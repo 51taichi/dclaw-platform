@@ -1,0 +1,8 @@
+<svg width="132" height="36" viewBox="0 0 132 36" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="DClaw">
+  <rect width="132" height="36" fill="none"/>
+  <text x="0" y="27" fill="#FF6A2A" font-family="Inter, Arial, Helvetica, sans-serif" font-size="25" font-weight="800">D</text>
+  <text x="19" y="27" fill="#F8FAFC" font-family="Inter, Arial, Helvetica, sans-serif" font-size="25" font-weight="800">claw</text>
+  <path d="M95.4 9.3C96.2 7.7 97.8 6.8 99.5 7.1C101.3 7.5 102.5 9 102.5 10.8C102.5 13.9 99.8 16.5 96.7 16.5H94.3C93.6 16.5 93.2 15.7 93.6 15.1L95.4 9.3Z" fill="#FF9A32"/>
+  <circle cx="104.6" cy="12.2" r="2.1" fill="#FF9A32"/>
+  <circle cx="110.3" cy="11.1" r="1.8" fill="#FF9A32"/>
+</svg>

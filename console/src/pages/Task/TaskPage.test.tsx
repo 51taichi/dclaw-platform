@@ -1,0 +1,628 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { act, screen, waitFor } from "@testing-library/react";
+import { useLocation } from "react-router-dom";
+import { renderWithProviders } from "@/test/common_setup";
+import TaskPage from "./index";
+
+let capturedOptions: any = null;
+let currentPathname = "";
+
+const {
+  mockGetActiveModels,
+  mockListProviders,
+  mockCreateChat,
+  mockListChats,
+  mockGetApiUrl,
+  mockRecordCreatedChat,
+  mockResolveSubmittedSession,
+  mockSetLastUserMessage,
+  mockGetSession,
+  mockGetChat,
+  mockGetChatStatus,
+  mockSetActiveSessionId,
+  mockUseAgentStore,
+  mockGetPlanConfig,
+  mockGetTranscriptionProviderType,
+  mockGetRunByChat,
+  mockGetExpertTeam,
+  mockChatSubmit,
+} = vi.hoisted(() => {
+  const store = vi.fn(() => ({
+    selectedAgent: "default",
+    selectedExpertTeam: null,
+    currentExpertTeamRun: null,
+    setSelectedExpertTeam: vi.fn(),
+    setCurrentExpertTeamRun: vi.fn(),
+    setLastChatId: vi.fn(),
+    getLastChatId: vi.fn(() => undefined),
+  })) as any;
+  store.getState = vi.fn(() => ({ selectedExpertTeam: null }));
+
+  return {
+    mockGetActiveModels: vi.fn(),
+    mockListProviders: vi.fn(),
+    mockCreateChat: vi.fn(),
+    mockListChats: vi.fn(),
+    mockGetApiUrl: vi.fn((path: string) => `/api${path}`),
+    mockRecordCreatedChat: vi.fn(),
+    mockResolveSubmittedSession: vi.fn(),
+    mockSetLastUserMessage: vi.fn(),
+    mockGetSession: vi.fn(),
+    mockGetChat: vi.fn(),
+    mockGetChatStatus: vi.fn(),
+    mockSetActiveSessionId: vi.fn(),
+    mockUseAgentStore: store,
+    mockGetPlanConfig: vi.fn(),
+    mockGetTranscriptionProviderType: vi.fn(),
+    mockGetRunByChat: vi.fn(),
+    mockGetExpertTeam: vi.fn(),
+    mockChatSubmit: vi.fn(),
+  };
+});
+
+vi.mock("@agentscope-ai/chat", async () => {
+  const React = await vi.importActual<typeof import("react")>("react");
+  type MockRuntimeProps = { options?: unknown };
+  type MockRuntimeHandle = {
+    input: { submit: typeof mockChatSubmit };
+    messages: { getMessages: () => unknown[] };
+  };
+  const MockAgentScopeRuntimeWebUI = React.forwardRef<
+    MockRuntimeHandle,
+    MockRuntimeProps
+  >((props, ref) => {
+    capturedOptions = props.options;
+    React.useImperativeHandle(ref, () => ({
+      input: { submit: mockChatSubmit },
+      messages: { getMessages: vi.fn(() => []) },
+    }));
+    return <div data-testid="task-chat-ui" />;
+  });
+  return {
+    AgentScopeRuntimeWebUI: MockAgentScopeRuntimeWebUI,
+    useChatAnywhereSessionsState: vi.fn(() => ({
+      currentSessionId: undefined,
+      sessions: [],
+      setCurrentSessionId: vi.fn(),
+      setSessions: vi.fn(),
+    })),
+    useChatAnywhereInput: vi.fn(() => ({
+      setLoading: vi.fn(),
+      getLoading: vi.fn(),
+    })),
+  };
+});
+
+vi.mock("@/stores/agentStore", () => ({
+  useAgentStore: mockUseAgentStore,
+}));
+
+vi.mock("../../hooks/useAppMessage", () => ({
+  useAppMessage: () => ({
+    message: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
+  }),
+}));
+
+vi.mock("../../contexts/ApprovalContext", () => ({
+  useApprovalContext: () => ({
+    approvals: [],
+    setApprovals: vi.fn(),
+  }),
+}));
+
+vi.mock("../../plugins/PluginContext", () => ({
+  usePlugins: () => ({
+    plugins: [],
+    registerPlugin: vi.fn(),
+    toolRenderConfig: {},
+  }),
+}));
+
+vi.mock("../../api/modules/provider", () => ({
+  providerApi: {
+    listProviders: mockListProviders,
+    getActiveModels: mockGetActiveModels,
+  },
+}));
+
+vi.mock("../../api/modules/chat", () => ({
+  chatApi: {
+    createChat: mockCreateChat,
+    listChats: mockListChats,
+    updateChat: vi.fn(() => Promise.resolve({})),
+    getChat: mockGetChat,
+    getChatStatus: mockGetChatStatus,
+    uploadFile: vi.fn(),
+    filePreviewUrl: vi.fn((file: string) => `/preview/${file}`),
+    stopChat: vi.fn(() => Promise.resolve({})),
+  },
+}));
+
+vi.mock("../../api/modules/expertTeams", () => ({
+  expertTeamsApi: {
+    getRunByChat: mockGetRunByChat,
+    getExpertTeam: mockGetExpertTeam,
+  },
+}));
+
+vi.mock("../../api/modules/agent", () => ({
+  agentApi: {
+    getTranscriptionProviderType: mockGetTranscriptionProviderType,
+  },
+}));
+
+vi.mock("../../api/modules/commands", () => ({
+  commandsApi: {
+    sendApprovalCommand: vi.fn(() => Promise.resolve({})),
+  },
+}));
+
+vi.mock("../../api/modules/plan", () => ({
+  planApi: {
+    getPlanConfig: mockGetPlanConfig,
+  },
+}));
+
+vi.mock("../../api/config", () => ({
+  getApiUrl: mockGetApiUrl,
+  getApiToken: vi.fn(() => ""),
+}));
+
+vi.mock("../../api/authHeaders", () => ({
+  buildAuthHeaders: vi.fn(() => ({ Authorization: "Bearer test-token" })),
+}));
+
+vi.mock("../Chat/sessionApi", () => ({
+  default: {
+    preferredChatId: null,
+    onSessionIdResolved: null,
+    onSessionRemoved: null,
+    onSessionSelected: null,
+    onSessionCreated: null,
+    onGeneratingStatusChange: null,
+    getSessionIdForChatId: vi.fn((chatId: string) => Promise.resolve(chatId)),
+    getRealIdForSession: vi.fn(() => null),
+    setLastUserMessage: mockSetLastUserMessage,
+    recordCreatedChat: mockRecordCreatedChat,
+    resolveSubmittedSession: mockResolveSubmittedSession,
+    getSession: mockGetSession,
+    reset: vi.fn(),
+  },
+  isDraftSessionId: (sessionId?: string | null) =>
+    !sessionId || sessionId === "draft-session",
+  DRAFT_SESSION_ID: "draft-session",
+}));
+
+vi.mock("../Chat/components/ChatSessionInitializer", () => ({
+  default: () => null,
+}));
+
+vi.mock("../../contexts/RuntimeEventContext", () => ({
+  useRuntimeEvents: () => ({
+    activeSessionId: null,
+    setActiveSessionId: mockSetActiveSessionId,
+    connected: true,
+    fallbackPolling: false,
+    lastEventId: null,
+    events: [],
+    clearEvents: vi.fn(),
+  }),
+}));
+
+vi.mock("../../components/WorkbenchInput", () => ({
+  default: () => <div data-testid="workbench-input" />,
+}));
+
+vi.mock("../Chat/components/ChatActionGroup", () => ({
+  default: () => <div data-testid="action-group" />,
+}));
+
+vi.mock("../Chat/components/ChatHeaderTitle", () => ({
+  default: () => <div data-testid="header-title" />,
+}));
+
+vi.mock("../../components/ApprovalCard/ApprovalCard", () => ({
+  ApprovalCard: () => <div data-testid="approval-card" />,
+}));
+
+vi.mock("../Chat/components/ArtifactPanel", () => ({
+  default: () => <div data-testid="artifact-panel" />,
+}));
+
+vi.mock("../Chat/components/RunningSessionNotice", () => ({
+  default: () => <div data-testid="running-notice" />,
+}));
+
+vi.mock("../Chat/components/ExpertTeamStatusStrip", () => ({
+  default: () => <div data-testid="expert-team-status" />,
+}));
+
+vi.mock("../Chat/components/RuntimeProgressCard", () => ({
+  default: () => <div data-testid="runtime-progress" />,
+}));
+
+vi.mock("../Chat/components/PreparingOverlay", () => ({
+  default: () => <div data-testid="preparing-overlay" />,
+}));
+
+vi.mock("../Chat/components/TaskArtifactCard", () => ({
+  TaskArtifactCard: () => <div data-testid="task-artifact-card" />,
+}));
+
+vi.mock("../Chat/components/WhisperSpeechButton", () => ({
+  default: () => <button type="button" data-testid="whisper-button" />,
+}));
+
+vi.mock("../Chat/utils/artifactCardScanScheduler", () => ({
+  scheduleArtifactCardScans: vi.fn(() => () => {}),
+}));
+
+vi.mock("../../utils/expertTeamSelection", () => ({
+  loadExpertTeamSelectionForChat: vi.fn(() => null),
+  saveExpertTeamSelectionForChat: vi.fn(),
+}));
+
+function LocationProbe() {
+  const location = useLocation();
+  currentPathname = location.pathname;
+  return null;
+}
+
+function buildChatResponse(chatId: string): Response {
+  return new Response("data: {}\n\n", {
+    status: 200,
+    headers: { "X-QwenPaw-Chat-Id": chatId },
+  });
+}
+
+describe("TaskPage", () => {
+  const originalVisibilityState = Object.getOwnPropertyDescriptor(
+    Document.prototype,
+    "visibilityState",
+  );
+
+  function setDocumentVisibilityState(state: DocumentVisibilityState) {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => state,
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useRealTimers();
+    capturedOptions = null;
+    currentPathname = "";
+    sessionStorage.clear();
+    setDocumentVisibilityState("visible");
+    delete (window as any).currentSessionId;
+    delete (window as any).currentUserId;
+    delete (window as any).currentChannel;
+    mockListProviders.mockResolvedValue([]);
+    mockGetActiveModels.mockResolvedValue({
+      active_llm: { provider_id: "openai", model: "gpt-4" },
+    });
+    mockCreateChat.mockResolvedValue({
+      id: "created-chat-id",
+      name: "hello",
+      session_id: "created-chat-id",
+      user_id: "42",
+      channel: "console",
+      created_at: null,
+      updated_at: null,
+      meta: {},
+    });
+    mockListChats.mockResolvedValue([]);
+    mockGetChat.mockResolvedValue({ messages: [], status: "idle" });
+    mockGetChatStatus.mockResolvedValue({
+      id: "created-chat-id",
+      status: "idle",
+      task_status: "completed",
+      updated_at: null,
+      message_count: 1,
+    });
+    mockGetSession.mockResolvedValue({ messages: [] });
+    mockGetPlanConfig.mockResolvedValue({ enabled: false });
+    mockGetTranscriptionProviderType.mockResolvedValue({
+      transcription_provider_type: "disabled",
+    });
+    mockGetRunByChat.mockResolvedValue(null);
+    mockGetExpertTeam.mockResolvedValue(null);
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue(buildChatResponse("created-chat-id"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    if (originalVisibilityState) {
+      Object.defineProperty(
+        Document.prototype,
+        "visibilityState",
+        originalVisibilityState,
+      );
+      delete (document as any).visibilityState;
+    }
+    vi.clearAllMocks();
+    sessionStorage.clear();
+  });
+
+  it("does not query expert-team runs for route chats outside the current user's list", async () => {
+    renderWithProviders(
+      <>
+        <LocationProbe />
+        <TaskPage />
+      </>,
+      { initialEntries: ["/task/stale-chat-id"] },
+    );
+
+    await screen.findByTestId("task-chat-ui");
+    await waitFor(() => expect(mockListChats).toHaveBeenCalled());
+
+    expect(mockGetRunByChat).not.toHaveBeenCalled();
+  });
+
+  it("continues a precreated task with the backend-confirmed user and chat id", async () => {
+    renderWithProviders(
+      <>
+        <LocationProbe />
+        <TaskPage />
+      </>,
+      { initialEntries: ["/task"] },
+    );
+    await screen.findByTestId("task-chat-ui");
+
+    await act(async () => {
+      await capturedOptions.api.fetch({
+        input: [{ role: "user", content: "hello" }],
+        signal: undefined,
+      });
+    });
+
+    await waitFor(() => expect(currentPathname).toBe("/task/created-chat-id"));
+    expect(mockRecordCreatedChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "created-chat-id",
+        user_id: "42",
+      }),
+    );
+    expect(mockResolveSubmittedSession).toHaveBeenCalledWith(
+      "created-chat-id",
+      "created-chat-id",
+    );
+
+    const [, fetchOptions] = (fetch as any).mock.calls[0];
+    const body = JSON.parse(fetchOptions.body);
+    expect(body.session_id).toBe("created-chat-id");
+    expect(body.user_id).toBe("42");
+  });
+
+  it("registers the opened task as the active runtime event session", async () => {
+    const view = renderWithProviders(
+      <>
+        <LocationProbe />
+        <TaskPage />
+      </>,
+      { initialEntries: ["/task/task-123"] },
+    );
+
+    await screen.findByTestId("task-chat-ui");
+
+    expect(mockSetActiveSessionId).toHaveBeenCalledWith("task-123");
+
+    view.unmount();
+
+    expect(mockSetActiveSessionId).toHaveBeenCalledWith(null);
+  });
+
+  it("resumes a persisted Workbench intent for an empty precreated task after refresh", async () => {
+    sessionStorage.setItem(
+      "qwenpaw_pending_task_intent_recovered-task",
+      JSON.stringify({
+        prompt: "继续生成这份材料",
+        agentId: "default",
+        expertTeam: null,
+      }),
+    );
+    mockGetChatStatus.mockResolvedValueOnce({
+      id: "recovered-task",
+      status: "idle",
+      task_status: "pending",
+      updated_at: null,
+      message_count: 0,
+    });
+
+    renderWithProviders(
+      <>
+        <LocationProbe />
+        <TaskPage />
+      </>,
+      { initialEntries: ["/task/recovered-task"] },
+    );
+
+    await screen.findByTestId("task-chat-ui");
+
+    await waitFor(() => {
+      expect(mockGetChatStatus).toHaveBeenCalledWith(
+        "recovered-task",
+        "default",
+      );
+    });
+
+    await act(async () => {
+      (await import("../Chat/sessionApi")).default.onSessionSelected?.(
+        "recovered-task",
+        null,
+      );
+    });
+
+    await waitFor(() => {
+      expect(mockChatSubmit).toHaveBeenCalledWith({
+        query: "继续生成这份材料",
+      });
+    });
+  });
+
+  it("submits a restored intent when the task session was already selected", async () => {
+    Object.assign(window, { currentSessionId: "already-selected-task" });
+    sessionStorage.setItem(
+      "qwenpaw_pending_task_intent_already-selected-task",
+      JSON.stringify({
+        prompt: "继续生成已选中的任务",
+        agentId: "default",
+      }),
+    );
+    mockGetChatStatus.mockResolvedValueOnce({
+      id: "already-selected-task",
+      status: "idle",
+      task_status: "pending",
+      updated_at: null,
+      message_count: 0,
+    });
+
+    renderWithProviders(
+      <>
+        <LocationProbe />
+        <TaskPage />
+      </>,
+      { initialEntries: ["/task/already-selected-task"] },
+    );
+
+    await screen.findByTestId("task-chat-ui");
+
+    await waitFor(() => {
+      expect(mockChatSubmit).toHaveBeenCalledWith({
+        query: "继续生成已选中的任务",
+      });
+    });
+  });
+
+  it("refreshes a completed running task with the lightweight status endpoint", async () => {
+    mockGetChatStatus.mockResolvedValueOnce({
+      id: "running-task",
+      status: "idle",
+      task_status: "completed",
+      updated_at: null,
+      message_count: 2,
+    });
+
+    renderWithProviders(
+      <>
+        <LocationProbe />
+        <TaskPage />
+      </>,
+      { initialEntries: ["/task/running-task"] },
+    );
+
+    await screen.findByTestId("task-chat-ui");
+
+    await act(async () => {
+      (await import("../Chat/sessionApi")).default.onGeneratingStatusChange?.(
+        true,
+      );
+    });
+
+    await waitFor(() => {
+      expect(mockGetChatStatus).toHaveBeenCalledWith(
+        "running-task",
+        "default",
+        expect.any(AbortSignal),
+      );
+    });
+    expect(mockGetChat).not.toHaveBeenCalledWith("running-task", "default");
+    expect(mockGetSession).toHaveBeenCalledWith("running-task");
+  });
+
+  it("checks a running task as soon as the page becomes visible again", async () => {
+    setDocumentVisibilityState("hidden");
+    mockGetChatStatus.mockResolvedValueOnce({
+      id: "sleeping-task",
+      status: "idle",
+      task_status: "completed",
+      updated_at: null,
+      message_count: 2,
+    });
+
+    renderWithProviders(
+      <>
+        <LocationProbe />
+        <TaskPage />
+      </>,
+      { initialEntries: ["/task/sleeping-task"] },
+    );
+
+    await screen.findByTestId("task-chat-ui");
+
+    await act(async () => {
+      (await import("../Chat/sessionApi")).default.onGeneratingStatusChange?.(
+        true,
+      );
+    });
+
+    expect(mockGetChatStatus).not.toHaveBeenCalledWith(
+      "sleeping-task",
+      "default",
+      expect.any(AbortSignal),
+    );
+
+    setDocumentVisibilityState("visible");
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      await Promise.resolve();
+    });
+
+    expect(mockGetChatStatus).toHaveBeenCalledWith(
+      "sleeping-task",
+      "default",
+      expect.any(AbortSignal),
+    );
+    expect(mockGetSession).toHaveBeenCalledWith("sleeping-task");
+  });
+
+  it("aborts a stuck status check and reconciles again after page restore", async () => {
+    let firstSignal: AbortSignal | undefined;
+    mockGetChatStatus
+      .mockImplementationOnce((_chatId, _agentId, signal) => {
+        firstSignal = signal;
+        return new Promise(() => {});
+      })
+      .mockResolvedValueOnce({
+        id: "stuck-task",
+        status: "idle",
+        task_status: "completed",
+        updated_at: null,
+        message_count: 2,
+      });
+
+    renderWithProviders(
+      <>
+        <LocationProbe />
+        <TaskPage />
+      </>,
+      { initialEntries: ["/task/stuck-task"] },
+    );
+
+    await screen.findByTestId("task-chat-ui");
+
+    await act(async () => {
+      (await import("../Chat/sessionApi")).default.onGeneratingStatusChange?.(
+        true,
+      );
+    });
+
+    await waitFor(() => {
+      expect(mockGetChatStatus).toHaveBeenCalledTimes(1);
+    });
+
+    await act(async () => {
+      window.dispatchEvent(new PageTransitionEvent("pageshow"));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(mockGetChatStatus).toHaveBeenCalledTimes(2);
+    });
+    expect(firstSignal?.aborted).toBe(true);
+    expect(mockGetSession).toHaveBeenCalledWith("stuck-task");
+  });
+});

@@ -1,0 +1,397 @@
+.chatToolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 12px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+  width: fit-content;
+  margin: 0 auto;
+}
+
+:global(.dark) .chatToolbar {
+  background: rgba(40, 40, 45, 0.85);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* ── Toolbar Button ─────────────────────────── */
+
+.toolbarBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #555;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  position: relative;
+}
+
+.toolbarBtn:hover {
+  background: rgba(0, 0, 0, 0.04);
+  color: #333;
+}
+
+:global(.dark) .toolbarBtn {
+  color: #aaa;
+}
+
+:global(.dark) .toolbarBtn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #ddd;
+}
+
+.toolbarBtnActive {
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.08);
+}
+
+:global(.dark) .toolbarBtnActive {
+  color: #60a5fa;
+  background: rgba(96, 165, 250, 0.12);
+}
+
+.expertAvatar {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+}
+
+.toolbarBtnIcon {
+  display: flex;
+  align-items: center;
+  font-size: 14px;
+}
+
+.toolbarChevron {
+  opacity: 0.5;
+  margin-left: -2px;
+}
+
+.toolbarDivider {
+  width: 1px;
+  height: 18px;
+  background: rgba(0, 0, 0, 0.08);
+  margin: 0 2px;
+  flex-shrink: 0;
+}
+
+:global(.dark) .toolbarDivider {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* ── Dropdown Menu (Mode / Model) ──────────── */
+
+.dropdownOverlay {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  width: 300px;
+  max-height: 400px;
+  overflow-y: auto;
+  background: #fff;
+  border-radius: 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  padding: 8px;
+  z-index: 1000;
+  animation: toolbarDropdownIn 0.15s ease;
+}
+
+:global(.dark) .dropdownOverlay {
+  background: #2a2a2e;
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+@keyframes toolbarDropdownIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.dropdownTitle {
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #999;
+}
+
+.dropdownItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  border: none;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+}
+
+.dropdownItem:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+:global(.dark) .dropdownItem {
+  color: #ddd;
+}
+
+:global(.dark) .dropdownItem:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.dropdownItemActive {
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.06);
+}
+
+:global(.dark) .dropdownItemActive {
+  color: #60a5fa;
+  background: rgba(96, 165, 250, 0.1);
+}
+
+.dropdownItemIconCircle {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 15px;
+  transition: all 0.2s ease;
+}
+
+.dropdownItemLabel {
+  font-size: 13px;
+  font-weight: 500;
+  color: #333;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+:global(.dark) .dropdownItemLabel {
+  color: #eee;
+}
+
+.dropdownItemCheck {
+  color: #2563eb;
+  opacity: 0.8;
+  flex-shrink: 0;
+}
+
+.dropdownItemDesc {
+  font-size: 11px;
+  color: #999;
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Popover Panel (Skills / Connectors) ───── */
+
+.popoverPanel {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  width: 300px;
+  max-height: 400px;
+  overflow-y: auto;
+  background: #fff;
+  border-radius: 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  padding: 8px;
+  z-index: 1000;
+  animation: toolbarDropdownIn 0.15s ease;
+}
+
+:global(.dark) .popoverPanel {
+  background: #2a2a2e;
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.popoverSearch {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 8px;
+  font-size: 13px;
+  background: rgba(0, 0, 0, 0.02);
+  outline: none;
+  margin-bottom: 6px;
+  color: #333;
+}
+
+:global(.dark) .popoverSearch {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #ddd;
+}
+
+.popoverSearch:focus {
+  border-color: #2563eb;
+}
+
+.popoverItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.popoverItem:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+:global(.dark) .popoverItem:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.popoverItemIcon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 16px;
+}
+
+.popoverItemInfo {
+  flex: 1;
+  min-width: 0;
+}
+
+.popoverItemName {
+  font-size: 13px;
+  font-weight: 500;
+  color: #333;
+}
+
+:global(.dark) .popoverItemName {
+  color: #eee;
+}
+
+.popoverItemDesc {
+  font-size: 11px;
+  color: #999;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.popoverItemAction {
+  font-size: 12px;
+  color: #2563eb;
+  cursor: pointer;
+  flex-shrink: 0;
+  font-weight: 500;
+}
+
+.popoverFooter {
+  padding: 6px 10px;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  margin-top: 4px;
+}
+
+:global(.dark) .popoverFooter {
+  border-top-color: rgba(255, 255, 255, 0.06);
+}
+
+.popoverFooterBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+  font-size: 13px;
+  color: #2563eb;
+  cursor: pointer;
+  background: none;
+  border: none;
+  width: 100%;
+}
+
+.popoverFooterBtn:hover {
+  opacity: 0.8;
+}
+
+.summonExpertWrapper {
+  position: relative;
+}
+
+.summonChevron {
+  color: #ccc;
+  transition: transform 0.2s;
+}
+
+.summonSubMenu {
+  position: absolute;
+  bottom: 0;
+  left: 100%;
+  margin-left: 4px;
+  min-width: 220px;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  padding: 6px;
+  z-index: 1001;
+  animation: toolbarDropdownIn 0.15s ease;
+}
+
+/* Hover bridge to prevent losing hover when moving mouse from parent to submenu */
+.summonSubMenu::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -12px;
+  width: 12px;
+  background: transparent;
+}
+
+:global(.dark) .summonSubMenu {
+  background: #2a2a2e;
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.dropdownDivider {
+  height: 1px;
+  background: rgba(0, 0, 0, 0.06);
+  margin: 4px 0;
+}
+
+:global(.dark) .dropdownDivider {
+  background: rgba(255, 255, 255, 0.08);
+}

@@ -1,0 +1,140 @@
+.mini-tabbar {
+  position: fixed;
+  right: 18px;
+  bottom: calc(env(safe-area-inset-bottom) + 10px);
+  left: 18px;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  height: 76px;
+  box-sizing: border-box;
+  padding: 8px 14px 10px;
+  border: 1px solid rgba(236, 238, 242, 0.95);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 16px 38px rgba(32, 28, 24, 0.16);
+}
+
+.mini-tabbar__grid {
+  display: grid;
+  align-items: end;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  width: 100%;
+  height: 100%;
+}
+
+.mini-tabbar__item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-direction: column;
+  height: 52px;
+  min-width: 0;
+  box-sizing: border-box;
+  gap: 4px;
+  color: #8f96a3;
+  transition:
+    color 180ms ease,
+    transform 180ms ease,
+    opacity 180ms ease;
+}
+
+.mini-tabbar__item--active {
+  color: #ff5a1f;
+  animation: mini-tabbar-active-pop 220ms ease-out;
+}
+
+.mini-tabbar__label {
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.mini-tabbar__center-slot {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  height: 52px;
+}
+
+.mini-tabbar__center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 58px;
+  height: 58px;
+  border: 5px solid #ffffff;
+  border-radius: 50%;
+  background: #fffaf3;
+  box-shadow: 0 10px 24px rgba(255, 90, 31, 0.24);
+  transform: translateY(-20px);
+  animation: mini-tabbar-mascot-breathe 2.4s ease-in-out infinite;
+}
+
+.mini-tabbar__mascot {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+}
+
+.mini-tabbar__icon {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  transition:
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.mini-tabbar__item--active .mini-tabbar__icon {
+  transform: translateY(-1px);
+}
+
+.mini-tabbar__item--attention .mini-tabbar__icon {
+  animation: mini-tabbar-attention-pulse 1.8s ease-in-out infinite;
+  border-radius: 14px;
+}
+
+.mini-tabbar__item--attention .mini-tabbar__label {
+  color: #ff5a1f;
+}
+
+@keyframes mini-tabbar-mascot-breathe {
+  0%,
+  100% {
+    transform: translateY(-20px) scale(1);
+  }
+
+  50% {
+    transform: translateY(-20px) scale(1.04);
+  }
+}
+
+@keyframes mini-tabbar-active-pop {
+  0% {
+    transform: translateY(0) scale(1);
+  }
+
+  55% {
+    transform: translateY(-2px) scale(1.06);
+  }
+
+  100% {
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes mini-tabbar-attention-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 90, 31, 0);
+    transform: translateY(0) scale(1);
+  }
+
+  50% {
+    box-shadow: 0 0 0 6px rgba(255, 90, 31, 0.14);
+    transform: translateY(-1px) scale(1.06);
+  }
+}

@@ -1,0 +1,83 @@
+.overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--ant-color-bg-layout, #fff);
+  z-index: 1000;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  animation: fadeIn 0.3s ease-out forwards;
+}
+
+.content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.mascot {
+  width: 140px;
+  height: auto;
+  margin-bottom: 24px;
+  animation: float 3s ease-in-out infinite;
+}
+
+.title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--ant-color-text, #1f1f1f);
+  margin: 0 0 8px 0;
+}
+
+.subtitle {
+  font-size: 14px;
+  color: var(--ant-color-text-secondary, #8c8c8c);
+  margin: 0 0 24px 0;
+}
+
+.progressBar {
+  width: 160px;
+  height: 4px;
+  background-color: var(--ant-color-fill-secondary, #f0f0f0);
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+}
+
+.progressInner {
+  position: absolute;
+  top: 0;
+  left: -50%;
+  width: 50%;
+  height: 100%;
+  background-color: #6366f1;
+  border-radius: 2px;
+  animation: sweep 1.5s ease-in-out infinite;
+}
+
+@keyframes sweep {
+  0% {
+    left: -50%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}

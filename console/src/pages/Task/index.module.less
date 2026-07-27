@@ -1,0 +1,537 @@
+/* Disabled input overlay */
+.chatDisabledOverlay {
+  position: relative;
+  height: 100%;
+  width: 100%;
+}
+
+.chatDisabledOverlay :global([class*="chat-anywhere-input"]),
+.chatDisabledOverlay :global([class*="chat-input"]),
+.chatDisabledOverlay :global(textarea),
+.chatDisabledOverlay :global(input[type="text"]) {
+  pointer-events: none !important;
+  opacity: 0.5 !important;
+  background-color: #f5f5f5 !important;
+  cursor: not-allowed !important;
+}
+
+.chatDisabledOverlay :global(button[class*="send"]),
+.chatDisabledOverlay :global(button[class*="submit"]) {
+  pointer-events: none !important;
+  opacity: 0.3 !important;
+  cursor: not-allowed !important;
+}
+
+/* Chat messages scrollable area */
+.chatMessagesArea {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  width: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-bottom: 260px; /* Space for the bottom composer stack */
+
+  :global {
+    [class*="chat-anywhere-default-header-right"] {
+      flex: 1;
+      display: flex;
+      align-items: center;
+    }
+  }
+
+  /* Custom scrollbar */
+  &::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 4px;
+
+    &:hover {
+      background: rgba(0, 0, 0, 0.3);
+    }
+  }
+
+  /* Dark mode scrollbar */
+  :global(.dark-mode) & {
+    &::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.2);
+
+      &:hover {
+        background: rgba(255, 255, 255, 0.3);
+      }
+    }
+  }
+
+  /* Firefox scrollbar */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+
+  :global(.dark-mode) & {
+    scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  }
+}
+
+.suggestionLabel {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  width: 100%;
+  line-height: 1.4;
+}
+
+.suggestionCommand {
+  flex: 0 0 88px;
+  color: #ff7f16;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.suggestionDescription {
+  flex: 1;
+  min-width: 0;
+  color: rgba(0, 0, 0, 0.45);
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+:global(.dark-mode) {
+  .suggestionCommand {
+    color: #ff7f16;
+  }
+
+  .suggestionDescription {
+    color: rgba(255, 255, 255, 0.65);
+  }
+}
+
+/* Prompt star icon - use theme color */
+:global {
+  .chat-anywhere-prompt-icon,
+  [class*="prompt-icon"],
+  [class*="PromptIcon"] {
+    color: #ff7f16 !important;
+  }
+}
+
+/* Fix #4216: Preserve newlines in user message bubbles.
+ * The Raw text renderer (used when raw=true) renders \n as plain React
+ * children which HTML collapses into whitespace. pre-wrap keeps them. */
+.taskView .chatMessagesArea :global {
+  [class*="bubble-end"] [class*="markdown"],
+  [class*="bubble-user"] [class*="markdown"] {
+    white-space: pre-wrap;
+  }
+
+  /* ----------------------------------------------------
+     Task View Restyling (WorkBuddy-style executing view)
+     ---------------------------------------------------- */
+  
+  /* 1. Style user messages as a compact prompt indicator */
+  [class*="bubble-end"],
+  [class*="message-list-item-user"],
+  [class*="chat-list-item-user"],
+  [class*="pro-chat-list-item-user"] {
+    /* display: visible — user messages shown */
+  }
+
+  /* 2. Remove bubble styling from the assistant to make it look like a seamless document */
+  [class*="bubble-start"] > div,
+  [class*="bubble-start"] [class*="bubble-content"],
+  [class*="bubble-start"] [class*="bubble-body"] {
+    background-color: transparent !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+  }
+  
+  [class*="bubble-start"] {
+    max-width: 100% !important;
+  }
+  
+  [class*="message-list-item-assistant"],
+  [class*="chat-list-item-assistant"],
+  [class*="pro-chat-list-item-assistant"] {
+    padding-bottom: 24px !important;
+    align-items: flex-start !important;
+  }
+  
+  /* Avatar align to the very top of the text */
+  [class*="pro-chat-list-item-avatar"] {
+    align-self: flex-start !important;
+    margin-top: 2px !important;
+  }
+}
+
+/* Dark mode scrollbar for disabled overlay */
+:global(.dark-mode) {
+  .chatDisabledOverlay :global([class*="chat-anywhere-input"]),
+  .chatDisabledOverlay :global([class*="chat-input"]),
+  .chatDisabledOverlay :global(textarea),
+  .chatDisabledOverlay :global(input[type="text"]) {
+    background-color: #2a2a2a !important;
+  }
+}
+
+/* Hide the default agentscope chat disclaimer so our toolbar takes its place */
+.taskView .chatMessagesArea :global {
+  [class*="disclaimer"],
+  [class*="Disclaimer"],
+  [class*="footer-text"] {
+    display: none !important;
+  }
+}
+
+/* ── Claw Welcome Restyling (match Workbench) ─────────────────────── */
+
+/* Welcome area: center content vertically like Workbench */
+.taskView .chatMessagesArea :global {
+  .qwenpaw-chat-anywhere-message-list-welcome {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    min-height: calc(100vh - 200px) !important;
+    padding-bottom: 120px !important;
+  }
+
+  /* Mascot avatar: enlarge and add float animation */
+  .qwenpaw-welcome-prompts .qwenpaw-avatar {
+    width: 100px !important;
+    height: 100px !important;
+    border-radius: 50% !important;
+    overflow: hidden !important;
+    filter: drop-shadow(0 8px 24px rgba(37, 99, 235, 0.15)) !important;
+    animation: chatMascotFloat 3s ease-in-out infinite !important;
+    margin-bottom: 16px !important;
+  }
+
+  .qwenpaw-welcome-prompts .qwenpaw-avatar img {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: cover !important;
+    border-radius: 50% !important;
+  }
+
+  /* Greeting: larger, bolder — Workbench slogan style */
+  .qwenpaw-welcome-prompts-greeting {
+    font-size: 26px !important;
+    font-weight: 600 !important;
+    color: rgba(0, 0, 0, 0.88) !important;
+    letter-spacing: -0.5px !important;
+    margin-bottom: 8px !important;
+    text-align: center !important;
+  }
+
+  /* Description: subtitle style with status dot */
+  .qwenpaw-welcome-prompts-description {
+    font-size: 14px !important;
+    color: rgba(0, 0, 0, 0.45) !important;
+    margin-bottom: 32px !important;
+    text-align: center !important;
+  }
+
+  /* Hide the default suggestion prompts (Claw doesn't need them) */
+  .qwenpaw-welcome-prompts-prompts {
+    display: none !important;
+  }
+
+  /* ── Input box restyling (Workbench card style) ── */
+  .qwenpaw-chat-anywhere-input-wrapper {
+    max-width: 680px !important;
+    margin: 0 auto !important;
+  }
+
+  [class*="chat-anywhere-sender-wrapper"],
+  [class*="chat-anywhere-sender"],
+  [class*="qwenpaw-sender-wrapper"],
+  [class*="qwenpaw-sender"] {
+    display: none !important;
+  }
+}
+
+@keyframes chatMascotFloat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+/* ── Dark mode overrides ─────────────────────────────────────────── */
+:global(.dark-mode) {
+  .taskView .chatMessagesArea :global {
+    .qwenpaw-welcome-prompts-greeting {
+      color: rgba(255, 255, 255, 0.9) !important;
+    }
+
+    .qwenpaw-welcome-prompts-description {
+      color: rgba(255, 255, 255, 0.5) !important;
+    }
+
+    [class*="chat-anywhere-sender"] {
+      background: rgba(255, 255, 255, 0.04) !important;
+      border-color: rgba(255, 255, 255, 0.1) !important;
+    }
+
+    [class*="chat-anywhere-sender"]:hover,
+    [class*="chat-anywhere-sender"]:focus-within {
+      border-color: rgba(255, 255, 255, 0.2) !important;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3) !important;
+    }
+
+    [class*="chat-anywhere-sender-input"] {
+      color: rgba(255, 255, 255, 0.9) !important;
+    }
+
+    [class*="chat-anywhere-sender-input"]::placeholder {
+      color: rgba(255, 255, 255, 0.25) !important;
+    }
+  }
+}
+
+.chatToolbarWrapper :global(.qwenpaw-chat-toolbar) {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  padding: 0 !important;
+}
+
+
+/* ── Custom Chat Input (Workbench Style) ── */
+.inputArea {
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 16px;
+  padding: 12px 16px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+  transition: all 0.3s ease;
+  max-width: 850px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.inputArea:hover, .inputArea:focus-within {
+  border-color: rgba(0, 0, 0, 0.2);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+}
+
+.inputToolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+}
+
+.toolbarBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 16px;
+}
+
+.toolbarBtn:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: rgba(0, 0, 0, 0.75);
+}
+
+.inputField {
+  width: 100%;
+  border: none;
+  outline: none;
+  font-size: 15px;
+  color: rgba(0, 0, 0, 0.88);
+  background: transparent;
+  resize: none;
+  min-height: 48px;
+  font-family: inherit;
+  line-height: 1.6;
+}
+
+.inputField::placeholder {
+  color: rgba(0, 0, 0, 0.3);
+}
+
+.inputFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 8px;
+}
+
+.footerLeftWrapper :global(.qwenpaw-chat-toolbar) {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  padding: 0 !important;
+}
+
+.footerRight {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.footerAction {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.footerAction:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: rgba(0, 0, 0, 0.75);
+}
+
+.sendBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: none;
+  background: #2563EB;
+  color: white;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.sendBtn:hover:not(:disabled) {
+  background: #1d4ed8;
+  transform: translateY(-1px);
+}
+
+.sendBtn:disabled {
+  background: rgba(0, 0, 0, 0.08);
+  color: rgba(0, 0, 0, 0.25);
+  cursor: not-allowed;
+}
+
+:global(.dark) .inputArea {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+:global(.dark) .inputArea:hover, :global(.dark) .inputArea:focus-within {
+  border-color: rgba(255, 255, 255, 0.2);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+:global(.dark) .inputField {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+:global(.dark) .inputField::placeholder {
+  color: rgba(255, 255, 255, 0.25);
+}
+
+:global(.dark) .inputToolbar {
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+:global(.dark) .toolbarBtn, :global(.dark) .footerAction {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+:global(.dark) .toolbarBtn:hover, :global(.dark) .footerAction:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
+}
+
+:global(.dark) .sendBtn:disabled {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.selectedSkillPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #f3f4f6;
+  border-radius: 6px;
+  padding: 4px 6px;
+  margin: 0 16px 8px;
+  font-size: 13px;
+  color: #374151;
+  border: 1px solid #e5e7eb;
+}
+
+.skillPillIcon {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+}
+
+.skillPillName {
+  font-weight: 500;
+}
+
+.skillPillClose {
+  cursor: pointer;
+  color: #9ca3af;
+  margin-left: 2px;
+}
+
+.skillPillClose:hover {
+  color: #ef4444;
+}
+
+:global(.dark) .selectedSkillPill {
+  background: #374151;
+  color: #e5e7eb;
+  border-color: #4b5563;
+}
+
+:global(.dark) .skillPillClose {
+  color: #9ca3af;
+}
+
+/* Inline Approval Cards */
+.inlineApprovalsContainer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  max-width: 850px;
+  padding: 0 16px;
+  margin: 0 auto 24px;
+}
+
+.inlineApprovalWrapper {
+  width: 100%;
+  animation: magicSlideIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+

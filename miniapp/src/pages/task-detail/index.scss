@@ -1,0 +1,210 @@
+.task-detail-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+
+  .task-summary,
+  .timeline-card,
+  .composer {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .task-title,
+  .card-title {
+    color: #19191b;
+    font-size: 17px;
+    font-weight: 700;
+  }
+
+  .task-status,
+  .muted-text {
+    color: #777d89;
+    font-size: 13px;
+  }
+
+  .result-link {
+    color: #ff5a1f;
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  .artifact-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .artifact-card__header,
+  .artifact-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .artifact-row {
+    padding: 10px 12px;
+    border-radius: 14px;
+    background: #fffaf3;
+  }
+
+  .artifact-row__name {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    color: #19191b;
+    font-size: 14px;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .artifact-row__kind {
+    flex: 0 0 auto;
+    color: #ff5a1f;
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  .artifact-row__preview {
+    width: 54px;
+    height: 54px;
+    flex: 0 0 54px;
+  }
+
+  .message-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .message-bubble {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-width: 88%;
+    padding: 10px 12px;
+    border-radius: 14px;
+    background: #fffaf3;
+
+    &--user {
+      align-self: flex-end;
+      color: #ffffff;
+      background: #ff5a1f;
+    }
+  }
+
+  .message-role {
+    font-size: 12px;
+    font-weight: 700;
+    opacity: 0.82;
+  }
+
+  .message-text {
+    font-size: 14px;
+    line-height: 1.5;
+    word-break: break-word;
+  }
+
+  .message-images {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .message-image {
+    width: 100%;
+    height: 132px;
+  }
+
+  .message-images .message-image:only-child {
+    grid-column: 1 / -1;
+    height: 180px;
+  }
+
+  .composer {
+    padding: 14px;
+    border: 1px solid #eceef2;
+    border-radius: 16px;
+    background: #ffffff;
+  }
+
+  .composer-toolbar {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .composer-chip {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 3px;
+    box-sizing: border-box;
+    padding: 9px 10px;
+    border: 1px solid #ffe1cd;
+    border-radius: 14px;
+    background: #fffaf3;
+  }
+
+  .composer-chip__label {
+    color: #ff5a1f;
+    font-size: 11px;
+    font-weight: 800;
+  }
+
+  .composer-chip__value {
+    overflow: hidden;
+    color: #19191b;
+    font-size: 13px;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .composer-input {
+    min-height: 82px;
+    box-sizing: border-box;
+    padding: 10px;
+    border-radius: 14px;
+    background: #fffaf3;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .composer-actions {
+    display: flex;
+    gap: 10px;
+  }
+
+  .primary-button,
+  .secondary-button {
+    box-sizing: border-box;
+    height: 42px;
+    flex: 1;
+    border: 0;
+    border-radius: 14px;
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 42px;
+  }
+
+  .primary-button::after,
+  .secondary-button::after {
+    border: 0;
+    border-radius: 14px;
+  }
+
+  .primary-button {
+    color: #ffffff;
+    background: #ff5a1f;
+  }
+
+  .secondary-button {
+    color: #19191b;
+    background: #ffffff;
+  }
+}

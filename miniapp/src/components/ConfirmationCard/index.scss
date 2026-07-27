@@ -1,0 +1,76 @@
+@use "../../theme/tokens.scss" as *;
+
+.confirmation-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 16px;
+  border: 1px solid $color-line;
+  border-radius: $radius-card;
+  background: $color-card;
+
+  &__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  &__title {
+    min-width: 0;
+    flex: 1;
+    color: $color-text;
+    font-size: 17px;
+    font-weight: 700;
+  }
+
+  &__risk {
+    flex: 0 0 auto;
+    padding: 4px 8px;
+    border-radius: 10px;
+    color: $color-orange;
+    background: rgba(255, 90, 31, 0.1);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  &__summary,
+  &__params,
+  &__countdown {
+    color: $color-muted;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  &__countdown {
+    color: $color-orange;
+    font-weight: 700;
+  }
+
+  &__actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 4px;
+  }
+
+  &__button {
+    height: 42px;
+    flex: 1;
+    border-radius: $radius-button;
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 42px;
+
+    &--deny {
+      color: $color-text;
+      background: #ffffff;
+    }
+
+    &--approve {
+      color: #ffffff;
+      background: $color-orange;
+    }
+  }
+}

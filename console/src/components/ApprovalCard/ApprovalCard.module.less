@@ -1,0 +1,364 @@
+.approvalCard {
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.04), inset 0 1px 0 rgba(255, 255, 255, 1);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  padding: 20px 24px;
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+  overflow: hidden;
+
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 3px;
+    background: linear-gradient(90deg, #f97316, #f59e0b);
+  }
+
+  &.critical {
+    &::before { background: linear-gradient(90deg, #ef4444, #f43f5e); }
+    box-shadow: 0 8px 32px rgba(239, 68, 68, 0.08), inset 0 1px 0 rgba(255, 255, 255, 1);
+  }
+
+  &.warning {
+    &::before { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+  }
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+
+  .titleRow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .icon {
+    color: #1a1a1a;
+  }
+
+  .title {
+    font-size: 15px;
+    font-weight: 600;
+    color: #1a1a1a;
+    letter-spacing: -0.3px;
+  }
+
+  .timer {
+    background: rgba(0, 0, 0, 0.04);
+    border-radius: 20px;
+    padding: 4px 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+
+    .timerIcon {
+      color: #64748b;
+    }
+
+    .timerText {
+      font-size: 13px;
+      font-weight: 600;
+      color: #475569;
+      font-family: "SF Mono", monospace;
+    }
+  }
+}
+
+.content {
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.03);
+}
+
+.infoRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.label {
+  font-size: 13px;
+  color: #64748b;
+  font-weight: 500;
+  min-width: 64px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.value {
+  font-size: 14px;
+  color: #0f172a;
+  font-weight: 500;
+  flex: 1;
+  word-break: break-all;
+
+  &:global(.ant-typography) code {
+    background: rgba(0, 0, 0, 0.04);
+    border: 1px solid rgba(0, 0, 0, 0.05);
+    border-radius: 6px;
+    padding: 2px 8px;
+    color: #334155;
+    font-family: "SF Mono", monospace;
+    font-size: 12.5px;
+  }
+}
+
+.severityTag {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 6px;
+  border: none;
+  letter-spacing: 0.02em;
+}
+
+.summaryBox {
+  margin-top: 4px;
+  position: relative;
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(0, 0, 0, 0.04);
+  border-radius: 8px;
+  padding: 12px;
+  
+  .summaryText {
+    font-size: 13px;
+    color: #475569;
+    line-height: 1.6;
+    padding-right: 28px;
+    word-break: break-word;
+    display: block;
+  }
+}
+
+.copyButton {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  transition: all 0.2s;
+
+  &:hover {
+    background: rgba(0, 0, 0, 0.04);
+    color: #475569;
+  }
+
+  &.copied {
+    color: #10b981;
+    background: rgba(16, 185, 129, 0.1);
+  }
+}
+
+.paramsDetails {
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(0, 0, 0, 0.04);
+  border-radius: 8px;
+  padding: 12px;
+  cursor: pointer;
+
+  summary {
+    font-size: 13px;
+    font-weight: 600;
+    color: #475569;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    list-style: none;
+    outline: none;
+    
+    &::-webkit-details-marker { display: none; }
+    
+    &::before {
+      content: "▶";
+      font-size: 9px;
+      color: #94a3b8;
+      transition: transform 0.2s;
+    }
+  }
+
+  &[open] summary {
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+    
+    &::before { transform: rotate(90deg); }
+  }
+}
+
+.paramsCodeWrapper { position: relative; }
+.paramsCode {
+  margin: 0;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.02);
+  border-radius: 6px;
+  font-family: "SF Mono", monospace;
+  font-size: 12px;
+  color: #334155;
+  max-height: 200px;
+  overflow-y: auto;
+
+  &::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.15);
+    border-radius: 3px;
+    &:hover { background: rgba(0, 0, 0, 0.25); }
+  }
+}
+
+.actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-top: 20px;
+  
+  button {
+    height: 38px;
+    border-radius: 10px;
+    font-weight: 600;
+    font-size: 14px;
+    padding: 0 20px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    cursor: pointer;
+  }
+  
+  .denyButton {
+    background: rgba(0, 0, 0, 0.04);
+    border: none;
+    color: #475569;
+    
+    &:hover:not(:disabled) {
+      background: rgba(0, 0, 0, 0.08);
+      color: #0f172a;
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  }
+
+  .approveButton {
+    background: #000000;
+    border: none;
+    color: #ffffff;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    
+    &:hover:not(:disabled) {
+      background: #1a1a1a;
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+    }
+
+    &:disabled {
+      background: rgba(0, 0, 0, 0.3);
+      box-shadow: none;
+      cursor: not-allowed;
+      transform: none;
+    }
+  }
+}
+
+.timeoutHint {
+  margin-right: auto;
+  font-size: 13px;
+  color: #ef4444;
+  font-weight: 500;
+}
+
+:global(.dark-mode) {
+  .approvalCard {
+    background: rgba(30, 30, 30, 0.65);
+    border-color: rgba(255, 255, 255, 0.08);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+
+    &.critical {
+      box-shadow: 0 8px 32px rgba(239, 68, 68, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    }
+  }
+
+  .title { color: rgba(255, 255, 255, 0.9); }
+  .icon { color: rgba(255, 255, 255, 0.9); }
+  
+  .timer {
+    background: rgba(255, 255, 255, 0.08);
+    .timerText { color: rgba(255, 255, 255, 0.85); }
+  }
+
+  .content {
+    background: rgba(0, 0, 0, 0.2);
+    border-color: rgba(255, 255, 255, 0.05);
+  }
+
+  .label { color: rgba(255, 255, 255, 0.45); }
+  .value {
+    color: rgba(255, 255, 255, 0.85);
+    &:global(.ant-typography) code {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: rgba(255, 255, 255, 0.1);
+      color: rgba(255, 255, 255, 0.85);
+    }
+  }
+
+  .summaryBox, .paramsDetails {
+    background: rgba(0, 0, 0, 0.2);
+    border-color: rgba(255, 255, 255, 0.05);
+    .summaryText, summary { color: rgba(255, 255, 255, 0.65); }
+  }
+
+  .paramsCode {
+    background: rgba(0, 0, 0, 0.3);
+    color: rgba(255, 255, 255, 0.75);
+
+    &::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.2);
+      &:hover { background: rgba(255, 255, 255, 0.3); }
+    }
+  }
+
+  .actions {
+    .denyButton {
+      background: rgba(255, 255, 255, 0.08);
+      color: rgba(255, 255, 255, 0.85);
+      &:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); }
+    }
+    .approveButton {
+      background: #ffffff;
+      color: #000000;
+      box-shadow: 0 4px 12px rgba(255, 255, 255, 0.15);
+      &:hover:not(:disabled) {
+        background: #f5f5f5;
+        box-shadow: 0 6px 16px rgba(255, 255, 255, 0.2);
+      }
+    }
+  }
+}

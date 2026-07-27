@@ -1,0 +1,342 @@
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(4px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modalContent {
+  width: 90%;
+  max-width: 1100px;
+  height: 80vh;
+  max-height: 700px;
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.2);
+  display: flex;
+  overflow: hidden;
+  animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+}
+
+:global(.dark) .modalContent {
+  background: #1e1e20;
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.modalClose {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.05);
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #666;
+  z-index: 10;
+  transition: all 0.2s;
+}
+
+.modalClose:hover {
+  background: rgba(0, 0, 0, 0.1);
+  color: #000;
+}
+
+:global(.dark) .modalClose {
+  background: rgba(255, 255, 255, 0.1);
+  color: #aaa;
+}
+:global(.dark) .modalClose:hover {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+}
+
+.modalLeft {
+  flex: 1.5;
+  background: #111;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.modalCover {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.modalCoverGradient {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  text-align: center;
+  padding: 40px;
+}
+
+.modalRight {
+  flex: 1;
+  padding: 40px;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.modalTitle {
+  font-size: 24px;
+  font-weight: 600;
+  color: #111;
+  margin-bottom: 12px;
+}
+
+:global(.dark) .modalTitle {
+  color: #eee;
+}
+
+.modalTags {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+
+.modalTag {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  background: rgba(37, 99, 235, 0.1);
+  color: #2563eb;
+}
+
+:global(.dark) .modalTag {
+  background: rgba(96, 165, 250, 0.15);
+  color: #60a5fa;
+}
+
+.modalAction {
+  width: 100%;
+  padding: 14px;
+  border-radius: 12px;
+  border: none;
+  background: #10b981;
+  color: white;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-bottom: 32px;
+}
+
+.modalAction:hover {
+  background: #059669;
+  transform: translateY(-1px);
+}
+
+.modalSectionTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: #999;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.toolList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 32px;
+}
+
+.toolItem {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.02);
+  border: 1px solid rgba(0, 0, 0, 0.04);
+}
+
+:global(.dark) .toolItem {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.05);
+}
+
+.toolIcon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+}
+
+:global(.dark) .toolIcon {
+  background: #333;
+}
+
+.toolName {
+  font-size: 14px;
+  font-weight: 500;
+  color: #333;
+}
+
+:global(.dark) .toolName {
+  color: #ddd;
+}
+
+.toolStatus {
+  margin-left: auto;
+  font-size: 12px;
+  color: #10b981;
+  font-weight: 500;
+}
+
+.modalDesc {
+  font-size: 14px;
+  line-height: 1.6;
+  color: #555;
+}
+
+:global(.dark) .modalDesc {
+  color: #aaa;
+}
+
+/* Card overrides for Explore */
+.exploreCard {
+  border-radius: 12px;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid rgba(0,0,0,0.06);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+:global(.dark) .exploreCard {
+  background: #2a2a2e;
+  border-color: rgba(255,255,255,0.08);
+}
+
+.exploreCard:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 24px rgba(0,0,0,0.08);
+}
+
+.cardCover {
+  width: 100%;
+  height: 160px;
+  background: #f5f5f5;
+  position: relative;
+  overflow: hidden;
+}
+
+.cardCoverGradient {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  text-align: center;
+  padding: 20px;
+}
+
+.cardTitleBig {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.cardTitleSmall {
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.cardBody {
+  padding: 16px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.cardTitle {
+  font-size: 15px;
+  font-weight: 600;
+  color: #111;
+  margin-bottom: 6px;
+}
+
+:global(.dark) .cardTitle {
+  color: #eee;
+}
+
+.cardDesc {
+  font-size: 13px;
+  color: #666;
+  line-height: 1.5;
+  margin-bottom: 16px;
+  flex: 1;
+}
+
+:global(.dark) .cardDesc {
+  color: #999;
+}
+
+.cardBadges {
+  display: flex;
+  gap: 6px;
+}
+
+.cardBadge {
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  background: rgba(0,0,0,0.04);
+  color: #666;
+}
+
+.cardBadgeNew {
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.cardBadgeHTML {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+:global(.dark) .cardBadge {
+  background: rgba(255,255,255,0.06);
+  color: #aaa;
+}
