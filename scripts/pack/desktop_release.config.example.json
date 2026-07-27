@@ -1,0 +1,13 @@
+{
+  "index_url": "https://static.deepmega.cn/metadata/apps/desktop/index.json",
+  "bucket": "oss://your-dclaw-download-bucket",
+  "download_base_url": "https://static.deepmega.cn",
+  "desktop_api_url": "https://dclaw.deepmega.cn",
+  "cdn_refresh_command": "",
+  "oss": {
+    "config_file": ".ossutilconfig",
+    "endpoint": "oss-cn-hangzhou.aliyuncs.com",
+    "access_key_id": "replace-with-your-access-key-id",
+    "access_key_secret": "replace-with-your-access-key-secret"
+  }
+}

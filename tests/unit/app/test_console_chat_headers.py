@@ -1,0 +1,310 @@
+# -*- coding: utf-8 -*-
+"""Tests for console chat streaming response metadata."""
+from __future__ import annotations
+
+import json
+from types import SimpleNamespace
+
+import pytest
+from fastapi import HTTPException
+
+from qwenpaw.app.task_limits import TaskConcurrencyLimiter
+from qwenpaw.app.routers import console
+
+
+class _FakeConsoleChannel:
+    def resolve_session_id(self, sender_id: str, channel_meta: dict) -> str:
+        _ = sender_id
+        return channel_meta["session_id"]
+
+    async def stream_one(self, *args, **kwargs):
+        _ = args, kwargs
+        if False:
+            yield None
+
+
+class _FakeChannelManager:
+    async def get_channel(self, name: str):
+        assert name == "console"
+        return _FakeConsoleChannel()
+
+
+class _FakeChatManager:
+    def __init__(self, chat_id: str = "chat-real-id"):
+        self.chat_id = chat_id
+        self.calls: list[dict[str, str]] = []
+
+    async def get_or_create_chat(
+        self,
+        session_id: str,
+        user_id: str,
+        channel: str,
+        name: str,
+    ):
+        self.calls.append(
+            {
+                "session_id": session_id,
+                "user_id": user_id,
+                "channel": channel,
+                "name": name,
+            },
+        )
+        return SimpleNamespace(id=self.chat_id, name="existing", meta={})
+
+
+class _FakeTaskTracker:
+    def __init__(self):
+        self.calls: list[dict[str, object]] = []
+
+    async def attach_or_start(
+        self,
+        chat_id: str,
+        native_payload,
+        stream_one,
+        **kwargs,
+    ):
+        self.calls.append(
+            {
+                "chat_id": chat_id,
+                "native_payload": native_payload,
+                "stream_one": stream_one,
+                "kwargs": kwargs,
+            },
+        )
+        return object(), None
+
+    async def stream_from_queue(self, queue, chat_id: str):
+        _ = queue, chat_id
+        if False:
+            yield ""
+
+
+class _FakeRequest:
+    def __init__(self, limiter=None):
+        self.state = SimpleNamespace(user_id=42)
+        if limiter is not None:
+            self.app = SimpleNamespace(
+                state=SimpleNamespace(task_limiter=limiter),
+            )
+
+
+@pytest.mark.asyncio
+async def test_console_chat_stream_response_exposes_real_chat_id(monkeypatch):
+    workspace = SimpleNamespace(
+        channel_manager=_FakeChannelManager(),
+        chat_manager=_FakeChatManager(),
+        task_tracker=_FakeTaskTracker(),
+    )
+
+    async def fake_get_agent_for_request(request):
+        _ = request
+        return workspace
+
+    monkeypatch.setattr(
+        console,
+        "get_agent_for_request",
+        fake_get_agent_for_request,
+    )
+
+    response = await console.post_console_chat(
+        {
+            "channel": "console",
+            "user_id": "default",
+            "session_id": "draft-session",
+            "input": [],
+        },
+        request=_FakeRequest(),
+    )
+
+    assert response.headers["x-qwenpaw-chat-id"] == "chat-real-id"
+    assert response.headers["x-qwenpaw-session-id"] == "draft-session"
+
+
+def test_console_chat_dict_input_text_stays_single_text_part():
+    native_payload = console._extract_session_and_payload(
+        {
+            "channel": "console",
+            "user_id": "frontend-default",
+            "session_id": "precreated-chat-id",
+            "chat_id": "precreated-chat-id",
+            "input": [{"role": "user", "content": "整理项目进展"}],
+        },
+    )
+
+    assert len(native_payload["content_parts"]) == 1
+    part = native_payload["content_parts"][0]
+    assert getattr(part, "type", None) == "text"
+    assert getattr(part, "text", None) == "整理项目进展"
+
+
+def test_console_chat_uses_chat_id_when_session_id_is_missing():
+    native_payload = console._extract_session_and_payload(
+        {
+            "channel": "console",
+            "user_id": "frontend-default",
+            "chat_id": "precreated-chat-id",
+            "input": [{"role": "user", "content": "整理项目进展"}],
+        },
+    )
+
+    assert native_payload["meta"]["session_id"] == "precreated-chat-id"
+
+
+@pytest.mark.asyncio
+async def test_console_chat_keeps_precreated_chat_session_with_request_user(
+    monkeypatch,
+):
+    chat_manager = _FakeChatManager(chat_id="precreated-chat-id")
+    workspace = SimpleNamespace(
+        channel_manager=_FakeChannelManager(),
+        chat_manager=chat_manager,
+        task_tracker=_FakeTaskTracker(),
+    )
+
+    async def fake_get_agent_for_request(request):
+        _ = request
+        return workspace
+
+    monkeypatch.setattr(
+        console,
+        "get_agent_for_request",
+        fake_get_agent_for_request,
+    )
+
+    response = await console.post_console_chat(
+        {
+            "channel": "console",
+            "user_id": "frontend-default",
+            "session_id": "precreated-chat-id",
+            "input": [],
+        },
+        request=_FakeRequest(),
+    )
+
+    assert chat_manager.calls[0]["session_id"] == "precreated-chat-id"
+    assert chat_manager.calls[0]["user_id"] == "42"
+    assert response.headers["x-qwenpaw-chat-id"] == "precreated-chat-id"
+    assert response.headers["x-qwenpaw-session-id"] == "precreated-chat-id"
+
+
+@pytest.mark.asyncio
+async def test_console_chat_can_start_task_without_sse_stream(monkeypatch):
+    chat_manager = _FakeChatManager(chat_id="mobile-task-id")
+    workspace = SimpleNamespace(
+        channel_manager=_FakeChannelManager(),
+        chat_manager=chat_manager,
+        task_tracker=_FakeTaskTracker(),
+    )
+
+    async def fake_get_agent_for_request(request):
+        _ = request
+        return workspace
+
+    monkeypatch.setattr(
+        console,
+        "get_agent_for_request",
+        fake_get_agent_for_request,
+    )
+
+    response = await console.post_console_chat(
+        {
+            "channel": "console",
+            "user_id": "frontend-default",
+            "session_id": "mobile-task-id",
+            "stream": False,
+            "input": [{"role": "user", "content": "整理项目进展"}],
+        },
+        request=_FakeRequest(),
+    )
+
+    payload = json.loads(response.body.decode("utf-8"))
+
+    assert payload == {
+        "chat_id": "mobile-task-id",
+        "session_id": "mobile-task-id",
+        "expert_team_run_id": "",
+        "status": "started",
+    }
+    assert response.media_type == "application/json"
+    assert workspace.task_tracker.calls[0]["chat_id"] == "mobile-task-id"
+    parts = workspace.task_tracker.calls[0]["native_payload"]["content_parts"]
+    assert len(parts) == 1
+    assert getattr(parts[0], "type", None) == "text"
+    assert getattr(parts[0], "text", None) == "整理项目进展"
+
+
+@pytest.mark.asyncio
+async def test_console_chat_expert_team_run_uses_authenticated_user(monkeypatch):
+    workspace = SimpleNamespace(
+        channel_manager=_FakeChannelManager(),
+        chat_manager=_FakeChatManager(),
+        task_tracker=_FakeTaskTracker(),
+    )
+    captured: dict[str, str] = {}
+
+    async def fake_get_agent_for_request(request):
+        _ = request
+        return workspace
+
+    def fake_create_expert_team_run(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(id="run-1")
+
+    async def fake_attach_run_to_chat(*args, **kwargs):
+        _ = args, kwargs
+
+    monkeypatch.setattr(console, "get_agent_for_request", fake_get_agent_for_request)
+    monkeypatch.setattr(console, "create_expert_team_run", fake_create_expert_team_run)
+    monkeypatch.setattr(console, "attach_run_to_chat", fake_attach_run_to_chat)
+
+    response = await console.post_console_chat(
+        {
+            "channel": "console",
+            "user_id": "frontend-default",
+            "session_id": "draft-session",
+            "expert_team_id": "software_dev_team",
+            "input": [],
+        },
+        request=_FakeRequest(),
+    )
+
+    assert response.headers["x-qwenpaw-expert-team-run-id"] == "run-1"
+    assert captured["user_id"] == "42"
+
+
+@pytest.mark.asyncio
+async def test_console_chat_returns_429_when_task_limit_is_full(monkeypatch):
+    workspace = SimpleNamespace(
+        agent_id="default",
+        channel_manager=_FakeChannelManager(),
+        chat_manager=_FakeChatManager(),
+        task_tracker=_FakeTaskTracker(),
+    )
+    limiter = TaskConcurrencyLimiter(
+        max_global=1,
+        max_per_agent=1,
+        max_per_user=1,
+    )
+    held = await limiter.try_acquire(agent_id="default", user_id="42")
+
+    async def fake_get_agent_for_request(request):
+        _ = request
+        return workspace
+
+    monkeypatch.setattr(console, "get_agent_for_request", fake_get_agent_for_request)
+
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await console.post_console_chat(
+                {
+                    "channel": "console",
+                    "user_id": "42",
+                    "session_id": "draft-session",
+                    "input": [],
+                },
+                request=_FakeRequest(limiter),
+            )
+    finally:
+        await held.release()
+
+    assert exc_info.value.status_code == 429
