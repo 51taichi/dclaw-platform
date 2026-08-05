@@ -36,6 +36,7 @@ from .object_storage import router as object_storage_router
 from .web_search import router as web_search_router
 from .open_api_admin import router as open_api_admin_router
 from .open_api import router as open_api_router
+from .open_api_group_history import router as open_api_group_history_router
 from .aigc_studio import public_router as public_aigc_studio_router
 from .aigc_studio import router as aigc_studio_router
 from .desktop import router as desktop_router
@@ -63,6 +64,7 @@ router.include_router(desktop_router)
 router.include_router(public_aigc_studio_router)
 router.include_router(settings_router)
 router.include_router(open_api_router)
+router.include_router(open_api_group_history_router)
 
 # ── User-facing APIs ──────────────────────────────────────────
 user_deps = [Depends(require_user)]

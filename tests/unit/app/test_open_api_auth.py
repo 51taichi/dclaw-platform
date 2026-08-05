@@ -45,6 +45,7 @@ class FakeOpenApiRepository:
 def _request(
     path: str = "/api/open/v1/messages",
     *,
+    method: str = "POST",
     token: str | None = "qp_live_secret-token",
     client: tuple[str, int] = ("203.0.113.10", 12345),
     headers: list[tuple[bytes, bytes]] | None = None,
@@ -55,7 +56,7 @@ def _request(
     return Request(
         {
             "type": "http",
-            "method": "POST",
+            "method": method,
             "path": path,
             "raw_path": path.encode(),
             "headers": raw_headers,
@@ -254,6 +255,58 @@ async def test_open_api_middleware_authenticates_even_when_auth_is_disabled(
     response = await middleware.dispatch(request, call_next)
 
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "path", "expected_scope"),
+    [
+        (
+            "POST",
+            "/api/open/v1/targets/public-agent/group-histories/wtg-1/messages",
+            "messages:create",
+        ),
+        (
+            "GET",
+            "/api/open/v1/targets/public-agent/group-histories/wtg-1/messages",
+            "messages:read",
+        ),
+        (
+            "POST",
+            "/api/open/v1/targets/public-agent/messages",
+            "messages:create",
+        ),
+    ],
+)
+async def test_open_api_middleware_uses_method_aware_history_scope(
+    monkeypatch,
+    method,
+    path,
+    expected_scope,
+):
+    seen: list[str] = []
+
+    async def fake_open_auth(request: Request, required_scope: str):
+        seen.append(required_scope)
+        request.state.user_id = "user-1"
+        request.state.role = "open_app"
+
+    monkeypatch.setattr(
+        app_auth,
+        "authenticate_open_api_request",
+        fake_open_auth,
+        raising=False,
+    )
+    request = _request(path=path, method=method)
+    middleware = app_auth.AuthMiddleware(app=lambda scope, receive, send: None)
+
+    async def call_next(_request: Request) -> Response:
+        return Response("ok")
+
+    response = await middleware.dispatch(request, call_next)
+
+    assert response.status_code == 200
+    assert seen == [expected_scope]
 
 
 @pytest.mark.asyncio
