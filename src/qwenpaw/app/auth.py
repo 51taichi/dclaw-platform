@@ -874,18 +874,6 @@ def revoke_all_tokens() -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _required_open_api_scope(request: Request) -> str:
-    """Select the narrow Open API scope required by this request."""
-    path = request.url.path
-    if (
-        request.method.upper() == "GET"
-        and "/group-histories/" in path
-        and path.endswith("/messages")
-    ):
-        return "messages:read"
-    return "messages:create"
-
-
 class AuthMiddleware(BaseHTTPMiddleware):
     """Middleware that checks Bearer token on protected routes."""
 
@@ -899,7 +887,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             try:
                 await authenticate_open_api_request(
                     request,
-                    required_scope=_required_open_api_scope(request),
+                    required_scope="messages:create",
                 )
             except HTTPException as exc:
                 return Response(

@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import warnings
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from agentscope_runtime.engine.schemas.agent_schemas import ContentType
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import HTTPException, Request
 
 from qwenpaw.app.open_api.runtime import (
     OpenMessageRequest,
@@ -822,11 +821,7 @@ async def test_post_open_message_expert_team_existing_run_prefers_active_payload
 
 
 def test_open_api_router_is_mounted_at_root_open_prefix_only():
-    app = FastAPI()
-    app.include_router(root_router)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", UserWarning)
-        paths = set(app.openapi()["paths"])
+    paths = {route.path for route in root_router.routes}
 
     assert "/open/v1/targets/{public_id}/messages" in paths
     assert "/user/open/v1/targets/{public_id}/messages" not in paths
