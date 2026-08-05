@@ -314,6 +314,40 @@ def init_db():
         )
     ''')
 
+    # 15. Storage-only Open API group histories
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS open_api_group_histories (
+            id TEXT PRIMARY KEY,
+            publication_id TEXT NOT NULL,
+            external_group_id TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (publication_id) REFERENCES open_api_publications (id),
+            UNIQUE(publication_id, external_group_id)
+        )
+    ''')
+
+    # 16. Immutable messages in an Open API group history
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS open_api_group_history_messages (
+            id TEXT PRIMARY KEY,
+            history_id TEXT NOT NULL,
+            external_message_id TEXT NOT NULL,
+            occurred_at TEXT NOT NULL,
+            sender_id TEXT NOT NULL DEFAULT '',
+            sender_name TEXT NOT NULL,
+            participant_role_id TEXT NOT NULL DEFAULT '',
+            direction TEXT NOT NULL,
+            source TEXT NOT NULL,
+            message_type TEXT NOT NULL,
+            content TEXT NOT NULL DEFAULT '',
+            metadata TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (history_id) REFERENCES open_api_group_histories (id),
+            UNIQUE(history_id, external_message_id)
+        )
+    ''')
+
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_chats_user_agent_updated
         ON chats (user_id, agent_id, updated_at DESC)
@@ -349,6 +383,18 @@ def init_db():
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_open_api_invocations_publication_created
         ON open_api_invocations (publication_id, created_at DESC)
+    ''')
+    cursor.execute('''
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_open_api_group_histories_publication_group
+        ON open_api_group_histories (publication_id, external_group_id)
+    ''')
+    cursor.execute('''
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_open_api_group_history_messages_external
+        ON open_api_group_history_messages (history_id, external_message_id)
+    ''')
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_open_api_group_history_messages_time
+        ON open_api_group_history_messages (history_id, occurred_at ASC, id ASC)
     ''')
     
     conn.commit()

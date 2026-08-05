@@ -248,6 +248,44 @@ open_api_invocations = Table(
     Column("created_at", DateTime(timezone=True), server_default=func.now()),
 )
 
+open_api_group_histories = Table(
+    "open_api_group_histories",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column(
+        "publication_id",
+        String,
+        ForeignKey("open_api_publications.id"),
+        nullable=False,
+    ),
+    Column("external_group_id", String, nullable=False),
+    Column("created_at", DateTime(timezone=True), server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), server_default=func.now()),
+)
+
+open_api_group_history_messages = Table(
+    "open_api_group_history_messages",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column(
+        "history_id",
+        String,
+        ForeignKey("open_api_group_histories.id"),
+        nullable=False,
+    ),
+    Column("external_message_id", String, nullable=False),
+    Column("occurred_at", DateTime(timezone=True), nullable=False),
+    Column("sender_id", String, nullable=False, server_default=""),
+    Column("sender_name", Text, nullable=False),
+    Column("participant_role_id", String, nullable=False, server_default=""),
+    Column("direction", String, nullable=False),
+    Column("source", String, nullable=False),
+    Column("message_type", String, nullable=False),
+    Column("content", Text, nullable=False, server_default=""),
+    Column("metadata", Text, nullable=False, server_default="{}"),
+    Column("created_at", DateTime(timezone=True), server_default=func.now()),
+)
+
 knowledge_docs = Table(
     "knowledge_docs",
     metadata,
@@ -336,6 +374,24 @@ Index("idx_open_api_publications_target", open_api_publications.c.target_type, o
 Index("idx_open_api_external_apps_owner_status", open_api_external_apps.c.owner_user_id, open_api_external_apps.c.status)
 Index("idx_open_api_keys_app_publication", open_api_keys.c.app_id, open_api_keys.c.publication_id)
 Index("idx_open_api_invocations_publication_created", open_api_invocations.c.publication_id, open_api_invocations.c.created_at.desc())
+Index(
+    "uq_open_api_group_histories_publication_group",
+    open_api_group_histories.c.publication_id,
+    open_api_group_histories.c.external_group_id,
+    unique=True,
+)
+Index(
+    "uq_open_api_group_history_messages_external",
+    open_api_group_history_messages.c.history_id,
+    open_api_group_history_messages.c.external_message_id,
+    unique=True,
+)
+Index(
+    "idx_open_api_group_history_messages_time",
+    open_api_group_history_messages.c.history_id,
+    open_api_group_history_messages.c.occurred_at.asc(),
+    open_api_group_history_messages.c.id.asc(),
+)
 Index("idx_knowledge_docs_scope_owner_updated", knowledge_docs.c.scope, knowledge_docs.c.owner_user_id, knowledge_docs.c.updated_at.desc())
 Index("idx_knowledge_docs_status", knowledge_docs.c.status)
 Index("idx_knowledge_assets_doc", knowledge_assets.c.doc_id)
