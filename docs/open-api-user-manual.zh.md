@@ -69,13 +69,14 @@ API Key 只在创建时显示一次。创建后后台只保存哈希和后四位
 
 Scope 表示 API Key 可以调用哪些能力。
 
-当前消息调用接口需要：
+当前接口使用以下消息 scope：
 
-```text
-messages:create
-```
+| Scope | 用途 |
+| --- | --- |
+| `messages:create` | 调用 Agent 消息接口；向群历史追加消息 |
+| `messages:read` | 分页读取群历史 |
 
-创建发布对象和 API Key 时，请至少选择 `messages:create`。其它 scope 属于预留能力，是否可用以当前产品版本实际开放的接口为准。
+普通 Agent 对话只需要 `messages:create`。如果接入 WorkTool 群历史与群定时任务，发布对象和 API Key 必须同时允许 `messages:create` 与 `messages:read`；权限取发布对象与 Key scope 的交集。
 
 ## 2. 使用前准备
 
@@ -117,7 +118,7 @@ messages:create
 | 目标 | 选择已经创建好的专家或专家团 | `客服专家` |
 | 发布标题 | 给管理员识别用的名称 | `客服专家` |
 | 描述 | 给外部应用识别的说明 | `处理售前和售后常见问题` |
-| 允许 scopes | 当前请选择 `messages:create` | `messages:create` |
+| 允许 scopes | 普通对话选择 `messages:create`；群历史集成还需 `messages:read` | `messages:create`, `messages:read` |
 | 初始状态 | `enabled` 表示创建后立即可用 | `enabled` |
 
 填写完成后点击：
@@ -165,7 +166,7 @@ IP allowlist 可以用逗号或换行分隔多个 IP：
 | --- | --- |
 | 发布对象 | 选择第一步创建的发布对象 |
 | 外部应用 | 选择第二步创建的外部应用 |
-| Key scopes | 选择 `messages:create` |
+| Key scopes | 普通对话选择 `messages:create`；群历史集成同时选择 `messages:read` |
 | 过期时间 | 可选。为空表示不过期 |
 
 点击：
@@ -254,6 +255,105 @@ Content-Type: application/json
 - 外部请求不能通过 body 或 query 参数切换目标专家。
 - 实际调用哪个专家或专家团，只由后台“发布对象”决定。
 - `metadata` 只用于业务辅助信息，不会改变授权范围。
+
+### 群历史存储接口（WorkTool 群任务）
+
+群历史接口用于保存外部群聊的完整、不可变消息记录。它只读写存储，不会创建 Agent 对话、调用模型或执行任何群任务。`external_group_id` 应使用调用方生成的稳定群 ID，不要使用可能变化的群名称；放入 URL 前需要进行百分号编码。
+
+接口与权限：
+
+```http
+POST /api/open/v1/targets/{Public ID}/group-histories/{external_group_id}/messages
+     需要 messages:create
+
+GET  /api/open/v1/targets/{Public ID}/group-histories/{external_group_id}/messages
+     需要 messages:read
+```
+
+追加消息示例：
+
+```bash
+curl -X POST \
+  'https://your-domain.example.com/api/open/v1/targets/support_agent/group-histories/wtg_abc/messages' \
+  -H 'Authorization: Bearer qp_live_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "messages": [
+      {
+        "external_message_id": "wt-message-1024",
+        "occurred_at": "2026-08-05T09:30:00+08:00",
+        "sender_id": "member-7",
+        "sender_name": "张三",
+        "participant_role_id": "role-parent",
+        "direction": "inbound",
+        "source": "worktool_local",
+        "message_type": "text",
+        "content": "今天的作业已经完成",
+        "metadata": {}
+      }
+    ]
+  }'
+```
+
+成功响应：
+
+```json
+{
+  "history_id": "history-1",
+  "inserted": 1,
+  "duplicates": 0
+}
+```
+
+写入规则：
+
+- 每批必须包含 1–200 条消息，序列化后的消息数据合计不能超过 1.5 MB。
+- `occurred_at` 必须包含时区；返回时统一为带时区的标准时间。
+- 同一发布对象、同一 `external_group_id` 下，`external_message_id` 唯一。
+- 重复写入同一外部消息 ID 只增加 `duplicates`，不会覆盖首次保存的发言人、时间、类型、内容或元数据。
+- 不同发布对象和不同群之间完全隔离，API Key 不能跨发布对象访问历史。
+
+按周期读取示例：
+
+```bash
+curl -G \
+  'https://your-domain.example.com/api/open/v1/targets/support_agent/group-histories/wtg_abc/messages' \
+  -H 'Authorization: Bearer qp_live_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx' \
+  --data-urlencode 'from=2026-08-01T00:00:00+08:00' \
+  --data-urlencode 'until=2026-08-05T10:00:00+08:00' \
+  --data-urlencode 'limit=100'
+```
+
+分页响应：
+
+```json
+{
+  "messages": [
+    {
+      "external_message_id": "wt-message-1024",
+      "occurred_at": "2026-08-05T01:30:00Z",
+      "sender_id": "member-7",
+      "sender_name": "张三",
+      "participant_role_id": "role-parent",
+      "direction": "inbound",
+      "source": "worktool_local",
+      "message_type": "text",
+      "content": "今天的作业已经完成",
+      "metadata": {}
+    }
+  ],
+  "next_cursor": null,
+  "has_more": false
+}
+```
+
+读取规则：
+
+- `from` 与 `until` 均可选，边界包含在查询范围内；用于任务执行时应固定同一时间窗口。
+- `limit` 允许 1–500，默认 100。
+- 当 `has_more=true` 时，把 `next_cursor` 原样传给下一次请求的 `after` 参数，直到 `has_more=false`。
+- 游标是不透明值，不要解析、修改或跨群复用；消息按发生时间与内部稳定序号正序返回。
+- 长群聊应逐页读取并在调用方做有界分段分析，不要把整段历史一次性拼入模型提示词。
 
 ## 5. curl 调用示例
 
@@ -448,7 +548,7 @@ def call_open_api(api_key: str, base_url: str, public_id: str, message: str) -> 
 | 401 | `Open API app is disabled` | 外部应用被禁用 | 联系管理员检查外部应用状态 |
 | 401 | `Open API publication is disabled` | 发布对象被禁用 | 在 Open API 页面启用发布对象 |
 | 403 | `Client IP is not allowed` | 调用方 IP 不在 allowlist | 添加调用方出口 IP，或检查代理 IP |
-| 403 | `Open API scope is not allowed` | 发布对象或 Key 没有 `messages:create` | 给发布对象和 Key 都配置 `messages:create` |
+| 403 | `Open API scope is not allowed` | 发布对象或 Key 缺少当前方法要求的 scope | Agent 调用和群历史写入配置 `messages:create`；群历史读取配置 `messages:read` |
 | 403 | `Open API key is not allowed for this publication` | Key 不属于这个发布对象 | 使用该发布对象对应的 Key |
 | 404 | `Open API publication not found` | Public ID 不存在或发布对象未启用 | 检查 URL 里的 Public ID |
 | 429 | `Too many running tasks...` | 当前运行任务过多 | 稍后重试，或调整并发策略 |
@@ -519,6 +619,7 @@ def call_open_api(api_key: str, base_url: str, public_id: str, message: str) -> 
 - 已创建并测试目标专家或专家团。
 - 发布对象状态是 `enabled`。
 - 发布对象 scopes 包含 `messages:create`。
+- 如果接入群历史，发布对象和 API Key 同时包含 `messages:create`、`messages:read`。
 - 外部应用已创建。
 - API Key 状态是 `active`。
 - API Key 未过期。
@@ -533,6 +634,7 @@ def call_open_api(api_key: str, base_url: str, public_id: str, message: str) -> 
 - `stream` 为 `true` 或不传。
 - 客户端按 SSE 流读取响应，不要用普通 JSON 响应解析。
 - 业务后端妥善保存 API Key。
+- 如果接入群历史，使用稳定的 `external_group_id`，按 `has_more`/`next_cursor` 完成分页读取，并验证重复写入不会覆盖首次记录。
 
 运维检查：
 
@@ -567,4 +669,3 @@ curl -N \
 ```
 
 如果配置正常，会看到多段 `data:` 开头的 SSE 返回，其中包含专家生成的文本内容。
-
