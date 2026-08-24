@@ -1,17 +1,19 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import insert, select
 
 from qwenpaw.app.storage.engine import create_engine_from_settings
-from qwenpaw.app.storage.repos.user_repo import SqlAlchemyUserRepository
+from qwenpaw.app.storage.repos.user_repo import SqlAlchemyUserRepository, SqliteUserRepository
 from qwenpaw.app.storage.schema import (
     chats,
     create_all,
     messages,
+    session_states,
     token_usage_logs,
     user_connections,
     users,
@@ -188,6 +190,13 @@ def test_sqlalchemy_user_repo_delete_user_cascades_owned_records(engine, repo):
             },
         )
         conn.execute(
+            insert(session_states),
+            {
+                "chat_id": "chat-alice",
+                "state_json": '{"memory": {"value": "remember me"}}',
+            },
+        )
+        conn.execute(
             insert(token_usage_logs),
             {
                 "id": "usage-1",
@@ -204,6 +213,47 @@ def test_sqlalchemy_user_repo_delete_user_cascades_owned_records(engine, repo):
         assert conn.execute(select(users).where(users.c.id == 1)).first() is None
         assert conn.execute(select(chats).where(chats.c.user_id == "1")).first() is None
         assert conn.execute(select(messages)).first() is None
+        assert conn.execute(select(session_states)).first() is None
         assert conn.execute(select(user_connections)).first() is None
         assert conn.execute(select(token_usage_logs)).first() is None
         assert conn.execute(select(users).where(users.c.id == 2)).first() is not None
+
+
+def test_sqlite_user_repo_delete_user_cascades_session_state(monkeypatch):
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.executescript(
+        """
+        CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, role TEXT, created_at TEXT);
+        CREATE TABLE chats (id TEXT PRIMARY KEY, user_id TEXT NOT NULL);
+        CREATE TABLE messages (
+            id TEXT PRIMARY KEY,
+            chat_id TEXT NOT NULL REFERENCES chats(id)
+        );
+        CREATE TABLE session_states (
+            chat_id TEXT PRIMARY KEY REFERENCES chats(id),
+            state_json TEXT
+        );
+        CREATE TABLE user_capabilities (id TEXT PRIMARY KEY, user_id INTEGER NOT NULL);
+        CREATE TABLE user_connections (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL);
+        CREATE TABLE token_usage_logs (id TEXT PRIMARY KEY, user_id INTEGER);
+        INSERT INTO users VALUES (1, 'alice', 'user', '2026-06-08');
+        INSERT INTO users VALUES (2, 'bob', 'user', '2026-06-08');
+        INSERT INTO chats VALUES ('chat-alice', '1');
+        INSERT INTO chats VALUES ('chat-bob', '2');
+        INSERT INTO session_states VALUES ('chat-alice', '{}');
+        INSERT INTO session_states VALUES ('chat-bob', '{}');
+        """,
+    )
+    monkeypatch.setattr("qwenpaw.app.storage.repos.user_repo.db.get_db", lambda: conn)
+
+    assert SqliteUserRepository().delete_user_cascade(1) is True
+
+    assert conn.execute("SELECT 1 FROM users WHERE id = 1").fetchone() is None
+    assert conn.execute(
+        "SELECT 1 FROM session_states WHERE chat_id = 'chat-alice'",
+    ).fetchone() is None
+    assert conn.execute(
+        "SELECT 1 FROM session_states WHERE chat_id = 'chat-bob'",
+    ).fetchone() is not None

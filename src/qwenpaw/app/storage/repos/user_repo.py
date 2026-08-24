@@ -12,6 +12,7 @@ from ..engine import get_app_engine
 from ..schema import (
     chats,
     messages,
+    session_states,
     token_usage_logs,
     user_capabilities,
     user_connections,
@@ -236,6 +237,11 @@ class SqlAlchemyUserRepository:
                 ).all()
             ]
             if chat_ids:
+                conn.execute(
+                    delete(session_states).where(
+                        session_states.c.chat_id.in_(chat_ids),
+                    ),
+                )
                 conn.execute(delete(messages).where(messages.c.chat_id.in_(chat_ids)))
             conn.execute(delete(user_capabilities).where(user_capabilities.c.user_id == user_id))
             conn.execute(delete(user_connections).where(user_connections.c.user_id == user_id))
@@ -394,7 +400,12 @@ class SqliteUserRepository:
         cursor.execute("DELETE FROM user_connections WHERE user_id = ?", (user_id,))
         cursor.execute("SELECT id FROM chats WHERE user_id = ?", (str(user_id),))
         chat_rows = cursor.fetchall()
+        has_session_states = cursor.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_states'",
+        ).fetchone()
         for row in chat_rows:
+            if has_session_states:
+                cursor.execute("DELETE FROM session_states WHERE chat_id = ?", (row["id"],))
             cursor.execute("DELETE FROM messages WHERE chat_id = ?", (row["id"],))
         cursor.execute("DELETE FROM chats WHERE user_id = ?", (str(user_id),))
         cursor.execute("DELETE FROM token_usage_logs WHERE user_id = ?", (user_id,))
