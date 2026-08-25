@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     ForeignKey,
@@ -326,6 +327,172 @@ knowledge_wiki = Table(
     Column("updated_at", DateTime(timezone=True), server_default=func.now()),
 )
 
+billing_wallets = Table(
+    "billing_wallets",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("owner_type", String, nullable=False),
+    Column("owner_id", String, nullable=False),
+    Column("status", String, nullable=False, server_default="active"),
+    Column("available_credits", Integer, nullable=False, server_default="0"),
+    Column("held_credits", Integer, nullable=False, server_default="0"),
+    Column("purchased_credits", Integer, nullable=False, server_default="0"),
+    Column("promotional_credits", Integer, nullable=False, server_default="0"),
+    Column("package_credits", Integer, nullable=False, server_default="0"),
+    Column("created_at", DateTime(timezone=True), server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), server_default=func.now()),
+    CheckConstraint("available_credits >= 0", name="ck_billing_wallets_available_nonnegative"),
+    CheckConstraint("held_credits >= 0", name="ck_billing_wallets_held_nonnegative"),
+    CheckConstraint("purchased_credits >= 0", name="ck_billing_wallets_purchased_nonnegative"),
+    CheckConstraint("promotional_credits >= 0", name="ck_billing_wallets_promotional_nonnegative"),
+    CheckConstraint("package_credits >= 0", name="ck_billing_wallets_package_nonnegative"),
+)
+
+billing_credit_lots = Table(
+    "billing_credit_lots",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("wallet_id", String, ForeignKey("billing_wallets.id"), nullable=False),
+    Column("source_ledger_entry_id", String, ForeignKey("billing_ledger_entries.id")),
+    Column("credit_type", String, nullable=False),
+    Column("status", String, nullable=False, server_default="active"),
+    Column("granted_credits", Integer, nullable=False),
+    Column("available_credits", Integer, nullable=False),
+    Column("held_credits", Integer, nullable=False, server_default="0"),
+    Column("expires_at", DateTime(timezone=True)),
+    Column("metadata_json", Text, nullable=False, server_default="{}"),
+    Column("created_at", DateTime(timezone=True), server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), server_default=func.now()),
+    CheckConstraint("granted_credits >= 0", name="ck_billing_credit_lots_granted_nonnegative"),
+    CheckConstraint("available_credits >= 0", name="ck_billing_credit_lots_available_nonnegative"),
+    CheckConstraint("held_credits >= 0", name="ck_billing_credit_lots_held_nonnegative"),
+)
+
+billing_ledger_entries = Table(
+    "billing_ledger_entries",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("wallet_id", String, ForeignKey("billing_wallets.id"), nullable=False),
+    Column("event_type", String, nullable=False),
+    Column("status", String, nullable=False, server_default="committed"),
+    Column("credit_delta", Integer, nullable=False),
+    Column("cash_delta_fen", Integer, nullable=False, server_default="0"),
+    Column("business_type", String, nullable=False),
+    Column("business_key", String, nullable=False),
+    Column("idempotency_key", String, nullable=False),
+    Column("actor_type", String, nullable=False, server_default="system"),
+    Column("actor_id", String),
+    Column("reason", Text),
+    Column("metadata_json", Text, nullable=False, server_default="{}"),
+    Column("created_at", DateTime(timezone=True), server_default=func.now()),
+)
+
+billing_ledger_allocations = Table(
+    "billing_ledger_allocations",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("ledger_entry_id", String, ForeignKey("billing_ledger_entries.id"), nullable=False),
+    Column("credit_lot_id", String, ForeignKey("billing_credit_lots.id"), nullable=False),
+    Column("credits", Integer, nullable=False),
+    Column("created_at", DateTime(timezone=True), server_default=func.now()),
+    CheckConstraint("credits > 0", name="ck_billing_ledger_allocations_credits_positive"),
+)
+
+billing_price_catalogs = Table(
+    "billing_price_catalogs",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("version", String, nullable=False),
+    Column("status", String, nullable=False, server_default="draft"),
+    Column("effective_at", DateTime(timezone=True)),
+    Column("published_at", DateTime(timezone=True)),
+    Column("created_by", String),
+    Column("metadata_json", Text, nullable=False, server_default="{}"),
+    Column("created_at", DateTime(timezone=True), server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), server_default=func.now()),
+)
+
+billing_price_rules = Table(
+    "billing_price_rules",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("catalog_id", String, ForeignKey("billing_price_catalogs.id"), nullable=False),
+    Column("provider_id", String, nullable=False),
+    Column("model_key", String, nullable=False),
+    Column("capability", String, nullable=False),
+    Column("unit_type", String, nullable=False),
+    Column("status", String, nullable=False, server_default="active"),
+    Column("priority", Integer, nullable=False, server_default="0"),
+    Column("unit_size", Integer, nullable=False, server_default="1"),
+    Column("credits_per_unit", Integer, nullable=False, server_default="0"),
+    Column("input_credits_per_1k", Integer, nullable=False, server_default="0"),
+    Column("output_credits_per_1k", Integer, nullable=False, server_default="0"),
+    Column("parameter_match_json", Text, nullable=False, server_default="{}"),
+    Column("metadata_json", Text, nullable=False, server_default="{}"),
+    Column("created_at", DateTime(timezone=True), server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), server_default=func.now()),
+    CheckConstraint("priority >= 0", name="ck_billing_price_rules_priority_nonnegative"),
+    CheckConstraint("unit_size > 0", name="ck_billing_price_rules_unit_size_positive"),
+    CheckConstraint("credits_per_unit >= 0", name="ck_billing_price_rules_credits_nonnegative"),
+    CheckConstraint("input_credits_per_1k >= 0", name="ck_billing_price_rules_input_credits_nonnegative"),
+    CheckConstraint("output_credits_per_1k >= 0", name="ck_billing_price_rules_output_credits_nonnegative"),
+)
+
+billing_usage_orders = Table(
+    "billing_usage_orders",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("wallet_id", String, ForeignKey("billing_wallets.id"), nullable=False),
+    Column("catalog_id", String, ForeignKey("billing_price_catalogs.id"), nullable=False),
+    Column("price_rule_id", String, ForeignKey("billing_price_rules.id")),
+    Column("business_key", String, nullable=False),
+    Column("status", String, nullable=False, server_default="quoted"),
+    Column("provider_id", String, nullable=False),
+    Column("model_key", String, nullable=False),
+    Column("capability", String, nullable=False),
+    Column("quoted_credits", Integer, nullable=False, server_default="0"),
+    Column("held_credits", Integer, nullable=False, server_default="0"),
+    Column("captured_credits", Integer, nullable=False, server_default="0"),
+    Column("request_snapshot_json", Text, nullable=False, server_default="{}"),
+    Column("price_snapshot_json", Text, nullable=False, server_default="{}"),
+    Column("supplier_reference", String),
+    Column("supplier_evidence_json", Text, nullable=False, server_default="{}"),
+    Column("created_at", DateTime(timezone=True), server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), server_default=func.now()),
+    Column("submitted_at", DateTime(timezone=True)),
+    Column("settled_at", DateTime(timezone=True)),
+    CheckConstraint("quoted_credits >= 0", name="ck_billing_usage_orders_quoted_nonnegative"),
+    CheckConstraint("held_credits >= 0", name="ck_billing_usage_orders_held_nonnegative"),
+    CheckConstraint("captured_credits >= 0", name="ck_billing_usage_orders_captured_nonnegative"),
+)
+
+billing_usage_items = Table(
+    "billing_usage_items",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("usage_order_id", String, ForeignKey("billing_usage_orders.id"), nullable=False),
+    Column("price_rule_id", String, ForeignKey("billing_price_rules.id")),
+    Column("status", String, nullable=False, server_default="quoted"),
+    Column("provider_id", String, nullable=False),
+    Column("model_key", String, nullable=False),
+    Column("capability", String, nullable=False),
+    Column("supplier_reference", String),
+    Column("input_tokens", Integer, nullable=False, server_default="0"),
+    Column("output_tokens", Integer, nullable=False, server_default="0"),
+    Column("quantity", Integer, nullable=False, server_default="0"),
+    Column("charged_credits", Integer, nullable=False, server_default="0"),
+    Column("supplier_cost_fen", Integer, nullable=False, server_default="0"),
+    Column("usage_snapshot_json", Text, nullable=False, server_default="{}"),
+    Column("supplier_evidence_json", Text, nullable=False, server_default="{}"),
+    Column("created_at", DateTime(timezone=True), server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), server_default=func.now()),
+    CheckConstraint("input_tokens >= 0", name="ck_billing_usage_items_input_nonnegative"),
+    CheckConstraint("output_tokens >= 0", name="ck_billing_usage_items_output_nonnegative"),
+    CheckConstraint("quantity >= 0", name="ck_billing_usage_items_quantity_nonnegative"),
+    CheckConstraint("charged_credits >= 0", name="ck_billing_usage_items_charged_nonnegative"),
+    CheckConstraint("supplier_cost_fen >= 0", name="ck_billing_usage_items_supplier_cost_nonnegative"),
+)
+
 Index("idx_chats_user_agent_updated", chats.c.user_id, chats.c.agent_id, chats.c.updated_at.desc())
 Index("idx_chats_session_user_channel_agent", chats.c.session_id, chats.c.user_id, chats.c.channel, chats.c.agent_id)
 Index("idx_messages_chat_timestamp", messages.c.chat_id, messages.c.timestamp.asc())
@@ -344,6 +511,21 @@ Index("idx_knowledge_chunks_scope_owner", knowledge_chunks.c.scope, knowledge_ch
 Index("idx_knowledge_embeddings_chunk", knowledge_embeddings.c.chunk_id)
 Index("idx_knowledge_wiki_scope_owner_concept", knowledge_wiki.c.scope, knowledge_wiki.c.owner_user_id, knowledge_wiki.c.concept)
 Index("idx_knowledge_wiki_doc", knowledge_wiki.c.doc_id)
+Index("uq_billing_wallets_owner", billing_wallets.c.owner_type, billing_wallets.c.owner_id, unique=True)
+Index("idx_billing_credit_lots_wallet_expiry", billing_credit_lots.c.wallet_id, billing_credit_lots.c.expires_at.asc())
+Index("idx_billing_credit_lots_wallet_status", billing_credit_lots.c.wallet_id, billing_credit_lots.c.status)
+Index("uq_billing_ledger_entries_idempotency", billing_ledger_entries.c.idempotency_key, unique=True)
+Index("idx_billing_ledger_entries_wallet_created", billing_ledger_entries.c.wallet_id, billing_ledger_entries.c.created_at.desc())
+Index("idx_billing_ledger_entries_business", billing_ledger_entries.c.business_type, billing_ledger_entries.c.business_key)
+Index("uq_billing_ledger_allocations_entry_lot", billing_ledger_allocations.c.ledger_entry_id, billing_ledger_allocations.c.credit_lot_id, unique=True)
+Index("idx_billing_ledger_allocations_lot", billing_ledger_allocations.c.credit_lot_id)
+Index("uq_billing_price_catalogs_version", billing_price_catalogs.c.version, unique=True)
+Index("idx_billing_price_catalogs_status_effective", billing_price_catalogs.c.status, billing_price_catalogs.c.effective_at.desc())
+Index("idx_billing_price_rules_catalog_lookup", billing_price_rules.c.catalog_id, billing_price_rules.c.provider_id, billing_price_rules.c.model_key, billing_price_rules.c.capability)
+Index("uq_billing_usage_orders_business", billing_usage_orders.c.business_key, unique=True)
+Index("idx_billing_usage_orders_wallet_status", billing_usage_orders.c.wallet_id, billing_usage_orders.c.status, billing_usage_orders.c.created_at.desc())
+Index("idx_billing_usage_orders_supplier_reference", billing_usage_orders.c.supplier_reference)
+Index("idx_billing_usage_items_order", billing_usage_items.c.usage_order_id)
 
 
 def create_all(engine: Engine) -> None:
