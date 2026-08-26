@@ -2,11 +2,12 @@
 """Versioned DClaw retail pricing authority and quote calculation."""
 from __future__ import annotations
 
+import json
+import math
 from collections.abc import Callable, Mapping, Sequence
-from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from typing import Any, TypeGuard
+from typing import Any, NoReturn, TypeGuard
 
 from ..storage.repos.price_catalog_repo import (
     CatalogImmutableError,
@@ -21,14 +22,71 @@ _SUPPORTED_UNITS = {
     "video_duration",
     "fixed_workflow",
 }
-_SUPPLIER_COMMERCIAL_MARKERS = (
-    "supplier",
-    "cost",
-    "discount",
-    "promotion",
-    "quota",
-    "resource_pack",
+_ALLOWED_SELECTOR_KEYS = frozenset(
+    {
+        "count",
+        "duration_seconds",
+        "resolution",
+        "quality",
+        "generation_mode",
+        "audio",
+        "aspect_ratio",
+        "tier",
+        "workflow_key",
+        "operation",
+        "size",
+    },
 )
+
+
+class FrozenJSONDict(dict[str, Any]):
+    """JSON-serializable dictionary that rejects every mutation."""
+
+    @staticmethod
+    def _immutable(*_args: Any, **_kwargs: Any) -> NoReturn:
+        raise TypeError("JSON snapshot values are immutable")
+
+    __setitem__ = _immutable
+    __delitem__ = _immutable
+    clear = _immutable
+    pop = _immutable
+    popitem = _immutable
+    setdefault = _immutable
+    update = _immutable
+    __ior__ = _immutable
+
+    def __copy__(self) -> FrozenJSONDict:
+        return self
+
+    def __deepcopy__(self, _memo: dict[int, Any]) -> FrozenJSONDict:
+        return self
+
+
+class FrozenJSONList(list[Any]):
+    """JSON-serializable list that rejects every mutation."""
+
+    @staticmethod
+    def _immutable(*_args: Any, **_kwargs: Any) -> NoReturn:
+        raise TypeError("JSON snapshot values are immutable")
+
+    __setitem__ = _immutable
+    __delitem__ = _immutable
+    append = _immutable
+    clear = _immutable
+    extend = _immutable
+    insert = _immutable
+    pop = _immutable
+    remove = _immutable
+    reverse = _immutable
+    sort = _immutable
+    __iadd__ = _immutable
+    __imul__ = _immutable
+
+    def __copy__(self) -> FrozenJSONList:
+        return self
+
+    def __deepcopy__(self, _memo: dict[int, Any]) -> FrozenJSONList:
+        return self
 
 
 class AmbiguousPriceRuleError(ValueError):
@@ -49,7 +107,11 @@ class QuoteRequest:
     output_tokens: int = 0
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "parameters", deepcopy(dict(self.parameters)))
+        object.__setattr__(
+            self,
+            "parameters",
+            _strict_json_object(self.parameters, "parameters"),
+        )
 
 
 @dataclass(frozen=True)
@@ -60,6 +122,18 @@ class RetailQuote:
     unit_breakdown: Mapping[str, int]
     snapshot: Mapping[str, Any]
     request: QuoteRequest
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "unit_breakdown",
+            _strict_json_object(self.unit_breakdown, "unit_breakdown"),
+        )
+        object.__setattr__(
+            self,
+            "snapshot",
+            _strict_json_object(self.snapshot, "snapshot"),
+        )
 
 
 @dataclass(frozen=True)
@@ -81,9 +155,13 @@ class PriceRule:
         object.__setattr__(
             self,
             "parameter_match",
-            deepcopy(dict(self.parameter_match)),
+            _strict_json_object(self.parameter_match, "parameter_match"),
         )
-        object.__setattr__(self, "metadata", deepcopy(dict(self.metadata)))
+        object.__setattr__(
+            self,
+            "metadata",
+            _strict_json_object(self.metadata, "metadata"),
+        )
 
 
 @dataclass(frozen=True)
@@ -96,7 +174,11 @@ class PriceCatalogDraft:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "rules", tuple(self.rules))
-        object.__setattr__(self, "metadata", deepcopy(dict(self.metadata)))
+        object.__setattr__(
+            self,
+            "metadata",
+            _strict_json_object(self.metadata, "metadata"),
+        )
 
 
 class PriceCatalogService:
@@ -118,12 +200,10 @@ class PriceCatalogService:
             draft,
             effective_at=_aware_utc(draft.effective_at),
         )
-        catalog_id = self.repository.create_draft(normalized_draft)
-        self.repository.publish_draft(
-            catalog_id,
+        return self.repository.publish_catalog(
+            normalized_draft,
             published_at=_aware_utc(self._clock()),
         )
-        return catalog_id
 
     def validate_draft(self, draft: PriceCatalogDraft) -> None:
         if not draft.version.strip():
@@ -204,7 +284,7 @@ class PriceCatalogService:
             request.provider_id,
             request.model_key,
             request.capability,
-            deepcopy(dict(request.parameters)),
+            request.parameters,
             input_tokens=request.input_tokens,
             output_tokens=request.output_tokens,
         )
@@ -225,13 +305,13 @@ class PriceCatalogService:
                 "output_credits_per_1k": int(
                     winner["output_credits_per_1k"],
                 ),
-                "parameter_match": deepcopy(winner["parameter_match"]),
+                "parameter_match": winner["parameter_match"],
             },
             "request": {
                 "provider_id": stable_request.provider_id,
                 "model_key": stable_request.model_key,
                 "capability": stable_request.capability,
-                "parameters": deepcopy(dict(stable_request.parameters)),
+                "parameters": stable_request.parameters,
                 "input_tokens": stable_request.input_tokens,
                 "output_tokens": stable_request.output_tokens,
             },
@@ -243,8 +323,8 @@ class PriceCatalogService:
             catalog_version=catalog["version"],
             rule_id=winner["id"],
             credits=total_credits,
-            unit_breakdown=deepcopy(breakdown),
-            snapshot=deepcopy(snapshot),
+            unit_breakdown=breakdown,
+            snapshot=snapshot,
             request=stable_request,
         )
 
@@ -281,14 +361,10 @@ class PriceCatalogService:
             raise ValueError(
                 f"{rule.unit_type} rule must define credits_per_unit",
             )
-        for key in rule.parameter_match:
-            lowered = key.lower()
-            if any(
-                marker in lowered for marker in _SUPPLIER_COMMERCIAL_MARKERS
-            ):
+        for key in sorted(rule.parameter_match):
+            if key not in _ALLOWED_SELECTOR_KEYS:
                 raise ValueError(
-                    "supplier commercial data cannot select a retail "
-                    "price rule",
+                    f"unsupported price selector key: {key}",
                 )
 
     @staticmethod
@@ -331,7 +407,10 @@ def _rules_are_ambiguous(left: PriceRule, right: PriceRule) -> bool:
         return False
     shared_keys = set(left.parameter_match) & set(right.parameter_match)
     return all(
-        left.parameter_match[key] == right.parameter_match[key]
+        _json_values_equal(
+            left.parameter_match[key],
+            right.parameter_match[key],
+        )
         for key in shared_keys
     )
 
@@ -341,7 +420,7 @@ def _parameters_match(
     actual: Mapping[str, Any],
 ) -> bool:
     return all(
-        key in actual and actual[key] == value
+        key in actual and _json_values_equal(actual[key], value)
         for key, value in expected.items()
     )
 
@@ -430,6 +509,77 @@ def _ceil_div(numerator: int, denominator: int) -> int:
 
 def _is_integer(value: Any) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _strict_json_object(
+    value: Mapping[str, Any],
+    field_name: str,
+) -> FrozenJSONDict:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be strict JSON: expected object")
+    try:
+        native = _json_native(value, field_name)
+        encoded = json.dumps(
+            native,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        canonical = json.loads(encoded)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be strict JSON: {exc}") from exc
+    return _freeze_json(canonical)
+
+
+def _json_native(value: Any, path: str) -> Any:
+    if value is None or type(value) in {str, bool, int}:  # noqa: E721
+        return value
+    if type(value) is float:  # noqa: E721
+        if not math.isfinite(value):
+            raise ValueError(f"{path} contains a non-finite number")
+        return value
+    if isinstance(value, Mapping):
+        result: dict[str, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise ValueError(f"{path} contains a non-string object key")
+            result[key] = _json_native(item, f"{path}.{key}")
+        return result
+    if isinstance(value, (list, tuple)):
+        return [
+            _json_native(item, f"{path}[{index}]")
+            for index, item in enumerate(value)
+        ]
+    raise ValueError(
+        f"{path} contains unsupported type {type(value).__name__}",
+    )
+
+
+def _freeze_json(value: Any) -> Any:
+    if isinstance(value, dict):
+        return FrozenJSONDict(
+            {key: _freeze_json(item) for key, item in value.items()},
+        )
+    if isinstance(value, list):
+        return FrozenJSONList(_freeze_json(item) for item in value)
+    return value
+
+
+def _json_values_equal(left: Any, right: Any) -> bool:
+    return json.dumps(
+        _json_native(left, "value"),
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ) == json.dumps(
+        _json_native(right, "value"),
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def _aware_utc(value: datetime) -> datetime:

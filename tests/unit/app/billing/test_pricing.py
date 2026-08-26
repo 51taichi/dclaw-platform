@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
-# pylint: disable=redefined-outer-name
+# pylint: disable=protected-access,redefined-outer-name
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import event, func, select
+from sqlalchemy.dialects import postgresql
 
 from qwenpaw.app.billing.pricing import (
     AmbiguousPriceRuleError,
@@ -13,11 +16,16 @@ from qwenpaw.app.billing.pricing import (
     PriceCatalogDraft,
     PriceCatalogService,
     PriceRule,
+    PriceRuleNotFoundError,
     QuoteRequest,
 )
 from qwenpaw.app.storage.engine import create_engine_from_settings
 from qwenpaw.app.storage.repos.price_catalog_repo import PriceCatalogRepository
-from qwenpaw.app.storage.schema import create_all
+from qwenpaw.app.storage.schema import (
+    billing_price_catalogs,
+    billing_price_rules,
+    create_all,
+)
 from qwenpaw.app.storage.settings import get_storage_settings
 
 
@@ -492,7 +500,10 @@ def test_publication_rejects_supplier_commercial_data_as_a_rule_selector(
         parameter_match={"supplier_discount": 50},
     )
 
-    with pytest.raises(ValueError, match="supplier commercial data"):
+    with pytest.raises(
+        ValueError,
+        match="unsupported price selector key: supplier_discount",
+    ):
         service.publish(
             _catalog(
                 "supplier-dependent",
@@ -500,3 +511,392 @@ def test_publication_rejects_supplier_commercial_data_as_a_rule_selector(
                 supplier_discount_rule,
             ),
         )
+
+
+def test_json_roundtrip_canonicalizes_tuple_and_list_selectors(service, clock):
+    service.publish(
+        _catalog(
+            "json-canonical",
+            clock,
+            _rule(
+                "tuple-size",
+                "image_count",
+                capability="text_to_image",
+                credits_per_unit=50,
+                parameter_match={"size": (1024, 1024)},
+            ),
+        ),
+    )
+    request = QuoteRequest(
+        "aliyun",
+        "model-1",
+        "text_to_image",
+        {"count": 1, "size": (1024, 1024)},
+    )
+
+    quote = service.quote(request)
+
+    assert quote.rule_id == "tuple-size"
+    assert isinstance(request.parameters["size"], list)
+    assert json.loads(json.dumps(request.parameters)) == {
+        "count": 1,
+        "size": [1024, 1024],
+    }
+
+
+def test_json_type_identity_distinguishes_boolean_and_integer_selectors(
+    service,
+    clock,
+):
+    service.publish(
+        _catalog(
+            "json-type-identity",
+            clock,
+            _rule(
+                "audio-boolean",
+                "image_count",
+                capability="text_to_image",
+                credits_per_unit=50,
+                parameter_match={"audio": True},
+            ),
+            _rule(
+                "audio-integer",
+                "image_count",
+                capability="text_to_image",
+                credits_per_unit=80,
+                parameter_match={"audio": 1},
+            ),
+        ),
+    )
+
+    boolean_quote = service.quote(
+        QuoteRequest(
+            "aliyun",
+            "model-1",
+            "text_to_image",
+            {"count": 1, "audio": True},
+        ),
+    )
+    integer_quote = service.quote(
+        QuoteRequest(
+            "aliyun",
+            "model-1",
+            "text_to_image",
+            {"count": 1, "audio": 1},
+        ),
+    )
+
+    assert boolean_quote.rule_id == "audio-boolean"
+    assert integer_quote.rule_id == "audio-integer"
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {"client_context": {1, 2}},
+        {"client_context": float("nan")},
+        {"client_context": float("inf")},
+        {1: "non-string JSON object key"},
+    ],
+)
+def test_quote_request_rejects_non_json_or_non_finite_parameters(parameters):
+    with pytest.raises(ValueError, match="parameters must be strict JSON"):
+        QuoteRequest(
+            "aliyun",
+            "model-1",
+            "text_to_image",
+            parameters,
+        )
+
+
+@pytest.mark.parametrize(
+    "rule_field",
+    [
+        {"parameter_match": {"quality": float("nan")}},
+        {"metadata": {"admin_note": {"not", "json"}}},
+    ],
+)
+def test_price_rule_rejects_non_json_or_non_finite_fields(rule_field):
+    with pytest.raises(ValueError, match="must be strict JSON"):
+        PriceRule(
+            id="invalid-json",
+            provider_id="aliyun",
+            model_key="model-1",
+            capability="text_to_image",
+            unit_type="image_count",
+            credits_per_unit=50,
+            **rule_field,
+        )
+
+
+def test_quote_snapshot_and_nested_values_are_deeply_immutable(
+    service,
+    clock,
+):
+    service.publish(
+        _catalog(
+            "immutable-quote",
+            clock,
+            _rule(
+                "immutable-quote-rule",
+                "image_count",
+                capability="text_to_image",
+                credits_per_unit=50,
+            ),
+        ),
+    )
+    source_parameters = {
+        "count": 1,
+        "client_context": {"steps": ["draft", "submit"]},
+    }
+    request = QuoteRequest(
+        "aliyun",
+        "model-1",
+        "text_to_image",
+        source_parameters,
+    )
+    quote = service.quote(request)
+    original_json = json.dumps(quote.snapshot, sort_keys=True)
+
+    source_parameters["count"] = 99
+    source_parameters["client_context"]["steps"].append("mutated")
+    with pytest.raises(TypeError):
+        request.parameters["count"] = 99
+    with pytest.raises(TypeError):
+        quote.unit_breakdown["image_count"] = 0
+    with pytest.raises(TypeError):
+        quote.snapshot["credits"] = 0
+    with pytest.raises(TypeError):
+        quote.snapshot["request"]["parameters"]["client_context"][
+            "steps"
+        ].append("mutated")
+
+    assert json.dumps(request.parameters, sort_keys=True)
+    assert json.dumps(quote.unit_breakdown, sort_keys=True)
+    assert json.dumps(quote.snapshot, sort_keys=True) == original_json
+    assert quote.credits == 50
+    assert quote.request.parameters["count"] == 1
+
+
+def test_controller_selector_allowlist_is_accepted(service, clock):
+    allowed_selectors = {
+        "count": 1,
+        "duration_seconds": 5,
+        "resolution": "1024x1024",
+        "quality": "hd",
+        "generation_mode": "text",
+        "audio": False,
+        "aspect_ratio": "1:1",
+        "tier": "standard",
+        "workflow_key": "research",
+        "operation": "generate",
+        "size": [1024, 1024],
+    }
+    service.publish(
+        _catalog(
+            "selector-allowlist",
+            clock,
+            _rule(
+                "all-allowed-selectors",
+                "image_count",
+                capability="text_to_image",
+                credits_per_unit=50,
+                parameter_match=allowed_selectors,
+            ),
+        ),
+    )
+
+    quote = service.quote(
+        QuoteRequest(
+            "aliyun",
+            "model-1",
+            "text_to_image",
+            {**allowed_selectors, "supplier_cost_fen": 1_000},
+        ),
+    )
+
+    assert quote.rule_id == "all-allowed-selectors"
+    assert quote.credits == 50
+
+
+@pytest.mark.parametrize(
+    "unknown_key",
+    ["supplier_cost_fen", "customer_discount", "component_estimate"],
+)
+def test_publication_rejects_every_non_allowlisted_selector(
+    service,
+    clock,
+    unknown_key,
+):
+    rule = _rule(
+        f"unknown-{unknown_key}",
+        "image_count",
+        capability="text_to_image",
+        credits_per_unit=50,
+        parameter_match={unknown_key: 1},
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=f"unsupported price selector key: {unknown_key}",
+    ):
+        service.publish(_catalog(f"unknown-{unknown_key}", clock, rule))
+
+
+def test_no_matching_rule_raises_a_specific_error(service, clock):
+    service.publish(
+        _catalog(
+            "no-match",
+            clock,
+            _rule(
+                "image-only",
+                "image_count",
+                capability="text_to_image",
+                credits_per_unit=50,
+            ),
+        ),
+    )
+
+    with pytest.raises(PriceRuleNotFoundError, match="text_to_video"):
+        service.quote(
+            QuoteRequest(
+                "aliyun",
+                "model-1",
+                "text_to_video",
+                {"duration_seconds": 5},
+            ),
+        )
+
+
+def test_empty_catalog_is_rejected_before_persistence(service, clock, engine):
+    with pytest.raises(ValueError, match="at least one price rule"):
+        service.publish(_catalog("empty", clock))
+
+    with engine.connect() as conn:
+        assert (
+            conn.scalar(
+                select(func.count()).select_from(billing_price_catalogs),
+            )
+            == 0
+        )
+
+
+@pytest.mark.parametrize(
+    ("unit_type", "parameters"),
+    [
+        ("image_count", {"count": 0}),
+        ("image_count", {"count": -1}),
+        ("video_duration", {"duration_seconds": 0}),
+        ("video_duration", {"duration_seconds": -1}),
+    ],
+)
+def test_non_positive_quote_quantities_are_rejected(
+    service,
+    clock,
+    unit_type,
+    parameters,
+):
+    capability = (
+        "text_to_image" if unit_type == "image_count" else "text_to_video"
+    )
+    service.publish(
+        _catalog(
+            f"quantity-{unit_type}",
+            clock,
+            _rule(
+                f"quantity-{unit_type}",
+                unit_type,
+                capability=capability,
+                credits_per_unit=50,
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="must be a positive integer"):
+        service.quote(
+            QuoteRequest(
+                "aliyun",
+                "model-1",
+                capability,
+                parameters,
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        _rule("zero-image", "image_count", credits_per_unit=0),
+        _rule("negative-image", "image_count", credits_per_unit=-1),
+        _rule("zero-token", "tokens"),
+        _rule("negative-token", "tokens", input_credits_per_1k=-1),
+    ],
+)
+def test_zero_or_negative_retail_rates_are_rejected(service, clock, rule):
+    with pytest.raises(
+        ValueError,
+        match="rate|credits_per_unit|credits_per_1k",
+    ):
+        service.publish(_catalog(f"invalid-rate-{rule.id}", clock, rule))
+
+
+def test_atomic_publication_rolls_back_and_same_version_can_retry(
+    repo,
+    engine,
+    clock,
+):
+    draft = _catalog(
+        "atomic-retry",
+        clock,
+        _rule(
+            "atomic-retry-rule",
+            "image_count",
+            capability="text_to_image",
+            credits_per_unit=50,
+        ),
+    )
+
+    def fail_rule_insert(_conn, _cursor, statement, _params, _context, _many):
+        if statement.startswith("INSERT INTO billing_price_rules"):
+            raise RuntimeError("injected rule insert failure")
+
+    event.listen(engine, "before_cursor_execute", fail_rule_insert)
+    try:
+        with pytest.raises(RuntimeError, match="injected rule insert failure"):
+            repo.publish_catalog(draft, published_at=clock.now)
+    finally:
+        event.remove(engine, "before_cursor_execute", fail_rule_insert)
+
+    with engine.connect() as conn:
+        assert (
+            conn.scalar(
+                select(func.count()).select_from(billing_price_catalogs),
+            )
+            == 0
+        )
+        assert (
+            conn.scalar(select(func.count()).select_from(billing_price_rules))
+            == 0
+        )
+
+    catalog_id = repo.publish_catalog(draft, published_at=clock.now)
+    assert catalog_id
+
+
+def test_draft_mutation_statements_lock_and_guard_catalog_status(repo):
+    lock_sql = str(
+        repo._draft_for_update_statement("catalog-id").compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        ),
+    )
+    delete_sql = str(
+        repo._guarded_delete_rules_statement("catalog-id").compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        ),
+    )
+
+    assert lock_sql.rstrip().endswith("FOR UPDATE")
+    assert "billing_price_catalogs.status = 'draft'" in delete_sql
+    assert "EXISTS" in delete_sql

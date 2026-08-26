@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import delete, insert, select, update
+from sqlalchemy import delete, exists, insert, select, update
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import IntegrityError
 
@@ -53,6 +53,33 @@ class PriceCatalogRepository:
             raise DuplicateCatalogVersionError(catalog.version) from exc
         return catalog_id
 
+    def publish_catalog(
+        self,
+        catalog: Any,
+        *,
+        published_at: datetime,
+    ) -> str:
+        """Insert a complete published catalog in one transaction."""
+        catalog_id = str(uuid4())
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(
+                    insert(billing_price_catalogs).values(
+                        id=catalog_id,
+                        version=catalog.version,
+                        status="published",
+                        effective_at=catalog.effective_at,
+                        published_at=published_at,
+                        created_by=catalog.created_by,
+                        metadata_json=_dump_json(catalog.metadata),
+                        updated_at=published_at,
+                    ),
+                )
+                self._insert_rules(conn, catalog_id, catalog.rules)
+        except IntegrityError as exc:
+            raise DuplicateCatalogVersionError(catalog.version) from exc
+        return catalog_id
+
     def replace_draft_rules(
         self,
         catalog_id: str,
@@ -61,12 +88,7 @@ class PriceCatalogRepository:
         """Replace rules only while a catalog is still an unpublished draft."""
         with self.engine.begin() as conn:
             catalog = (
-                conn.execute(
-                    select(
-                        billing_price_catalogs.c.id,
-                        billing_price_catalogs.c.status,
-                    ).where(billing_price_catalogs.c.id == catalog_id),
-                )
+                conn.execute(self._draft_for_update_statement(catalog_id))
                 .mappings()
                 .first()
             )
@@ -76,12 +98,32 @@ class PriceCatalogRepository:
                 raise CatalogImmutableError(
                     f"published catalog is immutable: {catalog_id}",
                 )
-            conn.execute(
-                delete(billing_price_rules).where(
-                    billing_price_rules.c.catalog_id == catalog_id,
-                ),
-            )
+            conn.execute(self._guarded_delete_rules_statement(catalog_id))
             self._insert_rules(conn, catalog_id, rules)
+
+    @staticmethod
+    def _draft_for_update_statement(catalog_id: str):
+        return (
+            select(
+                billing_price_catalogs.c.id,
+                billing_price_catalogs.c.status,
+            )
+            .where(billing_price_catalogs.c.id == catalog_id)
+            .with_for_update()
+        )
+
+    @staticmethod
+    def _guarded_delete_rules_statement(catalog_id: str):
+        draft_exists = exists(
+            select(billing_price_catalogs.c.id).where(
+                billing_price_catalogs.c.id == catalog_id,
+                billing_price_catalogs.c.status == "draft",
+            ),
+        )
+        return delete(billing_price_rules).where(
+            billing_price_rules.c.catalog_id == catalog_id,
+            draft_exists,
+        )
 
     def publish_draft(
         self,
@@ -198,6 +240,7 @@ def _dump_json(value: Any) -> str:
     return json.dumps(
         value,
         ensure_ascii=False,
+        allow_nan=False,
         sort_keys=True,
         separators=(",", ":"),
     )
