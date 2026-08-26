@@ -318,10 +318,13 @@ class AgentRunner(Runner):
         )
         query = _get_last_user_text(msgs)
         session_id = getattr(request, "session_id", "") or ""
+        from ..sealed_agents.registry import get_sealed_agent_registry
+
+        sealed_runtime = get_sealed_agent_registry().is_sealed(self.agent_id)
 
         # Check if query is a command (including /approval)
         logger.debug(f"Query: {query!r}, is_command: {_is_command(query)}")
-        if query and _is_command(query):
+        if query and _is_command(query) and not sealed_runtime:
             logger.info("Command path: %s", query.strip()[:50])
             async for msg, last in run_command_path(request, msgs, self):
                 yield msg, last
@@ -773,9 +776,7 @@ class AgentRunner(Runner):
                     build_release_output_policy,
                     sanitize_message,
                 )
-                from ..sealed_agents.registry import get_sealed_agent_registry
-
-                sealed = get_sealed_agent_registry().is_sealed(self.agent_id)
+                sealed = sealed_runtime
                 output_policy = (
                     build_release_output_policy(Path(self.workspace_dir))
                     if sealed and self.workspace_dir

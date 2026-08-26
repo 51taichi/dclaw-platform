@@ -160,18 +160,41 @@ async def activate_sealed_agent_release(
 
 
 @router.post("/{agent_id}/disable")
-def disable_sealed_agent(agent_id: str, request: Request) -> dict[str, Any]:
+async def disable_sealed_agent(agent_id: str, request: Request) -> dict[str, Any]:
     _require_admin(request)
     try:
-        return _operational_dto(get_sealed_agent_service().disable(agent_id))
+        record = get_sealed_agent_service().disable(agent_id)
+        config = load_config()
+        profile = config.agents.profiles.get(agent_id)
+        if profile is not None:
+            profile.enabled = False
+            save_config(config)
+        manager = getattr(request.app.state, "multi_agent_manager", None)
+        if manager is not None and manager.is_agent_loaded(agent_id):
+            await manager.stop_agent(agent_id)
+        return _operational_dto(record)
     except SealedAgentReleaseError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/{agent_id}/enable")
-def enable_sealed_agent(agent_id: str, request: Request) -> dict[str, Any]:
+async def enable_sealed_agent(agent_id: str, request: Request) -> dict[str, Any]:
     _require_admin(request)
     try:
-        return _operational_dto(get_sealed_agent_service().enable(agent_id))
+        record = get_sealed_agent_service().enable(agent_id)
+        config = load_config()
+        profile = config.agents.profiles.get(agent_id)
+        if profile is not None:
+            profile.enabled = True
+            save_config(config)
+        manager = getattr(request.app.state, "multi_agent_manager", None)
+        if manager is not None and not manager.is_agent_loaded(agent_id):
+            if not await manager.preload_agent(agent_id):
+                get_sealed_agent_service().disable(agent_id)
+                if profile is not None:
+                    profile.enabled = False
+                    save_config(config)
+                raise SealedAgentReleaseError("sealed agent runtime validation failed")
+        return _operational_dto(record)
     except SealedAgentReleaseError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

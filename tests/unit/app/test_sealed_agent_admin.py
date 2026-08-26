@@ -111,3 +111,39 @@ async def test_activation_registers_private_runtime_only_after_preload_succeeds(
     assert response["agent_id"] == "luyu"
     assert config.agents.profiles["luyu"].workspace_dir == str(release_root / "agent")
     assert saved
+
+
+@pytest.mark.asyncio
+async def test_disable_stops_loaded_runtime_and_config(monkeypatch):
+    record = _record().model_copy(update={"enabled": False})
+
+    class Service:
+        def disable(self, agent_id):
+            return record
+
+    stopped = []
+
+    class Manager:
+        def is_agent_loaded(self, agent_id):
+            return True
+
+        async def stop_agent(self, agent_id):
+            stopped.append(agent_id)
+
+    config = Config()
+    from qwenpaw.config.config import AgentProfileRef
+
+    config.agents.profiles["luyu"] = AgentProfileRef(
+        id="luyu", workspace_dir="/private/release", enabled=True
+    )
+    monkeypatch.setattr(router_module, "get_sealed_agent_service", lambda: Service())
+    monkeypatch.setattr(router_module, "load_config", lambda: config)
+    monkeypatch.setattr(router_module, "save_config", lambda _value: None)
+    request = _request()
+    request.app = SimpleNamespace(state=SimpleNamespace(multi_agent_manager=Manager()))
+
+    response = await router_module.disable_sealed_agent("luyu", request)
+
+    assert response["enabled"] is False
+    assert config.agents.profiles["luyu"].enabled is False
+    assert stopped == ["luyu"]

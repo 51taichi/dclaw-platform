@@ -463,7 +463,7 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
         for tool_name, tool_func in tool_functions.items():
             if not tool_allowed_for_runtime(
                 tool_name,
-                sealed=self._sealed_runtime,
+                sealed=bool(getattr(self, "_sealed_runtime", False)),
                 plugin_tool=tool_name in plugin_tools,
             ):
                 logger.debug("Skipped tool denied by sealed runtime: %s", tool_name)
@@ -712,7 +712,7 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
                 Options: "override", "skip", "raise", "rename"
                 (default: "skip")
         """
-        if self._sealed_runtime:
+        if bool(getattr(self, "_sealed_runtime", False)):
             logger.info("Skipped MCP tools for sealed agent runtime")
             return
         for i, client in enumerate(self._mcp_clients):
