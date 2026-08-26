@@ -19,8 +19,10 @@ from ..billing.pricing import (
     QuoteRequest,
 )
 from ..billing.usage import (
+    IdempotencyConflictError,
     InsufficientUsageCreditsError,
     UsageOrderConflictError,
+    UsageOrderStateError,
     UsageService,
     wallet_balance_dict,
 )
@@ -168,8 +170,16 @@ def create_user_quote(
             quote_request,
             business_key=payload.business_key,
         )
-        if order["id"] is not None:
+        if order["id"] is not None and order["status"] == "quoted":
             order = service.hold(str(order["id"]))
+        elif order["id"] is not None and order["status"] not in {
+            "held",
+            "captured",
+            "released",
+        }:
+            raise UsageOrderStateError(
+                f"cannot replay usage order in state: {order['status']}",
+            )
         return order
     except InsufficientUsageCreditsError as exc:
         return JSONResponse(
@@ -180,11 +190,26 @@ def create_user_quote(
                 "available_credits": exc.available,
             },
         )
-    except UsageOrderConflictError as exc:
-        raise HTTPException(
+    except IdempotencyConflictError:
+        return JSONResponse(
             status_code=409,
-            detail={"code": "business_key_conflict"},
-        ) from exc
+            content={"code": "idempotency_conflict"},
+        )
+    except UsageOrderStateError as exc:
+        return JSONResponse(
+            status_code=409,
+            content={"code": "usage_state_conflict", "detail": str(exc)},
+        )
+    except UsageOrderConflictError:
+        return JSONResponse(
+            status_code=409,
+            content={"code": "business_key_conflict"},
+        )
+    except CatalogNotFoundError:
+        return JSONResponse(
+            status_code=503,
+            content={"code": "catalog_not_ready"},
+        )
     except PriceRuleNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (ValueError, TypeError) as exc:

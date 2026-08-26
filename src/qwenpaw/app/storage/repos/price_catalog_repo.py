@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
@@ -132,7 +132,48 @@ class PriceCatalogRepository:
         published_at: datetime,
     ) -> None:
         """Atomically transition one validated draft to published status."""
+        self.publish_draft_validated(
+            catalog_id,
+            published_at=published_at,
+            validate=lambda _catalog: None,
+        )
+
+    def publish_draft_validated(
+        self,
+        catalog_id: str,
+        *,
+        published_at: datetime,
+        validate: Callable[[dict[str, Any]], None],
+    ) -> None:
+        """Lock, validate, and publish the same stored draft snapshot."""
         with self.engine.begin() as conn:
+            catalog = (
+                conn.execute(
+                    select(billing_price_catalogs)
+                    .where(billing_price_catalogs.c.id == catalog_id)
+                    .with_for_update(),
+                )
+                .mappings()
+                .first()
+            )
+            if catalog is None:
+                raise CatalogNotFoundError(catalog_id)
+            if catalog["status"] != "draft":
+                raise CatalogImmutableError(
+                    f"published catalog is immutable: {catalog_id}",
+                )
+
+            rules = (
+                conn.execute(
+                    select(billing_price_rules)
+                    .where(billing_price_rules.c.catalog_id == catalog_id)
+                    .order_by(billing_price_rules.c.id),
+                )
+                .mappings()
+                .all()
+            )
+            validate(_decode_catalog(catalog, rules))
+
             result = conn.execute(
                 update(billing_price_catalogs)
                 .where(
@@ -147,13 +188,6 @@ class PriceCatalogRepository:
             )
             if result.rowcount:
                 return
-            catalog = conn.execute(
-                select(billing_price_catalogs.c.status).where(
-                    billing_price_catalogs.c.id == catalog_id,
-                ),
-            ).first()
-            if catalog is None:
-                raise CatalogNotFoundError(catalog_id)
             raise CatalogImmutableError(
                 f"published catalog is immutable: {catalog_id}",
             )

@@ -292,7 +292,15 @@ class PriceCatalogService:
 
     def publish_draft(self, catalog_id: str) -> dict[str, Any]:
         """Revalidate and publish a stored draft without rewriting it."""
-        stored = self.repository.get_catalog(catalog_id)
+        self.repository.publish_draft_validated(
+            catalog_id,
+            published_at=_aware_utc(self._clock()),
+            validate=self._validate_stored_draft,
+        )
+        return self.repository.get_catalog(catalog_id)
+
+    def _validate_stored_draft(self, stored: dict[str, Any]) -> None:
+        """Validate the snapshot held under the repository publish lock."""
         rules = tuple(
             PriceRule(
                 id=str(rule["id"]),
@@ -327,11 +335,6 @@ class PriceCatalogService:
             metadata=stored["metadata"],
         )
         self.validate_draft(draft)
-        self.repository.publish_draft(
-            catalog_id,
-            published_at=_aware_utc(self._clock()),
-        )
-        return self.repository.get_catalog(catalog_id)
 
     def list_catalogs(self) -> list[dict[str, Any]]:
         """Return the immutable catalog history for trusted admins."""

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from hashlib import sha256
 from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import uuid4
@@ -39,6 +40,10 @@ class UsageOrderNotFoundError(UsageOrderError):
 
 class UsageOrderConflictError(UsageOrderError):
     """Raised when a business key belongs to a different wallet."""
+
+
+class IdempotencyConflictError(UsageOrderConflictError):
+    """Raised when one client key is replayed with a different request."""
 
 
 class UsageOrderStateError(UsageOrderError):
@@ -88,10 +93,14 @@ class UsageService:
             return _off_order(normalized_key, quote)
 
         wallet = self.repository.ensure_wallet("user", normalized_owner)
-        existing = self._find_by_business_key(normalized_key)
+        stored_key = _stored_business_key(str(wallet["id"]), normalized_key)
+        existing = self._find_existing_order(
+            str(wallet["id"]),
+            stored_key,
+            normalized_key,
+        )
         if existing is not None:
-            if existing["wallet_id"] != wallet["id"]:
-                raise UsageOrderConflictError(normalized_key)
+            self._assert_replay_matches(existing, request)
             return self._decode_order(existing)
 
         quote = self.pricing.quote(request)
@@ -103,7 +112,7 @@ class UsageService:
             "wallet_id": wallet["id"],
             "catalog_id": catalog_id,
             "price_rule_id": quote.rule_id,
-            "business_key": normalized_key,
+            "business_key": stored_key,
             "status": "quoted",
             "provider_id": request.provider_id,
             "model_key": request.model_key,
@@ -115,6 +124,7 @@ class UsageService:
                 {
                     **request.to_jsonable(),
                     "billing_mode": self.mode,
+                    "client_business_key": normalized_key,
                 },
             ),
             "price_snapshot_json": _dump_json(quote.to_jsonable()),
@@ -125,11 +135,12 @@ class UsageService:
             with self.repository.engine.begin() as conn:
                 conn.execute(insert(billing_usage_orders).values(**values))
         except IntegrityError as exc:
-            existing = self._find_by_business_key(normalized_key)
+            existing = self._find_by_business_key(stored_key)
             if existing is None:
                 raise
             if existing["wallet_id"] != wallet["id"]:
                 raise UsageOrderConflictError(normalized_key) from exc
+            self._assert_replay_matches(existing, request)
             return self._decode_order(existing)
         return self.get_order(order_id)
 
@@ -302,6 +313,57 @@ class UsageService:
             )
         return dict(row) if row is not None else None
 
+    def _find_existing_order(
+        self,
+        wallet_id: str,
+        stored_key: str,
+        client_key: str,
+    ) -> dict[str, Any] | None:
+        existing = self._find_by_business_key(stored_key)
+        if existing is not None:
+            if str(existing["wallet_id"]) != wallet_id:
+                raise UsageOrderConflictError(client_key)
+            return existing
+        # Compatibility for Task 5 orders created before keys were
+        # namespaced. The wallet predicate prevents another owner's legacy
+        # raw key from blocking this owner.
+        with self.repository.engine.connect() as conn:
+            legacy = (
+                conn.execute(
+                    select(billing_usage_orders).where(
+                        billing_usage_orders.c.business_key == client_key,
+                        billing_usage_orders.c.wallet_id == wallet_id,
+                    ),
+                )
+                .mappings()
+                .first()
+            )
+        return dict(legacy) if legacy is not None else None
+
+    @staticmethod
+    def _assert_replay_matches(
+        order: dict[str, Any],
+        request: QuoteRequest,
+    ) -> None:
+        stored = json.loads(order["request_snapshot_json"] or "{}")
+        canonical_stored = {
+            key: stored.get(key)
+            for key in (
+                "provider_id",
+                "model_key",
+                "capability",
+                "parameters",
+                "input_tokens",
+                "output_tokens",
+            )
+        }
+        if _canonical_json(canonical_stored) != _canonical_json(
+            request.to_jsonable(),
+        ):
+            raise IdempotencyConflictError(
+                "idempotency key is already bound to another quote request",
+            )
+
     def _catalog_id(self, version: str) -> str:
         with self.repository.engine.connect() as conn:
             catalog_id = conn.scalar(
@@ -353,9 +415,13 @@ class UsageService:
     def _decode_order(order: dict[str, Any]) -> dict[str, Any]:
         request_snapshot = json.loads(order["request_snapshot_json"] or "{}")
         price_snapshot = json.loads(order["price_snapshot_json"] or "{}")
+        client_business_key = request_snapshot.pop(
+            "client_business_key",
+            str(order["business_key"]),
+        )
         return {
             "id": str(order["id"]),
-            "business_key": str(order["business_key"]),
+            "business_key": client_business_key,
             "status": str(order["status"]),
             "billing_mode": request_snapshot.pop("billing_mode", "shadow"),
             "quoted_credits": int(order["quoted_credits"]),
@@ -418,3 +484,12 @@ def _dump_json(value: Any) -> str:
         sort_keys=True,
         separators=(",", ":"),
     )
+
+
+def _canonical_json(value: Any) -> str:
+    return _dump_json(value)
+
+
+def _stored_business_key(wallet_id: str, client_key: str) -> str:
+    digest = sha256(client_key.encode("utf-8")).hexdigest()
+    return f"user-wallet:{wallet_id}:{digest}"

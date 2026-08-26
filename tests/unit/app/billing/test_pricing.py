@@ -987,3 +987,78 @@ def test_draft_mutation_statements_lock_and_guard_catalog_status(repo):
     assert lock_sql.rstrip().endswith("FOR UPDATE")
     assert "billing_price_catalogs.status = 'draft'" in delete_sql
     assert "EXISTS" in delete_sql
+
+
+def test_locked_draft_publish_validates_current_rules_before_status_update(
+    service,
+    repo,
+    clock,
+):
+    catalog_id = service.create_draft(
+        _catalog(
+            "locked-publish",
+            clock,
+            _rule(
+                "locked-image",
+                "image_count",
+                capability="text_to_image",
+                credits_per_unit=50,
+            ),
+        ),
+    )
+    observed_rule_ids = []
+
+    def reject_current_catalog(catalog):
+        observed_rule_ids.extend(rule["id"] for rule in catalog["rules"])
+        raise ValueError("current draft rules are invalid")
+
+    with pytest.raises(ValueError, match="current draft rules are invalid"):
+        repo.publish_draft_validated(
+            catalog_id,
+            published_at=clock.now,
+            validate=reject_current_catalog,
+        )
+
+    assert observed_rule_ids == ["locked-image"]
+    assert repo.get_catalog(catalog_id)["status"] == "draft"
+
+
+def test_service_rejects_ambiguous_rules_replaced_before_locked_publish(
+    service,
+    repo,
+    clock,
+):
+    catalog_id = service.create_draft(
+        _catalog(
+            "replaced-before-publish",
+            clock,
+            _rule(
+                "original-image",
+                "image_count",
+                capability="text_to_image",
+                credits_per_unit=50,
+            ),
+        ),
+    )
+    repo.replace_draft_rules(
+        catalog_id,
+        (
+            _rule(
+                "ambiguous-a",
+                "image_count",
+                capability="text_to_image",
+                credits_per_unit=50,
+            ),
+            _rule(
+                "ambiguous-b",
+                "image_count",
+                capability="text_to_image",
+                credits_per_unit=80,
+            ),
+        ),
+    )
+
+    with pytest.raises(AmbiguousPriceRuleError):
+        service.publish_draft(catalog_id)
+
+    assert repo.get_catalog(catalog_id)["status"] == "draft"

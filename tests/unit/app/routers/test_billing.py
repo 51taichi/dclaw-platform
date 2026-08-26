@@ -314,6 +314,169 @@ def test_enforced_quote_returns_409_code_when_wallet_is_insufficient(
     assert order["held_credits"] == 0
 
 
+def test_same_client_business_key_is_namespaced_per_authenticated_user(
+    monkeypatch,
+    engine,
+    wallet_repo,
+    pricing,
+):
+    _publish_catalog(pricing)
+    usage = UsageService(wallet_repo, pricing, mode="shadow")
+    client = TestClient(_app(monkeypatch, usage, wallet_repo, pricing))
+
+    alice = client.post(
+        "/api/user/billing/quotes",
+        json=_quote_payload("shared-key"),
+        headers=_headers("alice"),
+    )
+    bob = client.post(
+        "/api/user/billing/quotes",
+        json=_quote_payload("shared-key"),
+        headers=_headers("bob"),
+    )
+
+    assert alice.status_code == 200
+    assert bob.status_code == 200
+    assert alice.json()["id"] != bob.json()["id"]
+    assert alice.json()["business_key"] == "shared-key"
+    assert bob.json()["business_key"] == "shared-key"
+    with engine.connect() as conn:
+        stored_keys = conn.scalars(
+            select(billing_usage_orders.c.business_key),
+        ).all()
+    assert len(set(stored_keys)) == 2
+    assert "shared-key" not in stored_keys
+
+
+@pytest.mark.parametrize(
+    "payload_update",
+    [
+        {"provider_id": "other-provider"},
+        {"model_key": "other-model"},
+        {"capability": "text_to_video"},
+        {"parameters": {"count": 3}},
+        {"input_tokens": 1},
+        {"output_tokens": 1},
+    ],
+)
+def test_same_owner_key_with_changed_quote_request_returns_409_conflict(
+    monkeypatch,
+    wallet_repo,
+    pricing,
+    payload_update,
+):
+    _publish_catalog(pricing)
+    usage = UsageService(wallet_repo, pricing, mode="shadow")
+    client = TestClient(_app(monkeypatch, usage, wallet_repo, pricing))
+    first = client.post(
+        "/api/user/billing/quotes",
+        json=_quote_payload("stable-key"),
+        headers=_headers("alice"),
+    )
+
+    changed = client.post(
+        "/api/user/billing/quotes",
+        json=_quote_payload("stable-key") | payload_update,
+        headers=_headers("alice"),
+    )
+
+    assert first.status_code == 200
+    assert changed.status_code == 409
+    assert changed.json()["code"] == "idempotency_conflict"
+
+
+@pytest.mark.parametrize("terminal_state", ["captured", "released"])
+def test_terminal_quote_replay_returns_the_existing_order_without_reholding(
+    monkeypatch,
+    wallet_repo,
+    pricing,
+    terminal_state,
+):
+    _publish_catalog(pricing)
+    usage = UsageService(wallet_repo, pricing, mode="shadow")
+    order = usage.create_quote(
+        "alice",
+        QuoteRequest(
+            "aliyun",
+            "wan-2.7",
+            "text_to_image",
+            {"count": 2},
+        ),
+        business_key=f"terminal-{terminal_state}",
+    )
+    usage.hold(order["id"])
+    if terminal_state == "captured":
+        usage.capture(order["id"])
+    else:
+        usage.release(order["id"])
+    client = TestClient(_app(monkeypatch, usage, wallet_repo, pricing))
+
+    replay = client.post(
+        "/api/user/billing/quotes",
+        json=_quote_payload(f"terminal-{terminal_state}"),
+        headers=_headers("alice"),
+    )
+
+    assert replay.status_code == 200
+    assert replay.json()["id"] == order["id"]
+    assert replay.json()["status"] == terminal_state
+
+
+def test_quote_replay_in_non_idempotent_state_returns_controlled_409(
+    monkeypatch,
+    wallet_repo,
+    pricing,
+):
+    _publish_catalog(pricing)
+    usage = UsageService(wallet_repo, pricing, mode="shadow")
+    order = usage.create_quote(
+        "alice",
+        QuoteRequest(
+            "aliyun",
+            "wan-2.7",
+            "text_to_image",
+            {"count": 2},
+        ),
+        business_key="reconciling-replay",
+    )
+    usage.hold(order["id"])
+    usage.mark_reconciling(order["id"])
+    client = TestClient(
+        _app(monkeypatch, usage, wallet_repo, pricing),
+        raise_server_exceptions=False,
+    )
+
+    replay = client.post(
+        "/api/user/billing/quotes",
+        json=_quote_payload("reconciling-replay"),
+        headers=_headers("alice"),
+    )
+
+    assert replay.status_code == 409
+    assert replay.json()["code"] == "usage_state_conflict"
+
+
+def test_quote_without_published_catalog_returns_catalog_not_ready(
+    monkeypatch,
+    wallet_repo,
+    pricing,
+):
+    usage = UsageService(wallet_repo, pricing, mode="shadow")
+    client = TestClient(
+        _app(monkeypatch, usage, wallet_repo, pricing),
+        raise_server_exceptions=False,
+    )
+
+    response = client.post(
+        "/api/user/billing/quotes",
+        json=_quote_payload("no-catalog"),
+        headers=_headers("alice"),
+    )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "catalog_not_ready"
+
+
 def test_enforced_usage_state_machine_holds_captures_and_releases(
     wallet_repo,
     pricing,
