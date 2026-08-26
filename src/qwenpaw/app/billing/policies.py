@@ -10,6 +10,7 @@ from typing import Mapping
 SIGNUP_TRIAL_CREDITS = 100
 SIGNUP_TRIAL_EXPIRY = timedelta(days=7)
 SIGNUP_TRIAL_ALLOWED_CAPABILITIES = ("text", "image")
+SIGNUP_TRIAL_ALLOWED_TIERS = ("standard",)
 SIGNUP_TRIAL_DENIED_CAPABILITIES = (
     "video",
     "high_cost",
@@ -36,5 +37,6 @@ def signup_trial_metadata() -> Mapping[str, object]:
     return {
         "grant_policy": "signup_trial",
         "allowed_capabilities": list(SIGNUP_TRIAL_ALLOWED_CAPABILITIES),
+        "allowed_tiers": list(SIGNUP_TRIAL_ALLOWED_TIERS),
         "denied_capabilities": list(SIGNUP_TRIAL_DENIED_CAPABILITIES),
     }

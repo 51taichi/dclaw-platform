@@ -1,19 +1,22 @@
 # -*- coding: utf-8 -*-
+# pylint: disable=protected-access,redefined-outer-name,unused-argument
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, insert, select
 from starlette.requests import Request
 from starlette.responses import Response
 
 from qwenpaw.app import auth, db
+from qwenpaw.app.billing.service import get_wallet_service
 from qwenpaw.app.storage.engine import get_app_engine, reset_app_engine_cache
 from qwenpaw.app.storage.schema import (
     billing_ledger_entries,
     billing_wallets,
     create_all,
+    users,
 )
 
 
@@ -85,6 +88,73 @@ def test_registration_creates_an_empty_personal_wallet(isolated_auth_store):
         wallet["package_credits"],
     ) == (0, 0, 0, 0, 0)
     assert ledger_count == 0
+
+
+def test_wallet_service_idempotently_backfills_existing_users(
+    isolated_auth_store,
+):
+    with get_app_engine().begin() as conn:
+        user_id = conn.execute(
+            insert(users).values(
+                username="legacy-user",
+                password_hash="hash",
+                password_salt="salt",
+                role="user",
+            ),
+        ).inserted_primary_key[0]
+
+    get_wallet_service()
+    get_wallet_service()
+
+    with get_app_engine().connect() as conn:
+        wallets = (
+            conn.execute(
+                select(billing_wallets).where(
+                    billing_wallets.c.owner_type == "user",
+                    billing_wallets.c.owner_id == str(user_id),
+                ),
+            )
+            .mappings()
+            .all()
+        )
+    assert len(wallets) == 1
+
+
+def test_registration_retry_compensates_a_transient_wallet_failure(
+    isolated_auth_store,
+    monkeypatch,
+):
+    real_wallet_service = get_wallet_service()
+
+    class FlakyWalletService:
+        calls = 0
+
+        def get_or_create_personal_wallet(self, user_id):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("temporary wallet failure")
+            return real_wallet_service.get_or_create_personal_wallet(user_id)
+
+    flaky = FlakyWalletService()
+    monkeypatch.setattr(auth, "get_wallet_service", lambda: flaky)
+
+    with pytest.raises(RuntimeError, match="temporary wallet failure"):
+        auth.register_user("admin", "strong-password")
+    token = auth.register_user("admin", "strong-password")
+
+    assert token is not None
+    assert flaky.calls == 2
+    user = auth.resolve_authenticated_user("admin")
+    with get_app_engine().connect() as conn:
+        wallet_count = conn.scalar(
+            select(func.count())
+            .select_from(billing_wallets)
+            .where(
+                billing_wallets.c.owner_type == "user",
+                billing_wallets.c.owner_id == str(user["id"]),
+            ),
+        )
+    assert wallet_count == 1
 
 
 def test_legacy_auth_json_user_is_migrated_to_db(isolated_auth_store):
@@ -187,14 +257,20 @@ async def test_desktop_update_endpoint_is_public(isolated_auth_store):
 
 
 @pytest.mark.asyncio
-async def test_preview_subresource_can_reuse_referer_token(isolated_auth_store):
+async def test_preview_subresource_can_reuse_referer_token(
+    isolated_auth_store,
+):
     token = auth.register_user("admin", "strong-password")
+    preview_path = (
+        "/api/user/workspace/preview/__qwenpaw_preview__/default/"
+        "chat-1/style.css"
+    )
     request = Request(
         {
             "type": "http",
             "method": "GET",
-            "path": "/api/user/workspace/preview/__qwenpaw_preview__/default/chat-1/style.css",
-            "raw_path": b"/api/user/workspace/preview/__qwenpaw_preview__/default/chat-1/style.css",
+            "path": preview_path,
+            "raw_path": preview_path.encode(),
             "headers": [
                 (
                     b"referer",

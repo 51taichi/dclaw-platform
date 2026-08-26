@@ -26,6 +26,7 @@ from ..schema import (
     billing_ledger_allocations,
     billing_ledger_entries,
     billing_wallets,
+    users,
 )
 
 
@@ -114,6 +115,15 @@ class BillingRepository:
                 .first()
             )
         return dict(row) if row is not None else None
+
+    def backfill_user_wallets(self) -> None:
+        """Idempotently create empty wallets for durable legacy users."""
+        with self.engine.connect() as conn:
+            user_ids = [
+                str(value) for value in conn.scalars(select(users.c.id))
+            ]
+        for user_id in user_ids:
+            self.ensure_wallet("user", user_id)
 
     def append_transaction(self, command: LedgerTransaction) -> WalletBalance:
         self._validate_command(command)
@@ -216,6 +226,8 @@ class BillingRepository:
         credits: int,
         business_key: str,
         idempotency_key: str,
+        capability: str | None = None,
+        tier: str | None = None,
     ) -> WalletBalance:
         return self.append_transaction(
             LedgerTransaction(
@@ -225,6 +237,7 @@ class BillingRepository:
                 business_type="usage",
                 business_key=business_key,
                 idempotency_key=idempotency_key,
+                metadata={"capability": capability, "tier": tier},
             ),
         )
 
@@ -546,6 +559,8 @@ class BillingRepository:
             conn,
             command.wallet_id,
             command.credits,
+            capability=str(command.metadata.get("capability") or ""),
+            tier=str(command.metadata.get("tier") or ""),
         )
         if sum(amount for _, amount in allocations) != command.credits:
             raise InsufficientCreditsError(
@@ -773,6 +788,7 @@ class BillingRepository:
                 "wallet held projection cannot satisfy release",
             )
 
+    # pylint: disable=too-many-branches,too-many-statements
     def _append_capture(self, conn, command: LedgerTransaction) -> None:
         prior_settlement = conn.execute(
             select(billing_ledger_entries.c.id).where(
@@ -802,11 +818,24 @@ class BillingRepository:
                 f"hold not found: {command.business_key}",
             )
 
+        now = self._clock()
+        expiry_is_null = case(
+            (billing_credit_lots.c.expires_at.is_(None), 1),
+            else_=0,
+        )
+        type_priority = case(
+            (billing_credit_lots.c.credit_type == "promotional", 0),
+            (billing_credit_lots.c.credit_type == "package", 1),
+            else_=2,
+        )
         allocations = conn.execute(
             select(
                 billing_ledger_allocations.c.credit_lot_id,
                 billing_ledger_allocations.c.credits,
                 billing_credit_lots.c.credit_type,
+                (billing_credit_lots.c.expires_at <= now).label(
+                    "is_expired",
+                ),
             )
             .select_from(
                 billing_ledger_allocations.join(
@@ -815,16 +844,22 @@ class BillingRepository:
                     == billing_credit_lots.c.id,
                 ),
             )
-            .where(billing_ledger_allocations.c.ledger_entry_id == hold_id),
+            .where(billing_ledger_allocations.c.ledger_entry_id == hold_id)
+            .order_by(
+                expiry_is_null,
+                billing_credit_lots.c.expires_at.asc(),
+                type_priority,
+                billing_credit_lots.c.created_at.asc(),
+                billing_credit_lots.c.id.asc(),
+            ),
         ).all()
-        captured_credits = sum(int(row.credits) for row in allocations)
-        if command.credits != captured_credits:
+        held_credits = sum(int(row.credits) for row in allocations)
+        if command.credits > held_credits:
             raise BillingInvariantError(
-                "capture must consume the complete hold",
+                "capture cannot exceed the complete hold",
             )
 
-        now = self._clock()
-        ledger_id = str(uuid4())
+        capture_ledger_id = str(uuid4())
         self._insert_ledger(
             conn,
             replace(
@@ -834,48 +869,140 @@ class BillingRepository:
                     "source_ledger_entry_id": hold_id,
                 },
             ),
-            ledger_id=ledger_id,
-            credit_delta=-captured_credits,
+            ledger_id=capture_ledger_id,
+            credit_delta=-command.credits,
             now=now,
         )
+        released_credits = held_credits - command.credits
+        release_ledger_id = str(uuid4()) if released_credits else None
+        if release_ledger_id is not None:
+            self._insert_ledger(
+                conn,
+                replace(
+                    command,
+                    event_type="usage_release",
+                    credits=0,
+                    idempotency_key=f"{command.idempotency_key}:remainder",
+                    metadata={
+                        **command.metadata,
+                        "source_ledger_entry_id": hold_id,
+                        "partial_capture_ledger_entry_id": capture_ledger_id,
+                    },
+                ),
+                ledger_id=release_ledger_id,
+                credit_delta=0,
+                now=now,
+            )
+
         captured_by_type = {credit_type: 0 for credit_type in _CREDIT_TYPES}
+        expired_by_type = {credit_type: 0 for credit_type in _CREDIT_TYPES}
+        expired_allocations: list[tuple[str, int]] = []
+        restored_available = 0
+        remaining_capture = command.credits
         for allocation in allocations:
             amount = int(allocation.credits)
+            captured = min(remaining_capture, amount)
+            released = amount - captured
+            remaining_capture -= captured
+            is_expired = bool(allocation.is_expired)
+            lot_values: dict[str, Any] = {
+                "held_credits": billing_credit_lots.c.held_credits - amount,
+                "updated_at": now,
+            }
+            if released and is_expired:
+                lot_values["status"] = "expired"
+                expired_by_type[str(allocation.credit_type)] += released
+                expired_allocations.append(
+                    (str(allocation.credit_lot_id), released),
+                )
+            elif released:
+                lot_values["available_credits"] = (
+                    billing_credit_lots.c.available_credits + released
+                )
+                restored_available += released
             changed = conn.execute(
                 update(billing_credit_lots)
                 .where(
                     billing_credit_lots.c.id == allocation.credit_lot_id,
                     billing_credit_lots.c.held_credits >= amount,
                 )
-                .values(
-                    held_credits=billing_credit_lots.c.held_credits - amount,
-                    updated_at=now,
-                ),
+                .values(**lot_values),
             )
             if changed.rowcount != 1:
                 raise BillingInvariantError(
                     "held lot projection cannot satisfy capture",
                 )
-            conn.execute(
-                insert(billing_ledger_allocations).values(
-                    id=str(uuid4()),
-                    ledger_entry_id=ledger_id,
-                    credit_lot_id=allocation.credit_lot_id,
-                    credits=amount,
-                    created_at=now,
+            if captured:
+                conn.execute(
+                    insert(billing_ledger_allocations).values(
+                        id=str(uuid4()),
+                        ledger_entry_id=capture_ledger_id,
+                        credit_lot_id=allocation.credit_lot_id,
+                        credits=captured,
+                        created_at=now,
+                    ),
+                )
+                captured_by_type[str(allocation.credit_type)] += captured
+            if released and release_ledger_id is not None:
+                conn.execute(
+                    insert(billing_ledger_allocations).values(
+                        id=str(uuid4()),
+                        ledger_entry_id=release_ledger_id,
+                        credit_lot_id=allocation.credit_lot_id,
+                        credits=released,
+                        created_at=now,
+                    ),
+                )
+
+        expired_credits = sum(expired_by_type.values())
+        if expired_credits:
+            expiry_ledger_id = str(uuid4())
+            self._insert_ledger(
+                conn,
+                LedgerTransaction(
+                    wallet_id=command.wallet_id,
+                    event_type="credit_expiry",
+                    credits=expired_credits,
+                    business_type="usage_hold",
+                    business_key=hold_id,
+                    idempotency_key=(
+                        f"credit-expiry:partial-capture:{hold_id}"
+                    ),
+                    metadata={
+                        "expiry_phase": "partial_capture_release",
+                        "source_ledger_entry_id": hold_id,
+                        "capture_ledger_entry_id": capture_ledger_id,
+                    },
                 ),
+                ledger_id=expiry_ledger_id,
+                credit_delta=-expired_credits,
+                now=now,
             )
-            captured_by_type[str(allocation.credit_type)] += amount
+            for lot_id, amount in expired_allocations:
+                conn.execute(
+                    insert(billing_ledger_allocations).values(
+                        id=str(uuid4()),
+                        ledger_entry_id=expiry_ledger_id,
+                        credit_lot_id=lot_id,
+                        credits=amount,
+                        created_at=now,
+                    ),
+                )
 
         wallet_values: dict[str, Any] = {
-            "held_credits": billing_wallets.c.held_credits - captured_credits,
+            "available_credits": billing_wallets.c.available_credits
+            + restored_available,
+            "held_credits": billing_wallets.c.held_credits - held_credits,
             "updated_at": now,
         }
         wallet_guards = [
             billing_wallets.c.id == command.wallet_id,
-            billing_wallets.c.held_credits >= captured_credits,
+            billing_wallets.c.held_credits >= held_credits,
         ]
-        for credit_type, amount in captured_by_type.items():
+        for credit_type in _CREDIT_TYPES:
+            amount = (
+                captured_by_type[credit_type] + expired_by_type[credit_type]
+            )
             if amount:
                 type_column = _TYPE_COLUMNS[credit_type]
                 wallet_values[type_column.name] = type_column - amount
@@ -895,6 +1022,9 @@ class BillingRepository:
         conn,
         wallet_id: str,
         credits: int,
+        *,
+        capability: str,
+        tier: str,
     ) -> list[tuple[str, int]]:
         now = self._clock()
         rows = conn.execute(
@@ -907,6 +1037,8 @@ class BillingRepository:
         remaining = credits
         allocations: list[tuple[str, int]] = []
         for row in rows:
+            if not _lot_is_eligible(row, capability=capability, tier=tier):
+                continue
             amount = min(remaining, int(row["available_credits"]))
             if amount:
                 allocations.append((str(row["id"]), amount))
@@ -1011,6 +1143,11 @@ class BillingRepository:
                 raise ValueError(
                     "grant commands require a supported credit type",
                 )
+            if (
+                command.credit_type == "purchased"
+                and command.expires_at is not None
+            ):
+                raise ValueError("purchased credits cannot expire")
         elif command.credit_type is not None:
             raise ValueError("only grant commands may specify a credit type")
 
@@ -1112,3 +1249,38 @@ class BillingRepository:
         result = dict(row)
         result["metadata"] = json.loads(result.pop("metadata_json") or "{}")
         return result
+
+
+def _lot_is_eligible(row, *, capability: str, tier: str) -> bool:
+    metadata = json.loads(row["metadata_json"] or "{}")
+    if metadata.get("grant_policy") != "signup_trial":
+        return True
+    normalized_capability = capability.strip().lower()
+    normalized_tier = tier.strip().lower()
+    if not normalized_capability or not normalized_tier:
+        return False
+    if "video" in normalized_capability:
+        capability_group = "video"
+    elif "image" in normalized_capability:
+        capability_group = "image"
+    elif normalized_capability == "fixed_workflow":
+        capability_group = "fixed_workflow"
+    else:
+        capability_group = "text"
+    denied = {
+        str(value).lower() for value in metadata.get("denied_capabilities", [])
+    }
+    if capability_group in denied or normalized_capability in denied:
+        return False
+    if normalized_tier == "high_cost" and "high_cost" in denied:
+        return False
+    allowed = {
+        str(value).lower()
+        for value in metadata.get("allowed_capabilities", [])
+    }
+    if allowed and capability_group not in allowed:
+        return False
+    allowed_tiers = {
+        str(value).lower() for value in metadata.get("allowed_tiers", [])
+    }
+    return not allowed_tiers or normalized_tier in allowed_tiers

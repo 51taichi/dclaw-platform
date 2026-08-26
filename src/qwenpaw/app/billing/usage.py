@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import json
 import os
-from hashlib import sha256
+from collections.abc import Mapping
 from datetime import datetime, timezone
+from hashlib import sha256
 from typing import Any, Literal
 from uuid import uuid4
 
 from sqlalchemy import insert, select, update
 from sqlalchemy.engine import Connection
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from .models import (
+    BillingInvariantError,
+    DuplicateLedgerTransactionError,
     InsufficientCreditsError,
     LedgerTransaction,
     WalletBalance,
@@ -27,7 +30,9 @@ from ..storage.schema import (
 
 
 BillingMode = Literal["off", "shadow", "enforced"]
+Billability = Literal["unknown", "billable", "not_billable"]
 _BILLING_MODES = frozenset({"off", "shadow", "enforced"})
+_BILLABILITY_VALUES = frozenset({"unknown", "billable", "not_billable"})
 
 
 class UsageOrderError(RuntimeError):
@@ -120,6 +125,7 @@ class UsageService:
             "quoted_credits": quote.credits,
             "held_credits": 0,
             "captured_credits": 0,
+            "billability": "unknown",
             "request_snapshot_json": _dump_json(
                 {
                     **request.to_jsonable(),
@@ -146,6 +152,23 @@ class UsageService:
 
     def hold(self, order_id: str) -> dict[str, Any]:
         """Reserve the locked quote, or record only a shadow reservation."""
+        for attempt in range(3):
+            try:
+                return self._hold_once(order_id)
+            except (
+                IntegrityError,
+                OperationalError,
+            ) as exc:
+                current = self.get_order(order_id)
+                if current["status"] == "held":
+                    return current
+                if current["status"] != "quoted" or attempt == 2:
+                    raise UsageOrderStateError(
+                        "concurrent hold did not reach a replayable state",
+                    ) from exc
+        raise AssertionError("unreachable")
+
+    def _hold_once(self, order_id: str) -> dict[str, Any]:
         wallet_id = ""
         quote_credits = 0
         try:
@@ -160,6 +183,9 @@ class UsageService:
                 wallet_id = str(order["wallet_id"])
                 quote_credits = int(order["quoted_credits"])
                 if self._order_mode(order) == "enforced" and quote_credits:
+                    request_snapshot = json.loads(
+                        order["request_snapshot_json"] or "{}",
+                    )
                     self.repository.append_transaction_in_connection(
                         conn,
                         LedgerTransaction(
@@ -169,6 +195,15 @@ class UsageService:
                             business_type="usage",
                             business_key=str(order["business_key"]),
                             idempotency_key=f"usage:{order_id}:hold",
+                            metadata={
+                                "capability": str(order["capability"]),
+                                "tier": str(
+                                    request_snapshot.get("parameters", {}).get(
+                                        "tier",
+                                        "standard",
+                                    ),
+                                ),
+                            },
                         ),
                     )
                 self._transition(
@@ -186,92 +221,198 @@ class UsageService:
             ) from exc
         return self.get_order(order_id)
 
-    def capture(self, order_id: str) -> dict[str, Any]:
-        """Capture the exact locked quote once supplier usage is billable."""
-        allowed = ("held", "billable", "reconciling")
+    def settle_supplier(
+        self,
+        order_id: str,
+        *,
+        supplier_reference: str,
+        evidence: Mapping[str, Any],
+        billability: Billability,
+        actual_credits: int | None = None,
+    ) -> dict[str, Any]:
+        """Settle only from durable supplier billability evidence."""
+        normalized_reference = supplier_reference.strip()
+        if not normalized_reference:
+            raise ValueError("supplier reference must be non-empty")
+        if billability not in _BILLABILITY_VALUES:
+            raise ValueError("unsupported supplier billability")
+        stable_evidence = json.loads(_dump_json(dict(evidence)))
+        if billability == "billable":
+            if actual_credits is None or actual_credits <= 0:
+                raise ValueError(
+                    "billable settlement requires positive actual credits",
+                )
+        elif actual_credits is not None:
+            raise ValueError(
+                "only billable settlement accepts actual credits",
+            )
+
+        for attempt in range(3):
+            try:
+                return self._settle_supplier_once(
+                    order_id,
+                    supplier_reference=normalized_reference,
+                    evidence=stable_evidence,
+                    billability=billability,
+                    actual_credits=actual_credits,
+                )
+            except (
+                BillingInvariantError,
+                DuplicateLedgerTransactionError,
+                IntegrityError,
+                OperationalError,
+            ) as exc:
+                current = self.get_order(order_id)
+                if current["status"] in {"captured", "released"}:
+                    return self._settlement_replay(
+                        current,
+                        supplier_reference=normalized_reference,
+                        evidence=stable_evidence,
+                        billability=billability,
+                        actual_credits=actual_credits,
+                    )
+                if attempt == 2:
+                    raise UsageOrderStateError(
+                        "concurrent settlement did not reach a stable state",
+                    ) from exc
+        raise AssertionError("unreachable")
+
+    def _settle_supplier_once(
+        self,
+        order_id: str,
+        *,
+        supplier_reference: str,
+        evidence: Mapping[str, Any],
+        billability: Billability,
+        actual_credits: int | None,
+    ) -> dict[str, Any]:
         with self.repository.engine.begin() as conn:
             order = self._order_row(order_id, conn=conn, for_update=True)
-            if order["status"] == "captured":
-                return self._decode_order(order)
+            decoded = self._decode_order(order)
+            if order["status"] in {"captured", "released"}:
+                return self._settlement_replay(
+                    decoded,
+                    supplier_reference=supplier_reference,
+                    evidence=evidence,
+                    billability=billability,
+                    actual_credits=actual_credits,
+                )
+            allowed = ("held", "reconciling")
             if order["status"] not in allowed:
                 raise UsageOrderStateError(
-                    f"cannot capture order in state {order['status']}",
+                    f"cannot settle order in state {order['status']}",
                 )
-            quote_credits = int(order["quoted_credits"])
-            if self._order_mode(order) == "enforced" and quote_credits:
-                self.repository.append_transaction_in_connection(
-                    conn,
-                    LedgerTransaction(
-                        wallet_id=str(order["wallet_id"]),
-                        event_type="usage_capture",
-                        credits=quote_credits,
-                        business_type="usage",
-                        business_key=str(order["business_key"]),
-                        idempotency_key=f"usage:{order_id}:capture",
-                    ),
-                )
-            self._transition(
-                order_id,
-                from_states=allowed,
-                status="captured",
-                conn=conn,
-                held_credits=0,
-                captured_credits=quote_credits,
-                settled_at=datetime.now(timezone.utc),
-            )
-        return self.get_order(order_id)
 
-    def release(self, order_id: str) -> dict[str, Any]:
-        """Release the complete hold after confirmed non-billable usage."""
-        allowed = ("held", "not_billable", "reconciling")
-        with self.repository.engine.begin() as conn:
-            order = self._order_row(order_id, conn=conn, for_update=True)
-            if order["status"] == "released":
-                return self._decode_order(order)
-            if order["status"] not in allowed:
-                raise UsageOrderStateError(
-                    f"cannot release order in state {order['status']}",
+            common_values = {
+                "supplier_reference": supplier_reference,
+                "supplier_evidence_json": _dump_json(evidence),
+                "billability": billability,
+            }
+            if billability == "unknown":
+                self._transition(
+                    order_id,
+                    from_states=allowed,
+                    status="reconciling",
+                    conn=conn,
+                    **common_values,
                 )
-            if self._order_mode(order) == "enforced" and int(
-                order["held_credits"],
-            ):
-                self.repository.append_transaction_in_connection(
-                    conn,
-                    LedgerTransaction(
-                        wallet_id=str(order["wallet_id"]),
-                        event_type="usage_release",
-                        credits=0,
-                        business_type="usage",
-                        business_key=str(order["business_key"]),
-                        idempotency_key=f"usage:{order_id}:release",
-                    ),
+                return self._decode_order(
+                    self._order_row(order_id, conn=conn),
                 )
-            self._transition(
-                order_id,
-                from_states=allowed,
-                status="released",
-                conn=conn,
-                held_credits=0,
-                settled_at=datetime.now(timezone.utc),
-            )
-        return self.get_order(order_id)
 
-    def mark_reconciling(self, order_id: str) -> dict[str, Any]:
-        """Preserve a hold while supplier billability remains unknown."""
-        order = self._order_row(order_id)
-        if order["status"] == "reconciling":
-            return self._decode_order(order)
-        allowed = ("held", "submitted", "running")
-        if order["status"] not in allowed:
-            raise UsageOrderStateError(
-                f"cannot reconcile order in state {order['status']}",
+            held_credits = int(order["held_credits"])
+            if billability == "billable":
+                assert actual_credits is not None
+                if actual_credits > held_credits:
+                    raise ValueError(
+                        "actual credits cannot exceed the held quote",
+                    )
+                if self._order_mode(order) == "enforced":
+                    self.repository.append_transaction_in_connection(
+                        conn,
+                        LedgerTransaction(
+                            wallet_id=str(order["wallet_id"]),
+                            event_type="usage_capture",
+                            credits=actual_credits,
+                            business_type="usage",
+                            business_key=str(order["business_key"]),
+                            idempotency_key=f"usage:{order_id}:capture",
+                            metadata={
+                                "supplier_reference": supplier_reference,
+                                "billability": billability,
+                            },
+                        ),
+                    )
+                self._transition(
+                    order_id,
+                    from_states=allowed,
+                    status="captured",
+                    conn=conn,
+                    held_credits=0,
+                    captured_credits=actual_credits,
+                    settled_at=datetime.now(timezone.utc),
+                    **common_values,
+                )
+            else:
+                if self._order_mode(order) == "enforced" and held_credits:
+                    self.repository.append_transaction_in_connection(
+                        conn,
+                        LedgerTransaction(
+                            wallet_id=str(order["wallet_id"]),
+                            event_type="usage_release",
+                            credits=0,
+                            business_type="usage",
+                            business_key=str(order["business_key"]),
+                            idempotency_key=f"usage:{order_id}:release",
+                            metadata={
+                                "supplier_reference": supplier_reference,
+                                "billability": billability,
+                            },
+                        ),
+                    )
+                self._transition(
+                    order_id,
+                    from_states=allowed,
+                    status="released",
+                    conn=conn,
+                    held_credits=0,
+                    settled_at=datetime.now(timezone.utc),
+                    **common_values,
+                )
+            return self._decode_order(
+                self._order_row(order_id, conn=conn),
             )
-        self._transition(
-            order_id,
-            from_states=allowed,
-            status="reconciling",
+
+    @staticmethod
+    def _settlement_replay(
+        current: dict[str, Any],
+        *,
+        supplier_reference: str,
+        evidence: Mapping[str, Any],
+        billability: Billability,
+        actual_credits: int | None,
+    ) -> dict[str, Any]:
+        expected_status = (
+            "captured" if billability == "billable" else "released"
         )
-        return self.get_order(order_id)
+        expected_credits = actual_credits if actual_credits is not None else 0
+        matches_evidence = all(
+            (
+                current["status"] == expected_status,
+                current["supplier_reference"] == supplier_reference,
+                current["supplier_evidence"] == evidence,
+                current["billability"] == billability,
+            ),
+        )
+        matches_credits = (
+            billability != "billable"
+            or current["captured_credits"] == expected_credits
+        )
+        if not matches_evidence or not matches_credits:
+            raise UsageOrderStateError(
+                "usage order was settled by a different supplier outcome",
+            )
+        return current
 
     def get_order(self, order_id: str) -> dict[str, Any]:
         return self._decode_order(self._order_row(order_id))
@@ -415,6 +556,9 @@ class UsageService:
     def _decode_order(order: dict[str, Any]) -> dict[str, Any]:
         request_snapshot = json.loads(order["request_snapshot_json"] or "{}")
         price_snapshot = json.loads(order["price_snapshot_json"] or "{}")
+        supplier_evidence = json.loads(
+            order["supplier_evidence_json"] or "{}",
+        )
         client_business_key = request_snapshot.pop(
             "client_business_key",
             str(order["business_key"]),
@@ -427,6 +571,9 @@ class UsageService:
             "quoted_credits": int(order["quoted_credits"]),
             "held_credits": int(order["held_credits"]),
             "captured_credits": int(order["captured_credits"]),
+            "supplier_reference": order["supplier_reference"],
+            "supplier_evidence": supplier_evidence,
+            "billability": str(order["billability"] or "unknown"),
             "request": request_snapshot,
             "quote": price_snapshot,
         }
@@ -460,6 +607,9 @@ def _off_order(business_key: str, quote: RetailQuote) -> dict[str, Any]:
         "quoted_credits": quote.credits,
         "held_credits": 0,
         "captured_credits": 0,
+        "supplier_reference": None,
+        "supplier_evidence": {},
+        "billability": "unknown",
         "request": quote.request.to_jsonable(),
         "quote": quote.to_jsonable(),
     }

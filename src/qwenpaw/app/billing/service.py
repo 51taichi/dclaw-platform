@@ -40,6 +40,10 @@ class WalletService:
         wallet = self._repository.ensure_wallet("user", str(user_id))
         return self._repository.balance(wallet["id"])
 
+    def backfill_personal_wallets(self) -> None:
+        """Create missing empty wallets for all durable users."""
+        self._repository.backfill_user_wallets()
+
     def grant_signup_trial(
         self,
         user_id: int,
@@ -85,4 +89,6 @@ def get_wallet_service() -> WalletService:
     """Build the default service after ensuring durable tables exist."""
     engine = get_app_engine()
     create_all(engine)
-    return WalletService(BillingRepository(engine))
+    service = WalletService(BillingRepository(engine))
+    service.backfill_personal_wallets()
+    return service

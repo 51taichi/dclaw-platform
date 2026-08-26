@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# pylint: disable=redefined-outer-name
 from __future__ import annotations
 
 import json
@@ -100,6 +101,7 @@ def test_signup_trial_lot_limits_capabilities_to_standard_text_and_image(
         "high_cost",
         "fixed_workflow",
     ]
+    assert metadata["allowed_tiers"] == ["standard"]
 
 
 def test_concurrent_signup_trial_requests_grant_once_per_risk_identity(

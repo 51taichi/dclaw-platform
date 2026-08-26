@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..billing.pricing import (
     CatalogImmutableError,
@@ -20,9 +20,7 @@ from ..billing.pricing import (
 )
 from ..billing.usage import (
     IdempotencyConflictError,
-    InsufficientUsageCreditsError,
     UsageOrderConflictError,
-    UsageOrderStateError,
     UsageService,
     wallet_balance_dict,
 )
@@ -34,6 +32,8 @@ from ..storage.schema import create_all
 
 user_router = APIRouter(prefix="/billing", tags=["billing"])
 admin_router = APIRouter(prefix="/billing", tags=["admin-billing"])
+_MAX_USAGE_TOKENS = 100_000_000
+_MAX_USAGE_QUANTITY = 1_000_000
 
 
 class QuoteRequestBody(BaseModel):
@@ -44,8 +44,21 @@ class QuoteRequestBody(BaseModel):
     model_key: str = Field(min_length=1, max_length=255)
     capability: str = Field(min_length=1, max_length=255)
     parameters: dict[str, Any] = Field(default_factory=dict)
-    input_tokens: int = Field(default=0, ge=0)
-    output_tokens: int = Field(default=0, ge=0)
+    input_tokens: int = Field(default=0, ge=0, le=_MAX_USAGE_TOKENS)
+    output_tokens: int = Field(default=0, ge=0, le=_MAX_USAGE_TOKENS)
+
+    @field_validator("parameters")
+    @classmethod
+    def validate_usage_quantities(cls, value: dict[str, Any]):
+        for key in ("count", "duration_seconds"):
+            amount = value.get(key)
+            if (
+                isinstance(amount, int)
+                and not isinstance(amount, bool)
+                and amount > _MAX_USAGE_QUANTITY
+            ):
+                raise ValueError(f"{key} exceeds the product limit")
+        return value
 
 
 class PriceRuleBody(BaseModel):
@@ -165,40 +178,15 @@ def create_user_quote(
         output_tokens=payload.output_tokens,
     )
     try:
-        order = service.create_quote(
+        return service.create_quote(
             owner_id,
             quote_request,
             business_key=payload.business_key,
-        )
-        if order["id"] is not None and order["status"] == "quoted":
-            order = service.hold(str(order["id"]))
-        elif order["id"] is not None and order["status"] not in {
-            "held",
-            "captured",
-            "released",
-        }:
-            raise UsageOrderStateError(
-                f"cannot replay usage order in state: {order['status']}",
-            )
-        return order
-    except InsufficientUsageCreditsError as exc:
-        return JSONResponse(
-            status_code=409,
-            content={
-                "code": "insufficient_credits",
-                "required_credits": exc.required,
-                "available_credits": exc.available,
-            },
         )
     except IdempotencyConflictError:
         return JSONResponse(
             status_code=409,
             content={"code": "idempotency_conflict"},
-        )
-    except UsageOrderStateError as exc:
-        return JSONResponse(
-            status_code=409,
-            content={"code": "usage_state_conflict", "detail": str(exc)},
         )
     except UsageOrderConflictError:
         return JSONResponse(
@@ -213,7 +201,7 @@ def create_user_quote(
     except PriceRuleNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (ValueError, TypeError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @admin_router.post("/catalogs/drafts", status_code=201)

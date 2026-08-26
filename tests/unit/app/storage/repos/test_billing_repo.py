@@ -5,8 +5,9 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import event, func, select, update
+from sqlalchemy import event, func, insert, select, update
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import IntegrityError
 
 from qwenpaw.app.billing.models import (
     BillingInvariantError,
@@ -555,3 +556,258 @@ def test_postgresql_lock_statements_compile_with_for_update():
 
     assert wallet_sql.rstrip().endswith("FOR UPDATE")
     assert lots_sql.rstrip().endswith("FOR UPDATE")
+
+
+def test_partial_capture_consumes_original_lots_and_releases_remainder(
+    engine,
+):
+    clock = MutableClock(datetime(2026, 8, 26, tzinfo=timezone.utc))
+    repo = BillingRepository(engine, clock=clock)
+    wallet = repo.ensure_wallet("user", "partial")
+    repo.grant(
+        wallet["id"],
+        credits=40,
+        credit_type="promotional",
+        expires_at=clock.now + timedelta(days=1),
+        idempotency_key="promo-soon",
+    )
+    repo.grant(
+        wallet["id"],
+        credits=30,
+        credit_type="package",
+        expires_at=clock.now + timedelta(days=2),
+        idempotency_key="package-later",
+    )
+    repo.grant(
+        wallet["id"],
+        credits=50,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key="purchased",
+    )
+    repo.hold(
+        wallet["id"],
+        credits=100,
+        business_key="partial-job",
+        idempotency_key="partial-hold",
+        capability="text_to_image",
+        tier="standard",
+    )
+
+    clock.now += timedelta(hours=36)
+    balance = repo.capture(
+        wallet["id"],
+        credits=60,
+        business_key="partial-job",
+        idempotency_key="partial-capture",
+    )
+
+    assert balance == WalletBalance(60, 0, 50, 0, 10)
+    entries = repo.list_ledger(wallet["id"], 20, None)
+    capture = next(
+        row for row in entries if row["event_type"] == "usage_capture"
+    )
+    release = next(
+        row for row in entries if row["event_type"] == "usage_release"
+    )
+    with engine.connect() as conn:
+        source_by_lot = {
+            row.id: row.idempotency_key
+            for row in conn.execute(
+                select(
+                    billing_credit_lots.c.id,
+                    billing_ledger_entries.c.idempotency_key,
+                ).select_from(
+                    billing_credit_lots.join(
+                        billing_ledger_entries,
+                        billing_credit_lots.c.source_ledger_entry_id
+                        == billing_ledger_entries.c.id,
+                    ),
+                ),
+            )
+        }
+    with engine.connect() as conn:
+        captured_allocations = {
+            source_by_lot[row.credit_lot_id]: int(row.credits)
+            for row in conn.execute(
+                select(
+                    billing_ledger_allocations.c.credit_lot_id,
+                    billing_ledger_allocations.c.credits,
+                ).where(
+                    billing_ledger_allocations.c.ledger_entry_id
+                    == capture["id"],
+                ),
+            )
+        }
+        released_allocations = {
+            source_by_lot[row.credit_lot_id]: int(row.credits)
+            for row in conn.execute(
+                select(
+                    billing_ledger_allocations.c.credit_lot_id,
+                    billing_ledger_allocations.c.credits,
+                ).where(
+                    billing_ledger_allocations.c.ledger_entry_id
+                    == release["id"],
+                ),
+            )
+        }
+    assert captured_allocations == {"promo-soon": 40, "package-later": 20}
+    assert released_allocations == {"package-later": 10, "purchased": 30}
+
+
+@pytest.mark.parametrize(
+    ("capability", "tier"),
+    [
+        ("text_to_video", "standard"),
+        ("text_to_image", "high_cost"),
+        ("fixed_workflow", "standard"),
+    ],
+)
+def test_restricted_trial_lot_is_skipped_for_ineligible_usage(
+    repo,
+    capability,
+    tier,
+):
+    wallet = repo.ensure_wallet("user", f"trial-{capability}-{tier}")
+    repo.append_transaction(
+        LedgerTransaction(
+            wallet_id=wallet["id"],
+            event_type="promotion_grant",
+            credits=100,
+            business_type="signup_trial",
+            business_key=f"trial-{capability}-{tier}",
+            idempotency_key=f"trial-{capability}-{tier}",
+            credit_type="promotional",
+            expires_at=_future(7),
+            metadata={
+                "grant_policy": "signup_trial",
+                "allowed_capabilities": ["text", "image"],
+                "denied_capabilities": [
+                    "video",
+                    "high_cost",
+                    "fixed_workflow",
+                ],
+                "allowed_tiers": ["standard"],
+            },
+        ),
+    )
+    repo.grant(
+        wallet["id"],
+        credits=60,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key=f"purchase-{capability}-{tier}",
+    )
+
+    repo.hold(
+        wallet["id"],
+        credits=50,
+        business_key=f"job-{capability}-{tier}",
+        idempotency_key=f"hold-{capability}-{tier}",
+        capability=capability,
+        tier=tier,
+    )
+
+    assert repo.allocations(f"job-{capability}-{tier}") == [
+        (f"purchase-{capability}-{tier}", 50),
+    ]
+
+
+def test_standard_image_usage_can_consume_the_signup_trial_lot(repo):
+    wallet = repo.ensure_wallet("user", "trial-standard-image")
+    repo.append_transaction(
+        LedgerTransaction(
+            wallet_id=wallet["id"],
+            event_type="promotion_grant",
+            credits=100,
+            business_type="signup_trial",
+            business_key="trial-standard-image",
+            idempotency_key="trial-standard-image",
+            credit_type="promotional",
+            expires_at=_future(7),
+            metadata={
+                "grant_policy": "signup_trial",
+                "allowed_capabilities": ["text", "image"],
+                "denied_capabilities": [
+                    "video",
+                    "high_cost",
+                    "fixed_workflow",
+                ],
+                "allowed_tiers": ["standard"],
+            },
+        ),
+    )
+
+    repo.hold(
+        wallet["id"],
+        credits=50,
+        business_key="standard-image-job",
+        idempotency_key="standard-image-hold",
+        capability="text_to_image",
+        tier="standard",
+    )
+
+    assert repo.allocations("standard-image-job") == [
+        ("trial-standard-image", 50),
+    ]
+
+
+def test_restricted_trial_lot_fails_closed_without_usage_classification(repo):
+    wallet = repo.ensure_wallet("user", "trial-missing-classification")
+    repo.append_transaction(
+        LedgerTransaction(
+            wallet_id=wallet["id"],
+            event_type="promotion_grant",
+            credits=100,
+            business_type="signup_trial",
+            business_key="trial-missing-classification",
+            idempotency_key="trial-missing-classification",
+            credit_type="promotional",
+            expires_at=_future(7),
+            metadata={
+                "grant_policy": "signup_trial",
+                "allowed_capabilities": ["text", "image"],
+                "allowed_tiers": ["standard"],
+            },
+        ),
+    )
+
+    with pytest.raises(InsufficientCreditsError):
+        repo.hold(
+            wallet["id"],
+            credits=10,
+            business_key="unclassified-job",
+            idempotency_key="unclassified-hold",
+        )
+
+
+def test_purchased_grant_rejects_expiry_in_repository_and_database(
+    repo,
+    engine,
+):
+    wallet = repo.ensure_wallet("user", "purchased-expiry")
+
+    with pytest.raises(ValueError, match="purchased credits cannot expire"):
+        repo.grant(
+            wallet["id"],
+            credits=10,
+            credit_type="purchased",
+            expires_at=_future(1),
+            idempotency_key="invalid-purchase",
+        )
+
+    with pytest.raises(IntegrityError):
+        with engine.begin() as conn:
+            conn.execute(
+                insert(billing_credit_lots).values(
+                    id="invalid-purchased-lot",
+                    wallet_id=wallet["id"],
+                    credit_type="purchased",
+                    status="active",
+                    granted_credits=10,
+                    available_credits=10,
+                    held_credits=0,
+                    expires_at=_future(1),
+                    metadata_json="{}",
+                ),
+            )

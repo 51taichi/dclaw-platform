@@ -2,7 +2,9 @@
 # pylint: disable=redefined-outer-name
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from threading import Barrier, Lock
 
 import pytest
 from fastapi import Depends, FastAPI
@@ -16,7 +18,7 @@ from qwenpaw.app.billing.pricing import (
     PriceRule,
     QuoteRequest,
 )
-from qwenpaw.app.billing.usage import UsageService
+from qwenpaw.app.billing.usage import UsageOrderStateError, UsageService
 from qwenpaw.app import auth as app_auth
 from qwenpaw.app.guards import require_admin, require_user
 from qwenpaw.app.routers import billing
@@ -231,7 +233,7 @@ def test_shadow_quote_uses_published_snapshot_and_never_moves_balance(
     assert response.status_code == 200
     body = response.json()
     assert body["billing_mode"] == "shadow"
-    assert body["status"] == "held"
+    assert body["status"] == "quoted"
     assert body["quote"]["credits"] == 100
     assert body["quote"]["catalog_version"] == "retail-v1"
     assert body["quote"]["snapshot"]["rule"] == {
@@ -255,9 +257,9 @@ def test_shadow_quote_uses_published_snapshot_and_never_moves_balance(
     with engine.connect() as conn:
         order = conn.execute(select(billing_usage_orders)).mappings().one()
     assert order["wallet_id"] == wallet["id"]
-    assert order["status"] == "held"
+    assert order["status"] == "quoted"
     assert order["quoted_credits"] == 100
-    assert order["held_credits"] == 100
+    assert order["held_credits"] == 0
     assert '"credits":100' in order["price_snapshot_json"]
 
 
@@ -288,7 +290,7 @@ def test_off_mode_quotes_without_recording_an_order(
         )
 
 
-def test_enforced_quote_returns_409_code_when_wallet_is_insufficient(
+def test_enforced_quote_records_price_without_holding_an_empty_wallet(
     monkeypatch,
     engine,
     wallet_repo,
@@ -304,14 +306,32 @@ def test_enforced_quote_returns_409_code_when_wallet_is_insufficient(
         headers=_headers("alice"),
     )
 
-    assert response.status_code == 409
-    assert response.json()["code"] == "insufficient_credits"
-    assert response.json()["required_credits"] == 100
-    assert response.json()["available_credits"] == 0
+    assert response.status_code == 200
+    assert response.json()["status"] == "quoted"
+    assert response.json()["quoted_credits"] == 100
+    assert response.json()["held_credits"] == 0
     with engine.connect() as conn:
         order = conn.execute(select(billing_usage_orders)).mappings().one()
     assert order["status"] == "quoted"
     assert order["held_credits"] == 0
+
+
+def test_quote_rejects_usage_above_the_product_limit_with_422(
+    monkeypatch,
+    wallet_repo,
+    pricing,
+):
+    _publish_catalog(pricing)
+    usage = UsageService(wallet_repo, pricing, mode="shadow")
+    client = TestClient(_app(monkeypatch, usage, wallet_repo, pricing))
+
+    response = client.post(
+        "/api/user/billing/quotes",
+        json=_quote_payload("oversized") | {"input_tokens": 100_000_001},
+        headers=_headers("alice"),
+    )
+
+    assert response.status_code == 422
 
 
 def test_same_client_business_key_is_namespaced_per_authenticated_user(
@@ -406,9 +426,20 @@ def test_terminal_quote_replay_returns_the_existing_order_without_reholding(
     )
     usage.hold(order["id"])
     if terminal_state == "captured":
-        usage.capture(order["id"])
+        usage.settle_supplier(
+            order["id"],
+            supplier_reference="dashscope:terminal-capture",
+            evidence={"charged": True},
+            billability="billable",
+            actual_credits=100,
+        )
     else:
-        usage.release(order["id"])
+        usage.settle_supplier(
+            order["id"],
+            supplier_reference="dashscope:terminal-release",
+            evidence={"charged": False},
+            billability="not_billable",
+        )
     client = TestClient(_app(monkeypatch, usage, wallet_repo, pricing))
 
     replay = client.post(
@@ -422,7 +453,7 @@ def test_terminal_quote_replay_returns_the_existing_order_without_reholding(
     assert replay.json()["status"] == terminal_state
 
 
-def test_quote_replay_in_non_idempotent_state_returns_controlled_409(
+def test_quote_replay_returns_a_reconciling_order_without_settling_it(
     monkeypatch,
     wallet_repo,
     pricing,
@@ -440,7 +471,12 @@ def test_quote_replay_in_non_idempotent_state_returns_controlled_409(
         business_key="reconciling-replay",
     )
     usage.hold(order["id"])
-    usage.mark_reconciling(order["id"])
+    usage.settle_supplier(
+        order["id"],
+        supplier_reference="dashscope:reconciling",
+        evidence={"task_status": "UNKNOWN"},
+        billability="unknown",
+    )
     client = TestClient(
         _app(monkeypatch, usage, wallet_repo, pricing),
         raise_server_exceptions=False,
@@ -452,8 +488,8 @@ def test_quote_replay_in_non_idempotent_state_returns_controlled_409(
         headers=_headers("alice"),
     )
 
-    assert replay.status_code == 409
-    assert replay.json()["code"] == "usage_state_conflict"
+    assert replay.status_code == 200
+    assert replay.json()["status"] == "reconciling"
 
 
 def test_quote_without_published_catalog_returns_catalog_not_ready(
@@ -508,8 +544,19 @@ def test_enforced_usage_state_machine_holds_captures_and_releases(
         business_key="capture-job",
     )
     held = usage.hold(capture_order["id"])
-    reconciling = usage.mark_reconciling(capture_order["id"])
-    captured = usage.capture(capture_order["id"])
+    reconciling = usage.settle_supplier(
+        capture_order["id"],
+        supplier_reference="dashscope:capture",
+        evidence={"task_status": "UNKNOWN"},
+        billability="unknown",
+    )
+    captured = usage.settle_supplier(
+        capture_order["id"],
+        supplier_reference="dashscope:capture",
+        evidence={"task_status": "SUCCEEDED"},
+        billability="billable",
+        actual_credits=100,
+    )
 
     assert held["status"] == "held"
     assert reconciling["status"] == "reconciling"
@@ -548,13 +595,128 @@ def test_enforced_usage_state_machine_holds_captures_and_releases(
         business_key="release-job",
     )
     usage.hold(release_order["id"])
-    released = usage.release(release_order["id"])
+    released = usage.settle_supplier(
+        release_order["id"],
+        supplier_reference="dashscope:release",
+        evidence={"task_status": "FAILED", "charged": False},
+        billability="not_billable",
+    )
 
     assert released["status"] == "released"
     assert wallet_repo.balance(release_wallet["id"]) == WalletBalance(
         150,
         0,
         150,
+        0,
+        0,
+    )
+
+
+def test_supplier_evidence_drives_unknown_then_partial_billable_settlement(
+    wallet_repo,
+    pricing,
+):
+    _publish_catalog(pricing)
+    wallet = wallet_repo.ensure_wallet("user", "evidence-user")
+    wallet_repo.grant(
+        wallet["id"],
+        credits=150,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key="evidence-purchase",
+    )
+    usage = UsageService(wallet_repo, pricing, mode="enforced")
+    order = usage.create_quote(
+        "evidence-user",
+        QuoteRequest(
+            "aliyun",
+            "wan-2.7",
+            "text_to_image",
+            {"count": 2, "tier": "standard"},
+        ),
+        business_key="evidence-job",
+    )
+    usage.hold(order["id"])
+
+    unknown = usage.settle_supplier(
+        order["id"],
+        supplier_reference="dashscope:req-1",
+        evidence={"task_status": "UNKNOWN", "attempt": 1},
+        billability="unknown",
+    )
+    captured = usage.settle_supplier(
+        order["id"],
+        supplier_reference="dashscope:req-1",
+        evidence={"task_status": "SUCCEEDED", "images": 1},
+        billability="billable",
+        actual_credits=50,
+    )
+    replay = usage.settle_supplier(
+        order["id"],
+        supplier_reference="dashscope:req-1",
+        evidence={"task_status": "SUCCEEDED", "images": 1},
+        billability="billable",
+        actual_credits=50,
+    )
+
+    assert unknown["status"] == "reconciling"
+    assert captured == replay
+    assert captured["status"] == "captured"
+    assert captured["billability"] == "billable"
+    assert captured["supplier_reference"] == "dashscope:req-1"
+    assert captured["supplier_evidence"] == {
+        "images": 1,
+        "task_status": "SUCCEEDED",
+    }
+    assert captured["captured_credits"] == 50
+    assert wallet_repo.balance(wallet["id"]) == WalletBalance(
+        100,
+        0,
+        100,
+        0,
+        0,
+    )
+
+
+def test_not_billable_supplier_evidence_releases_the_complete_hold(
+    wallet_repo,
+    pricing,
+):
+    _publish_catalog(pricing)
+    wallet = wallet_repo.ensure_wallet("user", "not-billable-user")
+    wallet_repo.grant(
+        wallet["id"],
+        credits=100,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key="not-billable-purchase",
+    )
+    usage = UsageService(wallet_repo, pricing, mode="enforced")
+    order = usage.create_quote(
+        "not-billable-user",
+        QuoteRequest(
+            "aliyun",
+            "wan-2.7",
+            "text_to_image",
+            {"count": 2},
+        ),
+        business_key="not-billable-job",
+    )
+    usage.hold(order["id"])
+
+    released = usage.settle_supplier(
+        order["id"],
+        supplier_reference="dashscope:req-2",
+        evidence={"task_status": "FAILED", "charged": False},
+        billability="not_billable",
+    )
+
+    assert released["status"] == "released"
+    assert released["billability"] == "not_billable"
+    assert wallet_repo.balance(wallet["id"]) == WalletBalance(
+        100,
+        0,
+        100,
         0,
         0,
     )
@@ -579,7 +741,13 @@ def test_shadow_capture_records_theoretical_charge_without_wallet_ledger(
     )
 
     usage.hold(order["id"])
-    captured = usage.capture(order["id"])
+    captured = usage.settle_supplier(
+        order["id"],
+        supplier_reference="dashscope:shadow",
+        evidence={"task_status": "SUCCEEDED"},
+        billability="billable",
+        actual_credits=100,
+    )
 
     assert captured["status"] == "captured"
     assert captured["captured_credits"] == 100
@@ -740,3 +908,138 @@ def test_billing_routers_are_mounted_on_trusted_user_and_admin_prefixes():
     assert "/user/billing/quotes" in paths
     assert "/admin/billing/catalogs" in paths
     assert "/admin/billing/wallets/{owner_id}" in paths
+
+
+def _synchronize_first_order_reads(order_id: str):
+    barrier = Barrier(2)
+    lock = Lock()
+    synchronized = 0
+
+    def synchronize(
+        _conn,
+        _cursor,
+        statement,
+        parameters,
+        _context,
+        _executemany,
+    ):
+        nonlocal synchronized
+        if (
+            not statement.lstrip().upper().startswith("SELECT")
+            or "FROM billing_usage_orders" not in statement
+            or order_id not in parameters
+        ):
+            return
+        with lock:
+            if synchronized >= 2:
+                return
+            synchronized += 1
+        barrier.wait(timeout=5)
+
+    return synchronize
+
+
+def test_concurrent_hold_replay_returns_one_consistent_held_order(
+    engine,
+    wallet_repo,
+    pricing,
+):
+    _publish_catalog(pricing)
+    wallet = wallet_repo.ensure_wallet("user", "concurrent-hold")
+    wallet_repo.grant(
+        wallet["id"],
+        credits=100,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key="concurrent-hold-purchase",
+    )
+    usage = UsageService(wallet_repo, pricing, mode="enforced")
+    order = usage.create_quote(
+        "concurrent-hold",
+        QuoteRequest(
+            "aliyun",
+            "wan-2.7",
+            "text_to_image",
+            {"count": 2},
+        ),
+        business_key="concurrent-hold-job",
+    )
+    synchronize = _synchronize_first_order_reads(order["id"])
+    event.listen(engine, "after_cursor_execute", synchronize)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(
+                executor.map(lambda _index: usage.hold(order["id"]), range(2)),
+            )
+    finally:
+        event.remove(engine, "after_cursor_execute", synchronize)
+
+    assert [result["status"] for result in results] == ["held", "held"]
+    assert wallet_repo.balance(wallet["id"]) == WalletBalance(
+        0,
+        100,
+        100,
+        0,
+        0,
+    )
+    entries = wallet_repo.list_ledger(wallet["id"], 10, None)
+    assert sum(row["event_type"] == "usage_hold" for row in entries) == 1
+
+
+def test_concurrent_capture_and_release_has_one_controlled_winner(
+    engine,
+    wallet_repo,
+    pricing,
+):
+    _publish_catalog(pricing)
+    wallet = wallet_repo.ensure_wallet("user", "concurrent-settlement")
+    wallet_repo.grant(
+        wallet["id"],
+        credits=150,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key="concurrent-settlement-purchase",
+    )
+    usage = UsageService(wallet_repo, pricing, mode="enforced")
+    order = usage.create_quote(
+        "concurrent-settlement",
+        QuoteRequest(
+            "aliyun",
+            "wan-2.7",
+            "text_to_image",
+            {"count": 2},
+        ),
+        business_key="concurrent-settlement-job",
+    )
+    usage.hold(order["id"])
+    synchronize = _synchronize_first_order_reads(order["id"])
+    event.listen(engine, "after_cursor_execute", synchronize)
+
+    def settle(billability):
+        try:
+            return usage.settle_supplier(
+                order["id"],
+                supplier_reference="dashscope:race",
+                evidence={"billability": billability},
+                billability=billability,
+                actual_credits=70 if billability == "billable" else None,
+            )
+        except UsageOrderStateError as exc:
+            return exc
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(
+                executor.map(settle, ("billable", "not_billable")),
+            )
+    finally:
+        event.remove(engine, "after_cursor_execute", synchronize)
+
+    assert (
+        sum(isinstance(item, UsageOrderStateError) for item in outcomes) == 1
+    )
+    terminal = usage.get_order(order["id"])
+    assert terminal["status"] in {"captured", "released"}
+    expected_available = 80 if terminal["status"] == "captured" else 150
+    assert wallet_repo.balance(wallet["id"]).available == expected_available
+    assert wallet_repo.balance(wallet["id"]).held == 0
