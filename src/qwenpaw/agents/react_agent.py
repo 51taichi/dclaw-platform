@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List, Literal, Optional, Type, TYPE_CHECKING
 
@@ -87,6 +88,83 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+SEALED_ALLOWED_BUILTIN_TOOLS = frozenset(
+    {
+        "get_current_time",
+        "set_user_timezone",
+        "get_token_usage",
+        "web_search",
+        "read_web_page",
+        "search_knowledge",
+        "read_knowledge_doc",
+        "search_wiki",
+        "read_wiki_page",
+    },
+)
+SEALED_DENIED_BUILTIN_TOOLS = frozenset(
+    {
+        "execute_shell_command",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "grep_search",
+        "glob_search",
+        "python_sandbox",
+        "send_file_to_user",
+        "delegate_external_agent",
+        "list_agents",
+        "chat_with_agent",
+        "submit_to_agent",
+        "check_agent_task",
+    },
+)
+
+
+@dataclass(frozen=True)
+class AgentRuntimeBoundary:
+    prompt_root: Path
+    skills_root: Path
+    session_root: Path
+
+
+def resolve_agent_runtime_boundary(
+    *,
+    agent_id: str,
+    session_id: str | None,
+    configured_workspace: Path,
+    sealed: bool,
+    working_dir: Path = WORKING_DIR,
+) -> AgentRuntimeBoundary:
+    source = Path(configured_workspace).resolve()
+    if sealed:
+        from ..app.sealed_agents.runtime import create_runtime_context
+
+        runtime = create_runtime_context(
+            agent_id=agent_id,
+            session_id=session_id or "default",
+            source_root=source,
+            sessions_root=Path(working_dir) / "sealed_sessions",
+        )
+        session_root = runtime.session_root
+    elif session_id:
+        session_root = source / "sessions_data" / session_id
+    else:
+        session_root = source
+    return AgentRuntimeBoundary(source, source, session_root)
+
+
+def tool_allowed_for_runtime(
+    tool_name: str,
+    *,
+    sealed: bool,
+    plugin_tool: bool,
+) -> bool:
+    if not sealed:
+        return True
+    if plugin_tool:
+        return False
+    return tool_name in SEALED_ALLOWED_BUILTIN_TOOLS
+
 # Valid namesake strategies for tool registration
 NamesakeStrategy = Literal["override", "skip", "raise", "rename"]
 
@@ -163,22 +241,32 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
         self._language = agent_config.language
         
         # Determine actual workspace directory (Physical Session Isolation)
-        original_workspace_dir = workspace_dir or WORKING_DIR
+        original_workspace_dir = Path(workspace_dir or WORKING_DIR)
         # Skills are runtime instructions owned by the agent workspace, not
         # per-session artifacts. Keep loading them from the root workspace even
         # when file outputs are isolated under sessions_data/<session_id>.
-        self._skills_workspace_dir = original_workspace_dir
+        agent_id = str(self._request_context.get("agent_id") or agent_config.id)
+        try:
+            from ..app.sealed_agents.registry import get_sealed_agent_registry
+
+            self._sealed_runtime = get_sealed_agent_registry().is_sealed(agent_id)
+        except Exception:
+            logger.exception("Failed to resolve sealed agent runtime policy")
+            self._sealed_runtime = False
         # Identity/system prompt markdown belongs to the agent profile. Session
         # isolation is for task files, not for replacing the agent persona with
         # default template markdown.
-        self._prompt_workspace_dir = original_workspace_dir
         # Use root_session_id if present (e.g. claw-global-session), otherwise fall back to session_id
         session_id = self._request_context.get("root_session_id") or self._request_context.get("session_id")
-        if session_id:
-            # We isolate each session inside 'sessions_data/<session_id>'
-            self._workspace_dir = original_workspace_dir / "sessions_data" / session_id
-        else:
-            self._workspace_dir = original_workspace_dir
+        boundary = resolve_agent_runtime_boundary(
+            agent_id=agent_id,
+            session_id=session_id,
+            configured_workspace=original_workspace_dir,
+            sealed=self._sealed_runtime,
+        )
+        self._skills_workspace_dir = boundary.skills_root
+        self._prompt_workspace_dir = boundary.prompt_root
+        self._workspace_dir = boundary.session_root
 
         # Automatically create the workspace and copy markdown templates if missing
         if self._workspace_dir != original_workspace_dir and not self._workspace_dir.exists():
@@ -373,6 +461,13 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
 
         # Register tools with appropriate defaults
         for tool_name, tool_func in tool_functions.items():
+            if not tool_allowed_for_runtime(
+                tool_name,
+                sealed=self._sealed_runtime,
+                plugin_tool=tool_name in plugin_tools,
+            ):
+                logger.debug("Skipped tool denied by sealed runtime: %s", tool_name)
+                continue
             # For plugin tools: skip if not in config (security)
             # For hardcoded tools: default to enabled (backward compatibility)
             if tool_name in plugin_tools:
@@ -617,6 +712,9 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
                 Options: "override", "skip", "raise", "rename"
                 (default: "skip")
         """
+        if self._sealed_runtime:
+            logger.info("Skipped MCP tools for sealed agent runtime")
+            return
         for i, client in enumerate(self._mcp_clients):
             client_name = getattr(client, "name", repr(client))
             try:

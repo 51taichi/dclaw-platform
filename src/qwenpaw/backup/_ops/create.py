@@ -165,6 +165,21 @@ def _compress_to_tmp(
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zf:
         config = load_config()
         if meta.scope.include_agents:
+            from ...app.sealed_agents.backup_policy import (
+                filter_backup_agent_ids,
+            )
+            from ...app.sealed_agents.registry import (
+                get_sealed_agent_registry,
+            )
+
+            sealed_ids = {
+                record.agent_id
+                for record in get_sealed_agent_registry().list_agents()
+            }
+            req_agents = filter_backup_agent_ids(
+                req_agents,
+                sealed_ids=sealed_ids,
+            )
             valid_agents, missing_agents = _compute_initial_agents(
                 req_agents,
                 config,

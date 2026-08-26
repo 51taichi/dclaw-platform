@@ -260,6 +260,22 @@ async def restore_backup(
     req: RestoreBackupRequest,
     request: Request,
 ):
+    from ..sealed_agents.backup_policy import (
+        SealedBackupPolicyError,
+        validate_restore_request,
+    )
+    from ..sealed_agents.registry import get_sealed_agent_registry
+
+    try:
+        validate_restore_request(
+            req,
+            sealed_ids={
+                record.agent_id
+                for record in get_sealed_agent_registry().list_agents()
+            },
+        )
+    except SealedBackupPolicyError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     manager = getattr(request.app.state, "multi_agent_manager", None)
     from ...agents.tools.browser_control import (
         stop_browsers_for_workspace_dirs,

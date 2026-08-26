@@ -769,11 +769,29 @@ class AgentRunner(Runner):
                     ):
                         yield msg, last
             else:
+                from ..sealed_agents.output_guard import (
+                    build_release_output_policy,
+                    sanitize_message,
+                )
+                from ..sealed_agents.registry import get_sealed_agent_registry
+
+                sealed = get_sealed_agent_registry().is_sealed(self.agent_id)
+                output_policy = (
+                    build_release_output_policy(Path(self.workspace_dir))
+                    if sealed and self.workspace_dir
+                    else None
+                )
                 async for msg, last in _stream_printing_messages_interruptible(
                     agents=[agent],
                     coroutine_task=agent(msgs),
                 ):
-                    yield msg, last
+                    if sealed and not last:
+                        continue
+                    yield (
+                        sanitize_message(msg, output_policy)
+                        if output_policy is not None
+                        else msg
+                    ), last
 
         except asyncio.CancelledError as exc:
             logger.info(f"query_handler: {session_id} cancelled!")

@@ -27,7 +27,7 @@ class SealedOutputPolicy:
         self._protected_texts = [
             _normalize(value)
             for value in protected_texts
-            if len(_normalize(value)) >= 40
+            if len(_normalize(value)) >= 20
         ]
         self._canaries = [value for value in canaries if value]
 
