@@ -6,9 +6,25 @@ export interface AgentSummary {
   id: string;
   name: string;
   description: string;
-  workspace_dir: string;
+  workspace_dir?: string | null;
   enabled: boolean;
+  agent_type?: "standard" | "sealed";
+  scope?: "local" | "global";
+  version?: string | null;
+  availability?: "available" | "unavailable";
+  capabilities?: AgentCapabilities;
   active_model?: ModelSlotConfig | null;
+}
+
+export interface AgentCapabilities {
+  invoke: boolean;
+  public_metadata?: boolean;
+  inspect: boolean;
+  edit: boolean;
+  clone: boolean;
+  export: boolean;
+  download: boolean;
+  trace: boolean;
 }
 
 export interface AgentListResponse {

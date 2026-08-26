@@ -79,6 +79,7 @@ import {
 } from "./taskListFilters";
 import { sortTasksForSidebar } from "./taskListOrdering";
 import { isTaskGenerating } from "./taskListState";
+import { canInspectAgent } from "../utils/agentCapabilities";
 
 // ── Layout ────────────────────────────────────────────────────────────────
 
@@ -134,7 +135,10 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
   const [taskListLoading, setTaskListLoading] = useState(false);
   const [renamingTaskId, setRenamingTaskId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
-  const { selectedAgent, setSelectedAgent } = useAgentStore();
+  const { selectedAgent, setSelectedAgent, agents } = useAgentStore();
+  const canInspectSelectedAgent = canInspectAgent(
+    agents.find((agent) => agent.id === selectedAgent),
+  );
   const [isDesktop, setIsDesktop] = useState(isDesktopApp());
   const { role } = useAuth();
   const isAdminRole = role === "admin";
@@ -286,7 +290,9 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
 
   const handleArchiveTask = async (task: ChatSpec) => {
     if (isTaskGenerating(task as TaskListChat)) {
-      message.warning(t("nav.archiveRunningTaskBlocked", "运行中的任务不能归档"));
+      message.warning(
+        t("nav.archiveRunningTaskBlocked", "运行中的任务不能归档"),
+      );
       return;
     }
     try {
@@ -556,15 +562,24 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
           icon: <SparkAgentLine size={16} />,
         },
         {
+          key: "sealed-agents",
+          label: collapsed ? null : t("nav.sealedAgents", "密封 Agent"),
+          icon: <KeyRound size={16} />,
+        },
+        {
           key: "expert-teams",
           label: collapsed ? null : t("nav.expertTeams", "专家团"),
           icon: <SparkAgentLine size={16} />,
         },
-        {
-          key: "workspace",
-          label: collapsed ? null : t("nav.workspace", "文件"),
-          icon: <SparkLocalFileLine size={16} />,
-        },
+        ...(canInspectSelectedAgent
+          ? [
+              {
+                key: "workspace",
+                label: collapsed ? null : t("nav.workspace", "文件"),
+                icon: <SparkLocalFileLine size={16} />,
+              },
+            ]
+          : []),
         {
           key: "models",
           label: collapsed ? null : t("nav.models"),
@@ -646,52 +661,64 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
       key: "advanced-group",
       label: collapsed ? null : t("nav.advanced"),
       children: [
-        {
-          key: "channels",
-          label: collapsed ? null : t("nav.channels"),
-          icon: <SparkWifiLine size={16} />,
-        },
+        ...(canInspectSelectedAgent
+          ? [
+              {
+                key: "channels",
+                label: collapsed ? null : t("nav.channels"),
+                icon: <SparkWifiLine size={16} />,
+              },
+            ]
+          : []),
         {
           key: "sessions",
           label: collapsed ? null : t("nav.sessions"),
           icon: <SparkUserGroupLine size={16} />,
         },
 
-        {
-          key: "tools",
-          label: collapsed ? null : t("nav.tools"),
-          icon: <SparkToolLine size={16} />,
-        },
-        {
-          key: "mcp",
-          label: collapsed ? null : t("nav.mcp"),
-          icon: <SparkMcpMcpLine size={16} />,
-        },
-        {
-          key: "acp",
-          label: collapsed ? null : t("nav.acp"),
-          icon: <SparkScanLine size={16} />,
-        },
-        {
-          key: "agent-config",
-          label: collapsed ? null : t("nav.agentConfig"),
-          icon: <SparkModifyLine size={16} />,
-        },
+        ...(canInspectSelectedAgent
+          ? [
+              {
+                key: "tools",
+                label: collapsed ? null : t("nav.tools"),
+                icon: <SparkToolLine size={16} />,
+              },
+              {
+                key: "mcp",
+                label: collapsed ? null : t("nav.mcp"),
+                icon: <SparkMcpMcpLine size={16} />,
+              },
+              {
+                key: "acp",
+                label: collapsed ? null : t("nav.acp"),
+                icon: <SparkScanLine size={16} />,
+              },
+              {
+                key: "agent-config",
+                label: collapsed ? null : t("nav.agentConfig"),
+                icon: <SparkModifyLine size={16} />,
+              },
+            ]
+          : []),
         {
           key: "inbox",
           label: inboxLabel,
           icon: <SparkEmailLine size={16} />,
         },
-        {
-          key: "heartbeat",
-          label: collapsed ? null : t("nav.heartbeat"),
-          icon: <SparkVoiceChat01Line size={16} />,
-        },
-        {
-          key: "cron-jobs",
-          label: collapsed ? null : t("nav.cronJobs"),
-          icon: <SparkDateLine size={16} />,
-        },
+        ...(canInspectSelectedAgent
+          ? [
+              {
+                key: "heartbeat",
+                label: collapsed ? null : t("nav.heartbeat"),
+                icon: <SparkVoiceChat01Line size={16} />,
+              },
+              {
+                key: "cron-jobs",
+                label: collapsed ? null : t("nav.cronJobs"),
+                icon: <SparkDateLine size={16} />,
+              },
+            ]
+          : []),
         {
           key: "voice-transcription",
           label: collapsed ? null : t("nav.voiceTranscription"),

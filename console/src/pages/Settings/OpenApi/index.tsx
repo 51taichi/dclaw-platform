@@ -574,6 +574,11 @@ export default function OpenApiPage() {
             {targetLabelById.get(`${record.target_type}:${record.target_id}`) ||
               record.target_id}
           </Typography.Text>
+          {record.allowed_capability === "invoke_only" && (
+            <Tag color="gold" icon={<ShieldCheck size={12} />}>
+              Invoke-only · 内部资产不可见
+            </Tag>
+          )}
         </Space>
       ),
     },

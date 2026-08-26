@@ -9,6 +9,8 @@ import { ChunkErrorBoundary } from "../../components/ChunkErrorBoundary";
 import { lazyImportWithRetry } from "../../utils/lazyWithRetry";
 import { usePlugins } from "../../plugins/PluginContext";
 import styles from "../index.module.less";
+import { useAgentStore } from "../../stores/agentStore";
+import { canInspectAgent } from "../../utils/agentCapabilities";
 
 // All other pages are lazily loaded with automatic retry on chunk failure
 const AgentConfigPage = lazyImportWithRetry("../../pages/Agent/Config");
@@ -41,6 +43,9 @@ const PluginManagerPage = lazyImportWithRetry(
   "../../pages/Settings/PluginManager",
 );
 const OpenApiPage = lazyImportWithRetry("../../pages/Settings/OpenApi");
+const SealedAgentsPage = lazyImportWithRetry(
+  "../../pages/Settings/SealedAgents",
+);
 
 const ChannelsPage = lazyImportWithRetry("../../pages/Control/Channels");
 const SessionsPage = lazyImportWithRetry("../../pages/Control/Sessions");
@@ -58,6 +63,15 @@ const ACPPage = lazyImportWithRetry("../../pages/Agent/ACP");
 // ── Ecosystem pages (WorkBuddy-style) ─────────────────────────────────────────
 
 const { Content } = Layout;
+
+function InspectableAgentRoute({ children }: { children: React.ReactNode }) {
+  const { selectedAgent, agents } = useAgentStore();
+  return canInspectAgent(agents.find((agent) => agent.id === selectedAgent)) ? (
+    <>{children}</>
+  ) : (
+    <Navigate to="/workbench" replace />
+  );
+}
 
 const pathToKey: Record<string, string> = {
   "/workbench": "workbench",
@@ -98,6 +112,7 @@ const pathToKey: Record<string, string> = {
   "/admin/backups": "backups",
   "/admin/plugin-manager": "plugin-manager",
   "/admin/open-api": "open-api",
+  "/admin/sealed-agents": "sealed-agents",
 };
 
 export default function AdminLayout() {
@@ -158,7 +173,14 @@ export default function AdminLayout() {
                     path="enterprise-knowledge"
                     element={<EnterpriseKnowledgePage />}
                   />
-                  <Route path="agent-config" element={<AgentConfigPage />} />
+                  <Route
+                    path="agent-config"
+                    element={
+                      <InspectableAgentRoute>
+                        <AgentConfigPage />
+                      </InspectableAgentRoute>
+                    }
+                  />
                   <Route path="security" element={<SecurityPage />} />
                   <Route path="token-usage" element={<TokenUsagePage />} />
                   <Route path="audit-chats" element={<AuditChatsPage />} />
@@ -175,19 +197,69 @@ export default function AdminLayout() {
                     element={<PluginManagerPage />}
                   />
                   <Route path="open-api" element={<OpenApiPage />} />
+                  <Route path="sealed-agents" element={<SealedAgentsPage />} />
 
-                  <Route path="channels" element={<ChannelsPage />} />
+                  <Route
+                    path="channels"
+                    element={
+                      <InspectableAgentRoute>
+                        <ChannelsPage />
+                      </InspectableAgentRoute>
+                    }
+                  />
                   <Route path="sessions" element={<SessionsPage />} />
                   <Route path="inbox" element={<InboxPage />} />
-                  <Route path="cron-jobs" element={<CronJobsPage />} />
-                  <Route path="heartbeat" element={<HeartbeatPage />} />
+                  <Route
+                    path="cron-jobs"
+                    element={
+                      <InspectableAgentRoute>
+                        <CronJobsPage />
+                      </InspectableAgentRoute>
+                    }
+                  />
+                  <Route
+                    path="heartbeat"
+                    element={
+                      <InspectableAgentRoute>
+                        <HeartbeatPage />
+                      </InspectableAgentRoute>
+                    }
+                  />
 
                   <Route path="skill-pool" element={<SkillPoolPage />} />
                   <Route path="expert-teams" element={<ExpertTeamsPage />} />
-                  <Route path="tools" element={<ToolsPage />} />
-                  <Route path="mcp" element={<MCPPage />} />
-                  <Route path="acp" element={<ACPPage />} />
-                  <Route path="workspace" element={<WorkspacePage />} />
+                  <Route
+                    path="tools"
+                    element={
+                      <InspectableAgentRoute>
+                        <ToolsPage />
+                      </InspectableAgentRoute>
+                    }
+                  />
+                  <Route
+                    path="mcp"
+                    element={
+                      <InspectableAgentRoute>
+                        <MCPPage />
+                      </InspectableAgentRoute>
+                    }
+                  />
+                  <Route
+                    path="acp"
+                    element={
+                      <InspectableAgentRoute>
+                        <ACPPage />
+                      </InspectableAgentRoute>
+                    }
+                  />
+                  <Route
+                    path="workspace"
+                    element={
+                      <InspectableAgentRoute>
+                        <WorkspacePage />
+                      </InspectableAgentRoute>
+                    }
+                  />
 
                   {/* Plugin routes — dynamically injected at runtime */}
                   {pluginRoutes.map((route) => (

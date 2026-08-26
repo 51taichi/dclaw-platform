@@ -28,6 +28,8 @@ export interface OpenApiPublication {
   status: OpenApiPublicationStatus;
   created_at?: string | null;
   updated_at?: string | null;
+  allowed_capability?: "standard" | "invoke_only";
+  response_policy?: "standard" | "sealed";
 }
 
 export interface CreateOpenApiPublicationRequest {

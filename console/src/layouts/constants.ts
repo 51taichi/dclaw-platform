@@ -58,6 +58,7 @@ export const KEY_TO_PATH: Record<string, string> = {
   backups: "/admin/backups",
   "plugin-manager": "/admin/plugin-manager",
   "open-api": "/admin/open-api",
+  "sealed-agents": "/admin/sealed-agents",
 };
 
 export const KEY_TO_LABEL: Record<string, string> = {
@@ -91,6 +92,7 @@ export const KEY_TO_LABEL: Record<string, string> = {
   "plugin-manager": "nav.pluginManager",
   "audit-chats": "nav.auditChats",
   "open-api": "nav.openApi",
+  "sealed-agents": "nav.sealedAgents",
 };
 
 // ── URL helpers ───────────────────────────────────────────────────────────
