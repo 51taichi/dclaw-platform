@@ -659,6 +659,7 @@ def test_partial_capture_consumes_original_lots_and_releases_remainder(
     ("capability", "tier"),
     [
         ("text_to_video", "standard"),
+        ("text_to_audio", "standard"),
         ("text_to_image", "high_cost"),
         ("fixed_workflow", "standard"),
     ],

@@ -333,6 +333,14 @@ def test_quote_rejects_usage_above_the_product_limit_with_422(
 
     assert response.status_code == 422
 
+    legacy_duration = client.post(
+        "/api/user/billing/quotes",
+        json=_quote_payload("oversized-duration")
+        | {"parameters": {"duration": 10**100}},
+        headers=_headers("alice"),
+    )
+    assert legacy_duration.status_code == 422
+
 
 def test_same_client_business_key_is_namespaced_per_authenticated_user(
     monkeypatch,

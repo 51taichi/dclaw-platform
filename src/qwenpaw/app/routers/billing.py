@@ -50,7 +50,7 @@ class QuoteRequestBody(BaseModel):
     @field_validator("parameters")
     @classmethod
     def validate_usage_quantities(cls, value: dict[str, Any]):
-        for key in ("count", "duration_seconds"):
+        for key in ("count", "duration", "duration_seconds"):
             amount = value.get(key)
             if (
                 isinstance(amount, int)

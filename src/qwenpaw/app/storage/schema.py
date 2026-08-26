@@ -2,6 +2,8 @@
 """SQLAlchemy Core schema for QwenPaw durable app data."""
 from __future__ import annotations
 
+from uuid import uuid4
+
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -18,6 +20,8 @@ from sqlalchemy import (
     false,
     func,
     inspect,
+    insert,
+    select,
     text,
     true,
 )
@@ -871,7 +875,96 @@ def create_all(engine: Engine) -> None:
     _ensure_open_api_publication_binding_columns(engine)
     _ensure_knowledge_metadata_columns(engine)
     _ensure_billing_usage_order_columns(engine)
+    _ensure_billing_bigint_columns(engine)
     _ensure_billing_constraints(engine)
+    _backfill_personal_wallets(engine)
+
+
+def _backfill_personal_wallets(engine: Engine) -> None:
+    """Create the empty personal wallet required for every durable user."""
+    with engine.begin() as conn:
+        user_ids = conn.execute(select(users.c.id)).scalars().all()
+        existing = set(
+            conn.execute(
+                select(billing_wallets.c.owner_id).where(
+                    billing_wallets.c.owner_type == "user",
+                ),
+            ).scalars(),
+        )
+        for user_id in user_ids:
+            owner_id = str(user_id)
+            if owner_id not in existing:
+                values = {
+                    "id": str(uuid4()),
+                    "owner_type": "user",
+                    "owner_id": owner_id,
+                }
+                if engine.dialect.name == "postgresql":
+                    from sqlalchemy.dialects.postgresql import (
+                        insert as pg_insert,
+                    )
+
+                    statement = pg_insert(billing_wallets).values(**values)
+                    statement = statement.on_conflict_do_nothing(
+                        index_elements=["owner_type", "owner_id"],
+                    )
+                elif engine.dialect.name == "sqlite":
+                    from sqlalchemy.dialects.sqlite import (
+                        insert as sqlite_insert,
+                    )
+
+                    statement = sqlite_insert(billing_wallets).values(**values)
+                    statement = statement.on_conflict_do_nothing(
+                        index_elements=["owner_type", "owner_id"],
+                    )
+                else:
+                    statement = insert(billing_wallets).values(**values)
+                conn.execute(statement)
+
+
+def _ensure_billing_bigint_columns(engine: Engine) -> None:
+    """Upgrade existing PostgreSQL accounting quantities to BIGINT."""
+    if engine.dialect.name != "postgresql":
+        return
+    columns = {
+        "billing_wallets": (
+            "available_credits",
+            "held_credits",
+            "purchased_credits",
+            "promotional_credits",
+            "package_credits",
+        ),
+        "billing_credit_lots": (
+            "granted_credits",
+            "available_credits",
+            "held_credits",
+        ),
+        "billing_ledger_entries": ("credits",),
+        "billing_ledger_allocations": ("credits",),
+        "billing_price_rules": (
+            "input_credits_per_million",
+            "output_credits_per_million",
+            "credits_per_unit",
+            "fixed_credits",
+        ),
+        "billing_usage_orders": (
+            "quoted_credits",
+            "held_credits",
+            "captured_credits",
+            "released_credits",
+            "supplier_cost_fen",
+        ),
+        "billing_usage_items": ("quantity", "credits"),
+    }
+    with engine.begin() as conn:
+        for table_name, column_names in columns.items():
+            for column_name in column_names:
+                conn.execute(
+                    text(
+                        f'ALTER TABLE "{table_name}" ALTER COLUMN '
+                        f'"{column_name}" TYPE BIGINT',
+                    ),
+                )
 
 
 def _ensure_billing_usage_order_columns(engine: Engine) -> None:
@@ -895,6 +988,26 @@ def _ensure_billing_usage_order_columns(engine: Engine) -> None:
 
 def _ensure_billing_constraints(engine: Engine) -> None:
     """Enforce invariants that runtime upgrades must not bypass."""
+    if engine.dialect.name == "postgresql":
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM "
+                    "pg_constraint WHERE conname = "
+                    "'ck_billing_credit_lots_purchased_no_expiry') THEN "
+                    "ALTER TABLE billing_credit_lots ADD CONSTRAINT "
+                    "ck_billing_credit_lots_purchased_no_expiry CHECK "
+                    "(credit_type <> 'purchased' OR expires_at IS NULL) "
+                    "NOT VALID; END IF; END $$",
+                ),
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE billing_credit_lots VALIDATE CONSTRAINT "
+                    "ck_billing_credit_lots_purchased_no_expiry",
+                ),
+            )
+        return
     if engine.dialect.name != "sqlite":
         return
     with engine.begin() as conn:

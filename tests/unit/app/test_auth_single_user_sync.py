@@ -90,7 +90,7 @@ def test_registration_creates_an_empty_personal_wallet(isolated_auth_store):
     assert ledger_count == 0
 
 
-def test_wallet_service_idempotently_backfills_existing_users(
+def test_schema_bootstrap_idempotently_backfills_existing_users(
     isolated_auth_store,
 ):
     with get_app_engine().begin() as conn:
@@ -103,8 +103,8 @@ def test_wallet_service_idempotently_backfills_existing_users(
             ),
         ).inserted_primary_key[0]
 
-    get_wallet_service()
-    get_wallet_service()
+    create_all(get_app_engine())
+    create_all(get_app_engine())
 
     with get_app_engine().connect() as conn:
         wallets = (

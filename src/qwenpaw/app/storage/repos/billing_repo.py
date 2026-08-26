@@ -1259,18 +1259,28 @@ def _lot_is_eligible(row, *, capability: str, tier: str) -> bool:
     normalized_tier = tier.strip().lower()
     if not normalized_capability or not normalized_tier:
         return False
-    if "video" in normalized_capability:
-        capability_group = "video"
-    elif "image" in normalized_capability:
-        capability_group = "image"
-    elif normalized_capability == "fixed_workflow":
-        capability_group = "fixed_workflow"
-    else:
-        capability_group = "text"
+    capability_groups = {
+        "chat": "text",
+        "text": "text",
+        "text_generation": "text",
+        "text_to_image": "image",
+        "image_to_image": "image",
+        "image_edit": "image",
+        "image_generation": "image",
+        "text_to_video": "video",
+        "image_to_video": "video",
+        "video_generation": "video",
+        "fixed_workflow": "fixed_workflow",
+    }
+    capability_group = capability_groups.get(normalized_capability)
     denied = {
         str(value).lower() for value in metadata.get("denied_capabilities", [])
     }
-    if capability_group in denied or normalized_capability in denied:
+    if (
+        capability_group is None
+        or capability_group in denied
+        or normalized_capability in denied
+    ):
         return False
     if normalized_tier == "high_cost" and "high_cost" in denied:
         return False
