@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
@@ -238,7 +238,7 @@ def _decode_rule(rule: dict[str, Any]) -> dict[str, Any]:
 
 def _dump_json(value: Any) -> str:
     return json.dumps(
-        value,
+        _to_jsonable(value),
         ensure_ascii=False,
         allow_nan=False,
         sort_keys=True,
@@ -251,3 +251,14 @@ def _load_json(value: str) -> dict[str, Any]:
     if not isinstance(loaded, dict):
         raise ValueError("catalog JSON fields must contain objects")
     return loaded
+
+
+def _to_jsonable(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _to_jsonable(item) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(
+        value,
+        (str, bytes, bytearray),
+    ):
+        return [_to_jsonable(item) for item in value]
+    return value

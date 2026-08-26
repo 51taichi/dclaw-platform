@@ -537,8 +537,10 @@ def test_json_roundtrip_canonicalizes_tuple_and_list_selectors(service, clock):
     quote = service.quote(request)
 
     assert quote.rule_id == "tuple-size"
-    assert isinstance(request.parameters["size"], list)
-    assert json.loads(json.dumps(request.parameters)) == {
+    assert not isinstance(request.parameters["size"], list)
+    assert json.loads(
+        json.dumps(request.to_jsonable()["parameters"]),
+    ) == {
         "count": 1,
         "size": [1024, 1024],
     }
@@ -656,7 +658,10 @@ def test_quote_snapshot_and_nested_values_are_deeply_immutable(
         source_parameters,
     )
     quote = service.quote(request)
-    original_json = json.dumps(quote.snapshot, sort_keys=True)
+    original_json = json.dumps(
+        quote.to_jsonable()["snapshot"],
+        sort_keys=True,
+    )
 
     source_parameters["count"] = 99
     source_parameters["client_context"]["steps"].append("mutated")
@@ -671,11 +676,93 @@ def test_quote_snapshot_and_nested_values_are_deeply_immutable(
             "steps"
         ].append("mutated")
 
-    assert json.dumps(request.parameters, sort_keys=True)
-    assert json.dumps(quote.unit_breakdown, sort_keys=True)
-    assert json.dumps(quote.snapshot, sort_keys=True) == original_json
+    assert json.dumps(request.to_jsonable()["parameters"], sort_keys=True)
+    assert json.dumps(quote.to_jsonable()["unit_breakdown"], sort_keys=True)
+    assert (
+        json.dumps(quote.to_jsonable()["snapshot"], sort_keys=True)
+        == original_json
+    )
     assert quote.credits == 50
     assert quote.request.parameters["count"] == 1
+
+
+def test_mutable_builtin_descriptors_cannot_bypass_quote_immutability(
+    service,
+    clock,
+):
+    service.publish(
+        _catalog(
+            "descriptor-bypass",
+            clock,
+            _rule(
+                "descriptor-bypass-rule",
+                "image_count",
+                capability="text_to_image",
+                credits_per_unit=50,
+            ),
+        ),
+    )
+    quote = service.quote(
+        QuoteRequest(
+            "aliyun",
+            "model-1",
+            "text_to_image",
+            {"count": 1, "client_context": {"steps": ["submit"]}},
+        ),
+    )
+
+    with pytest.raises(TypeError):
+        dict.__setitem__(quote.snapshot, "credits", 0)
+    with pytest.raises(TypeError):
+        list.append(
+            quote.snapshot["request"]["parameters"]["client_context"]["steps"],
+            "mutated",
+        )
+
+    assert quote.credits == 50
+    assert quote.snapshot["credits"] == 50
+    assert quote.snapshot["request"]["parameters"]["client_context"] == {
+        "steps": ["submit"],
+    }
+
+
+def test_quote_has_an_explicit_detached_json_serialization_contract(
+    service,
+    clock,
+):
+    service.publish(
+        _catalog(
+            "explicit-json",
+            clock,
+            _rule(
+                "explicit-json-rule",
+                "image_count",
+                capability="text_to_image",
+                credits_per_unit=50,
+            ),
+        ),
+    )
+    quote = service.quote(
+        QuoteRequest(
+            "aliyun",
+            "model-1",
+            "text_to_image",
+            {"count": 1, "client_context": {"steps": ["submit"]}},
+        ),
+    )
+
+    payload = quote.to_jsonable()
+    encoded = json.dumps(payload, allow_nan=False, sort_keys=True)
+    payload["snapshot"]["credits"] = 0
+    payload["request"]["parameters"]["client_context"]["steps"].append(
+        "mutated",
+    )
+
+    assert json.loads(encoded)["credits"] == 50
+    assert quote.snapshot["credits"] == 50
+    assert quote.request.to_jsonable()["parameters"]["client_context"] == {
+        "steps": ["submit"],
+    }
 
 
 def test_controller_selector_allowlist_is_accepted(service, clock):

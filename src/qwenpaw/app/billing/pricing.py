@@ -39,8 +39,34 @@ _ALLOWED_SELECTOR_KEYS = frozenset(
 )
 
 
-class FrozenJSONDict(dict[str, Any]):
-    """JSON-serializable dictionary that rejects every mutation."""
+class FrozenJSONDict(Mapping[str, Any]):
+    """Tuple-backed JSON object with no mutable built-in base class."""
+
+    __slots__ = ("_items",)
+
+    def __init__(self, value: Mapping[str, Any]) -> None:
+        object.__setattr__(self, "_items", tuple(value.items()))
+
+    def __setattr__(self, _name: str, _value: Any) -> NoReturn:
+        raise TypeError("JSON snapshot values are immutable")
+
+    def __getitem__(self, key: str) -> Any:
+        for item_key, item_value in self._items:
+            if item_key == key:
+                return item_value
+        raise KeyError(key)
+
+    def __iter__(self):
+        return (key for key, _value in self._items)
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Mapping) and _json_values_equal(self, other)
+
+    def __repr__(self) -> str:
+        return repr(to_jsonable(self))
 
     @staticmethod
     def _immutable(*_args: Any, **_kwargs: Any) -> NoReturn:
@@ -62,8 +88,38 @@ class FrozenJSONDict(dict[str, Any]):
         return self
 
 
-class FrozenJSONList(list[Any]):
-    """JSON-serializable list that rejects every mutation."""
+class FrozenJSONList(Sequence[Any]):
+    """Tuple-backed JSON array with no mutable built-in base class."""
+
+    __slots__ = ("_items",)
+
+    def __init__(self, value: Sequence[Any]) -> None:
+        object.__setattr__(self, "_items", tuple(value))
+
+    def __setattr__(self, _name: str, _value: Any) -> NoReturn:
+        raise TypeError("JSON snapshot values are immutable")
+
+    def __getitem__(self, index):
+        value = self._items[index]
+        if isinstance(index, slice):
+            return FrozenJSONList(value)
+        return value
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def __iter__(self):
+        return iter(self._items)
+
+    def __eq__(self, other: object) -> bool:
+        return (
+            isinstance(other, Sequence)
+            and not isinstance(other, (str, bytes, bytearray))
+            and _json_values_equal(self, other)
+        )
+
+    def __repr__(self) -> str:
+        return repr(to_jsonable(self))
 
     @staticmethod
     def _immutable(*_args: Any, **_kwargs: Any) -> NoReturn:
@@ -113,6 +169,17 @@ class QuoteRequest:
             _strict_json_object(self.parameters, "parameters"),
         )
 
+    def to_jsonable(self) -> dict[str, Any]:
+        """Return a detached strict-JSON request payload."""
+        return {
+            "provider_id": self.provider_id,
+            "model_key": self.model_key,
+            "capability": self.capability,
+            "parameters": to_jsonable(self.parameters),
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+        }
+
 
 @dataclass(frozen=True)
 class RetailQuote:
@@ -134,6 +201,17 @@ class RetailQuote:
             "snapshot",
             _strict_json_object(self.snapshot, "snapshot"),
         )
+
+    def to_jsonable(self) -> dict[str, Any]:
+        """Return a detached strict-JSON quote payload."""
+        return {
+            "catalog_version": self.catalog_version,
+            "rule_id": self.rule_id,
+            "credits": self.credits,
+            "unit_breakdown": to_jsonable(self.unit_breakdown),
+            "snapshot": to_jsonable(self.snapshot),
+            "request": self.request.to_jsonable(),
+        }
 
 
 @dataclass(frozen=True)
@@ -546,7 +624,10 @@ def _json_native(value: Any, path: str) -> Any:
                 raise ValueError(f"{path} contains a non-string object key")
             result[key] = _json_native(item, f"{path}.{key}")
         return result
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, Sequence) and not isinstance(
+        value,
+        (str, bytes, bytearray),
+    ):
         return [
             _json_native(item, f"{path}[{index}]")
             for index, item in enumerate(value)
@@ -562,8 +643,13 @@ def _freeze_json(value: Any) -> Any:
             {key: _freeze_json(item) for key, item in value.items()},
         )
     if isinstance(value, list):
-        return FrozenJSONList(_freeze_json(item) for item in value)
+        return FrozenJSONList([_freeze_json(item) for item in value])
     return value
+
+
+def to_jsonable(value: Any) -> Any:
+    """Return detached mutable JSON primitives for an immutable JSON value."""
+    return _json_native(value, "value")
 
 
 def _json_values_equal(left: Any, right: Any) -> bool:
@@ -598,4 +684,5 @@ __all__ = [
     "PriceRuleNotFoundError",
     "QuoteRequest",
     "RetailQuote",
+    "to_jsonable",
 ]
