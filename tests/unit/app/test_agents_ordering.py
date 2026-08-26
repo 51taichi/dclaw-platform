@@ -12,6 +12,7 @@ from qwenpaw.config.config import (
     Config,
 )
 from qwenpaw.app.routers import agents as agents_router
+from qwenpaw.app.sealed_agents.models import SealedAgentRecord
 
 
 def _build_config(
@@ -86,6 +87,43 @@ async def test_list_agents_appends_missing_ids(monkeypatch):
         "beta",
         "alpha",
     ]
+
+
+@pytest.mark.asyncio
+async def test_list_agents_merges_sealed_agents_without_exposing_workspace(
+    monkeypatch,
+):
+    config = _build_config(["default"], agent_order=["default"])
+
+    class Registry:
+        def list_agents(self):
+            return [
+                SealedAgentRecord(
+                    agent_id="luyu",
+                    name="陆羽",
+                    description="茶文化专家",
+                    enabled=True,
+                    active_release_id=None,
+                ),
+            ]
+
+    monkeypatch.setattr(agents_router, "load_config", lambda: config)
+    monkeypatch.setattr(agents_router, "load_agent_config", _agent_config)
+    monkeypatch.setattr(
+        agents_router,
+        "get_sealed_agent_registry",
+        lambda: Registry(),
+    )
+
+    response = await agents_router.list_agents()
+    sealed = response.agents[1]
+
+    assert [agent.id for agent in response.agents] == ["default", "luyu"]
+    assert sealed.agent_type == "sealed"
+    assert sealed.scope == "global"
+    assert sealed.workspace_dir is None
+    assert sealed.capabilities.invoke is True
+    assert sealed.capabilities.download is False
 
 
 @pytest.mark.asyncio

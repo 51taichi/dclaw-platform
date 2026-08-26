@@ -19,7 +19,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi import Path as PathParam
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from ..chat_access import current_user_id
 from ..guards import require_admin
 from ..agent_package_import import (
@@ -56,6 +56,8 @@ from ...security.skill_scanner import SkillScanError
 from ..multi_agent_manager import MultiAgentManager
 from ...constant import WORKING_DIR
 from ..storage.repos.chat_list_repo import get_chat_list_repository
+from ..sealed_agents.models import AgentCapabilities
+from ..sealed_agents.registry import get_sealed_agent_registry
 
 logger = logging.getLogger(__name__)
 
@@ -75,9 +77,16 @@ class AgentSummary(BaseModel):
     id: str
     name: str
     description: str
-    workspace_dir: str
+    workspace_dir: str | None = None
     enabled: bool
     active_model: ModelSlotConfig | None = None
+    agent_type: str = "standard"
+    scope: str = "private"
+    version: str | None = None
+    availability: str = "available"
+    capabilities: AgentCapabilities = Field(
+        default_factory=AgentCapabilities.for_standard,
+    )
 
 
 class AgentListResponse(BaseModel):
@@ -264,6 +273,34 @@ async def list_agents() -> AgentListResponse:
                     enabled=getattr(agent_ref, "enabled", True),
                 ),
             )
+
+    configured_ids = {agent.id for agent in agents}
+    for sealed in get_sealed_agent_registry().list_agents():
+        if sealed.agent_id in configured_ids:
+            logger.error(
+                "Ignoring sealed agent whose id conflicts with a standard agent: %s",
+                sealed.agent_id,
+            )
+            continue
+        active_release = sealed.active_release
+        agents.append(
+            AgentSummary(
+                id=sealed.agent_id,
+                name=sealed.name,
+                description=sealed.description,
+                workspace_dir=None,
+                enabled=sealed.enabled,
+                agent_type="sealed",
+                scope="global",
+                version=active_release.version if active_release else None,
+                availability=(
+                    "available"
+                    if sealed.enabled and active_release is not None
+                    else "unavailable"
+                ),
+                capabilities=AgentCapabilities.for_sealed_global(),
+            ),
+        )
 
     return AgentListResponse(agents=agents)
 
