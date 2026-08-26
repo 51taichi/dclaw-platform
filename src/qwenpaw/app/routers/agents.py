@@ -56,7 +56,8 @@ from ...security.skill_scanner import SkillScanError
 from ..multi_agent_manager import MultiAgentManager
 from ...constant import WORKING_DIR
 from ..storage.repos.chat_list_repo import get_chat_list_repository
-from ..sealed_agents.models import AgentCapabilities
+from ..sealed_agents.models import AgentCapabilities, SealedCapability
+from ..sealed_agents.policy import assert_sealed_capability
 from ..sealed_agents.registry import get_sealed_agent_registry
 
 logger = logging.getLogger(__name__)
@@ -475,6 +476,17 @@ async def import_agent_package_upload(
     """Import an agent zip package into the configured workspaces."""
     data = await _read_agent_package_upload(file)
     try:
+        preview = await asyncio.to_thread(
+            preview_agent_package,
+            data,
+            existing_ids=set(load_config().agents.profiles.keys()),
+            requested_id=agent_id or None,
+        )
+        if get_sealed_agent_registry().is_sealed(preview.id):
+            raise HTTPException(
+                status_code=403,
+                detail="Sealed agent asset access denied",
+            )
         result = await asyncio.to_thread(
             import_agent_package,
             data,
@@ -482,6 +494,8 @@ async def import_agent_package_upload(
             enabled=enabled,
             mode=mode,
         )
+    except HTTPException:
+        raise
     except AgentPackageConflict as exc:
         raise HTTPException(status_code=409, detail=exc.detail) from exc
     except (AgentPackageError, SkillScanError, ValueError) as exc:
@@ -499,6 +513,11 @@ async def import_agent_package_upload(
 )
 async def get_agent(agentId: str = PathParam(...)) -> AgentProfileConfig:
     """Get agent configuration."""
+    assert_sealed_capability(
+        agentId,
+        SealedCapability.INSPECT,
+        is_sealed=get_sealed_agent_registry().is_sealed(agentId),
+    )
     try:
         agent_config = load_agent_config(agentId)
         return agent_config
@@ -623,6 +642,11 @@ async def update_agent(
     request: Request = None,
 ) -> AgentProfileConfig:
     """Update agent configuration."""
+    assert_sealed_capability(
+        agentId,
+        SealedCapability.EDIT,
+        is_sealed=get_sealed_agent_registry().is_sealed(agentId),
+    )
     config = load_config()
 
     if agentId not in config.agents.profiles:
@@ -656,6 +680,11 @@ async def delete_agent(
     request: Request = None,
 ) -> dict:
     """Delete an agent."""
+    assert_sealed_capability(
+        agentId,
+        SealedCapability.EDIT,
+        is_sealed=get_sealed_agent_registry().is_sealed(agentId),
+    )
     config = load_config()
 
     if agentId not in config.agents.profiles:
@@ -692,6 +721,11 @@ async def toggle_agent_enabled(
     request: Request = None,
 ) -> dict:
     """Toggle agent enabled state."""
+    assert_sealed_capability(
+        agentId,
+        SealedCapability.EDIT,
+        is_sealed=get_sealed_agent_registry().is_sealed(agentId),
+    )
     config = load_config()
 
     if agentId not in config.agents.profiles:

@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from qwenpaw.app.sealed_agents import policy
+from qwenpaw.app.routers import agents as agents_router
 
 
 class Request:
@@ -53,3 +54,25 @@ def test_asset_guard_keeps_standard_agent_routes_unchanged(monkeypatch):
     )
 
     policy.deny_sealed_asset_access(Request(header_agent="ordinary"))
+
+
+@pytest.mark.asyncio
+async def test_direct_agent_detail_never_loads_sealed_profile(monkeypatch):
+    registry = SimpleNamespace(is_sealed=lambda agent_id: agent_id == "luyu")
+    loaded = []
+    monkeypatch.setattr(
+        agents_router,
+        "get_sealed_agent_registry",
+        lambda: registry,
+    )
+    monkeypatch.setattr(
+        agents_router,
+        "load_agent_config",
+        lambda agent_id: loaded.append(agent_id),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await agents_router.get_agent("luyu")
+
+    assert exc_info.value.status_code == 403
+    assert loaded == []

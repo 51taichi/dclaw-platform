@@ -72,7 +72,30 @@ def add_global_config(zf: zipfile.ZipFile) -> None:
     """Add the global config file to the zip."""
     cfg_src = WORKING_DIR / CONFIG_FILE
     if cfg_src.is_file():
-        zf.write(cfg_src, PREFIX_CONFIG)
+        import json
+
+        from ...app.sealed_agents.registry import get_sealed_agent_registry
+
+        payload = json.loads(cfg_src.read_text(encoding="utf-8"))
+        agents = payload.get("agents")
+        if isinstance(agents, dict):
+            sealed_ids = {
+                record.agent_id
+                for record in get_sealed_agent_registry().list_agents()
+            }
+            profiles = agents.get("profiles")
+            if isinstance(profiles, dict):
+                for agent_id in sealed_ids:
+                    profiles.pop(agent_id, None)
+            order = agents.get("agent_order")
+            if isinstance(order, list):
+                agents["agent_order"] = [
+                    agent_id for agent_id in order if agent_id not in sealed_ids
+                ]
+        zf.writestr(
+            PREFIX_CONFIG,
+            json.dumps(payload, ensure_ascii=False, indent=2),
+        )
         logger.info("Global config added to backup: %s", cfg_src)
     else:
         logger.warning(
