@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -42,8 +44,14 @@ _TYPE_COLUMNS = {
 
 
 class BillingRepository:
-    def __init__(self, engine: Engine) -> None:
+    def __init__(
+        self,
+        engine: Engine,
+        *,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
         self.engine = engine
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     def ensure_wallet(self, owner_type: str, owner_id: str) -> dict[str, Any]:
         if not owner_type.strip() or not owner_id.strip():
@@ -94,9 +102,7 @@ class BillingRepository:
             with self.engine.begin() as conn:
                 wallet = (
                     conn.execute(
-                        select(billing_wallets)
-                        .where(billing_wallets.c.id == command.wallet_id)
-                        .with_for_update(),
+                        self._wallet_for_update_statement(command.wallet_id),
                     )
                     .mappings()
                     .first()
@@ -115,6 +121,12 @@ class BillingRepository:
                         command.idempotency_key,
                     )
 
+                self._expire_available_lots(
+                    conn,
+                    command.wallet_id,
+                    self._clock(),
+                )
+
                 if command.event_type in _GRANT_EVENTS:
                     self._append_grant(conn, command)
                 elif command.event_type == "usage_hold":
@@ -131,7 +143,7 @@ class BillingRepository:
                     )
 
                 balance = self._balance_for_update(conn, command.wallet_id)
-                self._assert_projection(balance)
+                self._assert_projection(conn, command.wallet_id, balance)
                 return balance
         except IntegrityError as exc:
             if self._idempotency_exists(command.idempotency_key):
@@ -207,8 +219,16 @@ class BillingRepository:
         )
 
     def balance(self, wallet_id: str) -> WalletBalance:
-        with self.engine.connect() as conn:
-            return self._balance_for_update(conn, wallet_id)
+        with self.engine.begin() as conn:
+            wallet = conn.execute(
+                self._wallet_for_update_statement(wallet_id),
+            ).first()
+            if wallet is None:
+                raise BillingInvariantError(f"wallet not found: {wallet_id}")
+            self._expire_available_lots(conn, wallet_id, self._clock())
+            balance = self._balance_for_update(conn, wallet_id)
+            self._assert_projection(conn, wallet_id, balance)
+            return balance
 
     def allocations(self, business_key: str) -> list[tuple[str, int]]:
         source_entry = billing_ledger_entries.alias("source_entry")
@@ -314,9 +334,105 @@ class BillingRepository:
             )
         return [self._ledger_row(row) for row in rows]
 
+    def _expire_available_lots(
+        self,
+        conn,
+        wallet_id: str,
+        now: datetime,
+    ) -> None:
+        rows = (
+            conn.execute(
+                select(billing_credit_lots)
+                .where(
+                    billing_credit_lots.c.wallet_id == wallet_id,
+                    billing_credit_lots.c.available_credits > 0,
+                    billing_credit_lots.c.expires_at.is_not(None),
+                    billing_credit_lots.c.expires_at <= now,
+                )
+                .order_by(
+                    billing_credit_lots.c.expires_at.asc(),
+                    billing_credit_lots.c.created_at.asc(),
+                    billing_credit_lots.c.id.asc(),
+                )
+                .with_for_update(),
+            )
+            .mappings()
+            .all()
+        )
+        for lot in rows:
+            amount = int(lot["available_credits"])
+            lot_id = str(lot["id"])
+            ledger_id = str(uuid4())
+            self._insert_ledger(
+                conn,
+                LedgerTransaction(
+                    wallet_id=wallet_id,
+                    event_type="credit_expiry",
+                    credits=amount,
+                    business_type="credit_lot",
+                    business_key=lot_id,
+                    idempotency_key=f"credit-expiry:available:{lot_id}",
+                    metadata={
+                        "expiry_phase": "available",
+                        "source_ledger_entry_id": lot[
+                            "source_ledger_entry_id"
+                        ],
+                    },
+                ),
+                ledger_id=ledger_id,
+                credit_delta=-amount,
+                now=now,
+            )
+            changed_lot = conn.execute(
+                update(billing_credit_lots)
+                .where(
+                    billing_credit_lots.c.id == lot_id,
+                    billing_credit_lots.c.available_credits == amount,
+                )
+                .values(
+                    status="expired",
+                    available_credits=0,
+                    updated_at=now,
+                ),
+            )
+            if changed_lot.rowcount != 1:
+                raise BillingInvariantError(
+                    "credit lot changed during expiry",
+                )
+            conn.execute(
+                insert(billing_ledger_allocations).values(
+                    id=str(uuid4()),
+                    ledger_entry_id=ledger_id,
+                    credit_lot_id=lot_id,
+                    credits=amount,
+                    created_at=now,
+                ),
+            )
+            type_column = _TYPE_COLUMNS[str(lot["credit_type"])]
+            changed_wallet = conn.execute(
+                update(billing_wallets)
+                .where(
+                    billing_wallets.c.id == wallet_id,
+                    billing_wallets.c.available_credits >= amount,
+                    type_column >= amount,
+                )
+                .values(
+                    available_credits=billing_wallets.c.available_credits
+                    - amount,
+                    **{type_column.name: type_column - amount},
+                    updated_at=now,
+                ),
+            )
+            if changed_wallet.rowcount != 1:
+                raise BillingInvariantError(
+                    "wallet changed during credit expiry",
+                )
+
     def _append_grant(self, conn, command: LedgerTransaction) -> None:
         assert command.credit_type is not None
-        now = datetime.now(timezone.utc)
+        now = self._clock()
+        if command.expires_at is not None and command.expires_at <= now:
+            raise ValueError("grant expiry must be in the future")
         ledger_id = str(uuid4())
         self._insert_ledger(
             conn,
@@ -342,7 +458,7 @@ class BillingRepository:
             ),
         )
         type_column = _TYPE_COLUMNS[command.credit_type]
-        conn.execute(
+        changed_wallet = conn.execute(
             update(billing_wallets)
             .where(billing_wallets.c.id == command.wallet_id)
             .values(
@@ -352,6 +468,8 @@ class BillingRepository:
                 updated_at=now,
             ),
         )
+        if changed_wallet.rowcount != 1:
+            raise BillingInvariantError("wallet changed during grant")
 
     def _append_hold(
         self,
@@ -360,6 +478,17 @@ class BillingRepository:
         *,
         wallet_available: int,
     ) -> None:
+        existing_hold = conn.execute(
+            select(billing_ledger_entries.c.id).where(
+                billing_ledger_entries.c.wallet_id == command.wallet_id,
+                billing_ledger_entries.c.event_type == "usage_hold",
+                billing_ledger_entries.c.business_key == command.business_key,
+            ),
+        ).first()
+        if existing_hold is not None:
+            raise BillingInvariantError(
+                f"hold already exists: {command.business_key}",
+            )
         if wallet_available < command.credits:
             raise InsufficientCreditsError(
                 "wallet has "
@@ -376,7 +505,7 @@ class BillingRepository:
                 "available unexpired credit lots are insufficient",
             )
 
-        now = datetime.now(timezone.utc)
+        now = self._clock()
         ledger_id = str(uuid4())
         self._insert_ledger(
             conn,
@@ -412,7 +541,7 @@ class BillingRepository:
                     created_at=now,
                 ),
             )
-        conn.execute(
+        changed_wallet = conn.execute(
             update(billing_wallets)
             .where(
                 billing_wallets.c.id == command.wallet_id,
@@ -425,6 +554,8 @@ class BillingRepository:
                 updated_at=now,
             ),
         )
+        if changed_wallet.rowcount != 1:
+            raise BillingInvariantError("wallet changed during hold")
 
     def _append_release(self, conn, command: LedgerTransaction) -> None:
         prior_release = conn.execute(
@@ -456,41 +587,72 @@ class BillingRepository:
             raise BillingInvariantError(
                 f"hold not found: {command.business_key}",
             )
+        now = self._clock()
         allocations = conn.execute(
             select(
                 billing_ledger_allocations.c.credit_lot_id,
                 billing_ledger_allocations.c.credits,
-            ).where(billing_ledger_allocations.c.ledger_entry_id == hold_id),
+                billing_credit_lots.c.credit_type,
+                (billing_credit_lots.c.expires_at <= now).label(
+                    "is_expired",
+                ),
+            )
+            .select_from(
+                billing_ledger_allocations.join(
+                    billing_credit_lots,
+                    billing_ledger_allocations.c.credit_lot_id
+                    == billing_credit_lots.c.id,
+                ),
+            )
+            .where(billing_ledger_allocations.c.ledger_entry_id == hold_id),
         ).all()
         released_credits = sum(int(row.credits) for row in allocations)
         if command.credits not in (0, released_credits):
             raise BillingInvariantError(
                 "release must compensate the complete hold",
             )
-
-        now = datetime.now(timezone.utc)
         ledger_id = str(uuid4())
         self._insert_ledger(
             conn,
-            command,
+            replace(
+                command,
+                metadata={
+                    **command.metadata,
+                    "source_ledger_entry_id": hold_id,
+                },
+            ),
             ledger_id=ledger_id,
             credit_delta=0,
             now=now,
         )
+        restored_available = 0
+        expired_by_type = {credit_type: 0 for credit_type in _CREDIT_TYPES}
+        expired_allocations: list[tuple[str, int]] = []
         for allocation in allocations:
             amount = int(allocation.credits)
+            is_expired = bool(allocation.is_expired)
+            lot_values: dict[str, Any] = {
+                "held_credits": billing_credit_lots.c.held_credits - amount,
+                "updated_at": now,
+            }
+            if is_expired:
+                lot_values["status"] = "expired"
+                expired_by_type[str(allocation.credit_type)] += amount
+                expired_allocations.append(
+                    (str(allocation.credit_lot_id), amount),
+                )
+            else:
+                lot_values["available_credits"] = (
+                    billing_credit_lots.c.available_credits + amount
+                )
+                restored_available += amount
             changed = conn.execute(
                 update(billing_credit_lots)
                 .where(
                     billing_credit_lots.c.id == allocation.credit_lot_id,
                     billing_credit_lots.c.held_credits >= amount,
                 )
-                .values(
-                    available_credits=billing_credit_lots.c.available_credits
-                    + amount,
-                    held_credits=billing_credit_lots.c.held_credits - amount,
-                    updated_at=now,
-                ),
+                .values(**lot_values),
             )
             if changed.rowcount != 1:
                 raise BillingInvariantError(
@@ -505,18 +667,57 @@ class BillingRepository:
                     created_at=now,
                 ),
             )
+        expired_credits = sum(expired_by_type.values())
+        if expired_credits:
+            expiry_ledger_id = str(uuid4())
+            self._insert_ledger(
+                conn,
+                LedgerTransaction(
+                    wallet_id=command.wallet_id,
+                    event_type="credit_expiry",
+                    credits=expired_credits,
+                    business_type="usage_hold",
+                    business_key=hold_id,
+                    idempotency_key=f"credit-expiry:held:{hold_id}",
+                    metadata={
+                        "expiry_phase": "held_release",
+                        "source_ledger_entry_id": hold_id,
+                        "release_ledger_entry_id": ledger_id,
+                    },
+                ),
+                ledger_id=expiry_ledger_id,
+                credit_delta=-expired_credits,
+                now=now,
+            )
+            for lot_id, amount in expired_allocations:
+                conn.execute(
+                    insert(billing_ledger_allocations).values(
+                        id=str(uuid4()),
+                        ledger_entry_id=expiry_ledger_id,
+                        credit_lot_id=lot_id,
+                        credits=amount,
+                        created_at=now,
+                    ),
+                )
+        wallet_values: dict[str, Any] = {
+            "available_credits": billing_wallets.c.available_credits
+            + restored_available,
+            "held_credits": billing_wallets.c.held_credits - released_credits,
+            "updated_at": now,
+        }
+        wallet_guards = [
+            billing_wallets.c.id == command.wallet_id,
+            billing_wallets.c.held_credits >= released_credits,
+        ]
+        for credit_type, expired_amount in expired_by_type.items():
+            if expired_amount:
+                type_column = _TYPE_COLUMNS[credit_type]
+                wallet_values[type_column.name] = type_column - expired_amount
+                wallet_guards.append(type_column >= expired_amount)
         changed = conn.execute(
             update(billing_wallets)
-            .where(
-                billing_wallets.c.id == command.wallet_id,
-                billing_wallets.c.held_credits >= released_credits,
-            )
-            .values(
-                available_credits=billing_wallets.c.available_credits
-                + released_credits,
-                held_credits=billing_wallets.c.held_credits - released_credits,
-                updated_at=now,
-            ),
+            .where(*wallet_guards)
+            .values(**wallet_values),
         )
         if changed.rowcount != 1:
             raise BillingInvariantError(
@@ -529,7 +730,39 @@ class BillingRepository:
         wallet_id: str,
         credits: int,
     ) -> list[tuple[str, int]]:
-        now = datetime.now(timezone.utc)
+        now = self._clock()
+        rows = conn.execute(
+            self._available_lots_for_update_statement(
+                wallet_id,
+                credits,
+                now,
+            ),
+        ).mappings()
+        remaining = credits
+        allocations: list[tuple[str, int]] = []
+        for row in rows:
+            amount = min(remaining, int(row["available_credits"]))
+            if amount:
+                allocations.append((str(row["id"]), amount))
+                remaining -= amount
+            if remaining == 0:
+                break
+        return allocations
+
+    @staticmethod
+    def _wallet_for_update_statement(wallet_id: str):
+        return (
+            select(billing_wallets)
+            .where(billing_wallets.c.id == wallet_id)
+            .with_for_update()
+        )
+
+    @staticmethod
+    def _available_lots_for_update_statement(
+        wallet_id: str,
+        credits: int,
+        now: datetime,
+    ):
         expiry_is_null = case(
             (billing_credit_lots.c.expires_at.is_(None), 1),
             else_=0,
@@ -539,7 +772,7 @@ class BillingRepository:
             (billing_credit_lots.c.credit_type == "package", 1),
             else_=2,
         )
-        rows = conn.execute(
+        return (
             select(billing_credit_lots)
             .where(
                 billing_credit_lots.c.wallet_id == wallet_id,
@@ -557,18 +790,9 @@ class BillingRepository:
                 billing_credit_lots.c.created_at.asc(),
                 billing_credit_lots.c.id.asc(),
             )
-            .with_for_update(),
-        ).mappings()
-        remaining = credits
-        allocations: list[tuple[str, int]] = []
-        for row in rows:
-            amount = min(remaining, int(row["available_credits"]))
-            if amount:
-                allocations.append((str(row["id"]), amount))
-                remaining -= amount
-            if remaining == 0:
-                break
-        return allocations
+            .limit(credits)
+            .with_for_update()
+        )
 
     def _insert_ledger(
         self,
@@ -625,7 +849,11 @@ class BillingRepository:
             raise ValueError("only grant commands may specify a credit type")
 
     @staticmethod
-    def _assert_projection(balance: WalletBalance) -> None:
+    def _assert_projection(
+        conn,
+        wallet_id: str,
+        balance: WalletBalance,
+    ) -> None:
         values = (
             balance.available,
             balance.held,
@@ -642,6 +870,33 @@ class BillingRepository:
         ):
             raise BillingInvariantError(
                 "wallet total projection is inconsistent",
+            )
+        lot_rows = conn.execute(
+            select(
+                billing_credit_lots.c.credit_type,
+                billing_credit_lots.c.available_credits,
+                billing_credit_lots.c.held_credits,
+            ).where(billing_credit_lots.c.wallet_id == wallet_id),
+        )
+        lot_available = 0
+        lot_held = 0
+        lot_types = {credit_type: 0 for credit_type in _CREDIT_TYPES}
+        for row in lot_rows:
+            available = int(row.available_credits)
+            held = int(row.held_credits)
+            lot_available += available
+            lot_held += held
+            lot_types[str(row.credit_type)] += available + held
+        expected = WalletBalance(
+            available=lot_available,
+            held=lot_held,
+            purchased=lot_types["purchased"],
+            promotional=lot_types["promotional"],
+            package=lot_types["package"],
+        )
+        if balance != expected:
+            raise BillingInvariantError(
+                "wallet projection does not match credit lot projections",
             )
 
     @staticmethod
