@@ -24,6 +24,7 @@ from ..open_api.auth import generate_open_api_key, hash_open_api_key
 from ..open_api.models import OpenApiScope, OpenApiStatus, OpenApiTargetType
 from ..storage.repos.open_api_repo import get_open_api_repository
 from ..storage.repos.user_repo import get_user_repository
+from ..sealed_agents.registry import get_sealed_agent_registry
 
 router = APIRouter(prefix="/open-api", tags=["admin-open-api"])
 
@@ -67,6 +68,19 @@ def _require_admin(request: Request) -> str:
 
 def _assert_target_exists(target_type: str, target_id: str) -> None:
     if target_type == "agent":
+        sealed_registry = get_sealed_agent_registry()
+        if sealed_registry.is_sealed(target_id):
+            record = sealed_registry.get_agent(target_id)
+            if (
+                record is None
+                or not record.enabled
+                or record.active_release_id is None
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Sealed agent target is unavailable",
+                )
+            return
         config = load_config()
         profiles = getattr(getattr(config, "agents", None), "profiles", {}) or {}
         if target_id not in profiles:
@@ -84,11 +98,39 @@ def _assert_target_exists(target_type: str, target_id: str) -> None:
     raise HTTPException(status_code=400, detail="Unsupported Open API target type")
 
 
+def _target_publication_policy(
+    target_type: str,
+    target_id: str,
+) -> dict[str, str]:
+    if (
+        target_type == "agent"
+        and get_sealed_agent_registry().is_sealed(target_id)
+    ):
+        return {
+            "allowed_capability": "invoke_only",
+            "response_policy": "sealed",
+        }
+    return {
+        "allowed_capability": "standard",
+        "response_policy": "standard",
+    }
+
+
+def _with_target_policy(publication: dict[str, Any]) -> dict[str, Any]:
+    policy = _target_publication_policy(
+        str(publication.get("target_type", "")),
+        str(publication.get("target_id", "")),
+    )
+    if policy["response_policy"] != "sealed":
+        return publication
+    return {**publication, **policy}
+
+
 @router.get("/publications")
 def list_publications(request: Request) -> list[dict[str, Any]]:
     owner_user_id = _require_admin(request)
     return [
-        publication
+        _with_target_policy(publication)
         for publication in get_open_api_repository().list_publications(enabled_only=False)
         if str(publication.get("owner_user_id")) == owner_user_id
     ]
@@ -108,7 +150,7 @@ def create_publication(
     _assert_public_id_available(repo, payload.public_id, owner_user_id)
     publication_id = str(uuid.uuid4())
     try:
-        return repo.upsert_publication(
+        created = repo.upsert_publication(
             {
                 "id": publication_id,
                 "public_id": payload.public_id,
@@ -123,6 +165,7 @@ def create_publication(
                 "allowed_scopes": list(payload.allowed_scopes),
             },
         )
+        return _with_target_policy(created)
     except ValueError as exc:
         if (
             "owner cannot be changed" in str(exc)

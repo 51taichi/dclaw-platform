@@ -1,0 +1,116 @@
+from __future__ import annotations
+
+import json
+
+import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+from qwenpaw.app.sealed_agents.package import build_signed_package_bytes
+from qwenpaw.app.sealed_agents.registry import SealedAgentRegistry
+from qwenpaw.app.sealed_agents.service import (
+    SealedAgentReleaseError,
+    SealedAgentService,
+)
+
+
+def _package(private, *, version="1.0.0", agent_id="luyu"):
+    manifest = {
+        "schema_version": 1,
+        "agent_id": agent_id,
+        "name": "陆羽",
+        "version": version,
+        "agent_type": "sealed",
+        "scope": "global",
+        "entrypoint": "agent/agent.json",
+        "public_metadata": {"description": "茶文化专家"},
+        "signer_id": "publisher",
+    }
+    files = {
+        "agent/agent.json": json.dumps(
+            {"id": agent_id, "name": "陆羽", "description": "internal"},
+        ).encode(),
+        "agent/AGENTS.md": b"private",
+    }
+    return build_signed_package_bytes(manifest, files, private)
+
+
+def _service(tmp_path, public, *, reload_agent=None):
+    return SealedAgentService(
+        root=tmp_path,
+        registry=SealedAgentRegistry(tmp_path),
+        trusted_signers={"publisher": public},
+        reload_agent=reload_agent,
+    )
+
+
+def test_install_creates_ready_immutable_release_without_activating(tmp_path):
+    private = Ed25519PrivateKey.generate()
+    service = _service(tmp_path, private.public_key())
+
+    release = service.install(_package(private))
+    agent = service.get_agent("luyu")
+
+    assert release.state == "ready"
+    assert agent.active_release_id is None
+    assert len(agent.releases) == 1
+    release_root = service.release_root("luyu", release.release_id)
+    assert (release_root / "agent/AGENTS.md").read_bytes() == b"private"
+
+
+def test_activate_switches_atomically_after_reload_succeeds(tmp_path):
+    private = Ed25519PrivateKey.generate()
+    reloads = []
+    service = _service(
+        tmp_path,
+        private.public_key(),
+        reload_agent=lambda agent_id, path: reloads.append((agent_id, path)),
+    )
+    release = service.install(_package(private))
+
+    active = service.activate("luyu", release.release_id)
+
+    assert active.active_release_id == release.release_id
+    assert active.active_release.state == "active"
+    assert reloads[0][0] == "luyu"
+    assert reloads[0][1].name == "agent"
+
+
+def test_failed_reload_preserves_previous_active_release(tmp_path):
+    private = Ed25519PrivateKey.generate()
+    service = _service(tmp_path, private.public_key())
+    first = service.install(_package(private, version="1.0.0"))
+    service.activate("luyu", first.release_id)
+    service._reload_agent = lambda agent_id, path: (_ for _ in ()).throw(
+        RuntimeError("private path must not escape"),
+    )
+    second = service.install(_package(private, version="1.1.0"))
+
+    with pytest.raises(SealedAgentReleaseError) as exc_info:
+        service.activate("luyu", second.release_id)
+
+    assert str(exc_info.value) == "sealed agent activation failed"
+    assert service.get_agent("luyu").active_release_id == first.release_id
+
+
+def test_duplicate_and_downgrade_versions_are_rejected(tmp_path):
+    private = Ed25519PrivateKey.generate()
+    service = _service(tmp_path, private.public_key())
+    service.install(_package(private, version="2.0.0"))
+
+    with pytest.raises(SealedAgentReleaseError, match="version"):
+        service.install(_package(private, version="2.0.0"))
+    with pytest.raises(SealedAgentReleaseError, match="version"):
+        service.install(_package(private, version="1.9.0"))
+
+
+def test_agents_are_optional_and_failures_are_isolated(tmp_path):
+    private = Ed25519PrivateKey.generate()
+    service = _service(tmp_path, private.public_key())
+
+    assert service.list_agents() == []
+    service.install(_package(private, agent_id="luyu"))
+    service.install(_package(private, agent_id="tea-master"))
+    service.disable("luyu")
+
+    assert service.get_agent("luyu").enabled is False
+    assert service.get_agent("tea-master").enabled is True

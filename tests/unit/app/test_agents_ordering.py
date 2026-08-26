@@ -96,6 +96,9 @@ async def test_list_agents_merges_sealed_agents_without_exposing_workspace(
     config = _build_config(["default"], agent_order=["default"])
 
     class Registry:
+        def is_sealed(self, agent_id):
+            return agent_id == "luyu"
+
         def list_agents(self):
             return [
                 SealedAgentRecord(

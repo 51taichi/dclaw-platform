@@ -4,7 +4,7 @@
 This provides agent isolation by injecting agentId into request.state,
 allowing downstream APIs to access the correct agent context.
 """
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from starlette.middleware.base import (
     BaseHTTPMiddleware,
     RequestResponseEndpoint,
@@ -80,6 +80,7 @@ def create_agent_scoped_router() -> APIRouter:
     from .console import router as console_router
     from .plugins import router as plugins_router
     from .plan import router as plan_router
+    from ..sealed_agents.policy import deny_sealed_asset_access
 
     router = APIRouter(prefix="/agents/{agentId}", tags=["agent-scoped"])
 
@@ -94,14 +95,15 @@ def create_agent_scoped_router() -> APIRouter:
     # /agents/{agentId}/workspace/* -> workspace_router
     router.include_router(agent_status_router)
     router.include_router(chats_router)
-    router.include_router(config_router)
-    router.include_router(cron_router)
-    router.include_router(mcp_router)
-    router.include_router(skills_router)
-    router.include_router(tools_router)
-    router.include_router(workspace_router)
+    asset_deps = [Depends(deny_sealed_asset_access)]
+    router.include_router(config_router, dependencies=asset_deps)
+    router.include_router(cron_router, dependencies=asset_deps)
+    router.include_router(mcp_router, dependencies=asset_deps)
+    router.include_router(skills_router, dependencies=asset_deps)
+    router.include_router(tools_router, dependencies=asset_deps)
+    router.include_router(workspace_router, dependencies=asset_deps)
     router.include_router(console_router)
-    router.include_router(plugins_router)
-    router.include_router(plan_router)
+    router.include_router(plugins_router, dependencies=asset_deps)
+    router.include_router(plan_router, dependencies=asset_deps)
 
     return router

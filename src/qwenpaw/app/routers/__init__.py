@@ -3,6 +3,7 @@
 
 from fastapi import APIRouter, Depends
 from ..guards import require_admin, require_user
+from ..sealed_agents.policy import deny_sealed_asset_access
 
 from .agents import router as agents_router
 from .config import router as config_router
@@ -36,6 +37,7 @@ from .object_storage import router as object_storage_router
 from .web_search import router as web_search_router
 from .open_api_admin import router as open_api_admin_router
 from .open_api import router as open_api_router
+from .sealed_agents import router as sealed_agents_router
 from .aigc_studio import public_router as public_aigc_studio_router
 from .aigc_studio import router as aigc_studio_router
 from .desktop import router as desktop_router
@@ -72,16 +74,18 @@ user_api_router.include_router(agents_router)
 user_api_router.include_router(console_router)
 user_api_router.include_router(runner_router)
 user_api_router.include_router(messages_router)
-user_api_router.include_router(workspace_router)
-user_api_router.include_router(files_router)
+asset_deps = [Depends(deny_sealed_asset_access)]
+
+user_api_router.include_router(workspace_router, dependencies=asset_deps)
+user_api_router.include_router(files_router, dependencies=asset_deps)
 user_api_router.include_router(settings_router)
-user_api_router.include_router(skills_router)
-user_api_router.include_router(skills_stream_router)
-user_api_router.include_router(tools_router)
-user_api_router.include_router(plan_router)
+user_api_router.include_router(skills_router, dependencies=asset_deps)
+user_api_router.include_router(skills_stream_router, dependencies=asset_deps)
+user_api_router.include_router(tools_router, dependencies=asset_deps)
+user_api_router.include_router(plan_router, dependencies=asset_deps)
 user_api_router.include_router(runtime_events_router)
 user_api_router.include_router(user_config_router)
-user_api_router.include_router(cron_router)
+user_api_router.include_router(cron_router, dependencies=asset_deps)
 user_api_router.include_router(mcp_oauth_router)
 user_api_router.include_router(aigc_studio_router)
 user_api_router.include_router(user_expert_teams_router)
@@ -95,16 +99,16 @@ router.include_router(user_api_router)
 admin_deps = [Depends(require_admin)]
 admin_api_router = APIRouter(prefix="/admin", dependencies=admin_deps)
 
-admin_api_router.include_router(config_router)
-admin_api_router.include_router(cron_router)
+admin_api_router.include_router(config_router, dependencies=asset_deps)
+admin_api_router.include_router(cron_router, dependencies=asset_deps)
 admin_api_router.include_router(local_models_router)
-admin_api_router.include_router(mcp_router)
+admin_api_router.include_router(mcp_router, dependencies=asset_deps)
 
 admin_api_router.include_router(envs_router)
 admin_api_router.include_router(audit_router)
 admin_api_router.include_router(token_usage_router)
 admin_api_router.include_router(agent_stats_router)
-admin_api_router.include_router(plugins_router)
+admin_api_router.include_router(plugins_router, dependencies=asset_deps)
 admin_api_router.include_router(backup_router)
 admin_api_router.include_router(performance_router)
 admin_api_router.include_router(admin_users_router)
@@ -114,6 +118,7 @@ admin_api_router.include_router(admin_expert_teams_router)
 admin_api_router.include_router(admin_mindspace_cloud_router)
 admin_api_router.include_router(admin_knowledge_router)
 admin_api_router.include_router(open_api_admin_router)
+admin_api_router.include_router(sealed_agents_router)
 
 
 router.include_router(admin_api_router)

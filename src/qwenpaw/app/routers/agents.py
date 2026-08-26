@@ -238,7 +238,10 @@ async def list_agents() -> AgentListResponse:
     ordered_agent_ids = _normalized_agent_order(config)
 
     agents = []
+    sealed_registry = get_sealed_agent_registry()
     for agent_id in ordered_agent_ids:
+        if sealed_registry.is_sealed(agent_id):
+            continue
         agent_ref = config.agents.profiles[agent_id]
         try:
             agent_config = load_agent_config(agent_id)
@@ -275,7 +278,7 @@ async def list_agents() -> AgentListResponse:
             )
 
     configured_ids = {agent.id for agent in agents}
-    for sealed in get_sealed_agent_registry().list_agents():
+    for sealed in sealed_registry.list_agents():
         if sealed.agent_id in configured_ids:
             logger.error(
                 "Ignoring sealed agent whose id conflicts with a standard agent: %s",

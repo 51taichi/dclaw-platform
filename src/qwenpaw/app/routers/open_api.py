@@ -26,6 +26,7 @@ from ..open_api.runtime import (
 )
 from ..storage.repos.open_api_repo import get_open_api_repository
 from ..task_limits import get_task_limiter
+from ..sealed_agents.registry import get_sealed_agent_registry
 
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,25 @@ async def post_open_message(
             status_code=403,
             detail="Open API key is not allowed for this publication",
         )
+    sealed_target = (
+        str(publication.get("target_type")) == "agent"
+        and get_sealed_agent_registry().is_sealed(
+            str(publication.get("target_id")),
+        )
+    )
+    if sealed_target:
+        sealed_record = get_sealed_agent_registry().get_agent(
+            str(publication["target_id"]),
+        )
+        if (
+            sealed_record is None
+            or not sealed_record.enabled
+            or sealed_record.active_release_id is None
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail="Sealed agent target is unavailable",
+            )
 
     prepared: PreparedOpenRun | None = None
     expert_team_run_id = ""
@@ -257,7 +277,12 @@ async def post_open_message(
                 async for event_data in stream_it:
                     if attached_existing_run and observed_failure is None:
                         observed_failure = _extract_stream_failure(event_data)
-                    yield event_data
+                    if sealed_target:
+                        public_event = _sanitize_sealed_stream_event(event_data)
+                        if public_event is not None:
+                            yield public_event
+                    else:
+                        yield event_data
                 disconnected = await _request_is_disconnected(request)
                 stream_completed = not disconnected
                 if attached_existing_run:
@@ -302,7 +327,10 @@ async def post_open_message(
                         latency_ms=_latency_ms(started_at),
                         error_summary=str(exc),
                     )
-                yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+                if sealed_target:
+                    yield _sealed_failure_event()
+                else:
+                    yield f"data: {json.dumps({'error': str(exc)})}\n\n"
         finally:
             await stream_it.aclose()
             if attached_existing_run and not stream_completed and not status_recorded:
@@ -417,6 +445,45 @@ def _extract_stream_failure(event_data: str) -> tuple[str, str] | None:
             if state == "cancelled":
                 summary = run.get("error")
                 return "cancelled", str(summary or "Expert team run cancelled")
+    return None
+
+
+_SEALED_PUBLIC_EVENT_TYPES = {
+    "response.started",
+    "response.output_text.delta",
+    "response.artifact.ready",
+    "response.completed",
+}
+
+
+def _sealed_failure_event() -> str:
+    return "data: " + json.dumps(
+        {"type": "response.failed", "error": "sealed_agent_failed"},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ) + "\n\n"
+
+
+def _sanitize_sealed_stream_event(event_data: str) -> str | None:
+    """Serialize sealed streams from an allowlist, never a denylist."""
+    for raw_line in event_data.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("data:"):
+            continue
+        raw = line[5:].strip()
+        if not raw or raw == "[DONE]":
+            continue
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        if "error" in payload:
+            return _sealed_failure_event()
+        if payload.get("type") not in _SEALED_PUBLIC_EVENT_TYPES:
+            return None
+        return f"data: {raw}\n\n"
     return None
 
 
