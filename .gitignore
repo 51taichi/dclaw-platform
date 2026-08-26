@@ -43,3 +43,5 @@ Thumbs.db
 *.tgz
 *.zip
 
+# Local git worktrees
+.worktrees/
