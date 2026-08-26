@@ -283,6 +283,60 @@ class PriceCatalogService:
             published_at=_aware_utc(self._clock()),
         )
 
+    def create_draft(self, draft: PriceCatalogDraft) -> str:
+        """Validate and persist an unpublished admin-authored catalog."""
+        self.validate_draft(draft)
+        return self.repository.create_draft(
+            replace(draft, effective_at=_aware_utc(draft.effective_at)),
+        )
+
+    def publish_draft(self, catalog_id: str) -> dict[str, Any]:
+        """Revalidate and publish a stored draft without rewriting it."""
+        stored = self.repository.get_catalog(catalog_id)
+        rules = tuple(
+            PriceRule(
+                id=str(rule["id"]),
+                provider_id=str(rule["provider_id"]),
+                model_key=str(rule["model_key"]),
+                capability=str(rule["capability"]),
+                unit_type=str(rule["unit_type"]),
+                priority=int(rule["priority"]),
+                unit_size=int(rule["unit_size"]),
+                credits_per_unit=int(rule["credits_per_unit"]),
+                input_credits_per_1k=int(
+                    rule["input_credits_per_1k"],
+                ),
+                output_credits_per_1k=int(
+                    rule["output_credits_per_1k"],
+                ),
+                parameter_match=rule["parameter_match"],
+                metadata=rule["metadata"],
+            )
+            for rule in stored["rules"]
+        )
+        effective_at = stored["effective_at"]
+        if effective_at.tzinfo is None:
+            # SQLite drops offsets from timezone-aware DateTime values. The
+            # draft boundary already normalized this persisted value to UTC.
+            effective_at = effective_at.replace(tzinfo=timezone.utc)
+        draft = PriceCatalogDraft(
+            version=str(stored["version"]),
+            effective_at=effective_at,
+            rules=rules,
+            created_by=stored["created_by"],
+            metadata=stored["metadata"],
+        )
+        self.validate_draft(draft)
+        self.repository.publish_draft(
+            catalog_id,
+            published_at=_aware_utc(self._clock()),
+        )
+        return self.repository.get_catalog(catalog_id)
+
+    def list_catalogs(self) -> list[dict[str, Any]]:
+        """Return the immutable catalog history for trusted admins."""
+        return self.repository.list_catalogs()
+
     def validate_draft(self, draft: PriceCatalogDraft) -> None:
         if not draft.version.strip():
             raise ValueError("catalog version must be non-empty")

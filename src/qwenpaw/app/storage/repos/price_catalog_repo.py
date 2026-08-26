@@ -158,6 +158,66 @@ class PriceCatalogRepository:
                 f"published catalog is immutable: {catalog_id}",
             )
 
+    def get_catalog(self, catalog_id: str) -> dict[str, Any]:
+        """Return one catalog with decoded rules for admin validation."""
+        with self.engine.connect() as conn:
+            catalog = (
+                conn.execute(
+                    select(billing_price_catalogs).where(
+                        billing_price_catalogs.c.id == catalog_id,
+                    ),
+                )
+                .mappings()
+                .first()
+            )
+            if catalog is None:
+                raise CatalogNotFoundError(catalog_id)
+            rules = (
+                conn.execute(
+                    select(billing_price_rules)
+                    .where(billing_price_rules.c.catalog_id == catalog_id)
+                    .order_by(billing_price_rules.c.id),
+                )
+                .mappings()
+                .all()
+            )
+        return _decode_catalog(catalog, rules)
+
+    def list_catalogs(self) -> list[dict[str, Any]]:
+        """List catalogs and their rules for the trusted admin API."""
+        with self.engine.connect() as conn:
+            catalogs = (
+                conn.execute(
+                    select(billing_price_catalogs).order_by(
+                        billing_price_catalogs.c.created_at.desc(),
+                        billing_price_catalogs.c.version.desc(),
+                    ),
+                )
+                .mappings()
+                .all()
+            )
+            rules = conn.execute(
+                select(billing_price_rules).order_by(
+                    billing_price_rules.c.catalog_id,
+                    billing_price_rules.c.id,
+                ),
+            ).mappings()
+            rules_by_catalog: dict[str, list[Mapping[str, Any]]] = {}
+            for rule in rules:
+                rules_by_catalog.setdefault(
+                    str(rule["catalog_id"]),
+                    [],
+                ).append(
+                    rule,
+                )
+        return [
+            _decode_catalog(
+                catalog,
+                rules_by_catalog.get(str(catalog["id"]), []),
+            )
+            for catalog in catalogs
+        ]
+
     def effective_catalog(self, at: datetime) -> dict[str, Any]:
         """Return the latest catalog effective at ``at`` and its rules."""
         with self.engine.connect() as conn:
@@ -234,6 +294,16 @@ def _decode_rule(rule: dict[str, Any]) -> dict[str, Any]:
     rule["parameter_match"] = _load_json(rule.pop("parameter_match_json"))
     rule["metadata"] = _load_json(rule.pop("metadata_json"))
     return rule
+
+
+def _decode_catalog(
+    catalog: Mapping[str, Any],
+    rules: Iterable[Mapping[str, Any]],
+) -> dict[str, Any]:
+    result = dict(catalog)
+    result["metadata"] = _load_json(result.pop("metadata_json"))
+    result["rules"] = [_decode_rule(dict(rule)) for rule in rules]
+    return result
 
 
 def _dump_json(value: Any) -> str:

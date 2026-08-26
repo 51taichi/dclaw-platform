@@ -11,7 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import and_, case, insert, or_, select, update
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import IntegrityError
 
 from ...billing.models import (
@@ -96,61 +96,89 @@ class BillingRepository:
                 )
             return dict(row)
 
+    def get_wallet(
+        self,
+        owner_type: str,
+        owner_id: str,
+    ) -> dict[str, Any] | None:
+        """Return an existing owner wallet without creating one."""
+        with self.engine.connect() as conn:
+            row = (
+                conn.execute(
+                    select(billing_wallets).where(
+                        billing_wallets.c.owner_type == owner_type,
+                        billing_wallets.c.owner_id == owner_id,
+                    ),
+                )
+                .mappings()
+                .first()
+            )
+        return dict(row) if row is not None else None
+
     def append_transaction(self, command: LedgerTransaction) -> WalletBalance:
         self._validate_command(command)
         try:
             with self.engine.begin() as conn:
-                wallet = (
-                    conn.execute(
-                        self._wallet_for_update_statement(command.wallet_id),
-                    )
-                    .mappings()
-                    .first()
-                )
-                if wallet is None:
-                    raise BillingInvariantError(
-                        f"wallet not found: {command.wallet_id}",
-                    )
-                if conn.execute(
-                    select(billing_ledger_entries.c.id).where(
-                        billing_ledger_entries.c.idempotency_key
-                        == command.idempotency_key,
-                    ),
-                ).first():
-                    raise DuplicateLedgerTransactionError(
-                        command.idempotency_key,
-                    )
-
-                self._expire_available_lots(
-                    conn,
-                    command.wallet_id,
-                    self._clock(),
-                )
-
-                if command.event_type in _GRANT_EVENTS:
-                    self._append_grant(conn, command)
-                elif command.event_type == "usage_hold":
-                    self._append_hold(
-                        conn,
-                        command,
-                        wallet_available=int(wallet["available_credits"]),
-                    )
-                elif command.event_type == "usage_release":
-                    self._append_release(conn, command)
-                else:
-                    raise ValueError(
-                        f"unsupported ledger event type: {command.event_type}",
-                    )
-
-                balance = self._balance_for_update(conn, command.wallet_id)
-                self._assert_projection(conn, command.wallet_id, balance)
-                return balance
+                return self.append_transaction_in_connection(conn, command)
         except IntegrityError as exc:
             if self._idempotency_exists(command.idempotency_key):
                 raise DuplicateLedgerTransactionError(
                     command.idempotency_key,
                 ) from exc
             raise
+
+    def append_transaction_in_connection(
+        self,
+        conn: Connection,
+        command: LedgerTransaction,
+    ) -> WalletBalance:
+        """Append accounting effects inside a caller-owned transaction."""
+        self._validate_command(command)
+        wallet = (
+            conn.execute(
+                self._wallet_for_update_statement(command.wallet_id),
+            )
+            .mappings()
+            .first()
+        )
+        if wallet is None:
+            raise BillingInvariantError(
+                f"wallet not found: {command.wallet_id}",
+            )
+        if conn.execute(
+            select(billing_ledger_entries.c.id).where(
+                billing_ledger_entries.c.idempotency_key
+                == command.idempotency_key,
+            ),
+        ).first():
+            raise DuplicateLedgerTransactionError(command.idempotency_key)
+
+        self._expire_available_lots(
+            conn,
+            command.wallet_id,
+            self._clock(),
+        )
+
+        if command.event_type in _GRANT_EVENTS:
+            self._append_grant(conn, command)
+        elif command.event_type == "usage_hold":
+            self._append_hold(
+                conn,
+                command,
+                wallet_available=int(wallet["available_credits"]),
+            )
+        elif command.event_type == "usage_release":
+            self._append_release(conn, command)
+        elif command.event_type == "usage_capture":
+            self._append_capture(conn, command)
+        else:
+            raise ValueError(
+                f"unsupported ledger event type: {command.event_type}",
+            )
+
+        balance = self._balance_for_update(conn, command.wallet_id)
+        self._assert_projection(conn, command.wallet_id, balance)
+        return balance
 
     def grant(
         self,
@@ -212,6 +240,25 @@ class BillingRepository:
                 wallet_id=wallet_id,
                 event_type="usage_release",
                 credits=0,
+                business_type="usage",
+                business_key=business_key,
+                idempotency_key=idempotency_key,
+            ),
+        )
+
+    def capture(
+        self,
+        wallet_id: str,
+        *,
+        credits: int,
+        business_key: str,
+        idempotency_key: str,
+    ) -> WalletBalance:
+        return self.append_transaction(
+            LedgerTransaction(
+                wallet_id=wallet_id,
+                event_type="usage_capture",
+                credits=credits,
                 business_type="usage",
                 business_key=business_key,
                 idempotency_key=idempotency_key,
@@ -558,16 +605,18 @@ class BillingRepository:
             raise BillingInvariantError("wallet changed during hold")
 
     def _append_release(self, conn, command: LedgerTransaction) -> None:
-        prior_release = conn.execute(
+        prior_settlement = conn.execute(
             select(billing_ledger_entries.c.id).where(
                 billing_ledger_entries.c.wallet_id == command.wallet_id,
-                billing_ledger_entries.c.event_type == "usage_release",
+                billing_ledger_entries.c.event_type.in_(
+                    ("usage_release", "usage_capture"),
+                ),
                 billing_ledger_entries.c.business_key == command.business_key,
             ),
         ).first()
-        if prior_release is not None:
+        if prior_settlement is not None:
             raise BillingInvariantError(
-                f"hold already released: {command.business_key}",
+                f"hold already settled: {command.business_key}",
             )
 
         hold_id = conn.execute(
@@ -722,6 +771,123 @@ class BillingRepository:
         if changed.rowcount != 1:
             raise BillingInvariantError(
                 "wallet held projection cannot satisfy release",
+            )
+
+    def _append_capture(self, conn, command: LedgerTransaction) -> None:
+        prior_settlement = conn.execute(
+            select(billing_ledger_entries.c.id).where(
+                billing_ledger_entries.c.wallet_id == command.wallet_id,
+                billing_ledger_entries.c.event_type.in_(
+                    ("usage_capture", "usage_release"),
+                ),
+                billing_ledger_entries.c.business_key == command.business_key,
+            ),
+        ).first()
+        if prior_settlement is not None:
+            raise BillingInvariantError(
+                f"hold already settled: {command.business_key}",
+            )
+
+        hold_id = conn.execute(
+            select(billing_ledger_entries.c.id)
+            .where(
+                billing_ledger_entries.c.wallet_id == command.wallet_id,
+                billing_ledger_entries.c.event_type == "usage_hold",
+                billing_ledger_entries.c.business_key == command.business_key,
+            )
+            .limit(1),
+        ).scalar_one_or_none()
+        if hold_id is None:
+            raise BillingInvariantError(
+                f"hold not found: {command.business_key}",
+            )
+
+        allocations = conn.execute(
+            select(
+                billing_ledger_allocations.c.credit_lot_id,
+                billing_ledger_allocations.c.credits,
+                billing_credit_lots.c.credit_type,
+            )
+            .select_from(
+                billing_ledger_allocations.join(
+                    billing_credit_lots,
+                    billing_ledger_allocations.c.credit_lot_id
+                    == billing_credit_lots.c.id,
+                ),
+            )
+            .where(billing_ledger_allocations.c.ledger_entry_id == hold_id),
+        ).all()
+        captured_credits = sum(int(row.credits) for row in allocations)
+        if command.credits != captured_credits:
+            raise BillingInvariantError(
+                "capture must consume the complete hold",
+            )
+
+        now = self._clock()
+        ledger_id = str(uuid4())
+        self._insert_ledger(
+            conn,
+            replace(
+                command,
+                metadata={
+                    **command.metadata,
+                    "source_ledger_entry_id": hold_id,
+                },
+            ),
+            ledger_id=ledger_id,
+            credit_delta=-captured_credits,
+            now=now,
+        )
+        captured_by_type = {credit_type: 0 for credit_type in _CREDIT_TYPES}
+        for allocation in allocations:
+            amount = int(allocation.credits)
+            changed = conn.execute(
+                update(billing_credit_lots)
+                .where(
+                    billing_credit_lots.c.id == allocation.credit_lot_id,
+                    billing_credit_lots.c.held_credits >= amount,
+                )
+                .values(
+                    held_credits=billing_credit_lots.c.held_credits - amount,
+                    updated_at=now,
+                ),
+            )
+            if changed.rowcount != 1:
+                raise BillingInvariantError(
+                    "held lot projection cannot satisfy capture",
+                )
+            conn.execute(
+                insert(billing_ledger_allocations).values(
+                    id=str(uuid4()),
+                    ledger_entry_id=ledger_id,
+                    credit_lot_id=allocation.credit_lot_id,
+                    credits=amount,
+                    created_at=now,
+                ),
+            )
+            captured_by_type[str(allocation.credit_type)] += amount
+
+        wallet_values: dict[str, Any] = {
+            "held_credits": billing_wallets.c.held_credits - captured_credits,
+            "updated_at": now,
+        }
+        wallet_guards = [
+            billing_wallets.c.id == command.wallet_id,
+            billing_wallets.c.held_credits >= captured_credits,
+        ]
+        for credit_type, amount in captured_by_type.items():
+            if amount:
+                type_column = _TYPE_COLUMNS[credit_type]
+                wallet_values[type_column.name] = type_column - amount
+                wallet_guards.append(type_column >= amount)
+        changed = conn.execute(
+            update(billing_wallets)
+            .where(*wallet_guards)
+            .values(**wallet_values),
+        )
+        if changed.rowcount != 1:
+            raise BillingInvariantError(
+                "wallet held projection cannot satisfy capture",
             )
 
     def _allocate_lots(
