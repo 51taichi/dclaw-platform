@@ -32,6 +32,7 @@ from fastapi import HTTPException, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from . import backup_endpoint_policy
+from .billing.service import get_wallet_service
 from .open_api.auth import authenticate_open_api_request
 from .storage.repos.user_repo import get_user_repository
 from ..constant import SECRET_DIR, EnvVarLoader
@@ -666,7 +667,9 @@ def register_user(
         data["jwt_secret"] = secrets.token_hex(32)
 
     _save_auth_data(data)
-    _ensure_db_user(username, pw_hash, salt, "admin")
+    user = _ensure_db_user(username, pw_hash, salt, "admin")
+    if user is not None:
+        get_wallet_service().get_or_create_personal_wallet(user["id"])
     logger.info("User '%s' registered", username)
     return create_token(username, expiry_seconds)
 

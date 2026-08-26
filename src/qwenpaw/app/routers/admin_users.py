@@ -7,8 +7,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..auth import _hash_password
-from ..billing.models import WalletBalance
-from ..billing.service import GrantResult, get_wallet_service
+from ..billing.service import get_wallet_service
 from ..storage.repos.user_repo import get_user_repository
 
 router = APIRouter(prefix="/users", tags=["admin_users"])
@@ -29,26 +28,6 @@ class CreateUserRequest(BaseModel):
 
 class ResetPasswordRequest(BaseModel):
     new_password: str
-
-
-class SignupTrialRequest(BaseModel):
-    """Evidence supplied by a trusted verified-mobile completion flow."""
-
-    verified_mobile: str
-    risk_key: str
-
-
-class WalletBalanceSpec(BaseModel):
-    available: int
-    held: int
-    purchased: int
-    promotional: int
-    package: int
-
-
-class TrialGrantSpec(BaseModel):
-    granted: bool
-    balance: WalletBalanceSpec
 
 
 @router.get("", response_model=List[UserSpec])
@@ -112,19 +91,6 @@ async def create_user(req: CreateUserRequest):
         )
 
 
-@router.post("/{user_id}/signup-trial", response_model=TrialGrantSpec)
-async def grant_signup_trial(user_id: int, req: SignupTrialRequest):
-    """Run the explicit admin/verified-mobile trial-grant boundary."""
-    if not get_user_repository().get_user_by_id(user_id):
-        raise HTTPException(status_code=404, detail="User not found")
-    result = get_wallet_service().grant_signup_trial(
-        user_id=user_id,
-        verified_mobile=req.verified_mobile,
-        risk_key=req.risk_key,
-    )
-    return _trial_grant_spec(result)
-
-
 @router.put("/{user_id}/password")
 async def reset_password(user_id: int, req: ResetPasswordRequest):
     """Reset a user's password."""
@@ -179,20 +145,3 @@ async def delete_user(user_id: int):
             status_code=500,
             detail=f"Failed to delete user: {e}",
         )
-
-
-def _trial_grant_spec(result: GrantResult) -> TrialGrantSpec:
-    return TrialGrantSpec(
-        granted=result.granted,
-        balance=_wallet_balance_spec(result.balance),
-    )
-
-
-def _wallet_balance_spec(balance: WalletBalance) -> WalletBalanceSpec:
-    return WalletBalanceSpec(
-        available=balance.available,
-        held=balance.held,
-        purchased=balance.purchased,
-        promotional=balance.promotional,
-        package=balance.package,
-    )

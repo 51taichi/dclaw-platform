@@ -84,18 +84,10 @@ class FakeUserRepository:
 class FakeWalletService:
     def __init__(self):
         self.wallet_users = []
-        self.trial_requests = []
 
     def get_or_create_personal_wallet(self, user_id):
         self.wallet_users.append(user_id)
         return WalletBalance(0, 0, 0, 0, 0)
-
-    def grant_signup_trial(self, user_id, verified_mobile, risk_key):
-        self.trial_requests.append((user_id, verified_mobile, risk_key))
-        return admin_users.GrantResult(
-            granted=True,
-            balance=WalletBalance(100, 0, 0, 100, 0),
-        )
 
 
 @pytest.fixture
@@ -136,7 +128,6 @@ async def test_admin_user_routes_use_user_repository(
         stored["password_salt"],
     )
     assert fake_wallet_service.wallet_users == [created.id]
-    assert fake_wallet_service.trial_requests == []
 
     result = await admin_users.reset_password(
         created.id,
@@ -154,32 +145,10 @@ async def test_admin_user_routes_use_user_repository(
     assert fake_repo.deleted == [created.id]
 
 
-@pytest.mark.asyncio
-async def test_admin_verified_mobile_path_requests_trial_explicitly(
-    fake_repo,
-    fake_wallet_service,
-):
-    result = await admin_users.grant_signup_trial(
-        1,
-        admin_users.SignupTrialRequest(
-            verified_mobile="+8613800138000",
-            risk_key="device:abc",
-        ),
-    )
+def test_admin_user_router_does_not_expose_a_signup_trial_path():
+    paths = {route.path for route in admin_users.router.routes}
 
-    assert result == admin_users.TrialGrantSpec(
-        granted=True,
-        balance=admin_users.WalletBalanceSpec(
-            available=100,
-            held=0,
-            purchased=0,
-            promotional=100,
-            package=0,
-        ),
-    )
-    assert fake_wallet_service.trial_requests == [
-        (1, "+8613800138000", "device:abc"),
-    ]
+    assert "/users/{user_id}/signup-trial" not in paths
 
 
 @pytest.mark.asyncio

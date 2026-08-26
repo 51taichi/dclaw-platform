@@ -4,10 +4,17 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from sqlalchemy import func, select
 from starlette.requests import Request
 from starlette.responses import Response
 
 from qwenpaw.app import auth, db
+from qwenpaw.app.storage.engine import get_app_engine, reset_app_engine_cache
+from qwenpaw.app.storage.schema import (
+    billing_ledger_entries,
+    billing_wallets,
+    create_all,
+)
 
 
 @pytest.fixture
@@ -16,6 +23,8 @@ def isolated_auth_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("QWENPAW_AUTH_ENABLED", "true")
     monkeypatch.setattr(auth, "AUTH_FILE", tmp_path / "auth.json")
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "qwenpaw.db")
+    monkeypatch.setenv("QWENPAW_SQLITE_PATH", str(tmp_path / "qwenpaw.db"))
+    reset_app_engine_cache()
 
     conn = getattr(db._local, "conn", None)
     if conn is not None:
@@ -23,6 +32,7 @@ def isolated_auth_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         delattr(db._local, "conn")
 
     db.init_db()
+    create_all(get_app_engine())
     try:
         yield
     finally:
@@ -30,6 +40,7 @@ def isolated_auth_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         if conn is not None:
             conn.close()
             delattr(db._local, "conn")
+        reset_app_engine_cache()
 
 
 def test_first_registered_user_is_synced_as_admin(isolated_auth_store):
@@ -43,6 +54,37 @@ def test_first_registered_user_is_synced_as_admin(isolated_auth_store):
     assert user is not None
     assert user["username"] == "admin"
     assert user["role"] == "admin"
+
+
+def test_registration_creates_an_empty_personal_wallet(isolated_auth_store):
+    auth.register_user("admin", "strong-password")
+    user = auth.resolve_authenticated_user("admin")
+
+    assert user is not None
+    with get_app_engine().connect() as conn:
+        wallet = (
+            conn.execute(
+                select(billing_wallets).where(
+                    billing_wallets.c.owner_type == "user",
+                    billing_wallets.c.owner_id == str(user["id"]),
+                ),
+            )
+            .mappings()
+            .one_or_none()
+        )
+        ledger_count = conn.scalar(
+            select(func.count()).select_from(billing_ledger_entries),
+        )
+
+    assert wallet is not None
+    assert (
+        wallet["available_credits"],
+        wallet["held_credits"],
+        wallet["purchased_credits"],
+        wallet["promotional_credits"],
+        wallet["package_credits"],
+    ) == (0, 0, 0, 0, 0)
+    assert ledger_count == 0
 
 
 def test_legacy_auth_json_user_is_migrated_to_db(isolated_auth_store):
