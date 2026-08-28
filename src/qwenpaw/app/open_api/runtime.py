@@ -32,6 +32,7 @@ from ..billing.execution import (
 )
 from ..billing.model_meter import BillingModelMeter
 from ..billing.pricing import PriceCatalogService
+from ..billing.reporting import persisted_billing_mode
 from ..billing.usage import (
     InsufficientUsageCreditsError,
     SettleModelCall,
@@ -244,7 +245,7 @@ def create_open_api_billing_runtime() -> OpenApiBillingRuntime:
     create_all(engine)
     repository = BillingRepository(engine)
     pricing = PriceCatalogService(PriceCatalogRepository(engine))
-    mode = _billing_mode()
+    mode = persisted_billing_mode(repository, fallback=_billing_mode())
     return OpenApiBillingRuntime(
         repository=repository,
         pricing=pricing,

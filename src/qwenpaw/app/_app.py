@@ -234,14 +234,23 @@ agent_app = AgentApp(
 
 def _recover_open_api_billing_at_startup() -> int:
     """Fail closed only when billing enforcement could debit a wallet."""
+    runtime = None
     try:
-        from .open_api.runtime import recover_open_api_billing
+        from .open_api.runtime import (
+            create_open_api_billing_runtime,
+            recover_open_api_billing,
+        )
 
-        return recover_open_api_billing()
+        runtime = create_open_api_billing_runtime()
+        return recover_open_api_billing(runtime)
     except Exception as exc:
         logger.error("OpenAPI billing recovery failed", exc_info=True)
-        mode = os.environ.get("DCLAW_BILLING_MODE", "shadow").strip().lower()
-        if mode == "enforced":
+        configured_mode = os.environ.get(
+            "DCLAW_BILLING_MODE", "shadow",
+        ).strip().lower()
+        if (runtime is not None and runtime.mode == "enforced") or (
+            configured_mode == "enforced"
+        ):
             raise RuntimeError("OpenAPI billing recovery failed") from exc
         # Off/shadow/observe do not mutate customer-wallet balances. Keeping
         # startup available is explicit and recovery will retry next startup.

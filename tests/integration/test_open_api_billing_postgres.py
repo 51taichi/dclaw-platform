@@ -6,7 +6,7 @@ from __future__ import annotations
 import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from threading import Barrier, Event, current_thread
+from threading import Barrier, Event, Lock, current_thread
 from uuid import uuid4
 
 import pytest
@@ -19,6 +19,7 @@ from sqlalchemy import (
     text,
     update,
 )
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.schema import CreateSchema, DropSchema
 
 import qwenpaw.app.storage.schema as schema_module
@@ -32,6 +33,10 @@ from qwenpaw.app.billing.pricing import (
     PriceCatalogDraft,
     PriceCatalogService,
     PriceRule,
+)
+from qwenpaw.app.billing.reporting import (
+    BillingReportingService,
+    ReconciliationResolution,
 )
 from qwenpaw.app.billing.usage import (
     BillingExecutionFencedError,
@@ -48,6 +53,9 @@ from qwenpaw.app.storage.repos.billing_repo import BillingRepository
 from qwenpaw.app.storage.repos.open_api_repo import SqlAlchemyOpenApiRepository
 from qwenpaw.app.storage.repos.price_catalog_repo import PriceCatalogRepository
 from qwenpaw.app.storage.schema import (
+    billing_reconciliation_audits,
+    billing_ledger_entries,
+    billing_rollout_settings,
     billing_usage_items,
     billing_wallets,
     billing_usage_orders,
@@ -84,6 +92,23 @@ def postgres_open_api_engine():
         with admin_engine.begin() as conn:
             conn.execute(DropSchema(schema_name, cascade=True))
         admin_engine.dispose()
+
+
+@pytest.mark.integration
+def test_postgresql_reporting_schema_upgrades_existing_database(
+    postgres_open_api_engine,
+):
+    billing_reconciliation_audits.drop(postgres_open_api_engine)
+    billing_rollout_settings.drop(postgres_open_api_engine)
+
+    create_all(postgres_open_api_engine)
+    create_all(postgres_open_api_engine)
+
+    tables = set(inspect(postgres_open_api_engine).get_table_names())
+    assert {
+        "billing_reconciliation_audits",
+        "billing_rollout_settings",
+    } <= tables
 
 
 def _coordinator(engine, identity: str, *, publish_catalog: bool = True):
@@ -1139,6 +1164,172 @@ def test_postgresql_capture_and_release_cannot_both_settle_one_item(
         {"conflict", "released"},
     )
     assert coordinator.repository.balance(session.wallet_id).held == 0
+
+
+@pytest.mark.integration
+def test_postgresql_admin_reconciliation_same_key_is_one_audited_capture(
+    postgres_open_api_engine,
+):
+    identity = "admin-reconciliation"
+    coordinator = _coordinator(postgres_open_api_engine, identity)
+    session = coordinator.begin_invocation(
+        _command(identity, "admin-reconciliation", mode="enforced"),
+    )
+    coordinator.repository.grant(
+        session.wallet_id,
+        credits=5,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key="admin-reconciliation-funds",
+    )
+    usage = UsageService(coordinator.repository, coordinator.pricing)
+    execution_fence = SqlAlchemyOpenApiRepository(
+        postgres_open_api_engine,
+    ).claim_invocation_execution(
+        session.invocation_id,
+        "admin-reconciliation-worker",
+        lease_seconds=300,
+    )
+    assert execution_fence is not None
+    usage.reserve_model_call(
+        ReserveModelCall(
+            usage_order_id=session.usage_order_id,
+            item_key="call-1",
+            provider_id="provider",
+            model_key="model",
+            capability="text",
+            parameters={"tier": "standard"},
+            input_tokens=1000,
+            max_output_tokens=0,
+            invocation_id=session.invocation_id,
+            execution_fence=execution_fence,
+        ),
+    )
+    usage.settle_model_call(
+        SettleModelCall(
+            usage_order_id=session.usage_order_id,
+            item_key="call-1",
+            supplier_reference="",
+            billability="unknown",
+            evidence={"response_class": "ambiguous"},
+            execution_outcome="pending",
+            invocation_id=session.invocation_id,
+            execution_fence=execution_fence,
+        ),
+    )
+    item_id = usage.list_items(session.usage_order_id)[0]["id"]
+    reporting = BillingReportingService(
+        coordinator.repository,
+        coordinator.pricing,
+    )
+    resolution = ReconciliationResolution(
+        idempotency_key="admin-reconciliation-resolution",
+        billability="billable",
+        reason="Supplier invoice confirms the usage.",
+        actual_input_tokens=1000,
+        actual_output_tokens=0,
+    )
+    start = Barrier(2)
+
+    def resolve():
+        start.wait()
+        return reporting.resolve_reconciliation(
+            item_id,
+            actor_id="admin-postgres",
+            resolution=resolution,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _value: resolve(), range(2)))
+
+    assert results[0] == results[1]
+    with postgres_open_api_engine.connect() as conn:
+        assert (
+            conn.scalar(
+                select(func.count()).select_from(
+                    billing_reconciliation_audits,
+                ),
+            )
+            == 1
+        )
+        assert (
+            conn.scalar(
+                select(func.count())
+                .select_from(billing_ledger_entries)
+                .where(billing_ledger_entries.c.event_type == "usage_capture"),
+            )
+            == 1
+        )
+    with pytest.raises(DBAPIError):
+        with postgres_open_api_engine.begin() as conn:
+            conn.execute(
+                update(billing_reconciliation_audits).values(
+                    reason="forbidden rewrite",
+                ),
+            )
+    assert coordinator.repository.balance(session.wallet_id).held == 0
+
+
+@pytest.mark.integration
+def test_postgresql_first_enforced_rollout_activation_is_one_cutover_cas(
+    postgres_open_api_engine,
+):
+    repository = BillingRepository(postgres_open_api_engine)
+    pricing = PriceCatalogService(
+        PriceCatalogRepository(postgres_open_api_engine),
+    )
+    reporting = BillingReportingService(repository, pricing)
+    reads = Barrier(2)
+    read_lock = Lock()
+    synchronized = 0
+
+    def synchronize_empty_reads(
+        _conn,
+        _cursor,
+        statement,
+        _parameters,
+        _context,
+        _executemany,
+    ):
+        nonlocal synchronized
+        if (
+            statement.lstrip().upper().startswith("SELECT")
+            and "FROM billing_rollout_settings" in statement
+        ):
+            with read_lock:
+                if synchronized >= 2:
+                    return
+                synchronized += 1
+            reads.wait(timeout=5)
+
+    event.listen(
+        postgres_open_api_engine,
+        "before_cursor_execute",
+        synchronize_empty_reads,
+    )
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(
+                pool.map(
+                    lambda actor: reporting.activate_rollout(
+                        "enforced",
+                        actor_id=actor,
+                    ),
+                    ("admin-a", "admin-b"),
+                ),
+            )
+    finally:
+        event.remove(
+            postgres_open_api_engine,
+            "before_cursor_execute",
+            synchronize_empty_reads,
+        )
+
+    assert results[0]["billing_cutover_at"] == results[1]["billing_cutover_at"]
+    assert {result["cutover_actor_id"] for result in results} in (
+        {"admin-a"},
+        {"admin-b"},
+    )
 
 
 @pytest.mark.integration

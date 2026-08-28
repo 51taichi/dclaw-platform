@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+import os
+from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -21,8 +22,17 @@ from ..billing.pricing import (
 from ..billing.usage import (
     IdempotencyConflictError,
     UsageOrderConflictError,
+    UsageOrderStateError,
     UsageService,
     wallet_balance_dict,
+)
+from ..billing.reporting import (
+    BillingReportFilters,
+    BillingReportingService,
+    ReconciliationConflictError,
+    ReconciliationNotFoundError,
+    ReconciliationResolution,
+    persisted_billing_mode,
 )
 from ..storage.engine import get_app_engine
 from ..storage.repos.billing_repo import BillingRepository
@@ -90,6 +100,21 @@ class CatalogDraftBody(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class ReconciliationResolutionBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    billability: Literal["billable", "not_billable"]
+    reason: str = Field(min_length=1, max_length=2000)
+    actual_input_tokens: int = Field(default=0, ge=0, le=(1 << 63) - 1)
+    actual_output_tokens: int = Field(default=0, ge=0, le=(1 << 63) - 1)
+
+
+class RolloutActivationBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["off", "shadow", "observe", "enforced"]
+
+
 def get_billing_repository() -> BillingRepository:
     engine = get_app_engine()
     create_all(engine)
@@ -103,7 +128,19 @@ def get_price_catalog_service() -> PriceCatalogService:
 
 
 def get_usage_service() -> UsageService:
+    repository = get_billing_repository()
     return UsageService(
+        repository,
+        get_price_catalog_service(),
+        mode=persisted_billing_mode(
+            repository,
+            fallback=os.environ.get("DCLAW_BILLING_MODE", "shadow"),
+        ),
+    )
+
+
+def get_billing_reporting_service() -> BillingReportingService:
+    return BillingReportingService(
         get_billing_repository(),
         get_price_catalog_service(),
     )
@@ -140,6 +177,52 @@ def _ledger_page(
         "items": items,
         "next_cursor": items[-1]["id"] if len(items) == limit else None,
     }
+
+
+def _report_filters(
+    *,
+    started_at: datetime | None,
+    ended_at: datetime | None,
+    model: str | None,
+    provider: str | None,
+    publication_id: str | None,
+    app_id: str | None,
+    api_key_id: str | None,
+    status: str | None,
+    owner_user_id: str | None = None,
+) -> BillingReportFilters:
+    try:
+        return BillingReportFilters(
+            started_at=started_at,
+            ended_at=ended_at,
+            model=model,
+            provider=provider,
+            publication_id=publication_id,
+            app_id=app_id,
+            api_key_id=api_key_id,
+            status=status,
+            owner_user_id=owner_user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _report_page(
+    *,
+    owner_user_id: str | None,
+    filters: BillingReportFilters,
+    limit: int,
+    cursor: str | None,
+) -> dict[str, Any]:
+    try:
+        return get_billing_reporting_service().list_usage_orders(
+            owner_user_id=owner_user_id,
+            filters=filters,
+            limit=limit,
+            cursor=cursor,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @user_router.get("/wallet")
@@ -204,6 +287,68 @@ def create_user_quote(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@user_router.get("/usage-orders")
+def list_user_usage_orders(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=100),
+    cursor: str | None = Query(default=None, max_length=2048),
+    started_at: datetime | None = None,
+    ended_at: datetime | None = None,
+    model: str | None = Query(default=None, min_length=1, max_length=255),
+    provider: str | None = Query(default=None, min_length=1, max_length=255),
+    publication_id: str
+    | None = Query(default=None, min_length=1, max_length=255),
+    app_id: str | None = Query(default=None, min_length=1, max_length=255),
+    status: str | None = Query(default=None, min_length=1, max_length=64),
+) -> dict[str, Any]:
+    owner_id = _authenticated_owner(request)
+    return _report_page(
+        owner_user_id=owner_id,
+        filters=_report_filters(
+            started_at=started_at,
+            ended_at=ended_at,
+            model=model,
+            provider=provider,
+            publication_id=publication_id,
+            app_id=app_id,
+            api_key_id=None,
+            status=status,
+        ),
+        limit=limit,
+        cursor=cursor,
+    )
+
+
+@user_router.get("/usage-orders/{order_id}")
+def get_user_usage_order(order_id: str, request: Request) -> dict[str, Any]:
+    detail = get_billing_reporting_service().get_usage_order(
+        order_id,
+        owner_user_id=_authenticated_owner(request),
+    )
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Usage order not found")
+    return detail
+
+
+@user_router.get("/open-api-summary")
+def get_user_open_api_summary(
+    request: Request,
+    timezone_name: str = Query(
+        default="UTC",
+        alias="timezone",
+        min_length=1,
+        max_length=64,
+    ),
+) -> dict[str, Any]:
+    try:
+        return get_billing_reporting_service().open_api_summary(
+            _authenticated_owner(request),
+            timezone_name=timezone_name,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @admin_router.post("/catalogs/drafts", status_code=201)
 def create_catalog_draft(
     payload: CatalogDraftBody,
@@ -262,6 +407,147 @@ def get_admin_wallet_ledger(
     repository = get_billing_repository()
     wallet = _wallet_for_owner(repository, owner_id)
     return _ledger_page(repository, str(wallet["id"]), limit, cursor)
+
+
+@admin_router.get("/usage-orders")
+def list_admin_usage_orders(
+    limit: int = Query(default=50, ge=1, le=100),
+    cursor: str | None = Query(default=None, max_length=2048),
+    started_at: datetime | None = None,
+    ended_at: datetime | None = None,
+    model: str | None = Query(default=None, min_length=1, max_length=255),
+    provider: str | None = Query(default=None, min_length=1, max_length=255),
+    publication_id: str
+    | None = Query(default=None, min_length=1, max_length=255),
+    app_id: str | None = Query(default=None, min_length=1, max_length=255),
+    api_key_id: str | None = Query(default=None, min_length=1, max_length=255),
+    owner_user_id: str
+    | None = Query(default=None, min_length=1, max_length=255),
+    status: str | None = Query(default=None, min_length=1, max_length=64),
+) -> dict[str, Any]:
+    return _report_page(
+        owner_user_id=None,
+        filters=_report_filters(
+            started_at=started_at,
+            ended_at=ended_at,
+            model=model,
+            provider=provider,
+            publication_id=publication_id,
+            app_id=app_id,
+            api_key_id=api_key_id,
+            status=status,
+            owner_user_id=owner_user_id,
+        ),
+        limit=limit,
+        cursor=cursor,
+    )
+
+
+@admin_router.get("/usage-orders/{order_id}")
+def get_admin_usage_order(order_id: str) -> dict[str, Any]:
+    detail = get_billing_reporting_service().get_usage_order(
+        order_id,
+        owner_user_id=None,
+    )
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Usage order not found")
+    return detail
+
+
+@admin_router.get("/reconciliation")
+def list_admin_reconciliation(
+    limit: int = Query(default=50, ge=1, le=100),
+    cursor: str | None = Query(default=None, max_length=2048),
+    started_at: datetime | None = None,
+    ended_at: datetime | None = None,
+    model: str | None = Query(default=None, min_length=1, max_length=255),
+    provider: str | None = Query(default=None, min_length=1, max_length=255),
+    publication_id: str
+    | None = Query(default=None, min_length=1, max_length=255),
+    app_id: str | None = Query(default=None, min_length=1, max_length=255),
+    api_key_id: str | None = Query(default=None, min_length=1, max_length=255),
+    owner_user_id: str
+    | None = Query(default=None, min_length=1, max_length=255),
+) -> dict[str, Any]:
+    filters = _report_filters(
+        started_at=started_at,
+        ended_at=ended_at,
+        model=model,
+        provider=provider,
+        publication_id=publication_id,
+        app_id=app_id,
+        api_key_id=api_key_id,
+        status="reconciling",
+        owner_user_id=owner_user_id,
+    )
+    try:
+        return get_billing_reporting_service().list_reconciliation(
+            filters=filters,
+            limit=limit,
+            cursor=cursor,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@admin_router.post("/reconciliation/{item_id}/resolve")
+def resolve_admin_reconciliation(
+    item_id: str,
+    payload: ReconciliationResolutionBody,
+    request: Request,
+    idempotency_key: str = Header(
+        min_length=1,
+        max_length=255,
+        alias="Idempotency-Key",
+    ),
+) -> dict[str, Any]:
+    try:
+        return get_billing_reporting_service().resolve_reconciliation(
+            item_id,
+            actor_id=_authenticated_owner(request),
+            resolution=ReconciliationResolution(
+                idempotency_key=idempotency_key,
+                billability=payload.billability,
+                reason=payload.reason,
+                actual_input_tokens=payload.actual_input_tokens,
+                actual_output_tokens=payload.actual_output_tokens,
+            ),
+        )
+    except ReconciliationNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="Reconciliation item not found",
+        ) from exc
+    except ReconciliationConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Idempotency conflict",
+        ) from exc
+    except UsageOrderConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except UsageOrderStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@admin_router.get("/rollout")
+def get_admin_rollout() -> dict[str, Any]:
+    return get_billing_reporting_service().get_rollout()
+
+
+@admin_router.post("/rollout/activate")
+def activate_admin_rollout(
+    payload: RolloutActivationBody,
+    request: Request,
+) -> dict[str, Any]:
+    try:
+        return get_billing_reporting_service().activate_rollout(
+            payload.mode,
+            actor_id=_authenticated_owner(request),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 __all__ = ["admin_router", "user_router"]

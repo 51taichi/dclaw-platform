@@ -914,8 +914,15 @@ def test_billing_routers_are_mounted_on_trusted_user_and_admin_prefixes():
     assert "/user/billing/wallet" in paths
     assert "/user/billing/ledger" in paths
     assert "/user/billing/quotes" in paths
+    assert "/user/billing/usage-orders" in paths
+    assert "/user/billing/usage-orders/{order_id}" in paths
+    assert "/user/billing/open-api-summary" in paths
     assert "/admin/billing/catalogs" in paths
     assert "/admin/billing/wallets/{owner_id}" in paths
+    assert "/admin/billing/usage-orders" in paths
+    assert "/admin/billing/reconciliation" in paths
+    assert "/admin/billing/reconciliation/{item_id}/resolve" in paths
+    assert "/admin/billing/rollout/activate" in paths
 
 
 def _synchronize_first_order_reads(order_id: str):

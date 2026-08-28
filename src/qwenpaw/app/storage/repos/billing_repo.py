@@ -25,6 +25,7 @@ from ..schema import (
     billing_credit_lots,
     billing_ledger_allocations,
     billing_ledger_entries,
+    billing_rollout_settings,
     billing_wallets,
     users,
 )
@@ -129,6 +130,20 @@ class BillingRepository:
                     select(billing_wallets).where(
                         billing_wallets.c.owner_type == owner_type,
                         billing_wallets.c.owner_id == owner_id,
+                    ),
+                )
+                .mappings()
+                .first()
+            )
+        return dict(row) if row is not None else None
+
+    def get_rollout_setting(self) -> dict[str, Any] | None:
+        """Return the singleton billing rollout authority, if activated."""
+        with self.engine.connect() as conn:
+            row = (
+                conn.execute(
+                    select(billing_rollout_settings).where(
+                        billing_rollout_settings.c.id == "global",
                     ),
                 )
                 .mappings()

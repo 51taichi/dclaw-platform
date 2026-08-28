@@ -977,6 +977,21 @@ class UsageService:
             ),
         )
 
+    def project_open_api_order_in_connection(
+        self,
+        conn: Connection,
+        order: Mapping[str, Any],
+    ) -> None:
+        """Project one OpenAPI order inside a trusted caller transaction.
+
+        Recovery and administrative reconciliation share the same durable
+        item/ledger projection.  Keeping the transaction caller-owned avoids
+        exposing a balance mutation shortcut or committing half a resolution.
+        """
+        if str(order.get("source_type") or "") != "open_api":
+            raise UsageOrderStateError("only open_api orders can reproject")
+        self._project_open_api_order(conn, order)
+
     @staticmethod
     def _settlement_replay(
         current: dict[str, Any],

@@ -809,6 +809,77 @@ billing_usage_items = Table(
     ),
 )
 
+billing_reconciliation_audits = Table(
+    "billing_reconciliation_audits",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column(
+        "usage_item_id",
+        String,
+        ForeignKey("billing_usage_items.id"),
+        nullable=False,
+    ),
+    Column(
+        "usage_order_id",
+        String,
+        ForeignKey("billing_usage_orders.id"),
+        nullable=False,
+    ),
+    Column("idempotency_key", String, nullable=False),
+    Column("request_sha256", String, nullable=False),
+    Column("actor_id", String, nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("billability", String, nullable=False),
+    Column(
+        "actual_input_tokens",
+        BigInteger,
+        nullable=False,
+        server_default="0",
+    ),
+    Column(
+        "actual_output_tokens",
+        BigInteger,
+        nullable=False,
+        server_default="0",
+    ),
+    Column("charged_credits", BigInteger, nullable=False, server_default="0"),
+    Column("previous_status", String, nullable=False),
+    Column("resolved_status", String, nullable=False),
+    Column("created_at", DateTime(timezone=True), server_default=func.now()),
+    CheckConstraint(
+        "billability IN ('billable', 'not_billable')",
+        name="ck_billing_reconciliation_audits_billability",
+    ),
+    CheckConstraint(
+        "actual_input_tokens >= 0",
+        name="ck_billing_reconciliation_audits_input_nonnegative",
+    ),
+    CheckConstraint(
+        "actual_output_tokens >= 0",
+        name="ck_billing_reconciliation_audits_output_nonnegative",
+    ),
+    CheckConstraint(
+        "charged_credits >= 0",
+        name="ck_billing_reconciliation_audits_charged_nonnegative",
+    ),
+)
+
+billing_rollout_settings = Table(
+    "billing_rollout_settings",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("mode", String, nullable=False, server_default="shadow"),
+    Column("billing_cutover_at", DateTime(timezone=True)),
+    Column("cutover_actor_id", String),
+    Column("updated_by", String, nullable=False),
+    Column("created_at", DateTime(timezone=True), server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), server_default=func.now()),
+    CheckConstraint(
+        "mode IN ('off', 'shadow', 'observe', 'enforced')",
+        name="ck_billing_rollout_settings_mode",
+    ),
+)
+
 Index(
     "idx_chats_user_agent_updated",
     chats.c.user_id,
@@ -967,6 +1038,16 @@ Index(
     billing_usage_items.c.item_key,
     unique=True,
 )
+Index(
+    "uq_billing_reconciliation_audits_idempotency",
+    billing_reconciliation_audits.c.idempotency_key,
+    unique=True,
+)
+Index(
+    "idx_billing_reconciliation_audits_item_created",
+    billing_reconciliation_audits.c.usage_item_id,
+    billing_reconciliation_audits.c.created_at.desc(),
+)
 
 
 def create_all(engine: Engine) -> None:
@@ -978,7 +1059,51 @@ def create_all(engine: Engine) -> None:
     _ensure_open_api_billing_columns(engine)
     _ensure_billing_bigint_columns(engine)
     _ensure_billing_constraints(engine)
+    _ensure_reconciliation_audit_immutable(engine)
     _backfill_personal_wallets(engine)
+
+
+def _ensure_reconciliation_audit_immutable(engine: Engine) -> None:
+    """Reject updates and deletes against the append-only admin audit."""
+    if engine.dialect.name == "sqlite":
+        statements = (
+            "CREATE TRIGGER IF NOT EXISTS "
+            "billing_reconciliation_audits_no_update BEFORE UPDATE ON "
+            "billing_reconciliation_audits BEGIN SELECT RAISE(ABORT, "
+            "'billing reconciliation audits are immutable'); END",
+            "CREATE TRIGGER IF NOT EXISTS "
+            "billing_reconciliation_audits_no_delete BEFORE DELETE ON "
+            "billing_reconciliation_audits BEGIN SELECT RAISE(ABORT, "
+            "'billing reconciliation audits are immutable'); END",
+        )
+        with engine.begin() as conn:
+            for statement in statements:
+                conn.execute(text(statement))
+        return
+    if engine.dialect.name != "postgresql":
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE OR REPLACE FUNCTION "
+                "billing_reconciliation_audits_immutable() RETURNS trigger "
+                "LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION "
+                "'billing reconciliation audits are immutable'; END $$",
+            ),
+        )
+        for operation in ("UPDATE", "DELETE"):
+            trigger = f"billing_reconciliation_audits_no_{operation.lower()}"
+            conn.execute(
+                text(
+                    "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_trigger "
+                    f"WHERE tgname = '{trigger}' AND tgrelid = "
+                    "'billing_reconciliation_audits'::regclass) THEN "
+                    f"CREATE TRIGGER {trigger} BEFORE {operation} ON "
+                    "billing_reconciliation_audits FOR EACH ROW EXECUTE "
+                    "FUNCTION billing_reconciliation_audits_immutable(); "
+                    "END IF; END $$",
+                ),
+            )
 
 
 def _backfill_personal_wallets(engine: Engine) -> None:
