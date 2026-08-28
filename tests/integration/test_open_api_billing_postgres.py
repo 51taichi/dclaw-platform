@@ -28,6 +28,7 @@ from qwenpaw.app.storage.repos.billing_repo import BillingRepository
 from qwenpaw.app.storage.repos.open_api_repo import SqlAlchemyOpenApiRepository
 from qwenpaw.app.storage.repos.price_catalog_repo import PriceCatalogRepository
 from qwenpaw.app.storage.schema import (
+    billing_wallets,
     billing_usage_orders,
     create_all,
     open_api_invocations,
@@ -64,28 +65,35 @@ def postgres_open_api_engine():
         admin_engine.dispose()
 
 
-def _coordinator(engine, *, publish_catalog: bool = True):
+def _coordinator(engine, identity: str, *, publish_catalog: bool = True):
+    publication_id = f"pub-{identity}"
+    app_id = f"app-{identity}"
+    api_key_id = f"key-{identity}"
     open_api = SqlAlchemyOpenApiRepository(engine)
     open_api.upsert_publication(
         {
-            "id": "pub-1",
-            "public_id": "public-pub-1",
+            "id": publication_id,
+            "public_id": f"public-{identity}",
             "target_type": "agent",
             "target_id": "agent-1",
-            "owner_user_id": "publication-owner",
-            "bound_user_id": "bound-user",
+            "owner_user_id": f"publication-owner-{identity}",
+            "bound_user_id": f"bound-user-{identity}",
             "name": "Open API agent",
         },
     )
     open_api.create_external_app(
-        {"id": "app-1", "owner_user_id": "app-owner", "name": "app"},
+        {
+            "id": app_id,
+            "owner_user_id": f"app-owner-{identity}",
+            "name": "app",
+        },
     )
     open_api.create_api_key(
         {
-            "id": "key-1",
-            "app_id": "app-1",
-            "publication_id": "pub-1",
-            "key_hash": "hash-key-1",
+            "id": api_key_id,
+            "app_id": app_id,
+            "publication_id": publication_id,
+            "key_hash": f"hash-{identity}",
             "key_prefix": "qp_live",
             "key_suffix": "test",
             "scopes": ["messages:create"],
@@ -112,11 +120,15 @@ def _coordinator(engine, *, publish_catalog: bool = True):
     return OpenApiBillingCoordinator(BillingRepository(engine), pricing)
 
 
-def _command(key: str, message: str = "first") -> OpenApiBillingCommand:
+def _command(
+    identity: str,
+    key: str,
+    message: str = "first",
+) -> OpenApiBillingCommand:
     return OpenApiBillingCommand(
-        app_id="app-1",
-        publication_id="pub-1",
-        api_key_id="key-1",
+        app_id=f"app-{identity}",
+        publication_id=f"pub-{identity}",
+        api_key_id=f"key-{identity}",
         target_type="agent",
         target_id="agent-1",
         external_user_id="external-user",
@@ -126,16 +138,38 @@ def _command(key: str, message: str = "first") -> OpenApiBillingCommand:
     )
 
 
+def _billing_counts(engine) -> tuple[int, int, int]:
+    with engine.connect() as conn:
+        return (
+            int(
+                conn.scalar(select(func.count()).select_from(billing_wallets))
+            ),
+            int(
+                conn.scalar(
+                    select(func.count()).select_from(billing_usage_orders)
+                )
+            ),
+            int(
+                conn.scalar(
+                    select(func.count()).select_from(open_api_invocations)
+                )
+            ),
+        )
+
+
 @pytest.mark.integration
-def test_postgresql_open_api_same_key_drift_catalog_and_rollback(
+def test_postgresql_open_api_same_key_and_payload_drift(
     postgres_open_api_engine,
 ):
-    coordinator = _coordinator(postgres_open_api_engine)
+    identity = "success"
+    coordinator = _coordinator(postgres_open_api_engine, identity)
     same_start = Barrier(2)
 
     def same_key():
         same_start.wait()
-        return coordinator.begin_invocation(_command("postgres-same"))
+        return coordinator.begin_invocation(
+            _command(identity, "postgres-same")
+        )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         same_sessions = list(pool.map(lambda _index: same_key(), range(2)))
@@ -147,7 +181,7 @@ def test_postgresql_open_api_same_key_drift_catalog_and_rollback(
         drift_start.wait()
         try:
             return coordinator.begin_invocation(
-                _command("postgres-drift", message)
+                _command(identity, "postgres-drift", message)
             )
         except IdempotencyConflictError:
             return "conflict"
@@ -156,13 +190,13 @@ def test_postgresql_open_api_same_key_drift_catalog_and_rollback(
         drift_results = list(pool.map(drift, ("first", "changed")))
     assert drift_results.count("conflict") == 1
 
-    with postgres_open_api_engine.connect() as conn:
-        order_count = conn.scalar(
-            select(func.count()).select_from(billing_usage_orders)
-        )
-        invocation_count = conn.scalar(
-            select(func.count()).select_from(open_api_invocations),
-        )
+
+@pytest.mark.integration
+def test_postgresql_open_api_injected_failure_rolls_back_fresh_identity(
+    postgres_open_api_engine,
+):
+    identity = "rollback"
+    coordinator = _coordinator(postgres_open_api_engine, identity)
     failing = OpenApiBillingCoordinator(
         coordinator.repository,
         coordinator.pricing,
@@ -171,23 +205,23 @@ def test_postgresql_open_api_same_key_drift_catalog_and_rollback(
         ),
     )
     with pytest.raises(RuntimeError, match="injected"):
-        failing.begin_invocation(_command("postgres-rollback"))
-    with postgres_open_api_engine.connect() as conn:
-        assert (
-            conn.scalar(select(func.count()).select_from(billing_usage_orders))
-            == order_count
-        )
-        assert (
-            conn.scalar(select(func.count()).select_from(open_api_invocations))
-            == invocation_count
-        )
+        failing.begin_invocation(_command(identity, "postgres-rollback"))
+    assert _billing_counts(postgres_open_api_engine) == (0, 0, 0)
 
 
 @pytest.mark.integration
 def test_postgresql_open_api_missing_catalog_is_controlled(
     postgres_open_api_engine,
 ):
-    coordinator = _coordinator(postgres_open_api_engine, publish_catalog=False)
+    identity = "missing-catalog"
+    coordinator = _coordinator(
+        postgres_open_api_engine,
+        identity,
+        publish_catalog=False,
+    )
 
     with pytest.raises(CatalogNotReadyError):
-        coordinator.begin_invocation(_command("postgres-missing-catalog"))
+        coordinator.begin_invocation(
+            _command(identity, "postgres-missing-catalog")
+        )
+    assert _billing_counts(postgres_open_api_engine) == (0, 0, 0)
