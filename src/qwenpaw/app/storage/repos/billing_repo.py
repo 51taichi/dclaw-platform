@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import and_, case, insert, or_, select, update
+from sqlalchemy import and_, case, func, insert, or_, select, update
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import IntegrityError
 
@@ -297,6 +297,37 @@ class BillingRepository:
                 idempotency_key=idempotency_key,
             ),
         )
+
+    def held_usage_credits_in_connection(
+        self,
+        conn: Connection,
+        wallet_id: str,
+        business_keys: list[str],
+    ) -> int:
+        """Sum durable hold allocations for still-active usage items.
+
+        Callers pass only items whose state still retains a hold.  This keeps
+        reporting tied to immutable allocation rows instead of caller input or
+        an asynchronous token queue.
+        """
+        if not business_keys:
+            return 0
+        total = conn.scalar(
+            select(func.coalesce(func.sum(billing_ledger_allocations.c.credits), 0))
+            .select_from(
+                billing_ledger_allocations.join(
+                    billing_ledger_entries,
+                    billing_ledger_allocations.c.ledger_entry_id
+                    == billing_ledger_entries.c.id,
+                ),
+            )
+            .where(
+                billing_ledger_entries.c.wallet_id == wallet_id,
+                billing_ledger_entries.c.event_type == "usage_hold",
+                billing_ledger_entries.c.business_key.in_(business_keys),
+            ),
+        )
+        return int(total or 0)
 
     def balance(self, wallet_id: str) -> WalletBalance:
         with self.engine.begin() as conn:
@@ -1313,4 +1344,4 @@ def _lot_is_eligible(row, *, capability: str, tier: str) -> bool:
     allowed_tiers = {
         str(value).lower() for value in metadata.get("allowed_tiers", [])
     }
-    return not allowed_tiers or normalized_tier in allowed_tiers
+    return bool(allowed_tiers) and normalized_tier in allowed_tiers

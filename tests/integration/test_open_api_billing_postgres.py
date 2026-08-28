@@ -24,6 +24,12 @@ from qwenpaw.app.billing.pricing import (
     PriceCatalogService,
     PriceRule,
 )
+from qwenpaw.app.billing.usage import (
+    ReserveModelCall,
+    SettleModelCall,
+    UsageOrderConflictError,
+    UsageService,
+)
 from qwenpaw.app.storage.repos.billing_repo import BillingRepository
 from qwenpaw.app.storage.repos.open_api_repo import SqlAlchemyOpenApiRepository
 from qwenpaw.app.storage.repos.price_catalog_repo import PriceCatalogRepository
@@ -124,6 +130,7 @@ def _command(
     identity: str,
     key: str,
     message: str = "first",
+    mode: str = "shadow",
 ) -> OpenApiBillingCommand:
     return OpenApiBillingCommand(
         app_id=f"app-{identity}",
@@ -135,6 +142,7 @@ def _command(
         external_session_id="external-session",
         payload={"message": message},
         idempotency_key=key,
+        mode=mode,
     )
 
 
@@ -225,3 +233,58 @@ def test_postgresql_open_api_missing_catalog_is_controlled(
             _command(identity, "postgres-missing-catalog")
         )
     assert _billing_counts(postgres_open_api_engine) == (0, 0, 0)
+
+
+@pytest.mark.integration
+def test_postgresql_capture_and_release_cannot_both_settle_one_item(
+    postgres_open_api_engine,
+):
+    identity = "settlement-race"
+    coordinator = _coordinator(postgres_open_api_engine, identity)
+    session = coordinator.begin_invocation(
+        _command(identity, "settlement", mode="enforced"),
+    )
+    coordinator.repository.grant(
+        session.wallet_id,
+        credits=5,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key="settlement-funds",
+    )
+    service = UsageService(coordinator.repository, coordinator.pricing)
+    reserve = ReserveModelCall(
+        usage_order_id=session.usage_order_id,
+        item_key="call-1",
+        provider_id="provider",
+        model_key="model",
+        capability="text",
+        parameters={"tier": "standard"},
+        input_tokens=1000,
+        max_output_tokens=0,
+    )
+    service.reserve_model_call(reserve)
+    start = Barrier(2)
+
+    def settle(billability: str):
+        start.wait()
+        try:
+            return service.settle_model_call(
+                SettleModelCall(
+                    usage_order_id=session.usage_order_id,
+                    item_key="call-1",
+                    supplier_reference="supplier-call-1",
+                    billability=billability,
+                    evidence={"reference": "supplier-call-1"},
+                    actual_input_tokens=1000,
+                    actual_output_tokens=0,
+                ),
+            ).status
+        except UsageOrderConflictError:
+            return "conflict"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(settle, ("billable", "not_billable")))
+
+    assert outcomes.count("conflict") == 1
+    assert set(outcomes) in ({"conflict", "captured"}, {"conflict", "released"})
+    assert coordinator.repository.balance(session.wallet_id).held == 0

@@ -380,6 +380,27 @@ class PriceCatalogService:
         self._validate_request(request)
         quote_time = _aware_utc(at or self._clock())
         catalog = self.repository.effective_catalog(quote_time)
+        return self._quote_from_catalog(request, catalog)
+
+    def quote_locked_catalog(
+        self,
+        catalog_id: str,
+        request: QuoteRequest,
+    ) -> RetailQuote:
+        """Quote a call from the immutable catalog locked by its invocation."""
+        self._validate_request(request)
+        catalog = self.repository.get_catalog(catalog_id)
+        if catalog["status"] != "published":
+            raise CatalogImmutableError(
+                f"locked catalog is not published: {catalog_id}",
+            )
+        return self._quote_from_catalog(request, catalog)
+
+    @staticmethod
+    def _quote_from_catalog(
+        request: QuoteRequest,
+        catalog: Mapping[str, Any],
+    ) -> RetailQuote:
         candidates = [
             rule
             for rule in catalog["rules"]

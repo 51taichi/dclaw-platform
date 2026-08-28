@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Any, Literal
@@ -25,13 +26,15 @@ from .pricing import PriceCatalogService, QuoteRequest, RetailQuote
 from ..storage.repos.billing_repo import BillingRepository
 from ..storage.schema import (
     billing_price_catalogs,
+    billing_usage_items,
     billing_usage_orders,
+    open_api_invocations,
 )
 
 
-BillingMode = Literal["off", "shadow", "enforced"]
+BillingMode = Literal["off", "shadow", "observe", "enforced"]
 Billability = Literal["unknown", "billable", "not_billable"]
-_BILLING_MODES = frozenset({"off", "shadow", "enforced"})
+_BILLING_MODES = frozenset({"off", "shadow", "observe", "enforced"})
 _BILLABILITY_VALUES = frozenset({"unknown", "billable", "not_billable"})
 
 
@@ -64,6 +67,52 @@ class InsufficientUsageCreditsError(InsufficientCreditsError):
         super().__init__(
             f"wallet has {available} available credits; {required} required",
         )
+
+
+@dataclass(frozen=True)
+class ReserveModelCall:
+    """Trusted reservation request for one call inside an OpenAPI order."""
+
+    usage_order_id: str
+    item_key: str
+    provider_id: str
+    model_key: str
+    capability: str
+    parameters: Mapping[str, Any]
+    input_tokens: int = 0
+    max_output_tokens: int = 0
+
+
+@dataclass(frozen=True)
+class SettleModelCall:
+    """Supplier-evidenced terminal outcome for one reserved model call."""
+
+    usage_order_id: str
+    item_key: str
+    supplier_reference: str
+    billability: Billability
+    evidence: Mapping[str, Any]
+    actual_input_tokens: int = 0
+    actual_output_tokens: int = 0
+
+
+@dataclass(frozen=True)
+class ReservedUsageItem:
+    usage_order_id: str
+    item_key: str
+    quoted_credits: int
+    status: str
+
+
+@dataclass(frozen=True)
+class UsageItemResult:
+    usage_order_id: str
+    item_key: str
+    status: str
+    quoted_credits: int
+    captured_credits: int
+    released_credits: int
+    reconciling_credits: int
 
 
 class UsageService:
@@ -383,6 +432,434 @@ class UsageService:
                 self._order_row(order_id, conn=conn),
             )
 
+    def reserve_model_call(
+        self,
+        command: ReserveModelCall,
+    ) -> ReservedUsageItem:
+        """Atomically hold the locked retail quote before supplier contact."""
+        normalized = _normalize_reserve_model_call(command)
+        for attempt in range(3):
+            try:
+                return self._reserve_model_call_once(normalized)
+            except (
+                BillingInvariantError,
+                DuplicateLedgerTransactionError,
+                IntegrityError,
+                OperationalError,
+            ) as exc:
+                with self.repository.engine.connect() as conn:
+                    existing = self._item_row(
+                        conn,
+                        normalized.usage_order_id,
+                        normalized.item_key,
+                    )
+                if existing is not None:
+                    self._assert_reservation_replay(existing, normalized)
+                    return _reserved_item(existing)
+                if attempt == 2:
+                    raise UsageOrderStateError(
+                        "concurrent model reservation did not become replayable",
+                    ) from exc
+        raise AssertionError("unreachable")
+
+    def _reserve_model_call_once(
+        self,
+        normalized: ReserveModelCall,
+    ) -> ReservedUsageItem:
+        with self.repository.engine.begin() as conn:
+            order = self._order_row(
+                normalized.usage_order_id,
+                conn=conn,
+                for_update=True,
+            )
+            existing = self._item_row(
+                conn,
+                normalized.usage_order_id,
+                normalized.item_key,
+                for_update=True,
+            )
+            if existing is not None:
+                self._assert_reservation_replay(existing, normalized)
+                return _reserved_item(existing)
+
+            request = QuoteRequest(
+                provider_id=normalized.provider_id,
+                model_key=normalized.model_key,
+                capability=normalized.capability,
+                parameters=normalized.parameters,
+                input_tokens=normalized.input_tokens,
+                output_tokens=normalized.max_output_tokens,
+            )
+            quote = self.pricing.quote_locked_catalog(
+                str(order["catalog_id"]),
+                request,
+            )
+            budget = int(order["budget_credits"])
+            if budget and int(order["captured_credits"]) + int(
+                order["held_credits"]
+            ) + quote.credits > budget:
+                raise InsufficientUsageCreditsError(
+                    quote.credits,
+                    max(
+                        budget
+                        - int(order["captured_credits"])
+                        - int(order["held_credits"]),
+                        0,
+                    ),
+                )
+
+            item_business_key = _item_business_key(
+                normalized.usage_order_id,
+                normalized.item_key,
+            )
+            mode = self._order_mode(order)
+            if mode == "enforced" and quote.credits:
+                try:
+                    self.repository.append_transaction_in_connection(
+                        conn,
+                        LedgerTransaction(
+                            wallet_id=str(order["wallet_id"]),
+                            event_type="usage_hold",
+                            credits=quote.credits,
+                            business_type="usage_item",
+                            business_key=item_business_key,
+                            idempotency_key=(
+                                f"open-api:{normalized.usage_order_id}:"
+                                f"{normalized.item_key}:hold"
+                            ),
+                            metadata={
+                                "capability": normalized.capability,
+                                "tier": str(
+                                    normalized.parameters.get(
+                                        "tier", "standard"
+                                    )
+                                ),
+                                "source_type": "open_api",
+                                "source_id": str(order["source_id"]),
+                                "item_key": normalized.item_key,
+                            },
+                        ),
+                    )
+                except InsufficientCreditsError as exc:
+                    balance = self.repository.balance(str(order["wallet_id"]))
+                    raise InsufficientUsageCreditsError(
+                        quote.credits,
+                        balance.available,
+                    ) from exc
+
+            now = datetime.now(timezone.utc)
+            conn.execute(
+                insert(billing_usage_items).values(
+                    id=str(uuid4()),
+                    usage_order_id=normalized.usage_order_id,
+                    price_rule_id=quote.rule_id,
+                    item_key=normalized.item_key,
+                    status="held",
+                    provider_id=normalized.provider_id,
+                    model_key=normalized.model_key,
+                    capability=normalized.capability,
+                    input_tokens=normalized.input_tokens,
+                    output_tokens=normalized.max_output_tokens,
+                    quantity=0,
+                    quoted_credits=quote.credits,
+                    charged_credits=0,
+                    usage_snapshot_json=_dump_json(
+                        _reservation_snapshot(order, normalized),
+                    ),
+                    price_snapshot_json=_dump_json(quote.to_jsonable()),
+                    supplier_evidence_json="{}",
+                    billability="unknown",
+                    started_at=now,
+                    created_at=now,
+                    updated_at=now,
+                ),
+            )
+            self._project_open_api_order(conn, order)
+            return ReservedUsageItem(
+                usage_order_id=normalized.usage_order_id,
+                item_key=normalized.item_key,
+                quoted_credits=quote.credits,
+                status="held",
+            )
+
+    def settle_model_call(
+        self,
+        command: SettleModelCall,
+    ) -> UsageItemResult:
+        """Settle one item without treating supplier activity as retail price."""
+        normalized = _normalize_settle_model_call(command)
+        with self.repository.engine.begin() as conn:
+            order = self._order_row(
+                normalized.usage_order_id,
+                conn=conn,
+                for_update=True,
+            )
+            item = self._item_row(
+                conn,
+                normalized.usage_order_id,
+                normalized.item_key,
+                for_update=True,
+            )
+            if item is None:
+                raise UsageOrderNotFoundError(normalized.item_key)
+            if str(item["status"]) in {"captured", "released"}:
+                self._assert_settlement_replay(item, normalized)
+                return _usage_item_result(item)
+            if (
+                str(item["status"]) == "reconciling"
+                and normalized.billability == "unknown"
+            ):
+                self._assert_settlement_replay(item, normalized)
+                return _usage_item_result(item)
+
+            if str(item["status"]) not in {"held", "reconciling"}:
+                raise UsageOrderStateError(
+                    f"cannot settle item in state {item['status']}",
+                )
+            quoted = int(item["quoted_credits"])
+            actual_credits = 0
+            if normalized.billability == "billable":
+                actual_quote = self.pricing.quote_locked_catalog(
+                    str(order["catalog_id"]),
+                    QuoteRequest(
+                        provider_id=str(item["provider_id"]),
+                        model_key=str(item["model_key"]),
+                        capability=str(item["capability"]),
+                        parameters=_item_parameters(item),
+                        input_tokens=normalized.actual_input_tokens,
+                        output_tokens=normalized.actual_output_tokens,
+                    ),
+                )
+                actual_credits = actual_quote.credits
+                if actual_credits > quoted:
+                    raise UsageOrderStateError(
+                        "actual retail credits exceed the pre-call hold",
+                    )
+
+            item_business_key = _item_business_key(
+                normalized.usage_order_id,
+                normalized.item_key,
+            )
+            if self._order_mode(order) == "enforced" and quoted:
+                if normalized.billability == "billable" and actual_credits:
+                    self.repository.append_transaction_in_connection(
+                        conn,
+                        LedgerTransaction(
+                            wallet_id=str(order["wallet_id"]),
+                            event_type="usage_capture",
+                            credits=actual_credits,
+                            business_type="usage_item",
+                            business_key=item_business_key,
+                            idempotency_key=(
+                                f"open-api:{normalized.usage_order_id}:"
+                                f"{normalized.item_key}:capture"
+                            ),
+                            metadata={
+                                "supplier_reference": normalized.supplier_reference,
+                            },
+                        ),
+                    )
+                elif normalized.billability in {"billable", "not_billable"}:
+                    self.repository.append_transaction_in_connection(
+                        conn,
+                        LedgerTransaction(
+                            wallet_id=str(order["wallet_id"]),
+                            event_type="usage_release",
+                            credits=0,
+                            business_type="usage_item",
+                            business_key=item_business_key,
+                            idempotency_key=(
+                                f"open-api:{normalized.usage_order_id}:"
+                                f"{normalized.item_key}:release"
+                            ),
+                            metadata={
+                                "supplier_reference": normalized.supplier_reference,
+                            },
+                        ),
+                    )
+
+            status = {
+                "billable": "captured",
+                "not_billable": "released",
+                "unknown": "reconciling",
+            }[normalized.billability]
+            now = datetime.now(timezone.utc)
+            conn.execute(
+                update(billing_usage_items)
+                .where(billing_usage_items.c.id == item["id"])
+                .values(
+                    status=status,
+                    supplier_reference=normalized.supplier_reference or None,
+                    input_tokens=normalized.actual_input_tokens,
+                    output_tokens=normalized.actual_output_tokens,
+                    charged_credits=actual_credits,
+                    supplier_evidence_json=_dump_json(normalized.evidence),
+                    billability=normalized.billability,
+                    finished_at=now,
+                    updated_at=now,
+                ),
+            )
+            self._project_open_api_order(conn, order)
+            settled = self._item_row(
+                conn,
+                normalized.usage_order_id,
+                normalized.item_key,
+            )
+            assert settled is not None
+            return _usage_item_result(settled)
+
+    def list_items(self, usage_order_id: str) -> list[dict[str, Any]]:
+        """Read durable model-call items; analytics queues are never consulted."""
+        with self.repository.engine.connect() as conn:
+            rows = conn.execute(
+                select(billing_usage_items)
+                .where(billing_usage_items.c.usage_order_id == usage_order_id)
+                .order_by(billing_usage_items.c.created_at, billing_usage_items.c.id),
+            ).mappings().all()
+        return [_decode_usage_item(dict(row)) for row in rows]
+
+    @staticmethod
+    def _item_row(
+        conn: Connection,
+        usage_order_id: str,
+        item_key: str,
+        *,
+        for_update: bool = False,
+    ) -> dict[str, Any] | None:
+        statement = select(billing_usage_items).where(
+            billing_usage_items.c.usage_order_id == usage_order_id,
+            billing_usage_items.c.item_key == item_key,
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        row = conn.execute(statement).mappings().first()
+        return dict(row) if row is not None else None
+
+    @staticmethod
+    def _assert_reservation_replay(
+        item: Mapping[str, Any],
+        command: ReserveModelCall,
+    ) -> None:
+        stored = json.loads(str(item["usage_snapshot_json"]) or "{}")
+        expected = {
+            "provider_id": command.provider_id,
+            "model_key": command.model_key,
+            "capability": command.capability,
+            "parameters": dict(command.parameters),
+            "input_tokens": command.input_tokens,
+            "max_output_tokens": command.max_output_tokens,
+        }
+        if _canonical_json(stored.get("reservation", {})) != _canonical_json(expected):
+            raise UsageOrderConflictError(
+                "model item key is already bound to another reservation",
+            )
+
+    @staticmethod
+    def _assert_settlement_replay(
+        item: Mapping[str, Any],
+        command: SettleModelCall,
+    ) -> None:
+        stored_evidence = json.loads(str(item["supplier_evidence_json"]) or "{}")
+        expected_status = {
+            "billable": "captured",
+            "not_billable": "released",
+            "unknown": "reconciling",
+        }[command.billability]
+        if (
+            str(item["status"]) != expected_status
+            or str(item["billability"]) != command.billability
+            or (item["supplier_reference"] or "") != command.supplier_reference
+            or stored_evidence != dict(command.evidence)
+            or int(item["input_tokens"]) != command.actual_input_tokens
+            or int(item["output_tokens"]) != command.actual_output_tokens
+        ):
+            raise UsageOrderConflictError(
+                "model item key is already settled by another outcome",
+            )
+
+    def _project_open_api_order(
+        self,
+        conn: Connection,
+        order: Mapping[str, Any],
+    ) -> None:
+        """Rebuild order/invocation totals solely from items and allocations."""
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                select(billing_usage_items).where(
+                    billing_usage_items.c.usage_order_id == order["id"],
+                ),
+            ).mappings()
+        ]
+        active_keys = [
+            _item_business_key(str(order["id"]), str(row["item_key"]))
+            for row in rows
+            if str(row["status"]) in {"held", "reconciling"}
+        ]
+        held = self.repository.held_usage_credits_in_connection(
+            conn,
+            str(order["wallet_id"]),
+            active_keys,
+        ) if self._order_mode(order) == "enforced" else sum(
+            int(row["quoted_credits"])
+            for row in rows
+            if str(row["status"]) in {"held", "reconciling"}
+        )
+        captured = sum(int(row["charged_credits"]) for row in rows)
+        released = sum(
+            int(row["quoted_credits"]) - int(row["charged_credits"])
+            for row in rows
+            if str(row["status"]) in {"captured", "released"}
+        )
+        reconciling = self.repository.held_usage_credits_in_connection(
+            conn,
+            str(order["wallet_id"]),
+            [
+                _item_business_key(str(order["id"]), str(row["item_key"]))
+                for row in rows
+                if str(row["status"]) == "reconciling"
+            ],
+        ) if self._order_mode(order) == "enforced" else sum(
+            int(row["quoted_credits"])
+            for row in rows
+            if str(row["status"]) == "reconciling"
+        )
+        statuses = {str(row["status"]) for row in rows}
+        status = (
+            "quoted" if not rows else "reconciling" if "reconciling" in statuses
+            else "held" if "held" in statuses else "settled"
+        )
+        billabilities = {str(row["billability"]) for row in rows}
+        billability = billabilities.pop() if len(billabilities) == 1 else "unknown"
+        now = datetime.now(timezone.utc)
+        conn.execute(
+            update(billing_usage_orders)
+            .where(billing_usage_orders.c.id == order["id"])
+            .values(
+                status=status,
+                quoted_credits=sum(int(row["quoted_credits"]) for row in rows),
+                held_credits=held,
+                captured_credits=captured,
+                released_credits=released,
+                reconciling_credits=reconciling,
+                billability=billability,
+                settled_at=now if status == "settled" else None,
+                updated_at=now,
+            ),
+        )
+        token_summary = _token_summary(rows)
+        conn.execute(
+            update(open_api_invocations)
+            .where(open_api_invocations.c.billing_usage_order_id == order["id"])
+            .values(
+                billing_status=status,
+                quoted_credits=sum(int(row["quoted_credits"]) for row in rows),
+                captured_credits=captured,
+                released_credits=released,
+                token_summary=_dump_json(token_summary),
+            ),
+        )
+
     @staticmethod
     def _settlement_replay(
         current: dict[str, Any],
@@ -571,6 +1048,8 @@ class UsageService:
             "quoted_credits": int(order["quoted_credits"]),
             "held_credits": int(order["held_credits"]),
             "captured_credits": int(order["captured_credits"]),
+            "released_credits": int(order["released_credits"]),
+            "reconciling_credits": int(order["reconciling_credits"]),
             "supplier_reference": order["supplier_reference"],
             "supplier_evidence": supplier_evidence,
             "billability": str(order["billability"] or "unknown"),
@@ -584,6 +1063,144 @@ class UsageService:
         return _billing_mode(request_snapshot.get("billing_mode", "shadow"))
 
 
+def _normalize_reserve_model_call(command: ReserveModelCall) -> ReserveModelCall:
+    values = {
+        name: str(getattr(command, name) or "").strip()
+        for name in (
+            "usage_order_id",
+            "item_key",
+            "provider_id",
+            "model_key",
+            "capability",
+        )
+    }
+    if not all(values.values()):
+        raise ValueError("model reservation identity fields must be non-empty")
+    if any(
+        not isinstance(value, int) or value < 0
+        for value in (command.input_tokens, command.max_output_tokens)
+    ):
+        raise ValueError("model reservation token counts must be non-negative")
+    return ReserveModelCall(
+        **values,
+        parameters=json.loads(_dump_json(dict(command.parameters))),
+        input_tokens=command.input_tokens,
+        max_output_tokens=command.max_output_tokens,
+    )
+
+
+def _normalize_settle_model_call(command: SettleModelCall) -> SettleModelCall:
+    usage_order_id = str(command.usage_order_id or "").strip()
+    item_key = str(command.item_key or "").strip()
+    supplier_reference = str(command.supplier_reference or "").strip()
+    if not usage_order_id or not item_key:
+        raise ValueError("model settlement identity fields must be non-empty")
+    if command.billability not in _BILLABILITY_VALUES:
+        raise ValueError("unsupported supplier billability")
+    if any(
+        not isinstance(value, int) or value < 0
+        for value in (command.actual_input_tokens, command.actual_output_tokens)
+    ):
+        raise ValueError("model settlement token counts must be non-negative")
+    evidence = json.loads(_dump_json(dict(command.evidence)))
+    if command.billability == "billable" and (
+        not supplier_reference or not evidence
+    ):
+        raise ValueError(
+            "billable settlement requires supplier reference and evidence",
+        )
+    return SettleModelCall(
+        usage_order_id=usage_order_id,
+        item_key=item_key,
+        supplier_reference=supplier_reference,
+        billability=command.billability,
+        evidence=evidence,
+        actual_input_tokens=command.actual_input_tokens,
+        actual_output_tokens=command.actual_output_tokens,
+    )
+
+
+def _item_business_key(usage_order_id: str, item_key: str) -> str:
+    return f"open-api-item:{usage_order_id}:{item_key}"
+
+
+def _reservation_snapshot(
+    order: Mapping[str, Any],
+    command: ReserveModelCall,
+) -> dict[str, Any]:
+    return {
+        "source_type": str(order["source_type"] or "open_api"),
+        "source_id": str(order["source_id"] or ""),
+        "item_key": command.item_key,
+        "catalog_id": str(order["catalog_id"]),
+        "reservation": {
+            "provider_id": command.provider_id,
+            "model_key": command.model_key,
+            "capability": command.capability,
+            "parameters": dict(command.parameters),
+            "input_tokens": command.input_tokens,
+            "max_output_tokens": command.max_output_tokens,
+        },
+    }
+
+
+def _item_parameters(item: Mapping[str, Any]) -> Mapping[str, Any]:
+    snapshot = json.loads(str(item["usage_snapshot_json"]) or "{}")
+    parameters = snapshot.get("reservation", {}).get("parameters", {})
+    if not isinstance(parameters, Mapping):
+        raise UsageOrderStateError("stored model item parameters are invalid")
+    return parameters
+
+
+def _reserved_item(item: Mapping[str, Any]) -> ReservedUsageItem:
+    return ReservedUsageItem(
+        usage_order_id=str(item["usage_order_id"]),
+        item_key=str(item["item_key"]),
+        quoted_credits=int(item["quoted_credits"]),
+        status=str(item["status"]),
+    )
+
+
+def _usage_item_result(item: Mapping[str, Any]) -> UsageItemResult:
+    quoted = int(item["quoted_credits"])
+    captured = int(item["charged_credits"])
+    status = str(item["status"])
+    return UsageItemResult(
+        usage_order_id=str(item["usage_order_id"]),
+        item_key=str(item["item_key"]),
+        status=status,
+        quoted_credits=quoted,
+        captured_credits=captured,
+        released_credits=(
+            quoted - captured if status in {"captured", "released"} else 0
+        ),
+        reconciling_credits=quoted if status == "reconciling" else 0,
+    )
+
+
+def _decode_usage_item(item: Mapping[str, Any]) -> dict[str, Any]:
+    result = _usage_item_result(item)
+    return {
+        "id": str(item["id"]),
+        "usage_order_id": result.usage_order_id,
+        "item_key": result.item_key,
+        "status": result.status,
+        "quoted_credits": result.quoted_credits,
+        "captured_credits": result.captured_credits,
+        "released_credits": result.released_credits,
+        "reconciling_credits": result.reconciling_credits,
+        "billability": str(item["billability"]),
+    }
+
+
+def _token_summary(items: list[Mapping[str, Any]]) -> dict[str, Any]:
+    return {
+        "input_tokens": sum(int(item["input_tokens"]) for item in items),
+        "output_tokens": sum(int(item["output_tokens"]) for item in items),
+        "model_calls": len(items),
+    }
+
+
 def _billing_mode(mode: str | None) -> BillingMode:
     value = (
         mode
@@ -593,7 +1210,7 @@ def _billing_mode(mode: str | None) -> BillingMode:
     normalized = value.strip().lower()
     if normalized not in _BILLING_MODES:
         raise ValueError(
-            "DCLAW_BILLING_MODE must be one of off, shadow, enforced",
+            "DCLAW_BILLING_MODE must be one of off, shadow, observe, enforced",
         )
     return normalized  # type: ignore[return-value]
 

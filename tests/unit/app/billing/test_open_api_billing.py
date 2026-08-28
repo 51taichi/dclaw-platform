@@ -21,6 +21,14 @@ from qwenpaw.app.billing.pricing import (
     PriceRule,
     QuoteRequest,
 )
+from qwenpaw.app.billing.models import LedgerTransaction
+from qwenpaw.app.billing.usage import (
+    InsufficientUsageCreditsError,
+    ReserveModelCall,
+    SettleModelCall,
+    UsageOrderConflictError,
+    UsageService,
+)
 from qwenpaw.app.storage.engine import create_engine_from_settings
 from qwenpaw.app.storage.repos.billing_repo import BillingRepository
 from qwenpaw.app.storage.repos.open_api_repo import SqlAlchemyOpenApiRepository
@@ -65,6 +73,7 @@ def coordinator(engine):
                     capability="text",
                     unit_type="tokens",
                     input_credits_per_1k=1,
+                    output_credits_per_1k=1,
                 ),
             ),
         ),
@@ -115,6 +124,7 @@ def _command(
     key: str | None = "request-1",
     message: str = "first message",
     mode: str = "shadow",
+    budget_credits: int = 0,
     payload: dict | None = None,
 ) -> OpenApiBillingCommand:
     return OpenApiBillingCommand(
@@ -128,6 +138,7 @@ def _command(
         payload=payload or {"message": message, "metadata": {"a": 1}},
         idempotency_key=key,
         mode=mode,
+        budget_credits=budget_credits,
     )
 
 
@@ -392,3 +403,304 @@ def test_replay_preserves_persisted_wallet_catalog_and_mode(
     assert replay.bound_user_id == first.bound_user_id
     assert replay.catalog_version == first.catalog_version
     assert replay.mode == "shadow"
+
+
+def _reserve(
+    session,
+    item_key: str,
+    *,
+    max_output_tokens: int = 1000,
+    capability: str = "text",
+    tier: str = "standard",
+) -> ReserveModelCall:
+    return ReserveModelCall(
+        usage_order_id=session.usage_order_id,
+        item_key=item_key,
+        provider_id="provider",
+        model_key="model",
+        capability=capability,
+        parameters={"tier": tier},
+        input_tokens=1000,
+        max_output_tokens=max_output_tokens,
+    )
+
+
+def _settle(
+    session,
+    item_key: str,
+    billability: str,
+    *,
+    input_tokens: int = 1000,
+    output_tokens: int = 0,
+) -> SettleModelCall:
+    return SettleModelCall(
+        usage_order_id=session.usage_order_id,
+        item_key=item_key,
+        supplier_reference=f"supplier-{item_key}",
+        billability=billability,
+        evidence={"usage": {"input_tokens": input_tokens}},
+        actual_input_tokens=input_tokens,
+        actual_output_tokens=output_tokens,
+    )
+
+
+def _fund(coordinator, session, credits: int) -> None:
+    coordinator.repository.grant(
+        session.wallet_id,
+        credits=credits,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key=f"fund-{session.invocation_id}",
+    )
+
+
+def test_model_items_incrementally_hold_then_project_mixed_settlement(
+    coordinator,
+):
+    session = coordinator.begin_invocation(_command(mode="enforced"))
+    _fund(coordinator, session, 20)
+    service = UsageService(coordinator.repository, coordinator.pricing)
+
+    first = service.reserve_model_call(_reserve(session, "call-1"))
+    second = service.reserve_model_call(_reserve(session, "call-2"))
+    third = service.reserve_model_call(_reserve(session, "call-3"))
+
+    assert first.usage_order_id == second.usage_order_id == third.usage_order_id
+    assert coordinator.repository.balance(session.wallet_id).held == 6
+    assert len(service.list_items(session.usage_order_id)) == 3
+
+    captured = service.settle_model_call(
+        _settle(session, "call-1", "billable", output_tokens=0),
+    )
+    released = service.settle_model_call(
+        _settle(session, "call-2", "not_billable"),
+    )
+    reconciling = service.settle_model_call(
+        _settle(session, "call-3", "unknown"),
+    )
+
+    assert captured.captured_credits == 1
+    assert released.released_credits == 2
+    assert reconciling.status == "reconciling"
+    order = service.get_order(session.usage_order_id)
+    assert order["captured_credits"] == 1
+    assert order["released_credits"] == 3
+    assert order["reconciling_credits"] == 2
+    assert coordinator.repository.balance(session.wallet_id).held == 2
+
+
+def test_reservation_is_a_supplier_preflight_and_rejects_insufficient_increment(
+    coordinator,
+):
+    session = coordinator.begin_invocation(_command(mode="enforced"))
+    _fund(coordinator, session, 2)
+    service = UsageService(coordinator.repository, coordinator.pricing)
+    supplier_calls: list[str] = []
+
+    service.reserve_model_call(_reserve(session, "call-1"))
+    with pytest.raises(InsufficientUsageCreditsError):
+        service.reserve_model_call(_reserve(session, "call-2"))
+
+    assert supplier_calls == []
+    assert service.list_items(session.usage_order_id)[0]["status"] == "held"
+
+
+def test_model_item_replay_is_idempotent_and_payload_drift_conflicts(
+    coordinator,
+):
+    session = coordinator.begin_invocation(_command(mode="enforced"))
+    _fund(coordinator, session, 4)
+    service = UsageService(coordinator.repository, coordinator.pricing)
+
+    first = service.reserve_model_call(_reserve(session, "call-1"))
+    replay = service.reserve_model_call(_reserve(session, "call-1"))
+    assert replay == first
+    with pytest.raises(UsageOrderConflictError):
+        service.reserve_model_call(
+            _reserve(session, "call-1", max_output_tokens=2000),
+        )
+
+    settled = service.settle_model_call(_settle(session, "call-1", "billable"))
+    assert service.settle_model_call(
+        _settle(session, "call-1", "billable"),
+    ) == settled
+    with pytest.raises(UsageOrderConflictError):
+        service.settle_model_call(
+            _settle(session, "call-1", "not_billable"),
+        )
+
+
+def test_invocation_budget_rejects_the_next_model_reservation(
+    coordinator,
+):
+    session = coordinator.begin_invocation(
+        _command(mode="enforced", budget_credits=2),
+    )
+    _fund(coordinator, session, 20)
+    service = UsageService(coordinator.repository, coordinator.pricing)
+
+    service.reserve_model_call(_reserve(session, "call-1"))
+    with pytest.raises(InsufficientUsageCreditsError) as raised:
+        service.reserve_model_call(_reserve(session, "call-2"))
+
+    assert raised.value.required == 2
+    assert raised.value.available == 0
+
+
+def test_model_call_uses_the_catalog_locked_by_its_invocation(
+    coordinator,
+):
+    session = coordinator.begin_invocation(_command(mode="enforced"))
+    _fund(coordinator, session, 20)
+    coordinator.pricing.publish(
+        PriceCatalogDraft(
+            version="later-price",
+            effective_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+            rules=(
+                PriceRule(
+                    id="later-text",
+                    provider_id="provider",
+                    model_key="model",
+                    capability="text",
+                    unit_type="tokens",
+                    input_credits_per_1k=9,
+                    output_credits_per_1k=9,
+                ),
+            ),
+        ),
+    )
+
+    held = UsageService(
+        coordinator.repository,
+        coordinator.pricing,
+    ).reserve_model_call(_reserve(session, "call-1"))
+
+    assert held.quoted_credits == 2
+
+
+def test_trial_lot_fails_closed_for_disallowed_model_tier(coordinator):
+    session = coordinator.begin_invocation(_command(mode="enforced"))
+    coordinator.repository.append_transaction(
+        LedgerTransaction(
+            wallet_id=session.wallet_id,
+            event_type="promotion_grant",
+            credits=10,
+            business_type="signup_trial",
+            business_key="trial-model-tier",
+            idempotency_key="trial-model-tier",
+            credit_type="promotional",
+            expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+            metadata={
+                "grant_policy": "signup_trial",
+                "allowed_capabilities": ["text"],
+                "denied_capabilities": ["high_cost"],
+            },
+        ),
+    )
+
+    with pytest.raises(InsufficientUsageCreditsError):
+        UsageService(
+            coordinator.repository,
+            coordinator.pricing,
+        ).reserve_model_call(_reserve(session, "call-1", tier="high_cost"))
+
+    assert coordinator.repository.balance(session.wallet_id).available == 10
+    assert coordinator.repository.balance(session.wallet_id).held == 0
+
+
+def test_observe_mode_persists_item_without_mutating_wallet(coordinator):
+    session = coordinator.begin_invocation(_command(mode="observe"))
+    _fund(coordinator, session, 10)
+    service = UsageService(coordinator.repository, coordinator.pricing)
+
+    service.reserve_model_call(_reserve(session, "call-1"))
+    service.settle_model_call(_settle(session, "call-1", "billable"))
+
+    assert coordinator.repository.balance(session.wallet_id).available == 10
+    assert coordinator.repository.balance(session.wallet_id).held == 0
+
+
+def test_billable_zero_actual_usage_releases_its_entire_hold(coordinator):
+    session = coordinator.begin_invocation(_command(mode="enforced"))
+    _fund(coordinator, session, 10)
+    service = UsageService(coordinator.repository, coordinator.pricing)
+    service.reserve_model_call(_reserve(session, "call-1"))
+
+    settled = service.settle_model_call(
+        _settle(
+            session,
+            "call-1",
+            "billable",
+            input_tokens=0,
+            output_tokens=0,
+        ),
+    )
+
+    assert settled.status == "captured"
+    assert settled.captured_credits == 0
+    assert settled.released_credits == 2
+    assert coordinator.repository.balance(session.wallet_id).held == 0
+
+
+def test_reconciling_item_later_settles_when_supplier_evidence_arrives(
+    coordinator,
+):
+    session = coordinator.begin_invocation(_command(mode="enforced"))
+    _fund(coordinator, session, 10)
+    service = UsageService(coordinator.repository, coordinator.pricing)
+    service.reserve_model_call(_reserve(session, "call-1"))
+    service.settle_model_call(_settle(session, "call-1", "unknown"))
+
+    resolved = service.settle_model_call(
+        _settle(session, "call-1", "billable", output_tokens=0),
+    )
+
+    assert resolved.status == "captured"
+    assert resolved.captured_credits == 1
+    assert coordinator.repository.balance(session.wallet_id).held == 0
+
+
+def test_trial_lot_without_explicit_allowed_tiers_fails_closed(coordinator):
+    session = coordinator.begin_invocation(_command(mode="enforced"))
+    coordinator.repository.append_transaction(
+        LedgerTransaction(
+            wallet_id=session.wallet_id,
+            event_type="promotion_grant",
+            credits=10,
+            business_type="signup_trial",
+            business_key="trial-no-tier-policy",
+            idempotency_key="trial-no-tier-policy",
+            credit_type="promotional",
+            expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+            metadata={
+                "grant_policy": "signup_trial",
+                "allowed_capabilities": ["text"],
+            },
+        ),
+    )
+
+    with pytest.raises(InsufficientUsageCreditsError):
+        UsageService(
+            coordinator.repository,
+            coordinator.pricing,
+        ).reserve_model_call(_reserve(session, "call-1", tier="standard"))
+
+
+def test_sqlite_concurrent_same_model_item_reservation_replays_once(
+    coordinator,
+):
+    session = coordinator.begin_invocation(_command(mode="enforced"))
+    _fund(coordinator, session, 10)
+    service = UsageService(coordinator.repository, coordinator.pricing)
+    start = Barrier(2)
+
+    def reserve_once():
+        start.wait()
+        return service.reserve_model_call(_reserve(session, "call-1"))
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first, second = list(pool.map(lambda _index: reserve_once(), range(2)))
+
+    assert first == second
+    assert len(service.list_items(session.usage_order_id)) == 1
+    assert coordinator.repository.balance(session.wallet_id).held == 2
