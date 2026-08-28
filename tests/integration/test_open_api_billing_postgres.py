@@ -35,6 +35,7 @@ from qwenpaw.app.billing.pricing import (
     PriceRule,
 )
 from qwenpaw.app.billing.reporting import (
+    BillingReportFilters,
     BillingReportingService,
     ReconciliationResolution,
 )
@@ -109,6 +110,13 @@ def test_postgresql_reporting_schema_upgrades_existing_database(
         "billing_reconciliation_audits",
         "billing_rollout_settings",
     } <= tables
+    invocation_indexes = {
+        index["name"]
+        for index in inspect(postgres_open_api_engine).get_indexes(
+            "open_api_invocations",
+        )
+    }
+    assert "idx_open_api_invocations_billing_usage_order" in invocation_indexes
 
 
 def _coordinator(engine, identity: str, *, publish_catalog: bool = True):
@@ -993,6 +1001,12 @@ def test_postgresql_legacy_bridge_schema_adds_execution_state(
                 "DROP COLUMN execution_outcome",
             ),
         )
+        conn.execute(
+            text(
+                "ALTER TABLE billing_usage_items "
+                "DROP COLUMN reconciliation_id",
+            ),
+        )
         for column in (
             "execution_owner_token",
             "execution_claimed_at",
@@ -1032,7 +1046,14 @@ def test_postgresql_legacy_bridge_schema_adds_execution_state(
         column["name"]
         for column in inspector.get_columns("billing_usage_items")
     }
-    assert "execution_outcome" in item_columns
+    assert {"execution_outcome", "reconciliation_id"} <= item_columns
+    invocation_indexes = {
+        index["name"]
+        for index in inspect(postgres_open_api_engine).get_indexes(
+            "open_api_invocations",
+        )
+    }
+    assert "idx_open_api_invocations_billing_usage_order" in invocation_indexes
     with postgres_open_api_engine.connect() as conn:
         assert (
             conn.scalar(
@@ -1217,11 +1238,14 @@ def test_postgresql_admin_reconciliation_same_key_is_one_audited_capture(
             execution_fence=execution_fence,
         ),
     )
-    item_id = usage.list_items(session.usage_order_id)[0]["id"]
     reporting = BillingReportingService(
         coordinator.repository,
         coordinator.pricing,
     )
+    reconciliation_id = reporting.list_reconciliation(
+        filters=BillingReportFilters(),
+        limit=10,
+    )["items"][0]["reconciliation_id"]
     resolution = ReconciliationResolution(
         idempotency_key="admin-reconciliation-resolution",
         billability="billable",
@@ -1234,7 +1258,7 @@ def test_postgresql_admin_reconciliation_same_key_is_one_audited_capture(
     def resolve():
         start.wait()
         return reporting.resolve_reconciliation(
-            item_id,
+            reconciliation_id,
             actor_id="admin-postgres",
             resolution=resolution,
         )
@@ -1268,6 +1292,15 @@ def test_postgresql_admin_reconciliation_same_key_is_one_audited_capture(
                 ),
             )
     assert coordinator.repository.balance(session.wallet_id).held == 0
+    today = datetime.now(timezone.utc).date()
+    summary = reporting.open_api_summary(
+        f"bound-user-{identity}",
+        date_from=today - timedelta(days=1),
+        date_to=today + timedelta(days=1),
+    )
+    assert summary["totals"]["orders"] == 1
+    assert summary["totals"]["model_calls"] == 1
+    assert summary["totals"]["actual_debited_credits"] == 1
 
 
 @pytest.mark.integration

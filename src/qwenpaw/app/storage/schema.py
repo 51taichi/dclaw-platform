@@ -24,6 +24,7 @@ from sqlalchemy import (
     select,
     text,
     true,
+    update,
 )
 from sqlalchemy.engine import Engine
 
@@ -740,6 +741,7 @@ billing_usage_items = Table(
     ),
     Column("price_rule_id", String, ForeignKey("billing_price_rules.id")),
     Column("item_key", String),
+    Column("reconciliation_id", String),
     Column("status", String, nullable=False, server_default="quoted"),
     Column("provider_id", String, nullable=False),
     Column("model_key", String, nullable=False),
@@ -931,6 +933,10 @@ Index(
     open_api_invocations.c.created_at.desc(),
 )
 Index(
+    "idx_open_api_invocations_billing_usage_order",
+    open_api_invocations.c.billing_usage_order_id,
+)
+Index(
     "idx_knowledge_docs_scope_owner_updated",
     knowledge_docs.c.scope,
     knowledge_docs.c.owner_user_id,
@@ -1032,6 +1038,11 @@ Index(
     billing_usage_orders.c.supplier_reference,
 )
 Index("idx_billing_usage_items_order", billing_usage_items.c.usage_order_id)
+Index(
+    "uq_billing_usage_items_reconciliation_id",
+    billing_usage_items.c.reconciliation_id,
+    unique=True,
+)
 Index(
     "uq_billing_usage_items_order_item_key",
     billing_usage_items.c.usage_order_id,
@@ -1294,6 +1305,10 @@ def _ensure_open_api_billing_columns(engine: Engine) -> None:
             "item_key": (
                 "ALTER TABLE billing_usage_items ADD COLUMN item_key VARCHAR"
             ),
+            "reconciliation_id": (
+                "ALTER TABLE billing_usage_items ADD COLUMN "
+                "reconciliation_id VARCHAR"
+            ),
             "billability": (
                 "ALTER TABLE billing_usage_items ADD COLUMN billability "
                 "VARCHAR NOT NULL DEFAULT 'unknown'"
@@ -1342,6 +1357,8 @@ def _ensure_open_api_billing_columns(engine: Engine) -> None:
     if execution_outcome_added:
         _backfill_legacy_execution_outcomes(engine)
 
+    _backfill_reconciliation_ids(engine)
+
     _validate_open_api_billing_history(engine)
     if (
         engine.dialect.name == "sqlite"
@@ -1370,6 +1387,24 @@ def _backfill_legacy_execution_outcomes(engine: Engine) -> None:
                 ") THEN 'succeeded' ELSE 'pending' END",
             ),
         )
+
+
+def _backfill_reconciliation_ids(engine: Engine) -> None:
+    """Give legacy unresolved items an opaque durable operator handle."""
+    with engine.begin() as conn:
+        item_ids = conn.execute(
+            select(billing_usage_items.c.id).where(
+                billing_usage_items.c.status == "reconciling",
+                billing_usage_items.c.billability == "unknown",
+                billing_usage_items.c.reconciliation_id.is_(None),
+            ),
+        ).scalars()
+        for item_id in item_ids:
+            conn.execute(
+                update(billing_usage_items)
+                .where(billing_usage_items.c.id == item_id)
+                .values(reconciliation_id=str(uuid4())),
+            )
 
 
 def _validate_open_api_billing_history(engine: Engine) -> None:
@@ -1558,6 +1593,9 @@ def _ensure_open_api_billing_indexes(engine: Engine) -> None:
     statements = (
         "CREATE INDEX IF NOT EXISTS idx_open_api_invocations_publication_created "  # noqa: E501
         "ON open_api_invocations (publication_id, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS "
+        "idx_open_api_invocations_billing_usage_order "
+        "ON open_api_invocations (billing_usage_order_id)",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_usage_orders_business "
         "ON billing_usage_orders (business_key)",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_usage_orders_source "
@@ -1568,6 +1606,9 @@ def _ensure_open_api_billing_indexes(engine: Engine) -> None:
         "ON billing_usage_orders (supplier_reference)",
         "CREATE INDEX IF NOT EXISTS idx_billing_usage_items_order "
         "ON billing_usage_items (usage_order_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS "
+        "uq_billing_usage_items_reconciliation_id "
+        "ON billing_usage_items (reconciliation_id)",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_usage_items_order_item_key "  # noqa: E501
         "ON billing_usage_items (usage_order_id, item_key)",
     )

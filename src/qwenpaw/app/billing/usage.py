@@ -717,6 +717,11 @@ class UsageService:
                 .where(billing_usage_items.c.id == item["id"])
                 .values(
                     status=status,
+                    reconciliation_id=(
+                        str(item["reconciliation_id"] or uuid4())
+                        if normalized.billability == "unknown"
+                        else item["reconciliation_id"]
+                    ),
                     supplier_reference=normalized.supplier_reference or None,
                     input_tokens=normalized.actual_input_tokens,
                     output_tokens=normalized.actual_output_tokens,

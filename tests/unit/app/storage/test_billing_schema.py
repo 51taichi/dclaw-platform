@@ -292,12 +292,18 @@ def test_postgresql_bigint_upgrade_only_targets_existing_billing_amounts():
 def test_postgresql_billing_upgrade_uses_typed_timestamps_and_scoped_guards(
     monkeypatch,
 ):
+    class RecordingResult:
+        @staticmethod
+        def scalars():
+            return ()
+
     class RecordingConnection:
         def __init__(self):
             self.statements: list[str] = []
 
         def execute(self, statement, *_args):
             self.statements.append(str(statement))
+            return RecordingResult()
 
         def scalar(self, _statement):
             return None

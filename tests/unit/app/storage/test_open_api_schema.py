@@ -115,7 +115,15 @@ def test_open_api_billing_columns_exist(tmp_path):
             column["name"]
             for column in inspect(engine).get_columns("billing_usage_items")
         }
-        assert "execution_outcome" in items
+        assert {"execution_outcome", "reconciliation_id"} <= items
+        invocation_indexes = {
+            index["name"]
+            for index in inspect(engine).get_indexes("open_api_invocations")
+        }
+        assert (
+            "idx_open_api_invocations_billing_usage_order"
+            in invocation_indexes
+        )
 
         reflected = {
             column["name"]: column
@@ -327,6 +335,7 @@ def test_open_api_billing_upgrade_is_idempotent_and_preserves_history(
         } <= order_columns
         assert {
             "item_key",
+            "reconciliation_id",
             "billability",
             "quoted_credits",
             "price_snapshot_json",
@@ -347,6 +356,12 @@ def test_open_api_billing_upgrade_is_idempotent_and_preserves_history(
         }
         assert ("source_type", "source_id") in order_uniques
         assert ("usage_order_id", "item_key") in item_uniques
+        assert ("reconciliation_id",) in item_uniques
+        invocation_indexes = {
+            tuple(index["column_names"])
+            for index in inspector.get_indexes("open_api_invocations")
+        }
+        assert ("billing_usage_order_id",) in invocation_indexes
         assert {"billing_usage_orders"} <= {
             foreign_key["referred_table"]
             for foreign_key in inspector.get_foreign_keys(
@@ -438,6 +453,19 @@ def test_open_api_billing_upgrade_is_idempotent_and_preserves_history(
                 "historic-recon-success": "succeeded",
                 "historic-released": "failed",
             }
+            reconciliation_ids = (
+                conn.execute(
+                    text(
+                        "SELECT reconciliation_id FROM billing_usage_items "
+                        "WHERE status = 'reconciling' ORDER BY id",
+                    ),
+                )
+                .scalars()
+                .all()
+            )
+            assert len(reconciliation_ids) == 2
+            assert all(reconciliation_ids)
+            assert len(set(reconciliation_ids)) == 2
 
             _insert_invocation_dependencies(conn)
             with pytest.raises(IntegrityError):

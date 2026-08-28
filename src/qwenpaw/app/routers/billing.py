@@ -2,7 +2,7 @@
 """Authenticated user and trusted-admin credit accounting APIs."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 import os
 from typing import Any, Literal
 
@@ -333,17 +333,14 @@ def get_user_usage_order(order_id: str, request: Request) -> dict[str, Any]:
 @user_router.get("/open-api-summary")
 def get_user_open_api_summary(
     request: Request,
-    timezone_name: str = Query(
-        default="UTC",
-        alias="timezone",
-        min_length=1,
-        max_length=64,
-    ),
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> dict[str, Any]:
     try:
         return get_billing_reporting_service().open_api_summary(
             _authenticated_owner(request),
-            timezone_name=timezone_name,
+            date_from=date_from,
+            date_to=date_to,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -490,9 +487,9 @@ def list_admin_reconciliation(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@admin_router.post("/reconciliation/{item_id}/resolve")
+@admin_router.post("/reconciliation/{reconciliation_id}/resolve")
 def resolve_admin_reconciliation(
-    item_id: str,
+    reconciliation_id: str,
     payload: ReconciliationResolutionBody,
     request: Request,
     idempotency_key: str = Header(
@@ -503,7 +500,7 @@ def resolve_admin_reconciliation(
 ) -> dict[str, Any]:
     try:
         return get_billing_reporting_service().resolve_reconciliation(
-            item_id,
+            reconciliation_id,
             actor_id=_authenticated_owner(request),
             resolution=ReconciliationResolution(
                 idempotency_key=idempotency_key,
@@ -529,6 +526,46 @@ def resolve_admin_reconciliation(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@admin_router.get("/reconciliation-audits")
+def list_admin_reconciliation_audits(
+    actor_id: str | None = Query(default=None, min_length=1, max_length=255),
+    reconciliation_id: str
+    | None = Query(default=None, min_length=1, max_length=255),
+    order_id: str | None = Query(default=None, min_length=1, max_length=255),
+    outcome: str | None = Query(default=None, min_length=1, max_length=64),
+    idempotency_key: str
+    | None = Query(default=None, min_length=1, max_length=255),
+    started_at: datetime | None = None,
+    ended_at: datetime | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+    cursor: str | None = Query(default=None, max_length=2048),
+) -> dict[str, Any]:
+    try:
+        return get_billing_reporting_service().list_reconciliation_audits(
+            actor_id=actor_id,
+            reconciliation_id=reconciliation_id,
+            order_id=order_id,
+            outcome=outcome,
+            idempotency_key=idempotency_key,
+            started_at=started_at,
+            ended_at=ended_at,
+            limit=limit,
+            cursor=cursor,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@admin_router.get("/reconciliation-audits/{audit_id}")
+def get_admin_reconciliation_audit(audit_id: str) -> dict[str, Any]:
+    result = get_billing_reporting_service().get_reconciliation_audit(
+        audit_id,
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Audit not found")
+    return result
 
 
 @admin_router.get("/rollout")

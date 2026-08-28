@@ -4,15 +4,24 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from hashlib import sha256
 import json
 import os
 from typing import Any, Literal, Mapping
 from uuid import uuid4
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import and_, exists, func, insert, or_, select, update
+from sqlalchemy import (
+    and_,
+    case,
+    exists,
+    func,
+    insert,
+    literal,
+    or_,
+    select,
+    update,
+)
 from sqlalchemy.exc import IntegrityError
 
 from .models import LedgerTransaction
@@ -168,15 +177,12 @@ class BillingReportingService:
         ).limit(limit + 1)
         with self.repository.engine.connect() as conn:
             rows = [dict(row) for row in conn.execute(statement).mappings()]
-            serialized = [
-                self._serialize_order(
-                    conn,
-                    row,
-                    detail=False,
-                    include_internal=owner_user_id is None,
-                )
-                for row in rows[:limit]
-            ]
+            serialized = self._serialize_orders(
+                conn,
+                rows[:limit],
+                detail=False,
+                include_internal=owner_user_id is None,
+            )
         next_cursor = None
         if len(rows) > limit:
             last = rows[limit - 1]
@@ -202,49 +208,148 @@ class BillingReportingService:
             row = conn.execute(statement).mappings().first()
             if row is None:
                 return None
-            return self._serialize_order(
+            return self._serialize_orders(
                 conn,
-                dict(row),
+                [dict(row)],
                 detail=True,
                 include_internal=owner_user_id is None,
-            )
+            )[0]
 
     def open_api_summary(
         self,
         owner_user_id: str,
         *,
-        timezone_name: str = "UTC",
+        date_from: date | None = None,
+        date_to: date | None = None,
     ) -> dict[str, Any]:
-        """Aggregate durable items and ledger debits, never analytics rows."""
-        try:
-            target_timezone = ZoneInfo(timezone_name)
-        except ZoneInfoNotFoundError as exc:
-            raise ValueError("unknown timezone") from exc
-        # Summary is intentionally complete rather than page-derived.
-        with self.repository.engine.connect() as conn:
-            durable = [
-                dict(row)
-                for row in conn.execute(
-                    self._order_statement(
-                        owner_user_id,
-                        BillingReportFilters(),
-                    ).order_by(
-                        billing_usage_orders.c.created_at,
-                        billing_usage_orders.c.id,
+        """Aggregate a bounded UTC financial window in the database."""
+        if (date_from is None) != (date_to is None):
+            raise ValueError("date_from and date_to must be provided together")
+        if date_from is None:
+            date_to = _aware_utc(self._clock()).date() + timedelta(days=1)
+            date_from = date_to - timedelta(days=30)
+        assert date_to is not None
+        if date_from >= date_to:
+            raise ValueError("date_from must be before date_to")
+        if (date_to - date_from).days > 366:
+            raise ValueError("summary window cannot exceed 366 days")
+        started_at = datetime.combine(date_from, time.min, tzinfo=timezone.utc)
+        ended_at = datetime.combine(date_to, time.min, tzinfo=timezone.utc)
+
+        item_totals = (
+            select(
+                billing_usage_items.c.usage_order_id.label("order_id"),
+                func.count().label("model_calls"),
+                func.sum(billing_usage_items.c.input_tokens).label(
+                    "input_tokens",
+                ),
+                func.sum(billing_usage_items.c.output_tokens).label(
+                    "output_tokens",
+                ),
+            )
+            .group_by(billing_usage_items.c.usage_order_id)
+            .subquery("summary_item_totals")
+        )
+        item_business_key = (
+            literal("open-api-item:")
+            + billing_usage_items.c.usage_order_id
+            + literal(":")
+            + billing_usage_items.c.item_key
+        )
+        ledger_totals = (
+            select(
+                billing_usage_items.c.usage_order_id.label("order_id"),
+                func.sum(-billing_ledger_entries.c.credit_delta).label(
+                    "actual_debited_credits",
+                ),
+            )
+            .select_from(
+                billing_usage_items.join(
+                    billing_ledger_entries,
+                    and_(
+                        billing_ledger_entries.c.business_key
+                        == item_business_key,
+                        billing_ledger_entries.c.event_type == "usage_capture",
                     ),
-                ).mappings()
-            ]
-            reports = [
-                self._serialize_order(
-                    conn,
-                    row,
-                    detail=True,
-                    include_internal=False,
-                )
-                for row in durable
+                ),
+            )
+            .group_by(billing_usage_items.c.usage_order_id)
+            .subquery("summary_ledger_totals")
+        )
+        eligible = self._order_statement(
+            owner_user_id,
+            BillingReportFilters(
+                started_at=started_at,
+                ended_at=ended_at,
+            ),
+        ).subquery("summary_orders")
+        day = func.date(eligible.c.created_at).label("day")
+        estimated = or_(
+            eligible.c.request_snapshot_json.like(
+                '%"billing_mode":"shadow"%',
+            ),
+            eligible.c.request_snapshot_json.like(
+                '%"billing_mode": "shadow"%',
+            ),
+            eligible.c.request_snapshot_json.like(
+                '%"billing_mode":"observe"%',
+            ),
+            eligible.c.request_snapshot_json.like(
+                '%"billing_mode": "observe"%',
+            ),
+        )
+        daily_statement = (
+            select(
+                day,
+                func.count(eligible.c.id).label("orders"),
+                func.coalesce(func.sum(item_totals.c.model_calls), 0).label(
+                    "model_calls",
+                ),
+                func.coalesce(func.sum(item_totals.c.input_tokens), 0).label(
+                    "input_tokens",
+                ),
+                func.coalesce(func.sum(item_totals.c.output_tokens), 0).label(
+                    "output_tokens",
+                ),
+                func.coalesce(func.sum(eligible.c.captured_credits), 0).label(
+                    "retail_credits",
+                ),
+                func.coalesce(
+                    func.sum(ledger_totals.c.actual_debited_credits),
+                    0,
+                ).label("actual_debited_credits"),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (estimated, eligible.c.captured_credits),
+                            else_=0,
+                        ),
+                    ),
+                    0,
+                ).label("shadow_estimated_credits"),
+                func.coalesce(
+                    func.sum(eligible.c.reconciling_credits),
+                    0,
+                ).label("reconciling_credits"),
+            )
+            .select_from(
+                eligible.outerjoin(
+                    item_totals,
+                    item_totals.c.order_id == eligible.c.id,
+                ).outerjoin(
+                    ledger_totals,
+                    ledger_totals.c.order_id == eligible.c.id,
+                ),
+            )
+            .group_by(day)
+            .order_by(day)
+        )
+        with self.repository.engine.connect() as conn:
+            daily_rows = [
+                dict(row) for row in conn.execute(daily_statement).mappings()
             ]
         totals = {
-            "orders": len(reports),
+            "orders": 0,
             "model_calls": 0,
             "input_tokens": 0,
             "output_tokens": 0,
@@ -253,43 +358,15 @@ class BillingReportingService:
             "shadow_estimated_credits": 0,
             "reconciling_credits": 0,
         }
-        by_day: dict[str, dict[str, int]] = {}
         by_month: dict[str, dict[str, int]] = {}
-        for report in reports:
-            totals["model_calls"] += report["item_count"]
-            totals["input_tokens"] += report["tokens"]["input"]
-            totals["output_tokens"] += report["tokens"]["output"]
-            totals["retail_credits"] += report["captured_credits"]
-            totals["actual_debited_credits"] += report[
-                "actual_debited_credits"
-            ]
-            totals["reconciling_credits"] += report["reconciling_credits"]
-            if report["is_estimate"]:
-                totals["shadow_estimated_credits"] += report[
-                    "captured_credits"
-                ]
-            day = (
-                datetime.fromisoformat(report["created_at"])
-                .astimezone(
-                    target_timezone,
-                )
-                .date()
-                .isoformat()
-            )
-            bucket = by_day.setdefault(
-                day,
-                {
-                    "orders": 0,
-                    "retail_credits": 0,
-                    "actual_debited_credits": 0,
-                },
-            )
-            bucket["orders"] += 1
-            bucket["retail_credits"] += report["captured_credits"]
-            bucket["actual_debited_credits"] += report[
-                "actual_debited_credits"
-            ]
-            month = day[:7]
+        by_day = []
+        for row in daily_rows:
+            day_value = str(row["day"])
+            values = {name: int(row[name] or 0) for name in totals}
+            for name, value in values.items():
+                totals[name] += value
+            by_day.append({"date": day_value, **values})
+            month = day_value[:7]
             month_bucket = by_month.setdefault(
                 month,
                 {
@@ -298,11 +375,8 @@ class BillingReportingService:
                     "actual_debited_credits": 0,
                 },
             )
-            month_bucket["orders"] += 1
-            month_bucket["retail_credits"] += report["captured_credits"]
-            month_bucket["actual_debited_credits"] += report[
-                "actual_debited_credits"
-            ]
+            for name in month_bucket:
+                month_bucket[name] += values[name]
         wallet = self.repository.get_wallet("user", owner_user_id)
         balance = (
             self.repository.balance(str(wallet["id"]))
@@ -317,12 +391,14 @@ class BillingReportingService:
             os.environ.get("DCLAW_TOP_UP_INSTRUCTIONS", "").strip() or None
         )
         return {
-            "timezone": timezone_name,
+            "window": {
+                "date_from": date_from.isoformat(),
+                "date_to": date_to.isoformat(),
+                "timezone": "UTC",
+                "lifetime": False,
+            },
             "totals": totals,
-            "by_day": [
-                {"date": day, **values}
-                for day, values in sorted(by_day.items())
-            ],
+            "by_day": by_day,
             "by_month": [
                 {"month": month, **values}
                 for month, values in sorted(by_month.items())
@@ -363,6 +439,9 @@ class BillingReportingService:
             select(
                 eligible_orders,
                 billing_usage_items.c.id.label("queue_item_id"),
+                billing_usage_items.c.reconciliation_id.label(
+                    "queue_reconciliation_id",
+                ),
                 billing_usage_items.c.created_at.label("queue_created_at"),
             )
             .select_from(
@@ -402,26 +481,30 @@ class BillingReportingService:
         ).limit(limit + 1)
         with self.repository.engine.connect() as conn:
             rows = [dict(row) for row in conn.execute(statement).mappings()]
+            page_rows = rows[:limit]
+            serialized_orders = self._serialize_orders(
+                conn,
+                page_rows,
+                detail=True,
+                include_internal=True,
+                include_item_internal=True,
+            )
             items = []
-            for row in rows[:limit]:
-                item = (
-                    conn.execute(
-                        select(billing_usage_items).where(
-                            billing_usage_items.c.id == row["queue_item_id"],
-                        ),
-                    )
-                    .mappings()
-                    .one()
+            for row, order in zip(page_rows, serialized_orders):
+                queue_item_id = str(row["queue_item_id"])
+                order_items = order.pop("items")
+                public_item = next(
+                    item
+                    for item in order_items
+                    if item.pop("_internal_id") == queue_item_id
                 )
                 items.append(
                     {
-                        "order": self._serialize_order(
-                            conn,
-                            row,
-                            detail=False,
-                            include_internal=True,
+                        "reconciliation_id": str(
+                            row["queue_reconciliation_id"]
                         ),
-                        "item": _public_item_row(item),
+                        "order": order,
+                        "item": public_item,
                     },
                 )
         next_cursor = None
@@ -436,7 +519,7 @@ class BillingReportingService:
 
     def resolve_reconciliation(
         self,
-        item_id: str,
+        reconciliation_id: str,
         *,
         actor_id: str,
         resolution: ReconciliationResolution,
@@ -445,7 +528,11 @@ class BillingReportingService:
         normalized_actor = str(actor_id).strip()
         if not normalized_actor:
             raise ValueError("admin actor is required")
-        request_hash = _resolution_hash(item_id, normalized_actor, resolution)
+        request_hash = _resolution_hash(
+            reconciliation_id,
+            normalized_actor,
+            resolution,
+        )
         existing = self._resolution_replay(
             resolution.idempotency_key,
             request_hash,
@@ -457,12 +544,16 @@ class BillingReportingService:
         try:
             with self.repository.engine.begin() as conn:
                 initial = conn.execute(
-                    select(billing_usage_items.c.usage_order_id).where(
-                        billing_usage_items.c.id == item_id,
+                    select(
+                        billing_usage_items.c.id,
+                        billing_usage_items.c.usage_order_id,
+                    ).where(
+                        billing_usage_items.c.reconciliation_id
+                        == reconciliation_id,
                     ),
                 ).first()
                 if initial is None:
-                    raise ReconciliationNotFoundError(item_id)
+                    raise ReconciliationNotFoundError(reconciliation_id)
                 order = (
                     conn.execute(
                         select(billing_usage_orders)
@@ -504,12 +595,15 @@ class BillingReportingService:
                         raise ReconciliationConflictError(
                             resolution.idempotency_key,
                         )
-                    return _public_item_row(winner)
+                    return _audit_row(
+                        concurrent_audit,
+                        reconciliation_id=str(winner["reconciliation_id"]),
+                    )
                 item = (
                     conn.execute(
                         select(billing_usage_items)
                         .where(
-                            billing_usage_items.c.id == item_id,
+                            billing_usage_items.c.id == initial.id,
                             billing_usage_items.c.usage_order_id
                             == initial.usage_order_id,
                         )
@@ -527,7 +621,7 @@ class BillingReportingService:
                         or str(item["billability"]) != "unknown"
                     )
                 ):
-                    raise ReconciliationNotFoundError(item_id)
+                    raise ReconciliationNotFoundError(reconciliation_id)
                 charged_credits = self._resolution_credits(
                     order,
                     item,
@@ -574,7 +668,7 @@ class BillingReportingService:
                 conn.execute(
                     insert(billing_reconciliation_audits).values(
                         id=audit_id,
-                        usage_item_id=item_id,
+                        usage_item_id=str(item["id"]),
                         usage_order_id=str(order["id"]),
                         idempotency_key=resolution.idempotency_key.strip(),
                         request_sha256=request_hash,
@@ -592,7 +686,7 @@ class BillingReportingService:
                 conn.execute(
                     update(billing_usage_items)
                     .where(
-                        billing_usage_items.c.id == item_id,
+                        billing_usage_items.c.id == item["id"],
                         billing_usage_items.c.status == "reconciling",
                         billing_usage_items.c.billability == "unknown",
                     )
@@ -624,10 +718,157 @@ class BillingReportingService:
             if replay is not None:
                 return replay
             raise
-        result = self._public_item(item_id)
+        result = self.get_reconciliation_audit(audit_id)
         if result is None:
-            raise ReconciliationNotFoundError(item_id)
+            raise ReconciliationNotFoundError(reconciliation_id)
         return result
+
+    def list_reconciliation_audits(
+        self,
+        *,
+        actor_id: str | None = None,
+        reconciliation_id: str | None = None,
+        order_id: str | None = None,
+        outcome: str | None = None,
+        idempotency_key: str | None = None,
+        started_at: datetime | None = None,
+        ended_at: datetime | None = None,
+        limit: int,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        """Page immutable operator decisions without financial evidence."""
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        for value in (started_at, ended_at):
+            if value is not None and (
+                value.tzinfo is None or value.utcoffset() is None
+            ):
+                raise ValueError("audit dates must include a timezone")
+        if started_at and ended_at and started_at >= ended_at:
+            raise ValueError("started_at must be before ended_at")
+        scope_payload = {
+            "actor_id": actor_id,
+            "reconciliation_id": reconciliation_id,
+            "order_id": order_id,
+            "outcome": outcome,
+            "idempotency_key": idempotency_key,
+            "started_at": started_at.isoformat() if started_at else None,
+            "ended_at": ended_at.isoformat() if ended_at else None,
+        }
+        scope = (
+            "audit:"
+            + sha256(
+                _dump_json(scope_payload).encode("utf-8"),
+            ).hexdigest()
+        )
+        anchor = _decode_cursor(cursor, scope) if cursor else None
+        statement = select(
+            billing_reconciliation_audits,
+            billing_usage_items.c.reconciliation_id,
+        ).join(
+            billing_usage_items,
+            billing_reconciliation_audits.c.usage_item_id
+            == billing_usage_items.c.id,
+        )
+        predicates = []
+        if actor_id is not None:
+            predicates.append(
+                billing_reconciliation_audits.c.actor_id == actor_id,
+            )
+        if reconciliation_id is not None:
+            predicates.append(
+                billing_usage_items.c.reconciliation_id == reconciliation_id,
+            )
+        if order_id is not None:
+            predicates.append(
+                billing_reconciliation_audits.c.usage_order_id == order_id,
+            )
+        if outcome is not None:
+            predicates.append(
+                billing_reconciliation_audits.c.resolved_status == outcome,
+            )
+        if idempotency_key is not None:
+            predicates.append(
+                billing_reconciliation_audits.c.idempotency_key
+                == idempotency_key,
+            )
+        if started_at is not None:
+            predicates.append(
+                billing_reconciliation_audits.c.created_at
+                >= started_at.astimezone(timezone.utc),
+            )
+        if ended_at is not None:
+            predicates.append(
+                billing_reconciliation_audits.c.created_at
+                < ended_at.astimezone(timezone.utc),
+            )
+        if anchor is not None:
+            created_at, audit_id = anchor
+            predicates.append(
+                or_(
+                    billing_reconciliation_audits.c.created_at < created_at,
+                    and_(
+                        billing_reconciliation_audits.c.created_at
+                        == created_at,
+                        billing_reconciliation_audits.c.id < audit_id,
+                    ),
+                ),
+            )
+        statement = (
+            statement.where(*predicates)
+            .order_by(
+                billing_reconciliation_audits.c.created_at.desc(),
+                billing_reconciliation_audits.c.id.desc(),
+            )
+            .limit(limit + 1)
+        )
+        with self.repository.engine.connect() as conn:
+            rows = [dict(row) for row in conn.execute(statement).mappings()]
+        page = rows[:limit]
+        next_cursor = None
+        if len(rows) > limit:
+            last = page[-1]
+            next_cursor = _encode_cursor(
+                _aware_utc(last["created_at"]),
+                str(last["id"]),
+                scope,
+            )
+        return {
+            "items": [
+                _audit_row(
+                    row,
+                    reconciliation_id=str(row["reconciliation_id"]),
+                )
+                for row in page
+            ],
+            "next_cursor": next_cursor,
+        }
+
+    def get_reconciliation_audit(
+        self,
+        audit_id: str,
+    ) -> dict[str, Any] | None:
+        """Return one safe immutable decision by its opaque audit UUID."""
+        statement = (
+            select(
+                billing_reconciliation_audits,
+                billing_usage_items.c.reconciliation_id,
+            )
+            .join(
+                billing_usage_items,
+                billing_reconciliation_audits.c.usage_item_id
+                == billing_usage_items.c.id,
+            )
+            .where(billing_reconciliation_audits.c.id == audit_id)
+        )
+        with self.repository.engine.connect() as conn:
+            row = conn.execute(statement).mappings().first()
+        if row is None:
+            return None
+        return _audit_row(
+            row,
+            reconciliation_id=str(row["reconciliation_id"]),
+        )
 
     def activate_rollout(self, mode: str, *, actor_id: str) -> dict[str, Any]:
         """Persist mode and CAS the first enforced cutover instant."""
@@ -816,50 +1057,87 @@ class BillingReportingService:
             )
         return statement
 
-    def _serialize_order(
+    def _serialize_orders(
         self,
         conn,
-        row: Mapping[str, Any],
+        rows: list[Mapping[str, Any]],
         *,
         detail: bool,
         include_internal: bool,
-    ) -> dict[str, Any]:
-        item_rows = [
+        include_item_internal: bool = False,
+    ) -> list[dict[str, Any]]:
+        if not rows:
+            return []
+        order_ids = tuple({str(row["id"]) for row in rows})
+        all_items = [
             dict(item)
             for item in conn.execute(
                 select(billing_usage_items)
-                .where(billing_usage_items.c.usage_order_id == row["id"])
+                .where(billing_usage_items.c.usage_order_id.in_(order_ids))
                 .order_by(
+                    billing_usage_items.c.usage_order_id,
                     billing_usage_items.c.created_at,
                     billing_usage_items.c.id,
                 ),
             ).mappings()
         ]
-        business_keys = [
-            _item_business_key(str(row["id"]), str(item["item_key"]))
-            for item in item_rows
-        ]
-        actual_debited = 0
-        if business_keys:
-            actual_debited = int(
-                conn.scalar(
-                    select(
-                        func.coalesce(
-                            func.sum(-billing_ledger_entries.c.credit_delta),
-                            0,
-                        ),
-                    ).where(
-                        billing_ledger_entries.c.wallet_id == row["wallet_id"],
-                        billing_ledger_entries.c.event_type == "usage_capture",
-                        billing_ledger_entries.c.business_key.in_(
-                            business_keys,
-                        ),
+        items_by_order: dict[str, list[dict[str, Any]]] = {}
+        business_to_order: dict[str, str] = {}
+        for item in all_items:
+            order_id = str(item["usage_order_id"])
+            items_by_order.setdefault(order_id, []).append(item)
+            business_to_order[
+                _item_business_key(order_id, str(item["item_key"]))
+            ] = order_id
+        actual_by_order: dict[str, int] = {}
+        if business_to_order:
+            ledger_rows = conn.execute(
+                select(
+                    billing_ledger_entries.c.business_key,
+                    func.sum(
+                        -billing_ledger_entries.c.credit_delta,
+                    ).label("debited"),
+                )
+                .where(
+                    billing_ledger_entries.c.event_type == "usage_capture",
+                    billing_ledger_entries.c.business_key.in_(
+                        tuple(business_to_order),
                     ),
                 )
-                or 0,
+                .group_by(billing_ledger_entries.c.business_key),
+            ).mappings()
+            for ledger in ledger_rows:
+                order_id = business_to_order[str(ledger["business_key"])]
+                actual_by_order[order_id] = actual_by_order.get(
+                    order_id,
+                    0,
+                ) + int(ledger["debited"] or 0)
+        return [
+            self._serialize_prefetched_order(
+                row,
+                items_by_order.get(str(row["id"]), []),
+                actual_by_order.get(str(row["id"]), 0),
+                detail=detail,
+                include_internal=include_internal,
+                include_item_internal=include_item_internal,
             )
-        snapshot = _load_json(row["request_snapshot_json"])
-        mode = str(snapshot.get("billing_mode") or "shadow")
+            for row in rows
+        ]
+
+    @staticmethod
+    def _serialize_prefetched_order(
+        row: Mapping[str, Any],
+        item_rows: list[Mapping[str, Any]],
+        actual_debited: int,
+        *,
+        detail: bool,
+        include_internal: bool,
+        include_item_internal: bool,
+    ) -> dict[str, Any]:
+        mode = str(
+            _load_json(row["request_snapshot_json"]).get("billing_mode")
+            or "shadow"
+        )
         result: dict[str, Any] = {
             "id": str(row["id"]),
             "invocation_id": str(row["invocation_id"]),
@@ -897,7 +1175,15 @@ class BillingReportingService:
                 api_key_id=str(row["api_key_id"]),
             )
         if detail:
-            result["items"] = [_public_item_row(item) for item in item_rows]
+            result["items"] = [
+                _public_item_row(
+                    item,
+                    call_sequence=sequence,
+                    catalog_version=str(row["catalog_version"]),
+                    include_internal=include_item_internal,
+                )
+                for sequence, item in enumerate(item_rows, start=1)
+            ]
         return result
 
     def _resolution_credits(
@@ -944,7 +1230,16 @@ class BillingReportingService:
         with self.repository.engine.connect() as conn:
             row = (
                 conn.execute(
-                    select(billing_reconciliation_audits).where(
+                    select(
+                        billing_reconciliation_audits,
+                        billing_usage_items.c.reconciliation_id,
+                    )
+                    .join(
+                        billing_usage_items,
+                        billing_reconciliation_audits.c.usage_item_id
+                        == billing_usage_items.c.id,
+                    )
+                    .where(
                         billing_reconciliation_audits.c.idempotency_key
                         == key.strip(),
                     ),
@@ -956,51 +1251,65 @@ class BillingReportingService:
             return None
         if str(row["request_sha256"]) != request_hash:
             raise ReconciliationConflictError(key)
-        result = self._public_item(str(row["usage_item_id"]))
-        if result is None:
-            raise ReconciliationConflictError(key)
-        return result
-
-    def _public_item(self, item_id: str) -> dict[str, Any] | None:
-        with self.repository.engine.connect() as conn:
-            row = (
-                conn.execute(
-                    select(billing_usage_items).where(
-                        billing_usage_items.c.id == item_id,
-                    ),
-                )
-                .mappings()
-                .first()
-            )
-        return _public_item_row(row) if row is not None else None
+        return _audit_row(
+            row,
+            reconciliation_id=str(row["reconciliation_id"]),
+        )
 
 
-def _public_item_row(item: Mapping[str, Any]) -> dict[str, Any]:
-    price = _load_json(item["price_snapshot_json"])
-    return {
-        "id": str(item["id"]),
-        "item_key": str(item["item_key"]),
-        "status": str(item["status"]),
-        "billability": str(item["billability"]),
-        "execution_outcome": str(item["execution_outcome"]),
-        "provider_id": str(item["provider_id"]),
-        "model_key": str(item["model_key"]),
-        "capability": str(item["capability"]),
-        "input_tokens": int(item["input_tokens"]),
-        "output_tokens": int(item["output_tokens"]),
-        "quantity": int(item["quantity"]),
-        "quoted_credits": int(item["quoted_credits"]),
-        "charged_credits": int(item["charged_credits"]),
-        "price": {
-            "catalog_version": price.get("catalog_version"),
-            "rule_id": price.get("rule_id"),
-            "quoted_credits": int(
-                price.get("credits", item["quoted_credits"]),
-            ),
-            "unit_breakdown": price.get("unit_breakdown", {}),
+def _public_item_row(
+    item: Mapping[str, Any],
+    *,
+    call_sequence: int,
+    catalog_version: str,
+    include_internal: bool = False,
+) -> dict[str, Any]:
+    result = {
+        "call_sequence": call_sequence,
+        "model": {
+            "provider": str(item["provider_id"]),
+            "id": str(item["model_key"]),
+            "capability": str(item["capability"]),
         },
-        "started_at": _optional_iso(item["started_at"]),
-        "finished_at": _optional_iso(item["finished_at"]),
+        "tokens": {
+            "input": int(item["input_tokens"]),
+            "output": int(item["output_tokens"]),
+        },
+        "credits": {
+            "quoted": int(item["quoted_credits"]),
+            "charged": int(item["charged_credits"]),
+        },
+        "status": str(item["status"]),
+        "catalog_version": catalog_version,
+    }
+    if include_internal:
+        result["_internal_id"] = str(item["id"])
+    return result
+
+
+def _audit_row(
+    audit: Mapping[str, Any],
+    *,
+    reconciliation_id: str,
+) -> dict[str, Any]:
+    """Allowlist the immutable administrative decision."""
+    return {
+        "audit_id": str(audit["id"]),
+        "reconciliation_id": reconciliation_id,
+        "order_id": str(audit["usage_order_id"]),
+        "actor_id": str(audit["actor_id"]),
+        "reason": str(audit["reason"]),
+        "idempotency_key": str(audit["idempotency_key"]),
+        "resolution": {
+            "status": str(audit["resolved_status"]),
+            "billability": str(audit["billability"]),
+            "actual_tokens": {
+                "input": int(audit["actual_input_tokens"]),
+                "output": int(audit["actual_output_tokens"]),
+            },
+            "charged_credits": int(audit["charged_credits"]),
+        },
+        "created_at": _aware_utc(audit["created_at"]).isoformat(),
     }
 
 
@@ -1068,14 +1377,14 @@ def _decode_cursor(cursor: str, scope: str) -> tuple[datetime, str]:
 
 
 def _resolution_hash(
-    item_id: str,
+    reconciliation_id: str,
     actor_id: str,
     resolution: ReconciliationResolution,
 ) -> str:
     return sha256(
         _dump_json(
             {
-                "item_id": item_id,
+                "reconciliation_id": reconciliation_id,
                 "actor_id": actor_id,
                 "billability": resolution.billability,
                 "reason": resolution.reason.strip(),
@@ -1119,10 +1428,6 @@ def _aware_utc(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
-
-
-def _optional_iso(value: datetime | None) -> str | None:
-    return _aware_utc(value).isoformat() if value is not None else None
 
 
 def _non_negative_env(name: str, default: int) -> int:

@@ -921,7 +921,9 @@ def test_billing_routers_are_mounted_on_trusted_user_and_admin_prefixes():
     assert "/admin/billing/wallets/{owner_id}" in paths
     assert "/admin/billing/usage-orders" in paths
     assert "/admin/billing/reconciliation" in paths
-    assert "/admin/billing/reconciliation/{item_id}/resolve" in paths
+    assert "/admin/billing/reconciliation/{reconciliation_id}/resolve" in paths
+    assert "/admin/billing/reconciliation-audits" in paths
+    assert "/admin/billing/reconciliation-audits/{audit_id}" in paths
     assert "/admin/billing/rollout/activate" in paths
 
 

@@ -2,13 +2,14 @@
 """Financial reporting and operator reconciliation contracts."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import json
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, func, insert, inspect, select, update
+from sqlalchemy import delete, event, func, insert, inspect, select, update
 from sqlalchemy.exc import DBAPIError
 
 from qwenpaw.app.billing.models import LedgerTransaction
@@ -257,6 +258,9 @@ def _seed_orders(engine, repository, wallets, catalog_id: str) -> None:
                         else "report-text-b"
                     ),
                     item_key=f"call-{key}",
+                    reconciliation_id=(
+                        str(uuid4()) if item_status == "reconciling" else None
+                    ),
                     status=item_status,
                     provider_id=(
                         "provider-a" if model == "model-a" else "provider-b"
@@ -355,6 +359,14 @@ def test_fresh_and_upgrade_create_reporting_state_tables(tmp_path):
             "billing_reconciliation_audits",
             "billing_rollout_settings",
         } <= names
+        invocation_indexes = {
+            index["name"]
+            for index in inspect(engine).get_indexes("open_api_invocations")
+        }
+        assert (
+            "idx_open_api_invocations_billing_usage_order"
+            in invocation_indexes
+        )
     finally:
         engine.dispose()
 
@@ -397,11 +409,17 @@ def test_user_list_filters_and_detail_are_owner_scoped_and_redacted(reporting):
     assert detail is not None
     assert len(detail["items"]) == 2
     item = detail["items"][0]
-    assert item["price"] == {
+    assert item == {
+        "call_sequence": 1,
+        "model": {
+            "provider": "provider-a",
+            "id": "model-a",
+            "capability": "text",
+        },
+        "tokens": {"input": 1000, "output": 1000},
+        "credits": {"quoted": 6, "charged": 5},
+        "status": "captured",
         "catalog_version": "retail-report-v1",
-        "rule_id": "report-text",
-        "quoted_credits": 6,
-        "unit_breakdown": {"input_tokens": 2, "output_tokens": 3},
     }
     serialized = json.dumps(detail)
     for forbidden in (
@@ -413,6 +431,9 @@ def test_user_list_filters_and_detail_are_owner_scoped_and_redacted(reporting):
         '"api_key": "secret"',
         "api_key_id",
         "owner_user_id",
+        "item-alice-new",
+        "call-alice-new",
+        "report-text",
     ):
         assert forbidden not in serialized
     assert (
@@ -472,7 +493,11 @@ def test_cursor_is_stable_scoped_and_rejects_timezone_naive_filters(reporting):
 
 def test_summary_uses_durable_items_and_ledger_and_excludes_history(reporting):
     service, repository, engine = reporting
-    summary = service.open_api_summary("alice", timezone_name="Asia/Shanghai")
+    summary = service.open_api_summary(
+        "alice",
+        date_from=date(2026, 8, 1),
+        date_to=date(2026, 8, 30),
+    )
     assert summary["totals"] == {
         "orders": 3,
         "model_calls": 3,
@@ -485,6 +510,12 @@ def test_summary_uses_durable_items_and_ledger_and_excludes_history(reporting):
     }
     assert summary["eras"]["financial_cutover_at"] is None
     assert summary["eras"]["historical_statistics_included"] is False
+    assert summary["window"] == {
+        "date_from": "2026-08-01",
+        "date_to": "2026-08-30",
+        "timezone": "UTC",
+        "lifetime": False,
+    }
     assert summary["top_up"]["collects_payment"] is False
     with engine.connect() as conn:
         analytics_count = conn.scalar(
@@ -497,6 +528,137 @@ def test_summary_uses_durable_items_and_ledger_and_excludes_history(reporting):
     before = repository.balance(str(wallet["id"]))
     service.open_api_summary("alice")
     assert repository.balance(str(wallet["id"])) == before
+
+
+def test_summary_rejects_unbounded_or_excessive_windows(reporting):
+    service, _repository, _engine = reporting
+    with pytest.raises(ValueError, match="date_from"):
+        service.open_api_summary(
+            "alice",
+            date_from=date(2026, 8, 30),
+            date_to=date(2026, 8, 30),
+        )
+    with pytest.raises(ValueError, match="366"):
+        service.open_api_summary(
+            "alice",
+            date_from=date(2025, 1, 1),
+            date_to=date(2026, 8, 30),
+        )
+
+
+def test_summary_large_window_remains_grouped_and_query_bounded(reporting):
+    service, _repository, engine = reporting
+    with engine.begin() as conn:
+        order_template = dict(
+            conn.execute(
+                select(billing_usage_orders).where(
+                    billing_usage_orders.c.id == "order-alice-shadow",
+                ),
+            )
+            .mappings()
+            .one(),
+        )
+        invocation_template = dict(
+            conn.execute(
+                select(open_api_invocations).where(
+                    open_api_invocations.c.id == "inv-alice-shadow",
+                ),
+            )
+            .mappings()
+            .one(),
+        )
+        item_template = dict(
+            conn.execute(
+                select(billing_usage_items).where(
+                    billing_usage_items.c.id == "item-alice-shadow",
+                ),
+            )
+            .mappings()
+            .one(),
+        )
+        for sequence in range(150):
+            suffix = f"large-{sequence}"
+            created_at = NOW - timedelta(days=sequence % 20)
+            order = {
+                **order_template,
+                "id": f"order-{suffix}",
+                "business_key": f"business-{suffix}",
+                "source_id": f"inv-{suffix}",
+                "created_at": created_at,
+                "updated_at": created_at,
+            }
+            invocation = {
+                **invocation_template,
+                "id": f"inv-{suffix}",
+                "billing_usage_order_id": f"order-{suffix}",
+                "created_at": created_at,
+            }
+            item = {
+                **item_template,
+                "id": f"item-{suffix}",
+                "usage_order_id": f"order-{suffix}",
+                "item_key": f"call-{suffix}",
+                "created_at": created_at,
+                "updated_at": created_at,
+            }
+            conn.execute(insert(billing_usage_orders).values(**order))
+            conn.execute(insert(open_api_invocations).values(**invocation))
+            conn.execute(insert(billing_usage_items).values(**item))
+
+    statements: list[str] = []
+
+    def record(_conn, _cursor, statement, *_args):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        summary = service.open_api_summary(
+            "alice",
+            date_from=date(2026, 8, 1),
+            date_to=date(2026, 8, 30),
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+
+    assert summary["totals"]["orders"] == 153
+    assert summary["totals"]["model_calls"] == 153
+    assert len(summary["by_day"]) <= 30
+    # One grouped financial query plus the existing constant wallet/lot and
+    # rollout reads; the count is independent of orders/items in the window.
+    assert len(statements) <= 7
+
+
+def test_order_and_reconciliation_pages_use_constant_query_count(reporting):
+    service, _repository, engine = reporting
+    statements: list[str] = []
+
+    def record(_conn, _cursor, statement, *_args):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        service.list_usage_orders(
+            owner_user_id="alice",
+            filters=BillingReportFilters(),
+            limit=3,
+        )
+        order_queries = len(statements)
+        statements.clear()
+        queue = service.list_reconciliation(
+            filters=BillingReportFilters(),
+            limit=10,
+        )
+        reconciliation_queries = len(statements)
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+
+    assert order_queries <= 3
+    assert reconciliation_queries <= 3
+    reconciliation_id = queue["items"][0]["reconciliation_id"]
+    assert str(UUID(reconciliation_id)) == reconciliation_id
+    serialized = json.dumps(queue)
+    assert "item-alice-reconciling" not in serialized
+    assert "call-alice-reconciling" not in serialized
 
 
 def test_manual_resolution_is_atomic_audited_idempotent_and_conflicting(
@@ -525,19 +687,30 @@ def test_manual_resolution_is_atomic_audited_idempotent_and_conflicting(
         actual_input_tokens=1000,
         actual_output_tokens=1000,
     )
+    queue = service.list_reconciliation(
+        filters=BillingReportFilters(),
+        limit=10,
+    )
+    reconciliation_id = queue["items"][0]["reconciliation_id"]
     first = service.resolve_reconciliation(
-        "item-alice-reconciling",
+        reconciliation_id,
         actor_id="admin-7",
         resolution=request,
     )
     replay = service.resolve_reconciliation(
-        "item-alice-reconciling",
+        reconciliation_id,
         actor_id="admin-7",
         resolution=request,
     )
     assert replay == first
-    assert first["status"] == "captured"
-    assert first["charged_credits"] == 5
+    assert first["reconciliation_id"] == reconciliation_id
+    assert str(UUID(first["audit_id"])) == first["audit_id"]
+    assert first["resolution"] == {
+        "status": "captured",
+        "billability": "billable",
+        "actual_tokens": {"input": 1000, "output": 1000},
+        "charged_credits": 5,
+    }
     assert repository.balance(str(wallet["id"])).held == 0
     with engine.connect() as conn:
         audits = (
@@ -576,7 +749,7 @@ def test_manual_resolution_is_atomic_audited_idempotent_and_conflicting(
             )
     with pytest.raises(ReconciliationConflictError):
         service.resolve_reconciliation(
-            "item-alice-reconciling",
+            reconciliation_id,
             actor_id="admin-7",
             resolution=ReconciliationResolution(
                 idempotency_key="resolve-alice-1",
@@ -586,7 +759,7 @@ def test_manual_resolution_is_atomic_audited_idempotent_and_conflicting(
         )
     with pytest.raises(ReconciliationNotFoundError):
         service.resolve_reconciliation(
-            "item-alice-new",
+            "00000000-0000-0000-0000-000000000000",
             actor_id="admin-7",
             resolution=ReconciliationResolution(
                 idempotency_key="resolved-item-new",
@@ -612,6 +785,66 @@ def test_rollout_cutover_is_written_once_only_by_explicit_enforced_activation(
         rows = conn.execute(select(billing_rollout_settings)).mappings().all()
     assert len(rows) == 1
     assert rows[0]["cutover_actor_id"] == "admin-2"
+
+
+def test_admin_audit_list_detail_filters_and_redacts(reporting):
+    service, repository, _engine = reporting
+    wallet = repository.get_wallet("user", "alice")
+    assert wallet is not None
+    repository.append_transaction(
+        LedgerTransaction(
+            wallet_id=str(wallet["id"]),
+            event_type="usage_hold",
+            credits=6,
+            business_type="usage_item",
+            business_key=(
+                "open-api-item:order-alice-reconciling:"
+                "call-alice-reconciling"
+            ),
+            idempotency_key="audit-list-hold",
+        ),
+    )
+    queue = service.list_reconciliation(
+        filters=BillingReportFilters(),
+        limit=10,
+    )
+    reconciliation_id = queue["items"][0]["reconciliation_id"]
+    resolved = service.resolve_reconciliation(
+        reconciliation_id,
+        actor_id="admin-audit",
+        resolution=ReconciliationResolution(
+            idempotency_key="audit-list-resolution",
+            billability="not_billable",
+            reason="Provider confirms this call was not invoiced.",
+        ),
+    )
+
+    page = service.list_reconciliation_audits(
+        actor_id="admin-audit",
+        reconciliation_id=reconciliation_id,
+        order_id="order-alice-reconciling",
+        outcome="released",
+        idempotency_key="audit-list-resolution",
+        started_at=NOW - timedelta(minutes=1),
+        ended_at=NOW + timedelta(minutes=1),
+        limit=10,
+    )
+    assert [audit["audit_id"] for audit in page["items"]] == [
+        resolved["audit_id"]
+    ]
+    detail = service.get_reconciliation_audit(resolved["audit_id"])
+    assert detail == page["items"][0]
+    assert detail["reconciliation_id"] == reconciliation_id
+    serialized = json.dumps(detail)
+    for forbidden in (
+        "usage_item_id",
+        "usage_order_id",
+        "supplier",
+        "evidence",
+        "cost",
+        "prompt",
+    ):
+        assert forbidden not in serialized
 
 
 def test_open_api_runtime_prefers_persisted_rollout_over_environment(
@@ -693,7 +926,7 @@ def test_user_reporting_routes_return_404_for_another_wallet_and_redact(
         headers=_headers("alice"),
     )
     summary = client.get(
-        "/api/user/billing/open-api-summary?timezone=Asia%2FShanghai",
+        "/api/user/billing/open-api-summary?date_from=2026-08-01&date_to=2026-08-30",
         headers=_headers("alice"),
     )
     assert own.status_code == 200
@@ -727,12 +960,17 @@ def test_admin_resolution_actor_comes_only_from_auth_and_rollout_is_explicit(
         ),
     )
     client = _reporting_client(monkeypatch, service, repository)
+    queue_response = client.get(
+        "/api/admin/billing/reconciliation",
+        headers=_headers("admin-real", "admin"),
+    )
+    reconciliation_id = queue_response.json()["items"][0]["reconciliation_id"]
     denied = client.get(
         "/api/admin/billing/reconciliation",
         headers=_headers("alice"),
     )
     spoofed = client.post(
-        "/api/admin/billing/reconciliation/item-alice-reconciling/resolve",
+        f"/api/admin/billing/reconciliation/{reconciliation_id}/resolve",
         headers={
             **_headers("admin-real", "admin"),
             "Idempotency-Key": "route-resolution-1",
@@ -746,7 +984,7 @@ def test_admin_resolution_actor_comes_only_from_auth_and_rollout_is_explicit(
         },
     )
     exceeds_reservation = client.post(
-        "/api/admin/billing/reconciliation/item-alice-reconciling/resolve",
+        f"/api/admin/billing/reconciliation/{reconciliation_id}/resolve",
         headers={
             **_headers("admin-real", "admin"),
             "Idempotency-Key": "route-resolution-too-high",
@@ -759,7 +997,7 @@ def test_admin_resolution_actor_comes_only_from_auth_and_rollout_is_explicit(
         },
     )
     resolved = client.post(
-        "/api/admin/billing/reconciliation/item-alice-reconciling/resolve",
+        f"/api/admin/billing/reconciliation/{reconciliation_id}/resolve",
         headers={
             **_headers("admin-real", "admin"),
             "Idempotency-Key": "route-resolution-1",
@@ -785,6 +1023,19 @@ def test_admin_resolution_actor_comes_only_from_auth_and_rollout_is_explicit(
     assert spoofed.status_code == 422
     assert exceeds_reservation.status_code == 409
     assert resolved.status_code == 200
-    assert resolved.json()["status"] == "released"
+    assert resolved.json()["resolution"]["status"] == "released"
+    audits = client.get(
+        "/api/admin/billing/reconciliation-audits"
+        "?actor_id=admin-real&outcome=released",
+        headers=_headers("admin-real", "admin"),
+    )
+    assert audits.status_code == 200
+    audit_id = audits.json()["items"][0]["audit_id"]
+    audit_detail = client.get(
+        f"/api/admin/billing/reconciliation-audits/{audit_id}",
+        headers=_headers("admin-real", "admin"),
+    )
+    assert audit_detail.status_code == 200
+    assert "usage_item_id" not in json.dumps(audit_detail.json())
     assert observed.json()["billing_cutover_at"] is None
     assert enforced.json()["billing_cutover_at"] == NOW.isoformat()
