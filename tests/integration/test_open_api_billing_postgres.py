@@ -26,6 +26,7 @@ from qwenpaw.app.billing.pricing import (
     PriceRule,
 )
 from qwenpaw.app.billing.usage import (
+    BillingExecutionFencedError,
     ReserveModelCall,
     SettleModelCall,
     UsageOrderConflictError,
@@ -215,27 +216,30 @@ def test_postgresql_invocation_execution_claim_has_one_winner(
         _command(identity, "postgres-execution-claim"),
     )
     repository = SqlAlchemyOpenApiRepository(postgres_open_api_engine)
-    lease_expires_at = datetime.now(timezone.utc) + timedelta(seconds=30)
     start = Barrier(8)
 
-    def claim(index: int) -> bool:
+    def claim(index: int):
         start.wait()
         return repository.claim_invocation_execution(
             session.invocation_id,
             f"worker-{index}",
-            lease_expires_at=lease_expires_at,
+            lease_seconds=30,
         )
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(claim, range(8)))
 
-    assert results.count(True) == 1
+    fences = [fence for fence in results if fence is not None]
+    assert len(fences) == 1
+    assert fences[0].generation == 1
     invocation = repository.get_invocation(session.invocation_id)
     assert invocation is not None
     assert invocation["status"] == "running"
     assert invocation["execution_owner_token"].startswith("worker-")
     assert invocation["execution_claimed_at"] is not None
-    assert invocation["execution_lease_expires_at"] == lease_expires_at
+    assert invocation["execution_lease_expires_at"] > datetime.now(
+        timezone.utc
+    )
 
 
 @pytest.mark.integration
@@ -248,18 +252,21 @@ def test_postgresql_expired_execution_lease_has_one_takeover_winner(
         _command(identity, "postgres-execution-takeover"),
     )
     repository = SqlAlchemyOpenApiRepository(postgres_open_api_engine)
-    now = datetime.now(timezone.utc)
-    assert repository.claim_invocation_execution(
+    original_fence = repository.claim_invocation_execution(
         session.invocation_id,
         "original-worker",
-        lease_expires_at=now + timedelta(seconds=30),
+        lease_seconds=30,
     )
-    assert not repository.takeover_invocation_execution(
-        session.invocation_id,
-        "premature-worker",
-        now=now + timedelta(seconds=29),
-        lease_expires_at=now + timedelta(seconds=60),
+    assert original_fence is not None
+    assert (
+        repository.takeover_invocation_execution(
+            session.invocation_id,
+            "premature-worker",
+            lease_seconds=60,
+        )
+        is None
     )
+    now = datetime.now(timezone.utc)
     with postgres_open_api_engine.begin() as conn:
         conn.execute(
             update(open_api_invocations)
@@ -268,27 +275,28 @@ def test_postgresql_expired_execution_lease_has_one_takeover_winner(
         )
     start = Barrier(8)
 
-    def takeover(index: int) -> bool:
+    def takeover(index: int):
         start.wait()
         return SqlAlchemyOpenApiRepository(
             postgres_open_api_engine,
         ).takeover_invocation_execution(
             session.invocation_id,
             f"replacement-{index}",
-            now=now,
-            lease_expires_at=now + timedelta(seconds=30),
+            lease_seconds=30,
         )
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(takeover, range(8)))
-    assert results.count(True) == 1
+    fences = [fence for fence in results if fence is not None]
+    assert len(fences) == 1
+    winner_fence = fences[0]
+    assert winner_fence.generation == 2
     invocation = repository.get_invocation(session.invocation_id)
     winner = str(invocation["execution_owner_token"])
     assert (
         repository.finalize_invocation_execution(
             session.invocation_id,
-            "original-worker",
-            now=now + timedelta(seconds=1),
+            original_fence,
             status="failed",
             status_code=500,
             error_summary="stale",
@@ -298,8 +306,7 @@ def test_postgresql_expired_execution_lease_has_one_takeover_winner(
     )
     sealed = repository.finalize_invocation_execution(
         session.invocation_id,
-        winner,
-        now=now + timedelta(seconds=1),
+        winner_fence,
         status="succeeded",
         status_code=200,
         error_summary="",
@@ -311,12 +318,128 @@ def test_postgresql_expired_execution_lease_has_one_takeover_winner(
 
 
 @pytest.mark.integration
+def test_postgresql_db_clock_and_fence_reject_late_provider_capture(
+    postgres_open_api_engine,
+    monkeypatch,
+):
+    identity = "late-provider-fence"
+    coordinator = _coordinator(postgres_open_api_engine, identity)
+    session = coordinator.begin_invocation(
+        _command(identity, "postgres-late-provider", mode="enforced"),
+    )
+    coordinator.repository.grant(
+        session.wallet_id,
+        credits=5,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key="late-provider-funds",
+    )
+    repository = SqlAlchemyOpenApiRepository(postgres_open_api_engine)
+    old_fence = repository.claim_invocation_execution(
+        session.invocation_id,
+        "clock-skewed-worker",
+        lease_seconds=30,
+    )
+    assert old_fence is not None
+    import qwenpaw.app.storage.repos.open_api_repo as repo_module
+
+    monkeypatch.setattr(
+        repo_module,
+        "_now",
+        lambda: datetime.now(timezone.utc) + timedelta(days=365),
+    )
+    assert (
+        repository.takeover_invocation_execution(
+            session.invocation_id,
+            "premature",
+            lease_seconds=30,
+        )
+        is None
+    )
+
+    service = UsageService(coordinator.repository, coordinator.pricing)
+    fields = {
+        "invocation_id": session.invocation_id,
+        "execution_fence": old_fence,
+    }
+    service.reserve_model_call(
+        ReserveModelCall(
+            usage_order_id=session.usage_order_id,
+            item_key="late-call",
+            provider_id="provider",
+            model_key="model",
+            capability="text",
+            parameters={"tier": "standard"},
+            input_tokens=1000,
+            max_output_tokens=0,
+            **fields,
+        ),
+    )
+    service.settle_model_call(
+        SettleModelCall(
+            usage_order_id=session.usage_order_id,
+            item_key="late-call",
+            supplier_reference="",
+            billability="unknown",
+            execution_outcome="pending",
+            evidence={"response_class": "provider_call_started"},
+            **fields,
+        ),
+    )
+    with postgres_open_api_engine.begin() as conn:
+        conn.execute(
+            update(open_api_invocations)
+            .where(open_api_invocations.c.id == session.invocation_id)
+            .values(
+                execution_lease_expires_at=datetime.now(timezone.utc)
+                - timedelta(seconds=1),
+            ),
+        )
+    winner = repository.takeover_invocation_execution(
+        session.invocation_id,
+        "winner",
+        lease_seconds=30,
+    )
+    assert winner is not None and winner.generation == 2
+    terminal = {"type": "billing.interrupted", "winner": "winner"}
+    assert repository.finalize_invocation_execution(
+        session.invocation_id,
+        winner,
+        status="failed",
+        status_code=500,
+        error_summary="recovered",
+        terminal_event=terminal,
+    )
+    with pytest.raises(BillingExecutionFencedError):
+        service.settle_model_call(
+            SettleModelCall(
+                usage_order_id=session.usage_order_id,
+                item_key="late-call",
+                supplier_reference="supplier-late",
+                billability="billable",
+                evidence={"response_class": "success"},
+                actual_input_tokens=1000,
+                actual_output_tokens=0,
+                **fields,
+            ),
+        )
+    assert service.list_items(session.usage_order_id)[0]["status"] == (
+        "reconciling"
+    )
+    assert (
+        repository.get_invocation(session.invocation_id)["terminal_event_json"]
+        == terminal
+    )
+
+
+@pytest.mark.integration
 def test_postgresql_legacy_bridge_schema_adds_execution_state(
     postgres_open_api_engine,
 ):
     identity = "legacy-execution-outcome"
     session = _coordinator(
-        postgres_open_api_engine, identity,
+        postgres_open_api_engine,
+        identity,
     ).begin_invocation(
         _command(identity, "legacy-execution-outcome"),
     )
@@ -388,6 +511,7 @@ def test_postgresql_legacy_bridge_schema_adds_execution_state(
             "execution_owner_token",
             "execution_claimed_at",
             "execution_lease_expires_at",
+            "execution_fence_generation",
             "expert_team_run_id",
             "terminal_event_json",
         ):
@@ -414,6 +538,7 @@ def test_postgresql_legacy_bridge_schema_adds_execution_state(
         "execution_owner_token",
         "execution_claimed_at",
         "execution_lease_expires_at",
+        "execution_fence_generation",
         "expert_team_run_id",
         "terminal_event_json",
     } <= invocation_columns
@@ -423,6 +548,16 @@ def test_postgresql_legacy_bridge_schema_adds_execution_state(
     }
     assert "execution_outcome" in item_columns
     with postgres_open_api_engine.connect() as conn:
+        assert (
+            conn.scalar(
+                text(
+                    "SELECT execution_fence_generation FROM "
+                    "open_api_invocations WHERE id = :invocation_id",
+                ),
+                {"invocation_id": session.invocation_id},
+            )
+            == 0
+        )
         outcomes = dict(
             conn.execute(
                 text(
@@ -492,6 +627,14 @@ def test_postgresql_capture_and_release_cannot_both_settle_one_item(
         idempotency_key="settlement-funds",
     )
     service = UsageService(coordinator.repository, coordinator.pricing)
+    execution_fence = SqlAlchemyOpenApiRepository(
+        postgres_open_api_engine,
+    ).claim_invocation_execution(
+        session.invocation_id,
+        "settlement-worker",
+        lease_seconds=300,
+    )
+    assert execution_fence is not None
     reserve = ReserveModelCall(
         usage_order_id=session.usage_order_id,
         item_key="call-1",
@@ -501,6 +644,8 @@ def test_postgresql_capture_and_release_cannot_both_settle_one_item(
         parameters={"tier": "standard"},
         input_tokens=1000,
         max_output_tokens=0,
+        invocation_id=session.invocation_id,
+        execution_fence=execution_fence,
     )
     service.reserve_model_call(reserve)
     start = Barrier(2)
@@ -517,6 +662,8 @@ def test_postgresql_capture_and_release_cannot_both_settle_one_item(
                     evidence={"reference": "supplier-call-1"},
                     actual_input_tokens=1000,
                     actual_output_tokens=0,
+                    invocation_id=session.invocation_id,
+                    execution_fence=execution_fence,
                 ),
             ).status
         except UsageOrderConflictError:
@@ -550,6 +697,14 @@ def test_postgresql_restart_recovery_is_idempotent_and_preserves_unknown(
         idempotency_key="restart-funds",
     )
     service = UsageService(coordinator.repository, coordinator.pricing)
+    execution_fence = SqlAlchemyOpenApiRepository(
+        postgres_open_api_engine,
+    ).claim_invocation_execution(
+        session.invocation_id,
+        "restart-worker",
+        lease_seconds=300,
+    )
+    assert execution_fence is not None
     service.reserve_model_call(
         ReserveModelCall(
             usage_order_id=session.usage_order_id,
@@ -560,8 +715,19 @@ def test_postgresql_restart_recovery_is_idempotent_and_preserves_unknown(
             parameters={"tier": "standard"},
             input_tokens=1000,
             max_output_tokens=0,
+            invocation_id=session.invocation_id,
+            execution_fence=execution_fence,
         ),
     )
+    with postgres_open_api_engine.begin() as conn:
+        conn.execute(
+            update(open_api_invocations)
+            .where(open_api_invocations.c.id == session.invocation_id)
+            .values(
+                execution_lease_expires_at=datetime.now(timezone.utc)
+                - timedelta(seconds=1),
+            ),
+        )
     runtime = OpenApiBillingRuntime(
         repository=coordinator.repository,
         pricing=coordinator.pricing,

@@ -73,7 +73,8 @@ def test_postgresql_constraint_guard_ddl_executes_in_isolated_schema(
             text(
                 "CREATE TABLE open_api_invocations ("
                 "billing_usage_order_id VARCHAR, quoted_credits BIGINT, "
-                "captured_credits BIGINT, released_credits BIGINT)",
+                "captured_credits BIGINT, released_credits BIGINT, "
+                "execution_fence_generation BIGINT)",
             ),
         )
         conn.execute(

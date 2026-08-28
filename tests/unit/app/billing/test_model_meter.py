@@ -21,6 +21,7 @@ from qwenpaw.app.billing.open_api import (
     OpenApiBillingCommand,
     OpenApiBillingCoordinator,
 )
+from qwenpaw.app.billing.execution import OpenApiBillingExecutionContext
 from qwenpaw.app.billing.pricing import (
     PriceCatalogDraft,
     PriceCatalogService,
@@ -118,9 +119,17 @@ def usage_service(tmp_path):
         expires_at=None,
         idempotency_key="fund-meter-wallet",
     )
+    fence = open_api.claim_invocation_execution(
+        session.invocation_id,
+        "model-meter-test",
+        lease_seconds=300,
+    )
+    assert fence is not None
+    _TEST_FENCES[session.invocation_id] = fence
     try:
         yield UsageService(repository, pricing), session
     finally:
+        _TEST_FENCES.pop(session.invocation_id, None)
         engine.dispose()
 
 
@@ -354,8 +363,16 @@ async def _consume(result):
     return result
 
 
+_TEST_FENCES = {}
+
+
 def _scope(session):
-    return set_current_billing_context(session)
+    return set_current_billing_context(
+        OpenApiBillingExecutionContext(
+            session=session,
+            fence=_TEST_FENCES[session.invocation_id],
+        ),
+    )
 
 
 def _stored_item(usage_service, usage_order_id):
@@ -1459,6 +1476,8 @@ def test_only_started_marker_permits_one_unknown_evidence_replacement(
                 evidence={"response_class": "supplier_outcome_unknown"},
                 actual_input_tokens=0,
                 actual_output_tokens=0,
+                invocation_id=session.invocation_id,
+                execution_fence=call.execution_fence,
             ),
         )
         with pytest.raises(UsageOrderConflictError):
@@ -1471,6 +1490,8 @@ def test_only_started_marker_permits_one_unknown_evidence_replacement(
                     evidence={"response_class": "drifted_unknown"},
                     actual_input_tokens=0,
                     actual_output_tokens=0,
+                    invocation_id=session.invocation_id,
+                    execution_fence=call.execution_fence,
                 ),
             )
     finally:

@@ -356,9 +356,12 @@ def _is_enforced_openapi_billing_context() -> bool:
     # Keep this import local: agent_context's normal startup graph eventually
     # imports model_factory, which imports this wrapper.
     from ..app.agent_context import get_current_billing_context
+    from ..app.billing.execution import OpenApiBillingExecutionContext
     from ..app.billing.open_api import OpenApiBillingSession
 
     context = get_current_billing_context()
+    if isinstance(context, OpenApiBillingExecutionContext):
+        context = context.session
     return (
         isinstance(context, OpenApiBillingSession)
         and context.mode == "enforced"

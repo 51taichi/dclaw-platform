@@ -16,12 +16,14 @@ from typing import Any, Mapping, cast
 from uuid import uuid4
 
 from ..agent_context import get_current_billing_context
+from .execution import OpenApiBillingExecutionContext, OpenApiExecutionFence
 from .open_api import OpenApiBillingSession
 from .supplier_reference_sidecar import (
     SupplierReference,
     pop_supplier_reference,
 )
 from .usage import (
+    BillingExecutionFencedError,
     Billability,
     ExecutionOutcome,
     ReserveModelCall,
@@ -36,6 +38,7 @@ class MeteredModelCall:
     """The durable reservation associated with an in-flight provider call."""
 
     session: OpenApiBillingSession
+    execution_fence: OpenApiExecutionFence
     item_key: str
     provider_id: str
     model_key: str
@@ -115,9 +118,10 @@ class BillingModelMeter:
         item_key: str | None = None,
     ) -> MeteredModelCall | None:
         """Durably reserve before provider execution, when OpenAPI-scoped."""
-        session = get_current_billing_context()
-        if not isinstance(session, OpenApiBillingSession):
+        context = get_current_billing_context()
+        if not isinstance(context, OpenApiBillingExecutionContext):
             return None
+        session = context.session
 
         normalized_provider = str(provider_id).strip()
         normalized_model = str(model_key).strip()
@@ -140,10 +144,13 @@ class BillingModelMeter:
                 parameters={"tier": "standard"},
                 input_tokens=_estimate_input_tokens(messages),
                 max_output_tokens=output_tokens,
+                invocation_id=session.invocation_id,
+                execution_fence=context.fence,
             ),
         )
         return MeteredModelCall(
             session=session,
+            execution_fence=context.fence,
             item_key=call_key,
             provider_id=normalized_provider,
             model_key=normalized_model,
@@ -170,8 +177,12 @@ class BillingModelMeter:
                     ),
                     actual_input_tokens=0,
                     actual_output_tokens=0,
+                    invocation_id=call.session.invocation_id,
+                    execution_fence=call.execution_fence,
                 ),
             )
+        except BillingExecutionFencedError:
+            raise
         except Exception as exc:
             raise BillingSettlementError(
                 "provider call was not started because billing marker "
@@ -284,6 +295,8 @@ class BillingModelMeter:
                     ),
                     actual_input_tokens=0,
                     actual_output_tokens=0,
+                    invocation_id=call.session.invocation_id,
+                    execution_fence=call.execution_fence,
                 ),
             )
         except BaseException as fallback_error:  # keep original hold if down
@@ -315,8 +328,12 @@ class BillingModelMeter:
                     ),
                     actual_input_tokens=actual_input_tokens,
                     actual_output_tokens=actual_output_tokens,
+                    invocation_id=call.session.invocation_id,
+                    execution_fence=call.execution_fence,
                 ),
             )
+        except BillingExecutionFencedError:
+            raise
         except Exception as exc:
             fallback_error = self.record_financial_write_failure(
                 call,

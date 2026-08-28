@@ -326,6 +326,12 @@ open_api_invocations = Table(
     Column("released_credits", BigInteger, nullable=False, server_default="0"),
     Column("billing_error_code", String),
     Column("execution_owner_token", String),
+    Column(
+        "execution_fence_generation",
+        BigInteger,
+        nullable=False,
+        server_default="0",
+    ),
     Column("execution_claimed_at", DateTime(timezone=True)),
     Column("execution_lease_expires_at", DateTime(timezone=True)),
     Column("expert_team_run_id", String),
@@ -342,6 +348,10 @@ open_api_invocations = Table(
     CheckConstraint(
         "released_credits >= 0",
         name="ck_open_api_invocations_released_nonnegative",
+    ),
+    CheckConstraint(
+        "execution_fence_generation >= 0",
+        name="ck_open_api_invocations_fence_generation_nonnegative",
     ),
 )
 
@@ -1114,6 +1124,10 @@ def _ensure_open_api_billing_columns(engine: Engine) -> None:
                 "ALTER TABLE open_api_invocations ADD COLUMN "
                 "execution_owner_token VARCHAR"
             ),
+            "execution_fence_generation": (
+                "ALTER TABLE open_api_invocations ADD COLUMN "
+                "execution_fence_generation BIGINT NOT NULL DEFAULT 0"
+            ),
             "execution_claimed_at": (
                 "ALTER TABLE open_api_invocations ADD COLUMN "
                 f"execution_claimed_at {datetime_type}"
@@ -1239,7 +1253,9 @@ def _validate_open_api_billing_history(engine: Engine) -> None:
         "open_api_invocations": (
             "quoted_credits IS NULL OR quoted_credits < 0 OR "
             "captured_credits IS NULL OR captured_credits < 0 OR "
-            "released_credits IS NULL OR released_credits < 0"
+            "released_credits IS NULL OR released_credits < 0 OR "
+            "execution_fence_generation IS NULL OR "
+            "execution_fence_generation < 0"
         ),
         "billing_usage_orders": (
             "quoted_credits IS NULL OR quoted_credits < 0 OR "
@@ -1361,6 +1377,7 @@ def _sqlite_open_api_billing_rebuild_required(engine: Engine) -> bool:
             "ck_open_api_invocations_quoted_nonnegative",
             "ck_open_api_invocations_captured_nonnegative",
             "ck_open_api_invocations_released_nonnegative",
+            "ck_open_api_invocations_fence_generation_nonnegative",
         },
         "billing_usage_orders": {
             "ck_billing_usage_orders_quoted_nonnegative",
@@ -1454,6 +1471,12 @@ def _ensure_postgresql_open_api_billing_constraints(engine: Engine) -> None:
             "ck_open_api_invocations_released_nonnegative",
             "c",
             "CHECK (released_credits >= 0)",
+        ),
+        (
+            "open_api_invocations",
+            "ck_open_api_invocations_fence_generation_nonnegative",
+            "c",
+            "CHECK (execution_fence_generation >= 0)",
         ),
         (
             "billing_usage_orders",

@@ -2,9 +2,6 @@
 """SQLite Database layer for Multi-User architecture."""
 import sqlite3
 import threading
-from pathlib import Path
-from typing import Optional, List, Dict, Any
-
 from ..constant import SECRET_DIR
 
 DB_PATH = SECRET_DIR / "qwenpaw.db"
@@ -22,6 +19,7 @@ def _configure_connection(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys=ON")
 
+
 def get_db() -> sqlite3.Connection:
     """Get a thread-local SQLite connection."""
     if not hasattr(_local, "conn"):
@@ -30,16 +28,18 @@ def get_db() -> sqlite3.Connection:
         _configure_connection(_local.conn)
     return _local.conn
 
+
 def init_db():
     """Initialize the SQLite schema."""
     # Ensure directory exists
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    
+
     conn = get_db()
     cursor = conn.cursor()
-    
+
     # 1. Users table
-    cursor.execute('''
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
@@ -48,10 +48,12 @@ def init_db():
             role TEXT DEFAULT 'user',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    ''')
-    
+    """
+    )
+
     # 2. User Connections table (for MCP Connectors)
-    cursor.execute('''
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS user_connections (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -63,9 +65,11 @@ def init_db():
             FOREIGN KEY (user_id) REFERENCES users (id),
             UNIQUE(user_id, connector_key)
         )
-    ''')
+    """
+    )
     # 3. Capability Registry (Global Market for MCP, Skills, Tools)
-    cursor.execute('''
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS capability_registry (
             id TEXT PRIMARY KEY,
             type TEXT NOT NULL,
@@ -75,10 +79,12 @@ def init_db():
             is_public BOOLEAN DEFAULT 1,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    ''')
-    
+    """
+    )
+
     # 4. User Capabilities (User Subscriptions)
-    cursor.execute('''
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS user_capabilities (
             id TEXT PRIMARY KEY,
             user_id INTEGER NOT NULL,
@@ -91,10 +97,12 @@ def init_db():
             FOREIGN KEY (capability_id) REFERENCES capability_registry (id),
             UNIQUE(user_id, capability_id)
         )
-    ''')
-    
+    """
+    )
+
     # 5. Chats table
-    cursor.execute('''
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS chats (
             id TEXT PRIMARY KEY,
             user_id INTEGER NOT NULL,
@@ -110,10 +118,12 @@ def init_db():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users (id)
         )
-    ''')
+    """
+    )
 
     # 6. Messages table (used by AgentScope Session)
-    cursor.execute('''
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS messages (
             id TEXT PRIMARY KEY,
             chat_id TEXT NOT NULL,
@@ -124,10 +134,12 @@ def init_db():
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (chat_id) REFERENCES chats (id)
         )
-    ''')
-    
+    """
+    )
+
     # 7. Token Usage Logs
-    cursor.execute('''
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS token_usage_logs (
             id TEXT PRIMARY KEY,
             user_id INTEGER,
@@ -137,10 +149,12 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users (id)
         )
-    ''')
+    """
+    )
 
     # 8. Expert team templates
-    cursor.execute('''
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS expert_team_templates (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -158,10 +172,12 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    ''')
+    """
+    )
 
     # 9. Expert team root runs
-    cursor.execute('''
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS expert_team_runs (
             id TEXT PRIMARY KEY,
             team_id TEXT NOT NULL,
@@ -177,10 +193,12 @@ def init_db():
             finished_at TIMESTAMP,
             FOREIGN KEY (team_id) REFERENCES expert_team_templates (id)
         )
-    ''')
+    """
+    )
 
     # 10. Expert team member runs
-    cursor.execute('''
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS expert_team_member_runs (
             id TEXT PRIMARY KEY,
             run_id TEXT NOT NULL,
@@ -202,10 +220,12 @@ def init_db():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (run_id) REFERENCES expert_team_runs (id)
         )
-    ''')
+    """
+    )
 
     # 11. Open API publications
-    cursor.execute('''
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS open_api_publications (
             id TEXT PRIMARY KEY,
             public_id TEXT UNIQUE NOT NULL,
@@ -221,10 +241,13 @@ def init_db():
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
-    ''')
+    """
+    )
     publication_columns = {
         str(row[1])
-        for row in cursor.execute("PRAGMA table_info(open_api_publications)").fetchall()
+        for row in cursor.execute(
+            "PRAGMA table_info(open_api_publications)"
+        ).fetchall()
     }
     if "bound_user_id" not in publication_columns:
         cursor.execute(
@@ -256,7 +279,8 @@ def init_db():
     )
 
     # 12. Open API external apps
-    cursor.execute('''
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS open_api_external_apps (
             id TEXT PRIMARY KEY,
             owner_user_id TEXT NOT NULL,
@@ -267,10 +291,12 @@ def init_db():
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
-    ''')
+    """
+    )
 
     # 13. Open API keys
-    cursor.execute('''
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS open_api_keys (
             id TEXT PRIMARY KEY,
             app_id TEXT NOT NULL,
@@ -288,10 +314,12 @@ def init_db():
             FOREIGN KEY (app_id) REFERENCES open_api_external_apps (id),
             FOREIGN KEY (publication_id) REFERENCES open_api_publications (id)
         )
-    ''')
+    """
+    )
 
     # 14. Open API invocations
-    cursor.execute('''
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS open_api_invocations (
             id TEXT PRIMARY KEY,
             app_id TEXT NOT NULL,
@@ -307,51 +335,109 @@ def init_db():
             latency_ms INTEGER DEFAULT 0,
             token_summary TEXT NOT NULL DEFAULT '{}',
             error_summary TEXT,
+            billing_usage_order_id TEXT,
+            billing_status TEXT NOT NULL DEFAULT 'unbilled',
+            quoted_credits INTEGER NOT NULL DEFAULT 0,
+            captured_credits INTEGER NOT NULL DEFAULT 0,
+            released_credits INTEGER NOT NULL DEFAULT 0,
+            billing_error_code TEXT,
+            execution_owner_token TEXT,
+            execution_fence_generation INTEGER NOT NULL DEFAULT 0,
+            execution_claimed_at TEXT,
+            execution_lease_expires_at TEXT,
+            expert_team_run_id TEXT,
+            terminal_event_json TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (app_id) REFERENCES open_api_external_apps (id),
             FOREIGN KEY (publication_id) REFERENCES open_api_publications (id),
             FOREIGN KEY (api_key_id) REFERENCES open_api_keys (id)
         )
-    ''')
+    """
+    )
+    invocation_columns = {
+        row[1]
+        for row in cursor.execute(
+            "PRAGMA table_info(open_api_invocations)",
+        ).fetchall()
+    }
+    invocation_additions = {
+        "billing_usage_order_id": "TEXT",
+        "billing_status": "TEXT NOT NULL DEFAULT 'unbilled'",
+        "quoted_credits": "INTEGER NOT NULL DEFAULT 0",
+        "captured_credits": "INTEGER NOT NULL DEFAULT 0",
+        "released_credits": "INTEGER NOT NULL DEFAULT 0",
+        "billing_error_code": "TEXT",
+        "execution_owner_token": "TEXT",
+        "execution_fence_generation": "INTEGER NOT NULL DEFAULT 0",
+        "execution_claimed_at": "TEXT",
+        "execution_lease_expires_at": "TEXT",
+        "expert_team_run_id": "TEXT",
+        "terminal_event_json": "TEXT",
+    }
+    for column, definition in invocation_additions.items():
+        if column not in invocation_columns:
+            cursor.execute(
+                "ALTER TABLE open_api_invocations ADD COLUMN "
+                f"{column} {definition}",
+            )
 
-    cursor.execute('''
+    cursor.execute(
+        """
         CREATE INDEX IF NOT EXISTS idx_chats_user_agent_updated
         ON chats (user_id, agent_id, updated_at DESC)
-    ''')
-    cursor.execute('''
+    """
+    )
+    cursor.execute(
+        """
         CREATE INDEX IF NOT EXISTS idx_chats_session_user_channel_agent
         ON chats (session_id, user_id, channel, agent_id)
-    ''')
-    cursor.execute('''
+    """
+    )
+    cursor.execute(
+        """
         CREATE INDEX IF NOT EXISTS idx_messages_chat_timestamp
         ON messages (chat_id, timestamp ASC)
-    ''')
-    cursor.execute('''
+    """
+    )
+    cursor.execute(
+        """
         CREATE INDEX IF NOT EXISTS idx_expert_team_runs_user_state_updated
         ON expert_team_runs (user_id, state, updated_at DESC)
-    ''')
-    cursor.execute('''
+    """
+    )
+    cursor.execute(
+        """
         CREATE INDEX IF NOT EXISTS idx_expert_team_member_runs_run_state
         ON expert_team_member_runs (run_id, state)
-    ''')
-    cursor.execute('''
+    """
+    )
+    cursor.execute(
+        """
         CREATE INDEX IF NOT EXISTS idx_open_api_publications_target
         ON open_api_publications (target_type, target_id)
-    ''')
-    cursor.execute('''
+    """
+    )
+    cursor.execute(
+        """
         CREATE INDEX IF NOT EXISTS idx_open_api_external_apps_owner_status
         ON open_api_external_apps (owner_user_id, status)
-    ''')
-    cursor.execute('''
+    """
+    )
+    cursor.execute(
+        """
         CREATE INDEX IF NOT EXISTS idx_open_api_keys_app_publication
         ON open_api_keys (app_id, publication_id)
-    ''')
-    cursor.execute('''
+    """
+    )
+    cursor.execute(
+        """
         CREATE INDEX IF NOT EXISTS idx_open_api_invocations_publication_created
         ON open_api_invocations (publication_id, created_at DESC)
-    ''')
-    
+    """
+    )
+
     conn.commit()
+
 
 # Automatically initialize tables
 init_db()

@@ -11,7 +11,7 @@ from hashlib import sha256
 from typing import Any, Literal
 from uuid import uuid4
 
-from sqlalchemy import insert, select, update
+from sqlalchemy import func, insert, select, update
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError, OperationalError
 
@@ -22,6 +22,7 @@ from .models import (
     LedgerTransaction,
     WalletBalance,
 )
+from .execution import OpenApiExecutionFence
 from .pricing import PriceCatalogService, QuoteRequest, RetailQuote
 from ..storage.repos.billing_repo import BillingRepository
 from ..storage.schema import (
@@ -71,6 +72,10 @@ class InsufficientUsageCreditsError(InsufficientCreditsError):
         )
 
 
+class BillingExecutionFencedError(UsageOrderError):
+    """The invocation execution claim is missing, stale, or expired."""
+
+
 @dataclass(frozen=True)
 class ReserveModelCall:
     """Trusted reservation request for one call inside an OpenAPI order."""
@@ -83,6 +88,8 @@ class ReserveModelCall:
     parameters: Mapping[str, Any]
     input_tokens: int = 0
     max_output_tokens: int = 0
+    invocation_id: str = ""
+    execution_fence: OpenApiExecutionFence | None = None
 
 
 @dataclass(frozen=True)
@@ -97,6 +104,8 @@ class SettleModelCall:
     execution_outcome: ExecutionOutcome = "succeeded"
     actual_input_tokens: int = 0
     actual_output_tokens: int = 0
+    invocation_id: str = ""
+    execution_fence: OpenApiExecutionFence | None = None
 
 
 @dataclass(frozen=True)
@@ -476,6 +485,7 @@ class UsageService:
                 conn=conn,
                 for_update=True,
             )
+            self._validate_execution_fence(conn, order, normalized)
             existing = self._item_row(
                 conn,
                 normalized.usage_order_id,
@@ -606,6 +616,7 @@ class UsageService:
                 conn=conn,
                 for_update=True,
             )
+            self._validate_execution_fence(conn, order, normalized)
             item = self._item_row(
                 conn,
                 normalized.usage_order_id,
@@ -725,6 +736,53 @@ class UsageService:
             )
             assert settled is not None
             return _usage_item_result(settled)
+
+    @staticmethod
+    def _validate_execution_fence(
+        conn: Connection,
+        order: Mapping[str, Any],
+        command: ReserveModelCall | SettleModelCall,
+    ) -> None:
+        """Validate and lock the invocation claim in this transaction."""
+        if str(order.get("source_type") or "") != "open_api":
+            return
+        invocation_id = str(command.invocation_id or "").strip()
+        fence = command.execution_fence
+        if not invocation_id or fence is None or fence.generation <= 0:
+            raise BillingExecutionFencedError(
+                "Open API billing command has no execution fence",
+            )
+        dialect = conn.engine.dialect.name
+        database_now = (
+            func.strftime("%Y-%m-%d %H:%M:%f", "now")
+            if dialect == "sqlite"
+            else func.current_timestamp()
+        )
+        guarded = conn.execute(
+            update(open_api_invocations)
+            .where(
+                open_api_invocations.c.id == invocation_id,
+                open_api_invocations.c.billing_usage_order_id
+                == str(order["id"]),
+                open_api_invocations.c.status == "running",
+                open_api_invocations.c.execution_owner_token
+                == fence.owner_token,
+                open_api_invocations.c.execution_fence_generation
+                == fence.generation,
+                open_api_invocations.c.execution_lease_expires_at
+                > database_now,
+                open_api_invocations.c.terminal_event_json.is_(None),
+            )
+            .values(
+                execution_fence_generation=(
+                    open_api_invocations.c.execution_fence_generation
+                ),
+            ),
+        )
+        if guarded.rowcount != 1:
+            raise BillingExecutionFencedError(
+                "Open API invocation execution fence is stale or expired",
+            )
 
     def list_items(self, usage_order_id: str) -> list[dict[str, Any]]:
         """Read durable model-call items without analytics queues."""
@@ -1158,6 +1216,8 @@ def _normalize_reserve_model_call(
         parameters=json.loads(_dump_json(dict(command.parameters))),
         input_tokens=command.input_tokens,
         max_output_tokens=command.max_output_tokens,
+        invocation_id=str(command.invocation_id or "").strip(),
+        execution_fence=command.execution_fence,
     )
 
 
@@ -1195,6 +1255,8 @@ def _normalize_settle_model_call(command: SettleModelCall) -> SettleModelCall:
         execution_outcome=command.execution_outcome,
         actual_input_tokens=command.actual_input_tokens,
         actual_output_tokens=command.actual_output_tokens,
+        invocation_id=str(command.invocation_id or "").strip(),
+        execution_fence=command.execution_fence,
     )
 
 

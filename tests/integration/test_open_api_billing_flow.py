@@ -27,7 +27,12 @@ from qwenpaw.app.billing.pricing import (
 from qwenpaw.app.billing.supplier_reference_sidecar import (
     stash_supplier_reference,
 )
-from qwenpaw.app.billing.usage import ReserveModelCall, UsageService
+from qwenpaw.app.billing.usage import (
+    BillingExecutionFencedError,
+    ReserveModelCall,
+    SettleModelCall,
+    UsageService,
+)
 from qwenpaw.app.open_api.runtime import (
     OpenApiBillingRuntime,
     get_current_billing_meter,
@@ -107,6 +112,32 @@ class _Channels:
 
     async def get_channel(self, name):
         return self.console if name == "console" else None
+
+
+class _CancelResistantLateResponseConsole:
+    def __init__(self):
+        self.started = asyncio.Event()
+        self.calls = 0
+
+    async def stream_one(self, payload):
+        del payload
+        meter = get_current_billing_meter()
+        assert meter is not None
+        call = meter.before_call(
+            provider_id="provider",
+            model_key="model",
+            messages=[{"role": "user", "content": "late"}],
+            max_output_tokens=1,
+        )
+        meter.mark_provider_call_started(call)
+        self.calls += 1
+        self.started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            pass
+        meter.record_response(call, _Response("supplier-late"))
+        yield "data: {}\n\n"
 
 
 class _Chats:
@@ -527,6 +558,12 @@ def test_recovery_releases_only_precontact_holds_once(billing_flow):
         expires_at=None,
         idempotency_key="fund-restart-held",
     )
+    fence = billing_flow.open_repo.claim_invocation_execution(
+        session.invocation_id,
+        "restart-held-worker",
+        lease_seconds=30,
+    )
+    assert fence is not None
     billing_flow.runtime.usage_service.reserve_model_call(
         ReserveModelCall(
             usage_order_id=session.usage_order_id,
@@ -537,8 +574,19 @@ def test_recovery_releases_only_precontact_holds_once(billing_flow):
             parameters={"tier": "standard"},
             input_tokens=1,
             max_output_tokens=1,
+            invocation_id=session.invocation_id,
+            execution_fence=fence,
         ),
     )
+    with billing_flow.engine.begin() as conn:
+        conn.execute(
+            update(open_api_invocations)
+            .where(open_api_invocations.c.id == session.invocation_id)
+            .values(
+                execution_lease_expires_at=datetime.now(timezone.utc)
+                - timedelta(seconds=1),
+            ),
+        )
 
     recover_open_api_billing(billing_flow.runtime)
     ledger_after_first = billing_flow.repository.list_ledger(
@@ -649,7 +697,10 @@ def _fund(flow, grant_credits: int, key: str) -> str:
     return str(wallet["id"])
 
 
-def test_sqlite_invocation_execution_lease_is_owner_cas(billing_flow):
+def test_sqlite_invocation_execution_lease_is_owner_cas(
+    billing_flow,
+    monkeypatch,
+):
     session = billing_flow.runtime.coordinator.begin_invocation(
         OpenApiBillingCommand(
             app_id="app",
@@ -666,90 +717,197 @@ def test_sqlite_invocation_execution_lease_is_owner_cas(billing_flow):
         ),
     )
 
-    now = datetime.now(timezone.utc)
-    first_expiry = now + timedelta(seconds=30)
-
-    def claim(token: str) -> bool:
+    def claim(token: str):
         repo = SqlAlchemyOpenApiRepository(billing_flow.engine)
         return repo.claim_invocation_execution(
             session.invocation_id,
             token,
-            lease_expires_at=first_expiry,
+            lease_seconds=30,
         )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         winners = list(pool.map(claim, ("owner-a", "owner-b")))
 
-    assert sorted(winners) == [False, True]
+    fences = [fence for fence in winners if fence is not None]
+    assert len(fences) == 1
+    first_fence = fences[0]
+    assert first_fence.generation == 1
     invocation = billing_flow.open_repo.get_invocation(session.invocation_id)
     assert invocation is not None
     assert invocation["status"] == "running"
     winner = str(invocation["execution_owner_token"])
     loser = "owner-b" if winner == "owner-a" else "owner-a"
-    assert invocation["execution_lease_expires_at"] == first_expiry
-
-    renewed_expiry = now + timedelta(seconds=60)
+    loser_fence = type(first_fence)(loser, first_fence.generation)
     assert not billing_flow.open_repo.renew_invocation_execution(
         session.invocation_id,
-        loser,
-        lease_expires_at=renewed_expiry,
-        now=now,
+        loser_fence,
+        lease_seconds=60,
     )
     assert billing_flow.open_repo.renew_invocation_execution(
         session.invocation_id,
-        winner,
-        lease_expires_at=renewed_expiry,
-        now=now,
+        first_fence,
+        lease_seconds=60,
     )
-    assert not billing_flow.open_repo.takeover_invocation_execution(
+    import qwenpaw.app.storage.repos.open_api_repo as repo_module
+
+    monkeypatch.setattr(
+        repo_module,
+        "_now",
+        lambda: datetime.now(timezone.utc) + timedelta(days=365),
+    )
+    assert (
+        billing_flow.open_repo.takeover_invocation_execution(
+            session.invocation_id,
+            "recovery-a",
+            lease_seconds=90,
+        )
+        is None
+    )
+    with billing_flow.engine.begin() as conn:
+        conn.execute(
+            update(open_api_invocations)
+            .where(open_api_invocations.c.id == session.invocation_id)
+            .values(
+                execution_lease_expires_at=datetime.now(timezone.utc)
+                - timedelta(seconds=1),
+            ),
+        )
+    assert not billing_flow.open_repo.renew_invocation_execution(
         session.invocation_id,
-        "recovery-a",
-        lease_expires_at=now + timedelta(seconds=90),
-        now=now + timedelta(seconds=59),
+        first_fence,
+        lease_seconds=120,
     )
 
-    takeover_expiry = now + timedelta(seconds=120)
-
-    def takeover(token: str) -> bool:
+    def takeover(token: str):
         repo = SqlAlchemyOpenApiRepository(billing_flow.engine)
         return repo.takeover_invocation_execution(
             session.invocation_id,
             token,
-            lease_expires_at=takeover_expiry,
-            now=now + timedelta(seconds=61),
+            lease_seconds=120,
         )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         takeovers = list(pool.map(takeover, ("recovery-a", "recovery-b")))
-    assert sorted(takeovers) == [False, True]
-    invocation = billing_flow.open_repo.get_invocation(session.invocation_id)
-    takeover_winner = str(invocation["execution_owner_token"])
-
+    takeover_fences = [fence for fence in takeovers if fence is not None]
+    assert len(takeover_fences) == 1
+    takeover_fence = takeover_fences[0]
+    assert takeover_fence.generation == 2
     assert (
         billing_flow.open_repo.finalize_invocation_execution(
             session.invocation_id,
-            winner,
+            first_fence,
             status="failed",
             status_code=500,
             error_summary="stale owner",
             terminal_event={"type": "billing.completed", "winner": "stale"},
-            now=now + timedelta(seconds=62),
         )
         is None
     )
     sealed = billing_flow.open_repo.finalize_invocation_execution(
         session.invocation_id,
-        takeover_winner,
+        takeover_fence,
         status="succeeded",
         status_code=200,
         error_summary="",
         terminal_event={"type": "billing.completed", "winner": "takeover"},
-        now=now + timedelta(seconds=62),
     )
     assert sealed is not None
     assert sealed["terminal_event_json"]["winner"] == "takeover"
     assert sealed["execution_owner_token"] is None
     assert sealed["execution_lease_expires_at"] is None
+
+
+def test_sqlite_late_provider_response_is_fenced_from_capture_and_terminal(
+    billing_flow,
+):
+    session = _begin_recovery_session(billing_flow, "late-provider-fence")
+    billing_flow.repository.grant(
+        session.wallet_id,
+        credits=10,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key="late-provider-funds",
+    )
+    old_fence = billing_flow.open_repo.claim_invocation_execution(
+        session.invocation_id,
+        "old-worker",
+        lease_seconds=30,
+    )
+    assert old_fence is not None
+    command_fields = {
+        "invocation_id": session.invocation_id,
+        "execution_fence": old_fence,
+    }
+    billing_flow.runtime.usage_service.reserve_model_call(
+        ReserveModelCall(
+            usage_order_id=session.usage_order_id,
+            item_key="late-call",
+            provider_id="provider",
+            model_key="model",
+            capability="text",
+            parameters={"tier": "standard"},
+            input_tokens=1,
+            max_output_tokens=1,
+            **command_fields,
+        ),
+    )
+    billing_flow.runtime.usage_service.settle_model_call(
+        SettleModelCall(
+            usage_order_id=session.usage_order_id,
+            item_key="late-call",
+            supplier_reference="",
+            billability="unknown",
+            execution_outcome="pending",
+            evidence={"response_class": "provider_call_started"},
+            **command_fields,
+        ),
+    )
+    with billing_flow.engine.begin() as conn:
+        conn.execute(
+            update(open_api_invocations)
+            .where(open_api_invocations.c.id == session.invocation_id)
+            .values(
+                execution_lease_expires_at=datetime.now(timezone.utc)
+                - timedelta(seconds=1),
+            ),
+        )
+    winner = billing_flow.open_repo.takeover_invocation_execution(
+        session.invocation_id,
+        "winner",
+        lease_seconds=30,
+    )
+    assert winner is not None and winner.generation == 2
+    terminal = {"type": "billing.interrupted", "winner": "winner"}
+    assert billing_flow.open_repo.finalize_invocation_execution(
+        session.invocation_id,
+        winner,
+        status="failed",
+        status_code=500,
+        error_summary="recovered",
+        terminal_event=terminal,
+    )
+
+    with pytest.raises(BillingExecutionFencedError):
+        billing_flow.runtime.usage_service.settle_model_call(
+            SettleModelCall(
+                usage_order_id=session.usage_order_id,
+                item_key="late-call",
+                supplier_reference="supplier-late",
+                billability="billable",
+                evidence={"response_class": "success"},
+                actual_input_tokens=1,
+                actual_output_tokens=1,
+                **command_fields,
+            ),
+        )
+
+    item = billing_flow.runtime.usage_service.list_items(
+        session.usage_order_id,
+    )[0]
+    assert item["status"] == "reconciling"
+    assert item["captured_credits"] == 0
+    invocation = billing_flow.open_repo.get_invocation(session.invocation_id)
+    assert invocation["terminal_event_json"] == terminal
 
 
 def test_sqlite_invocation_terminal_snapshot_is_sealed_once(billing_flow):
@@ -1181,7 +1339,8 @@ async def test_provider_blocked_longer_than_lease_is_kept_active_by_heartbeat(
     assert recover_open_api_billing(billing_flow.runtime) == 0
     console.release.set()
     body = await asyncio.wait_for(
-        _consume_streaming_response(response), timeout=2,
+        _consume_streaming_response(response),
+        timeout=2,
     )
     assert "billing.completed" in body
     assert console.calls == 1
@@ -1197,7 +1356,8 @@ async def test_owner_loss_stops_next_supplier_and_cannot_replace_winner(
     _fund(billing_flow, 20, "owner-loss-funds")
     release_second = asyncio.Event()
     console = _SupplierConsole(
-        calls_per_run=2, block_after_first=release_second,
+        calls_per_run=2,
+        block_after_first=release_second,
     )
     billing_flow.workspace.channel_manager = _Channels(console)
     route_task = asyncio.create_task(
@@ -1224,11 +1384,12 @@ async def test_owner_loss_stops_next_supplier_and_cannot_replace_winner(
                 - timedelta(seconds=1),
             ),
         )
-    assert billing_flow.open_repo.takeover_invocation_execution(
+    replacement_fence = billing_flow.open_repo.takeover_invocation_execution(
         invocation_id,
         "replacement-worker",
-        lease_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+        lease_seconds=30,
     )
+    assert replacement_fence is not None
     winner_terminal = {
         "type": "billing.completed",
         "invocation_id": invocation_id,
@@ -1236,7 +1397,7 @@ async def test_owner_loss_stops_next_supplier_and_cannot_replace_winner(
     }
     assert billing_flow.open_repo.finalize_invocation_execution(
         invocation_id,
-        "replacement-worker",
+        replacement_fence,
         status="failed",
         status_code=500,
         error_summary="recovered by replacement worker",
@@ -1250,6 +1411,72 @@ async def test_owner_loss_stops_next_supplier_and_cannot_replace_winner(
     assert console.calls == 1
     invocation = billing_flow.open_repo.get_invocation(invocation_id)
     assert invocation["terminal_event_json"] == winner_terminal
+
+
+@pytest.mark.asyncio
+async def test_fastapi_cancel_resistant_late_response_is_financially_fenced(
+    billing_flow,
+    monkeypatch,
+):
+    monkeypatch.setenv("DCLAW_OPEN_API_EXECUTION_LEASE_SECONDS", "1")
+    monkeypatch.setenv("DCLAW_OPEN_API_EXECUTION_HEARTBEAT_SECONDS", "0.05")
+    _fund(billing_flow, 20, "late-fastapi-funds")
+    console = _CancelResistantLateResponseConsole()
+    billing_flow.workspace.channel_manager = _Channels(console)
+    response = await open_api.post_open_message(
+        "public-agent",
+        open_api.OpenMessageRequest(
+            external_user_id="external",
+            message="late FastAPI response",
+        ),
+        _request(billing_flow),
+    )
+    await asyncio.wait_for(console.started.wait(), timeout=2)
+    invocation = billing_flow.open_repo.list_invocations(limit=1)[0]
+    invocation_id = str(invocation["id"])
+    with billing_flow.engine.begin() as conn:
+        conn.execute(
+            update(open_api_invocations)
+            .where(open_api_invocations.c.id == invocation_id)
+            .values(
+                execution_lease_expires_at=datetime.now(timezone.utc)
+                - timedelta(seconds=1),
+            ),
+        )
+    winner = billing_flow.open_repo.takeover_invocation_execution(
+        invocation_id,
+        "late-response-winner",
+        lease_seconds=30,
+    )
+    assert winner is not None
+    terminal = {
+        "type": "billing.interrupted",
+        "invocation_id": invocation_id,
+        "winner": "late-response-winner",
+    }
+    assert billing_flow.open_repo.finalize_invocation_execution(
+        invocation_id,
+        winner,
+        status="failed",
+        status_code=500,
+        error_summary="recovered",
+        terminal_event=terminal,
+    )
+
+    await asyncio.wait_for(_consume_streaming_response(response), timeout=2)
+
+    item = billing_flow.runtime.usage_service.list_items(
+        str(invocation["billing_usage_order_id"]),
+    )[0]
+    assert console.calls == 1
+    assert item["status"] == "reconciling"
+    assert item["captured_credits"] == 0
+    assert (
+        billing_flow.open_repo.get_invocation(invocation_id)[
+            "terminal_event_json"
+        ]
+        == terminal
+    )
 
 
 def _request(flow) -> Request:
@@ -1418,11 +1645,10 @@ def _begin_recovery_session(flow, key: str):
 
 def test_recovery_does_not_touch_unexpired_active_owner(billing_flow):
     session = _begin_recovery_session(billing_flow, "active-owner")
-    expiry = datetime.now(timezone.utc) + timedelta(seconds=30)
     assert billing_flow.open_repo.claim_invocation_execution(
         session.invocation_id,
         "live-worker",
-        lease_expires_at=expiry,
+        lease_seconds=30,
     )
 
     assert recover_open_api_billing(billing_flow.runtime) == 0
@@ -1430,7 +1656,9 @@ def test_recovery_does_not_touch_unexpired_active_owner(billing_flow):
     invocation = billing_flow.open_repo.get_invocation(session.invocation_id)
     assert invocation["status"] == "running"
     assert invocation["execution_owner_token"] == "live-worker"
-    assert invocation["execution_lease_expires_at"] == expiry
+    assert invocation["execution_lease_expires_at"] > datetime.now(
+        timezone.utc,
+    )
     assert invocation["terminal_event_json"] is None
 
 
@@ -1439,7 +1667,7 @@ def test_recovery_expired_lease_has_one_takeover_winner(billing_flow):
     assert billing_flow.open_repo.claim_invocation_execution(
         session.invocation_id,
         "dead-worker",
-        lease_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+        lease_seconds=30,
     )
     with billing_flow.engine.begin() as conn:
         conn.execute(

@@ -5,6 +5,7 @@ import asyncio
 
 from qwenpaw.app.agent_context import get_current_billing_context
 from qwenpaw.app.billing.open_api import OpenApiBillingSession
+from qwenpaw.app.billing.execution import OpenApiExecutionFence
 from qwenpaw.app.open_api.runtime import open_api_billing_context
 
 
@@ -24,19 +25,21 @@ def _session(invocation_id: str) -> OpenApiBillingSession:
 
 def test_context_is_installed_for_committed_session_and_reset_after_scope():
     session = _session("one")
+    fence = OpenApiExecutionFence("owner-one", 1)
 
     assert get_current_billing_context() is None
-    with open_api_billing_context(session):
-        assert get_current_billing_context() == session
+    with open_api_billing_context(session, fence) as context:
+        assert get_current_billing_context() == context
     assert get_current_billing_context() is None
 
 
 def test_concurrent_async_billing_contexts_are_isolated_and_do_not_leak():
     async def worker(invocation_id: str):
         session = _session(invocation_id)
-        with open_api_billing_context(session):
+        fence = OpenApiExecutionFence(f"owner-{invocation_id}", 1)
+        with open_api_billing_context(session, fence) as context:
             await asyncio.sleep(0)
-            assert get_current_billing_context() == session
+            assert get_current_billing_context() == context
         return get_current_billing_context()
 
     async def run_workers():

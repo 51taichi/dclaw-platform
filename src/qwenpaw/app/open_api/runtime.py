@@ -6,7 +6,7 @@ import asyncio
 from contextvars import ContextVar, Token
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import os
 import re
 from typing import Any
@@ -26,6 +26,10 @@ from ..agent_context import (
 )
 from ..billing.open_api import OpenApiBillingSession
 from ..billing.open_api import OpenApiBillingCoordinator
+from ..billing.execution import (
+    OpenApiBillingExecutionContext,
+    OpenApiExecutionFence,
+)
 from ..billing.model_meter import BillingModelMeter
 from ..billing.pricing import PriceCatalogService
 from ..billing.usage import (
@@ -118,13 +122,13 @@ class OpenApiBillingRuntime:
     def execution(
         self,
         invocation_id: str,
-        owner_token: str,
+        fence: OpenApiExecutionFence,
         lease_seconds: float,
     ) -> "OpenApiBillingExecution":
         return OpenApiBillingExecution(
             self,
             invocation_id,
-            owner_token,
+            fence,
             lease_seconds,
         )
 
@@ -164,15 +168,16 @@ class OpenApiBillingExecution:
         self,
         runtime: OpenApiBillingRuntime,
         invocation_id: str,
-        owner_token: str,
+        fence: OpenApiExecutionFence,
         lease_seconds: float,
     ) -> None:
         self.runtime = runtime
         self.invocation_id = invocation_id
-        self.owner_token = owner_token
+        self.fence = fence
         self.lease_seconds = lease_seconds
         self.lease_lost = False
         self.finalizing = False
+        self.producer_task: asyncio.Task | None = None
         self.meter = _RequestBillingMeter(runtime, self)
         self._preflight_ready = asyncio.Event()
         self._initial_failure: InsufficientUsageCreditsError | None = None
@@ -186,9 +191,8 @@ class OpenApiBillingExecution:
             self.lease_lost
             or not self.runtime.open_api_repository.renew_invocation_execution(
                 self.invocation_id,
-                self.owner_token,
-                lease_expires_at=datetime.now(timezone.utc)
-                + timedelta(seconds=self.lease_seconds),
+                self.fence,
+                lease_seconds=self.lease_seconds,
             )
         ):
             self.lease_lost = True
@@ -267,15 +271,17 @@ def get_current_billing_meter() -> BillingModelMeter | None:
 @contextmanager
 def open_api_billing_context(
     session: OpenApiBillingSession,
+    fence: OpenApiExecutionFence,
     meter: BillingModelMeter | None = None,
 ):
     """Scope a committed billing session to an OpenAPI execution path."""
-    token = set_current_billing_context(session)
+    context = OpenApiBillingExecutionContext(session=session, fence=fence)
+    token = set_current_billing_context(context)
     meter_token: Token[BillingModelMeter | None] = _current_billing_meter.set(
         meter,
     )
     try:
-        yield session
+        yield context
     finally:
         _current_billing_meter.reset(meter_token)
         reset_current_billing_context(token)
@@ -366,17 +372,18 @@ def recover_open_api_billing(
             continue
 
         owner_token = f"recovery:{uuid4().hex}"
-        now = datetime.now(timezone.utc)
         lease_seconds = _positive_float_env(
             "DCLAW_OPEN_API_EXECUTION_LEASE_SECONDS",
             30.0,
         )
-        if not active.open_api_repository.takeover_invocation_execution(
-            invocation_id,
-            owner_token,
-            now=now,
-            lease_expires_at=now + timedelta(seconds=lease_seconds),
-        ):
+        recovery_fence = (
+            active.open_api_repository.takeover_invocation_execution(
+                invocation_id,
+                owner_token,
+                lease_seconds=lease_seconds,
+            )
+        )
+        if recovery_fence is None:
             continue
 
         order_id = str(row["order_id"])
@@ -395,9 +402,8 @@ def recover_open_api_billing(
                 continue
             if not active.open_api_repository.renew_invocation_execution(
                 invocation_id,
-                owner_token,
-                lease_expires_at=datetime.now(timezone.utc)
-                + timedelta(seconds=lease_seconds),
+                recovery_fence,
+                lease_seconds=lease_seconds,
             ):
                 break
             active.usage_service.settle_model_call(
@@ -414,6 +420,8 @@ def recover_open_api_billing(
                             timespec="seconds",
                         ),
                     },
+                    invocation_id=invocation_id,
+                    execution_fence=recovery_fence,
                 ),
             )
 
@@ -421,6 +429,30 @@ def recover_open_api_billing(
         if not items:
             now = datetime.now(timezone.utc)
             with engine.begin() as conn:
+                order_row = (
+                    conn.execute(
+                        select(billing_usage_orders).where(
+                            billing_usage_orders.c.id == order_id,
+                        ),
+                    )
+                    .mappings()
+                    .one()
+                )
+                validate_fence = active.usage_service._validate_execution_fence  # pylint: disable=protected-access  # noqa: E501
+                validate_fence(
+                    conn,
+                    order_row,
+                    SettleModelCall(
+                        usage_order_id=order_id,
+                        item_key="recovery-empty-order",
+                        supplier_reference="",
+                        billability="not_billable",
+                        evidence={},
+                        execution_outcome="failed",
+                        invocation_id=invocation_id,
+                        execution_fence=recovery_fence,
+                    ),
+                )
                 conn.execute(
                     update(billing_usage_orders)
                     .where(billing_usage_orders.c.id == order_id)
@@ -484,7 +516,7 @@ def recover_open_api_billing(
         }
         finalized = active.open_api_repository.finalize_invocation_execution(
             invocation_id,
-            owner_token,
+            recovery_fence,
             status=status,
             status_code=status_code,
             error_summary=error_summary,

@@ -9,7 +9,7 @@ import logging
 import os
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, AsyncGenerator
 
 from fastapi import APIRouter, HTTPException, Request
@@ -20,6 +20,7 @@ from ..billing.open_api import (
     OpenApiBillingCommand,
     OpenApiPublicationNotFoundError,
 )
+from ..billing.execution import OpenApiExecutionFence
 from ..billing.usage import (
     IdempotencyConflictError,
     InsufficientUsageCreditsError,
@@ -137,15 +138,31 @@ async def post_open_message(
         "DCLAW_OPEN_API_EXECUTION_HEARTBEAT_SECONDS",
         10.0,
     )
-    owns_execution = False
+    execution_fence = None
     if not billing_session.replayed:
-        owns_execution = (
+        execution_fence = (
             billing.open_api_repository.claim_invocation_execution(
                 invocation_id,
                 execution_owner_token,
-                lease_expires_at=datetime.now(timezone.utc)
-                + timedelta(seconds=lease_seconds),
+                lease_seconds=lease_seconds,
             )
+        )
+    owns_execution = execution_fence is not None
+    execution = None
+    heartbeat_task = None
+    if execution_fence is not None:
+        execution = billing.execution(
+            invocation_id,
+            execution_fence,
+            lease_seconds,
+        )
+        execution.producer_task = asyncio.current_task()
+        heartbeat_task = asyncio.create_task(
+            _execution_heartbeat(
+                execution,
+                heartbeat_seconds=heartbeat_seconds,
+                producer_task=None,
+            ),
         )
 
     if billing_session.replayed:
@@ -190,11 +207,19 @@ async def post_open_message(
                 invocation.get("expert_team_run_id") or "",
             )
             if owns_execution and not expert_team_run_id:
+                assert execution_fence is not None
                 expert_team_run_id = str(uuid.uuid4())
-                billing.open_api_repository.update_billing_invocation(
-                    invocation_id,
-                    expert_team_run_id=expert_team_run_id,
+                updated = (
+                    billing.open_api_repository.update_claimed_invocation(
+                        invocation_id,
+                        execution_fence,
+                        expert_team_run_id=expert_team_run_id,
+                    )
                 )
+                if updated is None:
+                    raise ExecutionLeaseLostError(
+                        "Open API invocation execution lease was lost",
+                    )
             stream_payload = {
                 "run_id": expert_team_run_id,
                 "team_id": str(team.id),
@@ -231,10 +256,17 @@ async def post_open_message(
                 detail="Unsupported Open API target type",
             )
 
-        billing.open_api_repository.update_billing_invocation(
-            invocation_id,
-            chat_id=prepared.chat_id,
-        )
+        if owns_execution:
+            assert execution_fence is not None
+            updated = billing.open_api_repository.update_claimed_invocation(
+                invocation_id,
+                execution_fence,
+                chat_id=prepared.chat_id,
+            )
+            if updated is None:
+                raise ExecutionLeaseLostError(
+                    "Open API invocation execution lease was lost",
+                )
 
         tracker = prepared.workspace.task_tracker
         if billing_session.replayed or not owns_execution:
@@ -292,11 +324,8 @@ async def post_open_message(
                     ),
                 )
 
-        execution = billing.execution(
-            invocation_id,
-            execution_owner_token,
-            lease_seconds,
-        )
+        assert execution_fence is not None
+        assert execution is not None
 
         async def limited_stream_fn(stream_payload):
             stream_started_at = time.monotonic()
@@ -304,16 +333,11 @@ async def post_open_message(
             stream_exception: Exception | None = None
             cancelled = False
             terminal: dict[str, Any] | None = None
-            heartbeat_task = asyncio.create_task(
-                _execution_heartbeat(
-                    execution,
-                    heartbeat_seconds=heartbeat_seconds,
-                    producer_task=asyncio.current_task(),
-                ),
-            )
+            execution.producer_task = asyncio.current_task()
             try:
                 with open_api_billing_context(
                     billing_session,
+                    execution_fence,
                     execution.meter,
                 ):
                     async for item in stream_fn(stream_payload):
@@ -342,9 +366,10 @@ async def post_open_message(
                         stream_exception=stream_exception,
                         cancelled=cancelled,
                         expert_team_run_id=expert_team_run_id,
-                        execution_owner_token=execution_owner_token,
+                        execution_fence=execution_fence,
                     )
                 finally:
+                    assert heartbeat_task is not None
                     heartbeat_task.cancel()
                     try:
                         await heartbeat_task
@@ -369,13 +394,16 @@ async def post_open_message(
             if permit is not None:
                 await permit.release()
             raise
-        billing.open_api_repository.update_billing_invocation(
+        updated = billing.open_api_repository.update_claimed_invocation(
             invocation_id,
+            execution_fence,
             status="running",
             status_code=202,
             latency_ms=_latency_ms(started_at),
             error_summary="",
         )
+        if updated is None:
+            execution.note_lease_lost()
         if not is_new_run and permit is not None:
             await permit.release()
         if not is_new_run and target_type == "expert_team":
@@ -399,27 +427,49 @@ async def post_open_message(
                 await _detach_tracker_queue(tracker, run_key, queue)
                 terminal = await execution.wait_for_finalization()
                 return _snapshot_json_response(terminal)
+    except asyncio.CancelledError:
+        seal_task = asyncio.create_task(
+            _seal_preproducer_failure(
+                billing,
+                billing_session,
+                execution_fence,
+                owns_execution=owns_execution,
+                status_code=499,
+                message="Request cancelled",
+                started_at=started_at,
+            ),
+        )
+        try:
+            await asyncio.shield(seal_task)
+        except asyncio.CancelledError:
+            await seal_task
+        await _cancel_heartbeat(heartbeat_task)
+        raise
     except HTTPException as exc:
-        return await _seal_preproducer_failure(
+        response = await _seal_preproducer_failure(
             billing,
             billing_session,
-            execution_owner_token,
+            execution_fence,
             owns_execution=owns_execution,
             status_code=exc.status_code,
             message=str(exc.detail),
             started_at=started_at,
         )
+        await _cancel_heartbeat(heartbeat_task)
+        return response
     except Exception:
         logger.exception("Open API failed before supplier producer start")
-        return await _seal_preproducer_failure(
+        response = await _seal_preproducer_failure(
             billing,
             billing_session,
-            execution_owner_token,
+            execution_fence,
             owns_execution=owns_execution,
             status_code=500,
             message="Internal server error",
             started_at=started_at,
         )
+        await _cancel_heartbeat(heartbeat_task)
+        return response
 
     current = billing.open_api_repository.get_invocation(invocation_id) or {}
     return _streaming_response(
@@ -545,7 +595,7 @@ async def _shielded_finalize(
     stream_exception: Exception | None,
     cancelled: bool,
     expert_team_run_id: str,
-    execution_owner_token: str,
+    execution_fence: OpenApiExecutionFence,
 ) -> dict[str, Any]:
     # pylint: disable=too-many-statements
     """Finish the durable bridge even when its producer is cancelled."""
@@ -623,7 +673,7 @@ async def _shielded_finalize(
         execution.begin_finalizing()
         updated = billing.open_api_repository.finalize_invocation_execution(
             session.invocation_id,
-            execution_owner_token,
+            execution_fence,
             status=status,
             status_code=status_code,
             latency_ms=_latency_ms(stream_started_at),
@@ -656,7 +706,7 @@ async def _shielded_finalize(
 async def _seal_preproducer_failure(
     billing: Any,
     session: Any,
-    execution_owner_token: str,
+    execution_fence: OpenApiExecutionFence | None,
     *,
     owns_execution: bool,
     status_code: int,
@@ -693,7 +743,7 @@ async def _seal_preproducer_failure(
     )
     sealed = billing.open_api_repository.finalize_invocation_execution(
         session.invocation_id,
-        execution_owner_token,
+        execution_fence,
         status="failed",
         status_code=status_code,
         latency_ms=_latency_ms(started_at),
@@ -735,19 +785,31 @@ async def _execution_heartbeat(
             execution.renew_lease()
         except ExecutionLeaseLostError:
             execution.note_lease_lost()
-            if producer_task is not None:
-                producer_task.cancel()
+            active_producer = execution.producer_task or producer_task
+            if active_producer is not None:
+                active_producer.cancel()
             return
         except Exception:
             consecutive_failures += 1
             logger.exception("Open API execution lease heartbeat failed")
             if consecutive_failures >= 2:
                 execution.note_lease_lost()
-                if producer_task is not None:
-                    producer_task.cancel()
+                active_producer = execution.producer_task or producer_task
+                if active_producer is not None:
+                    active_producer.cancel()
                 return
         else:
             consecutive_failures = 0
+
+
+async def _cancel_heartbeat(task: asyncio.Task | None) -> None:
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
 
 
 def _canonical_terminal_snapshot(

@@ -107,6 +107,7 @@ def test_open_api_billing_columns_exist(tmp_path):
             "execution_owner_token",
             "execution_claimed_at",
             "execution_lease_expires_at",
+            "execution_fence_generation",
             "expert_team_run_id",
             "terminal_event_json",
         } <= invocations
@@ -138,6 +139,7 @@ def test_open_api_billing_columns_exist(tmp_path):
             "ck_open_api_invocations_quoted_nonnegative",
             "ck_open_api_invocations_captured_nonnegative",
             "ck_open_api_invocations_released_nonnegative",
+            "ck_open_api_invocations_fence_generation_nonnegative",
         } <= check_names
 
         with engine.begin() as conn:
@@ -312,6 +314,7 @@ def test_open_api_billing_upgrade_is_idempotent_and_preserves_history(
             "execution_owner_token",
             "execution_claimed_at",
             "execution_lease_expires_at",
+            "execution_fence_generation",
             "expert_team_run_id",
             "terminal_event_json",
         } <= invocation_columns
@@ -381,6 +384,7 @@ def test_open_api_billing_upgrade_is_idempotent_and_preserves_history(
             "ck_open_api_invocations_quoted_nonnegative",
             "ck_open_api_invocations_captured_nonnegative",
             "ck_open_api_invocations_released_nonnegative",
+            "ck_open_api_invocations_fence_generation_nonnegative",
         } <= invocation_checks
 
         with engine.begin() as conn:
@@ -400,11 +404,12 @@ def test_open_api_billing_upgrade_is_idempotent_and_preserves_history(
             assert conn.execute(
                 text(
                     "SELECT billing_status, quoted_credits, captured_credits, "
-                    "released_credits, terminal_event_json "
+                    "released_credits, execution_fence_generation, "
+                    "terminal_event_json "
                     "FROM open_api_invocations "
                     "WHERE id = 'historic-invocation'"
                 ),
-            ).one() == ("unbilled", 0, 0, 0, None)
+            ).one() == ("unbilled", 0, 0, 0, 0, None)
             assert conn.execute(
                 text(
                     "SELECT source_type, source_id FROM billing_usage_orders "

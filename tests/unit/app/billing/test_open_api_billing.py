@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from threading import Barrier
+from threading import Barrier, Lock
 
 import pytest
 from sqlalchemy import func, select, update
@@ -58,6 +58,8 @@ def engine(tmp_path):
 
 @pytest.fixture
 def coordinator(engine):
+    global _TEST_ENGINE
+    _TEST_ENGINE = engine
     open_api = SqlAlchemyOpenApiRepository(engine)
     _create_open_api_identity(open_api)
     pricing = PriceCatalogService(PriceCatalogRepository(engine))
@@ -79,6 +81,29 @@ def coordinator(engine):
         ),
     )
     return OpenApiBillingCoordinator(BillingRepository(engine), pricing)
+
+
+_TEST_ENGINE = None
+_TEST_FENCES = {}
+_TEST_FENCE_LOCK = Lock()
+
+
+def _execution_fence(session):
+    with _TEST_FENCE_LOCK:
+        fence = _TEST_FENCES.get(session.invocation_id)
+        if fence is not None:
+            return fence
+        assert _TEST_ENGINE is not None
+        fence = SqlAlchemyOpenApiRepository(
+            _TEST_ENGINE,
+        ).claim_invocation_execution(
+            session.invocation_id,
+            f"unit-{session.invocation_id}",
+            lease_seconds=300,
+        )
+        assert fence is not None
+        _TEST_FENCES[session.invocation_id] = fence
+        return fence
 
 
 def _create_open_api_identity(
@@ -422,6 +447,8 @@ def _reserve(
         parameters={"tier": tier},
         input_tokens=1000,
         max_output_tokens=max_output_tokens,
+        invocation_id=session.invocation_id,
+        execution_fence=_execution_fence(session),
     )
 
 
@@ -441,6 +468,8 @@ def _settle(
         evidence={"usage": {"input_tokens": input_tokens}},
         actual_input_tokens=input_tokens,
         actual_output_tokens=output_tokens,
+        invocation_id=session.invocation_id,
+        execution_fence=_execution_fence(session),
     )
 
 
@@ -465,7 +494,9 @@ def test_model_items_incrementally_hold_then_project_mixed_settlement(
     second = service.reserve_model_call(_reserve(session, "call-2"))
     third = service.reserve_model_call(_reserve(session, "call-3"))
 
-    assert first.usage_order_id == second.usage_order_id == third.usage_order_id
+    assert (
+        first.usage_order_id == second.usage_order_id == third.usage_order_id
+    )
     assert coordinator.repository.balance(session.wallet_id).held == 6
     assert len(service.list_items(session.usage_order_id)) == 3
 
@@ -521,9 +552,12 @@ def test_model_item_replay_is_idempotent_and_payload_drift_conflicts(
         )
 
     settled = service.settle_model_call(_settle(session, "call-1", "billable"))
-    assert service.settle_model_call(
-        _settle(session, "call-1", "billable"),
-    ) == settled
+    assert (
+        service.settle_model_call(
+            _settle(session, "call-1", "billable"),
+        )
+        == settled
+    )
     with pytest.raises(UsageOrderConflictError):
         service.settle_model_call(
             _settle(session, "call-1", "not_billable"),

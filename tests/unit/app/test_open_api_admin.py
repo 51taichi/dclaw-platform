@@ -36,7 +36,11 @@ class FakeOpenApiRepository:
         self.list_external_apps_owner_user_ids.append(owner_user_id)
         rows = list(self.apps.values())
         if owner_user_id is not None:
-            rows = [row for row in rows if row.get("owner_user_id") == owner_user_id]
+            rows = [
+                row
+                for row in rows
+                if row.get("owner_user_id") == owner_user_id
+            ]
         return rows
 
     def get_external_app(self, app_id: str):
@@ -46,12 +50,18 @@ class FakeOpenApiRepository:
         self.apps[str(row["id"])] = dict(row)
         return self.apps[str(row["id"])]
 
-    def list_api_keys(self, app_id: str | None = None, publication_id: str | None = None):
+    def list_api_keys(
+        self, app_id: str | None = None, publication_id: str | None = None
+    ):
         rows = list(self.keys.values())
         if app_id is not None:
             rows = [row for row in rows if row.get("app_id") == app_id]
         if publication_id is not None:
-            rows = [row for row in rows if row.get("publication_id") == publication_id]
+            rows = [
+                row
+                for row in rows
+                if row.get("publication_id") == publication_id
+            ]
         return rows
 
     def create_api_key(self, row: dict[str, object]):
@@ -73,11 +83,19 @@ class FakeOpenApiRepository:
         offset: int = 0,
     ):
         self.list_invocations_calls.append(
-            {"publication_id": publication_id, "limit": limit, "offset": offset},
+            {
+                "publication_id": publication_id,
+                "limit": limit,
+                "offset": offset,
+            },
         )
         rows = self.invocations
         if publication_id is not None:
-            rows = [row for row in rows if row.get("publication_id") == publication_id]
+            rows = [
+                row
+                for row in rows
+                if row.get("publication_id") == publication_id
+            ]
         return rows[offset : offset + limit]
 
 
@@ -100,8 +118,12 @@ def _request(*, role: str = "admin", user_id: str = "admin-1") -> Request:
     return request
 
 
-def _patch_repo(monkeypatch, repo: FakeOpenApiRepository) -> FakeOpenApiRepository:
-    monkeypatch.setattr(open_api_admin, "get_open_api_repository", lambda: repo)
+def _patch_repo(
+    monkeypatch, repo: FakeOpenApiRepository
+) -> FakeOpenApiRepository:
+    monkeypatch.setattr(
+        open_api_admin, "get_open_api_repository", lambda: repo
+    )
     return repo
 
 
@@ -110,7 +132,9 @@ def _patch_agent(monkeypatch, agent_id: str = "agent-1") -> None:
         open_api_admin,
         "load_config",
         lambda: SimpleNamespace(
-            agents=SimpleNamespace(profiles={agent_id: SimpleNamespace(enabled=True)}),
+            agents=SimpleNamespace(
+                profiles={agent_id: SimpleNamespace(enabled=True)}
+            ),
         ),
     )
 
@@ -185,7 +209,9 @@ def test_create_publication_honors_disabled_initial_status(monkeypatch):
     assert repo.publications[created["id"]]["status"] == "disabled"
 
 
-def test_create_publication_rejects_public_id_owned_by_another_admin(monkeypatch):
+def test_create_publication_rejects_public_id_owned_by_another_admin(
+    monkeypatch,
+):
     repo = _patch_repo(monkeypatch, FakeOpenApiRepository())
     _patch_agent(monkeypatch, "agent-1")
     repo.publications["pub-existing"] = {
@@ -284,7 +310,7 @@ def test_create_publication_rejects_missing_agent(monkeypatch):
 
 
 def test_create_publication_validates_expert_team(monkeypatch):
-    repo = _patch_repo(monkeypatch, FakeOpenApiRepository())
+    _patch_repo(monkeypatch, FakeOpenApiRepository())
     _patch_expert_team(monkeypatch)
 
     created = open_api_admin.create_publication(
@@ -325,7 +351,9 @@ def test_create_publication_rejects_disabled_expert_team(monkeypatch, enabled):
 
 def test_create_publication_rejects_missing_expert_team(monkeypatch):
     _patch_repo(monkeypatch, FakeOpenApiRepository())
-    monkeypatch.setattr(open_api_admin, "get_expert_team_template", lambda _team_id: None)
+    monkeypatch.setattr(
+        open_api_admin, "get_expert_team_template", lambda _team_id: None
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         open_api_admin.create_publication(
@@ -385,7 +413,9 @@ def test_create_external_app_uses_admin_owner(monkeypatch):
     assert repo.apps[created["id"]]["quota_policy"] == {"daily": 100}
 
 
-def test_create_api_key_returns_plaintext_once_and_stores_safe_active_hash(monkeypatch):
+def test_create_api_key_returns_plaintext_once_and_stores_safe_active_hash(
+    monkeypatch,
+):
     repo = _patch_repo(monkeypatch, FakeOpenApiRepository())
     repo.apps["app-1"] = {"id": "app-1", "status": "enabled"}
     repo.publications["pub-1"] = {
@@ -479,7 +509,11 @@ def test_create_api_key_requires_enabled_app_and_publication(
 def test_revoke_api_key_updates_status_to_revoked(monkeypatch):
     repo = _patch_repo(monkeypatch, FakeOpenApiRepository())
     repo.publications["pub-1"] = {"id": "pub-1", "owner_user_id": "admin-1"}
-    repo.keys["key-1"] = {"id": "key-1", "status": "active", "publication_id": "pub-1"}
+    repo.keys["key-1"] = {
+        "id": "key-1",
+        "status": "active",
+        "publication_id": "pub-1",
+    }
 
     revoked = open_api_admin.revoke_api_key("key-1", _request())
 
@@ -489,7 +523,11 @@ def test_revoke_api_key_updates_status_to_revoked(monkeypatch):
 
 def test_create_api_key_rejects_cross_owner_publication(monkeypatch):
     repo = _patch_repo(monkeypatch, FakeOpenApiRepository())
-    repo.apps["app-1"] = {"id": "app-1", "owner_user_id": "admin-1", "status": "enabled"}
+    repo.apps["app-1"] = {
+        "id": "app-1",
+        "owner_user_id": "admin-1",
+        "status": "enabled",
+    }
     repo.publications["pub-1"] = {
         "id": "pub-1",
         "owner_user_id": "admin-2",
@@ -512,7 +550,11 @@ def test_create_api_key_rejects_cross_owner_publication(monkeypatch):
 
 def test_create_api_key_rejects_empty_scopes(monkeypatch):
     repo = _patch_repo(monkeypatch, FakeOpenApiRepository())
-    repo.apps["app-1"] = {"id": "app-1", "owner_user_id": "admin-1", "status": "enabled"}
+    repo.apps["app-1"] = {
+        "id": "app-1",
+        "owner_user_id": "admin-1",
+        "status": "enabled",
+    }
     repo.publications["pub-1"] = {
         "id": "pub-1",
         "owner_user_id": "admin-1",
@@ -536,7 +578,11 @@ def test_create_api_key_rejects_empty_scopes(monkeypatch):
 def test_revoke_api_key_rejects_cross_owner_key(monkeypatch):
     repo = _patch_repo(monkeypatch, FakeOpenApiRepository())
     repo.publications["pub-1"] = {"id": "pub-1", "owner_user_id": "admin-2"}
-    repo.keys["key-1"] = {"id": "key-1", "status": "active", "publication_id": "pub-1"}
+    repo.keys["key-1"] = {
+        "id": "key-1",
+        "status": "active",
+        "publication_id": "pub-1",
+    }
 
     with pytest.raises(HTTPException) as exc_info:
         open_api_admin.revoke_api_key("key-1", _request(user_id="admin-1"))
@@ -579,9 +625,21 @@ def test_list_invocations_filters_owner_before_paginating(monkeypatch):
     repo.publications["pub-1"] = {"id": "pub-1", "owner_user_id": "admin-1"}
     repo.publications["pub-2"] = {"id": "pub-2", "owner_user_id": "admin-2"}
     repo.invocations = [
-        {"id": "other-new", "publication_id": "pub-2", "created_at": "2026-07-02T10:00:00"},
-        {"id": "own-new", "publication_id": "pub-1", "created_at": "2026-07-02T09:00:00"},
-        {"id": "own-old", "publication_id": "pub-1", "created_at": "2026-07-02T08:00:00"},
+        {
+            "id": "other-new",
+            "publication_id": "pub-2",
+            "created_at": "2026-07-02T10:00:00",
+        },
+        {
+            "id": "own-new",
+            "publication_id": "pub-1",
+            "created_at": "2026-07-02T09:00:00",
+        },
+        {
+            "id": "own-old",
+            "publication_id": "pub-1",
+            "created_at": "2026-07-02T08:00:00",
+        },
     ]
 
     rows = open_api_admin.list_invocations(
@@ -591,12 +649,22 @@ def test_list_invocations_filters_owner_before_paginating(monkeypatch):
     )
 
     assert rows == [
-        {"id": "own-new", "publication_id": "pub-1", "created_at": "2026-07-02T09:00:00"},
+        {
+            "id": "own-new",
+            "publication_id": "pub-1",
+            "created_at": "2026-07-02T09:00:00",
+        },
     ]
-    assert {"publication_id": None, "limit": 1, "offset": 0} not in repo.list_invocations_calls
+    assert {
+        "publication_id": None,
+        "limit": 1,
+        "offset": 0,
+    } not in repo.list_invocations_calls
 
 
-def test_list_api_keys_only_returns_current_owner_publication_keys(monkeypatch):
+def test_list_api_keys_only_returns_current_owner_publication_keys(
+    monkeypatch,
+):
     repo = _patch_repo(monkeypatch, FakeOpenApiRepository())
     repo.publications["pub-1"] = {"id": "pub-1", "owner_user_id": "admin-1"}
     repo.publications["pub-2"] = {"id": "pub-2", "owner_user_id": "admin-2"}
@@ -609,12 +677,13 @@ def test_list_api_keys_only_returns_current_owner_publication_keys(monkeypatch):
 
 
 def test_open_api_admin_router_is_mounted_under_admin_prefix():
+    from fastapi import FastAPI
     from qwenpaw.app.routers import router
 
+    effective_app = FastAPI()
+    effective_app.include_router(router, prefix="/api")
     api_paths = {
-        f"/api{route.path}"
-        for route in router.routes
-        if "open-api" in getattr(route, "path", "")
+        path for path in effective_app.openapi()["paths"] if "open-api" in path
     }
 
     assert "/api/admin/open-api/publications" in api_paths
