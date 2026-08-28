@@ -255,40 +255,60 @@ class PriceCatalogRepository:
     def effective_catalog(self, at: datetime) -> dict[str, Any]:
         """Return the latest catalog effective at ``at`` and its rules."""
         with self.engine.connect() as conn:
-            catalog = (
-                conn.execute(
-                    select(billing_price_catalogs)
-                    .where(
-                        billing_price_catalogs.c.status == "published",
-                        billing_price_catalogs.c.effective_at.is_not(None),
-                        billing_price_catalogs.c.effective_at <= at,
-                        billing_price_catalogs.c.published_at <= at,
-                    )
-                    .order_by(
-                        billing_price_catalogs.c.effective_at.desc(),
-                        billing_price_catalogs.c.published_at.desc(),
-                        billing_price_catalogs.c.version.desc(),
-                    )
-                    .limit(1),
-                )
-                .mappings()
-                .first()
+            return self._effective_catalog_in_connection(conn, at)
+
+    def lock_effective_catalog(
+        self,
+        conn: Connection,
+        at: datetime,
+    ) -> dict[str, Any]:
+        """Lock and return the catalog selected by the pricing authority."""
+        return self._effective_catalog_in_connection(
+            conn,
+            at,
+            for_update=True,
+        )
+
+    @staticmethod
+    def _effective_catalog_in_connection(
+        conn: Connection,
+        at: datetime,
+        *,
+        for_update: bool = False,
+    ) -> dict[str, Any]:
+        statement = (
+            select(billing_price_catalogs)
+            .where(
+                billing_price_catalogs.c.status == "published",
+                billing_price_catalogs.c.effective_at.is_not(None),
+                billing_price_catalogs.c.effective_at <= at,
+                billing_price_catalogs.c.published_at <= at,
             )
-            if catalog is None:
-                raise CatalogNotFoundError(
-                    "no published retail catalog effective at "
-                    f"{at.isoformat()}",
-                )
-            rules = (
-                conn.execute(
-                    select(billing_price_rules).where(
-                        billing_price_rules.c.catalog_id == catalog["id"],
-                        billing_price_rules.c.status == "active",
-                    ),
-                )
-                .mappings()
-                .all()
+            .order_by(
+                billing_price_catalogs.c.effective_at.desc(),
+                billing_price_catalogs.c.published_at.desc(),
+                billing_price_catalogs.c.version.desc(),
             )
+            .limit(1)
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        catalog = conn.execute(statement).mappings().first()
+        if catalog is None:
+            raise CatalogNotFoundError(
+                "no published retail catalog effective at "
+                f"{at.isoformat()}",
+            )
+        rules = (
+            conn.execute(
+                select(billing_price_rules).where(
+                    billing_price_rules.c.catalog_id == catalog["id"],
+                    billing_price_rules.c.status == "active",
+                ),
+            )
+            .mappings()
+            .all()
+        )
 
         result = dict(catalog)
         result["metadata"] = _load_json(result.pop("metadata_json"))

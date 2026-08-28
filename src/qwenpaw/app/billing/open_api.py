@@ -17,6 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from .pricing import PriceCatalogService
 from .usage import IdempotencyConflictError
 from ..storage.repos.billing_repo import BillingRepository
+from ..storage.repos.price_catalog_repo import CatalogNotFoundError
 from ..storage.schema import (
     billing_price_catalogs,
     billing_usage_orders,
@@ -120,12 +121,11 @@ class OpenApiBillingCoordinator:
                     "user",
                     bound_user_id,
                 )
-                catalog = self._catalog_for_update(conn)
+                catalog = self._lock_catalog(conn)
                 invocation_id = str(uuid4())
                 usage_order_id = str(uuid4())
                 persisted_key = business_key or (
-                    f"openapi:{normalized.app_id}:{normalized.publication_id}:"
-                    f"invocation:{invocation_id}"
+                    f"openapi-invocation:{invocation_id}"
                 )
                 now = datetime.now(timezone.utc)
                 snapshot = json.dumps(
@@ -251,32 +251,13 @@ class OpenApiBillingCoordinator:
             raise OpenApiPublicationNotFoundError(command.publication_id)
         return dict(row)
 
-    @staticmethod
-    def _catalog_for_update(conn: Connection) -> dict[str, Any]:
-        now = datetime.now(timezone.utc)
-        row = (
-            conn.execute(
-                select(billing_price_catalogs)
-                .where(
-                    billing_price_catalogs.c.status == "published",
-                    billing_price_catalogs.c.effective_at.is_not(None),
-                    billing_price_catalogs.c.effective_at <= now,
-                    billing_price_catalogs.c.published_at <= now,
-                )
-                .order_by(
-                    billing_price_catalogs.c.effective_at.desc(),
-                    billing_price_catalogs.c.published_at.desc(),
-                    billing_price_catalogs.c.version.desc(),
-                )
-                .limit(1)
-                .with_for_update(),
-            )
-            .mappings()
-            .first()
-        )
-        if row is None:
-            raise CatalogNotReadyError("no published retail catalog is ready")
-        return dict(row)
+    def _lock_catalog(self, conn: Connection) -> dict[str, Any]:
+        try:
+            return self.pricing.lock_effective_catalog(conn)
+        except CatalogNotFoundError as exc:
+            raise CatalogNotReadyError(
+                "no published retail catalog is ready",
+            ) from exc
 
     @staticmethod
     def _existing_session(

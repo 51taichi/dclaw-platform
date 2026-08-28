@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from threading import Barrier
 
 import pytest
 from sqlalchemy import func, select, update
@@ -17,6 +19,7 @@ from qwenpaw.app.billing.pricing import (
     PriceCatalogDraft,
     PriceCatalogService,
     PriceRule,
+    QuoteRequest,
 )
 from qwenpaw.app.storage.engine import create_engine_from_settings
 from qwenpaw.app.storage.repos.billing_repo import BillingRepository
@@ -128,6 +131,14 @@ def _command(
     )
 
 
+class MutableClock:
+    def __init__(self, now: datetime) -> None:
+        self.now = now
+
+    def __call__(self) -> datetime:
+        return self.now
+
+
 def test_begin_resolves_wallet_only_from_publication_bound_user(
     coordinator,
 ):
@@ -195,6 +206,95 @@ def test_request_without_client_key_creates_distinct_invocation_pairs(
         ("open_api", first.invocation_id, first.usage_order_id),
         ("open_api", second.invocation_id, second.usage_order_id),
     }
+
+
+def test_client_key_cannot_collide_with_server_generated_invocation_key(
+    coordinator,
+    engine,
+):
+    first = coordinator.begin_invocation(_command(key=None))
+
+    client_key = f"invocation:{first.invocation_id}"
+    second = coordinator.begin_invocation(_command(key=client_key))
+
+    assert second.invocation_id != first.invocation_id
+    assert second.usage_order_id != first.usage_order_id
+    with engine.connect() as conn:
+        keys = conn.scalars(select(billing_usage_orders.c.business_key)).all()
+    assert set(keys) == {
+        f"openapi-invocation:{first.invocation_id}",
+        f"openapi:app-1:pub-1:{client_key}",
+    }
+
+
+def test_coordinator_locks_catalog_selected_by_injected_pricing_clock(engine):
+    open_api = SqlAlchemyOpenApiRepository(engine)
+    _create_open_api_identity(open_api)
+    clock = MutableClock(datetime(2030, 1, 1, tzinfo=timezone.utc))
+    pricing = PriceCatalogService(PriceCatalogRepository(engine), clock=clock)
+    pricing.publish(
+        PriceCatalogDraft(
+            version="future-v1",
+            effective_at=clock.now,
+            rules=(
+                PriceRule(
+                    id="future-text",
+                    provider_id="provider",
+                    model_key="model",
+                    capability="text",
+                    unit_type="tokens",
+                    input_credits_per_1k=1,
+                ),
+            ),
+        ),
+    )
+    coordinator = OpenApiBillingCoordinator(BillingRepository(engine), pricing)
+
+    quote = pricing.quote(
+        QuoteRequest(
+            provider_id="provider",
+            model_key="model",
+            capability="text",
+            parameters={},
+        ),
+    )
+    session = coordinator.begin_invocation(_command())
+
+    assert quote.catalog_version == "future-v1"
+    assert session.catalog_version == "future-v1"
+
+
+def test_sqlite_concurrent_same_key_replays_one_pair(coordinator):
+    start = Barrier(2)
+
+    def begin():
+        start.wait()
+        return coordinator.begin_invocation(_command(key="sqlite-same-key"))
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first, second = list(pool.map(lambda _index: begin(), range(2)))
+
+    assert first == second
+
+
+def test_sqlite_concurrent_same_key_payload_drift_conflicts(coordinator):
+    start = Barrier(2)
+
+    def begin(message: str):
+        start.wait()
+        try:
+            return coordinator.begin_invocation(
+                _command(key="sqlite-drift", message=message),
+            )
+        except IdempotencyConflictError:
+            return "conflict"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(begin, ("first", "changed")))
+
+    sessions = [result for result in results if result != "conflict"]
+    assert len(sessions) == 1
+    assert results.count("conflict") == 1
 
 
 def test_same_key_with_different_canonical_payload_conflicts(coordinator):

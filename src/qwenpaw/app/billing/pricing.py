@@ -9,6 +9,8 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, NoReturn, TypeGuard
 
+from sqlalchemy.engine import Connection
+
 from ..storage.repos.price_catalog_repo import (
     CatalogImmutableError,
     CatalogNotFoundError,
@@ -339,6 +341,13 @@ class PriceCatalogService:
     def list_catalogs(self) -> list[dict[str, Any]]:
         """Return the immutable catalog history for trusted admins."""
         return self.repository.list_catalogs()
+
+    def lock_effective_catalog(self, conn: Connection) -> dict[str, Any]:
+        """Lock the catalog selected by this service's authoritative clock."""
+        return self.repository.lock_effective_catalog(
+            conn,
+            _aware_utc(self._clock()),
+        )
 
     def validate_draft(self, draft: PriceCatalogDraft) -> None:
         if not draft.version.strip():
