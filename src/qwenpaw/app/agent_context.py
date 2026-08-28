@@ -3,7 +3,7 @@
 
 Provides utilities to get the correct agent instance for each request.
 """
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from typing import Optional, TYPE_CHECKING
 from fastapi import Request
 from .multi_agent_manager import MultiAgentManager
@@ -30,7 +30,8 @@ _current_user_id: ContextVar[Optional[str]] = ContextVar(
     default=None,
 )
 
-# Context variable for an externally published agent's dedicated knowledge base.
+# Context variable for an externally published agent's dedicated knowledge
+# base.
 _current_knowledge_base_id: ContextVar[Optional[str]] = ContextVar(
     "current_knowledge_base_id",
     default=None,
@@ -42,12 +43,18 @@ _current_root_session_id: ContextVar[Optional[str]] = ContextVar(
     default=None,
 )
 
-# Context variable to store current chat model config for per-chat model selection
+# Context variable to store current chat model config for per-chat selection.
 _current_chat_model: ContextVar[Optional[dict]] = ContextVar(
     "current_chat_model",
     default=None,
 )
 
+# The financial session is installed only after its order/invocation pair has
+# committed. ContextVar provides task-local inheritance for nested model calls.
+_current_billing_context: ContextVar[object | None] = ContextVar(
+    "current_billing_context",
+    default=None,
+)
 
 
 async def get_agent_for_request(
@@ -89,7 +96,7 @@ async def get_agent_for_request(
     if not target_agent_id:
         target_agent_id = request.query_params.get("agent_id")
 
-    # Fallback to Referer header for iframe relative assets (e.g. css/js loaded by html)
+    # Fallback to Referer for iframe-relative assets, such as CSS or JS.
     if not target_agent_id:
         referer = request.headers.get("referer")
         if referer:
@@ -242,3 +249,18 @@ def get_current_chat_model() -> Optional[dict]:
         Chat model configuration dictionary or None
     """
     return _current_chat_model.get()
+
+
+def set_current_billing_context(session: object) -> Token[object | None]:
+    """Install one committed OpenAPI billing session for this async context."""
+    return _current_billing_context.set(session)
+
+
+def get_current_billing_context() -> object | None:
+    """Return the committed billing session, if this call is OpenAPI scoped."""
+    return _current_billing_context.get()
+
+
+def reset_current_billing_context(token: Token[object | None]) -> None:
+    """Restore the prior billing context in a ``finally`` block."""
+    _current_billing_context.reset(token)

@@ -2,13 +2,23 @@
 """Runtime preparation helpers for external Open API message calls."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 import re
 from typing import Any
 
-from agentscope_runtime.engine.schemas.agent_schemas import ContentType, TextContent
+from agentscope_runtime.engine.schemas.agent_schemas import (
+    ContentType,
+    TextContent,
+)
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
+
+from ..agent_context import (
+    reset_current_billing_context,
+    set_current_billing_context,
+)
+from ..billing.open_api import OpenApiBillingSession
 
 
 _SAFE_ID_PATTERN = re.compile(r"[^A-Za-z0-9_.:-]+")
@@ -64,6 +74,16 @@ class PreparedOpenRun:
     console_channel: Any
 
 
+@contextmanager
+def open_api_billing_context(session: OpenApiBillingSession):
+    """Scope a committed billing session to an OpenAPI execution path."""
+    token = set_current_billing_context(session)
+    try:
+        yield session
+    finally:
+        reset_current_billing_context(token)
+
+
 def build_open_session_id(
     app_id: str,
     public_id: str,
@@ -71,7 +91,9 @@ def build_open_session_id(
     external_session_id: str | None,
 ) -> str:
     external_user = _safe_external_id(external_user_id, fallback="anonymous")
-    external_session = _safe_external_id(external_session_id or "", fallback="default")
+    external_session = _safe_external_id(
+        external_session_id or "", fallback="default"
+    )
     return f"open:{app_id}:{public_id}:{external_user}:{external_session}"
 
 
@@ -189,6 +211,8 @@ async def _prepare_open_chat(
 
 
 def _safe_external_id(value: str, *, fallback: str) -> str:
-    normalized = _SAFE_ID_PATTERN.sub("_", value.strip())[:_MAX_EXTERNAL_ID_LENGTH]
+    normalized = _SAFE_ID_PATTERN.sub("_", value.strip())[
+        :_MAX_EXTERNAL_ID_LENGTH
+    ]
     normalized = normalized.strip("._:-")
     return normalized or fallback

@@ -61,6 +61,50 @@ class BillingRepository:
             )
 
         with self.engine.begin() as conn:
+            return self.ensure_wallet_in_connection(conn, owner_type, owner_id)
+
+    def ensure_wallet_in_connection(
+        self,
+        conn: Connection,
+        owner_type: str,
+        owner_id: str,
+    ) -> dict[str, Any]:
+        """Create or recover a wallet inside the caller's transaction."""
+        if not owner_type.strip() or not owner_id.strip():
+            raise ValueError(
+                "wallet owner_type and owner_id must be non-empty",
+            )
+        row = (
+            conn.execute(
+                select(billing_wallets).where(
+                    billing_wallets.c.owner_type == owner_type,
+                    billing_wallets.c.owner_id == owner_id,
+                ),
+            )
+            .mappings()
+            .first()
+        )
+        if row is None:
+            try:
+                # sqlite3 does not start its outer transaction for a SELECT.
+                # Without a write first, releasing the first savepoint commits
+                # the wallet even if a caller later rolls the outer scope back.
+                if conn.dialect.name == "sqlite":
+                    conn.exec_driver_sql(
+                        "UPDATE billing_wallets SET id = id WHERE 0",
+                    )
+                with conn.begin_nested():
+                    conn.execute(
+                        insert(billing_wallets).values(
+                            id=str(uuid4()),
+                            owner_type=owner_type,
+                            owner_id=owner_id,
+                        ),
+                    )
+            except IntegrityError:
+                # A concurrent creator won the unique owner key. The
+                # savepoint keeps this transaction usable for the read.
+                pass
             row = (
                 conn.execute(
                     select(billing_wallets).where(
@@ -69,33 +113,9 @@ class BillingRepository:
                     ),
                 )
                 .mappings()
-                .first()
+                .one()
             )
-            if row is None:
-                try:
-                    with conn.begin_nested():
-                        conn.execute(
-                            insert(billing_wallets).values(
-                                id=str(uuid4()),
-                                owner_type=owner_type,
-                                owner_id=owner_id,
-                            ),
-                        )
-                except IntegrityError:
-                    # A concurrent creator won the unique owner key. The
-                    # savepoint keeps this transaction usable for the read.
-                    pass
-                row = (
-                    conn.execute(
-                        select(billing_wallets).where(
-                            billing_wallets.c.owner_type == owner_type,
-                            billing_wallets.c.owner_id == owner_id,
-                        ),
-                    )
-                    .mappings()
-                    .one()
-                )
-            return dict(row)
+        return dict(row)
 
     def get_wallet(
         self,
