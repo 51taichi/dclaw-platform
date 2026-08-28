@@ -9,7 +9,6 @@ import logging
 import os
 import time
 import uuid
-from datetime import datetime, timezone
 from typing import Any, AsyncGenerator
 
 from fastapi import APIRouter, HTTPException, Request
@@ -536,28 +535,6 @@ def _terminal_billing_payload(
     insufficient: InsufficientUsageCreditsError | None,
 ) -> dict[str, Any]:
     items = billing.usage_service.list_items(session.usage_order_id)
-    if not items:
-        # No supplier call exists. Seal the bridge order without inventing an
-        # item or touching the ledger; this includes initial reserve failure.
-        from sqlalchemy import update
-
-        from ..storage.schema import billing_usage_orders, open_api_invocations
-
-        now = datetime.now(timezone.utc)
-        with billing.repository.engine.begin() as conn:
-            conn.execute(
-                update(billing_usage_orders)
-                .where(
-                    billing_usage_orders.c.id == session.usage_order_id,
-                    billing_usage_orders.c.status == "quoted",
-                )
-                .values(status="settled", settled_at=now, updated_at=now),
-            )
-            conn.execute(
-                update(open_api_invocations)
-                .where(open_api_invocations.c.id == session.invocation_id)
-                .values(billing_status="settled"),
-            )
     order = billing.usage_service.get_order(session.usage_order_id)
     balance = billing.repository.balance(session.wallet_id)
     completed = sum(
@@ -573,7 +550,11 @@ def _terminal_billing_payload(
             "required_credits_for_next_step": insufficient.required,
             "invocation_id": session.invocation_id,
         }
-    billing_status = str(order["status"])
+    billing_status = (
+        "settled"
+        if not items and str(order["status"]) == "quoted"
+        else str(order["status"])
+    )
     if billing_status == "settled" and int(order["captured_credits"]):
         billing_status = "captured"
     return {
@@ -611,6 +592,9 @@ async def _shielded_finalize(
             execution.note_finalized(stored)
             return stored
 
+        no_items = not billing.usage_service.list_items(
+            session.usage_order_id,
+        )
         terminal = _terminal_billing_payload(
             billing,
             session,
@@ -671,17 +655,33 @@ async def _shielded_finalize(
             billing_status=str(terminal.get("billing_status") or "settled"),
         )
         execution.begin_finalizing()
-        updated = billing.open_api_repository.finalize_invocation_execution(
-            session.invocation_id,
-            execution_fence,
-            status=status,
-            status_code=status_code,
-            latency_ms=_latency_ms(stream_started_at),
-            error_summary=error_summary,
-            billing_error_code=billing_error_code,
-            expert_team_run_id=expert_team_run_id or None,
-            terminal_event=terminal,
-        )
+        finalize_kwargs = {
+            "status": status,
+            "status_code": status_code,
+            "latency_ms": _latency_ms(stream_started_at),
+            "error_summary": error_summary,
+            "billing_error_code": billing_error_code,
+            "expert_team_run_id": expert_team_run_id or None,
+            "terminal_event": terminal,
+        }
+        repository = billing.open_api_repository
+        if no_items:
+            updated = (
+                repository.finalize_empty_invocation_execution(
+                    session.invocation_id,
+                    session.usage_order_id,
+                    execution_fence,
+                    **finalize_kwargs,
+                )
+            )
+        else:
+            updated = (
+                repository.finalize_invocation_execution(
+                    session.invocation_id,
+                    execution_fence,
+                    **finalize_kwargs,
+                )
+            )
         if updated is None:
             updated = billing.open_api_repository.get_invocation(
                 session.invocation_id,
@@ -726,6 +726,7 @@ async def _seal_preproducer_failure(
             content={"code": "invocation_still_running"},
         )
 
+    no_items = not billing.usage_service.list_items(session.usage_order_id)
     financial = _terminal_billing_payload(billing, session, None)
     public_code = _preproducer_error_code(status_code, message)
     terminal = _canonical_terminal_snapshot(
@@ -741,16 +742,30 @@ async def _seal_preproducer_failure(
         required_credits=None,
         billing_status=str(financial.get("billing_status") or "settled"),
     )
-    sealed = billing.open_api_repository.finalize_invocation_execution(
-        session.invocation_id,
-        execution_fence,
-        status="failed",
-        status_code=status_code,
-        latency_ms=_latency_ms(started_at),
-        error_summary=terminal["message"],
-        billing_status=str(financial.get("billing_status") or "settled"),
-        terminal_event=terminal,
-    )
+    if no_items:
+        sealed = (
+            billing.open_api_repository.finalize_empty_invocation_execution(
+                session.invocation_id,
+                session.usage_order_id,
+                execution_fence,
+                status="failed",
+                status_code=status_code,
+                latency_ms=_latency_ms(started_at),
+                error_summary=terminal["message"],
+                terminal_event=terminal,
+            )
+        )
+    else:
+        sealed = billing.open_api_repository.finalize_invocation_execution(
+            session.invocation_id,
+            execution_fence,
+            status="failed",
+            status_code=status_code,
+            latency_ms=_latency_ms(started_at),
+            error_summary=terminal["message"],
+            billing_status=str(financial.get("billing_status") or "settled"),
+            terminal_event=terminal,
+        )
     if sealed is None:
         await _wait_for_durable_terminal(
             billing.open_api_repository,

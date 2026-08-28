@@ -318,6 +318,223 @@ def test_postgresql_expired_execution_lease_has_one_takeover_winner(
 
 
 @pytest.mark.integration
+def test_postgresql_stale_empty_finalizer_cannot_change_takeover_winner(
+    postgres_open_api_engine,
+):
+    identity = "stale-empty-finalizer"
+    coordinator = _coordinator(postgres_open_api_engine, identity)
+    session = coordinator.begin_invocation(
+        _command(identity, "postgres-stale-empty", mode="enforced"),
+    )
+    coordinator.repository.grant(
+        session.wallet_id,
+        credits=5,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key="stale-empty-funds",
+    )
+    ledger_count = len(
+        coordinator.repository.list_ledger(session.wallet_id, 100, None),
+    )
+    repository = SqlAlchemyOpenApiRepository(postgres_open_api_engine)
+    old_fence = repository.claim_invocation_execution(
+        session.invocation_id,
+        "stale-empty-owner",
+        lease_seconds=30,
+    )
+    assert old_fence is not None
+    with postgres_open_api_engine.begin() as conn:
+        conn.execute(
+            update(open_api_invocations)
+            .where(open_api_invocations.c.id == session.invocation_id)
+            .values(
+                execution_lease_expires_at=datetime.now(timezone.utc)
+                - timedelta(seconds=1),
+            ),
+        )
+    winner_fence = repository.takeover_invocation_execution(
+        session.invocation_id,
+        "empty-finalize-winner",
+        lease_seconds=30,
+    )
+    assert winner_fence is not None
+    with postgres_open_api_engine.begin() as conn:
+        conn.execute(
+            update(open_api_invocations)
+            .where(open_api_invocations.c.id == session.invocation_id)
+            .values(billing_status="reconciling"),
+        )
+    winner_terminal = {
+        "type": "billing.interrupted",
+        "billing_status": "reconciling",
+        "winner": "empty-finalize-winner",
+    }
+    start = Barrier(2)
+
+    def stale_finalize():
+        start.wait()
+        return SqlAlchemyOpenApiRepository(
+            postgres_open_api_engine,
+        ).finalize_empty_invocation_execution(
+            session.invocation_id,
+            session.usage_order_id,
+            old_fence,
+            status="failed",
+            status_code=500,
+            error_summary="stale",
+            terminal_event={"type": "billing.completed", "winner": "stale"},
+        )
+
+    def winner_finalize():
+        start.wait()
+        return SqlAlchemyOpenApiRepository(
+            postgres_open_api_engine,
+        ).finalize_invocation_execution(
+            session.invocation_id,
+            winner_fence,
+            status="failed",
+            status_code=500,
+            error_summary="recovered",
+            billing_status="reconciling",
+            terminal_event=winner_terminal,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        stale_result, winner_result = list(
+            pool.map(lambda call: call(), (stale_finalize, winner_finalize)),
+        )
+
+    assert stale_result is None
+    assert winner_result is not None
+    invocation = repository.get_invocation(session.invocation_id)
+    assert invocation["billing_status"] == "reconciling"
+    assert invocation["terminal_event_json"] == winner_terminal
+    with postgres_open_api_engine.connect() as conn:
+        order_status = conn.scalar(
+            select(billing_usage_orders.c.status).where(
+                billing_usage_orders.c.id == session.usage_order_id,
+            ),
+        )
+        item_count = conn.scalar(
+            select(func.count())
+            .select_from(billing_usage_items)
+            .where(
+                billing_usage_items.c.usage_order_id
+                == session.usage_order_id,
+            ),
+        )
+    assert order_status == "quoted"
+    assert item_count == 0
+    assert (
+        len(coordinator.repository.list_ledger(session.wallet_id, 100, None))
+        == ledger_count
+    )
+
+
+@pytest.mark.integration
+def test_postgresql_empty_finalize_has_one_current_fence_winner(
+    postgres_open_api_engine,
+):
+    identity = "empty-finalize-race"
+    coordinator = _coordinator(postgres_open_api_engine, identity)
+    session = coordinator.begin_invocation(
+        _command(identity, "postgres-empty-race", mode="enforced"),
+    )
+    coordinator.repository.grant(
+        session.wallet_id,
+        credits=5,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key="empty-race-funds",
+    )
+    ledger_count = len(
+        coordinator.repository.list_ledger(session.wallet_id, 100, None),
+    )
+    repository = SqlAlchemyOpenApiRepository(postgres_open_api_engine)
+    old_fence = repository.claim_invocation_execution(
+        session.invocation_id,
+        "empty-race-stale",
+        lease_seconds=30,
+    )
+    assert old_fence is not None
+    with postgres_open_api_engine.begin() as conn:
+        conn.execute(
+            update(open_api_invocations)
+            .where(open_api_invocations.c.id == session.invocation_id)
+            .values(
+                execution_lease_expires_at=datetime.now(timezone.utc)
+                - timedelta(seconds=1),
+            ),
+        )
+    winner_fence = repository.takeover_invocation_execution(
+        session.invocation_id,
+        "empty-race-winner",
+        lease_seconds=30,
+    )
+    assert winner_fence is not None
+    winner_terminal = {
+        "type": "billing.completed",
+        "billing_status": "settled",
+        "winner": "empty-race-winner",
+    }
+    start = Barrier(2)
+
+    def finalize(fence, terminal):
+        start.wait()
+        return SqlAlchemyOpenApiRepository(
+            postgres_open_api_engine,
+        ).finalize_empty_invocation_execution(
+            session.invocation_id,
+            session.usage_order_id,
+            fence,
+            status="failed",
+            status_code=500,
+            error_summary=str(terminal["winner"]),
+            terminal_event=terminal,
+        )
+
+    stale_terminal = {
+        "type": "billing.completed",
+        "billing_status": "settled",
+        "winner": "empty-race-stale",
+    }
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        stale_result, winner_result = list(
+            pool.map(
+                lambda pair: finalize(*pair),
+                (
+                    (old_fence, stale_terminal),
+                    (winner_fence, winner_terminal),
+                ),
+            ),
+        )
+
+    assert stale_result is None
+    assert winner_result is not None
+    invocation = repository.get_invocation(session.invocation_id)
+    assert invocation["billing_status"] == "settled"
+    assert invocation["terminal_event_json"] == winner_terminal
+    with postgres_open_api_engine.connect() as conn:
+        assert conn.scalar(
+            select(billing_usage_orders.c.status).where(
+                billing_usage_orders.c.id == session.usage_order_id,
+            ),
+        ) == "settled"
+        assert conn.scalar(
+            select(func.count())
+            .select_from(billing_usage_items)
+            .where(
+                billing_usage_items.c.usage_order_id
+                == session.usage_order_id,
+            ),
+        ) == 0
+    assert (
+        len(coordinator.repository.list_ledger(session.wallet_id, 100, None))
+        == ledger_count
+    )
+
+
+@pytest.mark.integration
 def test_postgresql_db_clock_and_fence_reject_late_provider_capture(
     postgres_open_api_engine,
     monkeypatch,

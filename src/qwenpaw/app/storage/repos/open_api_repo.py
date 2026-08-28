@@ -15,6 +15,8 @@ from ... import db
 from ...billing.execution import OpenApiExecutionFence
 from ..engine import get_app_engine
 from ..schema import (
+    billing_usage_items,
+    billing_usage_orders,
     create_all,
     open_api_external_apps,
     open_api_invocations,
@@ -22,6 +24,10 @@ from ..schema import (
     open_api_publications,
 )
 from ..settings import get_storage_settings
+
+
+class _EmptyFinalizationLost(RuntimeError):
+    """Roll back an empty-order transition if its fence stops matching."""
 
 
 class OpenApiRepository(Protocol):  # pylint: disable=too-many-public-methods
@@ -125,6 +131,22 @@ class OpenApiRepository(Protocol):  # pylint: disable=too-many-public-methods
         terminal_event: dict[str, Any],
         latency_ms: int | None = None,
         billing_status: str | None = None,
+        billing_error_code: str | None = None,
+        expert_team_run_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        ...
+
+    def finalize_empty_invocation_execution(
+        self,
+        invocation_id: str,
+        usage_order_id: str,
+        fence: OpenApiExecutionFence,
+        *,
+        status: str,
+        status_code: int,
+        error_summary: str,
+        terminal_event: dict[str, Any],
+        latency_ms: int | None = None,
         billing_error_code: str | None = None,
         expert_team_run_id: str | None = None,
     ) -> dict[str, Any] | None:
@@ -618,6 +640,122 @@ class SqlAlchemyOpenApiRepository:  # pylint: disable=too-many-public-methods
                 .values(**values),
             )
         if result.rowcount != 1:
+            return None
+        return self._get_invocation(invocation_id)
+
+    def finalize_empty_invocation_execution(
+        self,
+        invocation_id: str,
+        usage_order_id: str,
+        fence: OpenApiExecutionFence,
+        *,
+        status: str,
+        status_code: int,
+        error_summary: str,
+        terminal_event: dict[str, Any],
+        latency_ms: int | None = None,
+        billing_error_code: str | None = None,
+        expert_team_run_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Atomically settle and seal an item-free claimed invocation."""
+        checked = _checked_fence(fence)
+        current = _database_now(self.engine)
+        final_values: dict[str, Any] = {
+            "status": status,
+            "status_code": int(status_code),
+            "error_summary": error_summary,
+            "billing_status": "settled",
+            "terminal_event_json": _json_text(
+                "terminal_event",
+                terminal_event,
+                dict,
+            ),
+            "execution_owner_token": None,
+            "execution_lease_expires_at": None,
+        }
+        for key, value in (
+            ("latency_ms", latency_ms),
+            ("billing_error_code", billing_error_code),
+            ("expert_team_run_id", expert_team_run_id),
+        ):
+            if value is not None:
+                final_values[key] = value
+        try:
+            with self.engine.begin() as conn:
+                guarded = conn.execute(
+                    update(open_api_invocations)
+                    .where(
+                        open_api_invocations.c.id == invocation_id,
+                        open_api_invocations.c.billing_usage_order_id
+                        == usage_order_id,
+                        open_api_invocations.c.status == "running",
+                        open_api_invocations.c.execution_owner_token
+                        == checked.owner_token,
+                        open_api_invocations.c.execution_fence_generation
+                        == checked.generation,
+                        open_api_invocations.c.execution_lease_expires_at
+                        > current,
+                        open_api_invocations.c.terminal_event_json.is_(None),
+                    )
+                    .values(
+                        execution_fence_generation=(
+                            open_api_invocations.c.execution_fence_generation
+                        ),
+                    ),
+                )
+                if guarded.rowcount != 1:
+                    return None
+                order = (
+                    conn.execute(
+                        select(billing_usage_orders)
+                        .where(
+                            billing_usage_orders.c.id == usage_order_id,
+                            billing_usage_orders.c.source_type == "open_api",
+                            billing_usage_orders.c.source_id == invocation_id,
+                        )
+                        .with_for_update(),
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+                has_items = conn.execute(
+                    select(billing_usage_items.c.id)
+                    .where(
+                        billing_usage_items.c.usage_order_id
+                        == usage_order_id,
+                    )
+                    .limit(1),
+                ).first()
+                if order is None or has_items is not None:
+                    return None
+                if str(order["status"]) not in {"quoted", "settled"}:
+                    return None
+                conn.execute(
+                    update(billing_usage_orders)
+                    .where(billing_usage_orders.c.id == usage_order_id)
+                    .values(
+                        status="settled",
+                        settled_at=current,
+                        updated_at=current,
+                    ),
+                )
+                finalized = conn.execute(
+                    update(open_api_invocations)
+                    .where(
+                        open_api_invocations.c.id == invocation_id,
+                        open_api_invocations.c.execution_owner_token
+                        == checked.owner_token,
+                        open_api_invocations.c.execution_fence_generation
+                        == checked.generation,
+                        open_api_invocations.c.execution_lease_expires_at
+                        > current,
+                        open_api_invocations.c.terminal_event_json.is_(None),
+                    )
+                    .values(**final_values),
+                )
+                if finalized.rowcount != 1:
+                    raise _EmptyFinalizationLost
+        except _EmptyFinalizationLost:
             return None
         return self._get_invocation(invocation_id)
 
@@ -1266,6 +1404,112 @@ class SqliteOpenApiRepository:  # pylint: disable=too-many-public-methods
         db.get_db().commit()
         if cursor.rowcount != 1:
             return None
+        return self._get_invocation(invocation_id)
+
+    def finalize_empty_invocation_execution(
+        self,
+        invocation_id: str,
+        usage_order_id: str,
+        fence: OpenApiExecutionFence,
+        *,
+        status: str,
+        status_code: int,
+        error_summary: str,
+        terminal_event: dict[str, Any],
+        latency_ms: int | None = None,
+        billing_error_code: str | None = None,
+        expert_team_run_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Atomically settle and seal an item-free claimed invocation."""
+        checked = _checked_fence(fence)
+        connection = db.get_db()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            guarded = connection.execute(
+                "UPDATE open_api_invocations SET "
+                "execution_fence_generation = execution_fence_generation "
+                "WHERE id = ? AND billing_usage_order_id = ? "
+                "AND status = 'running' AND execution_owner_token = ? "
+                "AND execution_fence_generation = ? "
+                "AND execution_lease_expires_at > "
+                "strftime('%Y-%m-%d %H:%M:%f', 'now') "
+                "AND terminal_event_json IS NULL",
+                (
+                    invocation_id,
+                    usage_order_id,
+                    checked.owner_token,
+                    checked.generation,
+                ),
+            )
+            if guarded.rowcount != 1:
+                connection.rollback()
+                return None
+            order = connection.execute(
+                "SELECT status FROM billing_usage_orders WHERE id = ? "
+                "AND source_type = 'open_api' AND source_id = ?",
+                (usage_order_id, invocation_id),
+            ).fetchone()
+            item = connection.execute(
+                "SELECT id FROM billing_usage_items WHERE usage_order_id = ? "
+                "LIMIT 1",
+                (usage_order_id,),
+            ).fetchone()
+            if order is None or item is not None or str(order[0]) not in {
+                "quoted",
+                "settled",
+            }:
+                connection.rollback()
+                return None
+            connection.execute(
+                "UPDATE billing_usage_orders SET status = 'settled', "
+                "settled_at = strftime('%Y-%m-%d %H:%M:%f', 'now'), "
+                "updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') "
+                "WHERE id = ?",
+                (usage_order_id,),
+            )
+            values: list[Any] = [
+                status,
+                int(status_code),
+                error_summary,
+                _json_text("terminal_event", terminal_event, dict),
+            ]
+            assignments = [
+                "status = ?",
+                "status_code = ?",
+                "error_summary = ?",
+                "terminal_event_json = ?",
+                "billing_status = 'settled'",
+                "execution_owner_token = NULL",
+                "execution_lease_expires_at = NULL",
+            ]
+            for key, value in (
+                ("latency_ms", latency_ms),
+                ("billing_error_code", billing_error_code),
+                ("expert_team_run_id", expert_team_run_id),
+            ):
+                if value is not None:
+                    assignments.append(f"{key} = ?")
+                    values.append(value)
+            values.extend(
+                (invocation_id, checked.owner_token, checked.generation),
+            )
+            finalized = connection.execute(
+                "UPDATE open_api_invocations SET "
+                + ", ".join(assignments)
+                + " WHERE id = ? AND execution_owner_token = ? "
+                "AND execution_fence_generation = ? "
+                "AND execution_lease_expires_at > "
+                "strftime('%Y-%m-%d %H:%M:%f', 'now') "
+                "AND terminal_event_json IS NULL",
+                tuple(values),
+            )
+            if finalized.rowcount != 1:
+                connection.rollback()
+                return None
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
         return self._get_invocation(invocation_id)
 
     def update_claimed_invocation(

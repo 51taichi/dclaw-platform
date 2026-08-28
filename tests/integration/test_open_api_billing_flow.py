@@ -1413,6 +1413,184 @@ async def test_owner_loss_stops_next_supplier_and_cannot_replace_winner(
     assert invocation["terminal_event_json"] == winner_terminal
 
 
+def _seal_reconciling_takeover_winner(billing_flow, invocation_id: str):
+    invocation = billing_flow.open_repo.get_invocation(invocation_id)
+    assert invocation is not None
+    order_id = str(invocation["billing_usage_order_id"])
+    with billing_flow.engine.begin() as conn:
+        conn.execute(
+            update(open_api_invocations)
+            .where(open_api_invocations.c.id == invocation_id)
+            .values(
+                execution_lease_expires_at=datetime.now(timezone.utc)
+                - timedelta(seconds=1),
+            ),
+        )
+    winner = billing_flow.open_repo.takeover_invocation_execution(
+        invocation_id,
+        "no-item-winner",
+        lease_seconds=30,
+    )
+    assert winner is not None
+    with billing_flow.engine.begin() as conn:
+        conn.execute(
+            update(open_api_invocations)
+            .where(open_api_invocations.c.id == invocation_id)
+            .values(billing_status="reconciling"),
+        )
+    terminal = {
+        "type": "billing.interrupted",
+        "invocation_id": invocation_id,
+        "billing_status": "reconciling",
+        "status": "failed",
+        "http_status": 500,
+        "code": "request_interrupted",
+        "message": "recovered by takeover winner",
+        "required_credits": None,
+        "headers": {
+            "X-DClaw-Invocation-Id": invocation_id,
+            "X-DClaw-Billing-Status": "reconciling",
+        },
+    }
+    sealed = billing_flow.open_repo.finalize_invocation_execution(
+        invocation_id,
+        winner,
+        status="failed",
+        status_code=500,
+        error_summary="recovered by takeover winner",
+        billing_status="reconciling",
+        terminal_event=terminal,
+    )
+    assert sealed is not None
+    return order_id, terminal
+
+
+@pytest.mark.asyncio
+async def test_stale_preproducer_failure_cannot_settle_takeover_winner_state(
+    billing_flow,
+    monkeypatch,
+):
+    wallet_id = _fund(billing_flow, 20, "stale-preproducer-funds")
+    ledger_count = len(
+        billing_flow.repository.list_ledger(wallet_id, 100, None),
+    )
+    prepare_started = asyncio.Event()
+    release_prepare = asyncio.Event()
+
+    async def fail_after_takeover(*_args, **_kwargs):
+        prepare_started.set()
+        await release_prepare.wait()
+        raise open_api.HTTPException(500, "late preproducer failure")
+
+    monkeypatch.setattr(
+        open_api,
+        "prepare_open_agent_chat",
+        fail_after_takeover,
+    )
+    transport = ASGITransport(app=billing_flow.app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://stale-preproducer",
+    ) as client:
+        request_task = asyncio.create_task(
+            client.post(
+                "/open/v1/targets/public-agent/messages",
+                headers={"Idempotency-Key": "stale-preproducer"},
+                json={
+                    "external_user_id": "external",
+                    "message": "late failure",
+                },
+            ),
+        )
+        await asyncio.wait_for(prepare_started.wait(), timeout=2)
+        invocation = billing_flow.open_repo.list_invocations(limit=1)[0]
+        invocation_id = str(invocation["id"])
+        order_id, winner_terminal = _seal_reconciling_takeover_winner(
+            billing_flow,
+            invocation_id,
+        )
+        release_prepare.set()
+        response = await asyncio.wait_for(request_task, timeout=2)
+
+    assert response.status_code == 500
+    assert response.json() == winner_terminal
+    order = billing_flow.runtime.usage_service.get_order(order_id)
+    assert order["status"] == "quoted"
+    durable = billing_flow.open_repo.get_invocation(invocation_id)
+    assert durable["billing_status"] == "reconciling"
+    assert durable["terminal_event_json"] == winner_terminal
+    assert billing_flow.runtime.usage_service.list_items(order_id) == []
+    assert (
+        len(billing_flow.repository.list_ledger(wallet_id, 100, None))
+        == ledger_count
+    )
+
+
+@pytest.mark.asyncio
+async def test_stale_no_item_stream_finalize_cannot_settle_winner_state(
+    billing_flow,
+    monkeypatch,
+):
+    wallet_id = _fund(billing_flow, 20, "stale-stream-finalize-funds")
+    ledger_count = len(
+        billing_flow.repository.list_ledger(wallet_id, 100, None),
+    )
+    session = _begin_recovery_session(billing_flow, "stale-stream-finalize")
+    old_fence = billing_flow.open_repo.claim_invocation_execution(
+        session.invocation_id,
+        "stale-stream-owner",
+        lease_seconds=30,
+    )
+    assert old_fence is not None
+    execution = billing_flow.runtime.execution(
+        session.invocation_id,
+        old_fence,
+        30,
+    )
+    winner_state: dict[str, object] = {}
+    original_payload = open_api._terminal_billing_payload
+
+    def takeover_before_stale_payload(*args, **kwargs):
+        order_id, terminal = _seal_reconciling_takeover_winner(
+            billing_flow,
+            session.invocation_id,
+        )
+        winner_state.update(order_id=order_id, terminal=terminal)
+        return original_payload(*args, **kwargs)
+
+    monkeypatch.setattr(
+        open_api,
+        "_terminal_billing_payload",
+        takeover_before_stale_payload,
+    )
+
+    sealed = await open_api._shielded_finalize(
+        billing_flow.runtime,
+        session,
+        execution,
+        stream_started_at=0.0,
+        stream_failure=None,
+        stream_exception=None,
+        cancelled=False,
+        expert_team_run_id="",
+        execution_fence=old_fence,
+    )
+
+    order_id = str(winner_state["order_id"])
+    winner_terminal = winner_state["terminal"]
+    assert sealed == winner_terminal
+    order = billing_flow.runtime.usage_service.get_order(order_id)
+    assert order["status"] == "quoted"
+    durable = billing_flow.open_repo.get_invocation(session.invocation_id)
+    assert durable["billing_status"] == "reconciling"
+    assert durable["terminal_event_json"] == winner_terminal
+    assert billing_flow.runtime.usage_service.list_items(order_id) == []
+    assert (
+        len(billing_flow.repository.list_ledger(wallet_id, 100, None))
+        == ledger_count
+    )
+
+
 @pytest.mark.asyncio
 async def test_fastapi_cancel_resistant_late_response_is_financially_fenced(
     billing_flow,
