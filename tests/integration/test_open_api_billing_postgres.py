@@ -30,6 +30,10 @@ from qwenpaw.app.billing.usage import (
     UsageOrderConflictError,
     UsageService,
 )
+from qwenpaw.app.open_api.runtime import (
+    OpenApiBillingRuntime,
+    recover_open_api_billing,
+)
 from qwenpaw.app.storage.repos.billing_repo import BillingRepository
 from qwenpaw.app.storage.repos.open_api_repo import SqlAlchemyOpenApiRepository
 from qwenpaw.app.storage.repos.price_catalog_repo import PriceCatalogRepository
@@ -150,17 +154,17 @@ def _billing_counts(engine) -> tuple[int, int, int]:
     with engine.connect() as conn:
         return (
             int(
-                conn.scalar(select(func.count()).select_from(billing_wallets))
+                conn.scalar(select(func.count()).select_from(billing_wallets)),
             ),
             int(
                 conn.scalar(
-                    select(func.count()).select_from(billing_usage_orders)
-                )
+                    select(func.count()).select_from(billing_usage_orders),
+                ),
             ),
             int(
                 conn.scalar(
-                    select(func.count()).select_from(open_api_invocations)
-                )
+                    select(func.count()).select_from(open_api_invocations),
+                ),
             ),
         )
 
@@ -176,7 +180,7 @@ def test_postgresql_open_api_same_key_and_payload_drift(
     def same_key():
         same_start.wait()
         return coordinator.begin_invocation(
-            _command(identity, "postgres-same")
+            _command(identity, "postgres-same"),
         )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -189,7 +193,7 @@ def test_postgresql_open_api_same_key_and_payload_drift(
         drift_start.wait()
         try:
             return coordinator.begin_invocation(
-                _command(identity, "postgres-drift", message)
+                _command(identity, "postgres-drift", message),
             )
         except IdempotencyConflictError:
             return "conflict"
@@ -209,7 +213,7 @@ def test_postgresql_open_api_injected_failure_rolls_back_fresh_identity(
         coordinator.repository,
         coordinator.pricing,
         after_order_insert=lambda: (_ for _ in ()).throw(
-            RuntimeError("injected")
+            RuntimeError("injected"),
         ),
     )
     with pytest.raises(RuntimeError, match="injected"):
@@ -230,7 +234,7 @@ def test_postgresql_open_api_missing_catalog_is_controlled(
 
     with pytest.raises(CatalogNotReadyError):
         coordinator.begin_invocation(
-            _command(identity, "postgres-missing-catalog")
+            _command(identity, "postgres-missing-catalog"),
         )
     assert _billing_counts(postgres_open_api_engine) == (0, 0, 0)
 
@@ -286,5 +290,72 @@ def test_postgresql_capture_and_release_cannot_both_settle_one_item(
         outcomes = list(pool.map(settle, ("billable", "not_billable")))
 
     assert outcomes.count("conflict") == 1
-    assert set(outcomes) in ({"conflict", "captured"}, {"conflict", "released"})
+    assert set(outcomes) in (
+        {"conflict", "captured"},
+        {"conflict", "released"},
+    )
     assert coordinator.repository.balance(session.wallet_id).held == 0
+
+
+@pytest.mark.integration
+def test_postgresql_restart_recovery_is_idempotent_and_preserves_unknown(
+    postgres_open_api_engine,
+):
+    identity = "restart-recovery"
+    coordinator = _coordinator(postgres_open_api_engine, identity)
+    session = coordinator.begin_invocation(
+        _command(identity, "restart", mode="enforced"),
+    )
+    coordinator.repository.grant(
+        session.wallet_id,
+        credits=5,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key="restart-funds",
+    )
+    service = UsageService(coordinator.repository, coordinator.pricing)
+    service.reserve_model_call(
+        ReserveModelCall(
+            usage_order_id=session.usage_order_id,
+            item_key="precontact",
+            provider_id="provider",
+            model_key="model",
+            capability="text",
+            parameters={"tier": "standard"},
+            input_tokens=1000,
+            max_output_tokens=0,
+        ),
+    )
+    runtime = OpenApiBillingRuntime(
+        repository=coordinator.repository,
+        pricing=coordinator.pricing,
+        coordinator=coordinator,
+        usage_service=service,
+        open_api_repository=SqlAlchemyOpenApiRepository(
+            postgres_open_api_engine,
+        ),
+        mode="enforced",
+        budget_credits=100,
+    )
+
+    recover_open_api_billing(runtime)
+    first_ledger = coordinator.repository.list_ledger(
+        session.wallet_id,
+        100,
+        None,
+    )
+    recover_open_api_billing(runtime)
+
+    assert (
+        service.list_items(session.usage_order_id)[0]["status"] == "released"
+    )
+    assert len(
+        coordinator.repository.list_ledger(session.wallet_id, 100, None),
+    ) == len(first_ledger)
+    assert coordinator.repository.balance(session.wallet_id).held == 0
+    invocation = runtime.open_api_repository.get_invocation(
+        session.invocation_id,
+    )
+    assert invocation is not None
+    assert invocation["status"] == "failed"
+    assert invocation["billing_status"] == "settled"

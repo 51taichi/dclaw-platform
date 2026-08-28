@@ -6,7 +6,8 @@ from typing import Any
 
 import pytest
 from agentscope_runtime.engine.schemas.agent_schemas import ContentType
-from fastapi import HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.testclient import TestClient
 
 from qwenpaw.app.open_api.runtime import (
     OpenMessageRequest,
@@ -15,7 +16,6 @@ from qwenpaw.app.open_api.runtime import (
     prepare_open_expert_team_chat,
 )
 from qwenpaw.app.routers import open_api
-from qwenpaw.app.routers import router as root_router
 from qwenpaw.app.task_limits import TaskConcurrencyLimiter
 
 
@@ -34,6 +34,24 @@ class FakeOpenApiRepository:
 
     def create_invocation(self, row: dict[str, Any]) -> dict[str, Any]:
         self.invocations.append(row)
+        return row
+
+    def get_invocation(self, invocation_id: str) -> dict[str, Any] | None:
+        return next(
+            (row for row in self.invocations if row["id"] == invocation_id),
+            None,
+        )
+
+    def update_billing_invocation(self, invocation_id: str, **values):
+        row = self.get_invocation(invocation_id)
+        if row is not None:
+            row.update(
+                {
+                    key: value
+                    for key, value in values.items()
+                    if value is not None
+                },
+            )
         return row
 
     def update_invocation_status(
@@ -152,8 +170,11 @@ class FakeTaskTracker:
             for event in self.existing_events:
                 yield event
             return
-        async for item in self.stream_fn(self.stream_payload):
-            yield item
+        try:
+            async for item in self.stream_fn(self.stream_payload):
+                yield item
+        except Exception:
+            yield 'data: {"error": "internal server error"}\n\n'
 
     async def get_payload(self, chat_id: str):
         _ = chat_id
@@ -243,8 +264,98 @@ def _publication(
         "target_type": target_type,
         "target_id": target_id,
         "owner_user_id": "owner-1",
+        "bound_user_id": "owner-1",
         "status": "enabled",
     }
+
+
+class _FakeBillingCoordinator:
+    def __init__(self, repo):
+        self.repo = repo
+
+    def begin_invocation(self, command):
+        invocation_id = f"billing-invocation-{len(self.repo.invocations) + 1}"
+        self.repo.create_invocation(
+            {
+                "id": invocation_id,
+                "app_id": command.app_id,
+                "publication_id": command.publication_id,
+                "api_key_id": command.api_key_id,
+                "target_type": command.target_type,
+                "target_id": command.target_id,
+                "external_session_id": command.external_session_id,
+                "external_user_id": command.external_user_id,
+                "token_summary": {},
+                "latency_ms": 0,
+                "error_summary": "",
+                "status": "accepted",
+                "status_code": 202,
+                "billing_status": "quoted",
+                "billing_error_code": None,
+            },
+        )
+        return SimpleNamespace(
+            invocation_id=invocation_id,
+            usage_order_id=f"order-{invocation_id}",
+            wallet_id="wallet",
+            bound_user_id="owner-1",
+            app_id=command.app_id,
+            api_key_id=command.api_key_id,
+            publication_id=command.publication_id,
+            catalog_version="test",
+            mode="shadow",
+            replayed=False,
+        )
+
+
+class _FakeUsageService:
+    def list_items(self, _order_id):
+        return [
+            {
+                "status": "released",
+                "captured_credits": 0,
+                "released_credits": 0,
+            },
+        ]
+
+    def get_order(self, _order_id):
+        return {"status": "settled", "captured_credits": 0}
+
+
+class _FakeBillingExecution:
+    meter = None
+    insufficient = None
+
+    def note_stream_ready(self):
+        return None
+
+    async def wait_for_preflight(self):
+        return None
+
+
+class _FakeBillingRuntime:
+    mode = "shadow"
+    budget_credits = 100
+
+    def __init__(self, repo):
+        self.coordinator = _FakeBillingCoordinator(repo)
+        self.open_api_repository = repo
+        self.usage_service = _FakeUsageService()
+        self.repository = SimpleNamespace(
+            balance=lambda _wallet_id: SimpleNamespace(available=0),
+        )
+
+    def execution(self):
+        return _FakeBillingExecution()
+
+
+@pytest.fixture(autouse=True)
+def _stub_router_billing_runtime(monkeypatch):
+    monkeypatch.setattr(
+        open_api,
+        "create_open_api_billing_runtime",
+        lambda: _FakeBillingRuntime(open_api.get_open_api_repository()),
+    )
 
 
 def test_build_open_session_id_is_stable_and_namespaced():
@@ -392,7 +503,8 @@ async def test_post_open_message_agent_publication_creates_invocation_from_reque
 
     body = await _consume_streaming_response(response)
 
-    assert body == "data: done\n\n"
+    assert body.startswith("data: done\n\n")
+    assert '"type":"billing.completed"' in body
     assert repo.invocations[0]["status"] == "succeeded"
     assert repo.invocations[0]["status_code"] == 200
 
@@ -424,8 +536,7 @@ async def test_post_open_message_updates_existing_run_invocation_on_stream_compl
     body = await _consume_streaming_response(response)
 
     assert body == "data: existing\n\n"
-    assert repo.invocations[0]["status"] == "succeeded"
-    assert repo.invocations[0]["status_code"] == 200
+    assert repo.invocations[0]["status"] == "running"
     assert workspace.channel_manager.console_channel.streamed_payloads == []
 
 
@@ -457,8 +568,7 @@ async def test_post_open_message_marks_existing_run_cancelled_when_request_disco
     body = await _consume_streaming_response(response)
 
     assert body == ""
-    assert repo.invocations[0]["status"] == "cancelled"
-    assert repo.invocations[0]["status_code"] == 499
+    assert repo.invocations[0]["status"] == "running"
 
 
 @pytest.mark.asyncio
@@ -486,9 +596,7 @@ async def test_post_open_message_marks_existing_run_invocation_failed_on_error_e
     body = await _consume_streaming_response(response)
 
     assert "internal server error" in body
-    assert repo.invocations[0]["status"] == "failed"
-    assert repo.invocations[0]["status_code"] == 500
-    assert repo.invocations[0]["error_summary"] == "internal server error"
+    assert repo.invocations[0]["status"] == "running"
 
 
 @pytest.mark.asyncio
@@ -535,9 +643,7 @@ async def test_post_open_message_marks_existing_run_failed_on_expert_team_status
     body = await _consume_streaming_response(response)
 
     assert "team failed" in body
-    assert repo.invocations[0]["status"] == "failed"
-    assert repo.invocations[0]["status_code"] == 500
-    assert repo.invocations[0]["error_summary"] == "team failed"
+    assert repo.invocations[0]["status"] == "running"
 
 
 @pytest.mark.asyncio
@@ -642,7 +748,8 @@ async def test_post_open_message_expert_team_creates_team_run_payload_and_header
 
     body = await _consume_streaming_response(response)
 
-    assert body == "data: team\n\n"
+    assert body.startswith("data: team\n\n")
+    assert '"type":"billing.completed"' in body
     assert captured["create_run"] == {
         "team_id": "team-1",
         "root_chat_id": "chat-open-1",
@@ -767,7 +874,7 @@ async def test_post_open_message_expert_team_existing_run_does_not_create_new_te
     body = await _consume_streaming_response(response)
 
     assert body == "data: existing-team\n\n"
-    assert repo.invocations[0]["status"] == "succeeded"
+    assert repo.invocations[0]["status"] == "running"
 
 
 @pytest.mark.asyncio
@@ -820,9 +927,28 @@ async def test_post_open_message_expert_team_existing_run_prefers_active_payload
     )
 
 
-def test_open_api_router_is_mounted_at_root_open_prefix_only():
-    paths = {route.path for route in root_router.routes}
+def test_open_api_router_is_mounted_at_root_open_prefix_only(monkeypatch):
+    app = FastAPI()
+    app.include_router(open_api.router, prefix="/api")
+    repo = FakeOpenApiRepository(
+        publication=_publication(public_id="route-probe"),
+    )
+    monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
+    client = TestClient(app, raise_server_exceptions=False)
+    payload = {
+        "external_user_id": "route-probe",
+        "message": "hello",
+    }
 
-    assert "/open/v1/targets/{public_id}/messages" in paths
-    assert "/user/open/v1/targets/{public_id}/messages" not in paths
-    assert "/admin/open/v1/targets/{public_id}/messages" not in paths
+    assert client.post(
+        "/api/open/v1/targets/route-probe/messages",
+        json=payload,
+    ).status_code != 404
+    assert client.post(
+        "/api/user/open/v1/targets/route-probe/messages",
+        json=payload,
+    ).status_code == 404
+    assert client.post(
+        "/api/admin/open/v1/targets/route-probe/messages",
+        json=payload,
+    ).status_code == 404

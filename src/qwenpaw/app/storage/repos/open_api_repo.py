@@ -73,6 +73,23 @@ class OpenApiRepository(Protocol):
     def create_invocation(self, row: dict[str, Any]) -> dict[str, Any]:
         ...
 
+    def get_invocation(self, invocation_id: str) -> dict[str, Any] | None:
+        ...
+
+    def update_billing_invocation(
+        self,
+        invocation_id: str,
+        *,
+        chat_id: str | None = None,
+        status: str | None = None,
+        status_code: int | None = None,
+        latency_ms: int | None = None,
+        error_summary: str | None = None,
+        billing_status: str | None = None,
+        billing_error_code: str | None = None,
+    ) -> dict[str, Any] | None:
+        ...
+
     def update_invocation_status(
         self,
         invocation_id: str,
@@ -277,6 +294,42 @@ class SqlAlchemyOpenApiRepository:
         if created is None:
             raise RuntimeError("failed to read open api invocation after create")
         return created
+
+    def get_invocation(self, invocation_id: str) -> dict[str, Any] | None:
+        return self._get_invocation(invocation_id)
+
+    def update_billing_invocation(
+        self,
+        invocation_id: str,
+        *,
+        chat_id: str | None = None,
+        status: str | None = None,
+        status_code: int | None = None,
+        latency_ms: int | None = None,
+        error_summary: str | None = None,
+        billing_status: str | None = None,
+        billing_error_code: str | None = None,
+    ) -> dict[str, Any] | None:
+        values: dict[str, Any] = {}
+        for key, value in (
+            ("chat_id", chat_id),
+            ("status", status),
+            ("status_code", status_code),
+            ("latency_ms", latency_ms),
+            ("error_summary", error_summary),
+            ("billing_status", billing_status),
+            ("billing_error_code", billing_error_code),
+        ):
+            if value is not None:
+                values[key] = value
+        if values:
+            with self.engine.begin() as conn:
+                conn.execute(
+                    update(open_api_invocations)
+                    .where(open_api_invocations.c.id == invocation_id)
+                    .values(**values),
+                )
+        return self._get_invocation(invocation_id)
 
     def update_invocation_status(
         self,
@@ -611,6 +664,46 @@ class SqliteOpenApiRepository:
         if created is None:
             raise RuntimeError("failed to read open api invocation after create")
         return created
+
+    def get_invocation(self, invocation_id: str) -> dict[str, Any] | None:
+        return self._get_invocation(invocation_id)
+
+    def update_billing_invocation(
+        self,
+        invocation_id: str,
+        *,
+        chat_id: str | None = None,
+        status: str | None = None,
+        status_code: int | None = None,
+        latency_ms: int | None = None,
+        error_summary: str | None = None,
+        billing_status: str | None = None,
+        billing_error_code: str | None = None,
+    ) -> dict[str, Any] | None:
+        values: list[Any] = []
+        assignments: list[str] = []
+        for key, value in (
+            ("chat_id", chat_id),
+            ("status", status),
+            ("status_code", status_code),
+            ("latency_ms", latency_ms),
+            ("error_summary", error_summary),
+            ("billing_status", billing_status),
+            ("billing_error_code", billing_error_code),
+        ):
+            if value is not None:
+                assignments.append(f"{key} = ?")
+                values.append(value)
+        if assignments:
+            values.append(invocation_id)
+            db.get_db().execute(
+                "UPDATE open_api_invocations SET "
+                + ", ".join(assignments)
+                + " WHERE id = ?",
+                tuple(values),
+            )
+            db.get_db().commit()
+        return self._get_invocation(invocation_id)
 
     def update_invocation_status(
         self,

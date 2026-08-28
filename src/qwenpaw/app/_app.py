@@ -259,6 +259,22 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
     if ensure_durable_schema():
         logger.info("Durable Postgres schema ensured")
 
+    # Recover only bridge-created OpenAPI billing orders. Historical token
+    # rows remain ``unbilled`` and are deliberately outside this scan.
+    try:
+        from .open_api.runtime import recover_open_api_billing
+
+        recovered_open_api_orders = recover_open_api_billing()
+        if recovered_open_api_orders:
+            logger.info(
+                "Recovered %d incomplete OpenAPI billing transition(s)",
+                recovered_open_api_orders,
+            )
+    except Exception:
+        # Ambiguous work must remain durable/reconciling; startup recovery is
+        # retry-safe and can run again without duplicating ledger entries.
+        logger.error("OpenAPI billing recovery failed", exc_info=True)
+
     auto_register_from_env()
 
     try:
@@ -615,6 +631,8 @@ if CORS_ORIGINS or CORS_ORIGIN_REGEX:
             "Content-Disposition",
             "X-QwenPaw-Chat-Id",
             "X-QwenPaw-Session-Id",
+            "X-DClaw-Invocation-Id",
+            "X-DClaw-Billing-Status",
         ],
     )
 

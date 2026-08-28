@@ -77,3 +77,36 @@ def test_auto_routing_uses_native_formatter_for_billing_adapter_subclass(
     )
 
     assert isinstance(formatter, expected_formatter)
+
+
+def test_auto_routing_threads_request_scoped_meter_to_each_endpoint():
+    class Provider:
+        id = "provider"
+        api_key = "configured"
+        disabled = False
+        models = [ModelInfo(id="model", name="model")]
+        extra_models = []
+
+        def get_chat_model_instance(self, model_id):
+            instance = object.__new__(BillingGeminiChatModel)
+            instance.model_name = model_id
+            instance.stream = True
+            return instance
+
+    class Manager:
+        builtin_providers = {"provider": Provider()}
+        custom_providers = {}
+        plugin_providers = {}
+
+        def get_active_model(self):
+            return ModelSlotConfig(provider_id="provider", model="model")
+
+    meter = object()
+    routed, _formatter = model_factory._build_auto_routing_model_and_formatter(
+        Manager(),
+        retry_config=None,
+        rate_limit_config=None,
+        billing_meter=meter,
+    )
+
+    assert routed.endpoints[0].model._inner._meter is meter

@@ -1033,6 +1033,7 @@ def _build_auto_routing_model_and_formatter(
     *,
     retry_config: RetryConfig | None,
     rate_limit_config: RateLimitConfig | None,
+    billing_meter: Any | None = None,
 ) -> tuple[ChatModelBase, FormatterBase]:
     endpoints: list[RoutingEndpoint] = []
     seen: set[tuple[str, str]] = set()
@@ -1095,6 +1096,7 @@ def _build_auto_routing_model_and_formatter(
                     raw_model,
                     retry_config=retry_config,
                     rate_limit_config=rate_limit_config,
+                    billing_meter=billing_meter,
                 ),
                 formatter=fallback_formatter,
                 formatter_family=formatter_family,
@@ -1141,6 +1143,9 @@ def create_model_and_formatter(
         get_current_chat_model,
     )
     from ..config.config import ModelSlotConfig, load_agent_config
+    from ..app.open_api.runtime import get_current_billing_meter
+
+    billing_meter = get_current_billing_meter()
 
     # Determine agent_id (parameter > context > None)
     if agent_id is None:
@@ -1192,6 +1197,7 @@ def create_model_and_formatter(
             manager,
             retry_config=retry_config,
             rate_limit_config=rate_limit_config,
+            billing_meter=billing_meter,
         )
 
     if model_slot and model_slot.provider_id and model_slot.model:
@@ -1227,6 +1233,7 @@ def create_model_and_formatter(
         model,
         retry_config=retry_config,
         rate_limit_config=rate_limit_config,
+        billing_meter=billing_meter,
     )
 
     return wrapped_model, formatter

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Any, Literal
@@ -78,6 +78,7 @@ class OpenApiBillingSession:
     publication_id: str
     catalog_version: str
     mode: BillingMode
+    replayed: bool = field(default=False, compare=False)
 
 
 class OpenApiBillingCoordinator:
@@ -340,6 +341,7 @@ class OpenApiBillingCoordinator:
             publication_id=str(invocation["publication_id"]),
             catalog_version=str(catalog["version"]),
             mode=mode,  # type: ignore[arg-type]
+            replayed=True,
         )
 
 
