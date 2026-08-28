@@ -135,6 +135,28 @@ def _sanitize_stream_item(item: Any) -> Any:
     return _sanitize_chunk(item)
 
 
+def attach_openai_supplier_billing_reference(
+    parsed: ChatResponse,
+    raw_response: Any,
+    *,
+    source: str = "openai.chat.completion.id",
+) -> ChatResponse:
+    """Attach only an OpenAI upstream ID as explicit billing evidence.
+
+    The generic ``ChatResponse.id`` is deliberately not consulted by billing:
+    AgentScope may synthesize it.  This adapter is the trusted boundary that
+    reads the verified OpenAI response object and labels its provenance.
+    """
+    try:
+        reference = getattr(raw_response, "id", None)
+    except (AttributeError, KeyError, TypeError):
+        reference = None
+    if isinstance(reference, str) and reference.strip():
+        parsed.supplier_billing_reference = reference.strip()
+        parsed.supplier_billing_reference_source = source
+    return parsed
+
+
 class _SanitizedStream:
     """Proxy OpenAI async stream that sanitizes each emitted item and
     captures ``extra_content`` from tool-call chunks (used by Gemini
@@ -144,6 +166,7 @@ class _SanitizedStream:
         self._stream = stream
         self._ctx_stream: Any | None = None
         self.extra_contents: dict[str, Any] = {}
+        self.supplier_response_id: str | None = None
 
     async def __aenter__(self) -> "_SanitizedStream":
         self._ctx_stream = await self._stream.__aenter__()
@@ -170,6 +193,13 @@ class _SanitizedStream:
     def _capture_extra_content(self, item: Any) -> None:
         """Store ``extra_content`` keyed by tool-call id."""
         chunk = getattr(item, "chunk", item)
+        if self.supplier_response_id is None:
+            try:
+                raw_id = getattr(chunk, "id", None)
+            except (AttributeError, KeyError, TypeError):
+                raw_id = None
+            if isinstance(raw_id, str) and raw_id.strip():
+                self.supplier_response_id = raw_id.strip()
         choices = getattr(chunk, "choices", None) or []
         for choice in choices:
             delta = getattr(choice, "delta", None)
@@ -273,6 +303,8 @@ class OpenAIChatModelCompat(OpenAIChatModel):
     """OpenAIChatModel with robust parsing for malformed tool-call chunks
     and transparent ``extra_content`` (Gemini thought_signature) relay."""
 
+    billing_provider_kind = "openai"
+
     def _format_tools_json_schemas(
         self,
         schemas: list[dict[str, Any]],
@@ -288,6 +320,20 @@ class OpenAIChatModelCompat(OpenAIChatModel):
         return super()._format_tools_json_schemas(
             _sanitize_tool_schemas(schemas),
         )
+
+    def _parse_openai_completion_response(
+        self,
+        start_datetime: datetime,
+        response: Any,
+        structured_model: Type[BaseModel] | None = None,
+    ) -> ChatResponse:
+        """Label the raw OpenAI completion ID before it becomes generic."""
+        parsed = super()._parse_openai_completion_response(
+            start_datetime,
+            response,
+            structured_model,
+        )
+        return attach_openai_supplier_billing_reference(parsed, response)
 
     # pylint: disable=too-many-branches, too-many-statements
     async def _parse_openai_stream_response(
@@ -417,5 +463,11 @@ class OpenAIChatModelCompat(OpenAIChatModel):
                 )
                 if extra:
                     parsed.content = list(parsed.content) + extra
+
+            attach_openai_supplier_billing_reference(
+                parsed,
+                SimpleNamespace(id=sanitized_response.supplier_response_id),
+                source="openai.chat.chunk.id",
+            )
 
             yield parsed

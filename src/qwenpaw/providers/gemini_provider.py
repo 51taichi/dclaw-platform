@@ -139,7 +139,9 @@ class GeminiProvider(Provider):
             )
 
     def get_chat_model_instance(self, model_id: str) -> ChatModelBase:
-        from agentscope.model import GeminiChatModel
+        from qwenpaw.providers.billing_chat_model_adapters import (
+            BillingGeminiChatModel,
+        )
 
         client_kwargs: dict = {}
         headers = self._build_default_headers()
@@ -147,7 +149,7 @@ class GeminiProvider(Provider):
             client_kwargs["http_options"] = genai_types.HttpOptions(
                 headers=headers,
             )
-        return GeminiChatModel(
+        return BillingGeminiChatModel(
             model_name=model_id,
             stream=True,
             api_key=self.api_key,

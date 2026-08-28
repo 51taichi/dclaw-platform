@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -458,7 +458,8 @@ class UsageService:
                     return _reserved_item(existing)
                 if attempt == 2:
                     raise UsageOrderStateError(
-                        "concurrent model reservation did not become replayable",
+                        "concurrent model reservation did not become "
+                        "replayable",
                     ) from exc
         raise AssertionError("unreachable")
 
@@ -495,9 +496,13 @@ class UsageService:
                 request,
             )
             budget = int(order["budget_credits"])
-            if budget and int(order["captured_credits"]) + int(
-                order["held_credits"]
-            ) + quote.credits > budget:
+            if (
+                budget
+                and int(order["captured_credits"])
+                + int(order["held_credits"])
+                + quote.credits
+                > budget
+            ):
                 raise InsufficientUsageCreditsError(
                     quote.credits,
                     max(
@@ -531,8 +536,9 @@ class UsageService:
                                 "capability": normalized.capability,
                                 "tier": str(
                                     normalized.parameters.get(
-                                        "tier", "standard"
-                                    )
+                                        "tier",
+                                        "standard",
+                                    ),
                                 ),
                                 "source_type": "open_api",
                                 "source_id": str(order["source_id"]),
@@ -586,7 +592,10 @@ class UsageService:
         self,
         command: SettleModelCall,
     ) -> UsageItemResult:
-        """Settle one item without treating supplier activity as retail price."""
+        """Settle one item without treating supplier activity as retail.
+
+        Supplier activity never becomes a retail price input.
+        """
         normalized = _normalize_settle_model_call(command)
         with self.repository.engine.begin() as conn:
             order = self._order_row(
@@ -609,8 +618,9 @@ class UsageService:
                 str(item["status"]) == "reconciling"
                 and normalized.billability == "unknown"
             ):
-                self._assert_settlement_replay(item, normalized)
-                return _usage_item_result(item)
+                if not _is_provider_call_started_marker(item):
+                    self._assert_settlement_replay(item, normalized)
+                    return _usage_item_result(item)
 
             if str(item["status"]) not in {"held", "reconciling"}:
                 raise UsageOrderStateError(
@@ -655,7 +665,9 @@ class UsageService:
                                 f"{normalized.item_key}:capture"
                             ),
                             metadata={
-                                "supplier_reference": normalized.supplier_reference,
+                                "supplier_reference": (
+                                    normalized.supplier_reference
+                                ),
                             },
                         ),
                     )
@@ -673,7 +685,9 @@ class UsageService:
                                 f"{normalized.item_key}:release"
                             ),
                             metadata={
-                                "supplier_reference": normalized.supplier_reference,
+                                "supplier_reference": (
+                                    normalized.supplier_reference
+                                ),
                             },
                         ),
                     )
@@ -709,13 +723,22 @@ class UsageService:
             return _usage_item_result(settled)
 
     def list_items(self, usage_order_id: str) -> list[dict[str, Any]]:
-        """Read durable model-call items; analytics queues are never consulted."""
+        """Read durable model-call items without analytics queues."""
         with self.repository.engine.connect() as conn:
-            rows = conn.execute(
-                select(billing_usage_items)
-                .where(billing_usage_items.c.usage_order_id == usage_order_id)
-                .order_by(billing_usage_items.c.created_at, billing_usage_items.c.id),
-            ).mappings().all()
+            rows = (
+                conn.execute(
+                    select(billing_usage_items)
+                    .where(
+                        billing_usage_items.c.usage_order_id == usage_order_id,
+                    )
+                    .order_by(
+                        billing_usage_items.c.created_at,
+                        billing_usage_items.c.id,
+                    ),
+                )
+                .mappings()
+                .all()
+            )
         return [_decode_usage_item(dict(row)) for row in rows]
 
     @staticmethod
@@ -749,7 +772,9 @@ class UsageService:
             "input_tokens": command.input_tokens,
             "max_output_tokens": command.max_output_tokens,
         }
-        if _canonical_json(stored.get("reservation", {})) != _canonical_json(expected):
+        if _canonical_json(stored.get("reservation", {})) != _canonical_json(
+            expected,
+        ):
             raise UsageOrderConflictError(
                 "model item key is already bound to another reservation",
             )
@@ -759,20 +784,31 @@ class UsageService:
         item: Mapping[str, Any],
         command: SettleModelCall,
     ) -> None:
-        stored_evidence = json.loads(str(item["supplier_evidence_json"]) or "{}")
+        stored_evidence = json.loads(
+            str(item["supplier_evidence_json"]) or "{}",
+        )
         expected_status = {
             "billable": "captured",
             "not_billable": "released",
             "unknown": "reconciling",
         }[command.billability]
-        if (
-            str(item["status"]) != expected_status
-            or str(item["billability"]) != command.billability
-            or (item["supplier_reference"] or "") != command.supplier_reference
-            or stored_evidence != dict(command.evidence)
-            or int(item["input_tokens"]) != command.actual_input_tokens
-            or int(item["output_tokens"]) != command.actual_output_tokens
-        ):
+        stored_outcome = (
+            str(item["status"]),
+            str(item["billability"]),
+            item["supplier_reference"] or "",
+            stored_evidence,
+            int(item["input_tokens"]),
+            int(item["output_tokens"]),
+        )
+        requested_outcome = (
+            expected_status,
+            command.billability,
+            command.supplier_reference,
+            dict(command.evidence),
+            command.actual_input_tokens,
+            command.actual_output_tokens,
+        )
+        if stored_outcome != requested_outcome:
             raise UsageOrderConflictError(
                 "model item key is already settled by another outcome",
             )
@@ -782,7 +818,7 @@ class UsageService:
         conn: Connection,
         order: Mapping[str, Any],
     ) -> None:
-        """Rebuild order/invocation totals solely from items and allocations."""
+        """Rebuild order/invocation totals from items and allocations only."""
         rows = [
             dict(row)
             for row in conn.execute(
@@ -796,14 +832,18 @@ class UsageService:
             for row in rows
             if str(row["status"]) in {"held", "reconciling"}
         ]
-        held = self.repository.held_usage_credits_in_connection(
-            conn,
-            str(order["wallet_id"]),
-            active_keys,
-        ) if self._order_mode(order) == "enforced" else sum(
-            int(row["quoted_credits"])
-            for row in rows
-            if str(row["status"]) in {"held", "reconciling"}
+        held = (
+            self.repository.held_usage_credits_in_connection(
+                conn,
+                str(order["wallet_id"]),
+                active_keys,
+            )
+            if self._order_mode(order) == "enforced"
+            else sum(
+                int(row["quoted_credits"])
+                for row in rows
+                if str(row["status"]) in {"held", "reconciling"}
+            )
         )
         captured = sum(int(row["charged_credits"]) for row in rows)
         released = sum(
@@ -811,26 +851,37 @@ class UsageService:
             for row in rows
             if str(row["status"]) in {"captured", "released"}
         )
-        reconciling = self.repository.held_usage_credits_in_connection(
-            conn,
-            str(order["wallet_id"]),
-            [
-                _item_business_key(str(order["id"]), str(row["item_key"]))
+        reconciling = (
+            self.repository.held_usage_credits_in_connection(
+                conn,
+                str(order["wallet_id"]),
+                [
+                    _item_business_key(str(order["id"]), str(row["item_key"]))
+                    for row in rows
+                    if str(row["status"]) == "reconciling"
+                ],
+            )
+            if self._order_mode(order) == "enforced"
+            else sum(
+                int(row["quoted_credits"])
                 for row in rows
                 if str(row["status"]) == "reconciling"
-            ],
-        ) if self._order_mode(order) == "enforced" else sum(
-            int(row["quoted_credits"])
-            for row in rows
-            if str(row["status"]) == "reconciling"
+            )
         )
         statuses = {str(row["status"]) for row in rows}
         status = (
-            "quoted" if not rows else "reconciling" if "reconciling" in statuses
-            else "held" if "held" in statuses else "settled"
+            "quoted"
+            if not rows
+            else "reconciling"
+            if "reconciling" in statuses
+            else "held"
+            if "held" in statuses
+            else "settled"
         )
         billabilities = {str(row["billability"]) for row in rows}
-        billability = billabilities.pop() if len(billabilities) == 1 else "unknown"
+        billability = (
+            billabilities.pop() if len(billabilities) == 1 else "unknown"
+        )
         now = datetime.now(timezone.utc)
         conn.execute(
             update(billing_usage_orders)
@@ -850,7 +901,9 @@ class UsageService:
         token_summary = _token_summary(rows)
         conn.execute(
             update(open_api_invocations)
-            .where(open_api_invocations.c.billing_usage_order_id == order["id"])
+            .where(
+                open_api_invocations.c.billing_usage_order_id == order["id"],
+            )
             .values(
                 billing_status=status,
                 quoted_credits=sum(int(row["quoted_credits"]) for row in rows),
@@ -1058,12 +1111,14 @@ class UsageService:
         }
 
     @staticmethod
-    def _order_mode(order: dict[str, Any]) -> BillingMode:
+    def _order_mode(order: Mapping[str, Any]) -> BillingMode:
         request_snapshot = json.loads(order["request_snapshot_json"] or "{}")
         return _billing_mode(request_snapshot.get("billing_mode", "shadow"))
 
 
-def _normalize_reserve_model_call(command: ReserveModelCall) -> ReserveModelCall:
+def _normalize_reserve_model_call(
+    command: ReserveModelCall,
+) -> ReserveModelCall:
     values = {
         name: str(getattr(command, name) or "").strip()
         for name in (
@@ -1099,7 +1154,10 @@ def _normalize_settle_model_call(command: SettleModelCall) -> SettleModelCall:
         raise ValueError("unsupported supplier billability")
     if any(
         not isinstance(value, int) or value < 0
-        for value in (command.actual_input_tokens, command.actual_output_tokens)
+        for value in (
+            command.actual_input_tokens,
+            command.actual_output_tokens,
+        )
     ):
         raise ValueError("model settlement token counts must be non-negative")
     evidence = json.loads(_dump_json(dict(command.evidence)))
@@ -1152,6 +1210,22 @@ def _item_parameters(item: Mapping[str, Any]) -> Mapping[str, Any]:
     return parameters
 
 
+def _is_provider_call_started_marker(item: Mapping[str, Any]) -> bool:
+    """Return whether this is the sole mutable reconciling marker.
+
+    A provider-call-start marker is deliberately replaced by the later
+    supplier outcome.  Other unknown outcomes remain strict idempotent
+    replays, so a caller cannot rewrite durable reconciliation evidence.
+    """
+    if str(item.get("billability") or "") != "unknown":
+        return False
+    try:
+        evidence = json.loads(str(item.get("supplier_evidence_json") or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return evidence.get("response_class") == "provider_call_started"
+
+
 def _reserved_item(item: Mapping[str, Any]) -> ReservedUsageItem:
     return ReservedUsageItem(
         usage_order_id=str(item["usage_order_id"]),
@@ -1193,7 +1267,7 @@ def _decode_usage_item(item: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _token_summary(items: list[Mapping[str, Any]]) -> dict[str, Any]:
+def _token_summary(items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     return {
         "input_tokens": sum(int(item["input_tokens"]) for item in items),
         "output_tokens": sum(int(item["output_tokens"]) for item in items),

@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from threading import Lock
 from typing import Any, Mapping
+from uuid import uuid4
 
 from ..agent_context import get_current_billing_context
 from .open_api import OpenApiBillingSession
@@ -22,10 +23,6 @@ from .usage import (
     UsageItemResult,
     UsageService,
 )
-
-
-_item_sequence_lock = Lock()
-_item_sequence_by_order: dict[str, int] = {}
 
 
 @dataclass
@@ -90,26 +87,6 @@ class BillingModelMeter:
             else platform_max_output_tokens
         )
 
-    def effective_max_output_tokens(
-        self,
-        call_kwargs: Mapping[str, Any],
-        model: Any,
-    ) -> int:
-        """Return the cap reserved and enforced for this OpenAPI call."""
-        limits = [self.platform_max_output_tokens]
-        for values in (
-            call_kwargs,
-            getattr(model, "generate_kwargs", {}),
-        ):
-            if isinstance(values, Mapping):
-                limits.extend(_configured_output_limits(values))
-        limits.extend(
-            _configured_output_limits(
-                {"max_tokens": getattr(model, "max_tokens", None)},
-            ),
-        )
-        return min(limits) if limits else self.default_max_output_tokens
-
     def before_call(
         self,
         *,
@@ -153,6 +130,34 @@ class BillingModelMeter:
             provider_id=normalized_provider,
             model_key=normalized_model,
         )
+
+    def mark_provider_call_started(
+        self,
+        call: MeteredModelCall | None,
+    ) -> UsageItemResult | None:
+        """Durably mark supplier contact before executing the provider call."""
+        if call is None:
+            return None
+        try:
+            return self.usage_service.settle_model_call(
+                SettleModelCall(
+                    usage_order_id=call.session.usage_order_id,
+                    item_key=call.item_key,
+                    supplier_reference="",
+                    billability="unknown",
+                    evidence=_evidence(
+                        supplier_reference=SupplierReference("", ""),
+                        response_class="provider_call_started",
+                    ),
+                    actual_input_tokens=0,
+                    actual_output_tokens=0,
+                ),
+            )
+        except Exception as exc:
+            raise BillingSettlementError(
+                "provider call was not started because billing marker "
+                "could not persist",
+            ) from exc
 
     def record_response(
         self,
@@ -286,10 +291,8 @@ def _item_key(session: OpenApiBillingSession, explicit: str | None) -> str:
         if not key:
             raise ValueError("billing item key must be non-empty")
         return key
-    with _item_sequence_lock:
-        sequence = _item_sequence_by_order.get(session.usage_order_id, 0) + 1
-        _item_sequence_by_order[session.usage_order_id] = sequence
-    return f"model:{session.invocation_id}:{sequence}"
+    del session
+    return f"model:{uuid4()}"
 
 
 def _estimate_input_tokens(messages: list[dict[str, Any]]) -> int:
@@ -323,14 +326,36 @@ def _official_usage(response: Any) -> dict[str, int] | None:
 
 def _supplier_reference(value: Any) -> SupplierReference:
     reference = str(
-        getattr(value, "supplier_billing_reference", "") or "",
+        _optional_value(value, "supplier_billing_reference") or "",
     ).strip()
     source = str(
-        getattr(value, "supplier_billing_reference_source", "") or "",
+        _optional_value(value, "supplier_billing_reference_source") or "",
     ).strip()
-    if reference and source in {"provider_response", "provider_error"}:
+    if reference and source in _SUPPLIER_REFERENCE_SOURCES:
         return SupplierReference(reference, source)
     return SupplierReference("", "")
+
+
+_SUPPLIER_REFERENCE_SOURCES = frozenset(
+    {
+        "provider_response",
+        "provider_error",
+        "openai.chat.completion.id",
+        "openai.chat.chunk.id",
+        "anthropic.message.id",
+        "gemini.response_id",
+    },
+)
+
+
+def _optional_value(value: Any, name: str) -> Any:
+    """Safely read optional fields from AgentScope's dict-like responses."""
+    try:
+        if isinstance(value, Mapping):
+            return value.get(name)
+        return getattr(value, name, None)
+    except (AttributeError, KeyError, TypeError):
+        return None
 
 
 def _exception_outcome(
@@ -380,15 +405,6 @@ def _non_negative_int(value: Any, field_name: str) -> int:
     if result < 0:
         raise ValueError(f"{field_name} must be a non-negative integer")
     return result
-
-
-def _configured_output_limits(values: Mapping[str, Any]) -> list[int]:
-    limits = []
-    for key in ("max_output_tokens", "max_tokens"):
-        value = values.get(key)
-        if value is not None:
-            limits.append(_non_negative_int(value, key))
-    return limits
 
 
 __all__ = ["BillingModelMeter", "BillingSettlementError", "MeteredModelCall"]
