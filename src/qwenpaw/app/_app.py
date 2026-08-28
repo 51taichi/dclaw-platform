@@ -4,10 +4,13 @@ import inspect
 import asyncio
 import mimetypes
 import os
+
 # Ensure localhost requests bypass system proxies to avoid timeout errors
 # when connecting to local model providers like LM Studio or Ollama.
 if "NO_PROXY" not in os.environ and "no_proxy" not in os.environ:
-    os.environ["NO_PROXY"] = "localhost,127.0.0.1,0.0.0.0,::1,192.168.0.0/16,10.0.0.0/8"
+    os.environ[
+        "NO_PROXY"
+    ] = "localhost,127.0.0.1,0.0.0.0,::1,192.168.0.0/16,10.0.0.0/8"
 
 import sys
 import time
@@ -66,6 +69,7 @@ from .migration import (
     migrate_all_agents_global_data,
 )
 from .storage.bootstrap import ensure_durable_schema
+from .expert_teams import bootstrap_expert_teams
 from .channels.registry import register_custom_channel_routes
 
 # Apply log level on load so reload child process gets same level as CLI.
@@ -245,9 +249,14 @@ def _recover_open_api_billing_at_startup() -> int:
         return recover_open_api_billing(runtime)
     except Exception as exc:
         logger.error("OpenAPI billing recovery failed", exc_info=True)
-        configured_mode = os.environ.get(
-            "DCLAW_BILLING_MODE", "shadow",
-        ).strip().lower()
+        configured_mode = (
+            os.environ.get(
+                "DCLAW_BILLING_MODE",
+                "shadow",
+            )
+            .strip()
+            .lower()
+        )
         if (runtime is not None and runtime.mode == "enforced") or (
             configured_mode == "enforced"
         ):
@@ -283,6 +292,7 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
 
     if ensure_durable_schema():
         logger.info("Durable Postgres schema ensured")
+    bootstrap_expert_teams()
 
     # Recover only bridge-created OpenAPI billing orders. Historical token
     # rows remain ``unbilled`` and are deliberately outside this scan.
