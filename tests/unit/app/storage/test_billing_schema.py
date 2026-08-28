@@ -171,6 +171,7 @@ def test_billing_schema_is_idempotent(sqlite_engine):
     assert {
         "item_key",
         "billability",
+        "execution_outcome",
         "quoted_credits",
         "price_snapshot_json",
         "started_at",

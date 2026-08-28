@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -11,6 +12,7 @@ import pytest
 from agentscope.model._model_usage import ChatUsage
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import delete, insert, select, update
 
 from qwenpaw.app.billing.open_api import (
@@ -615,4 +617,415 @@ def test_recovery_ignores_historical_unbilled_and_is_ledger_idempotent(
             .one()
         )
     assert historical["billing_status"] == "unbilled"
-    assert recovered["billing_status"] == "reconciling"
+    # The bridge row is repaired from its fully resolved durable item; only
+    # the historical unbilled row remains outside startup recovery.
+    assert recovered["billing_status"] == "settled"
+
+
+def _fund(flow, grant_credits: int, key: str) -> str:
+    wallet = flow.repository.ensure_wallet("user", "wallet-owner")
+    flow.repository.grant(
+        str(wallet["id"]),
+        credits=grant_credits,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key=key,
+    )
+    return str(wallet["id"])
+
+
+def test_sqlite_invocation_execution_claim_has_one_winner(billing_flow):
+    session = billing_flow.runtime.coordinator.begin_invocation(
+        OpenApiBillingCommand(
+            app_id="app",
+            publication_id="publication",
+            api_key_id="key",
+            target_type="agent",
+            target_id="agent",
+            external_user_id="external",
+            external_session_id="claim",
+            payload={"message": "claim"},
+            idempotency_key="claim-once",
+            mode="enforced",
+            budget_credits=100,
+        ),
+    )
+
+    def claim(token: str) -> bool:
+        repo = SqlAlchemyOpenApiRepository(billing_flow.engine)
+        return repo.claim_invocation_execution(session.invocation_id, token)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        winners = list(pool.map(claim, ("owner-a", "owner-b")))
+
+    assert sorted(winners) == [False, True]
+    invocation = billing_flow.open_repo.get_invocation(session.invocation_id)
+    assert invocation is not None
+    assert invocation["status"] == "running"
+    assert invocation["execution_owner_token"] in {"owner-a", "owner-b"}
+
+
+def test_sqlite_invocation_terminal_snapshot_is_sealed_once(billing_flow):
+    session = billing_flow.runtime.coordinator.begin_invocation(
+        OpenApiBillingCommand(
+            app_id="app",
+            publication_id="publication",
+            api_key_id="key",
+            target_type="agent",
+            target_id="agent",
+            external_user_id="external",
+            external_session_id="seal",
+            payload={"message": "seal"},
+            idempotency_key="seal-once",
+            mode="enforced",
+            budget_credits=100,
+        ),
+    )
+    billing_flow.open_repo.update_billing_invocation(
+        session.invocation_id,
+        status="succeeded",
+        terminal_event={"type": "billing.completed", "credits_remaining": 1},
+    )
+    billing_flow.open_repo.update_billing_invocation(
+        session.invocation_id,
+        status="failed",
+        terminal_event={"type": "billing.completed", "credits_remaining": 9},
+    )
+
+    invocation = billing_flow.open_repo.get_invocation(session.invocation_id)
+    assert invocation is not None
+    assert invocation["status"] == "succeeded"
+    assert invocation["terminal_event_json"]["credits_remaining"] == 1
+
+
+@pytest.mark.parametrize("funded", [True, False])
+@pytest.mark.asyncio
+async def test_same_key_race_before_tracker_never_restarts_supplier(
+    billing_flow,
+    monkeypatch,
+    funded,
+):
+    if funded:
+        _fund(billing_flow, 20, "race-before-tracker-funds")
+    original_prepare = open_api.prepare_open_agent_chat
+    both_prepared = asyncio.Event()
+    prepared_count = 0
+
+    async def delayed_prepare(*args, **kwargs):
+        nonlocal prepared_count
+        prepared = await original_prepare(*args, **kwargs)
+        prepared_count += 1
+        if prepared_count == 2:
+            both_prepared.set()
+        await asyncio.wait_for(both_prepared.wait(), timeout=2)
+        return prepared
+
+    monkeypatch.setattr(
+        open_api,
+        "prepare_open_agent_chat",
+        delayed_prepare,
+    )
+    transport = ASGITransport(app=billing_flow.app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+    ) as client:
+        responses = await asyncio.gather(
+            *(
+                client.post(
+                    "/open/v1/targets/public-agent/messages",
+                    headers={
+                        "Idempotency-Key": f"before-tracker-{funded}",
+                    },
+                    json={
+                        "external_user_id": "external",
+                        "message": "hello",
+                    },
+                )
+                for _index in range(2)
+            ),
+        )
+
+    assert billing_flow.console.calls == (1 if funded else 0)
+    if funded:
+        assert all(response.status_code == 200 for response in responses)
+        assert _events(responses[0])[-1] == _events(responses[1])[-1]
+    else:
+        assert all(response.status_code == 409 for response in responses)
+        assert responses[0].json() == responses[1].json()
+
+
+class _ProducerJustFinishedTracker(TaskTracker):
+    async def get_status(self, _run_key: str) -> str:
+        return "running"
+
+
+def test_replay_when_producer_just_finished_never_restarts_supplier(
+    billing_flow,
+):
+    _fund(billing_flow, 20, "race-funds")
+    first = _post(billing_flow, key="producer-finished")
+    first_terminal = _events(first)[-1]
+    assert billing_flow.console.calls == 1
+    billing_flow.workspace.task_tracker = _ProducerJustFinishedTracker()
+
+    replay = _post(billing_flow, key="producer-finished")
+
+    assert billing_flow.console.calls == 1
+    assert _events(replay) == [first_terminal]
+
+
+def test_initial_insufficient_replay_uses_sealed_required_credits(
+    billing_flow,
+):
+    first = _post(billing_flow, key="sealed-insufficient")
+    _fund(billing_flow, 100, "late-funds")
+
+    replay = _post(billing_flow, key="sealed-insufficient")
+
+    assert replay.status_code == 409
+    assert replay.json() == first.json()
+    assert "required_credits" in replay.json()
+    assert billing_flow.console.calls == 0
+
+
+def test_terminal_replay_is_immutable_after_wallet_balance_changes(
+    billing_flow,
+):
+    _fund(billing_flow, 20, "snapshot-funds")
+    first = _post(billing_flow, key="sealed-terminal")
+    first_terminal = _events(first)[-1]
+    _fund(billing_flow, 100, "later-wallet-change")
+
+    replay = _post(billing_flow, key="sealed-terminal")
+
+    assert _events(replay) == [first_terminal]
+
+
+def test_success_without_reference_counts_as_completed_before_insufficient(
+    billing_flow,
+):
+    _fund(billing_flow, 2, "unknown-partial-funds")
+    billing_flow.console.calls_per_run = 2
+    billing_flow.console.omit_reference = True
+
+    response = _post(billing_flow, key="unknown-partial")
+
+    terminal = _events(response)[-1]
+    assert terminal["type"] == "billing.interrupted"
+    assert terminal["completed_steps"] == 1
+    assert terminal["status"] == "partially_completed"
+    invocation = billing_flow.open_repo.get_invocation(
+        response.headers["X-DClaw-Invocation-Id"],
+    )
+    with billing_flow.engine.connect() as conn:
+        item = (
+            conn.execute(
+                select(billing_usage_items).where(
+                    billing_usage_items.c.usage_order_id
+                    == invocation["billing_usage_order_id"],
+                ),
+            )
+            .mappings()
+            .one()
+        )
+    assert item["status"] == "reconciling"
+    assert item["execution_outcome"] == "succeeded"
+
+
+class _TimeoutThenInsufficientConsole:
+    def __init__(self):
+        self.calls = 0
+
+    async def stream_one(self, _payload):
+        meter = get_current_billing_meter()
+        assert meter is not None
+        call = meter.before_call(
+            provider_id="provider",
+            model_key="model",
+            messages=[{"role": "user", "content": "hello"}],
+            max_output_tokens=1,
+        )
+        meter.mark_provider_call_started(call)
+        self.calls += 1
+        meter.record_exception(call, TimeoutError("timeout"))
+        yield 'data: {"step": 1}\n\n'
+        meter.before_call(
+            provider_id="provider",
+            model_key="model",
+            messages=[{"role": "user", "content": "again"}],
+            max_output_tokens=1,
+        )
+
+
+def test_timeout_unknown_does_not_count_as_completed_step(billing_flow):
+    _fund(billing_flow, 2, "timeout-funds")
+    console = _TimeoutThenInsufficientConsole()
+    billing_flow.workspace.channel_manager = _Channels(console)
+
+    response = _post(billing_flow, key="timeout-partial")
+
+    terminal = _events(response)[-1]
+    assert terminal["completed_steps"] == 0
+    assert terminal["status"] == "failed"
+    with billing_flow.engine.connect() as conn:
+        item = conn.execute(select(billing_usage_items)).mappings().one()
+    assert item["execution_outcome"] == "failed"
+
+
+class _BlockingContactConsole:
+    def __init__(self, *, before_contact: bool):
+        self.before_contact = before_contact
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.calls = 0
+
+    async def stream_one(self, _payload):
+        meter = get_current_billing_meter()
+        assert meter is not None
+        if self.before_contact:
+            self.started.set()
+            await self.release.wait()
+        call = meter.before_call(
+            provider_id="provider",
+            model_key="model",
+            messages=[{"role": "user", "content": "cancel"}],
+            max_output_tokens=1,
+        )
+        meter.mark_provider_call_started(call)
+        self.calls += 1
+        self.started.set()
+        await self.release.wait()
+        meter.record_response(call, _Response("cancel-supplier"))
+        yield 'data: {"step": 1}\n\n'
+
+
+def _request(flow) -> Request:
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/open/v1/targets/public-agent/messages",
+            "raw_path": b"/open/v1/targets/public-agent/messages",
+            "headers": [],
+            "query_string": b"",
+            "scheme": "http",
+            "server": ("127.0.0.1", 80),
+            "client": ("127.0.0.1", 1234),
+            "app": flow.app,
+        },
+    )
+    request.state.user_id = "wallet-owner"
+    request.state.open_app_id = "app"
+    request.state.open_publication_id = "publication"
+    request.state.open_api_key_id = "key"
+    return request
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("before_contact", "want_billing"),
+    [(True, "settled"), (False, "reconciling")],
+)
+async def test_cancelled_background_run_shields_durable_finalization(
+    billing_flow,
+    before_contact,
+    want_billing,
+):
+    _fund(billing_flow, 20, f"cancel-funds-{before_contact}")
+    console = _BlockingContactConsole(before_contact=before_contact)
+    billing_flow.workspace.channel_manager = _Channels(console)
+    route_task = asyncio.create_task(
+        open_api.post_open_message(
+            "public-agent",
+            open_api.OpenMessageRequest(
+                external_user_id="external",
+                message="cancel",
+            ),
+            _request(billing_flow),
+        ),
+    )
+    await asyncio.wait_for(console.started.wait(), timeout=2)
+    with billing_flow.engine.connect() as conn:
+        invocation_id = str(
+            conn.scalar(select(open_api_invocations.c.id)),
+        )
+    await billing_flow.workspace.task_tracker.request_stop(
+        f"open-api:{invocation_id}",
+    )
+    response = await asyncio.wait_for(route_task, timeout=2)
+    assert await billing_flow.workspace.task_tracker.wait_all_done(timeout=2)
+
+    invocation = billing_flow.open_repo.get_invocation(invocation_id)
+    assert invocation is not None
+    assert invocation["status"] == "cancelled"
+    assert invocation["status_code"] == 499
+    assert invocation["billing_status"] == want_billing
+    assert invocation["terminal_event_json"]
+    del response
+
+
+def test_recovery_reprojects_settled_order_and_running_request(billing_flow):
+    wallet_id = _fund(billing_flow, 20, "reproject-funds")
+    response = _post(billing_flow, key="reproject")
+    invocation_id = response.headers["X-DClaw-Invocation-Id"]
+    invocation = billing_flow.open_repo.get_invocation(invocation_id)
+    order_id = invocation["billing_usage_order_id"]
+    ledger_count = len(
+        billing_flow.repository.list_ledger(wallet_id, 100, None),
+    )
+    with billing_flow.engine.begin() as conn:
+        conn.execute(
+            update(open_api_invocations)
+            .where(open_api_invocations.c.id == invocation_id)
+            .values(
+                status="running",
+                billing_status="held",
+                captured_credits=0,
+                token_summary="{}",
+                terminal_event_json=None,
+            ),
+        )
+        conn.execute(
+            update(billing_usage_orders)
+            .where(billing_usage_orders.c.id == order_id)
+            .values(captured_credits=0),
+        )
+
+    recover_open_api_billing(billing_flow.runtime)
+    recover_open_api_billing(billing_flow.runtime)
+
+    recovered = billing_flow.open_repo.get_invocation(invocation_id)
+    assert recovered["status"] == "succeeded"
+    assert recovered["billing_status"] == "settled"
+    assert recovered["captured_credits"] > 0
+    assert recovered["token_summary"]["model_calls"] == 1
+    assert recovered["terminal_event_json"]
+    assert (
+        len(
+            billing_flow.repository.list_ledger(wallet_id, 100, None),
+        )
+        == ledger_count
+    )
+
+
+def test_recovery_keeps_successful_unknown_as_completed_reconciling(
+    billing_flow,
+):
+    _fund(billing_flow, 20, "recover-unknown-funds")
+    billing_flow.console.omit_reference = True
+    response = _post(billing_flow, key="recover-unknown")
+    invocation_id = response.headers["X-DClaw-Invocation-Id"]
+    with billing_flow.engine.begin() as conn:
+        conn.execute(
+            update(open_api_invocations)
+            .where(open_api_invocations.c.id == invocation_id)
+            .values(status="running", terminal_event_json=None),
+        )
+
+    recover_open_api_billing(billing_flow.runtime)
+
+    invocation = billing_flow.open_repo.get_invocation(invocation_id)
+    assert invocation["status"] == "succeeded"
+    assert invocation["billing_status"] == "reconciling"
+    assert invocation["terminal_event_json"]

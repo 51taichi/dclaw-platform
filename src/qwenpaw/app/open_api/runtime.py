@@ -17,7 +17,7 @@ from agentscope_runtime.engine.schemas.agent_schemas import (
 )
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 
 from ..agent_context import (
     reset_current_billing_context,
@@ -151,6 +151,8 @@ class OpenApiBillingExecution:
         self._initial_failure: InsufficientUsageCreditsError | None = None
         self.insufficient: InsufficientUsageCreditsError | None = None
         self.reservation_succeeded = False
+        self._finalized = asyncio.Event()
+        self.terminal_snapshot: dict[str, Any] | None = None
 
     def note_first_reservation(self) -> None:
         if not self.reservation_succeeded:
@@ -171,6 +173,15 @@ class OpenApiBillingExecution:
         await self._preflight_ready.wait()
         if self._initial_failure is not None:
             raise self._initial_failure
+
+    def note_finalized(self, terminal: dict[str, Any]) -> None:
+        self.terminal_snapshot = dict(terminal)
+        self._finalized.set()
+
+    async def wait_for_finalization(self) -> dict[str, Any]:
+        await self._finalized.wait()
+        assert self.terminal_snapshot is not None
+        return dict(self.terminal_snapshot)
 
 
 def create_open_api_billing_runtime() -> OpenApiBillingRuntime:
@@ -223,12 +234,7 @@ def open_api_billing_context(
 def recover_open_api_billing(
     runtime: OpenApiBillingRuntime | None = None,
 ) -> int:
-    """Conservatively recover only bridge-created nonterminal orders.
-
-    A held item has no durable provider-contact marker, so it is safe to
-    release.  A reconciling item is deliberately left untouched.  Historical
-    invocations have ``billing_status='unbilled'`` and never enter this scan.
-    """
+    """Idempotently close incomplete OpenAPI invocation/order bridge pairs."""
     active = runtime or create_open_api_billing_runtime()
     engine = active.repository.engine
     with engine.connect() as conn:
@@ -236,6 +242,7 @@ def recover_open_api_billing(
             conn.execute(
                 select(
                     billing_usage_orders.c.id.label("order_id"),
+                    billing_usage_orders.c.wallet_id.label("wallet_id"),
                     billing_usage_orders.c.status.label("order_status"),
                     open_api_invocations.c.id.label("invocation_id"),
                 )
@@ -246,10 +253,16 @@ def recover_open_api_billing(
                 )
                 .where(
                     billing_usage_orders.c.source_type == "open_api",
-                    billing_usage_orders.c.status.in_(
-                        ("quoted", "held", "reconciling"),
-                    ),
                     open_api_invocations.c.billing_status != "unbilled",
+                    or_(
+                        billing_usage_orders.c.status.in_(
+                            ("quoted", "held", "reconciling"),
+                        ),
+                        open_api_invocations.c.status.in_(
+                            ("accepted", "running"),
+                        ),
+                        open_api_invocations.c.terminal_event_json.is_(None),
+                    ),
                 ),
             )
             .mappings()
@@ -278,6 +291,7 @@ def recover_open_api_billing(
                     item_key=str(item["item_key"]),
                     supplier_reference="",
                     billability="not_billable",
+                    execution_outcome="failed",
                     evidence={
                         "adapter_version": "open-api-recovery-v1",
                         "response_class": "recovered_before_provider_contact",
@@ -289,70 +303,72 @@ def recover_open_api_billing(
             )
             recovered += 1
 
-        with engine.begin() as conn:
-            remaining = (
-                conn.execute(
-                    select(billing_usage_items.c.status).where(
-                        billing_usage_items.c.usage_order_id == order_id,
-                    ),
-                )
-                .scalars()
-                .all()
-            )
-            remaining_statuses = {str(value) for value in remaining}
-            if not remaining:
-                now = datetime.now(timezone.utc)
+        items = active.usage_service.list_items(order_id)
+        if not items:
+            now = datetime.now(timezone.utc)
+            with engine.begin() as conn:
                 conn.execute(
                     update(billing_usage_orders)
-                    .where(
-                        billing_usage_orders.c.id == order_id,
-                        billing_usage_orders.c.status == "quoted",
-                    )
+                    .where(billing_usage_orders.c.id == order_id)
                     .values(status="settled", settled_at=now, updated_at=now),
                 )
                 conn.execute(
                     update(open_api_invocations)
-                    .where(
-                        open_api_invocations.c.id == row["invocation_id"],
-                        open_api_invocations.c.billing_status != "unbilled",
-                    )
-                    .values(
-                        status="failed",
-                        status_code=500,
-                        error_summary="request interrupted by process restart",
-                        billing_status="settled",
-                    ),
+                    .where(open_api_invocations.c.id == row["invocation_id"])
+                    .values(billing_status="settled"),
                 )
-                recovered += 1
-            elif "reconciling" in remaining_statuses:
-                conn.execute(
-                    update(billing_usage_orders)
-                    .where(billing_usage_orders.c.id == order_id)
-                    .values(status="reconciling"),
-                )
-                conn.execute(
-                    update(open_api_invocations)
-                    .where(
-                        open_api_invocations.c.id == row["invocation_id"],
-                        open_api_invocations.c.billing_status != "unbilled",
-                    )
-                    .values(billing_status="reconciling"),
-                )
-            elif remaining_statuses <= {"captured", "released"}:
-                conn.execute(
-                    update(open_api_invocations)
-                    .where(
-                        open_api_invocations.c.id == row["invocation_id"],
-                        open_api_invocations.c.status.in_(
-                            ("accepted", "running"),
-                        ),
-                    )
-                    .values(
-                        status="failed",
-                        status_code=500,
-                        error_summary="request interrupted by process restart",
-                    ),
-                )
+        else:
+            active.usage_service.reproject_open_api_order(order_id)
+
+        order = active.usage_service.get_order(order_id)
+        invocation_id = str(row["invocation_id"])
+        invocation = active.open_api_repository.get_invocation(invocation_id)
+        if invocation is None:
+            continue
+        succeeded = sum(
+            1
+            for item in items
+            if str(item.get("execution_outcome")) == "succeeded"
+        )
+        failed = sum(
+            1
+            for item in items
+            if str(item.get("execution_outcome")) != "succeeded"
+        )
+        status = (
+            "partially_completed"
+            if succeeded and failed
+            else "succeeded"
+            if succeeded
+            else "failed"
+        )
+        terminal = invocation.get("terminal_event_json")
+        if not isinstance(terminal, dict):
+            balance = active.repository.balance(str(row["wallet_id"]))
+            billing_status = str(order["status"])
+            if billing_status == "settled" and int(
+                order["captured_credits"],
+            ):
+                billing_status = "captured"
+            terminal = {
+                "type": "billing.completed",
+                "invocation_id": invocation_id,
+                "credits_used": int(order["captured_credits"]),
+                "credits_remaining": balance.available,
+                "billing_status": billing_status,
+            }
+        active.open_api_repository.update_billing_invocation(
+            invocation_id,
+            status=status,
+            status_code=200 if status == "succeeded" else 500,
+            error_summary=(
+                ""
+                if status == "succeeded"
+                else "request interrupted by process restart"
+            ),
+            terminal_event=terminal,
+        )
+        recovered += 1
     return recovered
 
 

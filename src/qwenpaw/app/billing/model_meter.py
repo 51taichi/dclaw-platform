@@ -12,7 +12,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from threading import Lock
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 from uuid import uuid4
 
 from ..agent_context import get_current_billing_context
@@ -22,6 +22,8 @@ from .supplier_reference_sidecar import (
     pop_supplier_reference,
 )
 from .usage import (
+    Billability,
+    ExecutionOutcome,
     ReserveModelCall,
     SettleModelCall,
     UsageItemResult,
@@ -161,6 +163,7 @@ class BillingModelMeter:
                     item_key=call.item_key,
                     supplier_reference="",
                     billability="unknown",
+                    execution_outcome="pending",
                     evidence=_evidence(
                         supplier_reference=SupplierReference("", ""),
                         response_class="provider_call_started",
@@ -199,6 +202,7 @@ class BillingModelMeter:
                 ),
                 actual_input_tokens=usage["input_tokens"],
                 actual_output_tokens=usage["output_tokens"],
+                execution_outcome="succeeded",
             )
         return self._settle(
             call,
@@ -210,6 +214,7 @@ class BillingModelMeter:
             ),
             actual_input_tokens=0,
             actual_output_tokens=0,
+            execution_outcome="succeeded",
         )
 
     def observe_stream_chunk(
@@ -251,6 +256,7 @@ class BillingModelMeter:
             ),
             actual_input_tokens=0,
             actual_output_tokens=0,
+            execution_outcome="failed",
         )
 
     def record_financial_write_failure(
@@ -258,6 +264,7 @@ class BillingModelMeter:
         call: MeteredModelCall,
         _error: BaseException,
         supplier_reference: SupplierReference,
+        execution_outcome: str,
     ) -> BaseException | None:
         """Attempt one non-recursive durable reconciliation transition."""
         try:
@@ -267,6 +274,10 @@ class BillingModelMeter:
                     item_key=call.item_key,
                     supplier_reference=supplier_reference.value,
                     billability="unknown",
+                    execution_outcome=cast(
+                        ExecutionOutcome,
+                        execution_outcome,
+                    ),
                     evidence=_evidence(
                         supplier_reference=supplier_reference,
                         response_class="financial_write_failure",
@@ -288,6 +299,7 @@ class BillingModelMeter:
         evidence: Mapping[str, Any],
         actual_input_tokens: int,
         actual_output_tokens: int,
+        execution_outcome: str,
     ) -> UsageItemResult:
         try:
             return self.usage_service.settle_model_call(
@@ -295,8 +307,12 @@ class BillingModelMeter:
                     usage_order_id=call.session.usage_order_id,
                     item_key=call.item_key,
                     supplier_reference=supplier_reference.value,
-                    billability=billability,  # type: ignore[arg-type]
+                    billability=cast(Billability, billability),
                     evidence=evidence,
+                    execution_outcome=cast(
+                        ExecutionOutcome,
+                        execution_outcome,
+                    ),
                     actual_input_tokens=actual_input_tokens,
                     actual_output_tokens=actual_output_tokens,
                 ),
@@ -306,6 +322,7 @@ class BillingModelMeter:
                 call,
                 exc,
                 supplier_reference,
+                execution_outcome,
             )
             detail = "reconciliation"
             if fallback_error is not None:

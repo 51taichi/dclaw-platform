@@ -232,6 +232,22 @@ agent_app = AgentApp(
 )
 
 
+def _recover_open_api_billing_at_startup() -> int:
+    """Fail closed only when billing enforcement could debit a wallet."""
+    try:
+        from .open_api.runtime import recover_open_api_billing
+
+        return recover_open_api_billing()
+    except Exception as exc:
+        logger.error("OpenAPI billing recovery failed", exc_info=True)
+        mode = os.environ.get("DCLAW_BILLING_MODE", "shadow").strip().lower()
+        if mode == "enforced":
+            raise RuntimeError("OpenAPI billing recovery failed") from exc
+        # Off/shadow/observe do not mutate customer-wallet balances. Keeping
+        # startup available is explicit and recovery will retry next startup.
+        return 0
+
+
 @asynccontextmanager
 async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
     app: FastAPI,
@@ -261,19 +277,12 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
 
     # Recover only bridge-created OpenAPI billing orders. Historical token
     # rows remain ``unbilled`` and are deliberately outside this scan.
-    try:
-        from .open_api.runtime import recover_open_api_billing
-
-        recovered_open_api_orders = recover_open_api_billing()
-        if recovered_open_api_orders:
-            logger.info(
-                "Recovered %d incomplete OpenAPI billing transition(s)",
-                recovered_open_api_orders,
-            )
-    except Exception:
-        # Ambiguous work must remain durable/reconciling; startup recovery is
-        # retry-safe and can run again without duplicating ledger entries.
-        logger.error("OpenAPI billing recovery failed", exc_info=True)
+    recovered_open_api_orders = _recover_open_api_billing_at_startup()
+    if recovered_open_api_orders:
+        logger.info(
+            "Recovered %d incomplete OpenAPI billing transition(s)",
+            recovered_open_api_orders,
+        )
 
     auto_register_from_env()
 

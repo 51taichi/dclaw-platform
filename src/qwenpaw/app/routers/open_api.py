@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
+# pylint: disable=too-many-return-statements
 """External Open API message runtime routes."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
 import time
 import uuid
 from typing import Any, AsyncGenerator
@@ -122,6 +125,16 @@ async def post_open_message(
         ) from exc
 
     invocation_id = billing_session.invocation_id
+    run_key = f"open-api:{invocation_id}"
+    execution_owner_token = str(uuid.uuid4())
+    owns_execution = False
+    if not billing_session.replayed:
+        owns_execution = (
+            billing.open_api_repository.claim_invocation_execution(
+                invocation_id,
+                execution_owner_token,
+            )
+        )
 
     prepared: PreparedOpenRun | None = None
     expert_team_run_id = ""
@@ -148,7 +161,18 @@ async def post_open_message(
                 payload,
                 leader_agent_id=str(getattr(team, "leader_agent_id")),
             )
-            expert_team_run_id = str(uuid.uuid4())
+            invocation = (
+                billing.open_api_repository.get_invocation(invocation_id) or {}
+            )
+            expert_team_run_id = str(
+                invocation.get("expert_team_run_id") or "",
+            )
+            if owns_execution and not expert_team_run_id:
+                expert_team_run_id = str(uuid.uuid4())
+                billing.open_api_repository.update_billing_invocation(
+                    invocation_id,
+                    expert_team_run_id=expert_team_run_id,
+                )
             stream_payload = {
                 "run_id": expert_team_run_id,
                 "team_id": str(team.id),
@@ -191,11 +215,39 @@ async def post_open_message(
         )
 
         tracker = prepared.workspace.task_tracker
-        run_key = f"open-api:{invocation_id}"
-        if billing_session.replayed and not await _tracker_is_running(
-            tracker,
-            run_key,
-        ):
+        if billing_session.replayed or not owns_execution:
+            queue = await _attach_tracker_queue(tracker, run_key)
+            if queue is not None:
+                first_event = await queue.get()
+                if first_event is None or _is_insufficient_terminal_event(
+                    first_event,
+                ):
+                    await _detach_tracker_queue(tracker, run_key, queue)
+                    await _wait_for_durable_terminal(
+                        billing.open_api_repository,
+                        invocation_id,
+                    )
+                    return _terminal_replay_response(
+                        billing,
+                        billing_session,
+                        prepared,
+                        expert_team_run_id,
+                    )
+                return _streaming_response(
+                    tracker,
+                    queue,
+                    run_key,
+                    prepared,
+                    invocation_id,
+                    expert_team_run_id,
+                    billing.open_api_repository.get_invocation(invocation_id)
+                    or {},
+                    initial_event=first_event,
+                )
+            await _wait_for_durable_terminal(
+                billing.open_api_repository,
+                invocation_id,
+            )
             return _terminal_replay_response(
                 billing,
                 billing_session,
@@ -204,7 +256,7 @@ async def post_open_message(
             )
 
         permit = None
-        if not billing_session.replayed:
+        if owns_execution:
             permit = await get_task_limiter(request.app).try_acquire(
                 agent_id=prepared.agent_id,
                 user_id=bound_user_id,
@@ -224,68 +276,39 @@ async def post_open_message(
             stream_started_at = time.monotonic()
             stream_failure: tuple[str, str] | None = None
             stream_exception: Exception | None = None
-            with open_api_billing_context(billing_session, execution.meter):
-                try:
+            cancelled = False
+            terminal: dict[str, Any] | None = None
+            try:
+                with open_api_billing_context(
+                    billing_session,
+                    execution.meter,
+                ):
                     async for item in stream_fn(stream_payload):
                         execution.note_stream_ready()
                         if stream_failure is None:
                             stream_failure = _extract_stream_failure(item)
                         yield item
-                except InsufficientUsageCreditsError as exc:
-                    execution.note_insufficient(exc)
-                except Exception as exc:
-                    stream_exception = exc
-                    billing.open_api_repository.update_billing_invocation(
-                        invocation_id,
-                        status="failed",
-                        status_code=500,
-                        latency_ms=_latency_ms(stream_started_at),
-                        error_summary=str(exc),
-                    )
-                    yield _sse({"error": "internal server error"})
-                finally:
-                    execution.note_stream_ready()
-
-            terminal = _terminal_billing_payload(
-                billing,
-                billing_session,
-                execution.insufficient,
-            )
-            if execution.insufficient is not None:
-                final_status = (
-                    "partially_completed"
-                    if terminal["completed_steps"]
-                    else "failed"
+            except InsufficientUsageCreditsError as exc:
+                execution.note_insufficient(exc)
+            except asyncio.CancelledError:
+                cancelled = True
+                raise
+            except Exception as exc:  # supplier details stay private
+                stream_exception = exc
+                yield _sse({"error": "internal server error"})
+            finally:
+                execution.note_stream_ready()
+                terminal = await _shielded_finalize(
+                    billing,
+                    billing_session,
+                    execution,
+                    stream_started_at=stream_started_at,
+                    stream_failure=stream_failure,
+                    stream_exception=stream_exception,
+                    cancelled=cancelled,
+                    expert_team_run_id=expert_team_run_id,
                 )
-                billing.open_api_repository.update_billing_invocation(
-                    invocation_id,
-                    status=final_status,
-                    status_code=409,
-                    latency_ms=_latency_ms(stream_started_at),
-                    error_summary="insufficient credits",
-                    billing_error_code="insufficient_credits",
-                )
-            elif stream_exception is not None:
-                # The exception status was written above.  Keep it while still
-                # delivering the sealed billing terminal event.
-                pass
-            elif stream_failure is not None:
-                status, error_summary = stream_failure
-                billing.open_api_repository.update_billing_invocation(
-                    invocation_id,
-                    status=status,
-                    status_code=_stream_failure_status_code(status),
-                    latency_ms=_latency_ms(stream_started_at),
-                    error_summary=error_summary,
-                )
-            else:
-                billing.open_api_repository.update_billing_invocation(
-                    invocation_id,
-                    status="succeeded",
-                    status_code=200,
-                    latency_ms=_latency_ms(stream_started_at),
-                    error_summary="",
-                )
+            assert terminal is not None
             yield _sse(terminal)
 
         try:
@@ -328,14 +351,17 @@ async def post_open_message(
         if is_new_run:
             try:
                 await execution.wait_for_preflight()
-            except InsufficientUsageCreditsError as exc:
+            except InsufficientUsageCreditsError:
                 await _detach_tracker_queue(tracker, run_key, queue)
+                terminal = await execution.wait_for_finalization()
                 return JSONResponse(
                     status_code=409,
                     content={
                         "code": "insufficient_credits",
-                        "remaining_credits": exc.available,
-                        "required_credits": exc.required,
+                        "remaining_credits": terminal["remaining_credits"],
+                        "required_credits": terminal[
+                            "required_credits_for_next_step"
+                        ],
                         "invocation_id": invocation_id,
                     },
                     headers={
@@ -362,31 +388,15 @@ async def post_open_message(
         )
         raise
 
-    async def event_generator() -> AsyncGenerator[str, None]:
-        stream_it = tracker.stream_from_queue(queue, run_key)
-        try:
-            async for event_data in stream_it:
-                yield event_data
-        finally:
-            await stream_it.aclose()
-
     current = billing.open_api_repository.get_invocation(invocation_id) or {}
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-QwenPaw-Chat-Id": prepared.chat_id,
-            "X-QwenPaw-Session-Id": prepared.session_id,
-            "X-QwenPaw-Open-Invocation-Id": invocation_id,
-            "X-QwenPaw-Expert-Team-Run-Id": expert_team_run_id,
-            "X-DClaw-Invocation-Id": invocation_id,
-            "X-DClaw-Billing-Status": str(
-                current.get("billing_status") or "quoted",
-            ),
-        },
+    return _streaming_response(
+        tracker,
+        queue,
+        run_key,
+        prepared,
+        invocation_id,
+        expert_team_run_id,
+        current,
     )
 
 
@@ -402,13 +412,19 @@ def _terminal_replay_response(
         )
         or {}
     )
+    payload = invocation.get("terminal_event_json")
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=503,
+            detail="Open API invocation is still finalizing",
+        )
     if invocation.get("billing_error_code") == "insufficient_credits":
-        balance = billing.repository.balance(session.wallet_id)
         return JSONResponse(
             status_code=409,
             content={
                 "code": "insufficient_credits",
-                "remaining_credits": balance.available,
+                "remaining_credits": payload["remaining_credits"],
+                "required_credits": payload["required_credits_for_next_step"],
                 "invocation_id": session.invocation_id,
             },
             headers={
@@ -416,7 +432,6 @@ def _terminal_replay_response(
                 "X-DClaw-Billing-Status": "insufficient_credits",
             },
         )
-    payload = _terminal_billing_payload(billing, session, None)
 
     async def replay_event() -> AsyncGenerator[str, None]:
         yield _sse(payload)
@@ -472,7 +487,7 @@ def _terminal_billing_payload(
     order = billing.usage_service.get_order(session.usage_order_id)
     balance = billing.repository.balance(session.wallet_id)
     completed = sum(
-        1 for item in items if item["status"] in {"captured", "released"}
+        1 for item in items if item.get("execution_outcome") == "succeeded"
     )
     if insufficient is not None:
         return {
@@ -494,6 +509,171 @@ def _terminal_billing_payload(
         "credits_remaining": balance.available,
         "billing_status": billing_status,
     }
+
+
+async def _shielded_finalize(
+    billing: Any,
+    session: Any,
+    execution: Any,
+    *,
+    stream_started_at: float,
+    stream_failure: tuple[str, str] | None,
+    stream_exception: Exception | None,
+    cancelled: bool,
+    expert_team_run_id: str,
+) -> dict[str, Any]:
+    """Finish the durable bridge even when its producer is cancelled."""
+
+    async def finalize() -> dict[str, Any]:
+        invocation = (
+            billing.open_api_repository.get_invocation(session.invocation_id)
+            or {}
+        )
+        stored = invocation.get("terminal_event_json")
+        if isinstance(stored, dict):
+            execution.note_finalized(stored)
+            return stored
+
+        terminal = _terminal_billing_payload(
+            billing,
+            session,
+            execution.insufficient,
+        )
+        if execution.insufficient is not None:
+            status = (
+                "partially_completed"
+                if terminal["completed_steps"]
+                else "failed"
+            )
+            status_code = 409
+            error_summary = "insufficient credits"
+            billing_error_code = "insufficient_credits"
+        elif cancelled:
+            status = "cancelled"
+            status_code = 499
+            error_summary = "request cancelled"
+            billing_error_code = None
+        elif stream_exception is not None:
+            status = "failed"
+            status_code = 500
+            error_summary = str(stream_exception)
+            billing_error_code = None
+        elif stream_failure is not None:
+            status, error_summary = stream_failure
+            status_code = _stream_failure_status_code(status)
+            billing_error_code = None
+        else:
+            status = "succeeded"
+            status_code = 200
+            error_summary = ""
+            billing_error_code = None
+        updated = billing.open_api_repository.update_billing_invocation(
+            session.invocation_id,
+            status=status,
+            status_code=status_code,
+            latency_ms=_latency_ms(stream_started_at),
+            error_summary=error_summary,
+            billing_error_code=billing_error_code,
+            expert_team_run_id=expert_team_run_id or None,
+            terminal_event=terminal,
+        )
+        sealed = (updated or {}).get("terminal_event_json")
+        if not isinstance(sealed, dict):
+            sealed = terminal
+        execution.note_finalized(sealed)
+        return sealed
+
+    task = asyncio.create_task(finalize())
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        # Preserve cancellation after the financial/business transition.
+        await task
+        raise
+
+
+async def _attach_tracker_queue(tracker: Any, run_key: str) -> Any | None:
+    attach = getattr(tracker, "attach", None)
+    if not callable(attach):
+        return None
+    return await attach(run_key)
+
+
+async def _wait_for_durable_terminal(repo: Any, invocation_id: str) -> None:
+    try:
+        wait_seconds = float(
+            os.environ.get("DCLAW_OPEN_API_REPLAY_WAIT_SECONDS", "300"),
+        )
+    except ValueError:
+        wait_seconds = 300.0
+    deadline = time.monotonic() + max(0.1, wait_seconds)
+    while time.monotonic() < deadline:
+        invocation = repo.get_invocation(invocation_id) or {}
+        if isinstance(invocation.get("terminal_event_json"), dict):
+            return
+        await asyncio.sleep(0.02)
+    raise HTTPException(
+        status_code=503,
+        detail="Open API invocation is still running",
+    )
+
+
+def _streaming_response(
+    tracker: Any,
+    queue: Any,
+    run_key: str,
+    prepared: PreparedOpenRun,
+    invocation_id: str,
+    expert_team_run_id: str,
+    invocation: dict[str, Any],
+    *,
+    initial_event: Any | None = None,
+) -> StreamingResponse:
+    async def event_generator() -> AsyncGenerator[str, None]:
+        stream_it = tracker.stream_from_queue(queue, run_key)
+        try:
+            if initial_event is not None:
+                yield initial_event
+            async for event in stream_it:
+                yield event
+        finally:
+            await stream_it.aclose()
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-QwenPaw-Chat-Id": prepared.chat_id,
+            "X-QwenPaw-Session-Id": prepared.session_id,
+            "X-QwenPaw-Open-Invocation-Id": invocation_id,
+            "X-QwenPaw-Expert-Team-Run-Id": expert_team_run_id,
+            "X-DClaw-Invocation-Id": invocation_id,
+            "X-DClaw-Billing-Status": str(
+                invocation.get("billing_status") or "reconciling",
+            ),
+        },
+    )
+
+
+def _is_insufficient_terminal_event(event: Any) -> bool:
+    if not isinstance(event, (str, bytes)):
+        return False
+    text_event = event.decode("utf-8") if isinstance(event, bytes) else event
+    for line in text_event.splitlines():
+        if not line.startswith("data:"):
+            continue
+        try:
+            payload = json.loads(line[5:].strip())
+        except (json.JSONDecodeError, TypeError):
+            continue
+        return bool(
+            isinstance(payload, dict)
+            and payload.get("type") == "billing.interrupted"
+            and payload.get("code") == "insufficient_credits",
+        )
+    return False
 
 
 def _sse(payload: dict[str, Any]) -> str:

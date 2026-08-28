@@ -10,9 +10,10 @@ from threading import Barrier
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, func, inspect, select, text
 from sqlalchemy.schema import CreateSchema, DropSchema
 
+import qwenpaw.app.storage.schema as schema_module
 from qwenpaw.app.billing.open_api import (
     CatalogNotReadyError,
     IdempotencyConflictError,
@@ -201,6 +202,90 @@ def test_postgresql_open_api_same_key_and_payload_drift(
     with ThreadPoolExecutor(max_workers=2) as pool:
         drift_results = list(pool.map(drift, ("first", "changed")))
     assert drift_results.count("conflict") == 1
+
+
+@pytest.mark.integration
+def test_postgresql_invocation_execution_claim_has_one_winner(
+    postgres_open_api_engine,
+):
+    identity = "execution-claim"
+    coordinator = _coordinator(postgres_open_api_engine, identity)
+    session = coordinator.begin_invocation(
+        _command(identity, "postgres-execution-claim"),
+    )
+    repository = SqlAlchemyOpenApiRepository(postgres_open_api_engine)
+    start = Barrier(8)
+
+    def claim(index: int) -> bool:
+        start.wait()
+        return repository.claim_invocation_execution(
+            session.invocation_id,
+            f"worker-{index}",
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(claim, range(8)))
+
+    assert results.count(True) == 1
+    invocation = repository.get_invocation(session.invocation_id)
+    assert invocation is not None
+    assert invocation["status"] == "running"
+    assert invocation["execution_owner_token"].startswith("worker-")
+    assert invocation["execution_claimed_at"] is not None
+
+
+@pytest.mark.integration
+def test_postgresql_legacy_bridge_schema_adds_execution_state(
+    postgres_open_api_engine,
+):
+    with postgres_open_api_engine.begin() as conn:
+        conn.execute(
+            text(
+                "ALTER TABLE billing_usage_items DROP CONSTRAINT "
+                "ck_billing_usage_items_execution_outcome",
+            ),
+        )
+        conn.execute(
+            text(
+                "ALTER TABLE billing_usage_items "
+                "DROP COLUMN execution_outcome",
+            ),
+        )
+        for column in (
+            "execution_owner_token",
+            "execution_claimed_at",
+            "expert_team_run_id",
+            "terminal_event_json",
+        ):
+            conn.execute(
+                text(
+                    f"ALTER TABLE open_api_invocations DROP COLUMN {column}",
+                ),
+            )
+
+    ensure_columns = getattr(
+        schema_module,
+        "_ensure_open_api_billing_columns",
+    )
+    ensure_columns(postgres_open_api_engine)
+    ensure_columns(postgres_open_api_engine)
+
+    inspector = inspect(postgres_open_api_engine)
+    invocation_columns = {
+        column["name"]
+        for column in inspector.get_columns("open_api_invocations")
+    }
+    assert {
+        "execution_owner_token",
+        "execution_claimed_at",
+        "expert_team_run_id",
+        "terminal_event_json",
+    } <= invocation_columns
+    item_columns = {
+        column["name"]
+        for column in inspector.get_columns("billing_usage_items")
+    }
+    assert "execution_outcome" in item_columns
 
 
 @pytest.mark.integration

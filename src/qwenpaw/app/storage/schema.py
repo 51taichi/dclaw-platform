@@ -325,6 +325,10 @@ open_api_invocations = Table(
     Column("captured_credits", BigInteger, nullable=False, server_default="0"),
     Column("released_credits", BigInteger, nullable=False, server_default="0"),
     Column("billing_error_code", String),
+    Column("execution_owner_token", String),
+    Column("execution_claimed_at", DateTime(timezone=True)),
+    Column("expert_team_run_id", String),
+    Column("terminal_event_json", Text),
     Column("created_at", DateTime(timezone=True), server_default=func.now()),
     CheckConstraint(
         "quoted_credits >= 0",
@@ -750,6 +754,12 @@ billing_usage_items = Table(
         server_default="{}",
     ),
     Column("billability", String, nullable=False, server_default="unknown"),
+    Column(
+        "execution_outcome",
+        String,
+        nullable=False,
+        server_default="pending",
+    ),
     Column("started_at", DateTime(timezone=True)),
     Column("finished_at", DateTime(timezone=True)),
     Column("created_at", DateTime(timezone=True), server_default=func.now()),
@@ -781,6 +791,10 @@ billing_usage_items = Table(
     CheckConstraint(
         "billability IN ('unknown', 'billable', 'not_billable')",
         name="ck_billing_usage_items_billability",
+    ),
+    CheckConstraint(
+        "execution_outcome IN ('pending', 'succeeded', 'failed')",
+        name="ck_billing_usage_items_execution_outcome",
     ),
 )
 
@@ -1095,6 +1109,22 @@ def _ensure_open_api_billing_columns(engine: Engine) -> None:
                 "ALTER TABLE open_api_invocations ADD COLUMN "
                 "billing_error_code VARCHAR"
             ),
+            "execution_owner_token": (
+                "ALTER TABLE open_api_invocations ADD COLUMN "
+                "execution_owner_token VARCHAR"
+            ),
+            "execution_claimed_at": (
+                "ALTER TABLE open_api_invocations ADD COLUMN "
+                f"execution_claimed_at {datetime_type}"
+            ),
+            "expert_team_run_id": (
+                "ALTER TABLE open_api_invocations ADD COLUMN "
+                "expert_team_run_id VARCHAR"
+            ),
+            "terminal_event_json": (
+                "ALTER TABLE open_api_invocations ADD COLUMN "
+                "terminal_event_json TEXT"
+            ),
         },
         "billing_usage_orders": {
             "source_type": (
@@ -1139,6 +1169,10 @@ def _ensure_open_api_billing_columns(engine: Engine) -> None:
             "finished_at": (
                 "ALTER TABLE billing_usage_items ADD COLUMN finished_at "
                 f"{datetime_type}"
+            ),
+            "execution_outcome": (
+                "ALTER TABLE billing_usage_items ADD COLUMN "
+                "execution_outcome VARCHAR NOT NULL DEFAULT 'pending'"
             ),
         },
     }
@@ -1192,7 +1226,9 @@ def _validate_open_api_billing_history(engine: Engine) -> None:
             "charged_credits IS NULL OR charged_credits < 0 OR "
             "supplier_cost_fen IS NULL OR supplier_cost_fen < 0 OR "
             "billability IS NULL OR billability NOT IN "
-            "('unknown', 'billable', 'not_billable')"
+            "('unknown', 'billable', 'not_billable') OR "
+            "execution_outcome IS NULL OR execution_outcome NOT IN "
+            "('pending', 'succeeded', 'failed')"
         ),
     }
     existing_table_names = set(inspect(engine).get_table_names())
@@ -1310,6 +1346,7 @@ def _sqlite_open_api_billing_rebuild_required(engine: Engine) -> bool:
             "ck_billing_usage_items_quoted_nonnegative",
             "ck_billing_usage_items_supplier_cost_nonnegative",
             "ck_billing_usage_items_billability",
+            "ck_billing_usage_items_execution_outcome",
         },
     }
     inspector = inspect(engine)
@@ -1468,6 +1505,12 @@ def _ensure_postgresql_open_api_billing_constraints(engine: Engine) -> None:
             "ck_billing_usage_items_billability",
             "c",
             "CHECK (billability IN ('unknown', 'billable', 'not_billable'))",
+        ),
+        (
+            "billing_usage_items",
+            "ck_billing_usage_items_execution_outcome",
+            "c",
+            "CHECK (execution_outcome IN ('pending', 'succeeded', 'failed'))",
         ),
         (
             "open_api_invocations",

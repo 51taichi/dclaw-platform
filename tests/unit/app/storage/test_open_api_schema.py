@@ -104,7 +104,16 @@ def test_open_api_billing_columns_exist(tmp_path):
             "captured_credits",
             "released_credits",
             "billing_error_code",
+            "execution_owner_token",
+            "execution_claimed_at",
+            "expert_team_run_id",
+            "terminal_event_json",
         } <= invocations
+        items = {
+            column["name"]
+            for column in inspect(engine).get_columns("billing_usage_items")
+        }
+        assert "execution_outcome" in items
 
         reflected = {
             column["name"]: column
@@ -279,6 +288,10 @@ def test_open_api_billing_upgrade_is_idempotent_and_preserves_history(
             "captured_credits",
             "released_credits",
             "billing_error_code",
+            "execution_owner_token",
+            "execution_claimed_at",
+            "expert_team_run_id",
+            "terminal_event_json",
         } <= invocation_columns
         assert {
             "source_type",
@@ -294,6 +307,7 @@ def test_open_api_billing_upgrade_is_idempotent_and_preserves_history(
             "price_snapshot_json",
             "started_at",
             "finished_at",
+            "execution_outcome",
         } <= item_columns
 
         order_uniques = {
@@ -364,10 +378,11 @@ def test_open_api_billing_upgrade_is_idempotent_and_preserves_history(
             assert conn.execute(
                 text(
                     "SELECT billing_status, quoted_credits, captured_credits, "
-                    "released_credits FROM open_api_invocations "
+                    "released_credits, terminal_event_json "
+                    "FROM open_api_invocations "
                     "WHERE id = 'historic-invocation'"
                 ),
-            ).one() == ("unbilled", 0, 0, 0)
+            ).one() == ("unbilled", 0, 0, 0, None)
             assert conn.execute(
                 text(
                     "SELECT source_type, source_id FROM billing_usage_orders "
@@ -376,10 +391,11 @@ def test_open_api_billing_upgrade_is_idempotent_and_preserves_history(
             ).one() == (None, None)
             assert conn.execute(
                 text(
-                    "SELECT item_key FROM billing_usage_items "
+                    "SELECT item_key, execution_outcome "
+                    "FROM billing_usage_items "
                     "WHERE id = 'historic-item'"
                 ),
-            ).one() == (None,)
+            ).one() == (None, "pending")
 
             _insert_invocation_dependencies(conn)
             with pytest.raises(IntegrityError):

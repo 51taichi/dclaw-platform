@@ -65,7 +65,8 @@ def test_postgresql_constraint_guard_ddl_executes_in_isolated_schema(
                 "CREATE TABLE billing_usage_items ("
                 "input_tokens BIGINT, output_tokens BIGINT, quantity BIGINT, "
                 "quoted_credits BIGINT, charged_credits BIGINT, "
-                "supplier_cost_fen BIGINT, billability VARCHAR)",
+                "supplier_cost_fen BIGINT, billability VARCHAR, "
+                "execution_outcome VARCHAR)",
             ),
         )
         conn.execute(
@@ -122,6 +123,7 @@ def test_postgresql_constraint_guard_ddl_executes_in_isolated_schema(
         "ck_billing_usage_items_quoted_nonnegative",
         "ck_billing_usage_items_supplier_cost_nonnegative",
         "ck_billing_usage_items_billability",
+        "ck_billing_usage_items_execution_outcome",
     } <= {
         check["name"]
         for check in inspector.get_check_constraints("billing_usage_items")

@@ -76,6 +76,13 @@ class OpenApiRepository(Protocol):
     def get_invocation(self, invocation_id: str) -> dict[str, Any] | None:
         ...
 
+    def claim_invocation_execution(
+        self,
+        invocation_id: str,
+        owner_token: str,
+    ) -> bool:
+        ...
+
     def update_billing_invocation(
         self,
         invocation_id: str,
@@ -87,6 +94,8 @@ class OpenApiRepository(Protocol):
         error_summary: str | None = None,
         billing_status: str | None = None,
         billing_error_code: str | None = None,
+        expert_team_run_id: str | None = None,
+        terminal_event: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         ...
 
@@ -298,6 +307,31 @@ class SqlAlchemyOpenApiRepository:
     def get_invocation(self, invocation_id: str) -> dict[str, Any] | None:
         return self._get_invocation(invocation_id)
 
+    def claim_invocation_execution(
+        self,
+        invocation_id: str,
+        owner_token: str,
+    ) -> bool:
+        token = str(owner_token or "").strip()
+        if not token:
+            raise ValueError("execution owner token must be non-empty")
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                update(open_api_invocations)
+                .where(
+                    open_api_invocations.c.id == invocation_id,
+                    open_api_invocations.c.status == "accepted",
+                    open_api_invocations.c.execution_owner_token.is_(None),
+                )
+                .values(
+                    status="running",
+                    status_code=202,
+                    execution_owner_token=token,
+                    execution_claimed_at=_now(),
+                ),
+            )
+        return result.rowcount == 1
+
     def update_billing_invocation(
         self,
         invocation_id: str,
@@ -309,6 +343,8 @@ class SqlAlchemyOpenApiRepository:
         error_summary: str | None = None,
         billing_status: str | None = None,
         billing_error_code: str | None = None,
+        expert_team_run_id: str | None = None,
+        terminal_event: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         values: dict[str, Any] = {}
         for key, value in (
@@ -319,16 +355,26 @@ class SqlAlchemyOpenApiRepository:
             ("error_summary", error_summary),
             ("billing_status", billing_status),
             ("billing_error_code", billing_error_code),
+            ("expert_team_run_id", expert_team_run_id),
         ):
             if value is not None:
                 values[key] = value
+        if terminal_event is not None:
+            values["terminal_event_json"] = _json_text(
+                "terminal_event",
+                terminal_event,
+                dict,
+            )
         if values:
             with self.engine.begin() as conn:
-                conn.execute(
-                    update(open_api_invocations)
-                    .where(open_api_invocations.c.id == invocation_id)
-                    .values(**values),
+                statement = update(open_api_invocations).where(
+                    open_api_invocations.c.id == invocation_id,
                 )
+                if terminal_event is not None:
+                    statement = statement.where(
+                        open_api_invocations.c.terminal_event_json.is_(None),
+                    )
+                conn.execute(statement.values(**values))
         return self._get_invocation(invocation_id)
 
     def update_invocation_status(
@@ -668,6 +714,25 @@ class SqliteOpenApiRepository:
     def get_invocation(self, invocation_id: str) -> dict[str, Any] | None:
         return self._get_invocation(invocation_id)
 
+    def claim_invocation_execution(
+        self,
+        invocation_id: str,
+        owner_token: str,
+    ) -> bool:
+        token = str(owner_token or "").strip()
+        if not token:
+            raise ValueError("execution owner token must be non-empty")
+        cursor = db.get_db().execute(
+            "UPDATE open_api_invocations SET status = 'running', "
+            "status_code = 202, execution_owner_token = ?, "
+            "execution_claimed_at = CURRENT_TIMESTAMP "
+            "WHERE id = ? AND status = 'accepted' "
+            "AND execution_owner_token IS NULL",
+            (token, invocation_id),
+        )
+        db.get_db().commit()
+        return cursor.rowcount == 1
+
     def update_billing_invocation(
         self,
         invocation_id: str,
@@ -679,6 +744,8 @@ class SqliteOpenApiRepository:
         error_summary: str | None = None,
         billing_status: str | None = None,
         billing_error_code: str | None = None,
+        expert_team_run_id: str | None = None,
+        terminal_event: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         values: list[Any] = []
         assignments: list[str] = []
@@ -690,16 +757,26 @@ class SqliteOpenApiRepository:
             ("error_summary", error_summary),
             ("billing_status", billing_status),
             ("billing_error_code", billing_error_code),
+            ("expert_team_run_id", expert_team_run_id),
         ):
             if value is not None:
                 assignments.append(f"{key} = ?")
                 values.append(value)
+        if terminal_event is not None:
+            assignments.append("terminal_event_json = ?")
+            values.append(_json_text("terminal_event", terminal_event, dict))
         if assignments:
             values.append(invocation_id)
+            terminal_guard = (
+                " AND terminal_event_json IS NULL"
+                if terminal_event is not None
+                else ""
+            )
             db.get_db().execute(
                 "UPDATE open_api_invocations SET "
                 + ", ".join(assignments)
-                + " WHERE id = ?",
+                + " WHERE id = ?"
+                + terminal_guard,
                 tuple(values),
             )
             db.get_db().commit()
@@ -847,6 +924,12 @@ def _invocation_row(row: Any) -> dict[str, Any]:
         dict,
     )
     result["latency_ms"] = int(result.get("latency_ms") or 0)
+    terminal = result.get("terminal_event_json")
+    result["terminal_event_json"] = (
+        _json_value("terminal_event_json", terminal, dict)
+        if terminal
+        else None
+    )
     return result
 
 

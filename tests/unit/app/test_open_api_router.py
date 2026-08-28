@@ -45,6 +45,10 @@ class FakeOpenApiRepository:
     def update_billing_invocation(self, invocation_id: str, **values):
         row = self.get_invocation(invocation_id)
         if row is not None:
+            if "terminal_event" in values:
+                if row.get("terminal_event_json") is not None:
+                    return row
+                values["terminal_event_json"] = values.pop("terminal_event")
             row.update(
                 {
                     key: value
@@ -53,6 +57,25 @@ class FakeOpenApiRepository:
                 },
             )
         return row
+
+    def claim_invocation_execution(
+        self,
+        invocation_id: str,
+        owner_token: str,
+    ) -> bool:
+        row = self.get_invocation(invocation_id)
+        if (
+            row is None
+            or row.get("status") != "accepted"
+            or row.get("execution_owner_token")
+        ):
+            return False
+        row.update(
+            status="running",
+            status_code=202,
+            execution_owner_token=owner_token,
+        )
+        return True
 
     def update_invocation_status(
         self,
@@ -313,6 +336,7 @@ class _FakeUsageService:
         return [
             {
                 "status": "released",
+                "execution_outcome": "succeeded",
                 "captured_credits": 0,
                 "released_credits": 0,
             },
@@ -326,11 +350,21 @@ class _FakeBillingExecution:
     meter = None
     insufficient = None
 
+    def __init__(self):
+        self.terminal_snapshot = None
+
     def note_stream_ready(self):
         return None
 
     async def wait_for_preflight(self):
         return None
+
+    def note_finalized(self, terminal):
+        self.terminal_snapshot = dict(terminal)
+
+    async def wait_for_finalization(self):
+        assert self.terminal_snapshot is not None
+        return dict(self.terminal_snapshot)
 
 
 class _FakeBillingRuntime:

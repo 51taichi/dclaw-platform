@@ -34,8 +34,10 @@ from ..storage.schema import (
 
 BillingMode = Literal["off", "shadow", "observe", "enforced"]
 Billability = Literal["unknown", "billable", "not_billable"]
+ExecutionOutcome = Literal["pending", "succeeded", "failed"]
 _BILLING_MODES = frozenset({"off", "shadow", "observe", "enforced"})
 _BILLABILITY_VALUES = frozenset({"unknown", "billable", "not_billable"})
+_EXECUTION_OUTCOMES = frozenset({"pending", "succeeded", "failed"})
 
 
 class UsageOrderError(RuntimeError):
@@ -92,6 +94,7 @@ class SettleModelCall:
     supplier_reference: str
     billability: Billability
     evidence: Mapping[str, Any]
+    execution_outcome: ExecutionOutcome = "succeeded"
     actual_input_tokens: int = 0
     actual_output_tokens: int = 0
 
@@ -709,6 +712,7 @@ class UsageService:
                     charged_credits=actual_credits,
                     supplier_evidence_json=_dump_json(normalized.evidence),
                     billability=normalized.billability,
+                    execution_outcome=normalized.execution_outcome,
                     finished_at=now,
                     updated_at=now,
                 ),
@@ -799,6 +803,7 @@ class UsageService:
             stored_evidence,
             int(item["input_tokens"]),
             int(item["output_tokens"]),
+            str(item["execution_outcome"]),
         )
         requested_outcome = (
             expected_status,
@@ -807,6 +812,7 @@ class UsageService:
             dict(command.evidence),
             command.actual_input_tokens,
             command.actual_output_tokens,
+            command.execution_outcome,
         )
         if stored_outcome != requested_outcome:
             raise UsageOrderConflictError(
@@ -946,6 +952,17 @@ class UsageService:
 
     def get_order(self, order_id: str) -> dict[str, Any]:
         return self._decode_order(self._order_row(order_id))
+
+    def reproject_open_api_order(self, order_id: str) -> dict[str, Any]:
+        """Rebuild a bridge order from durable item and ledger state."""
+        with self.repository.engine.begin() as conn:
+            order = self._order_row(order_id, conn=conn, for_update=True)
+            if str(order.get("source_type")) != "open_api":
+                raise UsageOrderStateError(
+                    "only open_api orders can reproject",
+                )
+            self._project_open_api_order(conn, order)
+        return self.get_order(order_id)
 
     def _order_row(
         self,
@@ -1152,6 +1169,8 @@ def _normalize_settle_model_call(command: SettleModelCall) -> SettleModelCall:
         raise ValueError("model settlement identity fields must be non-empty")
     if command.billability not in _BILLABILITY_VALUES:
         raise ValueError("unsupported supplier billability")
+    if command.execution_outcome not in _EXECUTION_OUTCOMES:
+        raise ValueError("unsupported execution outcome")
     if any(
         not isinstance(value, int) or value < 0
         for value in (
@@ -1173,6 +1192,7 @@ def _normalize_settle_model_call(command: SettleModelCall) -> SettleModelCall:
         supplier_reference=supplier_reference,
         billability=command.billability,
         evidence=evidence,
+        execution_outcome=command.execution_outcome,
         actual_input_tokens=command.actual_input_tokens,
         actual_output_tokens=command.actual_output_tokens,
     )
@@ -1264,6 +1284,7 @@ def _decode_usage_item(item: Mapping[str, Any]) -> dict[str, Any]:
         "released_credits": result.released_credits,
         "reconciling_credits": result.reconciling_credits,
         "billability": str(item["billability"]),
+        "execution_outcome": str(item["execution_outcome"]),
     }
 
 
