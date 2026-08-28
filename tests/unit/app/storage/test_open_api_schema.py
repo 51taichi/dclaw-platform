@@ -14,7 +14,7 @@ from qwenpaw.app.storage.settings import get_storage_settings
 
 def _engine(tmp_path, name: str):
     settings = get_storage_settings(
-        {"QWENPAW_SQLITE_PATH": str(tmp_path / name)}
+        {"QWENPAW_SQLITE_PATH": str(tmp_path / name)},
     )
     return create_engine_from_settings(settings)
 
@@ -23,7 +23,7 @@ def _insert_invocation_dependencies(conn):
     conn.execute(
         text(
             "INSERT INTO open_api_external_apps (id, owner_user_id, name) "
-            "VALUES ('app-1', 'user-1', 'App')"
+            "VALUES ('app-1', 'user-1', 'App')",
         ),
     )
     conn.execute(
@@ -32,26 +32,26 @@ def _insert_invocation_dependencies(conn):
             "id, public_id, target_type, target_id, owner_user_id, "
             "bound_user_id, knowledge_base_id, name) VALUES ("
             "'pub-1', 'public-1', 'agent', 'agent-1', 'user-1', "
-            "'user-1', 'knowledge-1', 'Publication')"
+            "'user-1', 'knowledge-1', 'Publication')",
         ),
     )
     conn.execute(
         text(
             "INSERT INTO open_api_keys ("
             "id, app_id, publication_id, key_hash, key_prefix, key_suffix) "
-            "VALUES ('key-1', 'app-1', 'pub-1', 'hash-1', 'prefix', 'suffix')"
+            "VALUES ('key-1', 'app-1', 'pub-1', 'hash-1', 'prefix', 'suffix')",
         ),
     )
     conn.execute(
         text(
             "INSERT INTO billing_wallets (id, owner_type, owner_id) "
-            "VALUES ('wallet-1', 'user', 'user-1')"
+            "VALUES ('wallet-1', 'user', 'user-1')",
         ),
     )
     conn.execute(
         text(
             "INSERT INTO billing_price_catalogs (id, version) "
-            "VALUES ('catalog-1', 'v1')"
+            "VALUES ('catalog-1', 'v1')",
         ),
     )
     conn.execute(
@@ -60,7 +60,7 @@ def _insert_invocation_dependencies(conn):
             "id, wallet_id, catalog_id, business_key, provider_id, model_key, "
             "capability, source_type, source_id) VALUES ("
             "'order-1', 'wallet-1', 'catalog-1', 'order-business-1', "
-            "'provider', 'model', 'chat', 'open_api', 'inv-1')"
+            "'provider', 'model', 'chat', 'open_api', 'inv-1')",
         ),
     )
 
@@ -82,7 +82,7 @@ def _insert_invocation(conn, invocation_id: str, order_id: str, **values):
     conn.execute(
         text(
             f"INSERT INTO open_api_invocations ({names}) "
-            f"VALUES ({placeholders})"
+            f"VALUES ({placeholders})",
         ),
         columns,
     )
@@ -140,7 +140,7 @@ def test_open_api_billing_columns_exist(tmp_path):
         check_names = {
             check["name"]
             for check in inspect(engine).get_check_constraints(
-                "open_api_invocations"
+                "open_api_invocations",
             )
         }
         assert {
@@ -189,7 +189,7 @@ def test_open_api_billing_upgrade_is_idempotent_and_preserves_history(
                     "target_id, status) VALUES ("
                     "'historic-invocation', 'historic-app', "
                     "'historic-publication', "
-                    "'historic-key', 'agent', 'historic-agent', 'accepted')"
+                    "'historic-key', 'agent', 'historic-agent', 'accepted')",
                 ),
             )
             conn.execute(
@@ -247,7 +247,7 @@ def test_open_api_billing_upgrade_is_idempotent_and_preserves_history(
                     "'historic-order', 'historic-wallet', 'historic-catalog', "
                     "'historic-business', 'quoted', 'provider', "
                     "'model', 'chat', "
-                    "1, 0, 0, 'unknown')"
+                    "1, 0, 0, 'unknown')",
                 ),
             )
             conn.execute(
@@ -258,7 +258,7 @@ def test_open_api_billing_upgrade_is_idempotent_and_preserves_history(
                     "input_tokens, output_tokens, quantity, charged_credits, "
                     "supplier_cost_fen) VALUES ("
                     "'historic-item', 'historic-order', 'quoted', 'provider', "
-                    "'model', 'chat', 0, 0, 0, 0, 0)"
+                    "'model', 'chat', 0, 0, 0, 0, 0)",
                 ),
             )
             conn.execute(
@@ -342,6 +342,8 @@ def test_open_api_billing_upgrade_is_idempotent_and_preserves_history(
             "started_at",
             "finished_at",
             "execution_outcome",
+            "would_pass",
+            "would_block_reason",
         } <= item_columns
 
         order_uniques = {
@@ -365,14 +367,14 @@ def test_open_api_billing_upgrade_is_idempotent_and_preserves_history(
         assert {"billing_usage_orders"} <= {
             foreign_key["referred_table"]
             for foreign_key in inspector.get_foreign_keys(
-                "open_api_invocations"
+                "open_api_invocations",
             )
         }
 
         order_checks = {
             check["name"]
             for check in inspector.get_check_constraints(
-                "billing_usage_orders"
+                "billing_usage_orders",
             )
         }
         item_checks = {
@@ -382,7 +384,7 @@ def test_open_api_billing_upgrade_is_idempotent_and_preserves_history(
         invocation_checks = {
             check["name"]
             for check in inspector.get_check_constraints(
-                "open_api_invocations"
+                "open_api_invocations",
             )
         }
         assert {
@@ -406,14 +408,14 @@ def test_open_api_billing_upgrade_is_idempotent_and_preserves_history(
             assert conn.execute(
                 text(
                     "SELECT model_name, prompt_tokens, completion_tokens "
-                    "FROM token_usage_logs WHERE id = 'token-before-cutover'"
+                    "FROM token_usage_logs WHERE id = 'token-before-cutover'",
                 ),
             ).one() == ("legacy-model", 7, 11)
             assert conn.execute(
                 text(
                     "SELECT business_type, business_key "
                     "FROM billing_ledger_entries "
-                    "WHERE id = 'ledger-before-cutover'"
+                    "WHERE id = 'ledger-before-cutover'",
                 ),
             ).one() == ("legacy", "legacy-key")
             assert conn.execute(
@@ -422,22 +424,23 @@ def test_open_api_billing_upgrade_is_idempotent_and_preserves_history(
                     "released_credits, execution_fence_generation, "
                     "terminal_event_json "
                     "FROM open_api_invocations "
-                    "WHERE id = 'historic-invocation'"
+                    "WHERE id = 'historic-invocation'",
                 ),
             ).one() == ("unbilled", 0, 0, 0, 0, None)
             assert conn.execute(
                 text(
                     "SELECT source_type, source_id FROM billing_usage_orders "
-                    "WHERE id = 'historic-order'"
+                    "WHERE id = 'historic-order'",
                 ),
             ).one() == (None, None)
             assert conn.execute(
                 text(
-                    "SELECT item_key, execution_outcome "
+                    "SELECT item_key, execution_outcome, would_pass, "
+                    "would_block_reason "
                     "FROM billing_usage_items "
-                    "WHERE id = 'historic-item'"
+                    "WHERE id = 'historic-item'",
                 ),
-            ).one() == (None, "pending")
+            ).one() == (None, "pending", None, None)
             assert dict(
                 conn.execute(
                     text(
@@ -482,7 +485,7 @@ def test_open_api_billing_upgrade_is_idempotent_and_preserves_history(
                     text(
                         "UPDATE billing_usage_orders "
                         "SET billability = 'invalid' "
-                        "WHERE id = 'order-1'"
+                        "WHERE id = 'order-1'",
                     ),
                 )
             conn.execute(
@@ -492,14 +495,14 @@ def test_open_api_billing_upgrade_is_idempotent_and_preserves_history(
                     "model_key, "
                     "capability, billability) VALUES ("
                     "'item-1', 'order-1', 'item-key-1', 'quoted', 'provider', "
-                    "'model', 'chat', 'unknown')"
+                    "'model', 'chat', 'unknown')",
                 ),
             )
             with pytest.raises(IntegrityError):
                 conn.execute(
                     text(
                         "UPDATE billing_usage_items SET quoted_credits = -1 "
-                        "WHERE id = 'item-1'"
+                        "WHERE id = 'item-1'",
                     ),
                 )
     finally:
@@ -551,7 +554,8 @@ def test_open_api_invocation_exposes_billing_fields():
 
 
 def test_fresh_sqlite_schema_skips_the_legacy_table_rebuild(
-    tmp_path, monkeypatch
+    tmp_path,
+    monkeypatch,
 ):
     engine = _engine(tmp_path, "fresh-rebuild-check.db")
     rebuild_calls: list[object] = []
@@ -590,7 +594,7 @@ def test_open_api_billing_upgrade_rejects_invalid_legacy_rows(
                     "CREATE TABLE billing_usage_orders ("
                     "id VARCHAR PRIMARY KEY, quoted_credits BIGINT, "
                     "held_credits BIGINT, captured_credits BIGINT, "
-                    "billability VARCHAR)"
+                    "billability VARCHAR)",
                 ),
             )
             conn.execute(
@@ -600,7 +604,7 @@ def test_open_api_billing_upgrade_rejects_invalid_legacy_rows(
                     "'invalid-order', "
                     f"{value if column == 'quoted_credits' else 0}, "
                     "0, 0, "
-                    f"'{value if column == 'billability' else 'unknown'}')"
+                    f"'{value if column == 'billability' else 'unknown'}')",
                 ),
             )
 

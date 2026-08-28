@@ -172,6 +172,8 @@ def test_billing_schema_is_idempotent(sqlite_engine):
         "item_key",
         "billability",
         "execution_outcome",
+        "would_pass",
+        "would_block_reason",
         "quoted_credits",
         "price_snapshot_json",
         "started_at",
@@ -185,7 +187,7 @@ def test_billing_schema_is_idempotent(sqlite_engine):
     } | {
         tuple(constraint["column_names"])
         for constraint in inspector.get_unique_constraints(
-            "billing_usage_orders"
+            "billing_usage_orders",
         )
     }
     assert ("source_type", "source_id") in source_uniques
@@ -197,7 +199,7 @@ def test_billing_schema_is_idempotent(sqlite_engine):
     } | {
         tuple(constraint["column_names"])
         for constraint in inspector.get_unique_constraints(
-            "billing_usage_items"
+            "billing_usage_items",
         )
     }
     assert ("usage_order_id", "item_key") in item_uniques
@@ -221,7 +223,9 @@ def test_billing_schema_is_idempotent(sqlite_engine):
         assert expected_targets <= targets
 
 
-def test_postgresql_bigint_upgrade_only_targets_existing_billing_amounts():
+def test_postgresql_bigint_upgrade_only_targets_existing_billing_amounts(
+    monkeypatch,
+):
     class RecordingConnection:
         def __init__(self):
             self.statements: list[str] = []
@@ -247,7 +251,54 @@ def test_postgresql_bigint_upgrade_only_targets_existing_billing_amounts():
         def begin(self):
             return RecordingBegin(self.connection)
 
+    class RecordingInspector:
+        @staticmethod
+        def get_columns(table_name):
+            names = {
+                "billing_wallets": {
+                    "available_credits",
+                    "held_credits",
+                    "purchased_credits",
+                    "promotional_credits",
+                    "package_credits",
+                },
+                "billing_credit_lots": {
+                    "granted_credits",
+                    "available_credits",
+                    "held_credits",
+                },
+                "billing_ledger_entries": {
+                    "credit_delta",
+                    "cash_delta_fen",
+                },
+                "billing_ledger_allocations": {"credits"},
+                "billing_usage_orders": {
+                    "quoted_credits",
+                    "budget_credits",
+                    "held_credits",
+                    "captured_credits",
+                    "released_credits",
+                    "reconciling_credits",
+                },
+                "billing_usage_items": {
+                    "input_tokens",
+                    "output_tokens",
+                    "quantity",
+                    "quoted_credits",
+                    "charged_credits",
+                    "supplier_cost_fen",
+                },
+            }
+            return [
+                {"name": name, "type": Integer()} for name in names[table_name]
+            ]
+
     engine = RecordingEngine()
+    monkeypatch.setattr(
+        schema_module,
+        "inspect",
+        lambda _: RecordingInspector(),
+    )
     _ensure_billing_bigint_columns(engine)
 
     statements = "\n".join(engine.connection.statements)
@@ -287,6 +338,70 @@ def test_postgresql_bigint_upgrade_only_targets_existing_billing_amounts():
         'ALTER TABLE "billing_usage_items" ALTER COLUMN "credits" TYPE BIGINT'
         not in statements
     )
+
+
+def test_postgresql_bigint_upgrade_skips_columns_already_bigint(monkeypatch):
+    class RecordingConnection:
+        def __init__(self):
+            self.statements: list[str] = []
+
+        def execute(self, statement, *_args):
+            self.statements.append(str(statement))
+
+    class RecordingBegin(AbstractContextManager):
+        def __init__(self, connection):
+            self.connection = connection
+
+        def __enter__(self):
+            return self.connection
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return None
+
+    class RecordingInspector:
+        @staticmethod
+        def get_columns(_table_name):
+            names = {
+                "available_credits",
+                "held_credits",
+                "purchased_credits",
+                "promotional_credits",
+                "package_credits",
+                "granted_credits",
+                "credit_delta",
+                "cash_delta_fen",
+                "credits",
+                "quoted_credits",
+                "budget_credits",
+                "captured_credits",
+                "released_credits",
+                "reconciling_credits",
+                "input_tokens",
+                "output_tokens",
+                "quantity",
+                "charged_credits",
+                "supplier_cost_fen",
+            }
+            return [{"name": name, "type": BigInteger()} for name in names]
+
+    class RecordingEngine:
+        def __init__(self):
+            self.dialect = SimpleNamespace(name="postgresql")
+            self.connection = RecordingConnection()
+
+        def begin(self):
+            return RecordingBegin(self.connection)
+
+    engine = RecordingEngine()
+    monkeypatch.setattr(
+        schema_module,
+        "inspect",
+        lambda _: RecordingInspector(),
+    )
+
+    _ensure_billing_bigint_columns(engine)
+
+    assert not engine.connection.statements
 
 
 def test_postgresql_billing_upgrade_uses_typed_timestamps_and_scoped_guards(
@@ -339,9 +454,13 @@ def test_postgresql_billing_upgrade_uses_typed_timestamps_and_scoped_guards(
                 "billing_usage_items": {
                     "id",
                     "usage_order_id",
+                    "quoted_credits",
                 },
             }
-            return [{"name": name} for name in columns[table_name]]
+            return [
+                {"name": name, "type": Integer()}
+                for name in columns.get(table_name, set())
+            ]
 
     class RecordingEngine:
         def __init__(self):
@@ -356,16 +475,20 @@ def test_postgresql_billing_upgrade_uses_typed_timestamps_and_scoped_guards(
 
     engine = RecordingEngine()
     monkeypatch.setattr(
-        schema_module, "inspect", lambda _: RecordingInspector()
+        schema_module,
+        "inspect",
+        lambda _: RecordingInspector(),
     )
 
     ensure_billing_columns = getattr(
-        schema_module, "_ensure_open_api_billing_columns"
+        schema_module,
+        "_ensure_open_api_billing_columns",
     )
     ensure_billing_columns(engine)
     _ensure_billing_bigint_columns(engine)
     ensure_credit_lot_constraint = getattr(
-        schema_module, "_ensure_billing_constraints"
+        schema_module,
+        "_ensure_billing_constraints",
     )
     ensure_credit_lot_constraint(engine)
 

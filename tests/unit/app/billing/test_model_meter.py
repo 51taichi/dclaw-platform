@@ -430,6 +430,8 @@ async def test_response_is_durable_before_analytics_enqueue(
     assert stored["supplier_reference"] == "supplier-response"
     assert stored["input_tokens"] == 12
     assert stored["output_tokens"] == 4
+    reservation = json.loads(stored["usage_snapshot_json"])["reservation"]
+    assert "tier" not in reservation["parameters"]
     assert sink.events[0].prompt_tokens == 12
     assert sink.events[0].completion_tokens == 4
     evidence = json.loads(stored["supplier_evidence_json"])

@@ -141,7 +141,7 @@ class BillingModelMeter:
                 provider_id=normalized_provider,
                 model_key=normalized_model,
                 capability="text",
-                parameters={"tier": "standard"},
+                parameters={},
                 input_tokens=_estimate_input_tokens(messages),
                 max_output_tokens=output_tokens,
                 invocation_id=session.invocation_id,

@@ -328,7 +328,12 @@ class BillingRepository:
         if not business_keys:
             return 0
         total = conn.scalar(
-            select(func.coalesce(func.sum(billing_ledger_allocations.c.credits), 0))
+            select(
+                func.coalesce(
+                    func.sum(billing_ledger_allocations.c.credits),
+                    0,
+                ),
+            )
             .select_from(
                 billing_ledger_allocations.join(
                     billing_ledger_entries,
@@ -343,6 +348,29 @@ class BillingRepository:
             ),
         )
         return int(total or 0)
+
+    def evaluate_hold_in_connection(
+        self,
+        conn: Connection,
+        wallet_id: str,
+        credits: int,
+        *,
+        capability: str,
+        tier: str,
+    ) -> tuple[bool, str | None]:
+        """Plan the same lot allocation as a hold without accounting writes."""
+        allocations, available = self._lot_allocation_plan(
+            conn,
+            wallet_id,
+            credits,
+            capability=capability,
+            tier=tier,
+        )
+        if sum(amount for _, amount in allocations) == credits:
+            return True, None
+        if available < credits:
+            return False, "insufficient_credits"
+        return False, "ineligible_credit_lots"
 
     def balance(self, wallet_id: str) -> WalletBalance:
         with self.engine.begin() as conn:
@@ -1092,14 +1120,33 @@ class BillingRepository:
         capability: str,
         tier: str,
     ) -> list[tuple[str, int]]:
-        now = self._clock()
-        rows = conn.execute(
-            self._available_lots_for_update_statement(
-                wallet_id,
-                credits,
-                now,
-            ),
-        ).mappings()
+        allocations, _available = self._lot_allocation_plan(
+            conn,
+            wallet_id,
+            credits,
+            capability=capability,
+            tier=tier,
+        )
+        return allocations
+
+    def _lot_allocation_plan(
+        self,
+        conn,
+        wallet_id: str,
+        credits: int,
+        *,
+        capability: str,
+        tier: str,
+    ) -> tuple[list[tuple[str, int]], int]:
+        rows = list(
+            conn.execute(
+                self._available_lots_for_update_statement(
+                    wallet_id,
+                    credits,
+                    self._clock(),
+                ),
+            ).mappings(),
+        )
         remaining = credits
         allocations: list[tuple[str, int]] = []
         for row in rows:
@@ -1111,7 +1158,7 @@ class BillingRepository:
                 remaining -= amount
             if remaining == 0:
                 break
-        return allocations
+        return allocations, sum(int(row["available_credits"]) for row in rows)
 
     @staticmethod
     def _wallet_for_update_statement(wallet_id: str):

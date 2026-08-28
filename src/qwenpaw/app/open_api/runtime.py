@@ -45,7 +45,6 @@ from ..storage.repos.price_catalog_repo import PriceCatalogRepository
 from ..storage.schema import (
     billing_usage_items,
     billing_usage_orders,
-    create_all,
     open_api_invocations,
 )
 
@@ -242,7 +241,6 @@ class OpenApiBillingExecution:
 def create_open_api_billing_runtime() -> OpenApiBillingRuntime:
     """Build explicit billing services over the configured durable engine."""
     engine = get_app_engine()
-    create_all(engine)
     repository = BillingRepository(engine)
     pricing = PriceCatalogService(PriceCatalogRepository(engine))
     mode = persisted_billing_mode(repository, fallback=_billing_mode())

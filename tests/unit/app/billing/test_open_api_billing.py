@@ -34,6 +34,9 @@ from qwenpaw.app.storage.repos.billing_repo import BillingRepository
 from qwenpaw.app.storage.repos.open_api_repo import SqlAlchemyOpenApiRepository
 from qwenpaw.app.storage.repos.price_catalog_repo import PriceCatalogRepository
 from qwenpaw.app.storage.schema import (
+    billing_credit_lots,
+    billing_ledger_entries,
+    billing_usage_items,
     billing_usage_orders,
     billing_wallets,
     create_all,
@@ -76,6 +79,7 @@ def coordinator(engine):
                     unit_type="tokens",
                     input_credits_per_1k=1,
                     output_credits_per_1k=1,
+                    metadata={"economic_tier": "standard"},
                 ),
             ),
         ),
@@ -192,7 +196,8 @@ def test_begin_resolves_wallet_only_from_publication_bound_user(
 
 
 def test_same_key_and_canonical_payload_replays_existing_pair(
-    coordinator, engine
+    coordinator,
+    engine,
 ):
     first = coordinator.begin_invocation(_command())
     replay = coordinator.begin_invocation(
@@ -217,7 +222,8 @@ def test_same_key_and_canonical_payload_replays_existing_pair(
 
 
 def test_request_without_client_key_creates_distinct_invocation_pairs(
-    coordinator, engine
+    coordinator,
+    engine,
 ):
     first = coordinator.begin_invocation(_command(key=None))
     second = coordinator.begin_invocation(_command(key=None))
@@ -341,7 +347,8 @@ def test_same_key_with_different_canonical_payload_conflicts(coordinator):
 
 
 def test_idempotency_key_namespace_includes_app_and_publication(
-    coordinator, engine
+    coordinator,
+    engine,
 ):
     repo = SqlAlchemyOpenApiRepository(engine)
     _create_open_api_identity(
@@ -390,7 +397,7 @@ def test_failure_between_order_and_invocation_rolls_back_both(engine):
         BillingRepository(engine),
         pricing,
         after_order_insert=lambda: (_ for _ in ()).throw(
-            RuntimeError("injected")
+            RuntimeError("injected"),
         ),
     )
 
@@ -412,14 +419,15 @@ def test_failure_between_order_and_invocation_rolls_back_both(engine):
 
 
 def test_replay_preserves_persisted_wallet_catalog_and_mode(
-    coordinator, engine
+    coordinator,
+    engine,
 ):
     first = coordinator.begin_invocation(_command(mode="shadow"))
     with engine.begin() as conn:
         conn.execute(
             update(open_api_publications)
             .where(open_api_publications.c.id == "pub-1")
-            .values(bound_user_id="later-bound-user")
+            .values(bound_user_id="later-bound-user"),
         )
 
     replay = coordinator.begin_invocation(_command(mode="enforced"))
@@ -473,13 +481,34 @@ def _settle(
     )
 
 
-def _fund(coordinator, session, credits: int) -> None:
+def _fund(coordinator, session, amount: int) -> None:
     coordinator.repository.grant(
         session.wallet_id,
-        credits=credits,
+        credits=amount,
         credit_type="purchased",
         expires_at=None,
         idempotency_key=f"fund-{session.invocation_id}",
+    )
+
+
+def _publish_model_tier(coordinator, tier: str) -> None:
+    coordinator.pricing.publish(
+        PriceCatalogDraft(
+            version=f"tier-{tier}",
+            effective_at=datetime.now(timezone.utc),
+            rules=(
+                PriceRule(
+                    id=f"text-{tier}",
+                    provider_id="provider",
+                    model_key="model",
+                    capability="text",
+                    unit_type="tokens",
+                    input_credits_per_1k=1,
+                    output_credits_per_1k=1,
+                    metadata={"economic_tier": tier},
+                ),
+            ),
+        ),
     )
 
 
@@ -520,7 +549,7 @@ def test_model_items_incrementally_hold_then_project_mixed_settlement(
     assert coordinator.repository.balance(session.wallet_id).held == 2
 
 
-def test_reservation_is_a_supplier_preflight_and_rejects_insufficient_increment(
+def test_reservation_preflight_rejects_insufficient_increment(
     coordinator,
 ):
     session = coordinator.begin_invocation(_command(mode="enforced"))
@@ -532,7 +561,7 @@ def test_reservation_is_a_supplier_preflight_and_rejects_insufficient_increment(
     with pytest.raises(InsufficientUsageCreditsError):
         service.reserve_model_call(_reserve(session, "call-2"))
 
-    assert supplier_calls == []
+    assert not supplier_calls
     assert service.list_items(session.usage_order_id)[0]["status"] == "held"
 
 
@@ -652,6 +681,232 @@ def test_observe_mode_persists_item_without_mutating_wallet(coordinator):
 
     assert coordinator.repository.balance(session.wallet_id).available == 10
     assert coordinator.repository.balance(session.wallet_id).held == 0
+
+
+def test_observe_dry_run_records_pass_without_any_accounting_mutation(
+    coordinator,
+    engine,
+):
+    session = coordinator.begin_invocation(_command(mode="observe"))
+    _fund(coordinator, session, 10)
+    before = coordinator.repository.balance(session.wallet_id)
+    with engine.connect() as conn:
+        ledger_before = conn.scalar(
+            select(func.count()).select_from(billing_ledger_entries),
+        )
+
+    UsageService(
+        coordinator.repository,
+        coordinator.pricing,
+    ).reserve_model_call(
+        _reserve(session, "observe-pass"),
+    )
+
+    with engine.connect() as conn:
+        item = (
+            conn.execute(
+                select(billing_usage_items).where(
+                    billing_usage_items.c.item_key == "observe-pass",
+                ),
+            )
+            .mappings()
+            .one()
+        )
+        ledger_after = conn.scalar(
+            select(func.count()).select_from(billing_ledger_entries),
+        )
+    assert item["would_pass"] is True
+    assert item["would_block_reason"] is None
+    assert ledger_after == ledger_before
+    assert coordinator.repository.balance(session.wallet_id) == before
+
+
+def test_observe_dry_run_applies_trial_tier_policy_without_mutation(
+    coordinator,
+    engine,
+):
+    _publish_model_tier(coordinator, "high_cost")
+    session = coordinator.begin_invocation(_command(mode="observe", key="obs"))
+    coordinator.repository.append_transaction(
+        LedgerTransaction(
+            wallet_id=session.wallet_id,
+            event_type="promotion_grant",
+            credits=10,
+            business_type="signup_trial",
+            business_key="observe-trial",
+            idempotency_key="observe-trial",
+            credit_type="promotional",
+            expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+            metadata={
+                "grant_policy": "signup_trial",
+                "allowed_capabilities": ["text"],
+                "allowed_tiers": ["standard"],
+                "denied_capabilities": ["high_cost"],
+            },
+        ),
+    )
+    before = coordinator.repository.balance(session.wallet_id)
+
+    UsageService(
+        coordinator.repository,
+        coordinator.pricing,
+    ).reserve_model_call(
+        _reserve(session, "observe-block", tier="standard"),
+    )
+
+    with engine.connect() as conn:
+        item = (
+            conn.execute(
+                select(billing_usage_items).where(
+                    billing_usage_items.c.item_key == "observe-block",
+                ),
+            )
+            .mappings()
+            .one()
+        )
+        usage_ledger = conn.scalar(
+            select(func.count())
+            .select_from(billing_ledger_entries)
+            .where(billing_ledger_entries.c.event_type == "usage_hold"),
+        )
+    assert item["would_pass"] is False
+    assert item["would_block_reason"] == "ineligible_credit_lots"
+    assert usage_ledger == 0
+    assert coordinator.repository.balance(session.wallet_id) == before
+
+
+def test_observe_dry_run_excludes_expired_lot_without_expiry_writes(
+    coordinator,
+    engine,
+):
+    session = coordinator.begin_invocation(
+        _command(mode="observe", key="observe-expired"),
+    )
+    coordinator.repository.append_transaction(
+        LedgerTransaction(
+            wallet_id=session.wallet_id,
+            event_type="promotion_grant",
+            credits=10,
+            business_type="signup_trial",
+            business_key="observe-expired-trial",
+            idempotency_key="observe-expired-trial",
+            credit_type="promotional",
+            expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+            metadata={
+                "grant_policy": "signup_trial",
+                "allowed_capabilities": ["text"],
+                "allowed_tiers": ["standard"],
+            },
+        ),
+    )
+    with engine.begin() as conn:
+        conn.execute(
+            update(billing_credit_lots)
+            .where(billing_credit_lots.c.wallet_id == session.wallet_id)
+            .values(expires_at=datetime.now(timezone.utc) - timedelta(days=1)),
+        )
+        wallet_before = dict(
+            conn.execute(
+                select(billing_wallets).where(
+                    billing_wallets.c.id == session.wallet_id,
+                ),
+            )
+            .mappings()
+            .one(),
+        )
+        lot_before = dict(
+            conn.execute(
+                select(billing_credit_lots).where(
+                    billing_credit_lots.c.wallet_id == session.wallet_id,
+                ),
+            )
+            .mappings()
+            .one(),
+        )
+        ledger_before = conn.scalar(
+            select(func.count()).select_from(billing_ledger_entries),
+        )
+
+    UsageService(
+        coordinator.repository,
+        coordinator.pricing,
+    ).reserve_model_call(
+        _reserve(session, "observe-expired"),
+    )
+
+    with engine.connect() as conn:
+        item = (
+            conn.execute(
+                select(billing_usage_items).where(
+                    billing_usage_items.c.item_key == "observe-expired",
+                ),
+            )
+            .mappings()
+            .one()
+        )
+        wallet_after = dict(
+            conn.execute(
+                select(billing_wallets).where(
+                    billing_wallets.c.id == session.wallet_id,
+                ),
+            )
+            .mappings()
+            .one(),
+        )
+        lot_after = dict(
+            conn.execute(
+                select(billing_credit_lots).where(
+                    billing_credit_lots.c.wallet_id == session.wallet_id,
+                ),
+            )
+            .mappings()
+            .one(),
+        )
+        ledger_after = conn.scalar(
+            select(func.count()).select_from(billing_ledger_entries),
+        )
+    assert item["would_pass"] is False
+    assert item["would_block_reason"] == "insufficient_credits"
+    assert (wallet_after, lot_after, ledger_after) == (
+        wallet_before,
+        lot_before,
+        ledger_before,
+    )
+
+
+def test_enforced_trial_eligibility_uses_catalog_tier_not_request_tier(
+    coordinator,
+):
+    _publish_model_tier(coordinator, "high_cost")
+    session = coordinator.begin_invocation(
+        _command(mode="enforced", key="trusted-tier"),
+    )
+    coordinator.repository.append_transaction(
+        LedgerTransaction(
+            wallet_id=session.wallet_id,
+            event_type="promotion_grant",
+            credits=10,
+            business_type="signup_trial",
+            business_key="trusted-tier-trial",
+            idempotency_key="trusted-tier-trial",
+            credit_type="promotional",
+            expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+            metadata={
+                "grant_policy": "signup_trial",
+                "allowed_capabilities": ["text"],
+                "allowed_tiers": ["standard"],
+                "denied_capabilities": ["high_cost"],
+            },
+        ),
+    )
+
+    with pytest.raises(InsufficientUsageCreditsError):
+        UsageService(
+            coordinator.repository,
+            coordinator.pricing,
+        ).reserve_model_call(
+            _reserve(session, "trusted-tier", tier="standard"),
+        )
 
 
 def test_billable_zero_actual_usage_releases_its_entire_hold(coordinator):

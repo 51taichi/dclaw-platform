@@ -11,7 +11,7 @@ from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import event, func, select
 
-from qwenpaw.app.billing.models import WalletBalance
+from qwenpaw.app.billing.models import LedgerTransaction, WalletBalance
 from qwenpaw.app.billing.pricing import (
     PriceCatalogDraft,
     PriceCatalogService,
@@ -147,12 +147,25 @@ def test_user_wallet_and_ledger_are_resolved_only_from_auth_context(
 ):
     alice = wallet_repo.ensure_wallet("user", "alice")
     bob = wallet_repo.ensure_wallet("user", "bob")
-    wallet_repo.grant(
-        alice["id"],
-        credits=80,
-        credit_type="purchased",
-        expires_at=None,
-        idempotency_key="alice-purchase",
+    wallet_repo.append_transaction(
+        LedgerTransaction(
+            wallet_id=alice["id"],
+            event_type="purchase_grant",
+            credits=80,
+            business_type="grant",
+            business_key="internal-business-alice",
+            idempotency_key="alice-purchase",
+            credit_type="purchased",
+            metadata={
+                "capability": "text",
+                "tier": "standard",
+                "billability": "billable",
+                "supplier_reference": "supplier-secret",
+                "evidence": {"invoice": "private"},
+                "source_id": "internal-source-id",
+                "credit_lot_id": "internal-lot-id",
+            },
+        ),
     )
     wallet_repo.grant(
         bob["id"],
@@ -181,9 +194,31 @@ def test_user_wallet_and_ledger_are_resolved_only_from_auth_context(
         "promotional": 0,
         "package": 0,
     }
-    assert [item["idempotency_key"] for item in ledger.json()["items"]] == [
+    ledger_item = ledger.json()["items"][0]
+    assert set(ledger_item) == {
+        "id",
+        "event_type",
+        "status",
+        "credit_delta",
+        "cash_delta_fen",
+        "business_type",
+        "metadata",
+        "created_at",
+    }
+    assert ledger_item["metadata"] == {
+        "billability": "billable",
+        "capability": "text",
+        "tier": "standard",
+    }
+    for forbidden in (
         "alice-purchase",
-    ]
+        "internal-business-alice",
+        "supplier-secret",
+        "invoice",
+        "internal-source-id",
+        "internal-lot-id",
+    ):
+        assert forbidden not in ledger.text
     assert "alice" not in wallet.text
     assert bob["id"] not in wallet.text
 
@@ -248,6 +283,7 @@ def test_shadow_quote_uses_published_snapshot_and_never_moves_balance(
         "input_credits_per_1k": 0,
         "output_credits_per_1k": 0,
         "parameter_match": {},
+        "metadata": {},
     }
     assert wallet_repo.balance(wallet["id"]) == before
     assert [

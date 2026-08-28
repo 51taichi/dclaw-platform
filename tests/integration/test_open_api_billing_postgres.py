@@ -1046,7 +1046,12 @@ def test_postgresql_legacy_bridge_schema_adds_execution_state(
         column["name"]
         for column in inspector.get_columns("billing_usage_items")
     }
-    assert {"execution_outcome", "reconciliation_id"} <= item_columns
+    assert {
+        "execution_outcome",
+        "reconciliation_id",
+        "would_pass",
+        "would_block_reason",
+    } <= item_columns
     invocation_indexes = {
         index["name"]
         for index in inspect(postgres_open_api_engine).get_indexes(
@@ -1079,6 +1084,38 @@ def test_postgresql_legacy_bridge_schema_adds_execution_state(
         "legacy-recon-success": "succeeded",
         "legacy-released": "failed",
     }
+
+
+@pytest.mark.integration
+def test_satisfied_schema_bootstrap_completes_under_usage_item_read_lock(
+    postgres_open_api_engine,
+):
+    statements: list[str] = []
+
+    def record(_conn, _cursor, statement, *_args):
+        statements.append(statement)
+
+    event.listen(postgres_open_api_engine, "before_cursor_execute", record)
+    try:
+        with postgres_open_api_engine.connect() as reader:
+            transaction = reader.begin()
+            reader.execute(
+                text("LOCK TABLE billing_usage_items IN ACCESS SHARE MODE"),
+            )
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                pool.submit(create_all, postgres_open_api_engine).result(
+                    timeout=5,
+                )
+            transaction.rollback()
+    finally:
+        event.remove(postgres_open_api_engine, "before_cursor_execute", record)
+
+    alters = [
+        statement
+        for statement in statements
+        if statement.lstrip().upper().startswith("ALTER TABLE")
+    ]
+    assert alters == []
 
 
 @pytest.mark.integration

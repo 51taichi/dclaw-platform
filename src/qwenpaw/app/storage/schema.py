@@ -320,7 +320,10 @@ open_api_invocations = Table(
         ),
     ),
     Column(
-        "billing_status", String, nullable=False, server_default="unbilled"
+        "billing_status",
+        String,
+        nullable=False,
+        server_default="unbilled",
     ),
     Column("quoted_credits", BigInteger, nullable=False, server_default="0"),
     Column("captured_credits", BigInteger, nullable=False, server_default="0"),
@@ -773,6 +776,8 @@ billing_usage_items = Table(
         nullable=False,
         server_default="pending",
     ),
+    Column("would_pass", Boolean),
+    Column("would_block_reason", String),
     Column("started_at", DateTime(timezone=True)),
     Column("finished_at", DateTime(timezone=True)),
     Column("created_at", DateTime(timezone=True), server_default=func.now()),
@@ -1195,15 +1200,29 @@ def _ensure_billing_bigint_columns(engine: Engine) -> None:
             "supplier_cost_fen",
         ),
     }
+    inspector = inspect(engine)
+    pending: list[tuple[str, str]] = []
+    for table_name, column_names in columns.items():
+        actual = {
+            str(column["name"]): column["type"]
+            for column in inspector.get_columns(table_name)
+        }
+        pending.extend(
+            (table_name, column_name)
+            for column_name in column_names
+            if column_name in actual
+            and not isinstance(actual[column_name], BigInteger)
+        )
+    if not pending:
+        return
     with engine.begin() as conn:
-        for table_name, column_names in columns.items():
-            for column_name in column_names:
-                conn.execute(
-                    text(
-                        f'ALTER TABLE "{table_name}" ALTER COLUMN '
-                        f'"{column_name}" TYPE BIGINT',
-                    ),
-                )
+        for table_name, column_name in pending:
+            conn.execute(
+                text(
+                    f'ALTER TABLE "{table_name}" ALTER COLUMN '
+                    f'"{column_name}" TYPE BIGINT',
+                ),
+            )
 
 
 def _ensure_billing_usage_order_columns(engine: Engine) -> None:
@@ -1228,7 +1247,7 @@ def _ensure_billing_usage_order_columns(engine: Engine) -> None:
 def _ensure_open_api_billing_columns(engine: Engine) -> None:
     """Upgrade OpenAPI billing data without changing ledger or token rows."""
     datetime_type = str(
-        DateTime(timezone=True).compile(dialect=engine.dialect)
+        DateTime(timezone=True).compile(dialect=engine.dialect),
     )
     additions = {
         "open_api_invocations": {
@@ -1332,6 +1351,14 @@ def _ensure_open_api_billing_columns(engine: Engine) -> None:
             "execution_outcome": (
                 "ALTER TABLE billing_usage_items ADD COLUMN "
                 "execution_outcome VARCHAR NOT NULL DEFAULT 'pending'"
+            ),
+            "would_pass": (
+                "ALTER TABLE billing_usage_items ADD COLUMN "
+                "would_pass BOOLEAN"
+            ),
+            "would_block_reason": (
+                "ALTER TABLE billing_usage_items ADD COLUMN "
+                "would_block_reason VARCHAR"
             ),
         },
     }
@@ -1765,6 +1792,19 @@ def _ensure_billing_constraints(engine: Engine) -> None:
     """Enforce invariants that runtime upgrades must not bypass."""
     if engine.dialect.name == "postgresql":
         with engine.begin() as conn:
+            validated = conn.scalar(
+                text(
+                    "SELECT pc.convalidated FROM pg_constraint AS pc "
+                    "JOIN pg_class AS relation ON relation.oid = pc.conrelid "
+                    "JOIN pg_namespace AS namespace "
+                    "ON namespace.oid = relation.relnamespace "
+                    "WHERE namespace.nspname = current_schema() AND "
+                    "relation.relname = 'billing_credit_lots' AND "
+                    "pc.conname = "
+                    "'ck_billing_credit_lots_purchased_no_expiry' AND "
+                    "pc.contype = 'c'",
+                ),
+            )
             conn.execute(
                 text(
                     "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM "
@@ -1783,12 +1823,14 @@ def _ensure_billing_constraints(engine: Engine) -> None:
                     "NOT VALID; END IF; END $$",
                 ),
             )
-            conn.execute(
-                text(
-                    "ALTER TABLE billing_credit_lots VALIDATE CONSTRAINT "
-                    "ck_billing_credit_lots_purchased_no_expiry",
-                ),
-            )
+            if validated is not True:
+                conn.execute(
+                    text(
+                        "ALTER TABLE billing_credit_lots "
+                        "VALIDATE CONSTRAINT "
+                        "ck_billing_credit_lots_purchased_no_expiry",
+                    ),
+                )
         return
     if engine.dialect.name != "sqlite":
         return

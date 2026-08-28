@@ -37,7 +37,6 @@ from ..billing.reporting import (
 from ..storage.engine import get_app_engine
 from ..storage.repos.billing_repo import BillingRepository
 from ..storage.repos.price_catalog_repo import PriceCatalogRepository
-from ..storage.schema import create_all
 
 
 user_router = APIRouter(prefix="/billing", tags=["billing"])
@@ -116,15 +115,11 @@ class RolloutActivationBody(BaseModel):
 
 
 def get_billing_repository() -> BillingRepository:
-    engine = get_app_engine()
-    create_all(engine)
-    return BillingRepository(engine)
+    return BillingRepository(get_app_engine())
 
 
 def get_price_catalog_service() -> PriceCatalogService:
-    engine = get_app_engine()
-    create_all(engine)
-    return PriceCatalogService(PriceCatalogRepository(engine))
+    return PriceCatalogService(PriceCatalogRepository(get_app_engine()))
 
 
 def get_usage_service() -> UsageService:
@@ -168,15 +163,50 @@ def _ledger_page(
     wallet_id: str,
     limit: int,
     cursor: str | None,
+    *,
+    include_internal: bool,
 ) -> dict[str, Any]:
     try:
         items = repository.list_ledger(wallet_id, limit, cursor)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    serialized = (
+        items if include_internal else [_user_ledger_row(row) for row in items]
+    )
     return {
-        "items": items,
+        "items": serialized,
         "next_cursor": items[-1]["id"] if len(items) == limit else None,
     }
+
+
+def _user_ledger_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Allowlist the customer ledger view and its non-sensitive metadata."""
+    allowed_metadata = {
+        "billability",
+        "capability",
+        "credit_type",
+        "expiry_phase",
+        "source_type",
+        "tier",
+    }
+    metadata = {
+        key: value
+        for key, value in dict(row.get("metadata") or {}).items()
+        if key in allowed_metadata
+        and (value is None or isinstance(value, (str, int, float, bool)))
+    }
+    return {
+        key: row[key]
+        for key in (
+            "id",
+            "event_type",
+            "status",
+            "credit_delta",
+            "cash_delta_fen",
+            "business_type",
+            "created_at",
+        )
+    } | {"metadata": metadata}
 
 
 def _report_filters(
@@ -242,7 +272,13 @@ def get_user_ledger(
     owner_id = _authenticated_owner(request)
     repository = get_billing_repository()
     wallet = repository.ensure_wallet("user", owner_id)
-    return _ledger_page(repository, str(wallet["id"]), limit, cursor)
+    return _ledger_page(
+        repository,
+        str(wallet["id"]),
+        limit,
+        cursor,
+        include_internal=False,
+    )
 
 
 @user_router.post("/quotes")
@@ -403,7 +439,13 @@ def get_admin_wallet_ledger(
 ) -> dict[str, Any]:
     repository = get_billing_repository()
     wallet = _wallet_for_owner(repository, owner_id)
-    return _ledger_page(repository, str(wallet["id"]), limit, cursor)
+    return _ledger_page(
+        repository,
+        str(wallet["id"]),
+        limit,
+        cursor,
+        include_internal=True,
+    )
 
 
 @admin_router.get("/usage-orders")

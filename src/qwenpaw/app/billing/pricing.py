@@ -471,6 +471,11 @@ class PriceCatalogService:
                     winner["output_credits_per_1k"],
                 ),
                 "parameter_match": winner["parameter_match"],
+                "metadata": {
+                    "economic_tier": winner["metadata"]["economic_tier"],
+                }
+                if "economic_tier" in winner["metadata"]
+                else {},
             },
             "request": {
                 "provider_id": stable_request.provider_id,

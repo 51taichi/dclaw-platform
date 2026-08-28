@@ -8,7 +8,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from hashlib import sha256
 import json
 import os
-from typing import Any, Literal, Mapping
+from typing import Any, Literal, Mapping, Sequence
 from uuid import uuid4
 
 from sqlalchemy import (
@@ -400,7 +400,7 @@ class BillingReportingService:
             if wallet is not None
             else None
         )
-        rollout = self.get_rollout()
+        rollout = self.get_rollout(include_observe_evaluation=False)
         available = balance.available if balance is not None else 0
         threshold = _non_negative_env("DCLAW_LOW_BALANCE_THRESHOLD", 100)
         qr_code_url = os.environ.get("DCLAW_TOP_UP_QR_URL", "").strip() or None
@@ -518,7 +518,7 @@ class BillingReportingService:
                 items.append(
                     {
                         "reconciliation_id": str(
-                            row["queue_reconciliation_id"]
+                            row["queue_reconciliation_id"],
                         ),
                         "order": order,
                         "item": public_item,
@@ -740,7 +740,7 @@ class BillingReportingService:
             raise ReconciliationNotFoundError(reconciliation_id)
         return result
 
-    def list_reconciliation_audits(
+    def list_reconciliation_audits(  # pylint: disable=too-many-branches
         self,
         *,
         actor_id: str | None = None,
@@ -953,25 +953,85 @@ class BillingReportingService:
                     raise
         return self.get_rollout()
 
-    def get_rollout(self) -> dict[str, Any]:
+    def get_rollout(
+        self,
+        *,
+        include_observe_evaluation: bool = True,
+    ) -> dict[str, Any]:
         """Return rollout state, defaulting to non-mutating shadow."""
         row = self.repository.get_rollout_setting()
+        result: dict[str, Any]
         if row is None:
-            return {
+            result = {
                 "mode": "shadow",
                 "billing_cutover_at": None,
                 "cutover_actor_id": None,
                 "updated_by": None,
             }
+        else:
+            result = {
+                "mode": str(row["mode"]),
+                "billing_cutover_at": (
+                    _aware_utc(row["billing_cutover_at"]).isoformat()
+                    if row["billing_cutover_at"] is not None
+                    else None
+                ),
+                "cutover_actor_id": row["cutover_actor_id"],
+                "updated_by": str(row["updated_by"]),
+            }
+        if include_observe_evaluation:
+            result["observe_evaluation"] = self._observe_evaluation()
+        return result
+
+    def _observe_evaluation(self) -> dict[str, Any]:
+        evaluated = billing_usage_items.c.would_pass.is_not(None)
+        with self.repository.engine.connect() as conn:
+            totals = conn.execute(
+                select(
+                    func.count().label("calls"),
+                    func.coalesce(
+                        func.sum(
+                            case(
+                                (billing_usage_items.c.would_pass, 1),
+                                else_=0,
+                            ),
+                        ),
+                        0,
+                    ).label("would_pass"),
+                    func.coalesce(
+                        func.sum(
+                            case(
+                                (
+                                    billing_usage_items.c.would_pass.is_(
+                                        False,
+                                    ),
+                                    1,
+                                ),
+                                else_=0,
+                            ),
+                        ),
+                        0,
+                    ).label("would_block"),
+                ).where(evaluated),
+            ).one()
+            reasons = conn.execute(
+                select(
+                    billing_usage_items.c.would_block_reason,
+                    func.count(),
+                )
+                .where(
+                    billing_usage_items.c.would_pass.is_(False),
+                    billing_usage_items.c.would_block_reason.is_not(None),
+                )
+                .group_by(billing_usage_items.c.would_block_reason),
+            ).all()
         return {
-            "mode": str(row["mode"]),
-            "billing_cutover_at": (
-                _aware_utc(row["billing_cutover_at"]).isoformat()
-                if row["billing_cutover_at"] is not None
-                else None
-            ),
-            "cutover_actor_id": row["cutover_actor_id"],
-            "updated_by": str(row["updated_by"]),
+            "calls": int(totals.calls),
+            "would_pass": int(totals.would_pass),
+            "would_block": int(totals.would_block),
+            "would_block_reasons": {
+                str(reason): int(count) for reason, count in reasons
+            },
         }
 
     def _order_statement(
@@ -1077,7 +1137,7 @@ class BillingReportingService:
     def _serialize_orders(
         self,
         conn,
-        rows: list[Mapping[str, Any]],
+        rows: Sequence[Mapping[str, Any]],
         *,
         detail: bool,
         include_internal: bool,
@@ -1144,7 +1204,7 @@ class BillingReportingService:
     @staticmethod
     def _serialize_prefetched_order(
         row: Mapping[str, Any],
-        item_rows: list[Mapping[str, Any]],
+        item_rows: Sequence[Mapping[str, Any]],
         actual_debited: int,
         *,
         detail: bool,
@@ -1153,7 +1213,7 @@ class BillingReportingService:
     ) -> dict[str, Any]:
         mode = str(
             _load_json(row["request_snapshot_json"]).get("billing_mode")
-            or "shadow"
+            or "shadow",
         )
         result: dict[str, Any] = {
             "id": str(row["id"]),
@@ -1301,6 +1361,9 @@ def _public_item_row(
     }
     if include_internal:
         result["_internal_id"] = str(item["id"])
+    if item["would_pass"] is not None:
+        result["would_pass"] = bool(item["would_pass"])
+        result["would_block_reason"] = item["would_block_reason"]
     return result
 
 

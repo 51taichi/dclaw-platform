@@ -1,8 +1,8 @@
 # OpenAPI Credit Billing Integration Design
 
-**Status:** Approved design  
-**Date:** 2026-08-28  
-**Depends on:** `2026-08-25-credit-wallet-billing-design.md`  
+**Status:** Approved design
+**Date:** 2026-08-28
+**Depends on:** `2026-08-25-credit-wallet-billing-design.md`
 **Scope:** Connect existing OpenAPI identity and token-usage flows to the
 personal credit wallet and immutable billing ledger.
 
@@ -434,4 +434,3 @@ Enforcement may be enabled only after:
 - reconciliation operations and customer low-balance guidance are available;
 - an administrator explicitly records `billing_cutover_at` and enables
   enforced mode.
-

@@ -18,7 +18,6 @@ from .policies import (
 )
 from ..storage.engine import get_app_engine
 from ..storage.repos.billing_repo import BillingRepository
-from ..storage.schema import create_all
 
 
 @dataclass(frozen=True)
@@ -86,9 +85,5 @@ class WalletService:
 
 
 def get_wallet_service() -> WalletService:
-    """Build the default service after ensuring durable tables exist."""
-    engine = get_app_engine()
-    create_all(engine)
-    service = WalletService(BillingRepository(engine))
-    service.backfill_personal_wallets()
-    return service
+    """Build the default service over the startup-migrated durable engine."""
+    return WalletService(BillingRepository(get_app_engine()))

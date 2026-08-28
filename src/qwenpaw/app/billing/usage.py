@@ -244,8 +244,8 @@ class UsageService:
                 wallet_id = str(order["wallet_id"])
                 quote_credits = int(order["quoted_credits"])
                 if self._order_mode(order) == "enforced" and quote_credits:
-                    request_snapshot = json.loads(
-                        order["request_snapshot_json"] or "{}",
+                    price_snapshot = json.loads(
+                        order["price_snapshot_json"] or "{}",
                     )
                     self.repository.append_transaction_in_connection(
                         conn,
@@ -258,12 +258,7 @@ class UsageService:
                             idempotency_key=f"usage:{order_id}:hold",
                             metadata={
                                 "capability": str(order["capability"]),
-                                "tier": str(
-                                    request_snapshot.get("parameters", {}).get(
-                                        "tier",
-                                        "standard",
-                                    ),
-                                ),
+                                "tier": _economic_tier(price_snapshot),
                             },
                         ),
                     )
@@ -508,14 +503,17 @@ class UsageService:
                 str(order["catalog_id"]),
                 request,
             )
+            economic_tier = _economic_tier(quote.snapshot)
             budget = int(order["budget_credits"])
-            if (
+            budget_blocked = bool(
                 budget
                 and int(order["captured_credits"])
                 + int(order["held_credits"])
                 + quote.credits
-                > budget
-            ):
+                > budget,
+            )
+            mode = self._order_mode(order)
+            if budget_blocked and mode == "enforced":
                 raise InsufficientUsageCreditsError(
                     quote.credits,
                     max(
@@ -530,7 +528,23 @@ class UsageService:
                 normalized.usage_order_id,
                 normalized.item_key,
             )
-            mode = self._order_mode(order)
+            would_pass: bool | None = None
+            would_block_reason: str | None = None
+            if mode == "observe":
+                if budget_blocked:
+                    would_pass = False
+                    would_block_reason = "invocation_budget_exceeded"
+                else:
+                    (
+                        would_pass,
+                        would_block_reason,
+                    ) = self.repository.evaluate_hold_in_connection(
+                        conn,
+                        str(order["wallet_id"]),
+                        quote.credits,
+                        capability=normalized.capability,
+                        tier=economic_tier,
+                    )
             if mode == "enforced" and quote.credits:
                 try:
                     self.repository.append_transaction_in_connection(
@@ -547,12 +561,7 @@ class UsageService:
                             ),
                             metadata={
                                 "capability": normalized.capability,
-                                "tier": str(
-                                    normalized.parameters.get(
-                                        "tier",
-                                        "standard",
-                                    ),
-                                ),
+                                "tier": economic_tier,
                                 "source_type": "open_api",
                                 "source_id": str(order["source_id"]),
                                 "item_key": normalized.item_key,
@@ -588,6 +597,8 @@ class UsageService:
                     price_snapshot_json=_dump_json(quote.to_jsonable()),
                     supplier_evidence_json="{}",
                     billability="unknown",
+                    would_pass=would_pass,
+                    would_block_reason=would_block_reason,
                     started_at=now,
                     created_at=now,
                     updated_at=now,
@@ -1284,6 +1295,20 @@ def _item_business_key(usage_order_id: str, item_key: str) -> str:
     return f"open-api-item:{usage_order_id}:{item_key}"
 
 
+def _economic_tier(snapshot: Mapping[str, Any]) -> str:
+    """Read the trusted catalog tier, failing closed for restricted trials."""
+    nested = snapshot.get("snapshot")
+    catalog_snapshot = nested if isinstance(nested, Mapping) else snapshot
+    rule = catalog_snapshot.get("rule")
+    metadata = rule.get("metadata") if isinstance(rule, Mapping) else None
+    value = (
+        str(metadata.get("economic_tier") or "").strip().lower()
+        if isinstance(metadata, Mapping)
+        else ""
+    )
+    return value if value in {"standard", "high_cost"} else "high_cost"
+
+
 def _reservation_snapshot(
     order: Mapping[str, Any],
     command: ReserveModelCall,
@@ -1367,6 +1392,8 @@ def _decode_usage_item(item: Mapping[str, Any]) -> dict[str, Any]:
         "reconciling_credits": result.reconciling_credits,
         "billability": str(item["billability"]),
         "execution_outcome": str(item["execution_outcome"]),
+        "would_pass": item["would_pass"],
+        "would_block_reason": item["would_block_reason"],
     }
 
 

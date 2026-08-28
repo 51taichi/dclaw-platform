@@ -804,6 +804,35 @@ def test_rollout_cutover_is_written_once_only_by_explicit_enforced_activation(
     assert rows[0]["cutover_actor_id"] == "admin-2"
 
 
+def test_admin_rollout_reports_persisted_observe_pass_and_block_counts(
+    reporting,
+):
+    service, _repository, engine = reporting
+    with engine.begin() as conn:
+        conn.execute(
+            update(billing_usage_items)
+            .where(billing_usage_items.c.id == "item-alice-shadow")
+            .values(would_pass=True, would_block_reason=None),
+        )
+        conn.execute(
+            update(billing_usage_items)
+            .where(billing_usage_items.c.id == "item-alice-new")
+            .values(
+                would_pass=False,
+                would_block_reason="ineligible_credit_lots",
+            ),
+        )
+
+    rollout = service.get_rollout()
+
+    assert rollout["observe_evaluation"] == {
+        "calls": 2,
+        "would_pass": 1,
+        "would_block": 1,
+        "would_block_reasons": {"ineligible_credit_lots": 1},
+    }
+
+
 def test_admin_audit_list_detail_filters_and_redacts(reporting):
     service, repository, _engine = reporting
     wallet = repository.get_wallet("user", "alice")
@@ -847,7 +876,7 @@ def test_admin_audit_list_detail_filters_and_redacts(reporting):
         limit=10,
     )
     assert [audit["audit_id"] for audit in page["items"]] == [
-        resolved["audit_id"]
+        resolved["audit_id"],
     ]
     detail = service.get_reconciliation_audit(resolved["audit_id"])
     assert detail == page["items"][0]
