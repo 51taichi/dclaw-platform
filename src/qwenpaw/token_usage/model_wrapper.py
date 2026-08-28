@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Model wrapper that records token usage from LLM responses."""
 
+import logging
 from datetime import date, datetime, timezone
 from typing import Any, AsyncGenerator, Literal, Type
 
@@ -13,18 +14,28 @@ from .buffer import _UsageEvent
 from .manager import get_token_usage_manager
 
 
+logger = logging.getLogger(__name__)
+
+
 class TokenRecordingModelWrapper(ChatModelBase):
     """Wraps a ChatModelBase to record token usage on each call."""
 
     _usage_by_session: dict[str, dict[str, Any]] = {}
 
-    def __init__(self, provider_id: str, model: ChatModelBase) -> None:
+    def __init__(
+        self,
+        provider_id: str,
+        model: ChatModelBase,
+        *,
+        meter: Any | None = None,
+    ) -> None:
         super().__init__(
             model_name=getattr(model, "model_name", "unknown"),
             stream=getattr(model, "stream", True),
         )
         self._model = model
         self._provider_id = provider_id
+        self._meter = meter
 
     def _record_usage(self, usage: ChatUsage | None) -> None:
         """Enqueue a usage event synchronously — never blocks the caller."""
@@ -36,6 +47,7 @@ class TokenRecordingModelWrapper(ChatModelBase):
             return
 
         from ..app.agent_context import get_current_user_id
+
         user_id = get_current_user_id()
 
         event = _UsageEvent(
@@ -49,9 +61,6 @@ class TokenRecordingModelWrapper(ChatModelBase):
             ),
             user_id=user_id,
         )
-        # Fire-and-forget: synchronous put_nowait, ~100 ns, no await needed.
-        get_token_usage_manager().enqueue(event)
-
         usage_data = {
             "provider_id": self._provider_id,
             "model_name": self.model_name,
@@ -60,6 +69,15 @@ class TokenRecordingModelWrapper(ChatModelBase):
             "total_tokens": pt + ct,
         }
         self._store_usage(usage_data)
+        # Analytics is explicitly best-effort.  Financial settlement happens
+        # earlier in ``__call__`` and must never be undone by queue pressure.
+        try:
+            get_token_usage_manager().enqueue(event)
+        except Exception:  # pragma: no cover - manager logs queue loss itself
+            logger.warning(
+                "token_usage: analytics event was dropped",
+                exc_info=True,
+            )
 
     @classmethod
     def pop_usage_for_session(cls, session_id: str) -> dict[str, Any] | None:
@@ -88,26 +106,58 @@ class TokenRecordingModelWrapper(ChatModelBase):
         if tool_choice == "auto":
             tool_choice = None
 
-        result = await self._model(
-            messages=messages,
-            tools=tools,
-            tool_choice=tool_choice,
-            structured_model=structured_model,
-            **kwargs,
-        )
+        billing_item_key = kwargs.pop("_billing_item_key", None)
+        meter_call = None
+        if self._meter is not None:
+            meter_call = self._meter.before_call(
+                provider_id=self._provider_id,
+                model_key=self.model_name,
+                messages=messages,
+                max_output_tokens=_max_output_tokens(kwargs),
+                item_key=billing_item_key,
+            )
+        try:
+            result = await self._model(
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                structured_model=structured_model,
+                **kwargs,
+            )
+        except Exception as exc:
+            if meter_call is not None:
+                self._meter.record_exception(meter_call, exc)
+            raise
 
         if isinstance(result, AsyncGenerator):
-            return self._wrap_stream(result)
+            return self._wrap_stream(result, meter_call)
+        if meter_call is not None:
+            self._meter.record_response(meter_call, result)
         self._record_usage(getattr(result, "usage", None))
         return result
 
     async def _wrap_stream(
         self,
         stream: AsyncGenerator[ChatResponse, None],
+        meter_call: Any | None = None,
     ) -> AsyncGenerator[ChatResponse, None]:
         last_usage: ChatUsage | None = None
-        async for chunk in stream:
-            if getattr(chunk, "usage", None) is not None:
-                last_usage = chunk.usage
-            yield chunk
+        last_chunk: ChatResponse | None = None
+        try:
+            async for chunk in stream:
+                last_chunk = chunk
+                if getattr(chunk, "usage", None) is not None:
+                    last_usage = chunk.usage
+                yield chunk
+        except Exception as exc:
+            if meter_call is not None:
+                self._meter.record_exception(meter_call, exc)
+            raise
+        if meter_call is not None:
+            self._meter.record_response(meter_call, last_chunk)
         self._record_usage(last_usage)
+
+
+def _max_output_tokens(kwargs: dict[str, Any]) -> int | None:
+    value = kwargs.get("max_output_tokens", kwargs.get("max_tokens"))
+    return value if isinstance(value, int) else None

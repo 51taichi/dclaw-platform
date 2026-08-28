@@ -1010,8 +1010,13 @@ def _wrap_chat_model(
     *,
     retry_config: RetryConfig | None,
     rate_limit_config: RateLimitConfig | None,
+    billing_meter: Any | None = None,
 ) -> ChatModelBase:
-    wrapped_model = TokenRecordingModelWrapper(provider_id, model)
+    wrapped_model = TokenRecordingModelWrapper(
+        provider_id,
+        model,
+        meter=billing_meter,
+    )
     return RetryChatModel(
         wrapped_model,
         retry_config=retry_config,
@@ -1071,7 +1076,9 @@ def _build_auto_routing_model_and_formatter(
         formatter_family = _get_formatter_for_chat_model(raw_model.__class__)
         if fallback_family is None:
             fallback_family = formatter_family
-            fallback_formatter = _create_formatter_instance(raw_model.__class__)
+            fallback_formatter = _create_formatter_instance(
+                raw_model.__class__,
+            )
         if formatter_family is not fallback_family:
             continue
 
@@ -1125,8 +1132,11 @@ def create_model_and_formatter(
     Example:
         >>> model, formatter = create_model_and_formatter()
     """
-    from ..app.agent_context import get_current_agent_id, get_current_chat_model
-    from ..config.config import load_agent_config
+    from ..app.agent_context import (
+        get_current_agent_id,
+        get_current_chat_model,
+    )
+    from ..config.config import ModelSlotConfig, load_agent_config
 
     # Determine agent_id (parameter > context > None)
     if agent_id is None:
@@ -1145,7 +1155,8 @@ def create_model_and_formatter(
             model=chat_model.get("model", ""),
         )
 
-    # Try to get agent-specific model config (retry config, rate limit, fallback model)
+    # Try to get agent-specific model config (retry config, rate limit,
+    # fallback model).
     retry_config = None
     rate_limit_config = None
     if agent_id:
@@ -1169,7 +1180,8 @@ def create_model_and_formatter(
         except Exception:
             pass
 
-    # Create chat model from chat-specific, agent-specific, auto, or global config
+    # Create a chat model from chat-specific, agent-specific, auto, or global
+    # config.
     manager = ProviderManager.get_instance()
     if model_slot and is_auto_model_slot(model_slot):
         return _build_auto_routing_model_and_formatter(
