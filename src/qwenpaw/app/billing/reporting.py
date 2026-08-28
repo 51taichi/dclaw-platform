@@ -12,8 +12,10 @@ from typing import Any, Literal, Mapping
 from uuid import uuid4
 
 from sqlalchemy import (
+    Date,
     and_,
     case,
+    cast,
     exists,
     func,
     insert,
@@ -236,6 +238,13 @@ class BillingReportingService:
         started_at = datetime.combine(date_from, time.min, tzinfo=timezone.utc)
         ended_at = datetime.combine(date_to, time.min, tzinfo=timezone.utc)
 
+        eligible = self._order_statement(
+            owner_user_id,
+            BillingReportFilters(
+                started_at=started_at,
+                ended_at=ended_at,
+            ),
+        ).cte("eligible_summary_orders")
         item_totals = (
             select(
                 billing_usage_items.c.usage_order_id.label("order_id"),
@@ -245,6 +254,12 @@ class BillingReportingService:
                 ),
                 func.sum(billing_usage_items.c.output_tokens).label(
                     "output_tokens",
+                ),
+            )
+            .select_from(
+                billing_usage_items.join(
+                    eligible,
+                    eligible.c.id == billing_usage_items.c.usage_order_id,
                 ),
             )
             .group_by(billing_usage_items.c.usage_order_id)
@@ -265,6 +280,9 @@ class BillingReportingService:
             )
             .select_from(
                 billing_usage_items.join(
+                    eligible,
+                    eligible.c.id == billing_usage_items.c.usage_order_id,
+                ).join(
                     billing_ledger_entries,
                     and_(
                         billing_ledger_entries.c.business_key
@@ -276,14 +294,13 @@ class BillingReportingService:
             .group_by(billing_usage_items.c.usage_order_id)
             .subquery("summary_ledger_totals")
         )
-        eligible = self._order_statement(
-            owner_user_id,
-            BillingReportFilters(
-                started_at=started_at,
-                ended_at=ended_at,
-            ),
-        ).subquery("summary_orders")
-        day = func.date(eligible.c.created_at).label("day")
+        if self.repository.engine.dialect.name == "postgresql":
+            day = cast(
+                func.timezone("UTC", eligible.c.created_at),
+                Date,
+            ).label("day")
+        else:
+            day = func.date(eligible.c.created_at).label("day")
         estimated = or_(
             eligible.c.request_snapshot_json.like(
                 '%"billing_mode":"shadow"%',

@@ -153,20 +153,43 @@ services:
   qwenpaw-saas:
     image: ${CANDIDATE_IMAGE:?candidate digest required}
     container_name: qwenpaw-billing-candidate-app
+    restart: unless-stopped
     ports:
       - "127.0.0.1:${CANDIDATE_PORT:?candidate port required}:8088"
+    environment:
+      QWENPAW_AUTH_ENABLED: "true"
+      QWENPAW_DATABASE_BACKEND: postgres
+      QWENPAW_DATABASE_URL: postgresql+psycopg://qwenpaw:${QWENPAW_POSTGRES_PASSWORD:?password required}@postgres:5432/qwenpaw
+      QWENPAW_RUNTIME_BACKEND: redis
+      QWENPAW_REDIS_URL: redis://redis:6379/0
     volumes:
       - candidate-data:/app/working
       - candidate-secrets:/app/working.secret
       - candidate-backups:/app/working.backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
   postgres:
+    image: postgres:16-alpine
     container_name: qwenpaw-billing-candidate-postgres
+    environment:
+      POSTGRES_DB: qwenpaw
+      POSTGRES_USER: qwenpaw
+      POSTGRES_PASSWORD: ${QWENPAW_POSTGRES_PASSWORD:?password required}
     volumes:
       - candidate-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qwenpaw -d qwenpaw"]
   redis:
+    image: redis:7-alpine
     container_name: qwenpaw-billing-candidate-redis
+    command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - candidate-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
 volumes:
   candidate-data:
     name: qwenpaw-billing-candidate-data
@@ -181,8 +204,9 @@ volumes:
 YAML
 
 export CANDIDATE_IMAGE CANDIDATE_PORT
-docker compose -p "$CANDIDATE_PROJECT" -f docker-compose.yml \
-  -f "$CHANGE_DIR/candidate.compose.yml" --profile saas config \
+docker compose version --short > "$CHANGE_DIR/compose-version.txt"
+docker compose -p "$CANDIDATE_PROJECT" \
+  -f "$CHANGE_DIR/candidate.compose.yml" config \
   > "$CHANGE_DIR/candidate.compose.rendered.yml"
 grep -F 'qwenpaw-billing-candidate-postgres' \
   "$CHANGE_DIR/candidate.compose.rendered.yml"
@@ -192,10 +216,36 @@ if grep -F 'source: qwenpaw-postgres' \
   "$CHANGE_DIR/candidate.compose.rendered.yml"; then exit 3; fi
 if grep -F 'source: qwenpaw-redis' \
   "$CHANGE_DIR/candidate.compose.rendered.yml"; then exit 3; fi
+if grep -F "published: \"${PRODUCTION_PORT}\"" \
+  "$CHANGE_DIR/candidate.compose.rendered.yml"; then exit 3; fi
+grep -F "published: \"${CANDIDATE_PORT}\"" \
+  "$CHANGE_DIR/candidate.compose.rendered.yml"
 
-docker compose -p "$CANDIDATE_PROJECT" -f docker-compose.yml \
-  -f "$CHANGE_DIR/candidate.compose.yml" --profile saas \
+docker compose -p "$CANDIDATE_PROJECT" \
+  -f "$CHANGE_DIR/candidate.compose.yml" \
   up -d postgres redis
+```
+
+Prove the fresh migration is repeatable before restoring any production data.
+Each command is expected to exit zero; the final query is the gate.
+
+```bash
+for BOOT in 1 2; do
+  docker compose -p "$CANDIDATE_PROJECT" \
+    -f "$CHANGE_DIR/candidate.compose.yml" run --rm qwenpaw-saas
+done
+docker compose -p "$CANDIDATE_PROJECT" \
+  -f "$CHANGE_DIR/candidate.compose.yml" exec -T postgres \
+  psql -v ON_ERROR_STOP=1 -U qwenpaw -d qwenpaw <<'SQL'
+SELECT to_regclass('billing_reconciliation_audits') IS NOT NULL AS audit_table;
+SELECT to_regclass('billing_rollout_settings') IS NOT NULL AS rollout_table;
+SELECT to_regclass('idx_open_api_invocations_billing_usage_order') IS NOT NULL
+  AS invocation_order_index;
+SQL
+docker compose -p "$CANDIDATE_PROJECT" \
+  -f "$CHANGE_DIR/candidate.compose.yml" down --volumes
+docker compose -p "$CANDIDATE_PROJECT" \
+  -f "$CHANGE_DIR/candidate.compose.yml" up -d postgres redis
 ```
 
 Restore only copies into the candidate. Restore application configuration and
@@ -209,13 +259,40 @@ for VOLUME_NAME in data secrets backups; do
     -v "$CHANGE_DIR:/backup:ro" alpine:3.20 \
     tar -C /restore -xzf "/backup/qwenpaw-${VOLUME_NAME}.tgz"
 done
-docker compose -p "$CANDIDATE_PROJECT" -f docker-compose.yml \
-  -f "$CHANGE_DIR/candidate.compose.yml" --profile saas exec -T postgres \
+docker compose -p "$CANDIDATE_PROJECT" \
+  -f "$CHANGE_DIR/candidate.compose.yml" exec -T postgres \
   pg_restore --exit-on-error --clean --if-exists \
   -U qwenpaw -d qwenpaw \
   < "$CHANGE_DIR/qwenpaw.pre-billing.dump"
-docker compose -p "$CANDIDATE_PROJECT" -f docker-compose.yml \
-  -f "$CHANGE_DIR/candidate.compose.yml" --profile saas \
+docker compose -p "$CANDIDATE_PROJECT" \
+  -f "$CHANGE_DIR/candidate.compose.yml" exec -T postgres \
+  psql -At -v ON_ERROR_STOP=1 -U qwenpaw -d qwenpaw <<'SQL' \
+  > "$CHANGE_DIR/upgrade-before.tsv"
+SELECT 'wallets', count(*), coalesce(sum(available_credits), 0),
+  coalesce(sum(held_credits), 0) FROM billing_wallets;
+SELECT 'ledger', count(*), coalesce(sum(credit_delta), 0) FROM billing_ledger_entries;
+SELECT 'orders', count(*), coalesce(sum(captured_credits), 0) FROM billing_usage_orders;
+SELECT 'items', count(*), coalesce(sum(captured_credits), 0) FROM billing_usage_items;
+SELECT 'invocations', count(*), coalesce(sum(captured_credits), 0) FROM open_api_invocations;
+SQL
+for BOOT in 1 2; do
+  docker compose -p "$CANDIDATE_PROJECT" \
+    -f "$CHANGE_DIR/candidate.compose.yml" run --rm qwenpaw-saas
+done
+docker compose -p "$CANDIDATE_PROJECT" \
+  -f "$CHANGE_DIR/candidate.compose.yml" exec -T postgres \
+  psql -At -v ON_ERROR_STOP=1 -U qwenpaw -d qwenpaw <<'SQL' \
+  > "$CHANGE_DIR/upgrade-after.tsv"
+SELECT 'wallets', count(*), coalesce(sum(available_credits), 0),
+  coalesce(sum(held_credits), 0) FROM billing_wallets;
+SELECT 'ledger', count(*), coalesce(sum(credit_delta), 0) FROM billing_ledger_entries;
+SELECT 'orders', count(*), coalesce(sum(captured_credits), 0) FROM billing_usage_orders;
+SELECT 'items', count(*), coalesce(sum(captured_credits), 0) FROM billing_usage_items;
+SELECT 'invocations', count(*), coalesce(sum(captured_credits), 0) FROM open_api_invocations;
+SQL
+cmp "$CHANGE_DIR/upgrade-before.tsv" "$CHANGE_DIR/upgrade-after.tsv"
+docker compose -p "$CANDIDATE_PROJECT" \
+  -f "$CHANGE_DIR/candidate.compose.yml" \
   up -d qwenpaw-saas
 curl --fail --silent --show-error \
   "http://127.0.0.1:${CANDIDATE_PORT}/api/health"
@@ -239,13 +316,17 @@ line as a literal:
 
 ```bash
 set +x
-ADMIN_TOKEN="$(<"$ADMIN_TOKEN_FILE")"
-curl --fail --silent --show-error \
-  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+CURL_CONFIG="$(mktemp "$CHANGE_DIR/curl-auth.XXXXXX")"
+chmod 0600 "$CURL_CONFIG"
+trap 'rm -f -- "$CURL_CONFIG"' EXIT
+printf 'header = "Authorization: Bearer %s"\n' \
+  "$(<"$ADMIN_TOKEN_FILE")" > "$CURL_CONFIG"
+curl --config "$CURL_CONFIG" --fail --silent --show-error \
   -H 'Content-Type: application/json' \
   -d '{"mode":"shadow"}' \
   "http://127.0.0.1:${CANDIDATE_PORT}/api/admin/billing/rollout/activate"
-unset ADMIN_TOKEN
+rm -f -- "$CURL_CONFIG"
+trap - EXIT
 ```
 
 Shadow must cover normal agent, expert team/multi-call, timeout, disconnect,
@@ -278,8 +359,8 @@ database, and named application volumes; from this point it is a production
 writer, not a candidate.
 
 ```bash
-docker compose -p "$CANDIDATE_PROJECT" -f docker-compose.yml \
-  -f "$CHANGE_DIR/candidate.compose.yml" --profile saas \
+docker compose -p "$CANDIDATE_PROJECT" \
+  -f "$CHANGE_DIR/candidate.compose.yml" \
   down --remove-orphans
 if docker ps --format '{{.Ports}}' | grep -F "127.0.0.1:${RELEASE_PORT}->"; then
   exit 3
@@ -318,17 +399,18 @@ EOF
 sudo sha256sum "$NGINX_DIR/upstream-old.conf" \
   "$NGINX_DIR/upstream-release.conf" \
   > "$CHANGE_DIR/nginx-upstreams.sha256"
-sudo ln -sfn "$NGINX_DIR/upstream-release.conf" \
-  "$NGINX_DIR/upstream-active.conf.next"
-sudo mv -Tf "$NGINX_DIR/upstream-active.conf.next" "$NGINX_ACTIVE"
-sudo nginx -t
-sudo nginx -s reload
-curl --fail --silent --show-error https://service.example/api/health
+test -x docs/operations/open-api-billing-nginx-switch.sh
+docs/operations/open-api-billing-nginx-switch.sh \
+  "$NGINX_ACTIVE" "$NGINX_DIR/upstream-release.conf" \
+  https://service.example/api/health
 docker stop qwenpaw-saas
 ```
 
-If `nginx -t` or the public health check fails, immediately execute the exact
-revert below; do not edit the active config in place.
+The switch helper pre-validates Nginx and installs an EXIT/signal trap before
+changing the symlink. If the post-switch `nginx -t`, reload, or public health
+check fails, it atomically restores the original resolved target and reloads
+it. Keep the exact manual revert below for operator recovery; do not edit the
+active config in place.
 
 ```bash
 sudo ln -sfn "$NGINX_DIR/upstream-old.conf" \
@@ -347,14 +429,18 @@ original timestamp and actor.
 
 ```bash
 set +x
-ADMIN_TOKEN="$(<"$ADMIN_TOKEN_FILE")"
-curl --fail --silent --show-error \
-  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+CURL_CONFIG="$(mktemp "$CHANGE_DIR/curl-auth.XXXXXX")"
+chmod 0600 "$CURL_CONFIG"
+trap 'rm -f -- "$CURL_CONFIG"' EXIT
+printf 'header = "Authorization: Bearer %s"\n' \
+  "$(<"$ADMIN_TOKEN_FILE")" > "$CURL_CONFIG"
+curl --config "$CURL_CONFIG" --fail --silent --show-error \
   -H 'Content-Type: application/json' \
   -d '{"mode":"enforced"}' \
   "http://127.0.0.1:${RELEASE_PORT}/api/admin/billing/rollout/activate" \
   > "$CHANGE_DIR/enforced-activation.json"
-unset ADMIN_TOKEN
+rm -f -- "$CURL_CONFIG"
+trap - EXIT
 ```
 
 Immediately repeat funded, replay, unfunded, incremental-insufficiency,

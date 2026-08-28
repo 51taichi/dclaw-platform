@@ -549,35 +549,29 @@ def test_summary_rejects_unbounded_or_excessive_windows(reporting):
 def test_summary_large_window_remains_grouped_and_query_bounded(reporting):
     service, _repository, engine = reporting
     with engine.begin() as conn:
-        order_template = dict(
-            conn.execute(
-                select(billing_usage_orders).where(
-                    billing_usage_orders.c.id == "order-alice-shadow",
-                ),
+        templates = {}
+        for owner in ("alice", "bob"):
+            template_key = "alice-shadow" if owner == "alice" else "bob-new"
+            templates[owner] = tuple(
+                dict(conn.execute(statement).mappings().one())
+                for statement in (
+                    select(billing_usage_orders).where(
+                        billing_usage_orders.c.id == f"order-{template_key}",
+                    ),
+                    select(open_api_invocations).where(
+                        open_api_invocations.c.id == f"inv-{template_key}",
+                    ),
+                    select(billing_usage_items).where(
+                        billing_usage_items.c.id == f"item-{template_key}",
+                    ),
+                )
             )
-            .mappings()
-            .one(),
-        )
-        invocation_template = dict(
-            conn.execute(
-                select(open_api_invocations).where(
-                    open_api_invocations.c.id == "inv-alice-shadow",
-                ),
-            )
-            .mappings()
-            .one(),
-        )
-        item_template = dict(
-            conn.execute(
-                select(billing_usage_items).where(
-                    billing_usage_items.c.id == "item-alice-shadow",
-                ),
-            )
-            .mappings()
-            .one(),
-        )
-        for sequence in range(150):
-            suffix = f"large-{sequence}"
+        for sequence in range(650):
+            owner = "alice" if sequence < 150 else "bob"
+            order_template, invocation_template, item_template = templates[
+                owner
+            ]
+            suffix = f"large-{owner}-{sequence}"
             created_at = NOW - timedelta(days=sequence % 20)
             order = {
                 **order_template,
@@ -626,6 +620,29 @@ def test_summary_large_window_remains_grouped_and_query_bounded(reporting):
     # One grouped financial query plus the existing constant wallet/lot and
     # rollout reads; the count is independent of orders/items in the window.
     assert len(statements) <= 7
+
+
+def test_summary_sql_scopes_item_and_ledger_aggregation_to_eligible_orders(
+    reporting,
+):
+    service, _repository, _engine = reporting
+    statements = []
+
+    def capture(_conn, _clause, _multiparams, _params, _options):
+        statements.append(str(_clause))
+
+    event.listen(service.repository.engine, "before_execute", capture)
+    try:
+        service.open_api_summary(
+            "alice",
+            date_from=date(2026, 8, 1),
+            date_to=date(2026, 9, 1),
+        )
+    finally:
+        event.remove(service.repository.engine, "before_execute", capture)
+
+    aggregate = next(sql for sql in statements if "summary_item_totals" in sql)
+    assert "eligible_summary_orders" in aggregate
 
 
 def test_order_and_reconciliation_pages_use_constant_query_count(reporting):
@@ -926,7 +943,8 @@ def test_user_reporting_routes_return_404_for_another_wallet_and_redact(
         headers=_headers("alice"),
     )
     summary = client.get(
-        "/api/user/billing/open-api-summary?date_from=2026-08-01&date_to=2026-08-30",
+        "/api/user/billing/open-api-summary"
+        "?date_from=2026-08-01&date_to=2026-08-30",
         headers=_headers("alice"),
     )
     assert own.status_code == 200

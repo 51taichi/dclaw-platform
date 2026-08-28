@@ -1292,15 +1292,23 @@ def test_postgresql_admin_reconciliation_same_key_is_one_audited_capture(
                 ),
             )
     assert coordinator.repository.balance(session.wallet_id).held == 0
-    today = datetime.now(timezone.utc).date()
+    boundary = datetime(2026, 8, 29, 23, 30, tzinfo=timezone.utc)
+    with postgres_open_api_engine.begin() as conn:
+        conn.execute(text("SET TIME ZONE 'Asia/Shanghai'"))
+        conn.execute(
+            update(billing_usage_orders)
+            .where(billing_usage_orders.c.id == session.usage_order_id)
+            .values(created_at=boundary),
+        )
     summary = reporting.open_api_summary(
         f"bound-user-{identity}",
-        date_from=today - timedelta(days=1),
-        date_to=today + timedelta(days=1),
+        date_from=boundary.date(),
+        date_to=boundary.date() + timedelta(days=1),
     )
     assert summary["totals"]["orders"] == 1
     assert summary["totals"]["model_calls"] == 1
     assert summary["totals"]["actual_debited_credits"] == 1
+    assert summary["by_day"][0]["date"] == "2026-08-29"
 
 
 @pytest.mark.integration
