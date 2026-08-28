@@ -2,11 +2,14 @@
 # pylint: disable=redefined-outer-name
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
+from types import SimpleNamespace
+
 import pytest
 from sqlalchemy import BigInteger, Integer, inspect
 
 from qwenpaw.app.storage.engine import create_engine_from_settings
-from qwenpaw.app.storage.schema import create_all
+from qwenpaw.app.storage.schema import _ensure_billing_bigint_columns, create_all
 from qwenpaw.app.storage.settings import get_storage_settings
 
 
@@ -143,7 +146,47 @@ def test_billing_schema_is_idempotent(sqlite_engine):
         column["name"]
         for column in inspector.get_columns("billing_usage_orders")
     }
-    assert "billability" in usage_columns
+    assert {
+        "billability",
+        "source_type",
+        "source_id",
+        "budget_credits",
+        "released_credits",
+        "reconciling_credits",
+    } <= usage_columns
+
+    item_columns = {
+        column["name"]
+        for column in inspector.get_columns("billing_usage_items")
+    }
+    assert {
+        "item_key",
+        "billability",
+        "quoted_credits",
+        "price_snapshot_json",
+        "started_at",
+        "finished_at",
+    } <= item_columns
+
+    source_uniques = {
+        tuple(index["column_names"])
+        for index in inspector.get_indexes("billing_usage_orders")
+        if index.get("unique")
+    } | {
+        tuple(constraint["column_names"])
+        for constraint in inspector.get_unique_constraints("billing_usage_orders")
+    }
+    assert ("source_type", "source_id") in source_uniques
+
+    item_uniques = {
+        tuple(index["column_names"])
+        for index in inspector.get_indexes("billing_usage_items")
+        if index.get("unique")
+    } | {
+        tuple(constraint["column_names"])
+        for constraint in inspector.get_unique_constraints("billing_usage_items")
+    }
+    assert ("usage_order_id", "item_key") in item_uniques
 
     foreign_key_targets = {
         "billing_credit_lots": {"billing_wallets"},
@@ -162,3 +205,44 @@ def test_billing_schema_is_idempotent(sqlite_engine):
             for foreign_key in inspector.get_foreign_keys(table_name)
         }
         assert expected_targets <= targets
+
+
+def test_postgresql_bigint_upgrade_only_targets_existing_billing_amounts():
+    class RecordingConnection:
+        def __init__(self):
+            self.statements: list[str] = []
+
+        def execute(self, statement):
+            self.statements.append(str(statement))
+
+    class RecordingBegin(AbstractContextManager):
+        def __init__(self, connection):
+            self.connection = connection
+
+        def __enter__(self):
+            return self.connection
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return None
+
+    class RecordingEngine:
+        def __init__(self):
+            self.dialect = SimpleNamespace(name="postgresql")
+            self.connection = RecordingConnection()
+
+        def begin(self):
+            return RecordingBegin(self.connection)
+
+    engine = RecordingEngine()
+    _ensure_billing_bigint_columns(engine)
+
+    statements = "\n".join(engine.connection.statements)
+    assert 'ALTER TABLE "billing_usage_orders" ALTER COLUMN "budget_credits" TYPE BIGINT' in statements
+    assert 'ALTER TABLE "billing_usage_orders" ALTER COLUMN "reconciling_credits" TYPE BIGINT' in statements
+    assert 'ALTER TABLE "billing_usage_items" ALTER COLUMN "quoted_credits" TYPE BIGINT' in statements
+    assert 'ALTER TABLE "billing_usage_items" ALTER COLUMN "charged_credits" TYPE BIGINT' in statements
+    assert 'ALTER TABLE "billing_ledger_entries" ALTER COLUMN "credit_delta" TYPE BIGINT' in statements
+    assert 'ALTER TABLE "billing_ledger_entries" ALTER COLUMN "cash_delta_fen" TYPE BIGINT' in statements
+    assert 'ALTER TABLE "billing_ledger_entries" ALTER COLUMN "credits" TYPE BIGINT' not in statements
+    assert 'ALTER TABLE "billing_usage_orders" ALTER COLUMN "supplier_cost_fen" TYPE BIGINT' not in statements
+    assert 'ALTER TABLE "billing_usage_items" ALTER COLUMN "credits" TYPE BIGINT' not in statements

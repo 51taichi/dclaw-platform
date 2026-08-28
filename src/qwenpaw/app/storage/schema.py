@@ -310,6 +310,19 @@ open_api_invocations = Table(
     Column("latency_ms", Integer, server_default="0"),
     Column("token_summary", Text, nullable=False, server_default="{}"),
     Column("error_summary", Text),
+    Column(
+        "billing_usage_order_id",
+        String,
+        ForeignKey(
+            "billing_usage_orders.id",
+            name="fk_open_api_invocations_billing_usage_order",
+        ),
+    ),
+    Column("billing_status", String, nullable=False, server_default="pending"),
+    Column("quoted_credits", BigInteger, nullable=False, server_default="0"),
+    Column("captured_credits", BigInteger, nullable=False, server_default="0"),
+    Column("released_credits", BigInteger, nullable=False, server_default="0"),
+    Column("billing_error_code", String),
     Column("created_at", DateTime(timezone=True), server_default=func.now()),
 )
 
@@ -625,13 +638,23 @@ billing_usage_orders = Table(
     ),
     Column("price_rule_id", String, ForeignKey("billing_price_rules.id")),
     Column("business_key", String, nullable=False),
+    Column("source_type", String),
+    Column("source_id", String),
     Column("status", String, nullable=False, server_default="quoted"),
     Column("provider_id", String, nullable=False),
     Column("model_key", String, nullable=False),
     Column("capability", String, nullable=False),
     Column("quoted_credits", BigInteger, nullable=False, server_default="0"),
+    Column("budget_credits", BigInteger, nullable=False, server_default="0"),
     Column("held_credits", BigInteger, nullable=False, server_default="0"),
     Column("captured_credits", BigInteger, nullable=False, server_default="0"),
+    Column("released_credits", BigInteger, nullable=False, server_default="0"),
+    Column(
+        "reconciling_credits",
+        BigInteger,
+        nullable=False,
+        server_default="0",
+    ),
     Column("request_snapshot_json", Text, nullable=False, server_default="{}"),
     Column("price_snapshot_json", Text, nullable=False, server_default="{}"),
     Column("supplier_reference", String),
@@ -659,6 +682,18 @@ billing_usage_orders = Table(
         name="ck_billing_usage_orders_captured_nonnegative",
     ),
     CheckConstraint(
+        "budget_credits >= 0",
+        name="ck_billing_usage_orders_budget_nonnegative",
+    ),
+    CheckConstraint(
+        "released_credits >= 0",
+        name="ck_billing_usage_orders_released_nonnegative",
+    ),
+    CheckConstraint(
+        "reconciling_credits >= 0",
+        name="ck_billing_usage_orders_reconciling_nonnegative",
+    ),
+    CheckConstraint(
         "billability IN ('unknown', 'billable', 'not_billable')",
         name="ck_billing_usage_orders_billability",
     ),
@@ -675,6 +710,7 @@ billing_usage_items = Table(
         nullable=False,
     ),
     Column("price_rule_id", String, ForeignKey("billing_price_rules.id")),
+    Column("item_key", String),
     Column("status", String, nullable=False, server_default="quoted"),
     Column("provider_id", String, nullable=False),
     Column("model_key", String, nullable=False),
@@ -683,6 +719,7 @@ billing_usage_items = Table(
     Column("input_tokens", BigInteger, nullable=False, server_default="0"),
     Column("output_tokens", BigInteger, nullable=False, server_default="0"),
     Column("quantity", BigInteger, nullable=False, server_default="0"),
+    Column("quoted_credits", BigInteger, nullable=False, server_default="0"),
     Column("charged_credits", BigInteger, nullable=False, server_default="0"),
     Column(
         "supplier_cost_fen",
@@ -691,12 +728,16 @@ billing_usage_items = Table(
         server_default="0",
     ),
     Column("usage_snapshot_json", Text, nullable=False, server_default="{}"),
+    Column("price_snapshot_json", Text, nullable=False, server_default="{}"),
     Column(
         "supplier_evidence_json",
         Text,
         nullable=False,
         server_default="{}",
     ),
+    Column("billability", String, nullable=False, server_default="unknown"),
+    Column("started_at", DateTime(timezone=True)),
+    Column("finished_at", DateTime(timezone=True)),
     Column("created_at", DateTime(timezone=True), server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), server_default=func.now()),
     CheckConstraint(
@@ -716,8 +757,16 @@ billing_usage_items = Table(
         name="ck_billing_usage_items_charged_nonnegative",
     ),
     CheckConstraint(
+        "quoted_credits >= 0",
+        name="ck_billing_usage_items_quoted_nonnegative",
+    ),
+    CheckConstraint(
         "supplier_cost_fen >= 0",
         name="ck_billing_usage_items_supplier_cost_nonnegative",
+    ),
+    CheckConstraint(
+        "billability IN ('unknown', 'billable', 'not_billable')",
+        name="ck_billing_usage_items_billability",
     ),
 )
 
@@ -857,6 +906,12 @@ Index(
     unique=True,
 )
 Index(
+    "uq_billing_usage_orders_source",
+    billing_usage_orders.c.source_type,
+    billing_usage_orders.c.source_id,
+    unique=True,
+)
+Index(
     "idx_billing_usage_orders_wallet_status",
     billing_usage_orders.c.wallet_id,
     billing_usage_orders.c.status,
@@ -867,6 +922,12 @@ Index(
     billing_usage_orders.c.supplier_reference,
 )
 Index("idx_billing_usage_items_order", billing_usage_items.c.usage_order_id)
+Index(
+    "uq_billing_usage_items_order_item_key",
+    billing_usage_items.c.usage_order_id,
+    billing_usage_items.c.item_key,
+    unique=True,
+)
 
 
 def create_all(engine: Engine) -> None:
@@ -875,6 +936,7 @@ def create_all(engine: Engine) -> None:
     _ensure_open_api_publication_binding_columns(engine)
     _ensure_knowledge_metadata_columns(engine)
     _ensure_billing_usage_order_columns(engine)
+    _ensure_open_api_billing_columns(engine)
     _ensure_billing_bigint_columns(engine)
     _ensure_billing_constraints(engine)
     _backfill_personal_wallets(engine)
@@ -939,22 +1001,24 @@ def _ensure_billing_bigint_columns(engine: Engine) -> None:
             "available_credits",
             "held_credits",
         ),
-        "billing_ledger_entries": ("credits",),
+        "billing_ledger_entries": ("credit_delta", "cash_delta_fen"),
         "billing_ledger_allocations": ("credits",),
-        "billing_price_rules": (
-            "input_credits_per_million",
-            "output_credits_per_million",
-            "credits_per_unit",
-            "fixed_credits",
-        ),
         "billing_usage_orders": (
             "quoted_credits",
+            "budget_credits",
             "held_credits",
             "captured_credits",
             "released_credits",
+            "reconciling_credits",
+        ),
+        "billing_usage_items": (
+            "input_tokens",
+            "output_tokens",
+            "quantity",
+            "quoted_credits",
+            "charged_credits",
             "supplier_cost_fen",
         ),
-        "billing_usage_items": ("quantity", "credits"),
     }
     with engine.begin() as conn:
         for table_name, column_names in columns.items():
@@ -982,6 +1046,122 @@ def _ensure_billing_usage_order_columns(engine: Engine) -> None:
                 text(
                     "ALTER TABLE billing_usage_orders ADD COLUMN "
                     "billability VARCHAR NOT NULL DEFAULT 'unknown'",
+                ),
+            )
+
+
+def _ensure_open_api_billing_columns(engine: Engine) -> None:
+    """Add OpenAPI billing bridge columns without rewriting history."""
+    additions = {
+        "open_api_invocations": {
+            "billing_usage_order_id": (
+                "ALTER TABLE open_api_invocations ADD COLUMN "
+                "billing_usage_order_id VARCHAR"
+            ),
+            "billing_status": (
+                "ALTER TABLE open_api_invocations ADD COLUMN billing_status "
+                "VARCHAR NOT NULL DEFAULT 'pending'"
+            ),
+            "quoted_credits": (
+                "ALTER TABLE open_api_invocations ADD COLUMN quoted_credits "
+                "BIGINT NOT NULL DEFAULT 0"
+            ),
+            "captured_credits": (
+                "ALTER TABLE open_api_invocations ADD COLUMN captured_credits "
+                "BIGINT NOT NULL DEFAULT 0"
+            ),
+            "released_credits": (
+                "ALTER TABLE open_api_invocations ADD COLUMN released_credits "
+                "BIGINT NOT NULL DEFAULT 0"
+            ),
+            "billing_error_code": (
+                "ALTER TABLE open_api_invocations ADD COLUMN "
+                "billing_error_code VARCHAR"
+            ),
+        },
+        "billing_usage_orders": {
+            "source_type": (
+                "ALTER TABLE billing_usage_orders ADD COLUMN source_type VARCHAR"
+            ),
+            "source_id": (
+                "ALTER TABLE billing_usage_orders ADD COLUMN source_id VARCHAR"
+            ),
+            "budget_credits": (
+                "ALTER TABLE billing_usage_orders ADD COLUMN budget_credits "
+                "BIGINT NOT NULL DEFAULT 0"
+            ),
+            "released_credits": (
+                "ALTER TABLE billing_usage_orders ADD COLUMN released_credits "
+                "BIGINT NOT NULL DEFAULT 0"
+            ),
+            "reconciling_credits": (
+                "ALTER TABLE billing_usage_orders ADD COLUMN "
+                "reconciling_credits BIGINT NOT NULL DEFAULT 0"
+            ),
+        },
+        "billing_usage_items": {
+            "item_key": (
+                "ALTER TABLE billing_usage_items ADD COLUMN item_key VARCHAR"
+            ),
+            "billability": (
+                "ALTER TABLE billing_usage_items ADD COLUMN billability "
+                "VARCHAR NOT NULL DEFAULT 'unknown'"
+            ),
+            "quoted_credits": (
+                "ALTER TABLE billing_usage_items ADD COLUMN quoted_credits "
+                "BIGINT NOT NULL DEFAULT 0"
+            ),
+            "price_snapshot_json": (
+                "ALTER TABLE billing_usage_items ADD COLUMN "
+                "price_snapshot_json TEXT NOT NULL DEFAULT '{}'"
+            ),
+            "started_at": (
+                "ALTER TABLE billing_usage_items ADD COLUMN started_at DATETIME"
+            ),
+            "finished_at": (
+                "ALTER TABLE billing_usage_items ADD COLUMN finished_at DATETIME"
+            ),
+        },
+    }
+    inspector = inspect(engine)
+    table_names = set(inspector.get_table_names())
+    with engine.begin() as conn:
+        for table_name, columns in additions.items():
+            if table_name not in table_names:
+                continue
+            existing = {
+                column["name"]
+                for column in inspector.get_columns(table_name)
+            }
+            for column_name, ddl in columns.items():
+                if column_name not in existing:
+                    conn.execute(text(ddl))
+
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS "
+                "uq_billing_usage_orders_source "
+                "ON billing_usage_orders (source_type, source_id)",
+            ),
+        )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS "
+                "uq_billing_usage_items_order_item_key "
+                "ON billing_usage_items (usage_order_id, item_key)",
+            ),
+        )
+
+        if engine.dialect.name == "postgresql":
+            conn.execute(
+                text(
+                    "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM "
+                    "pg_constraint WHERE conname = "
+                    "'fk_open_api_invocations_billing_usage_order') THEN "
+                    "ALTER TABLE open_api_invocations ADD CONSTRAINT "
+                    "fk_open_api_invocations_billing_usage_order "
+                    "FOREIGN KEY (billing_usage_order_id) "
+                    "REFERENCES billing_usage_orders (id); END IF; END $$",
                 ),
             )
 

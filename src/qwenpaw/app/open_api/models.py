@@ -88,4 +88,10 @@ class OpenApiInvocation(BaseModel):
     latency_ms: int = 0
     token_summary: dict[str, Any] = Field(default_factory=dict)
     error_summary: str | None = None
+    billing_usage_order_id: str | None = None
+    billing_status: str = "pending"
+    quoted_credits: int = 0
+    captured_credits: int = 0
+    released_credits: int = 0
+    billing_error_code: str | None = None
     created_at: datetime | str | None = None
