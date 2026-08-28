@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 
@@ -62,6 +63,8 @@ class FakeOpenApiRepository:
         self,
         invocation_id: str,
         owner_token: str,
+        *,
+        lease_expires_at,
     ) -> bool:
         row = self.get_invocation(invocation_id)
         if (
@@ -74,8 +77,70 @@ class FakeOpenApiRepository:
             status="running",
             status_code=202,
             execution_owner_token=owner_token,
+            execution_lease_expires_at=lease_expires_at,
         )
         return True
+
+    def renew_invocation_execution(
+        self,
+        invocation_id: str,
+        owner_token: str,
+        *,
+        lease_expires_at,
+        now=None,
+    ) -> bool:
+        row = self.get_invocation(invocation_id)
+        current = now or datetime.now(timezone.utc)
+        current_expiry = (row or {}).get("execution_lease_expires_at")
+        owner_matches = bool(
+            row
+            and row.get("status") == "running"
+            and row.get("execution_owner_token") == owner_token,
+        )
+        expiry_valid = bool(
+            isinstance(current_expiry, datetime)
+            and current_expiry > current,
+        )
+        if (
+            not owner_matches
+            or not expiry_valid
+            or (row or {}).get("terminal_event_json") is not None
+        ):
+            return False
+        assert row is not None
+        row["execution_lease_expires_at"] = lease_expires_at
+        return True
+
+    def finalize_invocation_execution(
+        self,
+        invocation_id: str,
+        owner_token: str,
+        *,
+        status: str,
+        status_code: int,
+        error_summary: str,
+        terminal_event: dict[str, Any],
+        **values,
+    ) -> dict[str, Any] | None:
+        row = self.get_invocation(invocation_id)
+        if (
+            row is None
+            or row.get("execution_owner_token") != owner_token
+            or row.get("terminal_event_json") is not None
+        ):
+            return None
+        row.update(
+            status=status,
+            status_code=status_code,
+            error_summary=error_summary,
+            terminal_event_json=dict(terminal_event),
+            execution_owner_token=None,
+            execution_lease_expires_at=None,
+        )
+        row.update(
+            {key: value for key, value in values.items() if value is not None},
+        )
+        return row
 
     def update_invocation_status(
         self,
@@ -350,16 +415,33 @@ class _FakeBillingExecution:
     meter = None
     insufficient = None
 
-    def __init__(self):
+    def __init__(self, repo, invocation_id, owner_token):
+        self.repo = repo
+        self.invocation_id = invocation_id
+        self.owner_token = owner_token
         self.terminal_snapshot = None
+        self.finalizing = False
+
+    def renew_lease(self):
+        if not self.repo.renew_invocation_execution(
+            self.invocation_id,
+            self.owner_token,
+            lease_expires_at=datetime.now(timezone.utc),
+            now=datetime.now(timezone.utc),
+        ):
+            raise AssertionError("fake execution lease was lost")
 
     def note_stream_ready(self):
         return None
+
+    def begin_finalizing(self):
+        self.finalizing = True
 
     async def wait_for_preflight(self):
         return None
 
     def note_finalized(self, terminal):
+        self.finalizing = True
         self.terminal_snapshot = dict(terminal)
 
     async def wait_for_finalization(self):
@@ -379,8 +461,12 @@ class _FakeBillingRuntime:
             balance=lambda _wallet_id: SimpleNamespace(available=0),
         )
 
-    def execution(self):
-        return _FakeBillingExecution()
+    def execution(self, invocation_id, owner_token, _lease_seconds):
+        return _FakeBillingExecution(
+            self.open_api_repository,
+            invocation_id,
+            owner_token,
+        )
 
 
 @pytest.fixture(autouse=True)

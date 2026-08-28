@@ -9,6 +9,7 @@ import logging
 import os
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncGenerator
 
 from fastapi import APIRouter, HTTPException, Request
@@ -32,6 +33,7 @@ from ..expert_teams import (
     get_latest_expert_team_run_by_chat,
 )
 from ..open_api.runtime import (
+    ExecutionLeaseLostError,
     OpenMessageRequest,
     PreparedOpenRun,
     create_open_api_billing_runtime,
@@ -127,14 +129,34 @@ async def post_open_message(
     invocation_id = billing_session.invocation_id
     run_key = f"open-api:{invocation_id}"
     execution_owner_token = str(uuid.uuid4())
+    lease_seconds = _positive_seconds_env(
+        "DCLAW_OPEN_API_EXECUTION_LEASE_SECONDS",
+        30.0,
+    )
+    heartbeat_seconds = _positive_seconds_env(
+        "DCLAW_OPEN_API_EXECUTION_HEARTBEAT_SECONDS",
+        10.0,
+    )
     owns_execution = False
     if not billing_session.replayed:
         owns_execution = (
             billing.open_api_repository.claim_invocation_execution(
                 invocation_id,
                 execution_owner_token,
+                lease_expires_at=datetime.now(timezone.utc)
+                + timedelta(seconds=lease_seconds),
             )
         )
+
+    if billing_session.replayed:
+        existing = billing.open_api_repository.get_invocation(invocation_id)
+        if isinstance((existing or {}).get("terminal_event_json"), dict):
+            return _terminal_replay_response(
+                billing,
+                billing_session,
+                None,
+                str((existing or {}).get("expert_team_run_id") or ""),
+            )
 
     prepared: PreparedOpenRun | None = None
     expert_team_run_id = ""
@@ -270,7 +292,11 @@ async def post_open_message(
                     ),
                 )
 
-        execution = billing.execution()
+        execution = billing.execution(
+            invocation_id,
+            execution_owner_token,
+            lease_seconds,
+        )
 
         async def limited_stream_fn(stream_payload):
             stream_started_at = time.monotonic()
@@ -278,6 +304,13 @@ async def post_open_message(
             stream_exception: Exception | None = None
             cancelled = False
             terminal: dict[str, Any] | None = None
+            heartbeat_task = asyncio.create_task(
+                _execution_heartbeat(
+                    execution,
+                    heartbeat_seconds=heartbeat_seconds,
+                    producer_task=asyncio.current_task(),
+                ),
+            )
             try:
                 with open_api_billing_context(
                     billing_session,
@@ -292,24 +325,35 @@ async def post_open_message(
                 execution.note_insufficient(exc)
             except asyncio.CancelledError:
                 cancelled = True
-                raise
+            except ExecutionLeaseLostError:
+                cancelled = True
             except Exception as exc:  # supplier details stay private
                 stream_exception = exc
                 yield _sse({"error": "internal server error"})
             finally:
                 execution.note_stream_ready()
-                terminal = await _shielded_finalize(
-                    billing,
-                    billing_session,
-                    execution,
-                    stream_started_at=stream_started_at,
-                    stream_failure=stream_failure,
-                    stream_exception=stream_exception,
-                    cancelled=cancelled,
-                    expert_team_run_id=expert_team_run_id,
-                )
+                try:
+                    terminal = await _shielded_finalize(
+                        billing,
+                        billing_session,
+                        execution,
+                        stream_started_at=stream_started_at,
+                        stream_failure=stream_failure,
+                        stream_exception=stream_exception,
+                        cancelled=cancelled,
+                        expert_team_run_id=expert_team_run_id,
+                        execution_owner_token=execution_owner_token,
+                    )
+                finally:
+                    heartbeat_task.cancel()
+                    try:
+                        await heartbeat_task
+                    except asyncio.CancelledError:
+                        pass
             assert terminal is not None
             yield _sse(terminal)
+            if cancelled:
+                raise asyncio.CancelledError
 
         try:
             (
@@ -354,39 +398,28 @@ async def post_open_message(
             except InsufficientUsageCreditsError:
                 await _detach_tracker_queue(tracker, run_key, queue)
                 terminal = await execution.wait_for_finalization()
-                return JSONResponse(
-                    status_code=409,
-                    content={
-                        "code": "insufficient_credits",
-                        "remaining_credits": terminal["remaining_credits"],
-                        "required_credits": terminal[
-                            "required_credits_for_next_step"
-                        ],
-                        "invocation_id": invocation_id,
-                    },
-                    headers={
-                        "X-DClaw-Invocation-Id": invocation_id,
-                        "X-DClaw-Billing-Status": "insufficient_credits",
-                    },
-                )
+                return _snapshot_json_response(terminal)
     except HTTPException as exc:
-        billing.open_api_repository.update_billing_invocation(
-            invocation_id,
-            status="failed",
+        return await _seal_preproducer_failure(
+            billing,
+            billing_session,
+            execution_owner_token,
+            owns_execution=owns_execution,
             status_code=exc.status_code,
-            latency_ms=_latency_ms(started_at),
-            error_summary=str(exc.detail),
+            message=str(exc.detail),
+            started_at=started_at,
         )
-        raise
-    except Exception as exc:
-        billing.open_api_repository.update_billing_invocation(
-            invocation_id,
-            status="failed",
+    except Exception:
+        logger.exception("Open API failed before supplier producer start")
+        return await _seal_preproducer_failure(
+            billing,
+            billing_session,
+            execution_owner_token,
+            owns_execution=owns_execution,
             status_code=500,
-            latency_ms=_latency_ms(started_at),
-            error_summary=str(exc),
+            message="Internal server error",
+            started_at=started_at,
         )
-        raise
 
     current = billing.open_api_repository.get_invocation(invocation_id) or {}
     return _streaming_response(
@@ -403,7 +436,7 @@ async def post_open_message(
 def _terminal_replay_response(
     billing: Any,
     session: Any,
-    prepared: PreparedOpenRun,
+    prepared: PreparedOpenRun | None,
     expert_team_run_id: str,
 ) -> StreamingResponse | JSONResponse:
     invocation = (
@@ -418,39 +451,32 @@ def _terminal_replay_response(
             status_code=503,
             detail="Open API invocation is still finalizing",
         )
-    if invocation.get("billing_error_code") == "insufficient_credits":
-        return JSONResponse(
-            status_code=409,
-            content={
-                "code": "insufficient_credits",
-                "remaining_credits": payload["remaining_credits"],
-                "required_credits": payload["required_credits_for_next_step"],
-                "invocation_id": session.invocation_id,
-            },
-            headers={
-                "X-DClaw-Invocation-Id": session.invocation_id,
-                "X-DClaw-Billing-Status": "insufficient_credits",
-            },
-        )
+    if int(payload.get("http_status") or 200) != 200:
+        return _snapshot_json_response(payload)
 
     async def replay_event() -> AsyncGenerator[str, None]:
         yield _sse(payload)
 
+    sealed_headers = payload.get("headers")
+    response_headers = (
+        {str(key): str(value) for key, value in sealed_headers.items()}
+        if isinstance(sealed_headers, dict)
+        else {}
+    )
+    response_headers.update(
+        {
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-QwenPaw-Chat-Id": prepared.chat_id if prepared else "",
+            "X-QwenPaw-Session-Id": prepared.session_id if prepared else "",
+            "X-QwenPaw-Open-Invocation-Id": session.invocation_id,
+            "X-QwenPaw-Expert-Team-Run-Id": expert_team_run_id,
+        },
+    )
     return StreamingResponse(
         replay_event(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-QwenPaw-Chat-Id": prepared.chat_id,
-            "X-QwenPaw-Session-Id": prepared.session_id,
-            "X-QwenPaw-Open-Invocation-Id": session.invocation_id,
-            "X-QwenPaw-Expert-Team-Run-Id": expert_team_run_id,
-            "X-DClaw-Invocation-Id": session.invocation_id,
-            "X-DClaw-Billing-Status": str(
-                invocation.get("billing_status") or "reconciling",
-            ),
-        },
+        headers=response_headers,
     )
 
 
@@ -463,8 +489,6 @@ def _terminal_billing_payload(
     if not items:
         # No supplier call exists. Seal the bridge order without inventing an
         # item or touching the ledger; this includes initial reserve failure.
-        from datetime import datetime, timezone
-
         from sqlalchemy import update
 
         from ..storage.schema import billing_usage_orders, open_api_invocations
@@ -521,10 +545,13 @@ async def _shielded_finalize(
     stream_exception: Exception | None,
     cancelled: bool,
     expert_team_run_id: str,
+    execution_owner_token: str,
 ) -> dict[str, Any]:
+    # pylint: disable=too-many-statements
     """Finish the durable bridge even when its producer is cancelled."""
 
     async def finalize() -> dict[str, Any]:
+        # pylint: disable=too-many-statements
         invocation = (
             billing.open_api_repository.get_invocation(session.invocation_id)
             or {}
@@ -548,27 +575,55 @@ async def _shielded_finalize(
             status_code = 409
             error_summary = "insufficient credits"
             billing_error_code = "insufficient_credits"
+            public_code = "insufficient_credits"
+            public_message = "Insufficient credits"
+            required_credits = terminal.get(
+                "required_credits_for_next_step",
+            )
         elif cancelled:
             status = "cancelled"
             status_code = 499
             error_summary = "request cancelled"
             billing_error_code = None
+            public_code = "request_cancelled"
+            public_message = "Request cancelled"
+            required_credits = None
         elif stream_exception is not None:
             status = "failed"
             status_code = 500
             error_summary = str(stream_exception)
             billing_error_code = None
+            public_code = "request_failed"
+            public_message = "Internal server error"
+            required_credits = None
         elif stream_failure is not None:
             status, error_summary = stream_failure
             status_code = _stream_failure_status_code(status)
             billing_error_code = None
+            public_code = "request_failed"
+            public_message = "Request failed"
+            required_credits = None
         else:
             status = "succeeded"
             status_code = 200
             error_summary = ""
             billing_error_code = None
-        updated = billing.open_api_repository.update_billing_invocation(
+            public_code = "completed"
+            public_message = "Completed"
+            required_credits = None
+        terminal["status"] = status
+        terminal = _canonical_terminal_snapshot(
+            terminal,
+            http_status=status_code,
+            code=public_code,
+            message=public_message,
+            required_credits=required_credits,
+            billing_status=str(terminal.get("billing_status") or "settled"),
+        )
+        execution.begin_finalizing()
+        updated = billing.open_api_repository.finalize_invocation_execution(
             session.invocation_id,
+            execution_owner_token,
             status=status,
             status_code=status_code,
             latency_ms=_latency_ms(stream_started_at),
@@ -577,9 +632,15 @@ async def _shielded_finalize(
             expert_team_run_id=expert_team_run_id or None,
             terminal_event=terminal,
         )
+        if updated is None:
+            updated = billing.open_api_repository.get_invocation(
+                session.invocation_id,
+            )
         sealed = (updated or {}).get("terminal_event_json")
         if not isinstance(sealed, dict):
-            sealed = terminal
+            raise ExecutionLeaseLostError(
+                "Open API invocation lease was lost before finalization",
+            )
         execution.note_finalized(sealed)
         return sealed
 
@@ -590,6 +651,171 @@ async def _shielded_finalize(
         # Preserve cancellation after the financial/business transition.
         await task
         raise
+
+
+async def _seal_preproducer_failure(
+    billing: Any,
+    session: Any,
+    execution_owner_token: str,
+    *,
+    owns_execution: bool,
+    status_code: int,
+    message: str,
+    started_at: float,
+) -> JSONResponse:
+    """Seal a claimed invocation that exits before its producer starts."""
+    if not owns_execution:
+        invocation = billing.open_api_repository.get_invocation(
+            session.invocation_id,
+        )
+        stored = (invocation or {}).get("terminal_event_json")
+        if isinstance(stored, dict):
+            return _snapshot_json_response(stored)
+        return JSONResponse(
+            status_code=503,
+            content={"code": "invocation_still_running"},
+        )
+
+    financial = _terminal_billing_payload(billing, session, None)
+    public_code = _preproducer_error_code(status_code, message)
+    terminal = _canonical_terminal_snapshot(
+        {
+            "type": "billing.interrupted",
+            "status": "failed",
+            "invocation_id": session.invocation_id,
+            "billing_status": financial.get("billing_status", "settled"),
+        },
+        http_status=status_code,
+        code=public_code,
+        message=message if status_code < 500 else "Internal server error",
+        required_credits=None,
+        billing_status=str(financial.get("billing_status") or "settled"),
+    )
+    sealed = billing.open_api_repository.finalize_invocation_execution(
+        session.invocation_id,
+        execution_owner_token,
+        status="failed",
+        status_code=status_code,
+        latency_ms=_latency_ms(started_at),
+        error_summary=terminal["message"],
+        billing_status=str(financial.get("billing_status") or "settled"),
+        terminal_event=terminal,
+    )
+    if sealed is None:
+        await _wait_for_durable_terminal(
+            billing.open_api_repository,
+            session.invocation_id,
+        )
+        sealed = billing.open_api_repository.get_invocation(
+            session.invocation_id,
+        )
+    snapshot = (sealed or {}).get("terminal_event_json")
+    if not isinstance(snapshot, dict):
+        raise HTTPException(
+            status_code=503,
+            detail="Open API invocation is still finalizing",
+        )
+    return _snapshot_json_response(snapshot)
+
+
+async def _execution_heartbeat(
+    execution: Any,
+    *,
+    heartbeat_seconds: float,
+    producer_task: asyncio.Task | None,
+) -> None:
+    consecutive_failures = 0
+    while True:
+        if execution.finalizing:
+            return
+        await asyncio.sleep(heartbeat_seconds)
+        if execution.finalizing:
+            return
+        try:
+            execution.renew_lease()
+        except ExecutionLeaseLostError:
+            execution.note_lease_lost()
+            if producer_task is not None:
+                producer_task.cancel()
+            return
+        except Exception:
+            consecutive_failures += 1
+            logger.exception("Open API execution lease heartbeat failed")
+            if consecutive_failures >= 2:
+                execution.note_lease_lost()
+                if producer_task is not None:
+                    producer_task.cancel()
+                return
+        else:
+            consecutive_failures = 0
+
+
+def _canonical_terminal_snapshot(
+    terminal: dict[str, Any],
+    *,
+    http_status: int,
+    code: str,
+    message: str,
+    required_credits: int | None,
+    billing_status: str,
+) -> dict[str, Any]:
+    snapshot = dict(terminal)
+    invocation_id = str(snapshot["invocation_id"])
+    header_status = (
+        "insufficient_credits"
+        if code == "insufficient_credits"
+        else billing_status
+    )
+    snapshot.update(
+        {
+            "http_status": int(http_status),
+            "code": code,
+            "message": message,
+            "required_credits": required_credits,
+            "headers": {
+                "X-DClaw-Invocation-Id": invocation_id,
+                "X-DClaw-Billing-Status": header_status,
+            },
+        },
+    )
+    return snapshot
+
+
+def _snapshot_json_response(snapshot: dict[str, Any]) -> JSONResponse:
+    headers = snapshot.get("headers")
+    return JSONResponse(
+        status_code=int(snapshot.get("http_status") or 200),
+        content=snapshot,
+        headers=(
+            {str(key): str(value) for key, value in headers.items()}
+            if isinstance(headers, dict)
+            else None
+        ),
+    )
+
+
+def _preproducer_error_code(status_code: int, message: str) -> str:
+    if status_code == 429:
+        return "task_limit_exceeded"
+    if status_code == 404 and "target" in message.lower():
+        return "open_target_unavailable"
+    if status_code == 404:
+        return "not_found"
+    if status_code == 400:
+        return "invalid_request"
+    if status_code == 401:
+        return "unauthorized"
+    if status_code == 403:
+        return "forbidden"
+    return "request_failed"
+
+
+def _positive_seconds_env(name: str, default: float) -> float:
+    try:
+        value = float(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        return default
+    return max(0.01, value)
 
 
 async def _attach_tracker_queue(tracker: Any, run_key: str) -> Any | None:

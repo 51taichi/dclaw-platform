@@ -10,7 +10,7 @@ from threading import Barrier
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine, func, inspect, select, text
+from sqlalchemy import create_engine, func, inspect, select, text, update
 from sqlalchemy.schema import CreateSchema, DropSchema
 
 import qwenpaw.app.storage.schema as schema_module
@@ -39,6 +39,7 @@ from qwenpaw.app.storage.repos.billing_repo import BillingRepository
 from qwenpaw.app.storage.repos.open_api_repo import SqlAlchemyOpenApiRepository
 from qwenpaw.app.storage.repos.price_catalog_repo import PriceCatalogRepository
 from qwenpaw.app.storage.schema import (
+    billing_usage_items,
     billing_wallets,
     billing_usage_orders,
     create_all,
@@ -214,6 +215,7 @@ def test_postgresql_invocation_execution_claim_has_one_winner(
         _command(identity, "postgres-execution-claim"),
     )
     repository = SqlAlchemyOpenApiRepository(postgres_open_api_engine)
+    lease_expires_at = datetime.now(timezone.utc) + timedelta(seconds=30)
     start = Barrier(8)
 
     def claim(index: int) -> bool:
@@ -221,6 +223,7 @@ def test_postgresql_invocation_execution_claim_has_one_winner(
         return repository.claim_invocation_execution(
             session.invocation_id,
             f"worker-{index}",
+            lease_expires_at=lease_expires_at,
         )
 
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -232,13 +235,143 @@ def test_postgresql_invocation_execution_claim_has_one_winner(
     assert invocation["status"] == "running"
     assert invocation["execution_owner_token"].startswith("worker-")
     assert invocation["execution_claimed_at"] is not None
+    assert invocation["execution_lease_expires_at"] == lease_expires_at
+
+
+@pytest.mark.integration
+def test_postgresql_expired_execution_lease_has_one_takeover_winner(
+    postgres_open_api_engine,
+):
+    identity = "execution-takeover"
+    coordinator = _coordinator(postgres_open_api_engine, identity)
+    session = coordinator.begin_invocation(
+        _command(identity, "postgres-execution-takeover"),
+    )
+    repository = SqlAlchemyOpenApiRepository(postgres_open_api_engine)
+    now = datetime.now(timezone.utc)
+    assert repository.claim_invocation_execution(
+        session.invocation_id,
+        "original-worker",
+        lease_expires_at=now + timedelta(seconds=30),
+    )
+    assert not repository.takeover_invocation_execution(
+        session.invocation_id,
+        "premature-worker",
+        now=now + timedelta(seconds=29),
+        lease_expires_at=now + timedelta(seconds=60),
+    )
+    with postgres_open_api_engine.begin() as conn:
+        conn.execute(
+            update(open_api_invocations)
+            .where(open_api_invocations.c.id == session.invocation_id)
+            .values(execution_lease_expires_at=now - timedelta(seconds=1)),
+        )
+    start = Barrier(8)
+
+    def takeover(index: int) -> bool:
+        start.wait()
+        return SqlAlchemyOpenApiRepository(
+            postgres_open_api_engine,
+        ).takeover_invocation_execution(
+            session.invocation_id,
+            f"replacement-{index}",
+            now=now,
+            lease_expires_at=now + timedelta(seconds=30),
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(takeover, range(8)))
+    assert results.count(True) == 1
+    invocation = repository.get_invocation(session.invocation_id)
+    winner = str(invocation["execution_owner_token"])
+    assert (
+        repository.finalize_invocation_execution(
+            session.invocation_id,
+            "original-worker",
+            now=now + timedelta(seconds=1),
+            status="failed",
+            status_code=500,
+            error_summary="stale",
+            terminal_event={"type": "billing.completed", "winner": "stale"},
+        )
+        is None
+    )
+    sealed = repository.finalize_invocation_execution(
+        session.invocation_id,
+        winner,
+        now=now + timedelta(seconds=1),
+        status="succeeded",
+        status_code=200,
+        error_summary="",
+        terminal_event={"type": "billing.completed", "winner": winner},
+    )
+    assert sealed is not None
+    assert sealed["terminal_event_json"]["winner"] == winner
+    assert sealed["execution_owner_token"] is None
 
 
 @pytest.mark.integration
 def test_postgresql_legacy_bridge_schema_adds_execution_state(
     postgres_open_api_engine,
 ):
+    identity = "legacy-execution-outcome"
+    session = _coordinator(
+        postgres_open_api_engine, identity,
+    ).begin_invocation(
+        _command(identity, "legacy-execution-outcome"),
+    )
     with postgres_open_api_engine.begin() as conn:
+        conn.execute(
+            billing_usage_items.insert(),
+            [
+                {
+                    "id": "legacy-captured",
+                    "usage_order_id": session.usage_order_id,
+                    "item_key": "captured",
+                    "status": "captured",
+                    "provider_id": "provider",
+                    "model_key": "model",
+                    "capability": "chat",
+                    "supplier_evidence_json": "{}",
+                    "execution_outcome": "pending",
+                },
+                {
+                    "id": "legacy-released",
+                    "usage_order_id": session.usage_order_id,
+                    "item_key": "released",
+                    "status": "released",
+                    "provider_id": "provider",
+                    "model_key": "model",
+                    "capability": "chat",
+                    "supplier_evidence_json": "{}",
+                    "execution_outcome": "pending",
+                },
+                {
+                    "id": "legacy-recon-success",
+                    "usage_order_id": session.usage_order_id,
+                    "item_key": "recon-success",
+                    "status": "reconciling",
+                    "provider_id": "provider",
+                    "model_key": "model",
+                    "capability": "chat",
+                    "supplier_evidence_json": '{"response_class":"success"}',
+                    "execution_outcome": "pending",
+                },
+                {
+                    "id": "legacy-recon-pending",
+                    "usage_order_id": session.usage_order_id,
+                    "item_key": "recon-pending",
+                    "status": "reconciling",
+                    "provider_id": "provider",
+                    "model_key": "model",
+                    "capability": "chat",
+                    "supplier_evidence_json": (
+                        '{"response_class":"provider_call_started"}'
+                    ),
+                    "execution_outcome": "pending",
+                },
+            ],
+        )
         conn.execute(
             text(
                 "ALTER TABLE billing_usage_items DROP CONSTRAINT "
@@ -254,12 +387,14 @@ def test_postgresql_legacy_bridge_schema_adds_execution_state(
         for column in (
             "execution_owner_token",
             "execution_claimed_at",
+            "execution_lease_expires_at",
             "expert_team_run_id",
             "terminal_event_json",
         ):
             conn.execute(
                 text(
-                    f"ALTER TABLE open_api_invocations DROP COLUMN {column}",
+                    "ALTER TABLE open_api_invocations DROP COLUMN "
+                    f"IF EXISTS {column}",
                 ),
             )
 
@@ -278,6 +413,7 @@ def test_postgresql_legacy_bridge_schema_adds_execution_state(
     assert {
         "execution_owner_token",
         "execution_claimed_at",
+        "execution_lease_expires_at",
         "expert_team_run_id",
         "terminal_event_json",
     } <= invocation_columns
@@ -286,6 +422,21 @@ def test_postgresql_legacy_bridge_schema_adds_execution_state(
         for column in inspector.get_columns("billing_usage_items")
     }
     assert "execution_outcome" in item_columns
+    with postgres_open_api_engine.connect() as conn:
+        outcomes = dict(
+            conn.execute(
+                text(
+                    "SELECT id, execution_outcome FROM billing_usage_items "
+                    "WHERE id LIKE 'legacy-%'",
+                ),
+            ).all(),
+        )
+    assert outcomes == {
+        "legacy-captured": "succeeded",
+        "legacy-recon-pending": "pending",
+        "legacy-recon-success": "succeeded",
+        "legacy-released": "failed",
+    }
 
 
 @pytest.mark.integration

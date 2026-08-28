@@ -6,10 +6,11 @@ import asyncio
 from contextvars import ContextVar, Token
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import os
 import re
 from typing import Any
+from uuid import uuid4
 
 from agentscope_runtime.engine.schemas.agent_schemas import (
     ContentType,
@@ -114,8 +115,22 @@ class OpenApiBillingRuntime:
     budget_credits: int
     default_max_output_tokens: int = 1024
 
-    def execution(self) -> "OpenApiBillingExecution":
-        return OpenApiBillingExecution(self)
+    def execution(
+        self,
+        invocation_id: str,
+        owner_token: str,
+        lease_seconds: float,
+    ) -> "OpenApiBillingExecution":
+        return OpenApiBillingExecution(
+            self,
+            invocation_id,
+            owner_token,
+            lease_seconds,
+        )
+
+
+class ExecutionLeaseLostError(RuntimeError):
+    """The current worker no longer owns the invocation execution."""
 
 
 class _RequestBillingMeter(BillingModelMeter):
@@ -131,6 +146,7 @@ class _RequestBillingMeter(BillingModelMeter):
         self._execution = execution
 
     def before_call(self, **kwargs):
+        self._execution.renew_lease()
         try:
             call = super().before_call(**kwargs)
         except InsufficientUsageCreditsError as exc:
@@ -144,8 +160,19 @@ class _RequestBillingMeter(BillingModelMeter):
 class OpenApiBillingExecution:
     """Per-invocation preflight signal and financial meter."""
 
-    def __init__(self, runtime: OpenApiBillingRuntime) -> None:
+    def __init__(
+        self,
+        runtime: OpenApiBillingRuntime,
+        invocation_id: str,
+        owner_token: str,
+        lease_seconds: float,
+    ) -> None:
         self.runtime = runtime
+        self.invocation_id = invocation_id
+        self.owner_token = owner_token
+        self.lease_seconds = lease_seconds
+        self.lease_lost = False
+        self.finalizing = False
         self.meter = _RequestBillingMeter(runtime, self)
         self._preflight_ready = asyncio.Event()
         self._initial_failure: InsufficientUsageCreditsError | None = None
@@ -153,6 +180,28 @@ class OpenApiBillingExecution:
         self.reservation_succeeded = False
         self._finalized = asyncio.Event()
         self.terminal_snapshot: dict[str, Any] | None = None
+
+    def renew_lease(self) -> None:
+        if (
+            self.lease_lost
+            or not self.runtime.open_api_repository.renew_invocation_execution(
+                self.invocation_id,
+                self.owner_token,
+                lease_expires_at=datetime.now(timezone.utc)
+                + timedelta(seconds=self.lease_seconds),
+            )
+        ):
+            self.lease_lost = True
+            raise ExecutionLeaseLostError(
+                "Open API invocation execution lease was lost",
+            )
+
+    def note_lease_lost(self) -> None:
+        self.lease_lost = True
+
+    def begin_finalizing(self) -> None:
+        """Hand lease ownership from heartbeat to the atomic finalizer."""
+        self.finalizing = True
 
     def note_first_reservation(self) -> None:
         if not self.reservation_succeeded:
@@ -175,6 +224,7 @@ class OpenApiBillingExecution:
             raise self._initial_failure
 
     def note_finalized(self, terminal: dict[str, Any]) -> None:
+        self.finalizing = True
         self.terminal_snapshot = dict(terminal)
         self._finalized.set()
 
@@ -234,6 +284,7 @@ def open_api_billing_context(
 def recover_open_api_billing(
     runtime: OpenApiBillingRuntime | None = None,
 ) -> int:
+    # pylint: disable=too-many-branches,too-many-statements
     """Idempotently close incomplete OpenAPI invocation/order bridge pairs."""
     active = runtime or create_open_api_billing_runtime()
     engine = active.repository.engine
@@ -245,6 +296,9 @@ def recover_open_api_billing(
                     billing_usage_orders.c.wallet_id.label("wallet_id"),
                     billing_usage_orders.c.status.label("order_status"),
                     open_api_invocations.c.id.label("invocation_id"),
+                    open_api_invocations.c.terminal_event_json.label(
+                        "terminal_event_json",
+                    ),
                 )
                 .join(
                     open_api_invocations,
@@ -271,6 +325,60 @@ def recover_open_api_billing(
 
     recovered = 0
     for row in rows:
+        invocation_id = str(row["invocation_id"])
+        invocation = active.open_api_repository.get_invocation(invocation_id)
+        if invocation is None:
+            continue
+        terminal = invocation.get("terminal_event_json")
+        if isinstance(terminal, dict):
+            order_id = str(row["order_id"])
+            order_before = active.usage_service.get_order(order_id)
+            durable_items = active.usage_service.list_items(order_id)
+            order_changed = False
+            if durable_items and all(
+                str(item.get("status")) != "held" for item in durable_items
+            ):
+                order_after = active.usage_service.reproject_open_api_order(
+                    order_id,
+                )
+                order_changed = any(
+                    order_before.get(key) != order_after.get(key)
+                    for key in (
+                        "status",
+                        "captured_credits",
+                        "released_credits",
+                        "reconciling_credits",
+                    )
+                )
+            state = _state_from_sealed_terminal(terminal)
+            state_changed = (
+                active.open_api_repository.repair_invocation_from_terminal(
+                    invocation_id,
+                    terminal_event=terminal,
+                    status=state["status"],
+                    status_code=state["status_code"],
+                    error_summary=state["error_summary"],
+                    billing_error_code=state["billing_error_code"],
+                )
+            )
+            if state_changed or order_changed:
+                recovered += 1
+            continue
+
+        owner_token = f"recovery:{uuid4().hex}"
+        now = datetime.now(timezone.utc)
+        lease_seconds = _positive_float_env(
+            "DCLAW_OPEN_API_EXECUTION_LEASE_SECONDS",
+            30.0,
+        )
+        if not active.open_api_repository.takeover_invocation_execution(
+            invocation_id,
+            owner_token,
+            now=now,
+            lease_expires_at=now + timedelta(seconds=lease_seconds),
+        ):
+            continue
+
         order_id = str(row["order_id"])
         with engine.connect() as conn:
             items = (
@@ -285,6 +393,13 @@ def recover_open_api_billing(
         for item in items:
             if str(item["status"]) != "held":
                 continue
+            if not active.open_api_repository.renew_invocation_execution(
+                invocation_id,
+                owner_token,
+                lease_expires_at=datetime.now(timezone.utc)
+                + timedelta(seconds=lease_seconds),
+            ):
+                break
             active.usage_service.settle_model_call(
                 SettleModelCall(
                     usage_order_id=order_id,
@@ -301,7 +416,6 @@ def recover_open_api_billing(
                     },
                 ),
             )
-            recovered += 1
 
         items = active.usage_service.list_items(order_id)
         if not items:
@@ -321,10 +435,6 @@ def recover_open_api_billing(
             active.usage_service.reproject_open_api_order(order_id)
 
         order = active.usage_service.get_order(order_id)
-        invocation_id = str(row["invocation_id"])
-        invocation = active.open_api_repository.get_invocation(invocation_id)
-        if invocation is None:
-            continue
         succeeded = sum(
             1
             for item in items
@@ -342,34 +452,77 @@ def recover_open_api_billing(
             if succeeded
             else "failed"
         )
-        terminal = invocation.get("terminal_event_json")
-        if not isinstance(terminal, dict):
-            balance = active.repository.balance(str(row["wallet_id"]))
-            billing_status = str(order["status"])
-            if billing_status == "settled" and int(
-                order["captured_credits"],
-            ):
-                billing_status = "captured"
-            terminal = {
-                "type": "billing.completed",
-                "invocation_id": invocation_id,
-                "credits_used": int(order["captured_credits"]),
-                "credits_remaining": balance.available,
-                "billing_status": billing_status,
-            }
-        active.open_api_repository.update_billing_invocation(
+        balance = active.repository.balance(str(row["wallet_id"]))
+        durable_billing_status = str(order["status"])
+        terminal_billing_status = durable_billing_status
+        if durable_billing_status == "settled" and int(
+            order["captured_credits"],
+        ):
+            terminal_billing_status = "captured"
+        status_code = 200 if status == "succeeded" else 500
+        error_summary = (
+            ""
+            if status == "succeeded"
+            else "request interrupted by process restart"
+        )
+        code = "completed" if status == "succeeded" else "request_interrupted"
+        terminal = {
+            "type": "billing.completed",
+            "invocation_id": invocation_id,
+            "credits_used": int(order["captured_credits"]),
+            "credits_remaining": balance.available,
+            "billing_status": terminal_billing_status,
+            "status": status,
+            "http_status": status_code,
+            "code": code,
+            "message": error_summary or "request completed",
+            "required_credits": None,
+            "headers": {
+                "X-DClaw-Invocation-Id": invocation_id,
+                "X-DClaw-Billing-Status": terminal_billing_status,
+            },
+        }
+        finalized = active.open_api_repository.finalize_invocation_execution(
             invocation_id,
+            owner_token,
             status=status,
-            status_code=200 if status == "succeeded" else 500,
-            error_summary=(
-                ""
-                if status == "succeeded"
-                else "request interrupted by process restart"
-            ),
+            status_code=status_code,
+            error_summary=error_summary,
+            billing_status=durable_billing_status,
+            billing_error_code=None if status == "succeeded" else code,
             terminal_event=terminal,
         )
-        recovered += 1
+        if finalized is not None:
+            recovered += 1
     return recovered
+
+
+def _state_from_sealed_terminal(terminal: dict[str, Any]) -> dict[str, Any]:
+    status_code = int(terminal.get("http_status") or 200)
+    status = str(terminal.get("status") or "").strip()
+    if status not in {
+        "succeeded",
+        "partially_completed",
+        "failed",
+        "cancelled",
+    }:
+        status = "succeeded" if status_code < 400 else "failed"
+    message = str(terminal.get("message") or "")
+    code = str(terminal.get("code") or "").strip() or None
+    return {
+        "status": status,
+        "status_code": status_code,
+        "error_summary": "" if status == "succeeded" else message,
+        "billing_error_code": None if status == "succeeded" else code,
+    }
+
+
+def _positive_float_env(name: str, default: float) -> float:
+    try:
+        value = float(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        return default
+    return value if value > 0 else default
 
 
 def _billing_mode() -> str:

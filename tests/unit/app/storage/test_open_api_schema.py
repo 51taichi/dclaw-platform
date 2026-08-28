@@ -106,6 +106,7 @@ def test_open_api_billing_columns_exist(tmp_path):
             "billing_error_code",
             "execution_owner_token",
             "execution_claimed_at",
+            "execution_lease_expires_at",
             "expert_team_run_id",
             "terminal_event_json",
         } <= invocations
@@ -252,6 +253,26 @@ def test_open_api_billing_upgrade_is_idempotent_and_preserves_history(
             )
             conn.execute(
                 text(
+                    "INSERT INTO billing_usage_items ("
+                    "id, usage_order_id, status, provider_id, model_key, "
+                    "capability, input_tokens, output_tokens, quantity, "
+                    "charged_credits, supplier_cost_fen, "
+                    "supplier_evidence_json) VALUES "
+                    "('historic-captured', 'historic-order', 'captured', "
+                    "'provider', 'model', 'chat', 1, 1, 0, 1, 0, '{}'), "
+                    "('historic-released', 'historic-order', 'released', "
+                    "'provider', 'model', 'chat', 0, 0, 0, 0, 0, '{}'), "
+                    "('historic-recon-success', 'historic-order', "
+                    "'reconciling', 'provider', 'model', 'chat', 1, 1, 0, "
+                    '0, 0, \'{"response_class":"success"}\'), '
+                    "('historic-recon-pending', 'historic-order', "
+                    "'reconciling', 'provider', 'model', 'chat', 0, 0, 0, "
+                    "0, 0, "
+                    '\'{"response_class":"provider_call_started"}\')',
+                ),
+            )
+            conn.execute(
+                text(
                     "INSERT INTO token_usage_logs "
                     "(id, model_name, prompt_tokens, completion_tokens) "
                     "VALUES ('token-before-cutover', 'legacy-model', 7, 11)",
@@ -290,6 +311,7 @@ def test_open_api_billing_upgrade_is_idempotent_and_preserves_history(
             "billing_error_code",
             "execution_owner_token",
             "execution_claimed_at",
+            "execution_lease_expires_at",
             "expert_team_run_id",
             "terminal_event_json",
         } <= invocation_columns
@@ -396,6 +418,21 @@ def test_open_api_billing_upgrade_is_idempotent_and_preserves_history(
                     "WHERE id = 'historic-item'"
                 ),
             ).one() == (None, "pending")
+            assert dict(
+                conn.execute(
+                    text(
+                        "SELECT id, execution_outcome "
+                        "FROM billing_usage_items WHERE id LIKE "
+                        "'historic-%'",
+                    ),
+                ).all(),
+            ) == {
+                "historic-captured": "succeeded",
+                "historic-item": "pending",
+                "historic-recon-pending": "pending",
+                "historic-recon-success": "succeeded",
+                "historic-released": "failed",
+            }
 
             _insert_invocation_dependencies(conn)
             with pytest.raises(IntegrityError):

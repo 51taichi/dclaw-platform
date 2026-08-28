@@ -327,6 +327,7 @@ open_api_invocations = Table(
     Column("billing_error_code", String),
     Column("execution_owner_token", String),
     Column("execution_claimed_at", DateTime(timezone=True)),
+    Column("execution_lease_expires_at", DateTime(timezone=True)),
     Column("expert_team_run_id", String),
     Column("terminal_event_json", Text),
     Column("created_at", DateTime(timezone=True), server_default=func.now()),
@@ -1117,6 +1118,10 @@ def _ensure_open_api_billing_columns(engine: Engine) -> None:
                 "ALTER TABLE open_api_invocations ADD COLUMN "
                 f"execution_claimed_at {datetime_type}"
             ),
+            "execution_lease_expires_at": (
+                "ALTER TABLE open_api_invocations ADD COLUMN "
+                f"execution_lease_expires_at {datetime_type}"
+            ),
             "expert_team_run_id": (
                 "ALTER TABLE open_api_invocations ADD COLUMN "
                 "expert_team_run_id VARCHAR"
@@ -1178,6 +1183,7 @@ def _ensure_open_api_billing_columns(engine: Engine) -> None:
     }
     inspector = inspect(engine)
     existing_table_names = set(inspector.get_table_names())
+    execution_outcome_added = False
     with engine.begin() as conn:
         for table_name, columns in additions.items():
             if table_name not in existing_table_names:
@@ -1188,6 +1194,14 @@ def _ensure_open_api_billing_columns(engine: Engine) -> None:
             for column_name, ddl in columns.items():
                 if column_name not in existing:
                     conn.execute(text(ddl))
+                    if (
+                        table_name == "billing_usage_items"
+                        and column_name == "execution_outcome"
+                    ):
+                        execution_outcome_added = True
+
+    if execution_outcome_added:
+        _backfill_legacy_execution_outcomes(engine)
 
     _validate_open_api_billing_history(engine)
     if (
@@ -1198,6 +1212,25 @@ def _ensure_open_api_billing_columns(engine: Engine) -> None:
     elif engine.dialect.name == "postgresql":
         _ensure_postgresql_open_api_billing_constraints(engine)
     _ensure_open_api_billing_indexes(engine)
+
+
+def _backfill_legacy_execution_outcomes(engine: Engine) -> None:
+    """Derive outcome only for rows predating the outcome column."""
+    compact_evidence = "REPLACE(supplier_evidence_json, ' ', '')"
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE billing_usage_items SET execution_outcome = CASE "
+                "WHEN status = 'captured' THEN 'succeeded' "
+                "WHEN status = 'released' THEN 'failed' "
+                "WHEN status = 'reconciling' AND ("
+                f"{compact_evidence} LIKE "
+                '\'%"response_class":"success"%\' OR '
+                f"{compact_evidence} LIKE "
+                '\'%"response_class":"success_without_official_usage"%\''
+                ") THEN 'succeeded' ELSE 'pending' END",
+            ),
+        )
 
 
 def _validate_open_api_billing_history(engine: Engine) -> None:

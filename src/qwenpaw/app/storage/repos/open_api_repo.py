@@ -7,7 +7,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from sqlalchemy import insert, select, update
+from sqlalchemy import insert, or_, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError as SqlAlchemyIntegrityError
 
@@ -23,7 +23,7 @@ from ..schema import (
 from ..settings import get_storage_settings
 
 
-class OpenApiRepository(Protocol):
+class OpenApiRepository(Protocol):  # pylint: disable=too-many-public-methods
     def ensure_tables(self) -> None:
         ...
 
@@ -80,6 +80,57 @@ class OpenApiRepository(Protocol):
         self,
         invocation_id: str,
         owner_token: str,
+        *,
+        lease_expires_at: datetime,
+    ) -> bool:
+        ...
+
+    def renew_invocation_execution(
+        self,
+        invocation_id: str,
+        owner_token: str,
+        *,
+        lease_expires_at: datetime,
+        now: datetime | None = None,
+    ) -> bool:
+        ...
+
+    def takeover_invocation_execution(
+        self,
+        invocation_id: str,
+        owner_token: str,
+        *,
+        lease_expires_at: datetime,
+        now: datetime | None = None,
+    ) -> bool:
+        ...
+
+    def finalize_invocation_execution(
+        self,
+        invocation_id: str,
+        owner_token: str,
+        *,
+        status: str,
+        status_code: int,
+        error_summary: str,
+        terminal_event: dict[str, Any],
+        now: datetime | None = None,
+        latency_ms: int | None = None,
+        billing_status: str | None = None,
+        billing_error_code: str | None = None,
+        expert_team_run_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        ...
+
+    def repair_invocation_from_terminal(
+        self,
+        invocation_id: str,
+        *,
+        terminal_event: dict[str, Any],
+        status: str,
+        status_code: int,
+        error_summary: str,
+        billing_error_code: str | None = None,
     ) -> bool:
         ...
 
@@ -120,7 +171,7 @@ class OpenApiRepository(Protocol):
         ...
 
 
-class SqlAlchemyOpenApiRepository:
+class SqlAlchemyOpenApiRepository:  # pylint: disable=too-many-public-methods
     """SQLAlchemy implementation for Postgres and SQLAlchemy-backed tests."""
 
     def __init__(self, engine: Engine) -> None:
@@ -311,10 +362,13 @@ class SqlAlchemyOpenApiRepository:
         self,
         invocation_id: str,
         owner_token: str,
+        *,
+        lease_expires_at: datetime,
     ) -> bool:
         token = str(owner_token or "").strip()
         if not token:
             raise ValueError("execution owner token must be non-empty")
+        expiry = _future_lease(lease_expires_at)
         with self.engine.begin() as conn:
             result = conn.execute(
                 update(open_api_invocations)
@@ -322,12 +376,161 @@ class SqlAlchemyOpenApiRepository:
                     open_api_invocations.c.id == invocation_id,
                     open_api_invocations.c.status == "accepted",
                     open_api_invocations.c.execution_owner_token.is_(None),
+                    open_api_invocations.c.terminal_event_json.is_(None),
                 )
                 .values(
                     status="running",
                     status_code=202,
                     execution_owner_token=token,
                     execution_claimed_at=_now(),
+                    execution_lease_expires_at=expiry,
+                ),
+            )
+        return result.rowcount == 1
+
+    def renew_invocation_execution(
+        self,
+        invocation_id: str,
+        owner_token: str,
+        *,
+        lease_expires_at: datetime,
+        now: datetime | None = None,
+    ) -> bool:
+        token = _owner_token(owner_token)
+        current = _utc_datetime(now or _now())
+        expiry = _future_lease(lease_expires_at, now=current)
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                update(open_api_invocations)
+                .where(
+                    open_api_invocations.c.id == invocation_id,
+                    open_api_invocations.c.status == "running",
+                    open_api_invocations.c.execution_owner_token == token,
+                    open_api_invocations.c.execution_lease_expires_at
+                    > current,
+                    open_api_invocations.c.terminal_event_json.is_(None),
+                )
+                .values(execution_lease_expires_at=expiry),
+            )
+        return result.rowcount == 1
+
+    def takeover_invocation_execution(
+        self,
+        invocation_id: str,
+        owner_token: str,
+        *,
+        lease_expires_at: datetime,
+        now: datetime | None = None,
+    ) -> bool:
+        token = _owner_token(owner_token)
+        current = _utc_datetime(now or _now())
+        expiry = _future_lease(lease_expires_at, now=current)
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                update(open_api_invocations)
+                .where(
+                    open_api_invocations.c.id == invocation_id,
+                    open_api_invocations.c.status.in_(("accepted", "running")),
+                    open_api_invocations.c.terminal_event_json.is_(None),
+                    or_(
+                        open_api_invocations.c.execution_owner_token.is_(None),
+                        open_api_invocations.c.execution_lease_expires_at.is_(
+                            None,
+                        ),
+                        open_api_invocations.c.execution_lease_expires_at
+                        <= current,
+                    ),
+                )
+                .values(
+                    status="running",
+                    status_code=202,
+                    execution_owner_token=token,
+                    execution_claimed_at=current,
+                    execution_lease_expires_at=expiry,
+                ),
+            )
+        return result.rowcount == 1
+
+    def finalize_invocation_execution(
+        self,
+        invocation_id: str,
+        owner_token: str,
+        *,
+        status: str,
+        status_code: int,
+        error_summary: str,
+        terminal_event: dict[str, Any],
+        now: datetime | None = None,
+        latency_ms: int | None = None,
+        billing_status: str | None = None,
+        billing_error_code: str | None = None,
+        expert_team_run_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        token = _owner_token(owner_token)
+        current = _utc_datetime(now or _now())
+        values: dict[str, Any] = {
+            "status": status,
+            "status_code": int(status_code),
+            "error_summary": error_summary,
+            "terminal_event_json": _json_text(
+                "terminal_event",
+                terminal_event,
+                dict,
+            ),
+            "execution_owner_token": None,
+            "execution_lease_expires_at": None,
+        }
+        for key, value in (
+            ("latency_ms", latency_ms),
+            ("billing_status", billing_status),
+            ("billing_error_code", billing_error_code),
+            ("expert_team_run_id", expert_team_run_id),
+        ):
+            if value is not None:
+                values[key] = value
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                update(open_api_invocations)
+                .where(
+                    open_api_invocations.c.id == invocation_id,
+                    open_api_invocations.c.execution_owner_token == token,
+                    open_api_invocations.c.execution_lease_expires_at
+                    > current,
+                    open_api_invocations.c.terminal_event_json.is_(None),
+                )
+                .values(**values),
+            )
+        if result.rowcount != 1:
+            return None
+        return self._get_invocation(invocation_id)
+
+    def repair_invocation_from_terminal(
+        self,
+        invocation_id: str,
+        *,
+        terminal_event: dict[str, Any],
+        status: str,
+        status_code: int,
+        error_summary: str,
+        billing_error_code: str | None = None,
+    ) -> bool:
+        terminal_json = _json_text("terminal_event", terminal_event, dict)
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                update(open_api_invocations)
+                .where(
+                    open_api_invocations.c.id == invocation_id,
+                    open_api_invocations.c.status.in_(("accepted", "running")),
+                    open_api_invocations.c.terminal_event_json
+                    == terminal_json,
+                )
+                .values(
+                    status=status,
+                    status_code=int(status_code),
+                    error_summary=error_summary,
+                    billing_error_code=billing_error_code,
+                    execution_owner_token=None,
+                    execution_lease_expires_at=None,
                 ),
             )
         return result.rowcount == 1
@@ -435,7 +638,7 @@ class SqlAlchemyOpenApiRepository:
         return _invocation_row(row) if row else None
 
 
-class SqliteOpenApiRepository:
+class SqliteOpenApiRepository:  # pylint: disable=too-many-public-methods
     """SQLite compatibility implementation using the existing sqlite3 module."""
 
     def ensure_tables(self) -> None:
@@ -718,17 +921,150 @@ class SqliteOpenApiRepository:
         self,
         invocation_id: str,
         owner_token: str,
+        *,
+        lease_expires_at: datetime,
     ) -> bool:
-        token = str(owner_token or "").strip()
-        if not token:
-            raise ValueError("execution owner token must be non-empty")
+        token = _owner_token(owner_token)
+        expiry = _future_lease(lease_expires_at)
         cursor = db.get_db().execute(
             "UPDATE open_api_invocations SET status = 'running', "
             "status_code = 202, execution_owner_token = ?, "
-            "execution_claimed_at = CURRENT_TIMESTAMP "
+            "execution_claimed_at = CURRENT_TIMESTAMP, "
+            "execution_lease_expires_at = ? "
             "WHERE id = ? AND status = 'accepted' "
-            "AND execution_owner_token IS NULL",
-            (token, invocation_id),
+            "AND execution_owner_token IS NULL "
+            "AND terminal_event_json IS NULL",
+            (token, expiry, invocation_id),
+        )
+        db.get_db().commit()
+        return cursor.rowcount == 1
+
+    def renew_invocation_execution(
+        self,
+        invocation_id: str,
+        owner_token: str,
+        *,
+        lease_expires_at: datetime,
+        now: datetime | None = None,
+    ) -> bool:
+        token = _owner_token(owner_token)
+        current = _utc_datetime(now or _now())
+        expiry = _future_lease(lease_expires_at, now=current)
+        cursor = db.get_db().execute(
+            "UPDATE open_api_invocations SET execution_lease_expires_at = ? "
+            "WHERE id = ? AND status = 'running' "
+            "AND execution_owner_token = ? "
+            "AND execution_lease_expires_at > ? "
+            "AND terminal_event_json IS NULL",
+            (expiry, invocation_id, token, current),
+        )
+        db.get_db().commit()
+        return cursor.rowcount == 1
+
+    def takeover_invocation_execution(
+        self,
+        invocation_id: str,
+        owner_token: str,
+        *,
+        lease_expires_at: datetime,
+        now: datetime | None = None,
+    ) -> bool:
+        token = _owner_token(owner_token)
+        current = _utc_datetime(now or _now())
+        expiry = _future_lease(lease_expires_at, now=current)
+        cursor = db.get_db().execute(
+            "UPDATE open_api_invocations SET status = 'running', "
+            "status_code = 202, execution_owner_token = ?, "
+            "execution_claimed_at = ?, execution_lease_expires_at = ? "
+            "WHERE id = ? AND status IN ('accepted', 'running') "
+            "AND terminal_event_json IS NULL AND ("
+            "execution_owner_token IS NULL OR "
+            "execution_lease_expires_at IS NULL OR "
+            "execution_lease_expires_at <= ?)",
+            (token, current, expiry, invocation_id, current),
+        )
+        db.get_db().commit()
+        return cursor.rowcount == 1
+
+    def finalize_invocation_execution(
+        self,
+        invocation_id: str,
+        owner_token: str,
+        *,
+        status: str,
+        status_code: int,
+        error_summary: str,
+        terminal_event: dict[str, Any],
+        now: datetime | None = None,
+        latency_ms: int | None = None,
+        billing_status: str | None = None,
+        billing_error_code: str | None = None,
+        expert_team_run_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        token = _owner_token(owner_token)
+        current = _utc_datetime(now or _now())
+        values: list[Any] = [
+            status,
+            int(status_code),
+            error_summary,
+            _json_text("terminal_event", terminal_event, dict),
+        ]
+        assignments = [
+            "status = ?",
+            "status_code = ?",
+            "error_summary = ?",
+            "terminal_event_json = ?",
+            "execution_owner_token = NULL",
+            "execution_lease_expires_at = NULL",
+        ]
+        for key, value in (
+            ("latency_ms", latency_ms),
+            ("billing_status", billing_status),
+            ("billing_error_code", billing_error_code),
+            ("expert_team_run_id", expert_team_run_id),
+        ):
+            if value is not None:
+                assignments.append(f"{key} = ?")
+                values.append(value)
+        values.extend((invocation_id, token, current))
+        cursor = db.get_db().execute(
+            "UPDATE open_api_invocations SET "
+            + ", ".join(assignments)
+            + " WHERE id = ? AND execution_owner_token = ? "
+            "AND execution_lease_expires_at > ? "
+            "AND terminal_event_json IS NULL",
+            tuple(values),
+        )
+        db.get_db().commit()
+        if cursor.rowcount != 1:
+            return None
+        return self._get_invocation(invocation_id)
+
+    def repair_invocation_from_terminal(
+        self,
+        invocation_id: str,
+        *,
+        terminal_event: dict[str, Any],
+        status: str,
+        status_code: int,
+        error_summary: str,
+        billing_error_code: str | None = None,
+    ) -> bool:
+        cursor = db.get_db().execute(
+            "UPDATE open_api_invocations SET status = ?, status_code = ?, "
+            "error_summary = ?, billing_error_code = ?, "
+            "execution_owner_token = NULL, "
+            "execution_lease_expires_at = NULL "
+            "WHERE id = ? AND status IN ('accepted', 'running') "
+            "AND terminal_event_json = ?",
+            (
+                status,
+                int(status_code),
+                error_summary,
+                billing_error_code,
+                invocation_id,
+                _json_text("terminal_event", terminal_event, dict),
+            ),
         )
         db.get_db().commit()
         return cursor.rowcount == 1
@@ -930,6 +1266,13 @@ def _invocation_row(row: Any) -> dict[str, Any]:
         if terminal
         else None
     )
+    for field_name in (
+        "execution_claimed_at",
+        "execution_lease_expires_at",
+    ):
+        value = result.get(field_name)
+        if isinstance(value, datetime):
+            result[field_name] = _utc_datetime(value)
     return result
 
 
@@ -964,6 +1307,30 @@ def _json_value(field_name: str, value: Any, expected_type: type) -> Any:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _utc_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _future_lease(
+    lease_expires_at: datetime,
+    *,
+    now: datetime | None = None,
+) -> datetime:
+    expiry = _utc_datetime(lease_expires_at)
+    if expiry <= _utc_datetime(now or _now()):
+        raise ValueError("execution lease must expire in the future")
+    return expiry
+
+
+def _owner_token(owner_token: str) -> str:
+    token = str(owner_token or "").strip()
+    if not token:
+        raise ValueError("execution owner token must be non-empty")
+    return token
 
 
 def _is_publication_public_id_conflict(exc: Exception) -> bool:
