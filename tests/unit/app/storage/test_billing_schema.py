@@ -7,9 +7,14 @@ from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import BigInteger, Integer, inspect
+from sqlalchemy.dialects import postgresql
 
+import qwenpaw.app.storage.schema as schema_module
 from qwenpaw.app.storage.engine import create_engine_from_settings
-from qwenpaw.app.storage.schema import _ensure_billing_bigint_columns, create_all
+from qwenpaw.app.storage.schema import (
+    _ensure_billing_bigint_columns,
+    create_all,
+)
 from qwenpaw.app.storage.settings import get_storage_settings
 
 
@@ -102,13 +107,17 @@ def test_billing_schema_is_idempotent(sqlite_engine):
         },
         "billing_usage_orders": {
             "quoted_credits",
+            "budget_credits",
             "held_credits",
             "captured_credits",
+            "released_credits",
+            "reconciling_credits",
         },
         "billing_usage_items": {
             "input_tokens",
             "output_tokens",
             "quantity",
+            "quoted_credits",
             "charged_credits",
             "supplier_cost_fen",
         },
@@ -174,7 +183,9 @@ def test_billing_schema_is_idempotent(sqlite_engine):
         if index.get("unique")
     } | {
         tuple(constraint["column_names"])
-        for constraint in inspector.get_unique_constraints("billing_usage_orders")
+        for constraint in inspector.get_unique_constraints(
+            "billing_usage_orders"
+        )
     }
     assert ("source_type", "source_id") in source_uniques
 
@@ -184,7 +195,9 @@ def test_billing_schema_is_idempotent(sqlite_engine):
         if index.get("unique")
     } | {
         tuple(constraint["column_names"])
-        for constraint in inspector.get_unique_constraints("billing_usage_items")
+        for constraint in inspector.get_unique_constraints(
+            "billing_usage_items"
+        )
     }
     assert ("usage_order_id", "item_key") in item_uniques
 
@@ -212,7 +225,7 @@ def test_postgresql_bigint_upgrade_only_targets_existing_billing_amounts():
         def __init__(self):
             self.statements: list[str] = []
 
-        def execute(self, statement):
+        def execute(self, statement, *_args):
             self.statements.append(str(statement))
 
     class RecordingBegin(AbstractContextManager):
@@ -237,12 +250,126 @@ def test_postgresql_bigint_upgrade_only_targets_existing_billing_amounts():
     _ensure_billing_bigint_columns(engine)
 
     statements = "\n".join(engine.connection.statements)
-    assert 'ALTER TABLE "billing_usage_orders" ALTER COLUMN "budget_credits" TYPE BIGINT' in statements
-    assert 'ALTER TABLE "billing_usage_orders" ALTER COLUMN "reconciling_credits" TYPE BIGINT' in statements
-    assert 'ALTER TABLE "billing_usage_items" ALTER COLUMN "quoted_credits" TYPE BIGINT' in statements
-    assert 'ALTER TABLE "billing_usage_items" ALTER COLUMN "charged_credits" TYPE BIGINT' in statements
-    assert 'ALTER TABLE "billing_ledger_entries" ALTER COLUMN "credit_delta" TYPE BIGINT' in statements
-    assert 'ALTER TABLE "billing_ledger_entries" ALTER COLUMN "cash_delta_fen" TYPE BIGINT' in statements
-    assert 'ALTER TABLE "billing_ledger_entries" ALTER COLUMN "credits" TYPE BIGINT' not in statements
-    assert 'ALTER TABLE "billing_usage_orders" ALTER COLUMN "supplier_cost_fen" TYPE BIGINT' not in statements
-    assert 'ALTER TABLE "billing_usage_items" ALTER COLUMN "credits" TYPE BIGINT' not in statements
+    assert (
+        'ALTER TABLE "billing_usage_orders" ALTER COLUMN '
+        '"budget_credits" TYPE BIGINT' in statements
+    )
+    assert (
+        'ALTER TABLE "billing_usage_orders" ALTER COLUMN '
+        '"reconciling_credits" TYPE BIGINT' in statements
+    )
+    assert (
+        'ALTER TABLE "billing_usage_items" ALTER COLUMN '
+        '"quoted_credits" TYPE BIGINT' in statements
+    )
+    assert (
+        'ALTER TABLE "billing_usage_items" ALTER COLUMN '
+        '"charged_credits" TYPE BIGINT' in statements
+    )
+    assert (
+        'ALTER TABLE "billing_ledger_entries" ALTER COLUMN '
+        '"credit_delta" TYPE BIGINT' in statements
+    )
+    assert (
+        'ALTER TABLE "billing_ledger_entries" ALTER COLUMN '
+        '"cash_delta_fen" TYPE BIGINT' in statements
+    )
+    assert (
+        'ALTER TABLE "billing_ledger_entries" ALTER COLUMN '
+        '"credits" TYPE BIGINT' not in statements
+    )
+    assert (
+        'ALTER TABLE "billing_usage_orders" ALTER COLUMN '
+        '"supplier_cost_fen" TYPE BIGINT' not in statements
+    )
+    assert (
+        'ALTER TABLE "billing_usage_items" ALTER COLUMN "credits" TYPE BIGINT'
+        not in statements
+    )
+
+
+def test_postgresql_billing_upgrade_uses_typed_timestamps_and_scoped_guards(
+    monkeypatch,
+):
+    class RecordingConnection:
+        def __init__(self):
+            self.statements: list[str] = []
+
+        def execute(self, statement, *_args):
+            self.statements.append(str(statement))
+
+        def scalar(self, _statement):
+            return None
+
+    class RecordingBegin(AbstractContextManager):
+        def __init__(self, connection):
+            self.connection = connection
+
+        def __enter__(self):
+            return self.connection
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return None
+
+    class RecordingInspector:
+        def get_table_names(self):
+            return [
+                "open_api_invocations",
+                "billing_usage_orders",
+                "billing_usage_items",
+            ]
+
+        def get_columns(self, table_name):
+            columns = {
+                "open_api_invocations": {"id"},
+                "billing_usage_orders": {
+                    "id",
+                    "quoted_credits",
+                    "held_credits",
+                    "captured_credits",
+                    "billability",
+                },
+                "billing_usage_items": {
+                    "id",
+                    "usage_order_id",
+                },
+            }
+            return [{"name": name} for name in columns[table_name]]
+
+    class RecordingEngine:
+        def __init__(self):
+            self.dialect = postgresql.dialect()
+            self.connection = RecordingConnection()
+
+        def begin(self):
+            return RecordingBegin(self.connection)
+
+        def connect(self):
+            return RecordingBegin(self.connection)
+
+    engine = RecordingEngine()
+    monkeypatch.setattr(
+        schema_module, "inspect", lambda _: RecordingInspector()
+    )
+
+    ensure_billing_columns = getattr(
+        schema_module, "_ensure_open_api_billing_columns"
+    )
+    ensure_billing_columns(engine)
+    _ensure_billing_bigint_columns(engine)
+
+    statements = "\n".join(engine.connection.statements)
+    assert "started_at TIMESTAMP WITH TIME ZONE" in statements
+    assert "finished_at TIMESTAMP WITH TIME ZONE" in statements
+    assert "DATETIME" not in statements
+    assert "ck_open_api_invocations_quoted_nonnegative" in statements
+    assert "ck_billing_usage_orders_billability" in statements
+    assert "ck_billing_usage_items_billability" in statements
+    assert "constraint.conrelid = relation.oid" in statements
+    assert "constraint.contype = 'c'" in statements
+    assert "constraint.contype = 'f'" in statements
+    assert "namespace.nspname = current_schema()" in statements
+    assert (
+        'ALTER TABLE "billing_usage_items" ALTER COLUMN '
+        '"quoted_credits" TYPE BIGINT' in statements
+    )

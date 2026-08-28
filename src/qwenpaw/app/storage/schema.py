@@ -318,12 +318,26 @@ open_api_invocations = Table(
             name="fk_open_api_invocations_billing_usage_order",
         ),
     ),
-    Column("billing_status", String, nullable=False, server_default="pending"),
+    Column(
+        "billing_status", String, nullable=False, server_default="unbilled"
+    ),
     Column("quoted_credits", BigInteger, nullable=False, server_default="0"),
     Column("captured_credits", BigInteger, nullable=False, server_default="0"),
     Column("released_credits", BigInteger, nullable=False, server_default="0"),
     Column("billing_error_code", String),
     Column("created_at", DateTime(timezone=True), server_default=func.now()),
+    CheckConstraint(
+        "quoted_credits >= 0",
+        name="ck_open_api_invocations_quoted_nonnegative",
+    ),
+    CheckConstraint(
+        "captured_credits >= 0",
+        name="ck_open_api_invocations_captured_nonnegative",
+    ),
+    CheckConstraint(
+        "released_credits >= 0",
+        name="ck_open_api_invocations_released_nonnegative",
+    ),
 )
 
 knowledge_docs = Table(
@@ -1051,7 +1065,10 @@ def _ensure_billing_usage_order_columns(engine: Engine) -> None:
 
 
 def _ensure_open_api_billing_columns(engine: Engine) -> None:
-    """Add OpenAPI billing bridge columns without rewriting history."""
+    """Upgrade OpenAPI billing data without changing ledger or token rows."""
+    datetime_type = str(
+        DateTime(timezone=True).compile(dialect=engine.dialect)
+    )
     additions = {
         "open_api_invocations": {
             "billing_usage_order_id": (
@@ -1060,7 +1077,7 @@ def _ensure_open_api_billing_columns(engine: Engine) -> None:
             ),
             "billing_status": (
                 "ALTER TABLE open_api_invocations ADD COLUMN billing_status "
-                "VARCHAR NOT NULL DEFAULT 'pending'"
+                "VARCHAR NOT NULL DEFAULT 'unbilled'"
             ),
             "quoted_credits": (
                 "ALTER TABLE open_api_invocations ADD COLUMN quoted_credits "
@@ -1081,7 +1098,7 @@ def _ensure_open_api_billing_columns(engine: Engine) -> None:
         },
         "billing_usage_orders": {
             "source_type": (
-                "ALTER TABLE billing_usage_orders ADD COLUMN source_type VARCHAR"
+                "ALTER TABLE billing_usage_orders ADD COLUMN source_type VARCHAR"  # noqa: E501
             ),
             "source_id": (
                 "ALTER TABLE billing_usage_orders ADD COLUMN source_id VARCHAR"
@@ -1116,52 +1133,365 @@ def _ensure_open_api_billing_columns(engine: Engine) -> None:
                 "price_snapshot_json TEXT NOT NULL DEFAULT '{}'"
             ),
             "started_at": (
-                "ALTER TABLE billing_usage_items ADD COLUMN started_at DATETIME"
+                "ALTER TABLE billing_usage_items ADD COLUMN started_at "
+                f"{datetime_type}"
             ),
             "finished_at": (
-                "ALTER TABLE billing_usage_items ADD COLUMN finished_at DATETIME"
+                "ALTER TABLE billing_usage_items ADD COLUMN finished_at "
+                f"{datetime_type}"
             ),
         },
     }
     inspector = inspect(engine)
-    table_names = set(inspector.get_table_names())
+    existing_table_names = set(inspector.get_table_names())
     with engine.begin() as conn:
         for table_name, columns in additions.items():
-            if table_name not in table_names:
+            if table_name not in existing_table_names:
                 continue
             existing = {
-                column["name"]
-                for column in inspector.get_columns(table_name)
+                column["name"] for column in inspector.get_columns(table_name)
             }
             for column_name, ddl in columns.items():
                 if column_name not in existing:
                     conn.execute(text(ddl))
 
-        conn.execute(
-            text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS "
-                "uq_billing_usage_orders_source "
-                "ON billing_usage_orders (source_type, source_id)",
-            ),
-        )
-        conn.execute(
-            text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS "
-                "uq_billing_usage_items_order_item_key "
-                "ON billing_usage_items (usage_order_id, item_key)",
-            ),
-        )
+    _validate_open_api_billing_history(engine)
+    if (
+        engine.dialect.name == "sqlite"
+        and _sqlite_open_api_billing_rebuild_required(engine)
+    ):
+        _rebuild_sqlite_open_api_billing_tables(engine)
+    elif engine.dialect.name == "postgresql":
+        _ensure_postgresql_open_api_billing_constraints(engine)
+    _ensure_open_api_billing_indexes(engine)
 
-        if engine.dialect.name == "postgresql":
+
+def _validate_open_api_billing_history(engine: Engine) -> None:
+    """Reject unsafe legacy values before adding financial constraints."""
+    violations = {
+        "open_api_invocations": (
+            "quoted_credits IS NULL OR quoted_credits < 0 OR "
+            "captured_credits IS NULL OR captured_credits < 0 OR "
+            "released_credits IS NULL OR released_credits < 0"
+        ),
+        "billing_usage_orders": (
+            "quoted_credits IS NULL OR quoted_credits < 0 OR "
+            "budget_credits IS NULL OR budget_credits < 0 OR "
+            "held_credits IS NULL OR held_credits < 0 OR "
+            "captured_credits IS NULL OR captured_credits < 0 OR "
+            "released_credits IS NULL OR released_credits < 0 OR "
+            "reconciling_credits IS NULL OR reconciling_credits < 0 OR "
+            "billability IS NULL OR billability NOT IN "
+            "('unknown', 'billable', 'not_billable')"
+        ),
+        "billing_usage_items": (
+            "input_tokens IS NULL OR input_tokens < 0 OR "
+            "output_tokens IS NULL OR output_tokens < 0 OR "
+            "quantity IS NULL OR quantity < 0 OR "
+            "quoted_credits IS NULL OR quoted_credits < 0 OR "
+            "charged_credits IS NULL OR charged_credits < 0 OR "
+            "supplier_cost_fen IS NULL OR supplier_cost_fen < 0 OR "
+            "billability IS NULL OR billability NOT IN "
+            "('unknown', 'billable', 'not_billable')"
+        ),
+    }
+    existing_table_names = set(inspect(engine).get_table_names())
+    with engine.connect() as conn:
+        for table_name, condition in violations.items():
+            if table_name not in existing_table_names:
+                continue
+            invalid = conn.scalar(
+                text(
+                    f"SELECT 1 FROM {table_name} WHERE {condition} LIMIT 1",
+                ),
+            )
+            if invalid is not None:
+                raise ValueError(
+                    f"invalid historical billing data in {table_name}",
+                )
+
+
+def _rebuild_sqlite_open_api_billing_tables(engine: Engine) -> None:
+    """Rebuild SQLite bridge tables so existing rows gain FKs and CHECKs."""
+    source_tables = (
+        billing_usage_orders,
+        billing_usage_items,
+        open_api_invocations,
+    )
+    temporary_tables: dict[str, Table] = {}
+    with engine.connect() as conn:
+        foreign_keys_enabled = bool(
+            conn.scalar(text("PRAGMA foreign_keys")),
+        )
+        conn.commit()
+        if foreign_keys_enabled:
+            conn.execute(text("PRAGMA foreign_keys = OFF"))
+            conn.commit()
+        transaction = conn.begin()
+        try:
+            for source_table in source_tables:
+                temporary_tables[source_table.name] = _sqlite_table_copy(
+                    conn,
+                    source_table,
+                )
+            for source_table in source_tables:
+                temporary_table = temporary_tables[source_table.name]
+                existing = {
+                    column["name"]
+                    for column in inspect(conn).get_columns(source_table.name)
+                }
+                columns = [
+                    column.name
+                    for column in temporary_table.columns
+                    if column.name in existing
+                ]
+                quoted_columns = ", ".join(f'"{column}"' for column in columns)
+                select_columns = ", ".join(
+                    f"COALESCE(\"{column}\", '{{}}')"
+                    if column
+                    in {
+                        "request_snapshot_json",
+                        "price_snapshot_json",
+                        "supplier_evidence_json",
+                        "token_summary",
+                        "usage_snapshot_json",
+                    }
+                    else f'"{column}"'
+                    for column in columns
+                )
+                conn.execute(
+                    text(
+                        f'INSERT INTO "{temporary_table.name}" '
+                        f"({quoted_columns}) SELECT {select_columns} "
+                        f'FROM "{source_table.name}"',
+                    ),
+                )
+            for source_table in reversed(source_tables):
+                conn.execute(text(f'DROP TABLE "{source_table.name}"'))
+            for source_table in source_tables:
+                temporary_table = temporary_tables[source_table.name]
+                conn.execute(
+                    text(
+                        f'ALTER TABLE "{temporary_table.name}" RENAME TO '
+                        f'"{source_table.name}"',
+                    ),
+                )
+            transaction.commit()
+        except Exception:
+            transaction.rollback()
+            raise
+        finally:
+            if foreign_keys_enabled:
+                conn.execute(text("PRAGMA foreign_keys = ON"))
+
+
+def _sqlite_open_api_billing_rebuild_required(engine: Engine) -> bool:
+    """Return whether legacy SQLite tables are missing bridge constraints."""
+    required_checks = {
+        "open_api_invocations": {
+            "ck_open_api_invocations_quoted_nonnegative",
+            "ck_open_api_invocations_captured_nonnegative",
+            "ck_open_api_invocations_released_nonnegative",
+        },
+        "billing_usage_orders": {
+            "ck_billing_usage_orders_quoted_nonnegative",
+            "ck_billing_usage_orders_held_nonnegative",
+            "ck_billing_usage_orders_captured_nonnegative",
+            "ck_billing_usage_orders_budget_nonnegative",
+            "ck_billing_usage_orders_released_nonnegative",
+            "ck_billing_usage_orders_reconciling_nonnegative",
+            "ck_billing_usage_orders_billability",
+        },
+        "billing_usage_items": {
+            "ck_billing_usage_items_input_nonnegative",
+            "ck_billing_usage_items_output_nonnegative",
+            "ck_billing_usage_items_quantity_nonnegative",
+            "ck_billing_usage_items_charged_nonnegative",
+            "ck_billing_usage_items_quoted_nonnegative",
+            "ck_billing_usage_items_supplier_cost_nonnegative",
+            "ck_billing_usage_items_billability",
+        },
+    }
+    inspector = inspect(engine)
+    for table_name, expected in required_checks.items():
+        actual = {
+            check["name"]
+            for check in inspector.get_check_constraints(table_name)
+        }
+        if not expected <= actual:
+            return True
+    invocation_targets = {
+        foreign_key["referred_table"]
+        for foreign_key in inspector.get_foreign_keys("open_api_invocations")
+    }
+    return "billing_usage_orders" not in invocation_targets
+
+
+def _sqlite_table_copy(conn, source_table: Table) -> Table:
+    """Create an unindexed SQLite clone with the current table constraints."""
+    clone_metadata = MetaData()
+    for foreign_key in source_table.foreign_keys:
+        foreign_key.column.table.to_metadata(clone_metadata)
+    temporary_table = source_table.to_metadata(
+        clone_metadata,
+        name=f"{source_table.name}__billing_rebuild",
+    )
+    temporary_table.indexes.clear()
+    temporary_table.create(conn)
+    return temporary_table
+
+
+def _ensure_open_api_billing_indexes(engine: Engine) -> None:
+    """Create the bridge indexes after fresh creation or a legacy rebuild."""
+    statements = (
+        "CREATE INDEX IF NOT EXISTS idx_open_api_invocations_publication_created "  # noqa: E501
+        "ON open_api_invocations (publication_id, created_at DESC)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_usage_orders_business "
+        "ON billing_usage_orders (business_key)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_usage_orders_source "
+        "ON billing_usage_orders (source_type, source_id)",
+        "CREATE INDEX IF NOT EXISTS idx_billing_usage_orders_wallet_status "
+        "ON billing_usage_orders (wallet_id, status, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_billing_usage_orders_supplier_reference "  # noqa: E501
+        "ON billing_usage_orders (supplier_reference)",
+        "CREATE INDEX IF NOT EXISTS idx_billing_usage_items_order "
+        "ON billing_usage_items (usage_order_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_usage_items_order_item_key "  # noqa: E501
+        "ON billing_usage_items (usage_order_id, item_key)",
+    )
+    with engine.begin() as conn:
+        for statement in statements:
+            conn.execute(text(statement))
+
+
+def _ensure_postgresql_open_api_billing_constraints(engine: Engine) -> None:
+    """Add missing bridge constraints with relation-scoped guards."""
+    constraints = (
+        (
+            "open_api_invocations",
+            "ck_open_api_invocations_quoted_nonnegative",
+            "c",
+            "CHECK (quoted_credits >= 0)",
+        ),
+        (
+            "open_api_invocations",
+            "ck_open_api_invocations_captured_nonnegative",
+            "c",
+            "CHECK (captured_credits >= 0)",
+        ),
+        (
+            "open_api_invocations",
+            "ck_open_api_invocations_released_nonnegative",
+            "c",
+            "CHECK (released_credits >= 0)",
+        ),
+        (
+            "billing_usage_orders",
+            "ck_billing_usage_orders_quoted_nonnegative",
+            "c",
+            "CHECK (quoted_credits >= 0)",
+        ),
+        (
+            "billing_usage_orders",
+            "ck_billing_usage_orders_held_nonnegative",
+            "c",
+            "CHECK (held_credits >= 0)",
+        ),
+        (
+            "billing_usage_orders",
+            "ck_billing_usage_orders_captured_nonnegative",
+            "c",
+            "CHECK (captured_credits >= 0)",
+        ),
+        (
+            "billing_usage_orders",
+            "ck_billing_usage_orders_budget_nonnegative",
+            "c",
+            "CHECK (budget_credits >= 0)",
+        ),
+        (
+            "billing_usage_orders",
+            "ck_billing_usage_orders_released_nonnegative",
+            "c",
+            "CHECK (released_credits >= 0)",
+        ),
+        (
+            "billing_usage_orders",
+            "ck_billing_usage_orders_reconciling_nonnegative",
+            "c",
+            "CHECK (reconciling_credits >= 0)",
+        ),
+        (
+            "billing_usage_orders",
+            "ck_billing_usage_orders_billability",
+            "c",
+            "CHECK (billability IN ('unknown', 'billable', 'not_billable'))",
+        ),
+        (
+            "billing_usage_items",
+            "ck_billing_usage_items_input_nonnegative",
+            "c",
+            "CHECK (input_tokens >= 0)",
+        ),
+        (
+            "billing_usage_items",
+            "ck_billing_usage_items_output_nonnegative",
+            "c",
+            "CHECK (output_tokens >= 0)",
+        ),
+        (
+            "billing_usage_items",
+            "ck_billing_usage_items_quantity_nonnegative",
+            "c",
+            "CHECK (quantity >= 0)",
+        ),
+        (
+            "billing_usage_items",
+            "ck_billing_usage_items_charged_nonnegative",
+            "c",
+            "CHECK (charged_credits >= 0)",
+        ),
+        (
+            "billing_usage_items",
+            "ck_billing_usage_items_quoted_nonnegative",
+            "c",
+            "CHECK (quoted_credits >= 0)",
+        ),
+        (
+            "billing_usage_items",
+            "ck_billing_usage_items_supplier_cost_nonnegative",
+            "c",
+            "CHECK (supplier_cost_fen >= 0)",
+        ),
+        (
+            "billing_usage_items",
+            "ck_billing_usage_items_billability",
+            "c",
+            "CHECK (billability IN ('unknown', 'billable', 'not_billable'))",
+        ),
+        (
+            "open_api_invocations",
+            "fk_open_api_invocations_billing_usage_order",
+            "f",
+            "FOREIGN KEY (billing_usage_order_id) "
+            "REFERENCES billing_usage_orders (id)",
+        ),
+    )
+    with engine.begin() as conn:
+        for table_name, name, constraint_type, definition in constraints:
             conn.execute(
                 text(
                     "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM "
-                    "pg_constraint WHERE conname = "
-                    "'fk_open_api_invocations_billing_usage_order') THEN "
-                    "ALTER TABLE open_api_invocations ADD CONSTRAINT "
-                    "fk_open_api_invocations_billing_usage_order "
-                    "FOREIGN KEY (billing_usage_order_id) "
-                    "REFERENCES billing_usage_orders (id); END IF; END $$",
+                    "pg_constraint AS constraint JOIN pg_class AS relation "
+                    "ON relation.oid = constraint.conrelid JOIN pg_namespace "
+                    "AS namespace ON namespace.oid = relation.relnamespace "
+                    "WHERE namespace.nspname = current_schema() AND "
+                    f"relation.relname = '{table_name}' AND "
+                    "constraint.conrelid = relation.oid AND "
+                    f"constraint.conname = '{name}' AND "
+                    f"constraint.contype = '{constraint_type}') THEN "
+                    f"ALTER TABLE {table_name} ADD CONSTRAINT {name} "
+                    f"{definition}; END IF; END $$",
                 ),
             )
 
@@ -1173,8 +1503,15 @@ def _ensure_billing_constraints(engine: Engine) -> None:
             conn.execute(
                 text(
                     "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM "
-                    "pg_constraint WHERE conname = "
-                    "'ck_billing_credit_lots_purchased_no_expiry') THEN "
+                    "pg_constraint AS constraint JOIN pg_class AS relation "
+                    "ON relation.oid = constraint.conrelid JOIN pg_namespace "
+                    "AS namespace ON namespace.oid = relation.relnamespace "
+                    "WHERE namespace.nspname = current_schema() AND "
+                    "relation.relname = 'billing_credit_lots' AND "
+                    "constraint.conrelid = relation.oid AND "
+                    "constraint.conname = "
+                    "'ck_billing_credit_lots_purchased_no_expiry' AND "
+                    "constraint.contype = 'c') THEN "
                     "ALTER TABLE billing_credit_lots ADD CONSTRAINT "
                     "ck_billing_credit_lots_purchased_no_expiry CHECK "
                     "(credit_type <> 'purchased' OR expires_at IS NULL) "
