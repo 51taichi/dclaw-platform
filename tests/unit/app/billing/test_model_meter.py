@@ -926,6 +926,85 @@ async def test_unstarted_stream_aclose_reconciles_contacted_provider_once(
 
 
 @pytest.mark.asyncio
+async def test_retry_outer_unstarted_close_finalizes_billing_and_slot_once(
+    usage_service,
+):
+    import asyncio
+
+    from qwenpaw.app.billing.model_meter import BillingModelMeter
+    from qwenpaw.providers.rate_limiter import (
+        get_rate_limiter,
+        reset_rate_limiter,
+    )
+    from qwenpaw.providers.retry_chat_model import (
+        RateLimitConfig,
+        RetryChatModel,
+        RetryConfig,
+    )
+
+    class _ProviderStream:
+        def __init__(self):
+            self.close_calls = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+        async def aclose(self):
+            self.close_calls += 1
+
+    class _CountingMeter(BillingModelMeter):
+        def __init__(self, service):
+            super().__init__(service)
+            self.exception_calls = 0
+
+        def record_exception(self, call, error, *, supplier_contacted=True):
+            self.exception_calls += 1
+            return super().record_exception(
+                call,
+                error,
+                supplier_contacted=supplier_contacted,
+            )
+
+    service, session = usage_service
+    provider_stream = _ProviderStream()
+    provider = _Model(provider_stream)
+    meter = _CountingMeter(service)
+    wrapper = RetryChatModel(
+        TokenRecordingModelWrapper("provider", provider, meter=meter),
+        retry_config=RetryConfig(enabled=False),
+        rate_limit_config=RateLimitConfig(max_concurrent=1, max_qpm=0),
+    )
+    reset_rate_limiter()
+    token = _scope(session)
+    try:
+        result = await wrapper(messages=[], max_tokens=1000)
+        await result.aclose()
+
+        limiter = await get_rate_limiter()
+        assert provider_stream.close_calls == 1
+        assert meter.exception_calls == 1
+        assert limiter.stats()["current_in_flight"] == 0
+        items = service.list_items(session.usage_order_id)
+        assert len(items) == 1
+        assert items[0]["status"] == "reconciling"
+
+        provider.result = _Response(
+            usage=SimpleNamespace(input_tokens=3, output_tokens=2),
+        )
+        await asyncio.wait_for(
+            wrapper(messages=[], max_tokens=1000),
+            timeout=0.2,
+        )
+        assert limiter.stats()["current_in_flight"] == 0
+    finally:
+        reset_current_billing_context(token)
+        reset_rate_limiter()
+
+
+@pytest.mark.asyncio
 async def test_provider_call_started_marker_is_durable_before_network_call(
     usage_service,
 ):
