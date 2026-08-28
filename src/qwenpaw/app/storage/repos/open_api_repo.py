@@ -38,7 +38,8 @@ class OpenApiRepository(Protocol):  # pylint: disable=too-many-public-methods
         ...
 
     def list_publications(
-        self, enabled_only: bool = False
+        self,
+        enabled_only: bool = False,
     ) -> list[dict[str, Any]]:
         ...
 
@@ -46,12 +47,14 @@ class OpenApiRepository(Protocol):  # pylint: disable=too-many-public-methods
         ...
 
     def get_publication_by_public_id(
-        self, public_id: str
+        self,
+        public_id: str,
     ) -> dict[str, Any] | None:
         ...
 
     def get_enabled_publication_by_public_id(
-        self, public_id: str
+        self,
+        public_id: str,
     ) -> dict[str, Any] | None:
         ...
 
@@ -59,7 +62,8 @@ class OpenApiRepository(Protocol):  # pylint: disable=too-many-public-methods
         ...
 
     def list_external_apps(
-        self, owner_user_id: str | None = None
+        self,
+        owner_user_id: str | None = None,
     ) -> list[dict[str, Any]]:
         ...
 
@@ -80,7 +84,9 @@ class OpenApiRepository(Protocol):  # pylint: disable=too-many-public-methods
         ...
 
     def update_api_key_status(
-        self, key_id: str, status: str
+        self,
+        key_id: str,
+        status: str,
     ) -> dict[str, Any] | None:
         ...
 
@@ -246,10 +252,10 @@ class SqlAlchemyOpenApiRepository:  # pylint: disable=too-many-public-methods
             if existing:
                 if str(existing[1]) != str(values["owner_user_id"]):
                     raise ValueError(
-                        "Open API publication owner cannot be changed"
+                        "Open API publication owner cannot be changed",
                     )
                 if str(existing[0]) == str(values["id"]) and str(
-                    existing[2]
+                    existing[2],
                 ) != str(values["knowledge_base_id"]):
                     raise ValueError(
                         "Open API publication knowledge base cannot be changed",
@@ -268,7 +274,7 @@ class SqlAlchemyOpenApiRepository:  # pylint: disable=too-many-public-methods
                 values.setdefault("created_at", now)
                 try:
                     conn.execute(
-                        insert(open_api_publications).values(**values)
+                        insert(open_api_publications).values(**values),
                     )
                 except SqlAlchemyIntegrityError as exc:
                     if _is_publication_public_id_conflict(exc):
@@ -279,12 +285,13 @@ class SqlAlchemyOpenApiRepository:  # pylint: disable=too-many-public-methods
         row = self.get_publication(publication_id)
         if row is None:
             raise RuntimeError(
-                "failed to read open api publication after upsert"
+                "failed to read open api publication after upsert",
             )
         return row
 
     def list_publications(
-        self, enabled_only: bool = False
+        self,
+        enabled_only: bool = False,
     ) -> list[dict[str, Any]]:
         stmt = select(open_api_publications)
         if enabled_only:
@@ -302,7 +309,7 @@ class SqlAlchemyOpenApiRepository:  # pylint: disable=too-many-public-methods
             row = (
                 conn.execute(
                     select(open_api_publications).where(
-                        open_api_publications.c.id == publication_id
+                        open_api_publications.c.id == publication_id,
                     ),
                 )
                 .mappings()
@@ -311,13 +318,14 @@ class SqlAlchemyOpenApiRepository:  # pylint: disable=too-many-public-methods
         return _publication_row(row) if row else None
 
     def get_publication_by_public_id(
-        self, public_id: str
+        self,
+        public_id: str,
     ) -> dict[str, Any] | None:
         with self.engine.connect() as conn:
             row = (
                 conn.execute(
                     select(open_api_publications).where(
-                        open_api_publications.c.public_id == public_id
+                        open_api_publications.c.public_id == public_id,
                     ),
                 )
                 .mappings()
@@ -326,7 +334,8 @@ class SqlAlchemyOpenApiRepository:  # pylint: disable=too-many-public-methods
         return _publication_row(row) if row else None
 
     def get_enabled_publication_by_public_id(
-        self, public_id: str
+        self,
+        public_id: str,
     ) -> dict[str, Any] | None:
         with self.engine.connect() as conn:
             row = (
@@ -348,17 +357,18 @@ class SqlAlchemyOpenApiRepository:  # pylint: disable=too-many-public-methods
         created = self.get_external_app(values["id"])
         if created is None:
             raise RuntimeError(
-                "failed to read open api external app after create"
+                "failed to read open api external app after create",
             )
         return created
 
     def list_external_apps(
-        self, owner_user_id: str | None = None
+        self,
+        owner_user_id: str | None = None,
     ) -> list[dict[str, Any]]:
         stmt = select(open_api_external_apps)
         if owner_user_id is not None:
             stmt = stmt.where(
-                open_api_external_apps.c.owner_user_id == owner_user_id
+                open_api_external_apps.c.owner_user_id == owner_user_id,
             )
         stmt = stmt.order_by(
             open_api_external_apps.c.created_at.desc(),
@@ -373,7 +383,7 @@ class SqlAlchemyOpenApiRepository:  # pylint: disable=too-many-public-methods
             row = (
                 conn.execute(
                     select(open_api_external_apps).where(
-                        open_api_external_apps.c.id == app_id
+                        open_api_external_apps.c.id == app_id,
                     ),
                 )
                 .mappings()
@@ -395,7 +405,7 @@ class SqlAlchemyOpenApiRepository:  # pylint: disable=too-many-public-methods
             row = (
                 conn.execute(
                     select(open_api_keys).where(
-                        open_api_keys.c.key_hash == key_hash
+                        open_api_keys.c.key_hash == key_hash,
                     ),
                 )
                 .mappings()
@@ -414,14 +424,17 @@ class SqlAlchemyOpenApiRepository:  # pylint: disable=too-many-public-methods
         if publication_id is not None:
             stmt = stmt.where(open_api_keys.c.publication_id == publication_id)
         stmt = stmt.order_by(
-            open_api_keys.c.created_at.desc(), open_api_keys.c.id.asc()
+            open_api_keys.c.created_at.desc(),
+            open_api_keys.c.id.asc(),
         )
         with self.engine.connect() as conn:
             rows = conn.execute(stmt).mappings().all()
         return [_api_key_row(row) for row in rows]
 
     def update_api_key_status(
-        self, key_id: str, status: str
+        self,
+        key_id: str,
+        status: str,
     ) -> dict[str, Any] | None:
         _validate_api_key_status(status)
         with self.engine.begin() as conn:
@@ -438,7 +451,9 @@ class SqlAlchemyOpenApiRepository:  # pylint: disable=too-many-public-methods
                 update(open_api_keys)
                 .where(open_api_keys.c.id == key_id)
                 .values(
-                    last_used_at=_now(), last_used_ip=ip, updated_at=_now()
+                    last_used_at=_now(),
+                    last_used_ip=ip,
+                    updated_at=_now(),
                 ),
             )
 
@@ -449,7 +464,7 @@ class SqlAlchemyOpenApiRepository:  # pylint: disable=too-many-public-methods
         created = self._get_invocation(values["id"])
         if created is None:
             raise RuntimeError(
-                "failed to read open api invocation after create"
+                "failed to read open api invocation after create",
             )
         return created
 
@@ -550,12 +565,12 @@ class SqlAlchemyOpenApiRepository:  # pylint: disable=too-many-public-methods
                     .where(
                         open_api_invocations.c.id == invocation_id,
                         open_api_invocations.c.status.in_(
-                            ("accepted", "running")
+                            ("accepted", "running"),
                         ),
                         open_api_invocations.c.terminal_event_json.is_(None),
                         or_(
                             open_api_invocations.c.execution_owner_token.is_(
-                                None
+                                None,
                             ),
                             open_api_invocations.c.execution_lease_expires_at.is_(
                                 None,
@@ -659,7 +674,6 @@ class SqlAlchemyOpenApiRepository:  # pylint: disable=too-many-public-methods
     ) -> dict[str, Any] | None:
         """Atomically settle and seal an item-free claimed invocation."""
         checked = _checked_fence(fence)
-        current = _database_now(self.engine)
         final_values: dict[str, Any] = {
             "status": status,
             "status_code": int(status_code),
@@ -682,29 +696,6 @@ class SqlAlchemyOpenApiRepository:  # pylint: disable=too-many-public-methods
                 final_values[key] = value
         try:
             with self.engine.begin() as conn:
-                guarded = conn.execute(
-                    update(open_api_invocations)
-                    .where(
-                        open_api_invocations.c.id == invocation_id,
-                        open_api_invocations.c.billing_usage_order_id
-                        == usage_order_id,
-                        open_api_invocations.c.status == "running",
-                        open_api_invocations.c.execution_owner_token
-                        == checked.owner_token,
-                        open_api_invocations.c.execution_fence_generation
-                        == checked.generation,
-                        open_api_invocations.c.execution_lease_expires_at
-                        > current,
-                        open_api_invocations.c.terminal_event_json.is_(None),
-                    )
-                    .values(
-                        execution_fence_generation=(
-                            open_api_invocations.c.execution_fence_generation
-                        ),
-                    ),
-                )
-                if guarded.rowcount != 1:
-                    return None
                 order = (
                     conn.execute(
                         select(billing_usage_orders)
@@ -718,21 +709,60 @@ class SqlAlchemyOpenApiRepository:  # pylint: disable=too-many-public-methods
                     .mappings()
                     .one_or_none()
                 )
+                if order is None:
+                    return None
+                invocation = (
+                    conn.execute(
+                        select(open_api_invocations.c.id)
+                        .where(
+                            open_api_invocations.c.id == invocation_id,
+                            open_api_invocations.c.billing_usage_order_id
+                            == usage_order_id,
+                        )
+                        .with_for_update(),
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+                if invocation is None:
+                    return None
+                current = _database_wall_clock(self.engine)
+                guarded = conn.scalar(
+                    select(open_api_invocations.c.id).where(
+                        open_api_invocations.c.id == invocation_id,
+                        open_api_invocations.c.billing_usage_order_id
+                        == usage_order_id,
+                        open_api_invocations.c.status == "running",
+                        open_api_invocations.c.execution_owner_token
+                        == checked.owner_token,
+                        open_api_invocations.c.execution_fence_generation
+                        == checked.generation,
+                        open_api_invocations.c.execution_lease_expires_at
+                        > current,
+                        open_api_invocations.c.terminal_event_json.is_(None),
+                    ),
+                )
+                if guarded is None:
+                    return None
                 has_items = conn.execute(
                     select(billing_usage_items.c.id)
                     .where(
-                        billing_usage_items.c.usage_order_id
-                        == usage_order_id,
+                        billing_usage_items.c.usage_order_id == usage_order_id,
                     )
                     .limit(1),
                 ).first()
-                if order is None or has_items is not None:
-                    return None
-                if str(order["status"]) not in {"quoted", "settled"}:
+                if has_items is not None or str(order["status"]) not in {
+                    "quoted",
+                    "settled",
+                }:
                     return None
                 conn.execute(
                     update(billing_usage_orders)
-                    .where(billing_usage_orders.c.id == usage_order_id)
+                    .where(
+                        billing_usage_orders.c.id == usage_order_id,
+                        billing_usage_orders.c.source_type == "open_api",
+                        billing_usage_orders.c.source_id == invocation_id,
+                    )
                     .values(
                         status="settled",
                         settled_at=current,
@@ -743,6 +773,9 @@ class SqlAlchemyOpenApiRepository:  # pylint: disable=too-many-public-methods
                     update(open_api_invocations)
                     .where(
                         open_api_invocations.c.id == invocation_id,
+                        open_api_invocations.c.billing_usage_order_id
+                        == usage_order_id,
+                        open_api_invocations.c.status == "running",
                         open_api_invocations.c.execution_owner_token
                         == checked.owner_token,
                         open_api_invocations.c.execution_fence_generation
@@ -892,7 +925,9 @@ class SqlAlchemyOpenApiRepository:  # pylint: disable=too-many-public-methods
         }
         if token_summary is not None:
             values["token_summary"] = _json_text(
-                "token_summary", token_summary, dict
+                "token_summary",
+                token_summary,
+                dict,
             )
         with self.engine.begin() as conn:
             conn.execute(
@@ -911,7 +946,7 @@ class SqlAlchemyOpenApiRepository:  # pylint: disable=too-many-public-methods
         stmt = select(open_api_invocations)
         if publication_id is not None:
             stmt = stmt.where(
-                open_api_invocations.c.publication_id == publication_id
+                open_api_invocations.c.publication_id == publication_id,
             )
         stmt = (
             stmt.order_by(
@@ -941,7 +976,7 @@ class SqlAlchemyOpenApiRepository:  # pylint: disable=too-many-public-methods
             row = (
                 conn.execute(
                     select(open_api_invocations).where(
-                        open_api_invocations.c.id == invocation_id
+                        open_api_invocations.c.id == invocation_id,
                     ),
                 )
                 .mappings()
@@ -970,10 +1005,10 @@ class SqliteOpenApiRepository:  # pylint: disable=too-many-public-methods
         if existing:
             if str(existing["owner_user_id"]) != str(values["owner_user_id"]):
                 raise ValueError(
-                    "Open API publication owner cannot be changed"
+                    "Open API publication owner cannot be changed",
                 )
             if str(existing["id"]) == str(values["id"]) and str(
-                existing["knowledge_base_id"]
+                existing["knowledge_base_id"],
             ) != str(values["knowledge_base_id"]):
                 raise ValueError(
                     "Open API publication knowledge base cannot be changed",
@@ -1039,12 +1074,13 @@ class SqliteOpenApiRepository:  # pylint: disable=too-many-public-methods
         created = self.get_publication(publication_id)
         if created is None:
             raise RuntimeError(
-                "failed to read open api publication after upsert"
+                "failed to read open api publication after upsert",
             )
         return created
 
     def list_publications(
-        self, enabled_only: bool = False
+        self,
+        enabled_only: bool = False,
     ) -> list[dict[str, Any]]:
         sql = "SELECT * FROM open_api_publications"
         params: tuple[Any, ...] = ()
@@ -1067,7 +1103,8 @@ class SqliteOpenApiRepository:  # pylint: disable=too-many-public-methods
         return _publication_row(dict(row)) if row else None
 
     def get_publication_by_public_id(
-        self, public_id: str
+        self,
+        public_id: str,
     ) -> dict[str, Any] | None:
         row = (
             db.get_db()
@@ -1080,7 +1117,8 @@ class SqliteOpenApiRepository:  # pylint: disable=too-many-public-methods
         return _publication_row(dict(row)) if row else None
 
     def get_enabled_publication_by_public_id(
-        self, public_id: str
+        self,
+        public_id: str,
     ) -> dict[str, Any] | None:
         row = (
             db.get_db()
@@ -1114,12 +1152,13 @@ class SqliteOpenApiRepository:  # pylint: disable=too-many-public-methods
         created = self.get_external_app(values["id"])
         if created is None:
             raise RuntimeError(
-                "failed to read open api external app after create"
+                "failed to read open api external app after create",
             )
         return created
 
     def list_external_apps(
-        self, owner_user_id: str | None = None
+        self,
+        owner_user_id: str | None = None,
     ) -> list[dict[str, Any]]:
         sql = "SELECT * FROM open_api_external_apps"
         params: tuple[Any, ...] = ()
@@ -1201,7 +1240,9 @@ class SqliteOpenApiRepository:  # pylint: disable=too-many-public-methods
         return [_api_key_row(dict(row)) for row in rows]
 
     def update_api_key_status(
-        self, key_id: str, status: str
+        self,
+        key_id: str,
+        status: str,
     ) -> dict[str, Any] | None:
         _validate_api_key_status(status)
         db.get_db().execute(
@@ -1258,7 +1299,7 @@ class SqliteOpenApiRepository:  # pylint: disable=too-many-public-methods
         created = self._get_invocation(values["id"])
         if created is None:
             raise RuntimeError(
-                "failed to read open api invocation after create"
+                "failed to read open api invocation after create",
             )
         return created
 
@@ -1454,10 +1495,15 @@ class SqliteOpenApiRepository:  # pylint: disable=too-many-public-methods
                 "LIMIT 1",
                 (usage_order_id,),
             ).fetchone()
-            if order is None or item is not None or str(order[0]) not in {
-                "quoted",
-                "settled",
-            }:
+            if (
+                order is None
+                or item is not None
+                or str(order[0])
+                not in {
+                    "quoted",
+                    "settled",
+                }
+            ):
                 connection.rollback()
                 return None
             connection.execute(
@@ -1721,10 +1767,14 @@ def _external_app_values(row: dict[str, Any]) -> dict[str, Any]:
     values = dict(row)
     values.setdefault("status", "enabled")
     values["ip_allowlist"] = _json_text(
-        "ip_allowlist", values.get("ip_allowlist"), list
+        "ip_allowlist",
+        values.get("ip_allowlist"),
+        list,
     )
     values["quota_policy"] = _json_text(
-        "quota_policy", values.get("quota_policy"), dict
+        "quota_policy",
+        values.get("quota_policy"),
+        dict,
     )
     return values
 
@@ -1764,10 +1814,14 @@ def _publication_row(row: Any) -> dict[str, Any]:
 def _external_app_row(row: Any) -> dict[str, Any]:
     result = dict(row)
     result["ip_allowlist"] = _json_value(
-        "ip_allowlist", result.get("ip_allowlist"), list
+        "ip_allowlist",
+        result.get("ip_allowlist"),
+        list,
     )
     result["quota_policy"] = _json_value(
-        "quota_policy", result.get("quota_policy"), dict
+        "quota_policy",
+        result.get("quota_policy"),
+        dict,
     )
     return result
 
@@ -1828,7 +1882,7 @@ def _json_value(field_name: str, value: Any, expected_type: type) -> Any:
         if isinstance(parsed, expected_type):
             return parsed
         raise ValueError(
-            f"{field_name} must be a JSON {expected_type.__name__}"
+            f"{field_name} must be a JSON {expected_type.__name__}",
         )
     raise ValueError(f"{field_name} must be a {expected_type.__name__}")
 
@@ -1895,6 +1949,12 @@ def _database_now(engine: Engine):
     if engine.dialect.name == "sqlite":
         return func.strftime("%Y-%m-%d %H:%M:%f", "now")
     return func.current_timestamp()
+
+
+def _database_wall_clock(engine: Engine):
+    if engine.dialect.name == "sqlite":
+        return func.strftime("%Y-%m-%d %H:%M:%f", "now")
+    return func.clock_timestamp()
 
 
 def _database_expiry(engine: Engine, seconds: float):

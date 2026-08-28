@@ -6,11 +6,19 @@ from __future__ import annotations
 import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from threading import Barrier
+from threading import Barrier, Event, current_thread
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine, func, inspect, select, text, update
+from sqlalchemy import (
+    create_engine,
+    event,
+    func,
+    inspect,
+    select,
+    text,
+    update,
+)
 from sqlalchemy.schema import CreateSchema, DropSchema
 
 import qwenpaw.app.storage.schema as schema_module
@@ -238,7 +246,7 @@ def test_postgresql_invocation_execution_claim_has_one_winner(
     assert invocation["execution_owner_token"].startswith("worker-")
     assert invocation["execution_claimed_at"] is not None
     assert invocation["execution_lease_expires_at"] > datetime.now(
-        timezone.utc
+        timezone.utc,
     )
 
 
@@ -419,8 +427,7 @@ def test_postgresql_stale_empty_finalizer_cannot_change_takeover_winner(
             select(func.count())
             .select_from(billing_usage_items)
             .where(
-                billing_usage_items.c.usage_order_id
-                == session.usage_order_id,
+                billing_usage_items.c.usage_order_id == session.usage_order_id,
             ),
         )
     assert order_status == "quoted"
@@ -515,19 +522,256 @@ def test_postgresql_empty_finalize_has_one_current_fence_winner(
     assert invocation["billing_status"] == "settled"
     assert invocation["terminal_event_json"] == winner_terminal
     with postgres_open_api_engine.connect() as conn:
-        assert conn.scalar(
-            select(billing_usage_orders.c.status).where(
-                billing_usage_orders.c.id == session.usage_order_id,
-            ),
-        ) == "settled"
-        assert conn.scalar(
-            select(func.count())
-            .select_from(billing_usage_items)
-            .where(
-                billing_usage_items.c.usage_order_id
-                == session.usage_order_id,
-            ),
-        ) == 0
+        assert (
+            conn.scalar(
+                select(billing_usage_orders.c.status).where(
+                    billing_usage_orders.c.id == session.usage_order_id,
+                ),
+            )
+            == "settled"
+        )
+        assert (
+            conn.scalar(
+                select(func.count())
+                .select_from(billing_usage_items)
+                .where(
+                    billing_usage_items.c.usage_order_id
+                    == session.usage_order_id,
+                ),
+            )
+            == 0
+        )
+    assert (
+        len(coordinator.repository.list_ledger(session.wallet_id, 100, None))
+        == ledger_count
+    )
+
+
+@pytest.mark.integration
+def test_postgresql_empty_finalize_does_not_deadlock_late_reserve(
+    postgres_open_api_engine,
+):  # pylint: disable=too-many-statements
+    """Empty finalization and reservation share order -> invocation locks."""
+    identity = "empty-finalize-reserve-lock-order"
+    coordinator = _coordinator(postgres_open_api_engine, identity)
+    session = coordinator.begin_invocation(
+        _command(identity, "postgres-empty-finalize-reserve", mode="enforced"),
+    )
+    coordinator.repository.grant(
+        session.wallet_id,
+        credits=5,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key="empty-finalize-reserve-funds",
+    )
+    ledger_count = len(
+        coordinator.repository.list_ledger(session.wallet_id, 100, None),
+    )
+    repository = SqlAlchemyOpenApiRepository(postgres_open_api_engine)
+    winner_fence = repository.claim_invocation_execution(
+        session.invocation_id,
+        "current-finalizer",
+        lease_seconds=30,
+    )
+    assert winner_fence is not None
+    terminal = {
+        "type": "billing.completed",
+        "billing_status": "settled",
+        "winner": "current-finalizer",
+    }
+    allow_reserve_order = Event()
+    reserve_at_order = Event()
+    reserve_locked_order = Event()
+    reserve_at_invocation = Event()
+    finalizer_locked_invocation = Event()
+    reserve_backend_pid: list[int] = []
+
+    def before_lock_statement(
+        _conn,
+        _cursor,
+        statement,
+        _parameters,
+        _context,
+        _executemany,
+    ):
+        normalized = " ".join(statement.lower().split())
+        if (
+            current_thread().name == "late-reserve"
+            and normalized.startswith("select")
+            and "from billing_usage_orders" in normalized
+            and "for update" in normalized
+        ):
+            reserve_at_order.set()
+            if not allow_reserve_order.wait(timeout=5):
+                raise RuntimeError("finalizer did not choose its first lock")
+        elif current_thread().name == "late-reserve" and normalized.startswith(
+            "update open_api_invocations",
+        ):
+            reserve_backend_pid.append(_cursor.connection.info.backend_pid)
+            _cursor.execute("SET LOCAL deadlock_timeout = '5s'")
+            reserve_at_invocation.set()
+        elif (
+            current_thread().name == "current-finalizer"
+            and normalized.startswith("select")
+            and "from billing_usage_orders" in normalized
+            and "for update" in normalized
+        ):
+            _cursor.execute("SET LOCAL deadlock_timeout = '100ms'")
+            if not finalizer_locked_invocation.is_set():
+                return
+            allow_reserve_order.set()
+            if not reserve_locked_order.wait(timeout=5):
+                raise RuntimeError("reserve did not acquire the order lock")
+            if not reserve_at_invocation.wait(timeout=5):
+                raise RuntimeError("reserve did not reach the invocation lock")
+            wait_type = None
+            for _attempt in range(200):
+                with postgres_open_api_engine.connect() as observer:
+                    wait_type = observer.scalar(
+                        text(
+                            "SELECT wait_event_type FROM pg_stat_activity "
+                            "WHERE pid = :pid",
+                        ),
+                        {"pid": reserve_backend_pid[0]},
+                    )
+                if wait_type == "Lock":
+                    break
+                reserve_at_invocation.wait(timeout=0.01)
+            if wait_type != "Lock":
+                raise RuntimeError("reserve did not block on the invocation")
+
+    def after_lock_statement(
+        _conn,
+        _cursor,
+        statement,
+        _parameters,
+        _context,
+        _executemany,
+    ):
+        normalized = " ".join(statement.lower().split())
+        if (
+            current_thread().name == "late-reserve"
+            and normalized.startswith("select")
+            and "from billing_usage_orders" in normalized
+            and "for update" in normalized
+        ):
+            reserve_locked_order.set()
+        elif (
+            current_thread().name == "current-finalizer"
+            and normalized.startswith("update open_api_invocations")
+        ):
+            finalizer_locked_invocation.set()
+        elif (
+            current_thread().name == "current-finalizer"
+            and normalized.startswith("select")
+            and "from billing_usage_orders" in normalized
+            and "for update" in normalized
+        ):
+            allow_reserve_order.set()
+
+    event.listen(
+        postgres_open_api_engine,
+        "before_cursor_execute",
+        before_lock_statement,
+    )
+    event.listen(
+        postgres_open_api_engine,
+        "after_cursor_execute",
+        after_lock_statement,
+    )
+
+    def late_reserve():
+        current_thread().name = "late-reserve"
+        try:
+            UsageService(
+                coordinator.repository,
+                coordinator.pricing,
+            ).reserve_model_call(
+                ReserveModelCall(
+                    usage_order_id=session.usage_order_id,
+                    item_key="late-reserve",
+                    provider_id="provider",
+                    model_key="model",
+                    capability="text",
+                    parameters={"tier": "standard"},
+                    input_tokens=1000,
+                    max_output_tokens=0,
+                    invocation_id=session.invocation_id,
+                    execution_fence=winner_fence,
+                ),
+            )
+        except Exception as exc:
+            return exc
+        return None
+
+    def current_finalize():
+        current_thread().name = "current-finalizer"
+        try:
+            return SqlAlchemyOpenApiRepository(
+                postgres_open_api_engine,
+            ).finalize_empty_invocation_execution(
+                session.invocation_id,
+                session.usage_order_id,
+                winner_fence,
+                status="succeeded",
+                status_code=200,
+                error_summary="",
+                terminal_event=terminal,
+            )
+        except Exception as exc:  # return both worker outcomes for assertions
+            return exc
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            reserve_future = pool.submit(late_reserve)
+            assert reserve_at_order.wait(timeout=5)
+            finalize_future = pool.submit(current_finalize)
+            reserve_result = reserve_future.result(timeout=10)
+            finalize_result = finalize_future.result(timeout=10)
+    finally:
+        event.remove(
+            postgres_open_api_engine,
+            "before_cursor_execute",
+            before_lock_statement,
+        )
+        event.remove(
+            postgres_open_api_engine,
+            "after_cursor_execute",
+            after_lock_statement,
+        )
+
+    assert not isinstance(finalize_result, Exception), (
+        finalize_result,
+        repository.get_invocation(session.invocation_id)[
+            "terminal_event_json"
+        ],
+    )
+    assert finalize_result is not None
+    assert isinstance(reserve_result, BillingExecutionFencedError)
+    assert finalize_result["terminal_event_json"] == terminal
+    invocation = repository.get_invocation(session.invocation_id)
+    assert invocation is not None
+    assert invocation["terminal_event_json"] == terminal
+    with postgres_open_api_engine.connect() as conn:
+        assert (
+            conn.scalar(
+                select(billing_usage_orders.c.status).where(
+                    billing_usage_orders.c.id == session.usage_order_id,
+                ),
+            )
+            == "settled"
+        )
+        assert (
+            conn.scalar(
+                select(func.count())
+                .select_from(billing_usage_items)
+                .where(
+                    billing_usage_items.c.usage_order_id
+                    == session.usage_order_id,
+                ),
+            )
+            == 0
+        )
     assert (
         len(coordinator.repository.list_ledger(session.wallet_id, 100, None))
         == ledger_count

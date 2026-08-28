@@ -18,7 +18,7 @@ from agentscope_runtime.engine.schemas.agent_schemas import (
 )
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import or_, select, update
+from sqlalchemy import or_, select
 
 from ..agent_context import (
     reset_current_billing_context,
@@ -426,44 +426,8 @@ def recover_open_api_billing(
             )
 
         items = active.usage_service.list_items(order_id)
-        if not items:
-            now = datetime.now(timezone.utc)
-            with engine.begin() as conn:
-                order_row = (
-                    conn.execute(
-                        select(billing_usage_orders).where(
-                            billing_usage_orders.c.id == order_id,
-                        ),
-                    )
-                    .mappings()
-                    .one()
-                )
-                validate_fence = active.usage_service._validate_execution_fence  # pylint: disable=protected-access  # noqa: E501
-                validate_fence(
-                    conn,
-                    order_row,
-                    SettleModelCall(
-                        usage_order_id=order_id,
-                        item_key="recovery-empty-order",
-                        supplier_reference="",
-                        billability="not_billable",
-                        evidence={},
-                        execution_outcome="failed",
-                        invocation_id=invocation_id,
-                        execution_fence=recovery_fence,
-                    ),
-                )
-                conn.execute(
-                    update(billing_usage_orders)
-                    .where(billing_usage_orders.c.id == order_id)
-                    .values(status="settled", settled_at=now, updated_at=now),
-                )
-                conn.execute(
-                    update(open_api_invocations)
-                    .where(open_api_invocations.c.id == row["invocation_id"])
-                    .values(billing_status="settled"),
-                )
-        else:
+        empty_order = not items
+        if not empty_order:
             active.usage_service.reproject_open_api_order(order_id)
 
         order = active.usage_service.get_order(order_id)
@@ -485,7 +449,9 @@ def recover_open_api_billing(
             else "failed"
         )
         balance = active.repository.balance(str(row["wallet_id"]))
-        durable_billing_status = str(order["status"])
+        durable_billing_status = (
+            "settled" if empty_order else str(order["status"])
+        )
         terminal_billing_status = durable_billing_status
         if durable_billing_status == "settled" and int(
             order["captured_credits"],
@@ -514,16 +480,36 @@ def recover_open_api_billing(
                 "X-DClaw-Billing-Status": terminal_billing_status,
             },
         }
-        finalized = active.open_api_repository.finalize_invocation_execution(
-            invocation_id,
-            recovery_fence,
-            status=status,
-            status_code=status_code,
-            error_summary=error_summary,
-            billing_status=durable_billing_status,
-            billing_error_code=None if status == "succeeded" else code,
-            terminal_event=terminal,
-        )
+        if empty_order:
+            finalized = (
+                active.open_api_repository.finalize_empty_invocation_execution(
+                    invocation_id,
+                    order_id,
+                    recovery_fence,
+                    status=status,
+                    status_code=status_code,
+                    error_summary=error_summary,
+                    billing_error_code=(
+                        None if status == "succeeded" else code
+                    ),
+                    terminal_event=terminal,
+                )
+            )
+        else:
+            finalized = (
+                active.open_api_repository.finalize_invocation_execution(
+                    invocation_id,
+                    recovery_fence,
+                    status=status,
+                    status_code=status_code,
+                    error_summary=error_summary,
+                    billing_status=durable_billing_status,
+                    billing_error_code=(
+                        None if status == "succeeded" else code
+                    ),
+                    terminal_event=terminal,
+                )
+            )
         if finalized is not None:
             recovered += 1
     return recovered
