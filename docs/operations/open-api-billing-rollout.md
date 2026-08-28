@@ -231,8 +231,28 @@ Each command is expected to exit zero; the final query is the gate.
 
 ```bash
 for BOOT in 1 2; do
+  BOOT_CONTAINER="qwenpaw-billing-candidate-fresh-boot-${BOOT}"
+  trap 'docker rm -f "$BOOT_CONTAINER" >/dev/null 2>&1 || true' EXIT
+  trap 'exit 130' HUP INT TERM
   docker compose -p "$CANDIDATE_PROJECT" \
-    -f "$CHANGE_DIR/candidate.compose.yml" run --rm qwenpaw-saas
+    -f "$CHANGE_DIR/candidate.compose.yml" run -d \
+    --name "$BOOT_CONTAINER" --service-ports qwenpaw-saas >/dev/null
+  BOOT_HEALTHY=false
+  for ATTEMPT in $(seq 1 60); do
+    if curl --fail --silent --show-error --connect-timeout 2 --max-time 3 \
+      "http://127.0.0.1:${CANDIDATE_PORT}/api/health" >/dev/null; then
+      BOOT_HEALTHY=true
+      break
+    fi
+    sleep 2
+  done
+  if [ "$BOOT_HEALTHY" != true ]; then
+    docker logs "$BOOT_CONTAINER" >&2 || true
+    exit 4
+  fi
+  docker stop --time 30 "$BOOT_CONTAINER" >/dev/null
+  docker rm -f "$BOOT_CONTAINER" >/dev/null
+  trap - EXIT HUP INT TERM
 done
 docker compose -p "$CANDIDATE_PROJECT" \
   -f "$CHANGE_DIR/candidate.compose.yml" exec -T postgres \
@@ -272,12 +292,34 @@ SELECT 'wallets', count(*), coalesce(sum(available_credits), 0),
   coalesce(sum(held_credits), 0) FROM billing_wallets;
 SELECT 'ledger', count(*), coalesce(sum(credit_delta), 0) FROM billing_ledger_entries;
 SELECT 'orders', count(*), coalesce(sum(captured_credits), 0) FROM billing_usage_orders;
-SELECT 'items', count(*), coalesce(sum(captured_credits), 0) FROM billing_usage_items;
+SELECT 'items', count(*), coalesce(sum(input_tokens), 0),
+  coalesce(sum(output_tokens), 0), coalesce(sum(charged_credits), 0)
+  FROM billing_usage_items;
 SELECT 'invocations', count(*), coalesce(sum(captured_credits), 0) FROM open_api_invocations;
 SQL
 for BOOT in 1 2; do
+  BOOT_CONTAINER="qwenpaw-billing-candidate-restored-boot-${BOOT}"
+  trap 'docker rm -f "$BOOT_CONTAINER" >/dev/null 2>&1 || true' EXIT
+  trap 'exit 130' HUP INT TERM
   docker compose -p "$CANDIDATE_PROJECT" \
-    -f "$CHANGE_DIR/candidate.compose.yml" run --rm qwenpaw-saas
+    -f "$CHANGE_DIR/candidate.compose.yml" run -d \
+    --name "$BOOT_CONTAINER" --service-ports qwenpaw-saas >/dev/null
+  BOOT_HEALTHY=false
+  for ATTEMPT in $(seq 1 60); do
+    if curl --fail --silent --show-error --connect-timeout 2 --max-time 3 \
+      "http://127.0.0.1:${CANDIDATE_PORT}/api/health" >/dev/null; then
+      BOOT_HEALTHY=true
+      break
+    fi
+    sleep 2
+  done
+  if [ "$BOOT_HEALTHY" != true ]; then
+    docker logs "$BOOT_CONTAINER" >&2 || true
+    exit 4
+  fi
+  docker stop --time 30 "$BOOT_CONTAINER" >/dev/null
+  docker rm -f "$BOOT_CONTAINER" >/dev/null
+  trap - EXIT HUP INT TERM
 done
 docker compose -p "$CANDIDATE_PROJECT" \
   -f "$CHANGE_DIR/candidate.compose.yml" exec -T postgres \
@@ -287,7 +329,9 @@ SELECT 'wallets', count(*), coalesce(sum(available_credits), 0),
   coalesce(sum(held_credits), 0) FROM billing_wallets;
 SELECT 'ledger', count(*), coalesce(sum(credit_delta), 0) FROM billing_ledger_entries;
 SELECT 'orders', count(*), coalesce(sum(captured_credits), 0) FROM billing_usage_orders;
-SELECT 'items', count(*), coalesce(sum(captured_credits), 0) FROM billing_usage_items;
+SELECT 'items', count(*), coalesce(sum(input_tokens), 0),
+  coalesce(sum(output_tokens), 0), coalesce(sum(charged_credits), 0)
+  FROM billing_usage_items;
 SELECT 'invocations', count(*), coalesce(sum(captured_credits), 0) FROM open_api_invocations;
 SQL
 cmp "$CHANGE_DIR/upgrade-before.tsv" "$CHANGE_DIR/upgrade-after.tsv"
