@@ -357,18 +357,47 @@ def test_postgresql_billing_upgrade_uses_typed_timestamps_and_scoped_guards(
     )
     ensure_billing_columns(engine)
     _ensure_billing_bigint_columns(engine)
+    ensure_credit_lot_constraint = getattr(
+        schema_module, "_ensure_billing_constraints"
+    )
+    ensure_credit_lot_constraint(engine)
 
     statements = "\n".join(engine.connection.statements)
     assert "started_at TIMESTAMP WITH TIME ZONE" in statements
     assert "finished_at TIMESTAMP WITH TIME ZONE" in statements
     assert "DATETIME" not in statements
-    assert "ck_open_api_invocations_quoted_nonnegative" in statements
-    assert "ck_billing_usage_orders_billability" in statements
-    assert "ck_billing_usage_items_billability" in statements
-    assert "constraint.conrelid = relation.oid" in statements
-    assert "constraint.contype = 'c'" in statements
-    assert "constraint.contype = 'f'" in statements
+    expected_constraints = {
+        "ck_open_api_invocations_quoted_nonnegative",
+        "ck_open_api_invocations_captured_nonnegative",
+        "ck_open_api_invocations_released_nonnegative",
+        "ck_billing_usage_orders_quoted_nonnegative",
+        "ck_billing_usage_orders_held_nonnegative",
+        "ck_billing_usage_orders_captured_nonnegative",
+        "ck_billing_usage_orders_budget_nonnegative",
+        "ck_billing_usage_orders_released_nonnegative",
+        "ck_billing_usage_orders_reconciling_nonnegative",
+        "ck_billing_usage_orders_billability",
+        "ck_billing_usage_items_input_nonnegative",
+        "ck_billing_usage_items_output_nonnegative",
+        "ck_billing_usage_items_quantity_nonnegative",
+        "ck_billing_usage_items_charged_nonnegative",
+        "ck_billing_usage_items_quoted_nonnegative",
+        "ck_billing_usage_items_supplier_cost_nonnegative",
+        "ck_billing_usage_items_billability",
+        "fk_open_api_invocations_billing_usage_order",
+        "ck_billing_credit_lots_purchased_no_expiry",
+    }
+    assert all(name in statements for name in expected_constraints)
+    assert "pc.conrelid = relation.oid" in statements
+    assert "pc.contype = 'c'" in statements
+    assert "pc.contype = 'f'" in statements
+    assert "pg_constraint AS constraint" not in statements
     assert "namespace.nspname = current_schema()" in statements
+    assert "NOT VALID" in statements
+    assert (
+        "VALIDATE CONSTRAINT ck_billing_credit_lots_purchased_no_expiry"
+        in statements
+    )
     assert (
         'ALTER TABLE "billing_usage_items" ALTER COLUMN '
         '"quoted_credits" TYPE BIGINT' in statements

@@ -1482,14 +1482,14 @@ def _ensure_postgresql_open_api_billing_constraints(engine: Engine) -> None:
             conn.execute(
                 text(
                     "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM "
-                    "pg_constraint AS constraint JOIN pg_class AS relation "
-                    "ON relation.oid = constraint.conrelid JOIN pg_namespace "
+                    "pg_constraint AS pc JOIN pg_class AS relation "
+                    "ON relation.oid = pc.conrelid JOIN pg_namespace "
                     "AS namespace ON namespace.oid = relation.relnamespace "
                     "WHERE namespace.nspname = current_schema() AND "
                     f"relation.relname = '{table_name}' AND "
-                    "constraint.conrelid = relation.oid AND "
-                    f"constraint.conname = '{name}' AND "
-                    f"constraint.contype = '{constraint_type}') THEN "
+                    "pc.conrelid = relation.oid AND "
+                    f"pc.conname = '{name}' AND "
+                    f"pc.contype = '{constraint_type}') THEN "
                     f"ALTER TABLE {table_name} ADD CONSTRAINT {name} "
                     f"{definition}; END IF; END $$",
                 ),
@@ -1503,15 +1503,15 @@ def _ensure_billing_constraints(engine: Engine) -> None:
             conn.execute(
                 text(
                     "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM "
-                    "pg_constraint AS constraint JOIN pg_class AS relation "
-                    "ON relation.oid = constraint.conrelid JOIN pg_namespace "
+                    "pg_constraint AS pc JOIN pg_class AS relation "
+                    "ON relation.oid = pc.conrelid JOIN pg_namespace "
                     "AS namespace ON namespace.oid = relation.relnamespace "
                     "WHERE namespace.nspname = current_schema() AND "
                     "relation.relname = 'billing_credit_lots' AND "
-                    "constraint.conrelid = relation.oid AND "
-                    "constraint.conname = "
+                    "pc.conrelid = relation.oid AND "
+                    "pc.conname = "
                     "'ck_billing_credit_lots_purchased_no_expiry' AND "
-                    "constraint.contype = 'c') THEN "
+                    "pc.contype = 'c') THEN "
                     "ALTER TABLE billing_credit_lots ADD CONSTRAINT "
                     "ck_billing_credit_lots_purchased_no_expiry CHECK "
                     "(credit_type <> 'purchased' OR expires_at IS NULL) "
