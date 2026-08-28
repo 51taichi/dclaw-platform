@@ -109,13 +109,20 @@ class TokenRecordingModelWrapper(ChatModelBase):
         billing_item_key = kwargs.pop("_billing_item_key", None)
         meter_call = None
         if self._meter is not None:
+            output_limit = self._meter.effective_max_output_tokens(
+                kwargs,
+                self._model,
+            )
             meter_call = self._meter.before_call(
                 provider_id=self._provider_id,
                 model_key=self.model_name,
                 messages=messages,
-                max_output_tokens=_max_output_tokens(kwargs),
+                max_output_tokens=output_limit,
                 item_key=billing_item_key,
             )
+            if meter_call is not None:
+                kwargs.pop("max_output_tokens", None)
+                kwargs["max_tokens"] = output_limit
         try:
             result = await self._model(
                 messages=messages,
@@ -124,9 +131,9 @@ class TokenRecordingModelWrapper(ChatModelBase):
                 structured_model=structured_model,
                 **kwargs,
             )
-        except Exception as exc:
+        except BaseException as exc:
             if meter_call is not None:
-                self._meter.record_exception(meter_call, exc)
+                _record_exception_without_masking(self._meter, meter_call, exc)
             raise
 
         if isinstance(result, AsyncGenerator):
@@ -143,21 +150,39 @@ class TokenRecordingModelWrapper(ChatModelBase):
     ) -> AsyncGenerator[ChatResponse, None]:
         last_usage: ChatUsage | None = None
         last_chunk: ChatResponse | None = None
+        exhausted = False
         try:
             async for chunk in stream:
                 last_chunk = chunk
                 if getattr(chunk, "usage", None) is not None:
                     last_usage = chunk.usage
                 yield chunk
-        except Exception as exc:
+            exhausted = True
+        except BaseException as exc:
             if meter_call is not None:
-                self._meter.record_exception(meter_call, exc)
+                _record_exception_without_masking(self._meter, meter_call, exc)
             raise
-        if meter_call is not None:
-            self._meter.record_response(meter_call, last_chunk)
-        self._record_usage(last_usage)
+        finally:
+            if meter_call is not None:
+                if exhausted:
+                    self._meter.record_response(meter_call, last_chunk)
+                else:
+                    _record_exception_without_masking(
+                        self._meter,
+                        meter_call,
+                        RuntimeError("provider stream interrupted"),
+                    )
+            if exhausted:
+                self._record_usage(last_usage)
 
 
-def _max_output_tokens(kwargs: dict[str, Any]) -> int | None:
-    value = kwargs.get("max_output_tokens", kwargs.get("max_tokens"))
-    return value if isinstance(value, int) else None
+def _record_exception_without_masking(
+    meter: Any,
+    call: Any,
+    error: BaseException,
+) -> None:
+    """Record supplier uncertainty without replacing caller cancellation."""
+    try:
+        meter.record_exception(call, error)
+    except Exception:
+        logger.exception("billing: exception outcome requires reconciliation")

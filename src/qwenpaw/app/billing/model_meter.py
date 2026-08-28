@@ -9,10 +9,9 @@ financial path has completed.
 from __future__ import annotations
 
 import json
-from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from math import ceil
+from threading import Lock
 from typing import Any, Mapping
 
 from ..agent_context import get_current_billing_context
@@ -25,13 +24,11 @@ from .usage import (
 )
 
 
-_call_sequence: ContextVar[int] = ContextVar(
-    "open_api_model_call_sequence",
-    default=0,
-)
+_item_sequence_lock = Lock()
+_item_sequence_by_order: dict[str, int] = {}
 
 
-@dataclass(frozen=True)
+@dataclass
 class MeteredModelCall:
     """The durable reservation associated with an in-flight provider call."""
 
@@ -39,6 +36,24 @@ class MeteredModelCall:
     item_key: str
     provider_id: str
     model_key: str
+    _finalization_lock: Lock = field(default_factory=Lock, repr=False)
+    _finalized: bool = field(default=False, init=False, repr=False)
+
+    def claim_finalization(self) -> bool:
+        """Return true exactly once, across stream finalization paths."""
+        with self._finalization_lock:
+            if self._finalized:
+                return False
+            self._finalized = True
+            return True
+
+
+@dataclass(frozen=True)
+class SupplierReference:
+    """A supplier reference explicitly surfaced by a provider adapter."""
+
+    value: str
+    source: str
 
 
 class BillingSettlementError(RuntimeError):
@@ -60,11 +75,40 @@ class BillingModelMeter:
         usage_service: UsageService,
         *,
         default_max_output_tokens: int = 1024,
+        platform_max_output_tokens: int | None = None,
     ) -> None:
-        if default_max_output_tokens < 0:
-            raise ValueError("default_max_output_tokens must be non-negative")
+        if default_max_output_tokens < 0 or (
+            platform_max_output_tokens is not None
+            and platform_max_output_tokens < 0
+        ):
+            raise ValueError("output token limits must be non-negative")
         self.usage_service = usage_service
         self.default_max_output_tokens = default_max_output_tokens
+        self.platform_max_output_tokens = (
+            default_max_output_tokens
+            if platform_max_output_tokens is None
+            else platform_max_output_tokens
+        )
+
+    def effective_max_output_tokens(
+        self,
+        call_kwargs: Mapping[str, Any],
+        model: Any,
+    ) -> int:
+        """Return the cap reserved and enforced for this OpenAPI call."""
+        limits = [self.platform_max_output_tokens]
+        for values in (
+            call_kwargs,
+            getattr(model, "generate_kwargs", {}),
+        ):
+            if isinstance(values, Mapping):
+                limits.extend(_configured_output_limits(values))
+        limits.extend(
+            _configured_output_limits(
+                {"max_tokens": getattr(model, "max_tokens", None)},
+            ),
+        )
+        return min(limits) if limits else self.default_max_output_tokens
 
     def before_call(
         self,
@@ -84,11 +128,12 @@ class BillingModelMeter:
         normalized_model = str(model_key).strip()
         if not normalized_provider or not normalized_model:
             raise ValueError("provider and model identities must be non-empty")
-        output_tokens = (
-            self.default_max_output_tokens
-            if max_output_tokens is None
-            else _non_negative_int(max_output_tokens, "max_output_tokens")
-        )
+        output_tokens = self.default_max_output_tokens
+        if max_output_tokens is not None:
+            output_tokens = _non_negative_int(
+                max_output_tokens,
+                "max_output_tokens",
+            )
         call_key = _item_key(session, item_key)
         self.usage_service.reserve_model_call(
             ReserveModelCall(
@@ -115,11 +160,11 @@ class BillingModelMeter:
         response: Any,
     ) -> UsageItemResult | None:
         """Settle output only with official usage and a supplier reference."""
-        if call is None:
+        if call is None or not call.claim_finalization():
             return None
         usage = _official_usage(response)
         supplier_reference = _supplier_reference(response)
-        if usage is not None and supplier_reference:
+        if usage is not None and supplier_reference.value:
             return self._settle(
                 call,
                 billability="billable",
@@ -152,7 +197,7 @@ class BillingModelMeter:
         supplier_contacted: bool = True,
     ) -> UsageItemResult | None:
         """Persist the safest outcome for a failed provider boundary."""
-        if call is None:
+        if call is None or not call.claim_finalization():
             return None
         billability, response_class, status = _exception_outcome(
             error,
@@ -174,25 +219,36 @@ class BillingModelMeter:
 
     def record_financial_write_failure(
         self,
-        call: MeteredModelCall | None,
-        error: BaseException,
-    ) -> None:
-        """Try to reconcile contacted supplier work without releasing it."""
-        if call is None:
-            return
+        call: MeteredModelCall,
+        _error: BaseException,
+        supplier_reference: SupplierReference,
+    ) -> BaseException | None:
+        """Attempt one non-recursive durable reconciliation transition."""
         try:
-            self.record_exception(call, error, supplier_contacted=True)
-        except (
-            Exception
-        ):  # pragma: no cover - durable hold remains if DB is down
-            pass
+            self.usage_service.settle_model_call(
+                SettleModelCall(
+                    usage_order_id=call.session.usage_order_id,
+                    item_key=call.item_key,
+                    supplier_reference=supplier_reference.value,
+                    billability="unknown",
+                    evidence=_evidence(
+                        supplier_reference=supplier_reference,
+                        response_class="financial_write_failure",
+                    ),
+                    actual_input_tokens=0,
+                    actual_output_tokens=0,
+                ),
+            )
+        except BaseException as fallback_error:  # keep original hold if down
+            return fallback_error
+        return None
 
     def _settle(
         self,
         call: MeteredModelCall,
         *,
         billability: str,
-        supplier_reference: str,
+        supplier_reference: SupplierReference,
         evidence: Mapping[str, Any],
         actual_input_tokens: int,
         actual_output_tokens: int,
@@ -202,7 +258,7 @@ class BillingModelMeter:
                 SettleModelCall(
                     usage_order_id=call.session.usage_order_id,
                     item_key=call.item_key,
-                    supplier_reference=supplier_reference,
+                    supplier_reference=supplier_reference.value,
                     billability=billability,  # type: ignore[arg-type]
                     evidence=evidence,
                     actual_input_tokens=actual_input_tokens,
@@ -210,10 +266,17 @@ class BillingModelMeter:
                 ),
             )
         except Exception as exc:
-            self.record_financial_write_failure(call, exc)
+            fallback_error = self.record_financial_write_failure(
+                call,
+                exc,
+                supplier_reference,
+            )
+            detail = "reconciliation"
+            if fallback_error is not None:
+                detail = "durable reconciliation is unavailable"
             raise BillingSettlementError(
                 "provider was contacted but billing settlement needs "
-                "reconciliation",
+                f"{detail}",
             ) from exc
 
 
@@ -223,8 +286,9 @@ def _item_key(session: OpenApiBillingSession, explicit: str | None) -> str:
         if not key:
             raise ValueError("billing item key must be non-empty")
         return key
-    sequence = _call_sequence.get() + 1
-    _call_sequence.set(sequence)
+    with _item_sequence_lock:
+        sequence = _item_sequence_by_order.get(session.usage_order_id, 0) + 1
+        _item_sequence_by_order[session.usage_order_id] = sequence
     return f"model:{session.invocation_id}:{sequence}"
 
 
@@ -236,7 +300,7 @@ def _estimate_input_tokens(messages: list[dict[str, Any]]) -> int:
         sort_keys=True,
         default=str,
     )
-    return max(1, ceil(len(serialized) / 4))
+    return max(1, len(serialized.encode("utf-8")))
 
 
 def _official_usage(response: Any) -> dict[str, int] | None:
@@ -257,10 +321,16 @@ def _official_usage(response: Any) -> dict[str, int] | None:
     return {"input_tokens": input_tokens, "output_tokens": output_tokens}
 
 
-def _supplier_reference(value: Any) -> str:
-    return str(
-        getattr(value, "id", "") or getattr(value, "supplier_reference", ""),
+def _supplier_reference(value: Any) -> SupplierReference:
+    reference = str(
+        getattr(value, "supplier_billing_reference", "") or "",
     ).strip()
+    source = str(
+        getattr(value, "supplier_billing_reference_source", "") or "",
+    ).strip()
+    if reference and source in {"provider_response", "provider_error"}:
+        return SupplierReference(reference, source)
+    return SupplierReference("", "")
 
 
 def _exception_outcome(
@@ -273,18 +343,17 @@ def _exception_outcome(
     supplier_not_billed = bool(getattr(error, "supplier_not_billed", False))
     if (
         not supplier_contacted
-        or supplier_not_billed
-        or isinstance(error, ValueError)
+        or getattr(error, "phase", None) == "pre_contact"
     ):
         return "not_billable", "supplier_preflight_rejected", normalized_status
-    if normalized_status is not None and 400 <= normalized_status < 500:
+    if supplier_not_billed:
         return "not_billable", "supplier_rejected", normalized_status
     return "unknown", "supplier_outcome_unknown", normalized_status
 
 
 def _evidence(
     *,
-    supplier_reference: str,
+    supplier_reference: SupplierReference,
     response_class: str,
     official_usage: Mapping[str, int] | None = None,
     status: int | None = None,
@@ -294,8 +363,9 @@ def _evidence(
         "response_class": response_class,
         "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
-    if supplier_reference:
-        evidence["supplier_reference"] = supplier_reference
+    if supplier_reference.value:
+        evidence["supplier_reference"] = supplier_reference.value
+        evidence["supplier_reference_source"] = supplier_reference.source
     if official_usage is not None:
         evidence["official_usage"] = dict(official_usage)
     if status is not None:
@@ -303,13 +373,22 @@ def _evidence(
     return evidence
 
 
-def _non_negative_int(value: Any, field: str) -> int:
+def _non_negative_int(value: Any, field_name: str) -> int:
     if isinstance(value, bool):
-        raise ValueError(f"{field} must be a non-negative integer")
+        raise ValueError(f"{field_name} must be a non-negative integer")
     result = int(value)
     if result < 0:
-        raise ValueError(f"{field} must be a non-negative integer")
+        raise ValueError(f"{field_name} must be a non-negative integer")
     return result
+
+
+def _configured_output_limits(values: Mapping[str, Any]) -> list[int]:
+    limits = []
+    for key in ("max_output_tokens", "max_tokens"):
+        value = values.get(key)
+        if value is not None:
+            limits.append(_non_negative_int(value, key))
+    return limits
 
 
 __all__ = ["BillingModelMeter", "BillingSettlementError", "MeteredModelCall"]

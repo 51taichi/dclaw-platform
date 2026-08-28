@@ -137,22 +137,33 @@ class _AnalyticsSink:
 
 
 class _Response:
-    def __init__(self, *, usage=None, response_id="supplier-response"):
+    def __init__(
+        self,
+        *,
+        usage=None,
+        response_id="synthetic-response-id",
+        supplier_billing_reference="supplier-response",
+    ):
         self.usage = usage
         self.id = response_id
+        self.supplier_billing_reference = supplier_billing_reference
+        self.supplier_billing_reference_source = "provider_response"
         self.metadata = {"api_key": "must-not-be-recorded", "content": "nope"}
 
 
 class _Model:
-    def __init__(self, result=None, error=None):
+    def __init__(self, result=None, error=None, generate_kwargs=None):
         self.model_name = "meter-model"
         self.stream = True
         self.result = result
         self.error = error
+        self.generate_kwargs = generate_kwargs or {}
         self.calls = 0
+        self.received_kwargs = []
 
-    async def __call__(self, **_kwargs):
+    async def __call__(self, **kwargs):
         self.calls += 1
+        self.received_kwargs.append(kwargs)
         if self.error is not None:
             raise self.error
         return self.result
@@ -173,6 +184,36 @@ class _FailsFirstSettlement:
         if self.settle_attempts == 1:
             raise OSError("ledger unavailable")
         return self.service.settle_model_call(command)
+
+
+class _AlwaysFailsSettlement:
+    """Model a storage outage for both settlement and reconciliation writes."""
+
+    def __init__(self, service):
+        self.service = service
+        self.settle_attempts = 0
+
+    def reserve_model_call(self, command):
+        return self.service.reserve_model_call(command)
+
+    def settle_model_call(self, _command):
+        self.settle_attempts += 1
+        raise OSError("ledger unavailable")
+
+
+class _ProviderError(ValueError):
+    def __init__(
+        self,
+        message,
+        *,
+        status_code=None,
+        phase=None,
+        supplier_not_billed=False,
+    ):
+        super().__init__(message)
+        self.status_code = status_code
+        self.phase = phase
+        self.supplier_not_billed = supplier_not_billed
 
 
 async def _consume(result):
@@ -248,6 +289,7 @@ async def test_response_is_durable_before_analytics_enqueue(
         "official_usage",
         "response_class",
         "supplier_reference",
+        "supplier_reference_source",
         "timestamp",
     }
     assert "api_key" not in str(evidence)
@@ -330,7 +372,7 @@ async def test_timeout_retains_reserved_item_for_reconciliation(usage_service):
 
 
 @pytest.mark.asyncio
-async def test_local_provider_preflight_rejection_releases_as_not_billable(
+async def test_generic_provider_validation_after_contact_is_reconciling(
     usage_service,
 ):
     from qwenpaw.app.billing.model_meter import BillingModelMeter
@@ -349,8 +391,8 @@ async def test_local_provider_preflight_rejection_releases_as_not_billable(
         reset_current_billing_context(token)
 
     item = service.list_items(session.usage_order_id)[0]
-    assert item["billability"] == "not_billable"
-    assert item["status"] == "released"
+    assert item["billability"] == "unknown"
+    assert item["status"] == "reconciling"
 
 
 @pytest.mark.asyncio
@@ -450,12 +492,13 @@ async def test_contacted_supplier_write_failure_stays_reconciling(
     )
 
     service, session = usage_service
+    failing_service = _FailsFirstSettlement(service)
     wrapper = TokenRecordingModelWrapper(
         "provider",
         _Model(
             _Response(usage=SimpleNamespace(input_tokens=3, output_tokens=2)),
         ),
-        meter=BillingModelMeter(_FailsFirstSettlement(service)),
+        meter=BillingModelMeter(failing_service),
     )
     token = _scope(session)
     try:
@@ -471,6 +514,7 @@ async def test_contacted_supplier_write_failure_stays_reconciling(
     assert item["billability"] == "unknown"
     assert item["status"] == "reconciling"
     assert service.repository.balance(session.wallet_id).held > 0
+    assert failing_service.settle_attempts == 2
 
 
 @pytest.mark.asyncio
@@ -500,3 +544,263 @@ async def test_non_openapi_call_stays_analytics_only(
 
     assert service.list_items(session.usage_order_id) == []
     assert len(sink.events) == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_openapi_calls_allocate_distinct_durable_item_keys(
+    usage_service,
+):
+    from qwenpaw.app.billing.model_meter import BillingModelMeter
+
+    service, session = usage_service
+    wrapper = TokenRecordingModelWrapper(
+        "provider",
+        _Model(
+            _Response(usage=SimpleNamespace(input_tokens=3, output_tokens=2)),
+        ),
+        meter=BillingModelMeter(service),
+    )
+    token = _scope(session)
+    try:
+        await pytest.importorskip("asyncio").gather(
+            wrapper(messages=[], max_tokens=1000),
+            wrapper(messages=[], max_tokens=1000),
+        )
+    finally:
+        reset_current_billing_context(token)
+
+    items = service.list_items(session.usage_order_id)
+    assert len(items) == 2
+    assert len({item["item_key"] for item in items}) == 2
+
+
+@pytest.mark.asyncio
+async def test_stream_close_after_partial_output_reconciles_once(
+    usage_service,
+):
+    from qwenpaw.app.billing.model_meter import BillingModelMeter
+
+    service, session = usage_service
+
+    async def stream():
+        yield _Response(
+            usage=SimpleNamespace(input_tokens=3, output_tokens=1),
+        )
+        yield _Response(
+            usage=SimpleNamespace(input_tokens=3, output_tokens=2),
+        )
+
+    wrapper = TokenRecordingModelWrapper(
+        "provider",
+        _Model(stream()),
+        meter=BillingModelMeter(service),
+    )
+    token = _scope(session)
+    try:
+        result = await wrapper(messages=[], max_tokens=1000)
+        async for _chunk in result:
+            break
+        await result.aclose()
+    finally:
+        reset_current_billing_context(token)
+
+    item = service.list_items(session.usage_order_id)[0]
+    assert item["billability"] == "unknown"
+    assert item["status"] == "reconciling"
+
+
+@pytest.mark.asyncio
+async def test_provider_task_cancellation_reconciles_and_propagates(
+    usage_service,
+):
+    import asyncio
+
+    from qwenpaw.app.billing.model_meter import BillingModelMeter
+
+    service, session = usage_service
+    entered_provider = asyncio.Event()
+
+    class _CancellingModel(_Model):
+        async def __call__(self, **kwargs):
+            self.calls += 1
+            self.received_kwargs.append(kwargs)
+            entered_provider.set()
+            await asyncio.Event().wait()
+
+    wrapper = TokenRecordingModelWrapper(
+        "provider",
+        _CancellingModel(),
+        meter=BillingModelMeter(service),
+    )
+    token = _scope(session)
+    try:
+        task = asyncio.create_task(wrapper(messages=[], max_tokens=1000))
+        await entered_provider.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        reset_current_billing_context(token)
+
+    item = service.list_items(session.usage_order_id)[0]
+    assert item["billability"] == "unknown"
+    assert item["status"] == "reconciling"
+
+
+@pytest.mark.asyncio
+async def test_stream_iterator_exception_reconciles_once_and_propagates(
+    usage_service,
+):
+    from qwenpaw.app.billing.model_meter import BillingModelMeter
+
+    service, session = usage_service
+
+    async def stream():
+        yield _Response(
+            usage=SimpleNamespace(input_tokens=3, output_tokens=1),
+        )
+        raise RuntimeError("stream transport failed")
+
+    wrapper = TokenRecordingModelWrapper(
+        "provider",
+        _Model(stream()),
+        meter=BillingModelMeter(service),
+    )
+    token = _scope(session)
+    try:
+        with pytest.raises(RuntimeError, match="stream transport failed"):
+            await _consume(await wrapper(messages=[], max_tokens=1000))
+    finally:
+        reset_current_billing_context(token)
+
+    assert len(service.list_items(session.usage_order_id)) == 1
+    item = service.list_items(session.usage_order_id)[0]
+    assert item["billability"] == "unknown"
+    assert item["status"] == "reconciling"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "expected_billability"),
+    [
+        (_ProviderError("validation"), "unknown"),
+        (_ProviderError("bad request", status_code=400), "unknown"),
+        (_ProviderError("limited", status_code=429), "unknown"),
+        (_ProviderError("local", phase="pre_contact"), "not_billable"),
+        (_ProviderError("declined", supplier_not_billed=True), "not_billable"),
+    ],
+)
+async def test_exception_billability_requires_explicit_non_charge_evidence(
+    usage_service,
+    error,
+    expected_billability,
+):
+    from qwenpaw.app.billing.model_meter import BillingModelMeter
+
+    service, session = usage_service
+    wrapper = TokenRecordingModelWrapper(
+        "provider",
+        _Model(error=error),
+        meter=BillingModelMeter(service),
+    )
+    token = _scope(session)
+    try:
+        with pytest.raises(_ProviderError):
+            await wrapper(messages=[], max_tokens=1000)
+    finally:
+        reset_current_billing_context(token)
+
+    item = service.list_items(session.usage_order_id)[0]
+    assert item["billability"] == expected_billability
+
+
+@pytest.mark.asyncio
+async def test_synthetic_chat_response_id_is_not_supplier_billing_evidence(
+    usage_service,
+):
+    from qwenpaw.app.billing.model_meter import BillingModelMeter
+
+    service, session = usage_service
+    wrapper = TokenRecordingModelWrapper(
+        "provider",
+        _Model(
+            _Response(
+                usage=SimpleNamespace(input_tokens=3, output_tokens=2),
+                response_id="agentscope-generated-id",
+                supplier_billing_reference=None,
+            ),
+        ),
+        meter=BillingModelMeter(service),
+    )
+    token = _scope(session)
+    try:
+        await wrapper(messages=[], max_tokens=1000)
+    finally:
+        reset_current_billing_context(token)
+
+    item = service.list_items(session.usage_order_id)[0]
+    assert item["billability"] == "unknown"
+    assert item["status"] == "reconciling"
+
+
+@pytest.mark.asyncio
+async def test_financial_write_fallback_attempts_reconciliation_once(
+    usage_service,
+):
+    from qwenpaw.app.billing.model_meter import (
+        BillingModelMeter,
+        BillingSettlementError,
+    )
+
+    service, session = usage_service
+    failing_service = _AlwaysFailsSettlement(service)
+    wrapper = TokenRecordingModelWrapper(
+        "provider",
+        _Model(
+            _Response(usage=SimpleNamespace(input_tokens=3, output_tokens=2)),
+        ),
+        meter=BillingModelMeter(failing_service),
+    )
+    token = _scope(session)
+    try:
+        with pytest.raises(BillingSettlementError):
+            await wrapper(messages=[], max_tokens=1000)
+    finally:
+        reset_current_billing_context(token)
+
+    assert failing_service.settle_attempts == 2
+    item = service.list_items(session.usage_order_id)[0]
+    assert item["status"] == "held"
+    assert service.repository.balance(session.wallet_id).held > 0
+
+
+@pytest.mark.asyncio
+async def test_cjk_reservation_and_provider_limit_share_the_same_frozen_cap(
+    usage_service,
+):
+    from qwenpaw.app.billing.model_meter import BillingModelMeter
+
+    service, session = usage_service
+    model = _Model(
+        _Response(usage=SimpleNamespace(input_tokens=6, output_tokens=2)),
+        generate_kwargs={"max_tokens": 12},
+    )
+    wrapper = TokenRecordingModelWrapper(
+        "provider",
+        model,
+        meter=BillingModelMeter(service, default_max_output_tokens=32),
+    )
+    token = _scope(session)
+    try:
+        await wrapper(
+            messages=[{"role": "user", "content": "你好世界"}],
+            max_tokens=100,
+        )
+    finally:
+        reset_current_billing_context(token)
+
+    stored = _stored_item(service, session.usage_order_id)
+    reservation = json.loads(stored["usage_snapshot_json"])["reservation"]
+    assert reservation["input_tokens"] >= len("你好世界".encode("utf-8"))
+    assert reservation["max_output_tokens"] == 12
+    assert model.received_kwargs[0]["max_tokens"] == 12
