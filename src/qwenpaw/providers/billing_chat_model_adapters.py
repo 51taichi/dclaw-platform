@@ -8,6 +8,8 @@ from agentscope.model import AnthropicChatModel, GeminiChatModel
 from agentscope.model._model_response import ChatResponse
 from pydantic import BaseModel
 
+from ..app.billing.supplier_reference_sidecar import stash_supplier_reference
+
 
 def _attach_reference(
     parsed: ChatResponse,
@@ -15,9 +17,7 @@ def _attach_reference(
     source: str,
 ) -> ChatResponse:
     """Write an explicit reference only when the raw adapter field exists."""
-    if isinstance(reference, str) and reference.strip():
-        parsed.supplier_billing_reference = reference.strip()
-        parsed.supplier_billing_reference_source = source
+    stash_supplier_reference(parsed, reference, source)
     return parsed
 
 

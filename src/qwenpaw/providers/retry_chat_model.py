@@ -26,7 +26,9 @@ Semaphore ownership rules:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
+from collections.abc import AsyncIterable
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator
 
@@ -307,7 +309,7 @@ class RetryChatModel(ChatModelBase):
 
     async def _consume_stream_with_slot(
         self,
-        stream: AsyncGenerator[ChatResponse, None],
+        stream: AsyncIterable[ChatResponse],
         limiter: LLMRateLimiter,
     ) -> AsyncGenerator[ChatResponse, None]:
         """Yield all chunks from *stream*, managing the semaphore slot
@@ -325,15 +327,18 @@ class RetryChatModel(ChatModelBase):
         exhausted.
         """
         first_chunk = True
+        iterator = stream.__aiter__()
         try:
-            async for chunk in stream:
+            async for chunk in iterator:
                 if first_chunk:
                     first_chunk = False
                     # return the slot once the API starts delivering
                     limiter.release()
                 yield chunk
         finally:
-            await stream.aclose()
+            await _close_async_iterable(iterator)
+            if iterator is not stream:
+                await _close_async_iterable(stream)
             if first_chunk:
                 # Stream failed before producing any chunk;
                 # slot not yet released.
@@ -404,7 +409,7 @@ class RetryChatModel(ChatModelBase):
                     )
                     result = await self._inner(*args, **kwargs)
 
-                if isinstance(result, AsyncGenerator):
+                if _is_async_iterable(result):
                     # Transfer semaphore ownership to _wrap_stream, which uses
                     # _consume_stream_with_slot internally and handles
                     # retries on stream failure.
@@ -449,7 +454,7 @@ class RetryChatModel(ChatModelBase):
     # pylint: disable=too-many-branches
     async def _wrap_stream(
         self,
-        stream: AsyncGenerator[ChatResponse, None],
+        stream: AsyncIterable[ChatResponse],
         call_args: tuple,
         call_kwargs: dict,
         current_attempt: int,
@@ -508,7 +513,7 @@ class RetryChatModel(ChatModelBase):
 
                 result = await self._inner(*call_args, **call_kwargs)
 
-                if isinstance(result, AsyncGenerator):
+                if _is_async_iterable(result):
                     owns_semaphore = False
                     try:
                         async for chunk in self._consume_stream_with_slot(
@@ -567,3 +572,26 @@ class RetryChatModel(ChatModelBase):
             finally:
                 if owns_semaphore and acquired:
                     limiter.release()
+
+
+def _is_async_iterable(value: Any) -> bool:
+    """Recognize SDK iterator wrappers as well as native async generators."""
+    try:
+        return isinstance(value, AsyncIterable) or callable(
+            getattr(value, "__aiter__", None),
+        )
+    except (AttributeError, KeyError, TypeError):
+        return False
+
+
+async def _close_async_iterable(stream: AsyncIterable[Any]) -> None:
+    """Close native generators and SDK async iterators when supported."""
+    try:
+        close = getattr(stream, "aclose", None)
+    except (AttributeError, KeyError, TypeError):
+        return
+    if not callable(close):
+        return
+    result = close()
+    if inspect.isawaitable(result):
+        await result

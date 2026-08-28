@@ -488,10 +488,14 @@ def _get_formatter_for_chat_model(
     Returns:
         Corresponding formatter class, defaults to OpenAIChatFormatter
     """
-    return _CHAT_MODEL_FORMATTER_MAP.get(
-        chat_model_class,
-        OpenAIChatFormatter,
-    )
+    # Task4 provider adapters subclass AgentScope's concrete classes.  An
+    # exact lookup silently classified those adapters as OpenAI, including in
+    # auto-routing, so select the first mapped ancestor in the class MRO.
+    for candidate in getattr(chat_model_class, "__mro__", ()):
+        formatter = _CHAT_MODEL_FORMATTER_MAP.get(candidate)
+        if formatter is not None:
+            return formatter
+    return OpenAIChatFormatter
 
 
 def _substitute_video_blocks(

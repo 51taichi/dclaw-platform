@@ -17,6 +17,10 @@ from uuid import uuid4
 
 from ..agent_context import get_current_billing_context
 from .open_api import OpenApiBillingSession
+from .supplier_reference_sidecar import (
+    SupplierReference,
+    pop_supplier_reference,
+)
 from .usage import (
     ReserveModelCall,
     SettleModelCall,
@@ -35,6 +39,11 @@ class MeteredModelCall:
     model_key: str
     _finalization_lock: Lock = field(default_factory=Lock, repr=False)
     _finalized: bool = field(default=False, init=False, repr=False)
+    _stream_supplier_reference: SupplierReference = field(
+        default_factory=lambda: SupplierReference("", ""),
+        init=False,
+        repr=False,
+    )
 
     def claim_finalization(self) -> bool:
         """Return true exactly once, across stream finalization paths."""
@@ -44,13 +53,20 @@ class MeteredModelCall:
             self._finalized = True
             return True
 
+    def remember_stream_supplier_reference(
+        self,
+        reference: SupplierReference,
+    ) -> None:
+        """Keep one private stream reference after its chunk is yielded."""
+        if not reference.value:
+            return
+        with self._finalization_lock:
+            if not self._stream_supplier_reference.value:
+                self._stream_supplier_reference = reference
 
-@dataclass(frozen=True)
-class SupplierReference:
-    """A supplier reference explicitly surfaced by a provider adapter."""
-
-    value: str
-    source: str
+    def stream_supplier_reference(self) -> SupplierReference:
+        with self._finalization_lock:
+            return self._stream_supplier_reference
 
 
 class BillingSettlementError(RuntimeError):
@@ -169,6 +185,8 @@ class BillingModelMeter:
             return None
         usage = _official_usage(response)
         supplier_reference = _supplier_reference(response)
+        if not supplier_reference.value:
+            supplier_reference = call.stream_supplier_reference()
         if usage is not None and supplier_reference.value:
             return self._settle(
                 call,
@@ -194,6 +212,17 @@ class BillingModelMeter:
             actual_output_tokens=0,
         )
 
+    def observe_stream_chunk(
+        self,
+        call: MeteredModelCall | None,
+        response: Any,
+    ) -> None:
+        """Consume sidecar evidence before a public stream chunk is yielded."""
+        if call is None:
+            pop_supplier_reference(response)
+            return
+        call.remember_stream_supplier_reference(_supplier_reference(response))
+
     def record_exception(
         self,
         call: MeteredModelCall | None,
@@ -209,6 +238,8 @@ class BillingModelMeter:
             supplier_contacted=supplier_contacted,
         )
         reference = _supplier_reference(error)
+        if not reference.value:
+            reference = call.stream_supplier_reference()
         return self._settle(
             call,
             billability=billability,
@@ -325,14 +356,12 @@ def _official_usage(response: Any) -> dict[str, int] | None:
 
 
 def _supplier_reference(value: Any) -> SupplierReference:
-    reference = str(
-        _optional_value(value, "supplier_billing_reference") or "",
-    ).strip()
-    source = str(
-        _optional_value(value, "supplier_billing_reference_source") or "",
-    ).strip()
-    if reference and source in _SUPPLIER_REFERENCE_SOURCES:
-        return SupplierReference(reference, source)
+    sidecar_reference = pop_supplier_reference(value)
+    if (
+        sidecar_reference.value
+        and sidecar_reference.source in _SUPPLIER_REFERENCE_SOURCES
+    ):
+        return sidecar_reference
     return SupplierReference("", "")
 
 
@@ -346,16 +375,6 @@ _SUPPLIER_REFERENCE_SOURCES = frozenset(
         "gemini.response_id",
     },
 )
-
-
-def _optional_value(value: Any, name: str) -> Any:
-    """Safely read optional fields from AgentScope's dict-like responses."""
-    try:
-        if isinstance(value, Mapping):
-            return value.get(name)
-        return getattr(value, name, None)
-    except (AttributeError, KeyError, TypeError):
-        return None
 
 
 def _exception_outcome(

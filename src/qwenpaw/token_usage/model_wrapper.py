@@ -14,9 +14,14 @@ from pydantic import BaseModel
 
 from .buffer import _UsageEvent
 from .manager import get_token_usage_manager
+from ..app.billing.supplier_reference_sidecar import pop_supplier_reference
 
 
 logger = logging.getLogger(__name__)
+
+
+class UnsupportedBillingProviderError(RuntimeError):
+    """An enforced OpenAPI call lacks a safe provider cap adapter."""
 
 
 class TokenRecordingModelWrapper(ChatModelBase):
@@ -116,6 +121,13 @@ class TokenRecordingModelWrapper(ChatModelBase):
                 kwargs,
                 self._meter.platform_max_output_tokens,
             )
+            if (
+                not prepared_call.supported
+                and _is_enforced_openapi_billing_context()
+            ):
+                raise UnsupportedBillingProviderError(
+                    "cannot enforce billing for an unknown provider adapter",
+                )
             meter_call = self._meter.before_call(
                 provider_id=self._provider_id,
                 model_key=self.model_name,
@@ -125,7 +137,8 @@ class TokenRecordingModelWrapper(ChatModelBase):
             )
             if meter_call is not None:
                 self._meter.mark_provider_call_started(meter_call)
-                kwargs = prepared_call.kwargs
+                if prepared_call.supported:
+                    kwargs = prepared_call.kwargs
         try:
             result = await self._model(
                 messages=messages,
@@ -148,6 +161,10 @@ class TokenRecordingModelWrapper(ChatModelBase):
             )
         if meter_call is not None:
             self._meter.record_response(meter_call, result)
+        else:
+            # Adapters may have supplied private evidence even outside an
+            # OpenAPI scope.  Do not retain it past the public return edge.
+            pop_supplier_reference(result)
         self._record_usage(getattr(result, "usage", None))
         return result
 
@@ -158,6 +175,7 @@ class _PreparedProviderCall:
 
     max_output_tokens: int
     kwargs: dict[str, Any]
+    supported: bool = True
 
 
 class _MeteredAsyncIterator(AsyncIterator[ChatResponse]):
@@ -197,6 +215,10 @@ class _MeteredAsyncIterator(AsyncIterator[ChatResponse]):
             self._finish_interrupted(exc)
             raise
         self._last_chunk = chunk
+        if self._meter is not None:
+            self._meter.observe_stream_chunk(self._call, chunk)
+        else:
+            pop_supplier_reference(chunk)
         usage = getattr(chunk, "usage", None)
         if usage is not None:
             self._last_usage = usage
@@ -245,6 +267,20 @@ def _is_async_iterable(value: Any) -> bool:
         return False
 
 
+def _is_enforced_openapi_billing_context() -> bool:
+    """Only enforced OpenAPI traffic must fail closed for unknown adapters."""
+    # Keep this import local: agent_context's normal startup graph eventually
+    # imports model_factory, which imports this wrapper.
+    from ..app.agent_context import get_current_billing_context
+    from ..app.billing.open_api import OpenApiBillingSession
+
+    context = get_current_billing_context()
+    return (
+        isinstance(context, OpenApiBillingSession)
+        and context.mode == "enforced"
+    )
+
+
 def _prepare_provider_call(
     model: Any,
     call_kwargs: Mapping[str, Any],
@@ -274,24 +310,28 @@ def _prepare_provider_call(
         kwargs["max_output_tokens"] = cap
         return _PreparedProviderCall(cap, kwargs)
     if kind == "ollama":
+        model_options = _mapping_value(model, "options")
         cap = _minimum_limit(
             platform_cap,
             _flat_limits(call_kwargs),
             _ollama_limits(call_kwargs),
             _flat_limits(model_kwargs),
             _ollama_limits(model_kwargs),
+            [_safe_limit(model_options.get("num_predict"))],
         )
         kwargs.pop("max_tokens", None)
         kwargs.pop("max_output_tokens", None)
-        options = dict(_mapping_value(model_kwargs, "options"))
+        options = dict(model_options)
+        options.update(_mapping_value(model_kwargs, "options"))
         options.update(_mapping_value(call_kwargs, "options"))
         options["num_predict"] = cap
         kwargs["options"] = options
         return _PreparedProviderCall(cap, kwargs)
 
-    kwargs.pop("max_tokens", None)
-    kwargs.pop("max_output_tokens", None)
-    return _PreparedProviderCall(platform_cap, kwargs)
+    # Do not strip potentially valid provider arguments if we cannot prove
+    # their native contract.  Enforced OpenAPI callers reject this prior to
+    # reservation; observe/off/non-OpenAPI preserve their old behaviour.
+    return _PreparedProviderCall(platform_cap, kwargs, supported=False)
 
 
 def _provider_kind(model: Any) -> str | None:

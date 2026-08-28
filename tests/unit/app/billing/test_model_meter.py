@@ -149,10 +149,17 @@ class _Response:
         response_id="synthetic-response-id",
         supplier_billing_reference="supplier-response",
     ):
+        from qwenpaw.app.billing.supplier_reference_sidecar import (
+            stash_supplier_reference,
+        )
+
         self.usage = usage
         self.id = response_id
-        self.supplier_billing_reference = supplier_billing_reference
-        self.supplier_billing_reference_source = "provider_response"
+        stash_supplier_reference(
+            self,
+            supplier_billing_reference,
+            "provider_response",
+        )
         self.metadata = {"api_key": "must-not-be-recorded", "content": "nope"}
 
 
@@ -1145,21 +1152,21 @@ async def test_unknown_provider_keeps_platform_cap_without_invalid_limit(
     )
     token = _scope(session)
     try:
-        await wrapper(messages=[], max_tokens=100)
+        with pytest.raises(RuntimeError, match="cannot enforce billing"):
+            await wrapper(messages=[], max_tokens=100)
     finally:
         reset_current_billing_context(token)
 
-    reservation = json.loads(
-        _stored_item(service, session.usage_order_id)["usage_snapshot_json"],
-    )["reservation"]
-    assert reservation["max_output_tokens"] == 17
-    assert "max_tokens" not in model.received_kwargs[0]
-    assert "max_output_tokens" not in model.received_kwargs[0]
+    assert model.calls == 0
+    assert service.list_items(session.usage_order_id) == []
 
 
 def test_openai_adapter_emits_dedicated_reference_from_verified_raw_field():
     from qwenpaw.providers.openai_chat_model_compat import (
         attach_openai_supplier_billing_reference,
+    )
+    from qwenpaw.app.billing.supplier_reference_sidecar import (
+        pop_supplier_reference,
     )
 
     parsed = _agentscope_response(response_id="synthetic-id")
@@ -1168,7 +1175,170 @@ def test_openai_adapter_emits_dedicated_reference_from_verified_raw_field():
         SimpleNamespace(id="chatcmpl-verified"),
     )
 
-    assert parsed.supplier_billing_reference == "chatcmpl-verified"
-    assert (
-        parsed.supplier_billing_reference_source == "openai.chat.completion.id"
+    assert "supplier_billing_reference" not in dict(parsed)
+    assert "supplier_billing_reference_source" not in dict(parsed)
+    reference = pop_supplier_reference(parsed)
+    assert reference.value == "chatcmpl-verified"
+    assert reference.source == "openai.chat.completion.id"
+    assert not pop_supplier_reference(parsed).value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["observe", "off"])
+async def test_unknown_provider_does_not_mutate_or_block_non_enforced_calls(
+    usage_service,
+    mode,
+):
+    from dataclasses import replace
+
+    from qwenpaw.app.billing.model_meter import BillingModelMeter
+
+    class _UnknownModel(_Model):
+        billing_provider_kind = None
+
+    service, session = usage_service
+    model = _UnknownModel(
+        _Response(usage=SimpleNamespace(input_tokens=3, output_tokens=2)),
     )
+    wrapper = TokenRecordingModelWrapper(
+        "provider",
+        model,
+        meter=BillingModelMeter(service, default_max_output_tokens=17),
+    )
+    token = _scope(replace(session, mode=mode))
+    try:
+        await wrapper(messages=[], max_tokens=7)
+    finally:
+        reset_current_billing_context(token)
+
+    assert model.calls == 1
+    assert model.received_kwargs[0]["max_tokens"] == 7
+
+
+@pytest.mark.asyncio
+async def test_unknown_provider_non_openapi_call_is_not_mutated(usage_service):
+    from qwenpaw.app.billing.model_meter import BillingModelMeter
+
+    class _UnknownModel(_Model):
+        billing_provider_kind = None
+
+    service, _session = usage_service
+    model = _UnknownModel(
+        _Response(usage=SimpleNamespace(input_tokens=3, output_tokens=2)),
+    )
+    wrapper = TokenRecordingModelWrapper(
+        "provider",
+        model,
+        meter=BillingModelMeter(service, default_max_output_tokens=17),
+    )
+
+    await wrapper(messages=[], max_tokens=7)
+
+    assert model.calls == 1
+    assert model.received_kwargs[0]["max_tokens"] == 7
+
+
+@pytest.mark.asyncio
+async def test_ollama_model_options_cap_is_never_expanded(usage_service):
+    from qwenpaw.app.billing.model_meter import BillingModelMeter
+
+    service, session = usage_service
+    model = _Model(
+        _Response(usage=SimpleNamespace(input_tokens=3, output_tokens=2)),
+        generate_kwargs={"options": {"num_predict": 50}},
+    )
+    model.billing_provider_kind = "ollama"
+    model.options = {"num_predict": 4, "temperature": 0.2}
+    wrapper = TokenRecordingModelWrapper(
+        "provider",
+        model,
+        meter=BillingModelMeter(service, default_max_output_tokens=1024),
+    )
+    token = _scope(session)
+    try:
+        await wrapper(messages=[], options={"num_predict": 40})
+    finally:
+        reset_current_billing_context(token)
+
+    reservation = json.loads(
+        _stored_item(service, session.usage_order_id)["usage_snapshot_json"],
+    )["reservation"]
+    assert reservation["max_output_tokens"] == 4
+    assert model.received_kwargs[0]["options"] == {
+        "num_predict": 4,
+        "temperature": 0.2,
+    }
+
+
+@pytest.mark.asyncio
+async def test_sidecar_is_discarded_before_non_openapi_response_is_returned(
+    usage_service,
+):
+    from qwenpaw.app.billing.model_meter import BillingModelMeter
+    from qwenpaw.app.billing.supplier_reference_sidecar import (
+        pop_supplier_reference,
+        stash_supplier_reference,
+    )
+
+    service, _session = usage_service
+    response = _agentscope_response()
+    stash_supplier_reference(
+        response,
+        "private-upstream-id",
+        "openai.chat.completion.id",
+    )
+    wrapper = TokenRecordingModelWrapper(
+        "provider",
+        _Model(response),
+        meter=BillingModelMeter(service),
+    )
+
+    returned = await wrapper(messages=[])
+
+    assert returned is response
+    assert "supplier_billing_reference" not in dict(returned)
+    assert not pop_supplier_reference(returned).value
+
+
+@pytest.mark.asyncio
+async def test_shared_response_sidecar_does_not_cross_supplier_evidence(
+    usage_service,
+):
+    import asyncio
+
+    from qwenpaw.app.billing.model_meter import BillingModelMeter
+    from qwenpaw.app.billing.supplier_reference_sidecar import (
+        stash_supplier_reference,
+    )
+
+    service, session = usage_service
+    response = _agentscope_response()
+    stash_supplier_reference(
+        response,
+        "private-upstream-id",
+        "openai.chat.completion.id",
+    )
+    wrapper = TokenRecordingModelWrapper(
+        "provider",
+        _Model(response),
+        meter=BillingModelMeter(service),
+    )
+    token = _scope(session)
+    try:
+        await asyncio.gather(wrapper(messages=[]), wrapper(messages=[]))
+    finally:
+        reset_current_billing_context(token)
+
+    with service.repository.engine.connect() as conn:
+        references = (
+            conn.execute(
+                select(billing_usage_items.c.supplier_reference).where(
+                    billing_usage_items.c.usage_order_id
+                    == session.usage_order_id,
+                ),
+            )
+            .scalars()
+            .all()
+        )
+    assert references.count("private-upstream-id") == 1
+    assert "supplier_billing_reference" not in dict(response)

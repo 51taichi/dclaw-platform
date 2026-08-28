@@ -151,9 +151,11 @@ def attach_openai_supplier_billing_reference(
         reference = getattr(raw_response, "id", None)
     except (AttributeError, KeyError, TypeError):
         reference = None
-    if isinstance(reference, str) and reference.strip():
-        parsed.supplier_billing_reference = reference.strip()
-        parsed.supplier_billing_reference_source = source
+    from ..app.billing.supplier_reference_sidecar import (
+        stash_supplier_reference,
+    )
+
+    stash_supplier_reference(parsed, reference, source)
     return parsed
 
 
