@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Model wrapper that records token usage from LLM responses."""
 
+import inspect
 import logging
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
@@ -196,23 +197,32 @@ class _MeteredAsyncIterator(AsyncIterator[ChatResponse]):
         self._record_usage = record_usage
         self._last_chunk: ChatResponse | None = None
         self._last_usage: ChatUsage | None = None
-        self._closed = False
+        self._owner_terminal = False
+        self._financial_finalized = False
+        self._iterator_closed = False
+        self._iterable_closed = False
 
     def __aiter__(self) -> "_MeteredAsyncIterator":
         return self
 
     async def __anext__(self) -> ChatResponse:
-        if self._closed:
+        if self._owner_terminal:
             raise StopAsyncIteration
         try:
             chunk = await self._iterator.__anext__()
-        except StopAsyncIteration:
-            self._closed = True
-            self._finish_success()
+        except StopAsyncIteration as outcome:
+            self._owner_terminal = True
+            try:
+                self._finish_success()
+            except BaseException as finalization_error:
+                await self._close_transport(finalization_error)
+                raise
+            await self._close_transport(outcome)
             raise
         except BaseException as exc:
-            self._closed = True
+            self._owner_terminal = True
             self._finish_interrupted(exc)
+            await self._close_transport(exc)
             raise
         self._last_chunk = chunk
         if self._meter is not None:
@@ -225,26 +235,100 @@ class _MeteredAsyncIterator(AsyncIterator[ChatResponse]):
         return chunk
 
     async def aclose(self) -> None:
-        if self._closed:
-            return
+        self._owner_terminal = True
+        active_error: BaseException | None = None
         try:
-            close = getattr(self._stream, "aclose", None)
-            if close is not None:
-                await close()
-        finally:
-            self._closed = True
             self._finish_interrupted(
                 RuntimeError("provider stream interrupted"),
             )
+        except BaseException as exc:
+            active_error = exc
+            raise
+        finally:
+            await self._close_transport(active_error)
 
     def _finish_success(self) -> None:
+        if self._financial_finalized:
+            return
+        self._financial_finalized = True
         if self._meter is not None:
             self._meter.record_response(self._call, self._last_chunk)
         self._record_usage(self._last_usage)
 
     def _finish_interrupted(self, error: BaseException) -> None:
+        if self._financial_finalized:
+            return
+        self._financial_finalized = True
         if self._meter is not None:
             _record_exception_without_masking(self._meter, self._call, error)
+
+    async def _close_transport(
+        self,
+        active_error: BaseException | None,
+    ) -> None:
+        """Best-effort close each distinct provider owner exactly once."""
+        cleanup_errors: list[BaseException] = []
+        if not self._iterator_closed:
+            self._iterator_closed = True
+            error = await _close_async_resource(
+                self._iterator,
+                "iterator",
+                active_error,
+            )
+            if error is not None:
+                cleanup_errors.append(error)
+
+        if self._stream is self._iterator:
+            self._iterable_closed = True
+        elif not self._iterable_closed:
+            self._iterable_closed = True
+            error = await _close_async_resource(
+                self._stream,
+                "iterable",
+                active_error,
+            )
+            if error is not None:
+                cleanup_errors.append(error)
+
+        if active_error is None:
+            for cleanup_error in cleanup_errors:
+                if not isinstance(cleanup_error, Exception):
+                    raise cleanup_error
+
+
+async def _close_async_resource(
+    resource: Any,
+    owner_kind: str,
+    active_error: BaseException | None,
+) -> BaseException | None:
+    """Close one provider stream owner without masking an active outcome."""
+    try:
+        close = getattr(resource, "aclose", None)
+    except (AttributeError, KeyError, TypeError):
+        return None
+    if not callable(close):
+        return None
+    try:
+        result = close()
+        if inspect.isawaitable(result):
+            await result
+    except BaseException as cleanup_error:
+        logger.warning(
+            "provider stream %s cleanup failed; preserving %s",
+            owner_kind,
+            (
+                type(active_error).__name__
+                if active_error is not None
+                else "stream outcome"
+            ),
+            exc_info=(
+                type(cleanup_error),
+                cleanup_error,
+                cleanup_error.__traceback__,
+            ),
+        )
+        return cleanup_error
+    return None
 
 
 def _record_exception_without_masking(

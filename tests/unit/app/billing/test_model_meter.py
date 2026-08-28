@@ -183,6 +183,118 @@ class _Model:
         return self.result
 
 
+class _SequenceModel(_Model):
+    """Return one provider result for each retry attempt."""
+
+    def __init__(self, results):
+        super().__init__()
+        self._results = iter(results)
+
+    async def __call__(self, **kwargs):
+        self.calls += 1
+        self.received_kwargs.append(kwargs)
+        return next(self._results)
+
+
+class _RawProviderIterator:
+    """SDK-like iterator kept distinct from its iterable response shell."""
+
+    def __init__(self, values=(), *, error=None, close_error=None):
+        self._values = iter(values)
+        self._error = error
+        self._raised = False
+        self._close_error = close_error
+        self.close_calls = 0
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._values)
+        except StopIteration as exc:
+            if self._error is not None and not self._raised:
+                self._raised = True
+                raise self._error from exc
+            raise StopAsyncIteration from exc
+
+    async def aclose(self):
+        self.close_calls += 1
+        if self._close_error is not None:
+            raise self._close_error
+
+
+class _RawProviderIterable:
+    def __init__(self, iterator, *, close_error=None):
+        self.iterator = iterator
+        self._close_error = close_error
+        self.close_calls = 0
+
+    def __aiter__(self):
+        return self.iterator
+
+    async def aclose(self):
+        self.close_calls += 1
+        if self._close_error is not None:
+            raise self._close_error
+
+
+class _CountingBillingMeter:
+    def __init__(self, service):
+        from qwenpaw.app.billing.model_meter import BillingModelMeter
+
+        self._inner = BillingModelMeter(service)
+        self.response_calls = 0
+        self.exception_calls = 0
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def record_response(self, call, response):
+        self.response_calls += 1
+        return self._inner.record_response(call, response)
+
+    def record_exception(self, call, error, *, supplier_contacted=True):
+        self.exception_calls += 1
+        return self._inner.record_exception(
+            call,
+            error,
+            supplier_contacted=supplier_contacted,
+        )
+
+
+def _retry_wrapper(provider, *, meter, retries=0):
+    from qwenpaw.providers.retry_chat_model import (
+        RateLimitConfig,
+        RetryChatModel,
+        RetryConfig,
+    )
+
+    return RetryChatModel(
+        TokenRecordingModelWrapper("provider", provider, meter=meter),
+        retry_config=RetryConfig(
+            enabled=retries > 0,
+            max_retries=max(1, retries),
+            backoff_base=0.1,
+            backoff_cap=0.5,
+        ),
+        rate_limit_config=RateLimitConfig(max_concurrent=1, max_qpm=0),
+    )
+
+
+def _reset_test_rate_limiter():
+    from qwenpaw.providers.rate_limiter import reset_rate_limiter
+
+    reset_rate_limiter()
+
+
+async def _test_rate_limiter_in_flight():
+    from qwenpaw.providers.rate_limiter import get_rate_limiter
+
+    limiter = await get_rate_limiter()
+    return limiter.stats()["current_in_flight"]
+
+
 class _FailsFirstSettlement:
     """Inject one synchronous accounting outage after supplier success."""
 
@@ -1002,6 +1114,211 @@ async def test_retry_outer_unstarted_close_finalizes_billing_and_slot_once(
     finally:
         reset_current_billing_context(token)
         reset_rate_limiter()
+
+
+@pytest.mark.asyncio
+async def test_retry_metered_normal_exhaustion_closes_raw_owners_once(
+    usage_service,
+):
+    service, session = usage_service
+    raw_iterator = _RawProviderIterator(
+        [_Response(usage=SimpleNamespace(input_tokens=3, output_tokens=2))],
+    )
+    raw_iterable = _RawProviderIterable(raw_iterator)
+    meter = _CountingBillingMeter(service)
+    wrapper = _retry_wrapper(_Model(raw_iterable), meter=meter)
+    _reset_test_rate_limiter()
+    token = _scope(session)
+    try:
+        result = await wrapper(messages=[], max_tokens=1000)
+        assert len([chunk async for chunk in result]) == 1
+        await result.aclose()
+        await result.aclose()
+
+        assert raw_iterator.close_calls == 1
+        assert raw_iterable.close_calls == 1
+        assert meter.response_calls == 1
+        assert meter.exception_calls == 0
+        assert await _test_rate_limiter_in_flight() == 0
+    finally:
+        reset_current_billing_context(token)
+        _reset_test_rate_limiter()
+
+
+@pytest.mark.asyncio
+async def test_retry_metered_iterator_error_preserves_business_error(
+    usage_service,
+):
+    service, session = usage_service
+    business_error = ValueError("provider iterator failed")
+    raw_iterator = _RawProviderIterator(
+        error=business_error,
+        close_error=RuntimeError("iterator close failed"),
+    )
+    raw_iterable = _RawProviderIterable(
+        raw_iterator,
+        close_error=RuntimeError("iterable close failed"),
+    )
+    meter = _CountingBillingMeter(service)
+    wrapper = _retry_wrapper(_Model(raw_iterable), meter=meter)
+    _reset_test_rate_limiter()
+    token = _scope(session)
+    try:
+        result = await wrapper(messages=[], max_tokens=1000)
+        with pytest.raises(ValueError) as raised:
+            await result.__anext__()
+        await result.aclose()
+
+        assert raised.value is business_error
+        assert raw_iterator.close_calls == 1
+        assert raw_iterable.close_calls == 1
+        assert meter.response_calls == 0
+        assert meter.exception_calls == 1
+        assert await _test_rate_limiter_in_flight() == 0
+    finally:
+        reset_current_billing_context(token)
+        _reset_test_rate_limiter()
+
+
+@pytest.mark.asyncio
+async def test_retry_metered_transient_failure_closes_both_raw_attempts(
+    usage_service,
+    monkeypatch,
+):
+    import asyncio
+
+    class _TransientStreamError(RuntimeError):
+        status_code = 500
+
+    service, session = usage_service
+    transient_error = _TransientStreamError("retry this stream")
+    first_iterator = _RawProviderIterator(
+        error=transient_error,
+        close_error=RuntimeError("first iterator close failed"),
+    )
+    first_iterable = _RawProviderIterable(first_iterator)
+    second_iterator = _RawProviderIterator(
+        [_Response(usage=SimpleNamespace(input_tokens=4, output_tokens=1))],
+    )
+    second_iterable = _RawProviderIterable(second_iterator)
+    provider = _SequenceModel([first_iterable, second_iterable])
+    meter = _CountingBillingMeter(service)
+    wrapper = _retry_wrapper(provider, meter=meter, retries=1)
+
+    async def _no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    _reset_test_rate_limiter()
+    token = _scope(session)
+    try:
+        result = await wrapper(messages=[], max_tokens=1000)
+        assert len([chunk async for chunk in result]) == 1
+        await result.aclose()
+
+        assert provider.calls == 2
+        assert first_iterator.close_calls == 1
+        assert first_iterable.close_calls == 1
+        assert second_iterator.close_calls == 1
+        assert second_iterable.close_calls == 1
+        assert meter.response_calls == 1
+        assert meter.exception_calls == 1
+        assert await _test_rate_limiter_in_flight() == 0
+    finally:
+        reset_current_billing_context(token)
+        _reset_test_rate_limiter()
+
+
+@pytest.mark.asyncio
+async def test_retry_metered_started_cancellation_closes_raw_owners_once(
+    usage_service,
+):
+    import asyncio
+
+    entered = asyncio.Event()
+
+    class _BlockingRawProviderIterator(_RawProviderIterator):
+        async def __anext__(self):
+            entered.set()
+            await asyncio.Event().wait()
+
+    service, session = usage_service
+    raw_iterator = _BlockingRawProviderIterator(
+        close_error=RuntimeError("iterator close failed"),
+    )
+    raw_iterable = _RawProviderIterable(
+        raw_iterator,
+        close_error=RuntimeError("iterable close failed"),
+    )
+    meter = _CountingBillingMeter(service)
+    wrapper = _retry_wrapper(_Model(raw_iterable), meter=meter)
+    _reset_test_rate_limiter()
+    token = _scope(session)
+    try:
+        result = await wrapper(messages=[], max_tokens=1000)
+        task = asyncio.create_task(result.__anext__())
+        await entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await result.aclose()
+
+        assert raw_iterator.close_calls == 1
+        assert raw_iterable.close_calls == 1
+        assert meter.response_calls == 0
+        assert meter.exception_calls == 1
+        assert await _test_rate_limiter_in_flight() == 0
+    finally:
+        reset_current_billing_context(token)
+        _reset_test_rate_limiter()
+
+
+@pytest.mark.asyncio
+async def test_retry_metered_unstarted_close_closes_distinct_raw_owners_once(
+    usage_service,
+):
+    service, session = usage_service
+    raw_iterator = _RawProviderIterator(
+        [_Response(usage=SimpleNamespace(input_tokens=3, output_tokens=2))],
+        close_error=RuntimeError("iterator close failed"),
+    )
+    raw_iterable = _RawProviderIterable(raw_iterator)
+    meter = _CountingBillingMeter(service)
+    wrapper = _retry_wrapper(_Model(raw_iterable), meter=meter)
+    _reset_test_rate_limiter()
+    token = _scope(session)
+    try:
+        result = await wrapper(messages=[], max_tokens=1000)
+        await result.aclose()
+        await result.aclose()
+
+        assert raw_iterator.close_calls == 1
+        assert raw_iterable.close_calls == 1
+        assert meter.response_calls == 0
+        assert meter.exception_calls == 1
+        assert await _test_rate_limiter_in_flight() == 0
+    finally:
+        reset_current_billing_context(token)
+        _reset_test_rate_limiter()
+
+
+@pytest.mark.asyncio
+async def test_retry_unmetered_normal_exhaustion_closes_raw_owners_once():
+    raw_iterator = _RawProviderIterator([_Response()])
+    raw_iterable = _RawProviderIterable(raw_iterator)
+    wrapper = _retry_wrapper(_Model(raw_iterable), meter=None)
+    _reset_test_rate_limiter()
+    try:
+        result = await wrapper(messages=[])
+        assert len([chunk async for chunk in result]) == 1
+        await result.aclose()
+        await result.aclose()
+
+        assert raw_iterator.close_calls == 1
+        assert raw_iterable.close_calls == 1
+        assert await _test_rate_limiter_in_flight() == 0
+    finally:
+        _reset_test_rate_limiter()
 
 
 @pytest.mark.asyncio
