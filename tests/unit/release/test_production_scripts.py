@@ -88,7 +88,7 @@ elif args[:1] == ["compose"]:
         for line in env_path.read_text().splitlines()
         if line.startswith("DCLAW_IMAGE=")
     )
-    state["running_id"] = target_id if selected == target_digest else current_id
+    state["running_id"] = target_id if selected in (target_digest, target_id) else current_id
     state["compose_count"] += 1
     state_path.write_text(json.dumps(state))
 elif args[:1] in (["tag"], ["logs"]):
@@ -321,3 +321,62 @@ def test_update_failure_restores_previous_image_without_database_restore(
     assert state["compose_count"] == 2
     assert not _contains_call(calls, "pg_restore", "--clean")
     assert not _contains_call(calls, "volume", "rm")
+
+
+def test_status_is_read_only_and_redacts_secrets(
+    deployment: dict[str, object],
+) -> None:
+    root = deployment["root"]
+    assert isinstance(root, Path)
+    (root / "production.env").write_text(
+        "QWENPAW_DATABASE_URL=postgresql://user:secret-value@db/app\n"
+        "GHCR_TOKEN=secret-token\n"
+    )
+
+    result = _run(deployment, "status.sh")
+    calls = _calls(deployment)
+
+    assert result.returncode == 0, result.stderr
+    assert "secret-value" not in result.stdout
+    assert "secret-token" not in result.stdout
+    assert "postgresql://" not in result.stdout
+    assert not _contains_call(calls, "compose", "up")
+    assert not _contains_call(calls, "exec", "pg_dump")
+    assert not _contains_call(calls, "pull")
+
+
+def test_rollback_only_switches_application_image(
+    deployment: dict[str, object],
+) -> None:
+    root = deployment["root"]
+    assert isinstance(root, Path)
+    release = root / "releases" / "successful"
+    release.mkdir(parents=True)
+    (release / "manifest.json").write_text(
+        json.dumps(
+            {
+                "result": "UPDATE_SUCCESS",
+                "previous_image": "sha256:" + "1" * 64,
+                "target_image": "ghcr.io/51taichi/dclaw@sha256:" + "2" * 64,
+                "server_sha": "a" * 40,
+                "client_sha": "b" * 40,
+            }
+        )
+    )
+    (root / "LATEST_SUCCESS").write_text(str(release) + "\n")
+    env = deployment["env"]
+    assert isinstance(env, dict)
+    env["FAKE_CURRENT_ID"] = "sha256:" + "2" * 64
+    env["FAKE_CURRENT_DIGEST"] = "ghcr.io/51taichi/dclaw@sha256:" + "2" * 64
+    env["FAKE_TARGET_ID"] = "sha256:" + "1" * 64
+    env["FAKE_TARGET_DIGEST"] = "ghcr.io/51taichi/dclaw@sha256:" + "1" * 64
+
+    result = _run(deployment, "rollback.sh")
+    calls = _calls(deployment)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.endswith("ROLLBACK_SUCCESS\n")
+    assert _contains_call(calls, "compose", "up")
+    assert not _contains_call(calls, "exec", "pg_dump")
+    assert not _contains_call(calls, "volume", "rm")
+    assert not _contains_call(calls, "network", "rm")
