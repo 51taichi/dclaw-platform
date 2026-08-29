@@ -143,7 +143,7 @@ describe("OpenApiPage", () => {
     const keyButtons = screen.getAllByRole("button", {
       name: "创建 API Key",
     });
-    await user.click(keyButtons.at(-1)!);
+    await user.click(keyButtons[keyButtons.length - 1]);
 
     await waitFor(() => {
       expect(mockOpenApiApi.createKey).toHaveBeenCalledWith(
@@ -184,7 +184,7 @@ describe("OpenApiPage", () => {
     const createButtons = screen.getAllByRole("button", {
       name: "创建外部应用",
     });
-    await user.click(createButtons.at(-1)!);
+    await user.click(createButtons[createButtons.length - 1]);
 
     await waitFor(() => {
       expect(mockOpenApiApi.createApp).toHaveBeenCalledWith({

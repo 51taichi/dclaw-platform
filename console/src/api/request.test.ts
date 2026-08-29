@@ -39,6 +39,10 @@ function mockFetch(
   } as unknown as Response);
 }
 
+function requestedHeaders() {
+  return new Headers(vi.mocked(fetch).mock.calls[0]?.[1]?.headers);
+}
+
 describe("request", () => {
   beforeEach(() => {
     vi.mocked(buildAuthHeaders).mockReturnValue({});
@@ -59,21 +63,21 @@ describe("request", () => {
   it("GET request does not set Content-Type", async () => {
     mockFetch(200, { data: "ok" });
     await request("/models");
-    const headers: Headers = vi.mocked(fetch).mock.calls[0][1].headers;
+    const headers = requestedHeaders();
     expect(headers.has("Content-Type")).toBe(false);
   });
 
   it("POST request automatically adds Content-Type: application/json", async () => {
     mockFetch(200, { data: "ok" });
     await request("/models", { method: "POST", body: "{}" });
-    const headers: Headers = vi.mocked(fetch).mock.calls[0][1].headers;
+    const headers = requestedHeaders();
     expect(headers.get("Content-Type")).toBe("application/json");
   });
 
   it("PUT request automatically adds Content-Type", async () => {
     mockFetch(200, { status: "ok" });
     await request("/models/active", { method: "PUT", body: "{}" });
-    const headers: Headers = vi.mocked(fetch).mock.calls[0][1].headers;
+    const headers = requestedHeaders();
     expect(headers.get("Content-Type")).toBe("application/json");
   });
 
@@ -83,7 +87,7 @@ describe("request", () => {
       method: "POST",
       headers: { "Content-Type": "multipart/form-data" },
     });
-    const headers: Headers = vi.mocked(fetch).mock.calls[0][1].headers;
+    const headers = requestedHeaders();
     expect(headers.get("Content-Type")).toBe("multipart/form-data");
   });
 
@@ -147,7 +151,7 @@ describe("request", () => {
     });
     mockFetch(200, {});
     await request("/models");
-    const headers: Headers = vi.mocked(fetch).mock.calls[0][1].headers;
+    const headers = requestedHeaders();
     expect(headers.get("Authorization")).toBe("Bearer test-token");
   });
 
