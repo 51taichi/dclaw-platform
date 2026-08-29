@@ -75,11 +75,15 @@ class BillingExecutionRepository:
         values = _command_values(command)
         try:
             with self.engine.begin() as conn:
-                row = conn.execute(
-                    insert(billing_executions)
-                    .values(**values)
-                    .returning(billing_executions),
-                ).mappings().one()
+                row = (
+                    conn.execute(
+                        insert(billing_executions)
+                        .values(**values)
+                        .returning(billing_executions),
+                    )
+                    .mappings()
+                    .one()
+                )
                 return _record(row)
         except IntegrityError:
             existing = self._find_replay(command)
@@ -89,11 +93,15 @@ class BillingExecutionRepository:
 
     def get(self, execution_id: str) -> BillingExecutionRecord | None:
         with self.engine.connect() as conn:
-            row = conn.execute(
-                select(billing_executions).where(
-                    billing_executions.c.id == execution_id,
-                ),
-            ).mappings().one_or_none()
+            row = (
+                conn.execute(
+                    select(billing_executions).where(
+                        billing_executions.c.id == execution_id,
+                    ),
+                )
+                .mappings()
+                .one_or_none()
+            )
         return _record(row) if row is not None else None
 
     def get_by_usage_order(
@@ -101,12 +109,38 @@ class BillingExecutionRepository:
         usage_order_id: str,
     ) -> BillingExecutionRecord | None:
         with self.engine.connect() as conn:
-            row = conn.execute(
-                select(billing_executions).where(
-                    billing_executions.c.usage_order_id == usage_order_id,
-                ),
-            ).mappings().one_or_none()
+            row = (
+                conn.execute(
+                    select(billing_executions).where(
+                        billing_executions.c.usage_order_id == usage_order_id,
+                    ),
+                )
+                .mappings()
+                .one_or_none()
+            )
         return _record(row) if row is not None else None
+
+    def list_recoverable(self) -> list[BillingExecutionRecord]:
+        """Return nonterminal executions without treating pauses as stale."""
+        with self.engine.connect() as conn:
+            rows = (
+                conn.execute(
+                    select(billing_executions)
+                    .where(
+                        billing_executions.c.usage_order_id.is_not(None),
+                        billing_executions.c.state.in_(
+                            ("accepted", "running")
+                        ),
+                    )
+                    .order_by(
+                        billing_executions.c.created_at,
+                        billing_executions.c.id,
+                    ),
+                )
+                .mappings()
+                .all()
+            )
+        return [_record(row) for row in rows]
 
     def claim(
         self,
@@ -118,27 +152,31 @@ class BillingExecutionRepository:
         normalized_owner = _required(owner_token, "owner_token")
         deadline = _lease_deadline(self.engine, lease_seconds)
         with self.engine.begin() as conn:
-            row = conn.execute(
-                update(billing_executions)
-                .where(
-                    billing_executions.c.id == execution_id,
-                    billing_executions.c.state == "accepted",
-                    billing_executions.c.owner_token.is_(None),
-                )
-                .values(
-                    state="running",
-                    owner_token=normalized_owner,
-                    fence_generation=(
-                        billing_executions.c.fence_generation + 1
+            row = (
+                conn.execute(
+                    update(billing_executions)
+                    .where(
+                        billing_executions.c.id == execution_id,
+                        billing_executions.c.state == "accepted",
+                        billing_executions.c.owner_token.is_(None),
+                    )
+                    .values(
+                        state="running",
+                        owner_token=normalized_owner,
+                        fence_generation=(
+                            billing_executions.c.fence_generation + 1
+                        ),
+                        lease_expires_at=deadline,
+                        updated_at=_db_now(self.engine),
+                    )
+                    .returning(
+                        billing_executions.c.owner_token,
+                        billing_executions.c.fence_generation,
                     ),
-                    lease_expires_at=deadline,
-                    updated_at=_db_now(self.engine),
                 )
-                .returning(
-                    billing_executions.c.owner_token,
-                    billing_executions.c.fence_generation,
-                ),
-            ).mappings().one_or_none()
+                .mappings()
+                .one_or_none()
+            )
         return _fence(row)
 
     def renew(
@@ -156,8 +194,7 @@ class BillingExecutionRepository:
                     billing_executions.c.id == execution_id,
                     billing_executions.c.state == "running",
                     billing_executions.c.owner_token == fence.owner_token,
-                    billing_executions.c.fence_generation
-                    == fence.generation,
+                    billing_executions.c.fence_generation == fence.generation,
                     billing_executions.c.lease_expires_at > now,
                 )
                 .values(
@@ -180,29 +217,33 @@ class BillingExecutionRepository:
         normalized_owner = _required(owner_token, "owner_token")
         now = _db_now(self.engine)
         with self.engine.begin() as conn:
-            row = conn.execute(
-                update(billing_executions)
-                .where(
-                    billing_executions.c.id == execution_id,
-                    billing_executions.c.state == "running",
-                    billing_executions.c.lease_expires_at <= now,
-                )
-                .values(
-                    owner_token=normalized_owner,
-                    fence_generation=(
-                        billing_executions.c.fence_generation + 1
+            row = (
+                conn.execute(
+                    update(billing_executions)
+                    .where(
+                        billing_executions.c.id == execution_id,
+                        billing_executions.c.state == "running",
+                        billing_executions.c.lease_expires_at <= now,
+                    )
+                    .values(
+                        owner_token=normalized_owner,
+                        fence_generation=(
+                            billing_executions.c.fence_generation + 1
+                        ),
+                        lease_expires_at=_lease_deadline(
+                            self.engine,
+                            lease_seconds,
+                        ),
+                        updated_at=now,
+                    )
+                    .returning(
+                        billing_executions.c.owner_token,
+                        billing_executions.c.fence_generation,
                     ),
-                    lease_expires_at=_lease_deadline(
-                        self.engine,
-                        lease_seconds,
-                    ),
-                    updated_at=now,
                 )
-                .returning(
-                    billing_executions.c.owner_token,
-                    billing_executions.c.fence_generation,
-                ),
-            ).mappings().one_or_none()
+                .mappings()
+                .one_or_none()
+            )
         return _fence(row)
 
     def pause_for_insufficient_balance(
@@ -246,32 +287,36 @@ class BillingExecutionRepository:
         normalized_owner = _required(owner_token, "owner_token")
         now = _db_now(self.engine)
         with self.engine.begin() as conn:
-            row = conn.execute(
-                update(billing_executions)
-                .where(
-                    billing_executions.c.id == execution_id,
-                    billing_executions.c.state
-                    == "paused_insufficient_balance",
-                    billing_executions.c.owner_token.is_(None),
-                )
-                .values(
-                    state="running",
-                    owner_token=normalized_owner,
-                    fence_generation=(
-                        billing_executions.c.fence_generation + 1
+            row = (
+                conn.execute(
+                    update(billing_executions)
+                    .where(
+                        billing_executions.c.id == execution_id,
+                        billing_executions.c.state
+                        == "paused_insufficient_balance",
+                        billing_executions.c.owner_token.is_(None),
+                    )
+                    .values(
+                        state="running",
+                        owner_token=normalized_owner,
+                        fence_generation=(
+                            billing_executions.c.fence_generation + 1
+                        ),
+                        lease_expires_at=_lease_deadline(
+                            self.engine,
+                            lease_seconds,
+                        ),
+                        error_code=None,
+                        updated_at=now,
+                    )
+                    .returning(
+                        billing_executions.c.owner_token,
+                        billing_executions.c.fence_generation,
                     ),
-                    lease_expires_at=_lease_deadline(
-                        self.engine,
-                        lease_seconds,
-                    ),
-                    error_code=None,
-                    updated_at=now,
                 )
-                .returning(
-                    billing_executions.c.owner_token,
-                    billing_executions.c.fence_generation,
-                ),
-            ).mappings().one_or_none()
+                .mappings()
+                .one_or_none()
+            )
         return _fence(row)
 
     def finalize(
@@ -292,8 +337,7 @@ class BillingExecutionRepository:
                     billing_executions.c.id == execution_id,
                     billing_executions.c.state == "running",
                     billing_executions.c.owner_token == fence.owner_token,
-                    billing_executions.c.fence_generation
-                    == fence.generation,
+                    billing_executions.c.fence_generation == fence.generation,
                     billing_executions.c.lease_expires_at > now,
                 )
                 .values(
@@ -313,13 +357,16 @@ class BillingExecutionRepository:
         conditions = [billing_executions.c.id == command.execution_id]
         if command.usage_order_id:
             conditions.append(
-                billing_executions.c.usage_order_id
-                == command.usage_order_id,
+                billing_executions.c.usage_order_id == command.usage_order_id,
             )
         with self.engine.connect() as conn:
-            row = conn.execute(
-                select(billing_executions).where(or_(*conditions)),
-            ).mappings().first()
+            row = (
+                conn.execute(
+                    select(billing_executions).where(or_(*conditions)),
+                )
+                .mappings()
+                .first()
+            )
         return _record(row) if row is not None else None
 
 
@@ -378,9 +425,7 @@ def _record(row) -> BillingExecutionRecord:
             str(row["exemption_actor"]) if row["exemption_actor"] else None
         ),
         exemption_reason=(
-            str(row["exemption_reason"])
-            if row["exemption_reason"]
-            else None
+            str(row["exemption_reason"]) if row["exemption_reason"] else None
         ),
         error_code=(str(row["error_code"]) if row["error_code"] else None),
     )

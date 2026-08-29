@@ -266,6 +266,17 @@ def _recover_open_api_billing_at_startup() -> int:
         return 0
 
 
+def _recover_general_billing_at_startup() -> int:
+    """Recover enforced user entry points before accepting traffic."""
+    try:
+        from .billing.recovery import recover_general_billing
+
+        return recover_general_billing()
+    except Exception as exc:
+        logger.error("General billing recovery failed", exc_info=True)
+        raise RuntimeError("General billing recovery failed") from exc
+
+
 @asynccontextmanager
 async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
     app: FastAPI,
@@ -303,7 +314,8 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
     pricing_sync = build_pricing_sync_from_env()
     pricing_sync_task = (
         asyncio.create_task(pricing_sync_loop(pricing_sync))
-        if pricing_sync is not None else None
+        if pricing_sync is not None
+        else None
     )
 
     # Recover only bridge-created OpenAPI billing orders. Historical token
@@ -313,6 +325,12 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
         logger.info(
             "Recovered %d incomplete OpenAPI billing transition(s)",
             recovered_open_api_orders,
+        )
+    recovered_general_executions = _recover_general_billing_at_startup()
+    if recovered_general_executions:
+        logger.info(
+            "Recovered %d incomplete general billing execution(s)",
+            recovered_general_executions,
         )
 
     auto_register_from_env()

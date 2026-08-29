@@ -493,6 +493,36 @@ supplier calls, wallet/lot/ledger projections, reconciliation age/rate,
 PostgreSQL locks/deadlocks, Redis health, recovery logs, and Nginx upstream
 health for the full observation window.
 
+Enforced mode is immediate for every authenticated model entry point: web
+client, mobile, OpenAPI, expert teams, automations, schedules, and external
+channels. A zero-balance request must stop before supplier contact and expose
+only `INSUFFICIENT_CREDITS`, available/required credits, and the `/wallet`
+top-up path. For an expert team, verify that already completed members and
+their charges remain durable, the run pauses at the next member, a real grant
+changes the wallet through the ledger, and “充值后继续” executes each remaining
+member once on the original order. Verify the customer usage list and detail
+show source, expert/team, per-call model/provider, input/output tokens, actual
+credits, catalog version, and reconciling state without supplier references,
+costs, evidence, prompts, credentials, internal ids, or item keys.
+
+Before switching traffic, record the digest-pinned combined image identity and
+both immutable revision labels:
+
+```bash
+docker image inspect "$CANDIDATE_IMAGE" --format \
+  'id={{.Id}} digests={{json .RepoDigests}}
+server={{index .Config.Labels "cn.deepmega.dclaw.server-revision"}}
+client={{index .Config.Labels "cn.deepmega.dclaw.client-revision"}}' \
+  | tee "$CHANGE_DIR/combined-image-identity.txt"
+test -s "$CHANGE_DIR/combined-image-identity.txt"
+```
+
+After a restart, startup recovery must finish before readiness. Confirm logs
+show that active leases and paused expert teams were preserved, expired work
+had one recovery owner, pre-contact holds were released, contacted unknowns
+remained reconciling, and a second restart added no ledger entries. Any general
+enforced recovery exception is a failed readiness gate, not a warning.
+
 ## 9. Rollback and database restore implications
 
 For a billing-policy incident, first activate `observe`, `shadow`, or `off`
