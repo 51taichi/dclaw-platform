@@ -116,6 +116,26 @@ class PricingAdminRepository:
                 billing_pricing_imports.c.content_sha256 == digest,
             )).mappings().one())
 
+    def get_import(self, import_id: str) -> dict[str, Any] | None:
+        with self.engine.connect() as conn:
+            row = conn.execute(select(billing_pricing_imports).where(
+                billing_pricing_imports.c.id == import_id,
+            )).mappings().first()
+            if row is None:
+                return None
+            result = dict(row)
+            result["preview"] = json.loads(result["preview_json"])
+            return result
+
+    def confirm_import(self, import_id: str) -> None:
+        with self.engine.begin() as conn:
+            result = conn.execute(update(billing_pricing_imports).where(
+                billing_pricing_imports.c.id == import_id,
+                billing_pricing_imports.c.status == "previewed",
+            ).values(status="confirmed"))
+            if result.rowcount != 1:
+                raise ValueError("import already confirmed or missing")
+
     def create_unlock(self, actor_id: str, token_hash: str,
                       credential_fingerprint: str,
                       expires_at: datetime, ip_address: str | None) -> str:

@@ -7,7 +7,7 @@ import os
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..billing.pricing import (
@@ -25,6 +25,7 @@ from ..billing.pricing_unlock import (
 )
 from ..billing.pricing_admin import PricingAdminService
 from ..billing.pricing_inventory import PricingModelInventory
+from ..billing.pricing_excel import PricingExcelService
 from ..auth import verify_password
 from ..billing.usage import (
     IdempotencyConflictError,
@@ -216,6 +217,14 @@ def get_pricing_admin_service() -> PricingAdminService:
     return PricingAdminService(
         PricingAdminRepository(engine), PriceCatalogService(catalogs),
         catalogs, PricingModelInventory(ProviderManager.get_instance()),
+    )
+
+
+def get_pricing_excel_service() -> PricingExcelService:
+    repository = PricingAdminRepository(get_app_engine())
+    return PricingExcelService(
+        repository,
+        preview_builder=get_pricing_admin_service().preview_initial_catalog,
     )
 
 
@@ -563,6 +572,44 @@ def pricing_models() -> list[dict[str, Any]]:
 @admin_router.get("/pricing/history")
 def pricing_history() -> list[dict[str, Any]]:
     return get_pricing_admin_service().repository.list_audits()
+
+
+@admin_router.get("/pricing/export")
+def export_pricing() -> Response:
+    repository = get_pricing_admin_service().repository
+    content = get_pricing_excel_service().export_workbook(
+        repository.latest_trusted_costs(),
+    )
+    return Response(
+        content=content,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        headers={"Content-Disposition": 'attachment; filename="pricing-rmb.xlsx"'},
+    )
+
+
+@admin_router.post("/pricing/imports/preview")
+async def preview_pricing_import(
+    request: Request,
+    filename: str = Query(min_length=1, max_length=255),
+) -> dict[str, Any]:
+    return get_pricing_excel_service().preview_import(
+        await request.body(), filename, _authenticated_owner(request),
+    )
+
+
+@admin_router.post("/pricing/imports/{import_id}/confirm")
+def confirm_pricing_import(
+    import_id: str,
+    actor_id: str = Depends(require_pricing_unlock),
+) -> dict[str, Any]:
+    try:
+        return get_pricing_excel_service().confirm_import(import_id, actor_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Import not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @admin_router.post("/pricing/policies")
