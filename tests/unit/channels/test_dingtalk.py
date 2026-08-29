@@ -1534,6 +1534,9 @@ class TestDingTalkWorkspaceIntegration:
             yield mock_event
 
         dingtalk_with_workspace._process = mock_process
+        dingtalk_with_workspace._prepare_channel_billing = (
+            lambda _request, _meta: None
+        )
 
         payload = {
             "sender_id": "user123",

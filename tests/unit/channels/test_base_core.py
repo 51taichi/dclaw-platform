@@ -20,6 +20,10 @@ from __future__ import annotations
 
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
+from pathlib import Path
+from types import SimpleNamespace
+from contextlib import contextmanager
+import asyncio
 
 import pytest
 
@@ -191,6 +195,87 @@ class TestBuildAgentRequestCore:
         assert request.input[0].content[0].type == ContentType.TEXT
         # Implementation uses " " as default to satisfy non-empty validation
         assert request.input[0].content[0].text == " "
+
+
+@pytest.mark.asyncio
+async def test_external_channel_prepares_workspace_owner_billing(
+    base_channel,
+    monkeypatch,
+):
+    base_channel.channel = "wechat"
+    base_channel._workspace = SimpleNamespace(
+        workspace_dir=Path("/srv/users/7"),
+    )
+    request = SimpleNamespace(
+        channel="wechat",
+        user_id="wx-user-1",
+        session_id="wechat:session-1",
+    )
+    captured = {}
+    prepared = object()
+
+    monkeypatch.setattr(
+        "qwenpaw.app.channels.base.resolve_channel_payer",
+        lambda channel, external_user_id, meta: (
+            captured.update(
+                channel=channel,
+                external_user_id=external_user_id,
+                meta=meta,
+            )
+            or "7"
+        ),
+    )
+    monkeypatch.setattr(
+        "qwenpaw.app.channels.base.prepare_user_billing_execution",
+        lambda *args, **kwargs: (
+            captured.update(prepare_args=args, prepare_kwargs=kwargs)
+            or prepared
+        ),
+    )
+
+    result = base_channel._prepare_channel_billing(request, {})
+
+    assert result is prepared
+    assert captured["external_user_id"] == "wx-user-1"
+    assert captured["meta"]["bound_user_id"] == "7"
+    assert captured["meta"]["binding_authenticated"] is True
+    assert captured["prepare_args"][0] == "7"
+
+
+@pytest.mark.asyncio
+async def test_channel_cancellation_finalizes_billing_as_cancelled(
+    base_channel,
+    monkeypatch,
+):
+    finalized = []
+
+    class _Prepared:
+        @contextmanager
+        def activate(self):
+            yield
+
+        def finalize(self, state, error_code=None):
+            finalized.append((state, error_code))
+
+    async def cancelled_process(_request):
+        raise asyncio.CancelledError
+        yield  # pragma: no cover
+
+    base_channel._process = cancelled_process
+    monkeypatch.setattr(
+        base_channel,
+        "_prepare_channel_billing",
+        lambda *_args: _Prepared(),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        async for _event in base_channel._process_with_channel_billing(
+            SimpleNamespace(),
+            {},
+        ):
+            pass
+
+    assert finalized == [("cancelled", "CANCELLED")]
 
 
 # =============================================================================

@@ -10,6 +10,7 @@ from fastapi import HTTPException
 
 from qwenpaw.app.crons import api as cron_api
 from qwenpaw.app.crons.models import CronJobSpec
+from qwenpaw.app.billing import payer
 
 
 class _FakeCronManager:
@@ -82,3 +83,22 @@ async def test_user_cron_get_rejects_other_users_job() -> None:
         await cron_api.get_job("b", _request("7"), mgr)
 
     assert exc.value.status_code == 404
+
+
+def test_job_payer_uses_creator_not_delivery_target(monkeypatch) -> None:
+    job = _job("owned", "99").model_copy(
+        update={"meta": {"created_by_user_id": "7"}},
+    )
+    monkeypatch.setattr(payer, "_user_exists", lambda user_id: user_id == "7")
+
+    assert payer.resolve_job_payer(job) == "7"
+
+
+def test_job_payer_rejects_deleted_owner(monkeypatch) -> None:
+    job = _job("deleted", "99").model_copy(
+        update={"meta": {"created_by_user_id": "7"}},
+    )
+    monkeypatch.setattr(payer, "_user_exists", lambda _user_id: False)
+
+    with pytest.raises(payer.BillingPayerResolutionError):
+        payer.resolve_job_payer(job)

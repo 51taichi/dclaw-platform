@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from hashlib import sha256
+import json
+from uuid import uuid4
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Literal, Optional, Union
@@ -32,6 +35,26 @@ DREAM_JOB_ID = "_dream"
 CRON_HISTORY_LIMIT = 50
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_job_payer(job: Any) -> str:
+    """Lazy import avoids the workspace/cron module initialization cycle."""
+    from ..billing.payer import resolve_job_payer as resolve
+
+    return resolve(job)
+
+
+def prepare_user_billing_execution(*args: Any, **kwargs: Any) -> Any:
+    """Lazy billing factory for cron startup compatibility."""
+    from ..billing.entrypoint import prepare_user_billing_execution as prepare
+
+    return prepare(*args, **kwargs)
+
+
+def _is_insufficient_credits(exc: BaseException) -> bool:
+    from ..billing.usage import InsufficientUsageCreditsError
+
+    return isinstance(exc, InsufficientUsageCreditsError)
 
 
 @dataclass
@@ -64,6 +87,46 @@ class CronManager:
         self._history: Dict[str, list[CronExecutionRecord]] = {}
         self._rt: Dict[str, _Runtime] = {}
         self._started = False
+
+    async def _execute_billed_job(self, job: CronJobSpec) -> dict[str, Any]:
+        from ..billing.context import BillingSource
+        from ..billing.usage import InsufficientUsageCreditsError
+
+        if job.task_type != "agent":
+            return await self._executor.execute(job)
+        payer_user_id = resolve_job_payer(job)
+        request_json = json.dumps(
+            job.request.model_dump(mode="json") if job.request else {},
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        prepared = prepare_user_billing_execution(
+            payer_user_id,
+            BillingSource(type="schedule", id=str(job.id)),
+            f"schedule:{job.id}:{uuid4()}",
+            {
+                "job_id": str(job.id),
+                "request_sha256": sha256(request_json.encode()).hexdigest(),
+            },
+        )
+        with prepared.activate():
+            try:
+                result = await self._executor.execute(job)
+            except InsufficientUsageCreditsError:
+                prepared.finalize(
+                    "failed",
+                    error_code="INSUFFICIENT_CREDITS",
+                )
+                raise
+            except asyncio.CancelledError:
+                prepared.finalize("cancelled", error_code="CANCELLED")
+                raise
+            except BaseException:
+                prepared.finalize("failed", error_code="MODEL_ERROR")
+                raise
+            prepared.finalize_completed()
+            return result
 
     async def start(self) -> None:
         async with self._lock:
@@ -517,7 +580,7 @@ class CronManager:
             delivery_failed = False
 
             try:
-                execution_result = await self._executor.execute(job)
+                execution_result = await self._execute_billed_job(job)
                 execution_succeeded = True
                 delivery_failed = (
                     execution_result.get("delivery_status") == "failed"
@@ -546,7 +609,11 @@ class CronManager:
                 raise
             except Exception as e:  # pylint: disable=broad-except
                 st.last_status = "error"
-                st.last_error = repr(e)
+                st.last_error = (
+                    "INSUFFICIENT_CREDITS"
+                    if _is_insufficient_credits(e)
+                    else repr(e)
+                )
                 logger.warning(
                     "cron _execute_once: job_id=%s status=error error=%s",
                     job.id,

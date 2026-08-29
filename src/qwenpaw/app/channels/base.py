@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from hashlib import sha256
+from uuid import uuid4
 from abc import ABC
 from typing import (
     Optional,
@@ -45,6 +47,24 @@ EnqueueCallback = Optional[Callable[[Any], None]]
 OnReplySent = Optional[Callable[[str, str, str], None]]
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_channel_payer(*args: Any, **kwargs: Any) -> str:
+    from ..billing.payer import resolve_channel_payer as resolve
+
+    return resolve(*args, **kwargs)
+
+
+def prepare_user_billing_execution(*args: Any, **kwargs: Any) -> Any:
+    from ..billing.entrypoint import prepare_user_billing_execution as prepare
+
+    return prepare(*args, **kwargs)
+
+
+def _is_insufficient_credits(exc: BaseException) -> bool:
+    from ..billing.usage import InsufficientUsageCreditsError
+
+    return isinstance(exc, InsufficientUsageCreditsError)
 
 
 _TOOL_OUTPUT_MESSAGE_TYPES = {
@@ -375,6 +395,74 @@ class BaseChannel(ABC):
         self._workspace = workspace
         self._command_registry = command_registry
 
+    def _prepare_channel_billing(
+        self,
+        request: "AgentRequest",
+        channel_meta: Dict[str, Any],
+    ) -> Any:
+        """Create producer-owned billing for non-console channel traffic."""
+        if str(self.channel) == "console":
+            return None
+        workspace_dir = getattr(self._workspace, "workspace_dir", None)
+        bound_user_id = (
+            str(getattr(workspace_dir, "name", "") or "").strip()
+        )
+        trusted_meta = {
+            **dict(channel_meta or {}),
+            "bound_user_id": bound_user_id,
+            "binding_authenticated": True,
+        }
+        external_user_id = str(getattr(request, "user_id", "") or "")
+        payer_user_id = resolve_channel_payer(
+            str(self.channel),
+            external_user_id,
+            trusted_meta,
+        )
+        session_id = str(getattr(request, "session_id", "") or "")
+        from ..billing.context import BillingSource
+
+        return prepare_user_billing_execution(
+            payer_user_id,
+            BillingSource(type="channel", id=session_id),
+            f"channel:{self.channel}:{session_id}:{uuid4()}",
+            {
+                "channel": str(self.channel),
+                "session_sha256": sha256(session_id.encode()).hexdigest(),
+                "external_user_sha256": sha256(
+                    external_user_id.encode(),
+                ).hexdigest(),
+            },
+        )
+
+    async def _process_with_channel_billing(
+        self,
+        request: "AgentRequest",
+        channel_meta: Dict[str, Any],
+    ) -> AsyncIterator["Event"]:
+        prepared = self._prepare_channel_billing(request, channel_meta)
+        if prepared is None:
+            async for event in self._process(request):
+                yield event
+            return
+        with prepared.activate():
+            try:
+                async for event in self._process(request):
+                    yield event
+            except asyncio.CancelledError:
+                prepared.finalize("cancelled", error_code="CANCELLED")
+                raise
+            except BaseException as exc:
+                prepared.finalize(
+                    "failed",
+                    error_code=(
+                        "INSUFFICIENT_CREDITS"
+                        if _is_insufficient_credits(exc)
+                        else "MODEL_ERROR"
+                    ),
+                )
+                raise
+            prepared.finalize_completed()
+
     def _extract_chat_name(self, payload: Any) -> str:
         """Extract chat name from payload for chat creation.
 
@@ -662,7 +750,10 @@ class BaseChannel(ABC):
         msg_id_to_stream_type: Dict[str, str] = {}
         streaming_buffers: Dict[str, str] = {}
         try:
-            process_iterator = self._process(request)
+            process_iterator = self._process_with_channel_billing(
+                request,
+                send_meta,
+            )
             async for event in process_iterator:
                 data = self._serialize_event_for_sse(event)
 
@@ -742,7 +833,11 @@ class BaseChannel(ABC):
             await self._on_consume_error(
                 request,
                 to_handle,
-                "Internal error",
+                (
+                    "积分不足，请充值后重试：/wallet"
+                    if _is_insufficient_credits(e)
+                    else "Internal error"
+                ),
             )
             raise
 
@@ -1115,7 +1210,10 @@ class BaseChannel(ABC):
         """
         last_response = None
         try:
-            async for event in self._process(request):
+            async for event in self._process_with_channel_billing(
+                request,
+                send_meta,
+            ):
                 obj = getattr(event, "object", None)
                 status = getattr(event, "status", None)
                 if obj == "content":
@@ -1152,12 +1250,16 @@ class BaseChannel(ABC):
             if self._on_reply_sent:
                 args = self.get_on_reply_sent_args(request, to_handle)
                 self._on_reply_sent(self.channel, *args)
-        except Exception:
+        except Exception as exc:
             logger.exception("channel consume_one failed")
             await self._on_consume_error(
                 request,
                 to_handle,
-                "An error occurred while processing your request.",
+                (
+                    "积分不足，请充值后重试：/wallet"
+                    if _is_insufficient_credits(exc)
+                    else "An error occurred while processing your request."
+                ),
             )
 
     def _get_response_error_message(self, last_response: Any) -> Optional[str]:
