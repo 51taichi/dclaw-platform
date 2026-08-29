@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from hashlib import sha256
 import json
 import logging
 import re
@@ -18,6 +19,9 @@ from starlette.responses import Response, StreamingResponse
 from agentscope_runtime.engine.schemas.agent_schemas import AgentRequest
 from ...utils.logging import LOG_FILE_PATH
 from ..agent_context import get_agent_for_request, set_current_chat_model
+from ..billing.context import BillingSource
+from ..billing.entrypoint import prepare_user_billing_execution
+from ..billing.usage import InsufficientUsageCreditsError
 from ..channels.base import ContentType, TextContent
 from ..expert_teams import (
     ExpertTeamOrchestrator,
@@ -192,6 +196,18 @@ def _bind_console_payload_to_request_user(
         meta["user_id"] = user_id
 
 
+def _billing_error_sse(exc: InsufficientUsageCreditsError) -> str:
+    """Return the stable, redacted customer billing failure event."""
+    payload = {
+        "type": "billing.error",
+        "code": "INSUFFICIENT_CREDITS",
+        "available_credits": exc.available,
+        "required_credits": exc.required,
+        "top_up_path": "/wallet",
+    }
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
 async def _acquire_task_permit(
     request: Request,
     *,
@@ -215,37 +231,6 @@ async def _acquire_task_permit(
             ),
     )
     return permit
-
-
-async def _run_title_generation_limited(
-    *,
-    request: Request,
-    workspace: Any,
-    chat_id: str,
-    user_message: str,
-    placeholder_name: str,
-    user_id: str,
-) -> None:
-    app = getattr(request, "app", None)
-    permit = None
-    if app is not None:
-        permit = await get_task_limiter(app).try_acquire(
-            agent_id=str(getattr(workspace, "agent_id", "") or "default"),
-            user_id=user_id,
-        )
-        if permit is None:
-            logger.info("Skipping title generation because task limit is full")
-            return
-    try:
-        await generate_and_update_title(
-            workspace=workspace,
-            chat_id=chat_id,
-            user_message=user_message,
-            placeholder_name=placeholder_name,
-        )
-    finally:
-        if permit is not None:
-            await permit.release()
 
 
 @router.post(
@@ -344,10 +329,77 @@ async def post_console_chat(
             user_id=_request_user_id(request, native_payload["sender_id"]),
         )
 
+        payer_user_id = _request_user_id(
+            request,
+            native_payload["sender_id"],
+        )
+        source_type = (
+            "expert_team"
+            if expert_team_id
+            else (
+                "mobile"
+                if isinstance(request_data, dict)
+                and request_data.get("stream") is False
+                else "client"
+            )
+        )
+        headers = getattr(request, "headers", {})
+        request_key = str(
+            headers.get("Idempotency-Key")
+            or headers.get("idempotency-key")
+            or uuid.uuid4()
+        )
+        request_fingerprint = {
+            "message_sha256": sha256(first_text.encode()).hexdigest(),
+            "chat_id": chat.id,
+        }
+
         async def limited_stream_fn(payload):
+            prepared = prepare_user_billing_execution(
+                payer_user_id,
+                BillingSource(
+                    type=source_type,
+                    id=chat.id,
+                    expert_id=str(getattr(workspace, "agent_id", "") or "")
+                    or None,
+                    expert_team_run_id=expert_team_run_id,
+                ),
+                request_key,
+                request_fingerprint,
+            )
             try:
-                async for item in stream_fn(payload):
-                    yield item
+                with prepared.activate():
+                    try:
+                        async for item in stream_fn(payload):
+                            yield item
+                        if first_text and chat.name == name:
+                            try:
+                                await generate_and_update_title(
+                                    workspace=workspace,
+                                    chat_id=chat.id,
+                                    user_message=first_text,
+                                    placeholder_name=name,
+                                )
+                            except InsufficientUsageCreditsError:
+                                raise
+                            except Exception:
+                                logger.exception(
+                                    "Console title generation failed",
+                                )
+                    except InsufficientUsageCreditsError as exc:
+                        prepared.finalize(
+                            "failed",
+                            error_code="INSUFFICIENT_CREDITS",
+                        )
+                        yield _billing_error_sse(exc)
+                        return
+                    except asyncio.CancelledError:
+                        prepared.finalize("cancelled", error_code="CANCELLED")
+                        raise
+                    except BaseException:
+                        prepared.finalize("failed", error_code="MODEL_ERROR")
+                        raise
+                    prepared.finalize_completed()
             finally:
                 if permit is not None:
                     await permit.release()
@@ -365,22 +417,6 @@ async def post_console_chat(
             raise
         if not is_new_run and permit is not None:
             await permit.release()
-        if first_text and chat.name == name and is_new_run:
-            title_user_id = _request_user_id(
-                request,
-                native_payload["sender_id"],
-            )
-            asyncio.create_task(
-                _run_title_generation_limited(
-                    request=request,
-                    workspace=workspace,
-                    chat_id=chat.id,
-                    user_message=first_text,
-                    placeholder_name=name,
-                    user_id=title_user_id,
-                ),
-            )
-
     if isinstance(request_data, dict) and request_data.get("stream") is False:
         return JSONResponse(
             {

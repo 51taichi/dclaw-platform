@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 
 from qwenpaw.app.task_limits import TaskConcurrencyLimiter
+from qwenpaw.app.billing.usage import InsufficientUsageCreditsError
 from qwenpaw.app.routers import console
 
 
@@ -308,3 +310,81 @@ async def test_console_chat_returns_429_when_task_limit_is_full(monkeypatch):
         await held.release()
 
     assert exc_info.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_console_producer_emits_safe_insufficient_credit_event(
+    monkeypatch,
+):
+    class _InsufficientChannel(_FakeConsoleChannel):
+        async def stream_one(self, *_args, **_kwargs):
+            raise InsufficientUsageCreditsError(required=7, available=2)
+            yield  # pragma: no cover
+
+    class _Prepared:
+        def __init__(self):
+            self.finalized = []
+
+        @contextmanager
+        def activate(self):
+            yield
+
+        def finalize(self, state, error_code=None):
+            self.finalized.append((state, error_code))
+            return True
+
+        def finalize_completed(self):
+            raise AssertionError("insufficient run cannot complete")
+
+    prepared = _Prepared()
+    tracker = _FakeTaskTracker()
+    workspace = SimpleNamespace(
+        channel_manager=SimpleNamespace(
+            get_channel=lambda _name: None,
+        ),
+        chat_manager=_FakeChatManager(),
+        task_tracker=tracker,
+    )
+
+    async def get_channel(_name):
+        return _InsufficientChannel()
+
+    workspace.channel_manager.get_channel = get_channel
+
+    async def fake_get_agent_for_request(_request):
+        return workspace
+
+    monkeypatch.setattr(
+        console,
+        "get_agent_for_request",
+        fake_get_agent_for_request,
+    )
+    monkeypatch.setattr(
+        console,
+        "prepare_user_billing_execution",
+        lambda *_args, **_kwargs: prepared,
+    )
+
+    await console.post_console_chat(
+        {
+            "channel": "console",
+            "session_id": "chat-1",
+            "input": [{"role": "user", "content": "hello"}],
+        },
+        request=_FakeRequest(),
+    )
+    call = tracker.calls[0]
+    events = [
+        event
+        async for event in call["stream_one"](call["native_payload"])
+    ]
+    payload = json.loads(events[0].removeprefix("data: "))
+
+    assert payload == {
+        "type": "billing.error",
+        "code": "INSUFFICIENT_CREDITS",
+        "available_credits": 2,
+        "required_credits": 7,
+        "top_up_path": "/wallet",
+    }
+    assert prepared.finalized == [("failed", "INSUFFICIENT_CREDITS")]
