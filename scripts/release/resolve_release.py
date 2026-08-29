@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """Resolve an immutable DClaw server/client release pair."""
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ class ReleasePair:
         for value in (self.server_sha, self.client_sha):
             if not SHA_RE.fullmatch(value):
                 raise ValueError(
-                    "revision must be a 40-character lowercase hexadecimal SHA"
+                    "revision must be a 40-character lowercase hexadecimal SHA",
                 )
 
     @property
@@ -46,12 +47,17 @@ def resolve_pair(
     manual_server = inputs.get("server_sha", "").strip()
     manual_client = inputs.get("client_sha", "").strip()
     if bool(manual_server) != bool(manual_client):
-        raise ValueError("both server_sha and client_sha must be supplied together")
+        raise ValueError(
+            "both server_sha and client_sha must be supplied together",
+        )
     if manual_server:
         return ReleasePair(manual_server, manual_client)
 
     if event_name == "push":
-        return ReleasePair(str(event_payload.get("after", "")), client_main_sha)
+        return ReleasePair(
+            str(event_payload.get("after", "")),
+            client_main_sha,
+        )
     if event_name == "repository_dispatch":
         if event_payload.get("action") != "dclaw_client_main":
             raise ValueError("unsupported repository_dispatch action")

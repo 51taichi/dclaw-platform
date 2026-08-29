@@ -1,6 +1,8 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -10,7 +12,7 @@ COMPOSE = REPO_ROOT / "deploy" / "production" / "compose.production.yml"
 EXAMPLE_ENV = REPO_ROOT / "deploy" / "production" / "production.env.example"
 
 
-def _compose() -> dict[str, object]:
+def _compose() -> dict[str, Any]:
     return yaml.safe_load(COMPOSE.read_text())
 
 

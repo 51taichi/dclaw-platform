@@ -1,18 +1,22 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import json
 import os
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
+
+# pylint: disable=redefined-outer-name
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PRODUCTION = REPO_ROOT / "deploy" / "production"
 
 
-FAKE_DOCKER = r'''#!/usr/bin/env python3
+FAKE_DOCKER = r"""#!/usr/bin/env python3
 import json
 import os
 import sys
@@ -25,8 +29,8 @@ with log.open("a") as stream:
 
 current_id = os.environ.get("FAKE_CURRENT_ID", "sha256:" + "1" * 64)
 target_id = os.environ.get("FAKE_TARGET_ID", "sha256:" + "2" * 64)
-current_digest = os.environ.get("FAKE_CURRENT_DIGEST", "ghcr.io/51taichi/dclaw@sha256:" + "1" * 64)
-target_digest = os.environ.get("FAKE_TARGET_DIGEST", "ghcr.io/51taichi/dclaw@sha256:" + "2" * 64)
+current_digest = os.environ.get("FAKE_CURRENT_DIGEST", "ghcr.io/51taichi/dclaw@sha256:" + "1" * 64)  # noqa: E501
+target_digest = os.environ.get("FAKE_TARGET_DIGEST", "ghcr.io/51taichi/dclaw@sha256:" + "2" * 64)  # noqa: E501
 target_server = os.environ.get("FAKE_TARGET_SERVER", "a" * 40)
 target_client = os.environ.get("FAKE_TARGET_CLIENT", "b" * 40)
 current_server = os.environ.get("FAKE_CURRENT_SERVER", "c" * 40)
@@ -39,13 +43,13 @@ else:
     state_path.write_text(json.dumps(state))
 
 def value_for_image(image, format_value):
-    target = image.endswith(":main") or "server-" in image or image == target_digest or image == target_id
+    target = image.endswith(":main") or "server-" in image or image == target_digest or image == target_id  # noqa: E501
     if ".Id" in format_value:
         return target_id if target else current_id
     if "RepoDigests" in format_value:
         return target_digest if target else current_digest
     if "server-revision" in format_value:
-        if target and os.environ.get("FAKE_LABEL_DRIFT") == "1" and state["compose_count"] > 0:
+        if target and os.environ.get("FAKE_LABEL_DRIFT") == "1" and state["compose_count"] > 0:  # noqa: E501
             return "f" * 40
         return target_server if target else current_server
     if "client-revision" in format_value:
@@ -56,20 +60,20 @@ if args[:1] == ["pull"]:
     print(args[1])
 elif args[:2] == ["image", "inspect"]:
     image = args[2]
-    format_value = args[args.index("--format") + 1] if "--format" in args else ""
+    format_value = args[args.index("--format") + 1] if "--format" in args else ""  # noqa: E501
     print(value_for_image(image, format_value))
 elif args[:1] == ["inspect"]:
     name = args[1]
-    format_value = args[args.index("--format") + 1] if "--format" in args else ""
+    format_value = args[args.index("--format") + 1] if "--format" in args else ""  # noqa: E501
     if name == "dclaw" and ".Image" in format_value:
         print(state["running_id"])
     elif ".State.Status" in format_value:
         print("running")
     elif ".State.Running" in format_value:
-        failed = os.environ.get("FAKE_HEALTH_FAILURE") == "container_exit" and state["running_id"] == target_id
+        failed = os.environ.get("FAKE_HEALTH_FAILURE") == "container_exit" and state["running_id"] == target_id  # noqa: E501
         print("false" if failed else "true")
     elif ".State.OOMKilled" in format_value:
-        failed = os.environ.get("FAKE_HEALTH_FAILURE") == "oom" and state["running_id"] == target_id
+        failed = os.environ.get("FAKE_HEALTH_FAILURE") == "oom" and state["running_id"] == target_id  # noqa: E501
         print("true" if failed else "false")
     elif ".HostConfig.RestartPolicy.Name" in format_value:
         print("unless-stopped")
@@ -104,7 +108,7 @@ elif args[:1] == ["compose"]:
         for line in env_path.read_text().splitlines()
         if line.startswith("DCLAW_IMAGE=")
     )
-    state["running_id"] = target_id if selected in (target_digest, target_id) else current_id
+    state["running_id"] = target_id if selected in (target_digest, target_id) else current_id  # noqa: E501
     state["compose_count"] += 1
     state_path.write_text(json.dumps(state))
 elif args[:1] == ["start"]:
@@ -117,10 +121,10 @@ elif args[:1] in (["tag"], ["logs"]):
     pass
 else:
     print("{}")
-'''
+"""
 
 
-FAKE_CURL = r'''#!/usr/bin/env python3
+FAKE_CURL = r"""#!/usr/bin/env python3
 import json
 import os
 import sys
@@ -142,29 +146,29 @@ if state["running_id"] == target_id:
 if os.environ.get("FAKE_ADOPTION_FAIL") == "1" and state["compose_count"] == 1:
     raise SystemExit(22)
 print('{"version":"1.1.10"}')
-'''
+"""
 
 
-FAKE_FLOCK = r'''#!/bin/sh
+FAKE_FLOCK = r"""#!/bin/sh
 if [ "${FAKE_LOCKED:-0}" = 1 ]; then
   exit 1
 fi
 exit 0
-'''
+"""
 
 
 @pytest.fixture
-def deployment(tmp_path: Path) -> dict[str, object]:
+def deployment(tmp_path: Path) -> dict[str, Any]:
     root = tmp_path / "deploy"
     root.mkdir()
     (root / "compose.production.yml").write_text(
-        (PRODUCTION / "compose.production.yml").read_text()
+        (PRODUCTION / "compose.production.yml").read_text(),
     )
     (root / "production.env").write_text("QWENPAW_AUTH_ENABLED=true\n")
     (root / "release.env").write_text(
         "DCLAW_IMAGE=ghcr.io/51taichi/dclaw@sha256:" + "1" * 64 + "\n"
         "SERVER_SHA=" + "c" * 40 + "\n"
-        "CLIENT_SHA=" + "d" * 40 + "\n"
+        "CLIENT_SHA=" + "d" * 40 + "\n",
     )
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -189,12 +193,15 @@ def deployment(tmp_path: Path) -> dict[str, object]:
             "DCLAW_TESTING": "1",
             "DCLAW_TEST_HEALTH_TIMEOUT": "1",
             "DCLAW_TEST_HEALTH_INTERVAL": "0.01",
-        }
+        },
     )
     return {"root": root, "env": env, "log": log, "state": state}
 
 
-def _run(deployment: dict[str, object], script: str) -> subprocess.CompletedProcess[str]:
+def _run(
+    deployment: dict[str, Any],
+    script: str,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["bash", str(PRODUCTION / script)],
         check=False,
@@ -204,7 +211,7 @@ def _run(deployment: dict[str, object], script: str) -> subprocess.CompletedProc
     )
 
 
-def _calls(deployment: dict[str, object]) -> list[list[str]]:
+def _calls(deployment: dict[str, Any]) -> list[list[str]]:
     log = deployment["log"]
     assert isinstance(log, Path)
     if not log.exists():
@@ -217,7 +224,7 @@ def _contains_call(calls: list[list[str]], *parts: str) -> bool:
 
 
 def test_update_same_digest_does_not_recreate_or_backup(
-    deployment: dict[str, object],
+    deployment: dict[str, Any],
 ) -> None:
     env = deployment["env"]
     assert isinstance(env, dict)
@@ -234,7 +241,7 @@ def test_update_same_digest_does_not_recreate_or_backup(
 
 
 def test_second_update_is_rejected_by_shared_lock(
-    deployment: dict[str, object],
+    deployment: dict[str, Any],
 ) -> None:
     env = deployment["env"]
     assert isinstance(env, dict)
@@ -248,7 +255,7 @@ def test_second_update_is_rejected_by_shared_lock(
 
 
 def test_invalid_backup_never_recreates_production(
-    deployment: dict[str, object],
+    deployment: dict[str, Any],
 ) -> None:
     env = deployment["env"]
     assert isinstance(env, dict)
@@ -270,7 +277,7 @@ def test_health_window_is_at_least_420_seconds() -> None:
 
 
 def test_successful_update_writes_manifest_and_keeps_external_resources(
-    deployment: dict[str, object],
+    deployment: dict[str, Any],
 ) -> None:
     result = _run(deployment, "update.sh")
     calls = _calls(deployment)
@@ -295,7 +302,7 @@ def test_successful_update_writes_manifest_and_keeps_external_resources(
 
 
 def test_exact_pair_uses_immutable_tag_and_validates_both_labels(
-    deployment: dict[str, object],
+    deployment: dict[str, Any],
 ) -> None:
     server_sha = "a" * 40
     client_sha = "b" * 40
@@ -317,7 +324,8 @@ def test_exact_pair_uses_immutable_tag_and_validates_both_labels(
     assert result.returncode == 0, result.stderr
     assert _contains_call(
         _calls(deployment),
-        f"ghcr.io/51taichi/dclaw:server-{server_sha[:12]}-client-{client_sha[:12]}",
+        "ghcr.io/51taichi/dclaw:"
+        f"server-{server_sha[:12]}-client-{client_sha[:12]}",
     )
 
 
@@ -326,7 +334,7 @@ def test_exact_pair_uses_immutable_tag_and_validates_both_labels(
     ["container_exit", "oom", "local_api", "public_api"],
 )
 def test_update_failure_restores_previous_image_without_database_restore(
-    deployment: dict[str, object],
+    deployment: dict[str, Any],
     failure: str,
 ) -> None:
     env = deployment["env"]
@@ -348,13 +356,13 @@ def test_update_failure_restores_previous_image_without_database_restore(
 
 
 def test_status_is_read_only_and_redacts_secrets(
-    deployment: dict[str, object],
+    deployment: dict[str, Any],
 ) -> None:
     root = deployment["root"]
     assert isinstance(root, Path)
     (root / "production.env").write_text(
         "QWENPAW_DATABASE_URL=postgresql://user:secret-value@db/app\n"
-        "GHCR_TOKEN=secret-token\n"
+        "GHCR_TOKEN=secret-token\n",
     )
 
     result = _run(deployment, "status.sh")
@@ -370,7 +378,7 @@ def test_status_is_read_only_and_redacts_secrets(
 
 
 def test_rollback_only_switches_application_image(
-    deployment: dict[str, object],
+    deployment: dict[str, Any],
 ) -> None:
     root = deployment["root"]
     assert isinstance(root, Path)
@@ -384,8 +392,8 @@ def test_rollback_only_switches_application_image(
                 "target_image": "ghcr.io/51taichi/dclaw@sha256:" + "2" * 64,
                 "server_sha": "a" * 40,
                 "client_sha": "b" * 40,
-            }
-        )
+            },
+        ),
     )
     (root / "LATEST_SUCCESS").write_text(str(release) + "\n")
     env = deployment["env"]
@@ -407,7 +415,7 @@ def test_rollback_only_switches_application_image(
 
 
 def test_adoption_refuses_resource_drift_before_stopping_production(
-    deployment: dict[str, object],
+    deployment: dict[str, Any],
 ) -> None:
     env = deployment["env"]
     assert isinstance(env, dict)
@@ -423,7 +431,7 @@ def test_adoption_refuses_resource_drift_before_stopping_production(
 
 
 def test_failed_adoption_restores_original_container(
-    deployment: dict[str, object],
+    deployment: dict[str, Any],
 ) -> None:
     env = deployment["env"]
     assert isinstance(env, dict)
@@ -441,7 +449,7 @@ def test_failed_adoption_restores_original_container(
 
 
 def test_successful_adoption_preserves_protected_environment_file(
-    deployment: dict[str, object],
+    deployment: dict[str, Any],
 ) -> None:
     result = _run(deployment, "adopt.sh")
     root = deployment["root"]
@@ -451,5 +459,8 @@ def test_successful_adoption_preserves_protected_environment_file(
     assert result.stdout.endswith("ADOPTION_SUCCESS\n")
     production_env = root / "production.env"
     assert production_env.stat().st_mode & 0o777 == 0o600
-    assert "QWENPAW_DATABASE_URL=postgresql+psycopg://protected" in production_env.read_text()
+    assert (
+        "QWENPAW_DATABASE_URL=postgresql+psycopg://protected"
+        in production_env.read_text()
+    )
     assert "postgresql+psycopg://protected" not in result.stdout

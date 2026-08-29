@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import os
@@ -32,7 +33,11 @@ def _commit(repo: Path, files: dict[str, str]) -> str:
     return _git(repo, "rev-parse", "HEAD")
 
 
-def _make_inputs(tmp_path: Path, *, include_docs: bool = True) -> tuple[Path, Path, str, str]:
+def _make_inputs(
+    tmp_path: Path,
+    *,
+    include_docs: bool = True,
+) -> tuple[Path, Path, str, str]:
     server = tmp_path / "server"
     client = tmp_path / "client"
     server_sha = _commit(
@@ -59,9 +64,13 @@ def _fake_npm(tmp_path: Path, *, fail_build: bool = False) -> Path:
     npm = bin_dir / "npm"
     npm.write_text(
         "#!/bin/sh\n"
-        "printf '%s\\n' \"$*\" >>\"$NPM_CALLS\"\n"
-        + ("case \"$*\" in *run\\ build*) exit 23;; esac\n" if fail_build else "")
-        + "exit 0\n"
+        'printf \'%s\\n\' "$*" >>"$NPM_CALLS"\n'
+        + (
+            'case "$*" in *run\\ build*) exit 23;; esac\n'
+            if fail_build
+            else ""
+        )
+        + "exit 0\n",
     )
     npm.chmod(0o755)
     return bin_dir
@@ -135,7 +144,9 @@ def test_assembler_rejects_head_mismatch(tmp_path: Path) -> None:
     assert not (tmp_path / "out").exists()
 
 
-def test_frontend_build_failure_does_not_publish_partial_context(tmp_path: Path) -> None:
+def test_frontend_build_failure_does_not_publish_partial_context(
+    tmp_path: Path,
+) -> None:
     server, client, server_sha, client_sha = _make_inputs(tmp_path)
 
     result = _run(
@@ -152,7 +163,9 @@ def test_frontend_build_failure_does_not_publish_partial_context(tmp_path: Path)
     assert not (tmp_path / "out").exists()
 
 
-def test_assembler_copies_exact_sources_and_builds_console(tmp_path: Path) -> None:
+def test_assembler_copies_exact_sources_and_builds_console(
+    tmp_path: Path,
+) -> None:
     server, client, server_sha, client_sha = _make_inputs(tmp_path)
     output = tmp_path / "out"
 

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from pathlib import Path
@@ -16,7 +17,9 @@ def test_runbook_documents_one_command_for_all_change_types() -> None:
     assert "server and client" in text
 
 
-def test_runbook_documents_disconnect_safe_execution_and_420_second_gate() -> None:
+def test_runbook_documents_disconnect_safe_execution_and_420_second_gate() -> (
+    None
+):
     text = RUNBOOK.read_text()
 
     assert "nohup sudo /opt/dclaw-deploy/update.sh" in text
@@ -33,7 +36,7 @@ def test_runbook_documents_minimal_github_and_ghcr_credentials() -> None:
     assert "docker login ghcr.io --username 51taichi --password-stdin" in text
 
 
-def test_runbook_never_recommends_destructive_cleanup_or_automatic_db_restore() -> None:
+def test_runbook_avoids_destructive_cleanup_and_automatic_db_restore() -> None:
     text = RUNBOOK.read_text()
 
     assert "docker system prune" not in text

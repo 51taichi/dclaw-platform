@@ -1,6 +1,8 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -9,11 +11,11 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "dclaw-combined-image.yml"
 
 
-def _load_workflow() -> dict[str, object]:
+def _load_workflow() -> dict[str, Any]:
     return yaml.load(WORKFLOW.read_text(), Loader=yaml.BaseLoader)
 
 
-def _steps() -> list[dict[str, object]]:
+def _steps() -> list[dict[str, Any]]:
     workflow = _load_workflow()
     jobs = workflow["jobs"]
     assert isinstance(jobs, dict)
@@ -24,12 +26,16 @@ def _steps() -> list[dict[str, object]]:
     return steps
 
 
-def _step(step_id: str) -> dict[str, object]:
+def _step(step_id: str) -> dict[str, Any]:
     return next(step for step in _steps() if step.get("id") == step_id)
 
 
 def _step_index(step_id: str) -> int:
-    return next(index for index, step in enumerate(_steps()) if step.get("id") == step_id)
+    return next(
+        index
+        for index, step in enumerate(_steps())
+        if step.get("id") == step_id
+    )
 
 
 def test_combined_workflow_has_all_three_entry_points() -> None:
@@ -60,7 +66,9 @@ def test_workflow_checks_out_both_exact_resolved_revisions() -> None:
 
 
 def test_main_is_published_only_after_immutable_image_verification() -> None:
-    assert _step_index("build-immutable-image") < _step_index("verify-image-labels")
+    assert _step_index("build-immutable-image") < _step_index(
+        "verify-image-labels",
+    )
     assert _step_index("verify-image-labels") < _step_index("publish-main-tag")
     verify = str(_step("verify-image-labels")["run"])
     assert "cn.deepmega.dclaw.server-revision" in verify
@@ -76,7 +84,9 @@ def test_workflow_never_pushes_main_in_build_step() -> None:
 def test_workflow_uses_assembler_and_verifies_frontend_before_build() -> None:
     assemble = _step("assemble-context")
     assert "scripts/release/assemble_context.sh" in str(assemble["run"])
-    assert _step_index("assemble-context") < _step_index("build-immutable-image")
+    assert _step_index("assemble-context") < _step_index(
+        "build-immutable-image",
+    )
 
 
 def test_workflow_uses_github_token_only_for_ghcr_write() -> None:
