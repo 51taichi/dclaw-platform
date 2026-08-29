@@ -173,3 +173,12 @@ class TestMasterKeyGeneration:
             key = mod._get_master_key()
 
         assert key == bytes.fromhex(key_hex)
+
+
+class TestKeyringAvailability:
+    def test_explicit_disable_skips_keyring(self, monkeypatch):
+        import qwenpaw.security.secret_store as mod
+
+        monkeypatch.setenv("QWENPAW_DISABLE_KEYRING", "true")
+
+        assert mod._should_skip_keyring() is True

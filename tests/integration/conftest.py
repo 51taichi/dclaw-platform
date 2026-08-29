@@ -145,6 +145,10 @@ def app_server(tmp_path: Path) -> Iterator[AppServer]:
     env["QWENPAW_SECRET_DIR"] = str(secret_dir)
     env["QWENPAW_BACKUP_DIR"] = str(backups_dir)
     env["QWENPAW_AUTH_ENABLED"] = "false"
+    # Isolated test directories intentionally have no persisted master key.
+    # Avoid blocking on the host desktop keyring before falling back to the
+    # per-test key file.
+    env["QWENPAW_DISABLE_KEYRING"] = "true"
     env["NO_PROXY"] = "*"
     env["PYTHONUNBUFFERED"] = "1"
 
