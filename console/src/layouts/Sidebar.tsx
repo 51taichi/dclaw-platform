@@ -637,6 +637,11 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
           icon: <SparkDataLine size={16} />,
         },
         {
+          key: "billing",
+          label: collapsed ? null : t("nav.billing", "积分与计费"),
+          icon: <CreditCard size={16} />,
+        },
+        {
           key: "audit-chats",
           label: collapsed ? null : "Audit Chats",
           icon: <SparkUserGroupLine size={16} />,

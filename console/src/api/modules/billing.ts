@@ -69,4 +69,21 @@ export const billingApi = {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
+  listCatalogs: () => request<unknown[]>("/admin/billing/catalogs"),
+  listAdminUsage: (params: Record<string, string | number | undefined> = {}) =>
+    request<Page<Record<string, unknown>>>(
+      `/admin/billing/usage-orders${query(params)}`,
+    ),
+  listReconciliation: () =>
+    request<Page<Record<string, unknown>>>("/admin/billing/reconciliation"),
+  listReconciliationAudits: () =>
+    request<Page<Record<string, unknown>>>(
+      "/admin/billing/reconciliation-audits",
+    ),
+  getRollout: () => request<Record<string, unknown>>("/admin/billing/rollout"),
+  activateRollout: (mode: "off" | "shadow" | "observe" | "enforced") =>
+    request<Record<string, unknown>>("/admin/billing/rollout/activate", {
+      method: "POST",
+      body: JSON.stringify({ mode }),
+    }),
 };

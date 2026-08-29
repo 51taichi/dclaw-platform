@@ -46,6 +46,7 @@ const OpenApiPage = lazyImportWithRetry("../../pages/Settings/OpenApi");
 const SealedAgentsPage = lazyImportWithRetry(
   "../../pages/Settings/SealedAgents",
 );
+const BillingPage = lazyImportWithRetry("../../pages/Settings/Billing");
 
 const ChannelsPage = lazyImportWithRetry("../../pages/Control/Channels");
 const SessionsPage = lazyImportWithRetry("../../pages/Control/Sessions");
@@ -113,6 +114,7 @@ const pathToKey: Record<string, string> = {
   "/admin/plugin-manager": "plugin-manager",
   "/admin/open-api": "open-api",
   "/admin/sealed-agents": "sealed-agents",
+  "/admin/billing": "billing",
 };
 
 export default function AdminLayout() {
@@ -198,6 +200,7 @@ export default function AdminLayout() {
                   />
                   <Route path="open-api" element={<OpenApiPage />} />
                   <Route path="sealed-agents" element={<SealedAgentsPage />} />
+                  <Route path="billing" element={<BillingPage />} />
 
                   <Route
                     path="channels"
