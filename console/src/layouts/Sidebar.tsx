@@ -57,6 +57,7 @@ import {
   WandSparkles,
   CloudUpload,
   KeyRound,
+  CreditCard,
 } from "lucide-react";
 import { clearAuthToken } from "../api/config";
 import { authApi } from "../api/modules/auth";
@@ -503,6 +504,11 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
 
   const agentMenuItems: MenuProps["items"] = [
     {
+      key: "wallet",
+      label: collapsed ? null : t("nav.wallet", "积分钱包"),
+      icon: <CreditCard size={16} />,
+    },
+    {
       key: "claw",
       label: collapsed ? null : t("nav.claw"),
       icon: <SparkChatTabFill size={16} />,
@@ -629,6 +635,11 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
           key: "token-usage",
           label: collapsed ? null : t("nav.tokenUsage"),
           icon: <SparkDataLine size={16} />,
+        },
+        {
+          key: "billing",
+          label: collapsed ? null : t("nav.billing", "积分与计费"),
+          icon: <CreditCard size={16} />,
         },
         {
           key: "audit-chats",

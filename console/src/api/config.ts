@@ -15,16 +15,39 @@ const AUTH_TOKEN_KEY = "qwenpaw_auth_token";
  * @returns Full API URL (e.g., "http://localhost:8088/api/models" or "/api/models")
  */
 const USER_PREFIXES = [
-  "/agents", "/console", "/runner", "/messages", "/workspace",
-  "/files", "/settings", "/skills", "/skills_stream", "/tools",
-  "/plan", "/mcp_oauth", "/chats", "/aigc-studio", "/runtime",
-  "/expert-teams", "/expert-team-runs"
+  "/agents",
+  "/console",
+  "/runner",
+  "/messages",
+  "/workspace",
+  "/files",
+  "/settings",
+  "/skills",
+  "/skills_stream",
+  "/tools",
+  "/plan",
+  "/mcp_oauth",
+  "/chats",
+  "/aigc-studio",
+  "/runtime",
+  "/expert-teams",
+  "/expert-team-runs",
+  "/billing",
 ];
 
 const ADMIN_PREFIXES = [
-  "/config", "/cron", "/local-models", "/mcp", "/providers",
-  "/envs", "/token-usage", "/agent-stats", "/plugins", "/backups",
-  "/capabilities/admin", "/open-api"
+  "/config",
+  "/cron",
+  "/local-models",
+  "/mcp",
+  "/providers",
+  "/envs",
+  "/token-usage",
+  "/agent-stats",
+  "/plugins",
+  "/backups",
+  "/capabilities/admin",
+  "/open-api",
 ];
 
 function getApiBaseUrl(): string {
@@ -44,10 +67,13 @@ export function getApiUrl(path: string): string {
   let normalizedPath = path.startsWith("/") ? path : `/${path}`;
 
   // If path doesn't already have /user or /admin prefix, check if it should
-  if (!normalizedPath.startsWith("/user/") && !normalizedPath.startsWith("/admin/")) {
-    if (ADMIN_PREFIXES.some(p => normalizedPath.startsWith(p))) {
+  if (
+    !normalizedPath.startsWith("/user/") &&
+    !normalizedPath.startsWith("/admin/")
+  ) {
+    if (ADMIN_PREFIXES.some((p) => normalizedPath.startsWith(p))) {
       normalizedPath = `/admin${normalizedPath}`;
-    } else if (USER_PREFIXES.some(p => normalizedPath.startsWith(p))) {
+    } else if (USER_PREFIXES.some((p) => normalizedPath.startsWith(p))) {
       normalizedPath = `/user${normalizedPath}`;
     } else if (normalizedPath.startsWith("/capabilities/user")) {
       normalizedPath = `/user${normalizedPath}`;

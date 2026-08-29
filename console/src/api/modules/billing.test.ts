@@ -1,0 +1,75 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { billingApi } from "./billing";
+
+describe("billingApi", () => {
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", {
+      getItem: vi.fn(() => "token"),
+      removeItem: vi.fn(),
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "application/json" }),
+        json: async () => ({ items: [] }),
+      })) as unknown as typeof fetch,
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("routes customer and admin billing through separate namespaces", async () => {
+    await billingApi.getWallet();
+    await billingApi.listAdminClaims({ limit: 20 });
+
+    expect(String(vi.mocked(fetch).mock.calls[0][0])).toContain(
+      "/api/user/billing/wallet",
+    );
+    expect(String(vi.mocked(fetch).mock.calls[1][0])).toContain(
+      "/api/admin/billing/top-up/claims?limit=20",
+    );
+  });
+
+  it("submits only customer evidence with an idempotency header", async () => {
+    await billingApi.submitClaim(
+      {
+        product_id: "opaque-product",
+        payment_channel: "wechat",
+        payer_reference: "tail-1234",
+        customer_note: "paid",
+      },
+      "claim-key",
+    );
+
+    const options = vi.mocked(fetch).mock.calls[0][1];
+    expect(options?.method).toBe("POST");
+    expect(JSON.parse(String(options?.body))).toEqual({
+      product_id: "opaque-product",
+      payment_channel: "wechat",
+      payer_reference: "tail-1234",
+      customer_note: "paid",
+    });
+    expect((options?.headers as Headers).get("Idempotency-Key")).toBe(
+      "claim-key",
+    );
+  });
+
+  it("uses the server's durable usage and UTC summary routes", async () => {
+    await billingApi.listUsage({ limit: 10 });
+    await billingApi.getSummary({
+      date_from: "2026-08-01",
+      date_to: "2026-08-29",
+    });
+    expect(String(vi.mocked(fetch).mock.calls[0][0])).toContain(
+      "/api/user/billing/usage-orders?limit=10",
+    );
+    expect(String(vi.mocked(fetch).mock.calls[1][0])).toContain(
+      "/api/user/billing/open-api-summary?date_from=2026-08-01&date_to=2026-08-29",
+    );
+  });
+});

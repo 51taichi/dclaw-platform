@@ -34,6 +34,7 @@ import { desktopUpdateApi } from "./modules/desktopUpdate";
 import { openApiApi } from "./modules/openApi";
 import { webSearchApi } from "./modules/webSearch";
 import { agentExperienceLibraryApi } from "./modules/agentExperienceLibrary";
+import { billingApi } from "./modules/billing";
 
 export const api = {
   // Root
@@ -120,6 +121,9 @@ export const api = {
 
   // Agent Experience Library
   ...agentExperienceLibraryApi,
+
+  // Billing
+  ...billingApi,
 };
 
 export default api;
@@ -133,4 +137,5 @@ export {
   openApiApi,
   webSearchApi,
   agentExperienceLibraryApi,
+  billingApi,
 };

@@ -27,6 +27,7 @@ export const KEY_TO_PATH: Record<string, string> = {
   connectors: "/connectors",
   library: "/tencent-doc",
   automations: "/automations",
+  wallet: "/wallet",
   channels: "/admin/channels",
   sessions: "/admin/sessions",
   inbox: "/admin/inbox",
@@ -59,10 +60,12 @@ export const KEY_TO_PATH: Record<string, string> = {
   "plugin-manager": "/admin/plugin-manager",
   "open-api": "/admin/open-api",
   "sealed-agents": "/admin/sealed-agents",
+  billing: "/admin/billing",
 };
 
 export const KEY_TO_LABEL: Record<string, string> = {
   "aigc-studio": "nav.aigcStudio",
+  wallet: "nav.wallet",
   channels: "nav.channels",
   sessions: "nav.sessions",
   inbox: "nav.inbox",
@@ -93,6 +96,7 @@ export const KEY_TO_LABEL: Record<string, string> = {
   "audit-chats": "nav.auditChats",
   "open-api": "nav.openApi",
   "sealed-agents": "nav.sealedAgents",
+  billing: "nav.billing",
 };
 
 // ── URL helpers ───────────────────────────────────────────────────────────
