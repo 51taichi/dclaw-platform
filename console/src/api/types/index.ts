@@ -11,6 +11,7 @@ export * from "./mcp";
 export * from "./provider";
 export * from "./skill";
 export * from "./workspace";
+export * from "./billing";
 export * from "./tokenUsage";
 export * from "./backup";
 export * from "./expertTeams";

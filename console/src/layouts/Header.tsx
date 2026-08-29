@@ -7,6 +7,7 @@ import LanguageSwitcher from "../components/LanguageSwitcher/index";
 import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
 import ThemeToggleButton from "../components/ThemeToggleButton";
+import BalanceBadge from "../features/billing/BalanceBadge";
 import styles from "./index.module.less";
 
 const { Header: AntHeader } = Layout;
@@ -31,6 +32,7 @@ export default function Header() {
         />
       </div>
       <Space size="middle">
+        {!isAdminMode && <BalanceBadge />}
         {isAdminRole && (
           <Button
             type="default"
