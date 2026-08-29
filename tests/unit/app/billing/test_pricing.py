@@ -170,6 +170,26 @@ def test_image_count_multiplies_the_published_retail_rate(service, clock):
     assert quote.unit_breakdown == {"image_count": 150}
 
 
+def test_new_catalog_version_can_reuse_stable_business_rule_id(service, clock):
+    first_id = service.publish(_catalog(
+        "pricing-v1", clock,
+        _rule("stable-image-price", "image_count", credits_per_unit=50),
+    ))
+    clock.now += timedelta(minutes=1)
+    second_id = service.publish(_catalog(
+        "pricing-v2", clock,
+        _rule("stable-image-price", "image_count", credits_per_unit=60),
+    ))
+
+    assert first_id != second_id
+    quote = service.quote(QuoteRequest(
+        "aliyun", "model-1", "generate", {"count": 1},
+    ))
+    assert quote.catalog_version == "pricing-v2"
+    assert quote.rule_id == "stable-image-price"
+    assert quote.credits == 60
+
+
 def test_video_duration_uses_integer_ceiling_for_the_published_unit(
     service,
     clock,

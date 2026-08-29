@@ -11,15 +11,13 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..billing.pricing import (
-    CatalogImmutableError,
     CatalogNotFoundError,
-    PriceCatalogDraft,
     PriceCatalogService,
-    PriceRule,
     PriceRuleNotFoundError,
     QuoteRequest,
 )
 from ..billing.pricing_unlock import (
+    PersistentPricingUnlockLimiter,
     PricingUnlockDenied,
     PricingUnlockService,
 )
@@ -51,7 +49,10 @@ from ..billing.reporting import (
 from ..storage.engine import get_app_engine
 from ..storage.repos.billing_repo import BillingRepository
 from ..storage.repos.price_catalog_repo import PriceCatalogRepository
-from ..storage.repos.pricing_admin_repo import PricingAdminRepository
+from ..storage.repos.pricing_admin_repo import (
+    PricingAdminRepository,
+    PricingRevisionConflict,
+)
 from ..storage.repos.user_repo import get_user_repository
 from ...providers.provider_manager import ProviderManager
 from ..storage.repos.top_up_repo import (
@@ -89,35 +90,6 @@ class QuoteRequestBody(BaseModel):
             ):
                 raise ValueError(f"{key} exceeds the product limit")
         return value
-
-
-class PriceRuleBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    id: str = Field(min_length=1, max_length=255)
-    provider_id: str = Field(min_length=1, max_length=255)
-    model_key: str = Field(min_length=1, max_length=255)
-    capability: str = Field(min_length=1, max_length=255)
-    unit_type: str
-    priority: int = Field(default=0, ge=0)
-    unit_size: int = Field(default=1, gt=0)
-    credits_per_unit: int = Field(default=0, ge=0)
-    input_credits_per_1k: int = Field(default=0, ge=0)
-    output_credits_per_1k: int = Field(default=0, ge=0)
-    parameter_match: dict[str, Any] = Field(default_factory=dict)
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-    def to_domain(self) -> PriceRule:
-        return PriceRule(**self.model_dump())
-
-
-class CatalogDraftBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    version: str = Field(min_length=1, max_length=255)
-    effective_at: datetime
-    rules: list[PriceRuleBody] = Field(min_length=1)
-    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ReconciliationResolutionBody(BaseModel):
@@ -204,10 +176,12 @@ def get_pricing_unlock_service() -> PricingUnlockService:
             str(user["role"]),
         )
 
+    repository = PricingAdminRepository(get_app_engine())
     return PricingUnlockService(
-        PricingAdminRepository(get_app_engine()),
+        repository,
         credential_loader=load_credentials,
         password_verifier=verify_password,
+        limiter=PersistentPricingUnlockLimiter(repository),
     )
 
 
@@ -574,6 +548,11 @@ def pricing_history() -> list[dict[str, Any]]:
     return get_pricing_admin_service().repository.list_audits()
 
 
+@admin_router.get("/pricing/policies")
+def pricing_policies() -> list[dict[str, Any]]:
+    return get_pricing_admin_service().repository.list_policies()
+
+
 @admin_router.get("/pricing/export")
 def export_pricing() -> Response:
     repository = get_pricing_admin_service().repository
@@ -602,10 +581,14 @@ async def preview_pricing_import(
 @admin_router.post("/pricing/imports/{import_id}/confirm")
 def confirm_pricing_import(
     import_id: str,
+    request: Request,
     actor_id: str = Depends(require_pricing_unlock),
 ) -> dict[str, Any]:
     try:
-        return get_pricing_excel_service().confirm_import(import_id, actor_id)
+        return get_pricing_excel_service().confirm_import(
+            import_id, actor_id,
+            request.client.host if request.client else None,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Import not found") from exc
     except ValueError as exc:
@@ -615,15 +598,22 @@ def confirm_pricing_import(
 @admin_router.post("/pricing/policies")
 def save_pricing_policy(
     payload: PricingPolicyBody,
+    request: Request,
     actor_id: str = Depends(require_pricing_unlock),
 ) -> dict[str, Any]:
     try:
         return get_pricing_admin_service().save_policy(
             payload.scope_type, payload.scope_key, payload.multiplier_decimal,
             payload.settings, actor_id, payload.expected_revision,
+            request.client.host if request.client else None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PricingRevisionConflict as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Pricing policy was updated; reload and retry",
+        ) from exc
 
 
 @admin_router.post("/pricing/initialize/preview")
@@ -636,53 +626,23 @@ def preview_initial_pricing(
 @admin_router.post("/pricing/previews/{catalog_id}/publish")
 def publish_pricing_preview(
     catalog_id: str,
+    request: Request,
     actor_id: str = Depends(require_pricing_unlock),
 ) -> dict[str, Any]:
-    return get_pricing_admin_service().publish_preview(catalog_id, actor_id)
+    return get_pricing_admin_service().publish_preview(
+        catalog_id, actor_id, request.client.host if request.client else None,
+    )
 
 
 @admin_router.post("/pricing/catalogs/{catalog_id}/rollback")
 def rollback_pricing_catalog(
     catalog_id: str,
+    request: Request,
     actor_id: str = Depends(require_pricing_unlock),
 ) -> dict[str, Any]:
-    return get_pricing_admin_service().rollback(catalog_id, actor_id)
-
-
-@admin_router.post("/catalogs/drafts", status_code=201)
-def create_catalog_draft(
-    payload: CatalogDraftBody,
-    request: Request,
-    _unlock_actor: str = Depends(require_pricing_unlock),
-) -> dict[str, str]:
-    service = get_price_catalog_service()
-    actor_id = _authenticated_owner(request)
-    draft = PriceCatalogDraft(
-        version=payload.version,
-        effective_at=payload.effective_at,
-        rules=tuple(rule.to_domain() for rule in payload.rules),
-        created_by=f"admin:{actor_id}",
-        metadata=payload.metadata,
+    return get_pricing_admin_service().rollback(
+        catalog_id, actor_id, request.client.host if request.client else None,
     )
-    try:
-        return {"id": service.create_draft(draft), "status": "draft"}
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
-@admin_router.post("/catalogs/{catalog_id}/publish")
-def publish_catalog(
-    catalog_id: str,
-    _unlock_actor: str = Depends(require_pricing_unlock),
-) -> dict[str, Any]:
-    try:
-        return get_price_catalog_service().publish_draft(catalog_id)
-    except CatalogNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except CatalogImmutableError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @admin_router.get("/catalogs")

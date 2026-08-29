@@ -41,7 +41,9 @@ class PricingExcelService:
         self,
         repository: ImportRepository,
         *,
-        preview_builder: Callable[[str], dict[str, Any]] | None = None,
+        preview_builder: (
+            Callable[[str, list[dict[str, Any]] | None], dict[str, Any]] | None
+        ) = None,
     ) -> None:
         self.repository = repository
         self.preview_builder = preview_builder
@@ -165,7 +167,12 @@ class PricingExcelService:
         workbook.save(output)
         return output.getvalue()
 
-    def confirm_import(self, import_id: str, actor_id: str) -> dict[str, Any]:
+    def confirm_import(
+        self,
+        import_id: str,
+        actor_id: str,
+        ip_address: str | None = None,
+    ) -> dict[str, Any]:
         stored = self.repository.get_import(  # type: ignore[attr-defined]
             import_id
         )
@@ -178,21 +185,19 @@ class PricingExcelService:
         preview = stored["preview"]
         if preview["status"] != "ready":
             raise ValueError("blocked import cannot be confirmed")
+        pricing_preview = (
+            self.preview_builder(actor_id, preview["valid_rows"])
+            if self.preview_builder
+            else None
+        )
         if stored["status"] == "previewed":
             self.repository.apply_import_rows(  # type: ignore[attr-defined]
                 import_id,
                 preview["valid_rows"],
                 stored["filename"],
                 actor_id,
-            )
-        pricing_preview = (
-            self.preview_builder(actor_id) if self.preview_builder else None
-        )
-        if pricing_preview is not None:
-            self.repository.finalize_import(  # type: ignore[attr-defined]
-                import_id,
                 pricing_preview,
-                actor_id,
+                ip_address,
             )
         return {
             "id": import_id,

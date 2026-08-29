@@ -18,6 +18,7 @@ from ..schema import (
     billing_pricing_imports,
     billing_pricing_policies,
     billing_pricing_sync_state,
+    billing_pricing_unlock_attempts,
     billing_pricing_unlocks,
 )
 
@@ -216,6 +217,8 @@ class PricingAdminRepository:
         rows: list[Mapping[str, Any]],
         filename: str,
         actor_id: str,
+        pricing_preview: Mapping[str, Any] | None,
+        ip_address: str | None = None,
     ) -> None:
         """Apply every imported cost/policy and claim the import atomically."""
         with self.engine.begin() as conn:
@@ -296,40 +299,15 @@ class PricingAdminRepository:
                     if result.rowcount != 1:
                         raise PricingRevisionConflict(scope_key)
                 policy_revisions[scope_key] = revision
+            preview = json.loads(imported["preview_json"])
+            preview["pricing_preview"] = dict(pricing_preview or {})
             conn.execute(
                 update(billing_pricing_imports)
                 .where(
                     billing_pricing_imports.c.id == import_id,
                     billing_pricing_imports.c.status == "previewed",
                 )
-                .values(status="confirmed")
-            )
-
-    def finalize_import(
-        self,
-        import_id: str,
-        pricing_preview: Mapping[str, Any],
-        actor_id: str,
-    ) -> None:
-        """Persist the draft reference and audit in one transaction."""
-        with self.engine.begin() as conn:
-            imported = (
-                conn.execute(
-                    select(billing_pricing_imports).where(
-                        billing_pricing_imports.c.id == import_id,
-                    )
-                )
-                .mappings()
-                .one()
-            )
-            preview = json.loads(imported["preview_json"])
-            preview["pricing_preview"] = dict(pricing_preview)
-            conn.execute(
-                update(billing_pricing_imports)
-                .where(
-                    billing_pricing_imports.c.id == import_id,
-                )
-                .values(preview_json=_json(preview))
+                .values(status="confirmed", preview_json=_json(preview))
             )
             conn.execute(
                 insert(billing_pricing_audits).values(
@@ -340,10 +318,12 @@ class PricingAdminRepository:
                     after_json=_json(
                         {
                             "import_id": import_id,
-                            "catalog_id": pricing_preview.get("catalog_id"),
+                            "catalog_id": (pricing_preview or {}).get(
+                                "catalog_id"
+                            ),
                         }
                     ),
-                    metadata_json="{}",
+                    metadata_json=_json({"ip_address": ip_address}),
                 )
             )
 
@@ -368,6 +348,51 @@ class PricingAdminRepository:
                 )
             )
         return unlock_id
+
+    def record_unlock_attempt(
+        self,
+        actor_id: str,
+        ip_address: str | None,
+        succeeded: bool,
+        occurred_at: datetime,
+    ) -> None:
+        with self.engine.begin() as conn:
+            conn.execute(
+                insert(billing_pricing_unlock_attempts).values(
+                    id=str(uuid4()),
+                    actor_id=actor_id,
+                    ip_address=ip_address,
+                    succeeded=succeeded,
+                    created_at=occurred_at,
+                )
+            )
+
+    def recent_unlock_failures(
+        self,
+        actor_id: str,
+        ip_address: str | None,
+        since: datetime,
+    ) -> int:
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                select(
+                    billing_pricing_unlock_attempts.c.succeeded,
+                )
+                .where(
+                    billing_pricing_unlock_attempts.c.actor_id == actor_id,
+                    billing_pricing_unlock_attempts.c.ip_address == ip_address,
+                    billing_pricing_unlock_attempts.c.created_at > since,
+                )
+                .order_by(
+                    billing_pricing_unlock_attempts.c.created_at.desc(),
+                )
+            ).all()
+        failures = 0
+        for row in rows:
+            if row[0]:
+                break
+            failures += 1
+        return failures
 
     def append_audit(
         self,

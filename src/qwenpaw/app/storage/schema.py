@@ -653,6 +653,15 @@ billing_pricing_unlocks = Table(
     Column("created_at", DateTime(timezone=True), server_default=func.now()),
 )
 
+billing_pricing_unlock_attempts = Table(
+    "billing_pricing_unlock_attempts", metadata,
+    Column("id", String, primary_key=True),
+    Column("actor_id", String, nullable=False),
+    Column("ip_address", String),
+    Column("succeeded", Boolean, nullable=False, server_default=false()),
+    Column("created_at", DateTime(timezone=True), server_default=func.now()),
+)
+
 billing_pricing_audits = Table(
     "billing_pricing_audits", metadata,
     Column("id", String, primary_key=True),

@@ -43,6 +43,7 @@ class PricingAdminService:
         settings: dict[str, Any],
         actor_id: str,
         expected_revision: int,
+        ip_address: str | None = None,
     ) -> dict[str, Any]:
         if Decimal(multiplier_decimal) < PricingDefaults().minimum_multiplier:
             raise ValueError("multiplier is below the 1.3 safety floor")
@@ -54,7 +55,13 @@ class PricingAdminService:
             actor_id=actor_id,
             expected_revision=expected_revision,
         )
-        self.repository.append_audit("policy.updated", actor_id, {}, saved)
+        self.repository.append_audit(
+            "policy.updated",
+            actor_id,
+            {},
+            saved,
+            {"ip_address": ip_address},
+        )
         return saved
 
     def overview(self) -> dict[str, Any]:
@@ -70,7 +77,11 @@ class PricingAdminService:
             "catalogs": self.pricing.list_catalogs(),
         }
 
-    def preview_initial_catalog(self, actor_id: str) -> dict[str, Any]:
+    def preview_initial_catalog(
+        self,
+        actor_id: str,
+        imported_rows: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         models = self.inventory.list_enabled()
         costs = {
             (
@@ -80,6 +91,18 @@ class PricingAdminService:
             ): TrustedCost(Decimal(row["rmb_cost_decimal"]), row["unit_key"])
             for row in self.repository.latest_trusted_costs()
         }
+        for row in imported_rows or []:
+            if row["verification_status"] == "verified":
+                costs[
+                    (
+                        row["provider_id"],
+                        row["model_key"],
+                        row["unit_key"],
+                    )
+                ] = TrustedCost(
+                    Decimal(row["rmb_cost_decimal"]),
+                    row["unit_key"],
+                )
         blockers = []
         identities = []
         for model in models:
@@ -117,13 +140,34 @@ class PricingAdminService:
                 )
         if blockers:
             return {"publishable": False, "blockers": blockers}
+        policy_rows = self.repository.list_policies()
+        imported_policy_keys = {
+            f"{row['provider_id']}/{row['model_key']}"
+            for row in imported_rows or []
+        }
+        policy_rows = [
+            row
+            for row in policy_rows
+            if not (
+                row["scope_type"] == "model"
+                and row["scope_key"] in imported_policy_keys
+            )
+        ]
+        policy_rows.extend(
+            {
+                "scope_type": "model",
+                "scope_key": f"{row['provider_id']}/{row['model_key']}",
+                "multiplier_decimal": row["multiplier_decimal"],
+            }
+            for row in imported_rows or []
+        )
         policies = tuple(
             PricingPolicy(
                 row["scope_type"],
                 row["scope_key"],
                 Decimal(row["multiplier_decimal"]),
             )
-            for row in self.repository.list_policies()
+            for row in policy_rows
         )
         rules = build_catalog_rules(
             tuple(identities), costs, policies, PricingDefaults()
@@ -147,7 +191,10 @@ class PricingAdminService:
         }
 
     def publish_preview(
-        self, catalog_id: str, actor_id: str
+        self,
+        catalog_id: str,
+        actor_id: str,
+        ip_address: str | None = None,
     ) -> dict[str, Any]:
         published = self.pricing.publish_draft(catalog_id)
         self.repository.append_audit(
@@ -155,10 +202,16 @@ class PricingAdminService:
             actor_id,
             {},
             {"catalog_id": catalog_id, "version": published["version"]},
+            {"ip_address": ip_address},
         )
         return published
 
-    def rollback(self, catalog_id: str, actor_id: str) -> dict[str, Any]:
+    def rollback(
+        self,
+        catalog_id: str,
+        actor_id: str,
+        ip_address: str | None = None,
+    ) -> dict[str, Any]:
         source = self.catalogs.get_catalog(catalog_id)
         rules = tuple(
             PriceRule(
@@ -193,5 +246,6 @@ class PricingAdminService:
             actor_id,
             {"catalog_id": catalog_id},
             {"catalog_id": new_id},
+            {"ip_address": ip_address},
         )
         return published

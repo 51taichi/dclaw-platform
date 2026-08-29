@@ -945,7 +945,7 @@ def test_enforced_hold_rolls_back_wallet_when_order_transition_fails(
     assert usage.get_order(order["id"])["status"] == "quoted"
 
 
-def test_admin_can_manage_catalogs_and_inspect_any_user_wallet(
+def test_admin_cannot_bypass_cost_derived_prices_and_can_inspect_wallet(
     monkeypatch,
     wallet_repo,
     pricing,
@@ -985,20 +985,17 @@ def test_admin_can_manage_catalogs_and_inspect_any_user_wallet(
             ],
         },
     )
-    assert created.status_code == 201
-    catalog_id = created.json()["id"]
+    assert created.status_code == 404
     published = client.post(
-        f"/api/admin/billing/catalogs/{catalog_id}/publish",
+        "/api/admin/billing/catalogs/forged-catalog/publish",
         headers=_headers("admin-1", "admin") | {"X-Billing-Unlock": "test"},
     )
-    assert published.status_code == 200
+    assert published.status_code == 404
     catalogs = client.get(
         "/api/admin/billing/catalogs",
         headers=_headers("admin-1", "admin"),
     )
-    assert [(item["version"], item["status"]) for item in catalogs.json()] == [
-        ("admin-v1", "published"),
-    ]
+    assert catalogs.json() == []
 
     inspected = client.get(
         "/api/admin/billing/wallets/alice",
@@ -1014,27 +1011,6 @@ def test_admin_can_manage_catalogs_and_inspect_any_user_wallet(
     assert [item["idempotency_key"] for item in ledger.json()["items"]] == [
         "admin-visible-grant",
     ]
-
-
-def test_catalog_mutation_requires_pricing_unlock(
-    monkeypatch, wallet_repo, pricing,
-):
-    client = TestClient(_app(
-        monkeypatch, UsageService(wallet_repo, pricing, mode="shadow"),
-        wallet_repo, pricing,
-    ))
-    monkeypatch.setattr(
-        billing,
-        "get_pricing_unlock_service",
-        lambda: type("Locked", (), {"is_valid": lambda self, token, actor: False})(),
-    )
-    response = client.post(
-        "/api/admin/billing/catalogs/drafts",
-        headers=_headers("1", "admin"),
-        json={"version": "v1", "effective_at": NOW.isoformat(), "rules": []},
-    )
-    assert response.status_code == 423
-    assert response.json()["detail"]["code"] == "pricing_locked"
 
 
 def test_billing_routers_are_mounted_on_trusted_user_and_admin_prefixes():

@@ -107,7 +107,7 @@ def test_confirm_creates_cost_policy_and_draft_only(tmp_path):
     repo = PricingAdminRepository(engine)
     service = PricingExcelService(
         repo,
-        preview_builder=lambda actor: {"catalog_id": "draft-1"},
+        preview_builder=lambda actor, rows: {"catalog_id": "draft-1"},
     )
     preview = service.preview_import(_workbook(), "prices.xlsx", "1")
     result = service.confirm_import(preview["id"], "1")
@@ -131,7 +131,7 @@ def test_confirm_can_resume_draft_creation_without_reapplying_rows(tmp_path):
     repo = PricingAdminRepository(engine)
     attempts = 0
 
-    def preview_builder(_actor):
+    def preview_builder(_actor, _rows):
         nonlocal attempts
         attempts += 1
         if attempts == 1:

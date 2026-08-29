@@ -321,9 +321,23 @@ class PriceCatalogRepository:
         catalog_id: str,
         rules: Iterable[Any],
     ) -> None:
+        rule_list = list(rules)
+        business_ids = [rule.id for rule in rule_list]
+        existing_ids = set(conn.execute(
+            select(billing_price_rules.c.id).where(
+                billing_price_rules.c.id.in_(business_ids),
+            )
+        ).scalars()) if business_ids else set()
         values = [
             {
-                "id": rule.id,
+                # ``id`` is a physical row key and must be unique across
+                # immutable catalog versions.  The stable business rule key
+                # is preserved in metadata and restored when decoding.
+                # Preserve legacy first-version IDs because usage rows have a
+                # foreign key to this column.  Only later catalog versions
+                # with the same stable business key need a catalog prefix.
+                "id": (f"{catalog_id}:{rule.id}"
+                       if rule.id in existing_ids else rule.id),
                 "catalog_id": catalog_id,
                 "provider_id": rule.provider_id,
                 "model_key": rule.model_key,
@@ -336,17 +350,22 @@ class PriceCatalogRepository:
                 "input_credits_per_1k": rule.input_credits_per_1k,
                 "output_credits_per_1k": rule.output_credits_per_1k,
                 "parameter_match_json": _dump_json(rule.parameter_match),
-                "metadata_json": _dump_json(rule.metadata),
+                "metadata_json": _dump_json({
+                    **dict(rule.metadata), "_business_rule_id": rule.id,
+                }),
             }
-            for rule in rules
+            for rule in rule_list
         ]
         if values:
             conn.execute(insert(billing_price_rules), values)
 
 
 def _decode_rule(rule: dict[str, Any]) -> dict[str, Any]:
+    storage_id = rule["id"]
     rule["parameter_match"] = _load_json(rule.pop("parameter_match_json"))
     rule["metadata"] = _load_json(rule.pop("metadata_json"))
+    rule["id"] = rule["metadata"].pop("_business_rule_id", rule["id"])
+    rule["storage_id"] = storage_id
     return rule
 
 

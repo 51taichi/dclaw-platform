@@ -96,6 +96,19 @@ order by created_at desc limit 30;"
 
 ## 5. 同步、复核和连续运营
 
+生产调度由 `DCLAW_PRICING_SYNC_SOURCES_JSON` 启用。每个地址必须是由本方控制的标准化 JSON 源（可由供应商官方 API 适配网关输出），不得直接信任结构不稳定的公开网页。访问令牌只通过 `token_env` 指向另一个环境变量，不能写进 JSON：
+
+```yaml
+environment:
+  DCLAW_PRICING_SYNC_SOURCES_JSON: >-
+    [{"id":"bailian-settlement","source_type":"aggregator",
+      "url":"https://pricing-gateway.internal/bailian","token_env":"BAILIAN_PRICE_TOKEN",
+      "interval_hours":168,"trusted":true}]
+  BAILIAN_PRICE_TOKEN: "由服务器密钥管理注入"
+```
+
+标准化响应为 `{"prices": [...]}`，每行必须包含 `provider_id`、`model_key`、`capability`、`unit_key` 和 `rmb_cost_decimal`。只有经过本方验证、配置为 `trusted:true` 的结构化源才能写入可信成本并触发限幅保护；其他源仅写候选记录供人工复核。未配置该环境变量时不启动外部采集任务，后台人工/Excel 定价仍正常运行。
+
 - 系统每天只检查哪些价格来源已经到期，不是每天抓取全部官网。
 - 官方结构化 API 默认每日；百炼、火山等聚合平台及价格页默认每周；人工来源默认每月。具体供应商可以覆盖周期。
 - 同步候选必须经过单位、币种、阶梯和优惠条件标准化。来源冲突、单位变化或异常涨幅只进入待复核，不直接替换正式目录。

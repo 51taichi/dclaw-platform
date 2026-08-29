@@ -191,6 +191,7 @@ class RetailQuote:
     unit_breakdown: Mapping[str, int]
     snapshot: Mapping[str, Any]
     request: QuoteRequest
+    storage_rule_id: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -495,6 +496,7 @@ class PriceCatalogService:
             unit_breakdown=breakdown,
             snapshot=snapshot,
             request=stable_request,
+            storage_rule_id=winner.get("storage_id", winner["id"]),
         )
 
     @staticmethod
