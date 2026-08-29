@@ -471,11 +471,10 @@ class PriceCatalogService:
                     winner["output_credits_per_1k"],
                 ),
                 "parameter_match": winner["parameter_match"],
-                "metadata": {
-                    "economic_tier": winner["metadata"]["economic_tier"],
-                }
-                if "economic_tier" in winner["metadata"]
-                else {},
+                # A settled usage record must retain the complete immutable
+                # economic evidence (cost, FX, buffer, multiplier and RMB
+                # sale price), not merely the customer-facing tier.
+                "metadata": winner["metadata"],
             },
             "request": {
                 "provider_id": stable_request.provider_id,

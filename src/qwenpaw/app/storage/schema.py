@@ -664,6 +664,13 @@ billing_pricing_audits = Table(
     Column("created_at", DateTime(timezone=True), server_default=func.now()),
 )
 
+billing_pricing_sync_state = Table(
+    "billing_pricing_sync_state", metadata,
+    Column("state_key", String, primary_key=True),
+    Column("occurred_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), server_default=func.now()),
+)
+
 billing_price_rules = Table(
     "billing_price_rules",
     metadata,
