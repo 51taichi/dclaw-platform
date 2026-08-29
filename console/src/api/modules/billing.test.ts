@@ -58,4 +58,18 @@ describe("billingApi", () => {
       "claim-key",
     );
   });
+
+  it("uses the server's durable usage and UTC summary routes", async () => {
+    await billingApi.listUsage({ limit: 10 });
+    await billingApi.getSummary({
+      date_from: "2026-08-01",
+      date_to: "2026-08-29",
+    });
+    expect(String(vi.mocked(fetch).mock.calls[0][0])).toContain(
+      "/api/user/billing/usage-orders?limit=10",
+    );
+    expect(String(vi.mocked(fetch).mock.calls[1][0])).toContain(
+      "/api/user/billing/open-api-summary?date_from=2026-08-01&date_to=2026-08-29",
+    );
+  });
 });

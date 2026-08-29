@@ -28,10 +28,10 @@ export const billingApi = {
   listLedger: (params: { limit?: number; cursor?: string } = {}) =>
     request<Page<BillingLedgerEntry>>(`/billing/ledger${query(params)}`),
   listUsage: (params: Record<string, string | number | undefined> = {}) =>
-    request<Page<BillingUsageOrder>>(`/billing/usage${query(params)}`),
-  getUsage: (id: string) => request(`/billing/usage/${id}`),
+    request<Page<BillingUsageOrder>>(`/billing/usage-orders${query(params)}`),
+  getUsage: (id: string) => request(`/billing/usage-orders/${id}`),
   getSummary: (params: { date_from?: string; date_to?: string } = {}) =>
-    request(`/billing/summary${query(params)}`),
+    request(`/billing/open-api-summary${query(params)}`),
   getTopUpConfig: () => request<TopUpConfig>("/billing/top-up/config"),
   listProducts: () => request<Page<TopUpProduct>>("/billing/top-up/products"),
   listClaims: () => request<Page<TopUpClaim>>("/billing/top-up/claims"),
