@@ -92,6 +92,15 @@ class PricingAdminRepository:
                     "scope_key": scope_key, "revision": revision,
                     "multiplier_decimal": multiplier_decimal}
 
+    def list_policies(self) -> list[dict[str, Any]]:
+        with self.engine.connect() as conn:
+            return [dict(row) for row in conn.execute(
+                select(billing_pricing_policies).order_by(
+                    billing_pricing_policies.c.scope_type,
+                    billing_pricing_policies.c.scope_key,
+                ),
+            ).mappings()]
+
     def record_import(self, digest: str, filename: str, actor_id: str,
                       preview: Mapping[str, Any]) -> dict[str, Any]:
         row = {"id": str(uuid4()), "content_sha256": digest,
@@ -108,11 +117,13 @@ class PricingAdminRepository:
             )).mappings().one())
 
     def create_unlock(self, actor_id: str, token_hash: str,
+                      credential_fingerprint: str,
                       expires_at: datetime, ip_address: str | None) -> str:
         unlock_id = str(uuid4())
         with self.engine.begin() as conn:
             conn.execute(insert(billing_pricing_unlocks).values(
                 id=unlock_id, actor_id=actor_id, token_hash=token_hash,
+                credential_fingerprint=credential_fingerprint,
                 expires_at=expires_at, ip_address=ip_address))
         return unlock_id
 
@@ -127,12 +138,22 @@ class PricingAdminRepository:
                 metadata_json=_json(metadata or {})))
         return audit_id
 
+    def list_audits(self) -> list[dict[str, Any]]:
+        with self.engine.connect() as conn:
+            return [dict(row) for row in conn.execute(
+                select(billing_pricing_audits).order_by(
+                    billing_pricing_audits.c.created_at.desc()),
+            ).mappings()]
+
     def validate_unlock(self, token_hash: str, actor_id: str,
+                        credential_fingerprint: str,
                         now: datetime) -> bool:
         with self.engine.connect() as conn:
             return conn.execute(select(billing_pricing_unlocks.c.id).where(
                 billing_pricing_unlocks.c.token_hash == token_hash,
                 billing_pricing_unlocks.c.actor_id == actor_id,
+                billing_pricing_unlocks.c.credential_fingerprint
+                == credential_fingerprint,
                 billing_pricing_unlocks.c.revoked_at.is_(None),
                 billing_pricing_unlocks.c.expires_at > now,
             )).first() is not None

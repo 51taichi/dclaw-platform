@@ -646,6 +646,7 @@ billing_pricing_unlocks = Table(
     Column("id", String, primary_key=True),
     Column("actor_id", String, nullable=False),
     Column("token_hash", String, nullable=False, unique=True),
+    Column("credential_fingerprint", String, nullable=False),
     Column("ip_address", String),
     Column("expires_at", DateTime(timezone=True), nullable=False),
     Column("revoked_at", DateTime(timezone=True)),

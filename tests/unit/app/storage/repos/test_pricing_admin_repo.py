@@ -69,6 +69,9 @@ def test_import_is_idempotent_and_unlock_expires(repo):
     assert first["id"] == second["id"]
 
     now = datetime.now(timezone.utc)
-    repo.create_unlock("1", "token-hash", now + timedelta(minutes=15), "127.0.0.1")
-    assert repo.validate_unlock("token-hash", "1", now)
-    assert not repo.validate_unlock("token-hash", "1", now + timedelta(minutes=16))
+    repo.create_unlock("1", "token-hash", "credentials-v1",
+                       now + timedelta(minutes=15), "127.0.0.1")
+    assert repo.validate_unlock("token-hash", "1", "credentials-v1", now)
+    assert not repo.validate_unlock("token-hash", "1", "credentials-v2", now)
+    assert not repo.validate_unlock(
+        "token-hash", "1", "credentials-v1", now + timedelta(minutes=16))

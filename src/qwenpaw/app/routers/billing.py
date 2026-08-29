@@ -6,7 +6,7 @@ from datetime import date, datetime
 import os
 from typing import Any, Literal
 
-from fastapi import APIRouter, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -19,6 +19,13 @@ from ..billing.pricing import (
     PriceRuleNotFoundError,
     QuoteRequest,
 )
+from ..billing.pricing_unlock import (
+    PricingUnlockDenied,
+    PricingUnlockService,
+)
+from ..billing.pricing_admin import PricingAdminService
+from ..billing.pricing_inventory import PricingModelInventory
+from ..auth import verify_password
 from ..billing.usage import (
     IdempotencyConflictError,
     UsageOrderConflictError,
@@ -43,6 +50,9 @@ from ..billing.reporting import (
 from ..storage.engine import get_app_engine
 from ..storage.repos.billing_repo import BillingRepository
 from ..storage.repos.price_catalog_repo import PriceCatalogRepository
+from ..storage.repos.pricing_admin_repo import PricingAdminRepository
+from ..storage.repos.user_repo import get_user_repository
+from ...providers.provider_manager import ProviderManager
 from ..storage.repos.top_up_repo import (
     TopUpIdempotencyConflict,
     TopUpRepository,
@@ -152,12 +162,74 @@ class TopUpProductBody(BaseModel):
     display_order: int = Field(default=0, ge=0, le=10000)
 
 
+class PricingUnlockBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class PricingPolicyBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    scope_type: Literal["global", "provider", "category", "model"]
+    scope_key: str = Field(min_length=1, max_length=512)
+    multiplier_decimal: str = Field(pattern=r"^\d+(\.\d+)?$")
+    settings: dict[str, Any] = Field(default_factory=dict)
+    expected_revision: int = Field(ge=0)
+
+
 def get_billing_repository() -> BillingRepository:
     return BillingRepository(get_app_engine())
 
 
 def get_price_catalog_service() -> PriceCatalogService:
     return PriceCatalogService(PriceCatalogRepository(get_app_engine()))
+
+
+def get_pricing_unlock_service() -> PricingUnlockService:
+    users = get_user_repository()
+
+    def load_credentials(actor_id: str) -> tuple[str, str, str] | None:
+        try:
+            user = users.get_user_by_id(int(actor_id))
+        except (TypeError, ValueError):
+            return None
+        if user is None:
+            return None
+        credentials = users.get_user_credentials(str(user["username"]))
+        if credentials is None:
+            return None
+        return (
+            str(credentials["password_hash"]),
+            str(credentials["password_salt"]),
+            str(user["role"]),
+        )
+
+    return PricingUnlockService(
+        PricingAdminRepository(get_app_engine()),
+        credential_loader=load_credentials,
+        password_verifier=verify_password,
+    )
+
+
+def get_pricing_admin_service() -> PricingAdminService:
+    engine = get_app_engine()
+    catalogs = PriceCatalogRepository(engine)
+    return PricingAdminService(
+        PricingAdminRepository(engine), PriceCatalogService(catalogs),
+        catalogs, PricingModelInventory(ProviderManager.get_instance()),
+    )
+
+
+def require_pricing_unlock(
+    request: Request,
+    token: str | None = Header(default=None, alias="X-Billing-Unlock"),
+) -> str:
+    actor_id = _authenticated_owner(request)
+    if not token or not get_pricing_unlock_service().is_valid(token, actor_id):
+        raise HTTPException(
+            status_code=423,
+            detail={"code": "pricing_locked", "message": "计费设置尚未解锁"},
+        )
+    return actor_id
 
 
 def get_usage_service() -> UsageService:
@@ -465,10 +537,76 @@ def get_user_open_api_summary(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@admin_router.post("/pricing/unlock")
+def unlock_pricing(payload: PricingUnlockBody, request: Request) -> dict[str, Any]:
+    actor_id = _authenticated_owner(request)
+    ip_address = request.client.host if request.client else None
+    try:
+        unlock = get_pricing_unlock_service().unlock(
+            actor_id, payload.password, ip_address,
+        )
+    except PricingUnlockDenied as exc:
+        raise HTTPException(status_code=403, detail="Invalid admin password") from exc
+    return {"token": unlock.token, "expires_at": unlock.expires_at}
+
+
+@admin_router.get("/pricing/overview")
+def pricing_overview() -> dict[str, Any]:
+    return get_pricing_admin_service().overview()
+
+
+@admin_router.get("/pricing/models")
+def pricing_models() -> list[dict[str, Any]]:
+    return [row.__dict__ for row in get_pricing_admin_service().inventory.list_enabled()]
+
+
+@admin_router.get("/pricing/history")
+def pricing_history() -> list[dict[str, Any]]:
+    return get_pricing_admin_service().repository.list_audits()
+
+
+@admin_router.post("/pricing/policies")
+def save_pricing_policy(
+    payload: PricingPolicyBody,
+    actor_id: str = Depends(require_pricing_unlock),
+) -> dict[str, Any]:
+    try:
+        return get_pricing_admin_service().save_policy(
+            payload.scope_type, payload.scope_key, payload.multiplier_decimal,
+            payload.settings, actor_id, payload.expected_revision,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@admin_router.post("/pricing/initialize/preview")
+def preview_initial_pricing(
+    actor_id: str = Depends(require_pricing_unlock),
+) -> dict[str, Any]:
+    return get_pricing_admin_service().preview_initial_catalog(actor_id)
+
+
+@admin_router.post("/pricing/previews/{catalog_id}/publish")
+def publish_pricing_preview(
+    catalog_id: str,
+    actor_id: str = Depends(require_pricing_unlock),
+) -> dict[str, Any]:
+    return get_pricing_admin_service().publish_preview(catalog_id, actor_id)
+
+
+@admin_router.post("/pricing/catalogs/{catalog_id}/rollback")
+def rollback_pricing_catalog(
+    catalog_id: str,
+    actor_id: str = Depends(require_pricing_unlock),
+) -> dict[str, Any]:
+    return get_pricing_admin_service().rollback(catalog_id, actor_id)
+
+
 @admin_router.post("/catalogs/drafts", status_code=201)
 def create_catalog_draft(
     payload: CatalogDraftBody,
     request: Request,
+    _unlock_actor: str = Depends(require_pricing_unlock),
 ) -> dict[str, str]:
     service = get_price_catalog_service()
     actor_id = _authenticated_owner(request)
@@ -486,7 +624,10 @@ def create_catalog_draft(
 
 
 @admin_router.post("/catalogs/{catalog_id}/publish")
-def publish_catalog(catalog_id: str) -> dict[str, Any]:
+def publish_catalog(
+    catalog_id: str,
+    _unlock_actor: str = Depends(require_pricing_unlock),
+) -> dict[str, Any]:
     try:
         return get_price_catalog_service().publish_draft(catalog_id)
     except CatalogNotFoundError as exc:
