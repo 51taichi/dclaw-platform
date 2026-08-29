@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Alert, Button, Card, Radio, Space, Table } from "antd";
 import { billingApi } from "../../../api/modules/billing";
+export { default as PricingTab } from "./PricingTab";
 
 function JsonRows({ load }: { load: () => Promise<unknown> }) {
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
@@ -30,7 +31,6 @@ function JsonRows({ load }: { load: () => Promise<unknown> }) {
   );
 }
 
-export const PricingTab = () => <JsonRows load={billingApi.listCatalogs} />;
 export const UsageTab = () => <JsonRows load={billingApi.listAdminUsage} />;
 export const ReconciliationTab = () => (
   <Space direction="vertical" style={{ width: "100%" }}>

@@ -8,6 +8,14 @@ import type {
   TopUpClaim,
   TopUpConfig,
   TopUpProduct,
+  PricingAudit,
+  PricingCatalogSummary,
+  PriceableModel,
+  PricingImportPreview,
+  PricingOverview,
+  PricingPolicyInput,
+  PricingPreview,
+  PricingUnlock,
 } from "../types/billing";
 
 function query(params: Record<string, string | number | undefined>): string {
@@ -21,6 +29,10 @@ function query(params: Record<string, string | number | undefined>): string {
 
 function idempotencyHeaders(key: string): Headers {
   return new Headers({ "Idempotency-Key": key });
+}
+
+function pricingHeaders(token: string): Headers {
+  return new Headers({ "X-Billing-Unlock": token });
 }
 
 export const billingApi = {
@@ -70,6 +82,54 @@ export const billingApi = {
       body: JSON.stringify(payload),
     }),
   listCatalogs: () => request<unknown[]>("/admin/billing/catalogs"),
+  getPricingOverview: () =>
+    request<PricingOverview>("/admin/billing/pricing/overview"),
+  listPricingModels: () =>
+    request<PriceableModel[]>("/admin/billing/pricing/models"),
+  listPricingHistory: () =>
+    request<PricingAudit[]>("/admin/billing/pricing/history"),
+  unlockPricing: (password: string) =>
+    request<PricingUnlock>("/admin/billing/pricing/unlock", {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    }),
+  savePricingPolicy: (payload: PricingPolicyInput, token: string) =>
+    request("/admin/billing/pricing/policies", {
+      method: "POST",
+      headers: pricingHeaders(token),
+      body: JSON.stringify({ ...payload, settings: payload.settings ?? {} }),
+    }),
+  initializePricingPreview: (token: string) =>
+    request<PricingPreview>("/admin/billing/pricing/initialize/preview", {
+      method: "POST",
+      headers: pricingHeaders(token),
+    }),
+  publishPricingPreview: (id: string, token: string) =>
+    request<PricingCatalogSummary>(
+      `/admin/billing/pricing/previews/${id}/publish`,
+      { method: "POST", headers: pricingHeaders(token) },
+    ),
+  rollbackPricingCatalog: (id: string, token: string) =>
+    request<PricingCatalogSummary>(
+      `/admin/billing/pricing/catalogs/${id}/rollback`,
+      { method: "POST", headers: pricingHeaders(token) },
+    ),
+  previewPricingImport: (file: File) =>
+    request<PricingImportPreview>(
+      `/admin/billing/pricing/imports/preview?filename=${encodeURIComponent(
+        file.name,
+      )}`,
+      {
+        method: "POST",
+        headers: new Headers({ "Content-Type": file.type }),
+        body: file,
+      },
+    ),
+  confirmPricingImport: (id: string, token: string) =>
+    request(`/admin/billing/pricing/imports/${id}/confirm`, {
+      method: "POST",
+      headers: pricingHeaders(token),
+    }),
   listAdminUsage: (params: Record<string, string | number | undefined> = {}) =>
     request<Page<Record<string, unknown>>>(
       `/admin/billing/usage-orders${query(params)}`,
