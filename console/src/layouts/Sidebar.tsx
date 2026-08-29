@@ -39,8 +39,6 @@ import {
   SparkMenuFoldLine,
   SparkOtherLine,
   SparkBarChartLine,
-  SparkDebugLine,
-  SparkSaveLine,
   SparkEmailLine,
 } from "@agentscope-ai/icons";
 import {
@@ -408,12 +406,6 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
 
   const collapsedNavItems = [
     {
-      key: "claw",
-      icon: <SparkChatTabFill size={18} />,
-      path: "/claw",
-      label: t("nav.claw"),
-    },
-    {
       key: "experts",
       icon: <SparkAgentLine size={18} />,
       path: "/experts",
@@ -429,13 +421,7 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
       key: "aigc-studio",
       icon: <WandSparkles size={18} />,
       path: "/aigc-studio",
-      label: t("nav.aigcStudio", "AIGC 创意工作室"),
-    },
-    {
-      key: "explore",
-      icon: <SparkBrowseLine size={18} />,
-      path: "/explore",
-      label: t("nav.explore"),
+      label: t("nav.aigcStudio", "AIGC"),
     },
     {
       key: "connectors",
@@ -481,12 +467,6 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
             path: "/admin/web-search",
             label: t("nav.webSearch", "Web 检索"),
           },
-          {
-            key: "debug",
-            icon: <SparkDebugLine size={18} />,
-            path: "/admin/debug",
-            label: t("nav.debug", "Debug"),
-          },
           // Append plugin nav items dynamically
           ...pluginRoutes.map((route) => ({
             key: route.path.replace(/^\//, ""),
@@ -509,11 +489,6 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
       icon: <CreditCard size={16} />,
     },
     {
-      key: "claw",
-      label: collapsed ? null : t("nav.claw"),
-      icon: <SparkChatTabFill size={16} />,
-    },
-    {
       key: "experts",
       label: collapsed ? null : t("nav.experts"),
       icon: <SparkAgentLine size={16} />,
@@ -525,13 +500,8 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
     },
     {
       key: "aigc-studio",
-      label: collapsed ? null : t("nav.aigcStudio", "AIGC 创意工作室"),
+      label: collapsed ? null : t("nav.aigcStudio", "AIGC"),
       icon: <WandSparkles size={16} />,
-    },
-    {
-      key: "explore",
-      label: collapsed ? null : t("nav.explore"),
-      icon: <SparkBrowseLine size={16} />,
     },
     {
       key: "connectors",
@@ -602,11 +572,6 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
           icon: <SparkOtherLine size={16} />,
         },
         {
-          key: "environments",
-          label: collapsed ? null : t("nav.environments"),
-          icon: <SparkInternetLine size={16} />,
-        },
-        {
           key: "object-storage",
           label: collapsed ? null : t("nav.objectStorage", "对象存储"),
           icon: <CloudUpload size={16} />,
@@ -640,21 +605,6 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
           key: "billing",
           label: collapsed ? null : t("nav.billing", "积分与计费"),
           icon: <CreditCard size={16} />,
-        },
-        {
-          key: "audit-chats",
-          label: collapsed ? null : "Audit Chats",
-          icon: <SparkUserGroupLine size={16} />,
-        },
-        {
-          key: "backups",
-          label: collapsed ? null : t("nav.backups"),
-          icon: <SparkSaveLine size={16} />,
-        },
-        {
-          key: "debug",
-          label: collapsed ? null : t("nav.debug", "Debug"),
-          icon: <SparkDebugLine size={16} />,
         },
         {
           key: "plugin-manager",
