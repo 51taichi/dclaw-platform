@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Router-level OpenAPI billing flow integration coverage."""
 from __future__ import annotations
 
@@ -45,10 +44,10 @@ from qwenpaw.app.storage.repos.billing_repo import BillingRepository
 from qwenpaw.app.storage.repos.open_api_repo import SqlAlchemyOpenApiRepository
 from qwenpaw.app.storage.repos.price_catalog_repo import PriceCatalogRepository
 from qwenpaw.app.storage.schema import (
-    billing_usage_items,
-    billing_usage_orders,
     billing_price_catalogs,
     billing_price_rules,
+    billing_usage_items,
+    billing_usage_orders,
     create_all,
     open_api_invocations,
 )
@@ -445,6 +444,28 @@ def test_missing_catalog_is_503_before_supplier(billing_flow):
     assert response.status_code == 503
     assert response.json() == {"code": "catalog_not_ready"}
     assert billing_flow.console.calls == 0
+
+
+def test_stale_price_source_metadata_does_not_interrupt_supplier(
+    billing_flow,
+):
+    wallet = billing_flow.repository.ensure_wallet("user", "wallet-owner")
+    billing_flow.repository.grant(
+        str(wallet["id"]), credits=10, credit_type="purchased",
+        expires_at=None, idempotency_key="fund-stale-source-test",
+    )
+    with billing_flow.engine.begin() as conn:
+        conn.execute(update(billing_price_catalogs).values(
+            metadata_json=json.dumps({
+                "source_stale": True,
+                "risk_status": "high",
+            }),
+        ))
+
+    response = _post(billing_flow, key="stale-source-still-runs")
+
+    assert response.status_code == 200
+    assert billing_flow.console.calls == 1
 
 
 def test_unknown_supplier_outcome_is_reconciling_and_terminal_is_sealed(

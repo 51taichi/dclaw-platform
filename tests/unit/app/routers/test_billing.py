@@ -95,6 +95,11 @@ def _app(
     monkeypatch.setattr(billing, "get_usage_service", lambda: usage)
     monkeypatch.setattr(billing, "get_billing_repository", lambda: wallet_repo)
     monkeypatch.setattr(billing, "get_price_catalog_service", lambda: pricing)
+    monkeypatch.setattr(
+        billing,
+        "get_pricing_unlock_service",
+        lambda: type("Unlocked", (), {"is_valid": lambda self, token, actor: True})(),
+    )
 
     app = FastAPI()
 
@@ -940,7 +945,7 @@ def test_enforced_hold_rolls_back_wallet_when_order_transition_fails(
     assert usage.get_order(order["id"])["status"] == "quoted"
 
 
-def test_admin_can_manage_catalogs_and_inspect_any_user_wallet(
+def test_admin_cannot_bypass_cost_derived_prices_and_can_inspect_wallet(
     monkeypatch,
     wallet_repo,
     pricing,
@@ -964,7 +969,7 @@ def test_admin_can_manage_catalogs_and_inspect_any_user_wallet(
 
     created = client.post(
         "/api/admin/billing/catalogs/drafts",
-        headers=_headers("admin-1", "admin"),
+        headers=_headers("admin-1", "admin") | {"X-Billing-Unlock": "test"},
         json={
             "version": "admin-v1",
             "effective_at": NOW.isoformat(),
@@ -980,20 +985,17 @@ def test_admin_can_manage_catalogs_and_inspect_any_user_wallet(
             ],
         },
     )
-    assert created.status_code == 201
-    catalog_id = created.json()["id"]
+    assert created.status_code == 404
     published = client.post(
-        f"/api/admin/billing/catalogs/{catalog_id}/publish",
-        headers=_headers("admin-1", "admin"),
+        "/api/admin/billing/catalogs/forged-catalog/publish",
+        headers=_headers("admin-1", "admin") | {"X-Billing-Unlock": "test"},
     )
-    assert published.status_code == 200
+    assert published.status_code == 404
     catalogs = client.get(
         "/api/admin/billing/catalogs",
         headers=_headers("admin-1", "admin"),
     )
-    assert [(item["version"], item["status"]) for item in catalogs.json()] == [
-        ("admin-v1", "published"),
-    ]
+    assert catalogs.json() == []
 
     inspected = client.get(
         "/api/admin/billing/wallets/alice",

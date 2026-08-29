@@ -65,6 +65,9 @@ def _should_skip_keyring() -> bool:
         ``_KEYRING_TIMEOUT`` seconds regardless of what this function
         returns.
     """
+    if EnvVarLoader.get_bool("QWENPAW_DISABLE_KEYRING"):
+        return True
+
     if EnvVarLoader.get_bool("QWENPAW_RUNNING_IN_CONTAINER"):
         return True
 

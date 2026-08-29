@@ -177,7 +177,7 @@ class UsageService:
             "id": order_id,
             "wallet_id": wallet["id"],
             "catalog_id": catalog_id,
-            "price_rule_id": quote.rule_id,
+            "price_rule_id": quote.storage_rule_id or quote.rule_id,
             "business_key": stored_key,
             "status": "quoted",
             "provider_id": request.provider_id,
@@ -580,7 +580,7 @@ class UsageService:
                 insert(billing_usage_items).values(
                     id=str(uuid4()),
                     usage_order_id=normalized.usage_order_id,
-                    price_rule_id=quote.rule_id,
+                    price_rule_id=quote.storage_rule_id or quote.rule_id,
                     item_key=normalized.item_key,
                     status="held",
                     provider_id=normalized.provider_id,
