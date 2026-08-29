@@ -1,7 +1,22 @@
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Button, Space, Table, Tag, Typography, Upload } from "antd";
+import {
+  Alert,
+  Button,
+  Card,
+  Space,
+  Table,
+  Tag,
+  Typography,
+  Upload,
+} from "antd";
 import type { UploadProps } from "antd";
-import { LockKeyhole, RefreshCw, UploadCloud } from "lucide-react";
+import {
+  LockKeyhole,
+  PackageCheck,
+  RefreshCw,
+  ShieldCheck,
+  UploadCloud,
+} from "lucide-react";
 import { PageHeader } from "../../../components/PageHeader";
 import {
   sealedAgentsApi,
@@ -9,6 +24,7 @@ import {
   type SealedRelease,
 } from "../../../api/modules/sealedAgents";
 import { useAppMessage } from "../../../hooks/useAppMessage";
+import styles from "./index.module.less";
 
 export default function SealedAgentsPage() {
   const { message } = useAppMessage();
@@ -28,6 +44,15 @@ export default function SealedAgentsPage() {
 
   useEffect(() => void load(), [load]);
 
+  const enabledCount = agents.filter((agent) => agent.enabled).length;
+  const availableCount = agents.filter(
+    (agent) => agent.availability === "available",
+  ).length;
+  const releaseCount = agents.reduce(
+    (total, agent) => total + agent.releases.length,
+    0,
+  );
+
   const upload: UploadProps["customRequest"] = async ({
     file,
     onSuccess,
@@ -45,13 +70,13 @@ export default function SealedAgentsPage() {
   };
 
   return (
-    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+    <div className={styles.page}>
       <PageHeader
         parent="设置"
-        current="密封全局 Agent"
+        current="密封/Agent"
         subRow={
           <Typography.Text type="secondary">
-            仅展示运行状态与签名信息；提示词、Skill、源码和下载入口不会暴露给后台管理员。
+            管理只可调用、不可查看内部资产的全局 Agent 发布包。
           </Typography.Text>
         }
         extra={
@@ -67,94 +92,153 @@ export default function SealedAgentsPage() {
           </Space>
         }
       />
-      <Alert
-        type="info"
-        showIcon
-        message="密封 Agent 是可选能力，可配置 0 个或多个；普通 Agent 不受影响。"
-      />
-      <Table
-        rowKey="agent_id"
-        loading={loading}
-        dataSource={agents}
-        columns={[
-          {
-            title: "Agent",
-            render: (_, a) => (
-              <Space>
-                <LockKeyhole size={16} />
-                <span>{a.name}</span>
-                <Typography.Text type="secondary">{a.agent_id}</Typography.Text>
-              </Space>
-            ),
-          },
-          { title: "版本", dataIndex: "version", render: (v) => v || "未激活" },
-          {
-            title: "状态",
-            render: (_, a) => (
-              <Tag color={a.availability === "available" ? "green" : "default"}>
-                {a.availability}
-              </Tag>
-            ),
-          },
-          { title: "签名者", dataIndex: "signer_id", render: (v) => v || "-" },
-          {
-            title: "操作",
-            render: (_, agent) => (
-              <Space wrap>
-                {agent.releases
-                  .filter(
-                    (r: SealedRelease) =>
-                      r.release_id !== agent.active_release_id,
-                  )
-                  .map((release) => (
+
+      <div className={styles.content}>
+        <div className={styles.summary}>
+          <div className={styles.summaryItem}>
+            <p className={styles.summaryLabel}>密封 Agent</p>
+            <div className={styles.summaryValue}>{agents.length}</div>
+          </div>
+          <div className={styles.summaryItem}>
+            <p className={styles.summaryLabel}>已启用</p>
+            <div className={styles.summaryValue}>{enabledCount}</div>
+          </div>
+          <div className={styles.summaryItem}>
+            <p className={styles.summaryLabel}>运行可用</p>
+            <div className={styles.summaryValue}>{availableCount}</div>
+          </div>
+          <div className={styles.summaryItem}>
+            <p className={styles.summaryLabel}>发布版本</p>
+            <div className={styles.summaryValue}>{releaseCount}</div>
+          </div>
+        </div>
+
+        <Alert
+          className={styles.securityNotice}
+          type="info"
+          showIcon
+          icon={<ShieldCheck size={18} />}
+          message="内部资产已密封"
+          description="后台仅展示运行状态与签名信息；提示词、Skill、源码、下载入口和内部追踪均不可见。该能力可配置 0 个或多个，不影响普通 Agent。"
+        />
+
+        <Card
+          className={styles.tableCard}
+          title={
+            <Space>
+              <PackageCheck size={18} />
+              <span>已上传发布包</span>
+              <Tag>{agents.length}</Tag>
+            </Space>
+          }
+        >
+          <Table
+            rowKey="agent_id"
+            loading={loading}
+            dataSource={agents}
+            pagination={{ pageSize: 10, showSizeChanger: false }}
+            scroll={{ x: 960 }}
+            locale={{ emptyText: "暂无密封 Agent，可上传签名发布包开始使用" }}
+            columns={[
+              {
+                title: "Agent",
+                render: (_, a) => (
+                  <Space>
+                    <LockKeyhole size={16} />
+                    <span>{a.name}</span>
+                    <Typography.Text type="secondary">
+                      {a.agent_id}
+                    </Typography.Text>
+                  </Space>
+                ),
+              },
+              {
+                title: "版本",
+                dataIndex: "version",
+                render: (v) => v || "未激活",
+              },
+              {
+                title: "状态",
+                render: (_, a) => (
+                  <Space size={4} wrap>
+                    <Tag
+                      color={
+                        a.availability === "available" ? "green" : "default"
+                      }
+                    >
+                      {a.availability === "available" ? "运行可用" : "不可用"}
+                    </Tag>
+                    <Tag color={a.enabled ? "blue" : "default"}>
+                      {a.enabled ? "已启用" : "已停用"}
+                    </Tag>
+                  </Space>
+                ),
+              },
+              {
+                title: "签名者",
+                dataIndex: "signer_id",
+                render: (v) => v || "-",
+              },
+              {
+                title: "操作",
+                render: (_, agent) => (
+                  <Space wrap>
+                    {agent.releases
+                      .filter(
+                        (r: SealedRelease) =>
+                          r.release_id !== agent.active_release_id,
+                      )
+                      .map((release) => (
+                        <Button
+                          key={release.release_id}
+                          size="small"
+                          onClick={async () => {
+                            await sealedAgentsApi.activate(
+                              agent.agent_id,
+                              release.release_id,
+                            );
+                            message.success(`已激活 ${release.version}`);
+                            await load();
+                          }}
+                        >
+                          激活 {release.version}
+                        </Button>
+                      ))}
                     <Button
-                      key={release.release_id}
                       size="small"
                       onClick={async () => {
-                        await sealedAgentsApi.activate(
+                        await sealedAgentsApi.setEnabled(
                           agent.agent_id,
-                          release.release_id,
+                          !agent.enabled,
                         );
-                        message.success(`已激活 ${release.version}`);
                         await load();
                       }}
                     >
-                      激活 {release.version}
+                      {agent.enabled ? "停用" : "启用"}
                     </Button>
-                  ))}
-                <Button
-                  size="small"
-                  onClick={async () => {
-                    await sealedAgentsApi.setEnabled(
-                      agent.agent_id,
-                      !agent.enabled,
-                    );
-                    await load();
-                  }}
-                >
-                  {agent.enabled ? "停用" : "启用"}
-                </Button>
-              </Space>
-            ),
-          },
-        ]}
-        expandable={{
-          expandedRowRender: (agent) => (
-            <Space direction="vertical">
-              <Typography.Text>
-                {agent.description || "无公开描述"}
-              </Typography.Text>
-              <Typography.Text type="secondary">
-                内容摘要：{agent.content_digest || "-"}
-              </Typography.Text>
-              <Typography.Text type="secondary">
-                Invoke-only：允许会话与 OpenAPI
-                调用，禁止查看、编辑、克隆、导出、下载和内部追踪。
-              </Typography.Text>
-            </Space>
-          ),
-        }}
-      />
-    </Space>
+                  </Space>
+                ),
+              },
+            ]}
+            expandable={{
+              expandedRowRender: (agent) => (
+                <div className={styles.expandedContent}>
+                  <Typography.Text>
+                    {agent.description || "无公开描述"}
+                  </Typography.Text>
+                  <Typography.Text type="secondary">
+                    内容摘要：{agent.content_digest || "-"}
+                  </Typography.Text>
+                  <Typography.Text type="secondary">
+                    Invoke-only：允许会话与 OpenAPI
+                    调用，禁止查看、编辑、克隆、导出、下载和内部追踪。
+                  </Typography.Text>
+                </div>
+              ),
+            }}
+          />
+        </Card>
+      </div>
+    </div>
   );
 }

@@ -136,12 +136,13 @@ describe("OpenApiPage", () => {
     render(<OpenApiPage />);
 
     expect((await screen.findAllByText("客服专家")).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("tab", { name: "应用与密钥" }));
     expect((await screen.findAllByText("CRM")).length).toBeGreaterThan(0);
-    expect(
-      (await screen.findAllByText("knowledge-owner (user)")).length,
-    ).toBeGreaterThan(0);
-
     await user.click(screen.getByRole("button", { name: /创建 API Key/ }));
+    const keyButtons = screen.getAllByRole("button", {
+      name: "创建 API Key",
+    });
+    await user.click(keyButtons.at(-1)!);
 
     await waitFor(() => {
       expect(mockOpenApiApi.createKey).toHaveBeenCalledWith(
@@ -167,6 +168,8 @@ describe("OpenApiPage", () => {
     render(<OpenApiPage />);
 
     await screen.findByText("Open API");
+    await user.click(screen.getByRole("tab", { name: "应用与密钥" }));
+    await user.click(screen.getByRole("button", { name: "创建外部应用" }));
     await user.type(
       screen.getByPlaceholderText("CRM / 小程序 / 内部系统"),
       "Mini Program",
@@ -177,7 +180,10 @@ describe("OpenApiPage", () => {
       ),
       "127.0.0.1, 10.0.0.8",
     );
-    await user.click(screen.getByRole("button", { name: "创建外部应用" }));
+    const createButtons = screen.getAllByRole("button", {
+      name: "创建外部应用",
+    });
+    await user.click(createButtons.at(-1)!);
 
     await waitFor(() => {
       expect(mockOpenApiApi.createApp).toHaveBeenCalledWith({
@@ -188,6 +194,7 @@ describe("OpenApiPage", () => {
   });
 
   it("does not allow creating a key for a disabled publication", async () => {
+    const user = userEvent.setup();
     mockOpenApiApi.listPublications.mockResolvedValue([
       {
         id: "pub-disabled",
@@ -204,9 +211,61 @@ describe("OpenApiPage", () => {
 
     render(<OpenApiPage />);
 
+    await user.click(await screen.findByRole("tab", { name: "应用与密钥" }));
     const button = await screen.findByRole("button", { name: /创建 API Key/ });
 
     expect(button).toBeDisabled();
     expect(mockOpenApiApi.createKey).not.toHaveBeenCalled();
+  });
+
+  it("hides disabled publications by default and reveals them on request", async () => {
+    const user = userEvent.setup();
+    mockOpenApiApi.listPublications.mockResolvedValue([
+      {
+        id: "pub-enabled",
+        public_id: "support_agent",
+        target_type: "agent",
+        target_id: "agent-1",
+        bound_user_id: "7",
+        knowledge_base_id: "openapi-pub-enabled",
+        name: "在线客服接口",
+        status: "enabled",
+        allowed_scopes: ["messages:create"],
+      },
+      {
+        id: "pub-disabled",
+        public_id: "legacy_support",
+        target_type: "agent",
+        target_id: "agent-1",
+        bound_user_id: "7",
+        knowledge_base_id: "openapi-pub-disabled",
+        name: "旧客服接口",
+        status: "disabled",
+        allowed_scopes: ["messages:create"],
+      },
+    ]);
+
+    render(<OpenApiPage />);
+
+    expect(await screen.findByText("在线客服接口")).toBeInTheDocument();
+    expect(screen.queryByText("旧客服接口")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("switch", { name: "仅显示启用" }));
+
+    expect(await screen.findByText("旧客服接口")).toBeInTheDocument();
+  });
+
+  it("identifies the selected knowledge target by agent name instead of only ids", async () => {
+    const user = userEvent.setup();
+
+    render(<OpenApiPage />);
+
+    await user.click(await screen.findByRole("tab", { name: "专属知识库" }));
+
+    expect(
+      await screen.findByRole("region", {
+        name: "当前知识对象：客服专家 · 专家 · support_agent",
+      }),
+    ).toBeInTheDocument();
   });
 });
