@@ -49,26 +49,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check out client sources
+        uses: actions/checkout@v4
+        with:
+          repository: 51taichi/dclaw-client
+          ref: main
+          token: ${{ secrets.DCLAW_CLIENT_READ_TOKEN }}
+          path: client
+
       - name: Set up Node.js (for console build)
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: console/package-lock.json
+          cache-dependency-path: client/console/package-lock.json
 
       - name: Build console frontend
         shell: bash
         env:
           NODE_OPTIONS: "--max-old-space-size=8192"
         run: |
-          cd console && npm ci && npm run build
+          cd client/console && npm ci && npm run build
 
       - name: Copy console build into package
         shell: bash
         run: |
           rm -rf src/qwenpaw/console/*
           mkdir -p src/qwenpaw/console
-          cp -R console/dist/* src/qwenpaw/console/
+          cp -R client/console/dist/* src/qwenpaw/console/
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
@@ -108,26 +116,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check out client sources
+        uses: actions/checkout@v4
+        with:
+          repository: 51taichi/dclaw-client
+          ref: main
+          token: ${{ secrets.DCLAW_CLIENT_READ_TOKEN }}
+          path: client
+
       - name: Set up Node.js (for console build)
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: console/package-lock.json
+          cache-dependency-path: client/console/package-lock.json
 
       - name: Build console frontend
         shell: bash
         env:
           NODE_OPTIONS: "--max-old-space-size=8192"
         run: |
-          cd console && npm ci && npm run build
+          cd client/console && npm ci && npm run build
 
       - name: Copy console build into package
         shell: bash
         run: |
           rm -rf src/qwenpaw/console/*
           mkdir -p src/qwenpaw/console
-          cp -R console/dist/* src/qwenpaw/console/
+          cp -R client/console/dist/* src/qwenpaw/console/
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
@@ -171,26 +187,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check out client sources
+        uses: actions/checkout@v4
+        with:
+          repository: 51taichi/dclaw-client
+          ref: main
+          token: ${{ secrets.DCLAW_CLIENT_READ_TOKEN }}
+          path: client
+
       - name: Set up Node.js (for console build)
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: console/package-lock.json
+          cache-dependency-path: client/console/package-lock.json
 
       - name: Build console frontend
         shell: bash
         env:
           NODE_OPTIONS: "--max-old-space-size=8192"
         run: |
-          cd console && npm ci && npm run build
+          cd client/console && npm ci && npm run build
 
       - name: Copy console build into package
         shell: bash
         run: |
           rm -rf src/qwenpaw/console/*
           mkdir -p src/qwenpaw/console
-          cp -R console/dist/* src/qwenpaw/console/
+          cp -R client/console/dist/* src/qwenpaw/console/
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
