@@ -9,7 +9,6 @@ import {
   InputNumber,
   Modal,
   Radio,
-  Space,
   Typography,
 } from "antd";
 import type { TopUpConfig, TopUpProduct } from "../../../api/types/billing";
@@ -63,18 +62,20 @@ export default function TopUpPanel({ config, products, onSubmit }: Props) {
   };
 
   return (
-    <Card title="购买积分" className={styles.topUpPanel}>
-      {!unavailableReason ? (
-        <Space align="start" wrap className={styles.paymentGuide}>
-          <Image
-            width={180}
-            src={config.qr_url ?? undefined}
-            alt="固定收款二维码"
-          />
-          <Typography.Paragraph>{config.instructions}</Typography.Paragraph>
-        </Space>
-      ) : (
-        <Alert type="info" showIcon message={unavailableReason} />
+    <section className={styles.topUpSection}>
+      <div className={styles.sectionHeader}>
+        <div className={styles.sectionTitle}>购买积分</div>
+        <div className={styles.sectionSubtitle}>
+          选择适合的积分套餐，付款并提交凭证后由管理员核对入账。
+        </div>
+      </div>
+      {unavailableReason && (
+        <Alert
+          className={styles.topUpNotice}
+          type="info"
+          showIcon
+          message={unavailableReason}
+        />
       )}
       <div className={styles.productGrid}>
         {products.map((product) => (
@@ -146,14 +147,38 @@ export default function TopUpPanel({ config, products, onSubmit }: Props) {
       <Modal
         open={Boolean(selected)}
         title="确认人工充值申请"
+        width={560}
         onCancel={() => setSelected(null)}
         onOk={() => void submit()}
         okText="提交充值申请"
         confirmLoading={submitting}
       >
-        <Typography.Paragraph>
-          提交后由管理员核对收款记录。积分以平台保存的套餐快照为准。
-        </Typography.Paragraph>
+        {selected && (
+          <div className={styles.modalProductSummary}>
+            <div>
+              <span>套餐</span>
+              <strong>{selected.name}</strong>
+            </div>
+            <div>
+              <span>付款金额</span>
+              <strong>¥{(selected.payment_amount_fen / 100).toFixed(2)}</strong>
+            </div>
+            <div>
+              <span>永久积分</span>
+              <strong>
+                {selected.purchased_credits.toLocaleString()} 永久积分
+              </strong>
+            </div>
+          </div>
+        )}
+        <div className={styles.modalPaymentGuide}>
+          <Image
+            width={180}
+            src={config.qr_url ?? undefined}
+            alt="固定收款二维码"
+          />
+          <Typography.Paragraph>{config.instructions}</Typography.Paragraph>
+        </div>
         <Form layout="vertical">
           <Form.Item label="付款方式">
             <Radio.Group
@@ -177,6 +202,6 @@ export default function TopUpPanel({ config, products, onSubmit }: Props) {
           </Form.Item>
         </Form>
       </Modal>
-    </Card>
+    </section>
   );
 }

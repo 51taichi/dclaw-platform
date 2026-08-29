@@ -71,12 +71,22 @@ describe("WalletPage", () => {
       </MemoryRouter>,
     );
     expect(await screen.findByText("1,000 永久积分")).toBeInTheDocument();
+    expect(
+      screen.getByText("查看积分余额、购买积分并跟踪充值记录。"),
+    ).toBeInTheDocument();
+    expect(screen.queryByAltText("固定收款二维码")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "选择 CNY 10" }));
+
+    const dialog = screen.getByRole("dialog", { name: "确认人工充值申请" });
     expect(screen.getByAltText("固定收款二维码")).toHaveAttribute(
       "src",
       "https://example.com/pay.png",
     );
+    expect(dialog).toHaveTextContent("CNY 10");
+    expect(dialog).toHaveTextContent("¥10.00");
+    expect(dialog).toHaveTextContent("1,000 永久积分");
 
-    await user.click(screen.getByRole("button", { name: "选择 CNY 10" }));
     await user.type(screen.getByLabelText("付款尾号或凭证号"), "1234");
     await user.click(screen.getByRole("button", { name: "提交充值申请" }));
 

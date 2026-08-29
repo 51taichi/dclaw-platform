@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Card, Col, Row, Spin, Tabs, Typography } from "antd";
+import { Alert, Card, Col, Row, Spin, Tabs } from "antd";
+import { WalletCards } from "lucide-react";
 import { billingApi } from "../../api/modules/billing";
 import type {
   BillingLedgerEntry,
@@ -13,6 +14,7 @@ import ClaimHistory from "./components/ClaimHistory";
 import LedgerTable from "./components/LedgerTable";
 import TopUpPanel from "./components/TopUpPanel";
 import UsageOrders from "./components/UsageOrders";
+import ecoStyles from "../shared/ecoPage.module.less";
 import styles from "./index.module.less";
 
 export default function WalletPage() {
@@ -63,31 +65,42 @@ export default function WalletPage() {
     return <Alert type="error" message={error ?? "积分数据不可用"} />;
 
   return (
-    <div className={styles.walletPage}>
-      <Typography.Title level={2} className={styles.pageTitle}>
-        积分钱包
-      </Typography.Title>
+    <div className={`${ecoStyles.ecoPage} ${styles.walletPage}`}>
+      <div className={ecoStyles.pageHeader}>
+        <div className={ecoStyles.pageTitle}>
+          <span className={ecoStyles.pageTitleIcon}>
+            <WalletCards size={18} />
+          </span>
+          积分钱包
+        </div>
+        <div className={ecoStyles.pageSubtitle}>
+          查看积分余额、购买积分并跟踪充值记录。
+        </div>
+      </div>
       {error && <Alert type="warning" message={error} />}
       <Row gutter={[16, 16]} className={styles.summaryRow}>
         <Col xs={24} sm={8}>
-          <Card title="可用积分" className={styles.summaryCard}>
-            <Typography.Title level={3}>
+          <Card className={styles.summaryCard}>
+            <div className={styles.summaryLabel}>可用积分</div>
+            <div className={styles.summaryValue}>
               {wallet.available.toLocaleString()}
-            </Typography.Title>
+            </div>
           </Card>
         </Col>
         <Col xs={24} sm={8}>
-          <Card title="冻结积分" className={styles.summaryCard}>
-            <Typography.Title level={3}>
+          <Card className={styles.summaryCard}>
+            <div className={styles.summaryLabel}>冻结积分</div>
+            <div className={styles.summaryValue}>
               {wallet.held.toLocaleString()}
-            </Typography.Title>
+            </div>
           </Card>
         </Col>
         <Col xs={24} sm={8}>
-          <Card title="永久购买积分" className={styles.summaryCard}>
-            <Typography.Title level={3}>
+          <Card className={styles.summaryCard}>
+            <div className={styles.summaryLabel}>永久购买积分</div>
+            <div className={styles.summaryValue}>
               {wallet.purchased.toLocaleString()}
-            </Typography.Title>
+            </div>
           </Card>
         </Col>
       </Row>

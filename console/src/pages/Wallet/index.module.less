@@ -1,50 +1,68 @@
 .walletPage {
   width: 100%;
-  padding: 4px 0 24px;
-}
-
-.pageTitle {
-  margin: 0 0 20px !important;
 }
 
 .summaryRow {
-  margin-bottom: 20px;
+  margin-bottom: 32px;
 }
 
 .summaryCard {
   height: 100%;
+  border-radius: 12px;
 
   :global(.ant-card-body) {
-    padding: 20px 24px;
-  }
-
-  :global(.ant-typography) {
-    margin: 0;
+    padding: 20px 22px;
   }
 }
 
-.topUpPanel {
-  margin-bottom: 20px;
-
-  :global(.ant-card-body) {
-    padding: 20px 24px 24px;
-  }
+.summaryLabel {
+  margin-bottom: 8px;
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 13px;
 }
 
-.paymentGuide {
-  margin-bottom: 4px;
+.summaryValue {
+  color: rgba(0, 0, 0, 0.88);
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.topUpSection {
+  margin-bottom: 28px;
+}
+
+.sectionHeader {
+  margin-bottom: 16px;
+}
+
+.sectionTitle {
+  color: rgba(0, 0, 0, 0.88);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.sectionSubtitle {
+  margin-top: 4px;
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.topUpNotice {
+  margin-bottom: 16px;
 }
 
 .productGrid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
-  margin-top: 20px;
 }
 
 .productCard {
   min-width: 0;
   height: 100%;
+  border-radius: 12px;
 
   :global(.ant-card-body) {
     height: 100%;
@@ -81,6 +99,54 @@
   line-height: 1.5;
 }
 
+.modalProductSummary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: #f5f7fb;
+
+  > div {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  span {
+    color: rgba(0, 0, 0, 0.45);
+    font-size: 12px;
+  }
+
+  strong {
+    overflow: hidden;
+    color: rgba(0, 0, 0, 0.88);
+    font-size: 14px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.modalPaymentGuide {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 20px;
+  padding: 18px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 12px;
+  background: #fafbfc;
+  text-align: center;
+
+  :global(.ant-typography) {
+    max-width: 420px;
+    margin: 12px 0 0;
+    color: rgba(0, 0, 0, 0.65);
+  }
+}
+
 .historyTabs {
   margin-top: 4px;
 }
@@ -92,26 +158,24 @@
 }
 
 @media (max-width: 680px) {
-  .walletPage {
-    padding-bottom: 16px;
-  }
-
-  .pageTitle {
-    margin-bottom: 16px !important;
-  }
-
-  .topUpPanel :global(.ant-card-body),
-  .productCard :global(.ant-card-body) {
-    padding: 16px;
+  .summaryRow {
+    margin-bottom: 24px;
   }
 
   .productGrid {
     grid-template-columns: 1fr;
     gap: 12px;
-    margin-top: 16px;
+  }
+
+  .productCard :global(.ant-card-body) {
+    padding: 16px;
   }
 
   .productCardContent {
     min-height: 190px;
+  }
+
+  .modalProductSummary {
+    grid-template-columns: 1fr;
   }
 }
