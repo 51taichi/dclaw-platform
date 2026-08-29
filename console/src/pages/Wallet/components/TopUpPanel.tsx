@@ -1,16 +1,19 @@
 import { useRef, useState } from "react";
 import {
+  Alert,
   Button,
   Card,
   Form,
   Image,
   Input,
+  InputNumber,
   Modal,
   Radio,
   Space,
   Typography,
 } from "antd";
 import type { TopUpConfig, TopUpProduct } from "../../../api/types/billing";
+import styles from "../index.module.less";
 
 interface Props {
   config: TopUpConfig;
@@ -28,7 +31,23 @@ export default function TopUpPanel({ config, products, onSubmit }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [channel, setChannel] = useState<"wechat" | "alipay">("wechat");
   const [reference, setReference] = useState("");
+  const [customAmount, setCustomAmount] = useState<number | null>(null);
   const key = useRef(crypto.randomUUID());
+
+  const referenceProduct = [...products].sort(
+    (left, right) => left.display_order - right.display_order,
+  )[0];
+  const creditsPerYuan = referenceProduct
+    ? referenceProduct.purchased_credits /
+      (referenceProduct.payment_amount_fen / 100)
+    : 0;
+  const estimatedCredits = Math.floor((customAmount ?? 0) * creditsPerYuan);
+
+  const unavailableReason = !config.enabled
+    ? "平台尚未开启人工充值，请联系平台管理员。"
+    : !config.qr_url
+    ? "平台尚未配置收款二维码，请联系平台管理员。"
+    : null;
 
   const submit = async () => {
     if (!selected || !reference.trim()) return;
@@ -44,22 +63,30 @@ export default function TopUpPanel({ config, products, onSubmit }: Props) {
   };
 
   return (
-    <Card title="购买积分">
-      {config.enabled && config.qr_url ? (
-        <Space align="start" wrap>
-          <Image width={180} src={config.qr_url} alt="固定收款二维码" />
+    <Card title="购买积分" className={styles.topUpPanel}>
+      {!unavailableReason ? (
+        <Space align="start" wrap className={styles.paymentGuide}>
+          <Image
+            width={180}
+            src={config.qr_url ?? undefined}
+            alt="固定收款二维码"
+          />
           <Typography.Paragraph>{config.instructions}</Typography.Paragraph>
         </Space>
       ) : (
-        <Typography.Text type="secondary">
-          人工充值暂未开放，请联系平台管理员。
-        </Typography.Text>
+        <Alert type="info" showIcon message={unavailableReason} />
       )}
-      <div style={{ display: "grid", gap: 12, marginTop: 16 }}>
+      <div className={styles.productGrid}>
         {products.map((product) => (
-          <Card key={product.public_id} size="small">
-            <Space direction="vertical">
-              <Typography.Title level={5}>{product.name}</Typography.Title>
+          <Card
+            key={product.public_id}
+            size="small"
+            className={styles.productCard}
+          >
+            <div className={styles.productCardContent}>
+              <Typography.Title level={5} className={styles.productTitle}>
+                {product.name}
+              </Typography.Title>
               <Typography.Text>
                 {product.purchased_credits.toLocaleString()} 永久积分
               </Typography.Text>
@@ -74,15 +101,47 @@ export default function TopUpPanel({ config, products, onSubmit }: Props) {
                 ¥{(product.payment_amount_fen / 100).toFixed(2)}
               </Typography.Text>
               <Button
-                disabled={!config.enabled}
+                block
+                disabled={Boolean(unavailableReason)}
                 onClick={() => setSelected(product)}
                 aria-label={`选择 ${product.name}`}
               >
                 选择
               </Button>
-            </Space>
+            </div>
           </Card>
         ))}
+        <Card
+          size="small"
+          className={`${styles.productCard} ${styles.customCard}`}
+        >
+          <div className={styles.productCardContent}>
+            <Typography.Title level={5} className={styles.productTitle}>
+              自定义金额
+            </Typography.Title>
+            <InputNumber
+              aria-label="自定义充值金额"
+              min={1}
+              precision={2}
+              value={customAmount}
+              onChange={setCustomAmount}
+              prefix="¥"
+              placeholder="请输入充值金额"
+              className={styles.customAmountInput}
+            />
+            <Typography.Text>
+              {estimatedCredits > 0
+                ? `预计获得 ${estimatedCredits.toLocaleString()} 永久积分`
+                : "输入金额后查看预计积分"}
+            </Typography.Text>
+            <Typography.Text type="secondary" className={styles.customHint}>
+              按当前基础兑换比例预估，实际规则以后端为准
+            </Typography.Text>
+            <Button block disabled aria-label="自定义充值暂需后端支持">
+              暂需后端支持
+            </Button>
+          </div>
+        </Card>
       </div>
       <Modal
         open={Boolean(selected)}

@@ -13,6 +13,7 @@ import ClaimHistory from "./components/ClaimHistory";
 import LedgerTable from "./components/LedgerTable";
 import TopUpPanel from "./components/TopUpPanel";
 import UsageOrders from "./components/UsageOrders";
+import styles from "./index.module.less";
 
 export default function WalletPage() {
   const [wallet, setWallet] = useState<BillingWallet | null>(null);
@@ -62,18 +63,32 @@ export default function WalletPage() {
     return <Alert type="error" message={error ?? "积分数据不可用"} />;
 
   return (
-    <div>
-      <Typography.Title level={2}>积分钱包</Typography.Title>
+    <div className={styles.walletPage}>
+      <Typography.Title level={2} className={styles.pageTitle}>
+        积分钱包
+      </Typography.Title>
       {error && <Alert type="warning" message={error} />}
-      <Row gutter={16}>
-        <Col span={8}>
-          <Card title="可用积分">{wallet.available.toLocaleString()}</Card>
+      <Row gutter={[16, 16]} className={styles.summaryRow}>
+        <Col xs={24} sm={8}>
+          <Card title="可用积分" className={styles.summaryCard}>
+            <Typography.Title level={3}>
+              {wallet.available.toLocaleString()}
+            </Typography.Title>
+          </Card>
         </Col>
-        <Col span={8}>
-          <Card title="冻结积分">{wallet.held.toLocaleString()}</Card>
+        <Col xs={24} sm={8}>
+          <Card title="冻结积分" className={styles.summaryCard}>
+            <Typography.Title level={3}>
+              {wallet.held.toLocaleString()}
+            </Typography.Title>
+          </Card>
         </Col>
-        <Col span={8}>
-          <Card title="永久购买积分">{wallet.purchased.toLocaleString()}</Card>
+        <Col xs={24} sm={8}>
+          <Card title="永久购买积分" className={styles.summaryCard}>
+            <Typography.Title level={3}>
+              {wallet.purchased.toLocaleString()}
+            </Typography.Title>
+          </Card>
         </Col>
       </Row>
       <TopUpPanel
@@ -94,6 +109,7 @@ export default function WalletPage() {
         }}
       />
       <Tabs
+        className={styles.historyTabs}
         items={[
           {
             key: "claims",

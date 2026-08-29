@@ -1,0 +1,117 @@
+.walletPage {
+  width: 100%;
+  padding: 4px 0 24px;
+}
+
+.pageTitle {
+  margin: 0 0 20px !important;
+}
+
+.summaryRow {
+  margin-bottom: 20px;
+}
+
+.summaryCard {
+  height: 100%;
+
+  :global(.ant-card-body) {
+    padding: 20px 24px;
+  }
+
+  :global(.ant-typography) {
+    margin: 0;
+  }
+}
+
+.topUpPanel {
+  margin-bottom: 20px;
+
+  :global(.ant-card-body) {
+    padding: 20px 24px 24px;
+  }
+}
+
+.paymentGuide {
+  margin-bottom: 4px;
+}
+
+.productGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 20px;
+}
+
+.productCard {
+  min-width: 0;
+  height: 100%;
+
+  :global(.ant-card-body) {
+    height: 100%;
+    padding: 20px;
+  }
+}
+
+.productCardContent {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  min-height: 210px;
+  gap: 10px;
+
+  > :global(.ant-btn) {
+    margin-top: auto;
+  }
+}
+
+.productTitle {
+  margin: 0 !important;
+}
+
+.customCard {
+  border-style: dashed;
+}
+
+.customAmountInput {
+  width: 100%;
+}
+
+.customHint {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.historyTabs {
+  margin-top: 4px;
+}
+
+@media (max-width: 1100px) {
+  .productGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 680px) {
+  .walletPage {
+    padding-bottom: 16px;
+  }
+
+  .pageTitle {
+    margin-bottom: 16px !important;
+  }
+
+  .topUpPanel :global(.ant-card-body),
+  .productCard :global(.ant-card-body) {
+    padding: 16px;
+  }
+
+  .productGrid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    margin-top: 16px;
+  }
+
+  .productCardContent {
+    min-height: 190px;
+  }
+}

@@ -91,4 +91,57 @@ describe("WalletPage", () => {
     expect(payload).not.toHaveProperty("credits");
     expect(payload).not.toHaveProperty("amountFen");
   });
+
+  it("previews custom credits without allowing a frontend-only submission", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <WalletPage />
+      </MemoryRouter>,
+    );
+
+    await user.type(await screen.findByLabelText("自定义充值金额"), "25");
+
+    expect(screen.getByText("预计获得 2,500 永久积分")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "自定义充值暂需后端支持" }),
+    ).toBeDisabled();
+  });
+
+  it("explains that manual top-up is disabled by the platform", async () => {
+    vi.mocked(billingApi.getTopUpConfig).mockResolvedValue({
+      enabled: false,
+      qr_url: null,
+      instructions: "",
+    });
+
+    render(
+      <MemoryRouter>
+        <WalletPage />
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByText("平台尚未开启人工充值，请联系平台管理员。"),
+    ).toBeInTheDocument();
+  });
+
+  it("explains that the payment QR code is missing", async () => {
+    vi.mocked(billingApi.getTopUpConfig).mockResolvedValue({
+      enabled: true,
+      qr_url: null,
+      instructions: "",
+    });
+
+    render(
+      <MemoryRouter>
+        <WalletPage />
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByText("平台尚未配置收款二维码，请联系平台管理员。"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "选择 CNY 10" })).toBeDisabled();
+  });
 });
