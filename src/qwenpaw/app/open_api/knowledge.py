@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from typing import Any
+from pathlib import Path
 
 from fastapi import HTTPException, Request
 
 from ...config.config import load_agent_config
+from ...config.utils import load_config
+from ...constant import WORKING_DIR
+from ...mindspace import MindspaceService
 from ..expert_teams import get_expert_team_template
 from ..sealed_agents.registry import get_sealed_agent_registry
 from ..storage.repos.open_api_repo import get_open_api_repository
@@ -86,3 +90,36 @@ def list_accessible_publications(request: Request) -> list[dict[str, Any]]:
         )
         if can_manage_publication(publication, request)
     ]
+
+
+def publication_agent_id(publication: dict[str, Any]) -> str:
+    """Resolve the concrete Agent workspace used by a publication."""
+    target_type = str(publication.get("target_type") or "")
+    target_id = str(publication.get("target_id") or "")
+    if target_type == "agent":
+        return target_id
+    if target_type == "expert_team":
+        team = get_expert_team_template(target_id)
+        if team is None:
+            raise HTTPException(status_code=404, detail="Expert team target not found")
+        return str(team.leader_agent_id)
+    raise HTTPException(status_code=400, detail="Unsupported Open API target type")
+
+
+def publication_knowledge_service(
+    publication: dict[str, Any],
+) -> MindspaceService:
+    """Create the isolated Mindspace service for one publication."""
+    agent_id = publication_agent_id(publication)
+    config = load_config()
+    profiles = getattr(getattr(config, "agents", None), "profiles", {}) or {}
+    profile = profiles.get(agent_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Agent target not found")
+    return MindspaceService(
+        global_root=Path(WORKING_DIR) / "mindspace",
+        agent_workspace=Path(profile.workspace_dir).expanduser(),
+        agent_id=agent_id,
+        user_id=str(publication["knowledge_base_id"]),
+        exclusive_personal=True,
+    )

@@ -2,29 +2,23 @@
 """Admin routes for managing external Open API access."""
 from __future__ import annotations
 
-import asyncio
-import os
 import uuid
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from ...config.utils import load_config
-from ...constant import WORKING_DIR
-from ...mindspace import MindspaceScope, MindspaceService
-from ...mindspace.models import (
-    normalize_knowledge_category,
-    normalize_knowledge_tags,
-)
+from ...mindspace import MindspaceScope
 from ..expert_teams import get_expert_team_template
 from ..open_api.auth import generate_open_api_key, hash_open_api_key
+from ..open_api import knowledge as experience_knowledge
 from ..open_api.models import OpenApiScope, OpenApiStatus, OpenApiTargetType
 from ..storage.repos.open_api_repo import get_open_api_repository
 from ..storage.repos.user_repo import get_user_repository
 from ..sealed_agents.registry import get_sealed_agent_registry
+from . import open_api_knowledge as experience_routes
 
 router = APIRouter(prefix="/open-api", tags=["admin-open-api"])
 
@@ -219,48 +213,13 @@ def _owned_publication(publication_id: str, owner_user_id: str) -> dict[str, Any
     return publication
 
 
-def _publication_agent_id(publication: dict[str, Any]) -> str:
-    if publication.get("target_type") == "agent":
-        return str(publication["target_id"])
-    if publication.get("target_type") == "expert_team":
-        template = get_expert_team_template(str(publication["target_id"]))
-        if template is None:
-            raise HTTPException(status_code=404, detail="Expert team target not found")
-        return str(template.leader_agent_id)
-    raise HTTPException(status_code=400, detail="Unsupported Open API target type")
-
-
-def _publication_knowledge_service(
-    publication: dict[str, Any],
-) -> MindspaceService:
-    agent_id = _publication_agent_id(publication)
-    config = load_config()
-    profiles = getattr(getattr(config, "agents", None), "profiles", {}) or {}
-    profile = profiles.get(agent_id)
-    if profile is None:
-        raise HTTPException(status_code=404, detail="Agent target not found")
-    workspace_dir = Path(profile.workspace_dir).expanduser()
-    return MindspaceService(
-        global_root=Path(WORKING_DIR) / "mindspace",
-        agent_workspace=workspace_dir,
-        agent_id=agent_id,
-        user_id=str(publication["knowledge_base_id"]),
-        exclusive_personal=True,
-    )
-
-
 @router.get("/publications/{publication_id}/knowledge/docs")
 def list_publication_knowledge_documents(
     publication_id: str,
     request: Request,
 ) -> list[dict[str, Any]]:
-    owner_user_id = _require_admin(request)
-    publication = _owned_publication(publication_id, owner_user_id)
-    service = _publication_knowledge_service(publication)
-    return [
-        doc.to_api_dict()
-        for doc in service.list_documents(MindspaceScope.PERSONAL)
-    ]
+    _require_admin(request)
+    return experience_routes.list_documents(publication_id, request)
 
 
 @router.post("/publications/{publication_id}/knowledge/docs")
@@ -271,28 +230,14 @@ async def upload_publication_knowledge_document(
     category: str = Query("uncategorized", max_length=64),
     tags: str | None = Query(None, max_length=512),
 ) -> dict[str, Any]:
-    owner_user_id = _require_admin(request)
-    publication = _owned_publication(publication_id, owner_user_id)
-    service = _publication_knowledge_service(publication)
-    filename = file.filename or "knowledge.txt"
-    suffix = os.path.splitext(filename)[1].lower().lstrip(".") or "txt"
-    content = await file.read()
-    doc = await asyncio.to_thread(
-        service.stage_local_bytes,
-        name=filename,
-        content=content,
-        scope=MindspaceScope.PERSONAL,
-        source_type=suffix,
-        mime_type=file.content_type,
-        category=normalize_knowledge_category(category),
-        tags=normalize_knowledge_tags(tags),
+    _require_admin(request)
+    return await experience_routes.upload_document(
+        publication_id,
+        request,
+        file,
+        category,
+        tags,
     )
-    indexed = await asyncio.to_thread(
-        service.process_staged_document,
-        doc.id,
-        MindspaceScope.PERSONAL,
-    )
-    return (indexed or doc).to_api_dict()
 
 
 @router.post("/publications/{publication_id}/knowledge/docs/{doc_id}/sync")
@@ -301,17 +246,12 @@ async def sync_publication_knowledge_document(
     doc_id: str,
     request: Request,
 ) -> dict[str, Any]:
-    owner_user_id = _require_admin(request)
-    publication = _owned_publication(publication_id, owner_user_id)
-    service = _publication_knowledge_service(publication)
-    doc = service.get_document(doc_id, MindspaceScope.PERSONAL)
-    if doc is None:
-        raise HTTPException(status_code=404, detail="Knowledge document not found")
-    indexed = await service.resync_document(
-        doc.id,
-        MindspaceScope.PERSONAL,
+    _require_admin(request)
+    return await experience_routes.sync_document(
+        publication_id,
+        doc_id,
+        request,
     )
-    return (indexed or doc).to_api_dict()
 
 
 @router.delete("/publications/{publication_id}/knowledge/docs/{doc_id}")
@@ -320,12 +260,12 @@ def delete_publication_knowledge_document(
     doc_id: str,
     request: Request,
 ) -> dict[str, Any]:
-    owner_user_id = _require_admin(request)
-    publication = _owned_publication(publication_id, owner_user_id)
-    service = _publication_knowledge_service(publication)
-    if not service.delete_document(doc_id, MindspaceScope.PERSONAL):
-        raise HTTPException(status_code=404, detail="Knowledge document not found")
-    return {"deleted": True, "id": doc_id}
+    _require_admin(request)
+    return experience_routes.delete_document(
+        publication_id,
+        doc_id,
+        request,
+    )
 
 
 @router.get("/publications/{publication_id}/knowledge/search")
@@ -335,9 +275,12 @@ def search_publication_knowledge(
     q: str = Query(..., min_length=1),
     top_k: int = Query(5, ge=1, le=20),
 ) -> dict[str, Any]:
-    owner_user_id = _require_admin(request)
-    publication = _owned_publication(publication_id, owner_user_id)
-    service = _publication_knowledge_service(publication)
+    _require_admin(request)
+    publication = experience_knowledge.require_accessible_publication(
+        publication_id,
+        request,
+    )
+    service = experience_knowledge.publication_knowledge_service(publication)
     hits = service.search(
         q,
         scope=MindspaceScope.PERSONAL,

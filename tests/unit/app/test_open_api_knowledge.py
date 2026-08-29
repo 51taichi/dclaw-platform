@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from io import BytesIO
 
 import pytest
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, UploadFile
+
+from qwenpaw.mindspace import MindspaceScope
 
 from qwenpaw.app.open_api import knowledge
 from qwenpaw.app.routers import open_api_knowledge
@@ -23,6 +26,51 @@ class FakeOpenApiRepository:
 
     def get_publication(self, publication_id: str):
         return self.publications.get(publication_id)
+
+
+class FakeDocument:
+    def __init__(self, doc_id: str, name: str | None = None) -> None:
+        self.id = doc_id
+        self.name = name or f"{doc_id}.txt"
+
+    def to_api_dict(self):
+        return {"id": self.id, "name": self.name}
+
+
+class FakeKnowledgeService:
+    def __init__(self, docs: list[FakeDocument] | None = None) -> None:
+        self.docs = list(docs or [])
+        self.list_scope = None
+        self.deleted: list[tuple[str, MindspaceScope]] = []
+        self.staged_content: bytes | None = None
+
+    def list_documents(self, scope):
+        self.list_scope = scope
+        return list(self.docs)
+
+    def stage_local_bytes(self, **kwargs):
+        self.staged_content = kwargs["content"]
+        doc = FakeDocument("uploaded", kwargs["name"])
+        self.docs.append(doc)
+        return doc
+
+    def process_staged_document(self, doc_id, scope):
+        assert doc_id == "uploaded"
+        assert scope == MindspaceScope.PERSONAL
+        return self.docs[-1]
+
+    def get_document(self, doc_id, scope):
+        assert scope == MindspaceScope.PERSONAL
+        return next((doc for doc in self.docs if doc.id == doc_id), None)
+
+    async def resync_document(self, doc_id, scope):
+        return self.get_document(doc_id, scope)
+
+    def delete_document(self, doc_id, scope):
+        self.deleted.append((doc_id, scope))
+        before = len(self.docs)
+        self.docs = [doc for doc in self.docs if doc.id != doc_id]
+        return len(self.docs) != before
 
 
 def _request(*, role: str, user_id: str) -> Request:
@@ -159,3 +207,114 @@ def test_experience_router_is_mounted_at_neutral_authenticated_prefix():
     paths = set(effective_app.openapi()["paths"])
 
     assert "/api/open-api-knowledge/publications" in paths
+
+
+def _publication(*, bound_user_id: str = "7", status: str = "enabled"):
+    return {
+        "id": "pub-1",
+        "public_id": "support",
+        "name": "客服入口",
+        "target_type": "agent",
+        "target_id": "agent-1",
+        "owner_user_id": "admin-1",
+        "bound_user_id": bound_user_id,
+        "knowledge_base_id": "openapi-pub-1",
+        "status": status,
+    }
+
+
+def _patch_service(monkeypatch, service: FakeKnowledgeService) -> None:
+    monkeypatch.setattr(
+        knowledge,
+        "publication_knowledge_service",
+        lambda publication: service,
+    )
+
+
+def test_bound_user_can_list_documents_for_disabled_publication(monkeypatch):
+    _patch_repo(
+        monkeypatch,
+        FakeOpenApiRepository(_publication(status="disabled")),
+    )
+    service = FakeKnowledgeService([FakeDocument("doc-1")])
+    _patch_service(monkeypatch, service)
+
+    rows = open_api_knowledge.list_documents(
+        "pub-1",
+        _request(user_id="7", role="user"),
+    )
+
+    assert rows == [{"id": "doc-1", "name": "doc-1.txt"}]
+    assert service.list_scope == MindspaceScope.PERSONAL
+
+
+@pytest.mark.asyncio
+async def test_non_bound_user_cannot_upload(monkeypatch):
+    _patch_repo(
+        monkeypatch,
+        FakeOpenApiRepository(_publication(bound_user_id="8")),
+    )
+    _patch_service(monkeypatch, FakeKnowledgeService())
+
+    with pytest.raises(HTTPException) as exc_info:
+        await open_api_knowledge.upload_document(
+            "pub-1",
+            _request(user_id="7", role="user"),
+            UploadFile(filename="guide.txt", file=BytesIO(b"content")),
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+def test_permission_is_rechecked_before_delete(monkeypatch):
+    publication = _publication()
+    _patch_repo(monkeypatch, FakeOpenApiRepository(publication))
+    service = FakeKnowledgeService([FakeDocument("doc-1")])
+    _patch_service(monkeypatch, service)
+    request = _request(user_id="7", role="user")
+    assert open_api_knowledge.list_documents("pub-1", request)
+    publication["bound_user_id"] = "8"
+
+    with pytest.raises(HTTPException) as exc_info:
+        open_api_knowledge.delete_document("pub-1", "doc-1", request)
+
+    assert exc_info.value.status_code == 404
+    assert service.deleted == []
+
+
+@pytest.mark.asyncio
+async def test_bound_user_can_upload_and_sync_document(monkeypatch):
+    _patch_repo(monkeypatch, FakeOpenApiRepository(_publication()))
+    service = FakeKnowledgeService()
+    _patch_service(monkeypatch, service)
+    request = _request(user_id="7", role="user")
+
+    uploaded = await open_api_knowledge.upload_document(
+        "pub-1",
+        request,
+        UploadFile(filename="guide.txt", file=BytesIO(b"content")),
+    )
+    synced = await open_api_knowledge.sync_document(
+        "pub-1",
+        "uploaded",
+        request,
+    )
+
+    assert uploaded == {"id": "uploaded", "name": "guide.txt"}
+    assert synced == uploaded
+    assert service.staged_content == b"content"
+
+
+def test_bound_user_can_delete_document(monkeypatch):
+    _patch_repo(monkeypatch, FakeOpenApiRepository(_publication()))
+    service = FakeKnowledgeService([FakeDocument("doc-1")])
+    _patch_service(monkeypatch, service)
+
+    result = open_api_knowledge.delete_document(
+        "pub-1",
+        "doc-1",
+        _request(user_id="7", role="user"),
+    )
+
+    assert result == {"deleted": True, "id": "doc-1"}
+    assert service.deleted == [("doc-1", MindspaceScope.PERSONAL)]
