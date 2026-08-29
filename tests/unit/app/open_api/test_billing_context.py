@@ -6,6 +6,7 @@ import asyncio
 from qwenpaw.app.agent_context import get_current_billing_context
 from qwenpaw.app.billing.open_api import OpenApiBillingSession
 from qwenpaw.app.billing.execution import OpenApiExecutionFence
+from qwenpaw.app.billing.context import get_current_billing_meter
 from qwenpaw.app.open_api.runtime import open_api_billing_context
 
 
@@ -26,11 +27,14 @@ def _session(invocation_id: str) -> OpenApiBillingSession:
 def test_context_is_installed_for_committed_session_and_reset_after_scope():
     session = _session("one")
     fence = OpenApiExecutionFence("owner-one", 1)
+    meter = object()
 
     assert get_current_billing_context() is None
-    with open_api_billing_context(session, fence) as context:
+    with open_api_billing_context(session, fence, meter) as context:
         assert get_current_billing_context() == context
+        assert get_current_billing_meter() is meter
     assert get_current_billing_context() is None
+    assert get_current_billing_meter() is None
 
 
 def test_concurrent_async_billing_contexts_are_isolated_and_do_not_leak():

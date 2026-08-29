@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from contextvars import ContextVar, Token
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -31,6 +30,11 @@ from ..billing.execution import (
     OpenApiExecutionFence,
 )
 from ..billing.model_meter import BillingModelMeter
+from ..billing.context import (
+    get_current_billing_meter,
+    reset_current_billing_meter,
+    set_current_billing_meter,
+)
 from ..billing.pricing import PriceCatalogService
 from ..billing.reporting import persisted_billing_mode
 from ..billing.usage import (
@@ -52,12 +56,6 @@ _SAFE_ID_PATTERN = re.compile(r"[^A-Za-z0-9_.:-]+")
 _MAX_EXTERNAL_ID_LENGTH = 128
 _MAX_MESSAGE_LENGTH = 20_000
 _BILLING_MODES = frozenset({"off", "shadow", "observe", "enforced"})
-_current_billing_meter: ContextVar[BillingModelMeter | None] = ContextVar(
-    "open_api_billing_meter",
-    default=None,
-)
-
-
 class OpenMessageRequest(BaseModel):
     external_user_id: str
     external_session_id: str | None = None
@@ -262,11 +260,6 @@ def create_open_api_billing_runtime() -> OpenApiBillingRuntime:
     )
 
 
-def get_current_billing_meter() -> BillingModelMeter | None:
-    """Return the request-scoped meter consumed by model construction."""
-    return _current_billing_meter.get()
-
-
 @contextmanager
 def open_api_billing_context(
     session: OpenApiBillingSession,
@@ -276,13 +269,11 @@ def open_api_billing_context(
     """Scope a committed billing session to an OpenAPI execution path."""
     context = OpenApiBillingExecutionContext(session=session, fence=fence)
     token = set_current_billing_context(context)
-    meter_token: Token[BillingModelMeter | None] = _current_billing_meter.set(
-        meter,
-    )
+    meter_token = set_current_billing_meter(meter)
     try:
         yield context
     finally:
-        _current_billing_meter.reset(meter_token)
+        reset_current_billing_meter(meter_token)
         reset_current_billing_context(token)
 
 
