@@ -52,7 +52,7 @@ validate_image_pair "$TARGET_REFERENCE" "$SERVER_SHA" "$CLIENT_SHA"
 
 CURRENT_ID=$(running_image_id)
 if [ "$TARGET_ID" = "$CURRENT_ID" ]; then
-  echo NO_UPDATE_REQUIRED
+  print_release_result NO_UPDATE_REQUIRED
   exit 0
 fi
 
@@ -83,7 +83,7 @@ if [ "$update_ok" = true ]; then
     "$RESOLVED_SERVER_SHA" "$RESOLVED_CLIENT_SHA"
   printf '%s\n' "$release_dir" >"$DEPLOY_ROOT/LATEST_SUCCESS"
   chmod 600 "$DEPLOY_ROOT/LATEST_SUCCESS"
-  echo UPDATE_SUCCESS
+  print_release_result UPDATE_SUCCESS
   exit 0
 fi
 

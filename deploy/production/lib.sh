@@ -97,6 +97,13 @@ validate_image_pair() {
   fi
 }
 
+print_release_result() {
+  local result=$1
+  printf 'server：%s\n' "$RESOLVED_SERVER_SHA"
+  printf 'client：%s\n' "$RESOLVED_CLIENT_SHA"
+  printf '%s\n' "$result"
+}
+
 write_release_env() {
   local image=$1
   local server_sha=$2
