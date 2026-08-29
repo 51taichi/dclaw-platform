@@ -80,6 +80,7 @@ import {
 import { sortTasksForSidebar } from "./taskListOrdering";
 import { isTaskGenerating } from "./taskListState";
 import { canInspectAgent } from "../utils/agentCapabilities";
+import { getAgentManagementMenuItems } from "./settingsAgentMenu";
 
 // ── Layout ────────────────────────────────────────────────────────────────
 
@@ -556,16 +557,15 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
       key: "settings-group",
       label: collapsed ? null : t("nav.settings"),
       children: [
-        {
-          key: "agents",
-          label: collapsed ? null : t("nav.agents"),
-          icon: <SparkAgentLine size={16} />,
-        },
-        {
-          key: "sealed-agents",
-          label: collapsed ? null : t("nav.sealedAgents", "密封 Agent"),
-          icon: <KeyRound size={16} />,
-        },
+        ...getAgentManagementMenuItems(collapsed, t).map((item) => ({
+          ...item,
+          icon:
+            item.key === "sealed-agents" ? (
+              <KeyRound size={16} />
+            ) : (
+              <SparkAgentLine size={16} />
+            ),
+        })),
         {
           key: "expert-teams",
           label: collapsed ? null : t("nav.expertTeams", "专家团"),
