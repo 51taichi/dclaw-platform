@@ -6,11 +6,14 @@ import {
   DatePicker,
   Form,
   Input,
+  Modal,
   Popconfirm,
   Select,
   Space,
+  Switch,
   Table,
   Tag,
+  Tabs,
   Typography,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
@@ -170,6 +173,12 @@ export default function OpenApiPage() {
   const [creatingKey, setCreatingKey] = useState(false);
   const [statusBusyId, setStatusBusyId] = useState<string>();
   const [revokeBusyId, setRevokeBusyId] = useState<string>();
+  const [onlyEnabled, setOnlyEnabled] = useState(true);
+  const [publicationSearch, setPublicationSearch] = useState("");
+  const [activeTab, setActiveTab] = useState("publications");
+  const [openForm, setOpenForm] = useState<
+    "publication" | "app" | "key" | null
+  >(null);
   const [createdSecret, setCreatedSecret] = useState<{
     secret: string;
     keyId?: string;
@@ -341,7 +350,13 @@ export default function OpenApiPage() {
         }));
 
   const publicationOptions = publications.map((publication) => ({
-    label: `${getPublicationTitle(publication)} (${publication.public_id})`,
+    label: `${
+      targetLabelById.get(
+        `${publication.target_type}:${publication.target_id}`,
+      ) || getPublicationTitle(publication)
+    } · ${publication.target_type === "agent" ? "专家" : "专家团"} · ${
+      publication.public_id
+    }`,
     value: publication.id,
   }));
 
@@ -367,6 +382,22 @@ export default function OpenApiPage() {
     users.map((user) => [String(user.id), user.username]),
   );
 
+  const visiblePublications = publications.filter((publication) => {
+    if (onlyEnabled && publication.status !== "enabled") return false;
+    const query = publicationSearch.trim().toLowerCase();
+    if (!query) return true;
+    const targetName =
+      targetLabelById.get(
+        `${publication.target_type}:${publication.target_id}`,
+      ) || "";
+    return [
+      getPublicationTitle(publication),
+      publication.public_id,
+      publication.target_id,
+      targetName,
+    ].some((value) => value.toLowerCase().includes(query));
+  });
+
   const handleCreatePublication = async (values: PublicationFormValues) => {
     const scopes = values.scopes || [];
     if (scopes.length === 0) {
@@ -383,6 +414,7 @@ export default function OpenApiPage() {
         public_id: values.public_id.trim(),
       });
       message.success("发布对象已创建");
+      setOpenForm(null);
       publicationForm.resetFields();
       publicationForm.setFieldsValue({
         target_type: "agent",
@@ -406,6 +438,7 @@ export default function OpenApiPage() {
         ip_allowlist: parseIpAllowlist(values.ip_allowlist),
       });
       message.success("外部应用已创建");
+      setOpenForm(null);
       appForm.resetFields();
       await fetchBaseData(selectedPublicationId);
     } catch (error) {
@@ -442,6 +475,7 @@ export default function OpenApiPage() {
         secret: response.secret,
         keyId: response.key.id,
       });
+      setOpenForm(null);
       message.success("API Key 已创建");
       await fetchScopedData(values.publication_id);
     } catch (error) {
@@ -849,6 +883,11 @@ export default function OpenApiPage() {
       <PageHeader
         parent="设置"
         current="Open API"
+        subRow={
+          <Typography.Text type="secondary">
+            统一管理对外发布、调用凭证、专属知识和调用记录。
+          </Typography.Text>
+        }
         extra={
           <Button
             icon={<RefreshCw size={15} />}
@@ -910,331 +949,473 @@ export default function OpenApiPage() {
           />
         ) : null}
 
-        <div className={styles.formGrid}>
-          <Card
-            className={styles.card}
-            title={
-              <Space>
-                <ShieldCheck size={18} />
-                发布专家/专家团
-              </Space>
-            }
-          >
-            <Form
-              className={styles.compactForm}
-              form={publicationForm}
-              layout="vertical"
-              onFinish={handleCreatePublication}
-            >
-              <Form.Item
-                name="public_id"
-                label="Public ID"
-                rules={[{ required: true, message: "请输入 public_id" }]}
-              >
-                <Input placeholder="support_agent" />
-              </Form.Item>
-
-              <div className={styles.targetRow}>
-                <Form.Item name="target_type" label="目标类型">
-                  <Select
-                    onChange={() =>
-                      publicationForm.setFieldValue("target_id", undefined)
-                    }
-                    options={[
-                      { label: "专家", value: "agent" },
-                      { label: "专家团", value: "expert_team" },
-                    ]}
-                  />
-                </Form.Item>
-                <Form.Item
-                  name="target_id"
-                  label="目标"
-                  rules={[{ required: true, message: "请选择目标" }]}
-                >
-                  <Select
-                    showSearch
-                    optionFilterProp="label"
-                    placeholder="选择专家或专家团"
-                    options={targetOptions}
-                  />
-                </Form.Item>
-              </div>
-
-              <Form.Item name="title" label="发布标题">
-                <Input placeholder="客服专家" />
-              </Form.Item>
-
-              <Form.Item name="description" label="描述">
-                <Input.TextArea rows={2} placeholder="给外部应用识别的说明" />
-              </Form.Item>
-
-              <Form.Item
-                name="bound_user_id"
-                label="运行用户"
-                extra="外部调用使用该用户的会话和用户配置；知识仅来自系统自动创建的专属知识库。"
-                rules={[{ required: true, message: "请选择绑定用户" }]}
-              >
-                <Select
-                  showSearch
-                  optionFilterProp="label"
-                  placeholder="选择运行用户"
-                  options={userOptions}
-                />
-              </Form.Item>
-
-              <Form.Item
-                name="scopes"
-                label="允许 scopes"
-                rules={[
-                  {
-                    required: true,
-                    type: "array",
-                    min: 1,
-                    message: "至少选择一个 scope",
-                  },
-                ]}
-              >
-                <Select mode="multiple" options={SCOPE_OPTIONS} />
-              </Form.Item>
-
-              <Form.Item name="status" label="初始状态">
-                <Select
-                  options={[
-                    { label: "enabled", value: "enabled" },
-                    { label: "disabled", value: "disabled" },
-                  ]}
-                />
-              </Form.Item>
-
-              <div className={styles.actions}>
-                <Button
-                  htmlType="submit"
-                  loading={creatingPublication}
-                  type="primary"
-                  icon={<Plus size={15} />}
-                >
-                  创建发布对象
-                </Button>
-              </div>
-            </Form>
-          </Card>
-
-          <Card
-            className={styles.card}
-            title={
-              <Space>
-                <Plus size={18} />
-                创建外部应用
-              </Space>
-            }
-          >
-            <Form
-              className={styles.compactForm}
-              form={appForm}
-              layout="vertical"
-              onFinish={handleCreateApp}
-            >
-              <Form.Item
-                name="name"
-                label="应用名称"
-                rules={[{ required: true, message: "请输入应用名称" }]}
-              >
-                <Input placeholder="CRM / 小程序 / 内部系统" />
-              </Form.Item>
-              <Form.Item name="ip_allowlist" label="IP allowlist">
-                <Input.TextArea
-                  rows={3}
-                  placeholder="留空表示不限 IP；多个 IP 可用逗号或换行分隔"
-                />
-              </Form.Item>
-              <div className={styles.actions}>
-                <Button
-                  htmlType="submit"
-                  loading={creatingApp}
-                  type="primary"
-                  icon={<Plus size={15} />}
-                >
-                  创建外部应用
-                </Button>
-              </div>
-            </Form>
-          </Card>
-
-          <Card
-            className={styles.card}
-            title={
-              <Space>
-                <KeyRound size={18} />
-                创建 API Key
-              </Space>
-            }
-          >
-            <Form
-              className={styles.compactForm}
-              form={keyForm}
-              layout="vertical"
-              onFinish={handleCreateKey}
-            >
-              <Form.Item
-                name="publication_id"
-                label="发布对象"
-                rules={[{ required: true, message: "请选择发布对象" }]}
-              >
-                <Select
-                  disabled={publications.length === 0}
-                  options={keyPublicationOptions}
-                  onChange={(value) => setSelectedPublicationId(value)}
-                />
-              </Form.Item>
-              <Form.Item
-                name="app_id"
-                label="外部应用"
-                rules={[{ required: true, message: "请选择外部应用" }]}
-              >
-                <Select disabled={apps.length === 0} options={appOptions} />
-              </Form.Item>
-              <Form.Item
-                name="scopes"
-                label="Key scopes"
-                rules={[
-                  {
-                    required: true,
-                    type: "array",
-                    min: 1,
-                    message: "至少选择一个 scope",
-                  },
-                ]}
-              >
-                <Select mode="multiple" options={keyScopeOptions} />
-              </Form.Item>
-              <Form.Item name="expires_at" label="过期时间">
-                <DatePicker showTime style={{ width: "100%" }} />
-              </Form.Item>
-              <div className={styles.actions}>
-                <Button
-                  disabled={
-                    !selectedPublicationId ||
-                    apps.length === 0 ||
-                    !selectedPublication ||
-                    selectedPublication.status !== "enabled" ||
-                    getPublicationScopes(selectedPublication).length === 0
-                  }
-                  htmlType="submit"
-                  loading={creatingKey}
-                  type="primary"
-                  icon={<KeyRound size={15} />}
-                >
-                  创建 API Key
-                </Button>
-              </div>
-            </Form>
-          </Card>
-        </div>
-
-        <Card
-          className={`${styles.card} ${styles.tableCard}`}
-          title="发布对象"
-          loading={initialLoading}
-        >
-          <Table
-            columns={publicationColumns}
-            dataSource={publications}
-            rowKey="id"
-            pagination={{ pageSize: 10 }}
-            scroll={{ x: 1380 }}
-          />
-        </Card>
-
-        <Card
-          className={`${styles.card} ${styles.tableCard}`}
-          title={
-            <div className={styles.toolbar}>
-              <Space>
-                <Database size={17} />
-                <span>专属知识库</span>
-                {selectedPublication?.knowledge_base_id ? (
-                  <Tag>{selectedPublication.knowledge_base_id}</Tag>
-                ) : null}
-              </Space>
-              <Space>
-                <Select
-                  className={styles.publicationFilter}
-                  value={selectedPublicationId}
-                  options={publicationOptions}
-                  placeholder="选择发布对象"
-                  onChange={(value) => setSelectedPublicationId(value)}
-                />
-                <input
-                  ref={knowledgeFileInputRef}
-                  hidden
-                  type="file"
-                  onChange={(event) => void handleKnowledgeUpload(event)}
-                />
-                <Button
-                  disabled={!selectedPublicationId}
-                  icon={<UploadCloud size={15} />}
-                  loading={knowledgeBusy}
-                  onClick={() => knowledgeFileInputRef.current?.click()}
-                >
-                  上传文档
-                </Button>
-              </Space>
-            </div>
-          }
-        >
-          <Alert
-            className={styles.knowledgeAlert}
-            type="info"
-            showIcon
-            message="一对一绑定"
-            description="该知识库只服务当前对外发布对象。外部调用不会读取运行用户的个人知识库，也不会读取企业共享知识库。"
-          />
-          <Table
-            columns={knowledgeColumns}
-            dataSource={knowledgeDocs}
-            loading={scopedLoading || knowledgeBusy}
-            rowKey="id"
-            pagination={{ pageSize: 8 }}
-            scroll={{ x: 760 }}
-          />
-        </Card>
-
-        <Card
-          className={`${styles.card} ${styles.tableCard}`}
-          title={
-            <div className={styles.toolbar}>
-              <span>API Keys</span>
-              <Select
-                className={styles.publicationFilter}
-                value={selectedPublicationId}
-                options={publicationOptions}
-                placeholder="选择发布对象"
-                onChange={(value) => setSelectedPublicationId(value)}
-              />
-            </div>
-          }
-        >
-          <Table
-            columns={keyColumns}
-            dataSource={keys}
-            loading={scopedLoading}
-            rowKey="id"
-            pagination={{ pageSize: 10 }}
-            scroll={{ x: 880 }}
-          />
-        </Card>
-
-        <Card className={`${styles.card} ${styles.tableCard}`} title="调用记录">
-          <Table
-            columns={invocationColumns}
-            dataSource={invocations}
-            loading={scopedLoading}
-            rowKey="id"
-            pagination={{ pageSize: 10 }}
-            scroll={{ x: 1180 }}
+        <Card className={styles.workspaceCard}>
+          <Tabs
+            activeKey={activeTab}
+            onChange={setActiveTab}
+            items={[
+              {
+                key: "publications",
+                label: "发布管理",
+                children: (
+                  <div className={styles.tabPanel}>
+                    <div className={styles.toolbar}>
+                      <Space wrap>
+                        <Input.Search
+                          allowClear
+                          className={styles.searchInput}
+                          placeholder="搜索名称、Public ID 或目标"
+                          value={publicationSearch}
+                          onChange={(event) =>
+                            setPublicationSearch(event.target.value)
+                          }
+                        />
+                        <Space size={6}>
+                          <Switch
+                            aria-label="仅显示启用"
+                            checked={onlyEnabled}
+                            onChange={setOnlyEnabled}
+                            size="small"
+                          />
+                          <Typography.Text>仅显示启用</Typography.Text>
+                        </Space>
+                      </Space>
+                      <Button
+                        icon={<Plus size={15} />}
+                        type="primary"
+                        onClick={() => setOpenForm("publication")}
+                      >
+                        创建发布对象
+                      </Button>
+                    </div>
+                    <Alert
+                      className={styles.inlineNotice}
+                      type="info"
+                      showIcon
+                      message="不再使用的接口可以先禁用；关闭“仅显示启用”即可随时查看和重新启用。"
+                    />
+                    <Table
+                      columns={publicationColumns}
+                      dataSource={visiblePublications}
+                      loading={initialLoading}
+                      rowKey="id"
+                      pagination={{ pageSize: 10, showSizeChanger: false }}
+                      scroll={{ x: 1380 }}
+                    />
+                  </div>
+                ),
+              },
+              {
+                key: "credentials",
+                label: "应用与密钥",
+                children: (
+                  <div className={styles.tabPanel}>
+                    <div className={styles.toolbar}>
+                      <Select
+                        className={styles.publicationFilter}
+                        value={selectedPublicationId}
+                        options={publicationOptions}
+                        showSearch
+                        optionFilterProp="label"
+                        placeholder="选择发布对象"
+                        onChange={(value) => setSelectedPublicationId(value)}
+                      />
+                      <Space wrap>
+                        <Button
+                          icon={<Plus size={15} />}
+                          onClick={() => setOpenForm("app")}
+                        >
+                          创建外部应用
+                        </Button>
+                        <Button
+                          icon={<KeyRound size={15} />}
+                          type="primary"
+                          disabled={
+                            !selectedPublication ||
+                            selectedPublication.status !== "enabled" ||
+                            apps.length === 0
+                          }
+                          onClick={() => setOpenForm("key")}
+                        >
+                          创建 API Key
+                        </Button>
+                      </Space>
+                    </div>
+                    <div className={styles.sectionHeading}>
+                      <div>
+                        <Typography.Title level={5}>API Keys</Typography.Title>
+                        <Typography.Text type="secondary">
+                          密钥只展示前后缀；完整 secret 仅在创建后显示一次。
+                        </Typography.Text>
+                      </div>
+                    </div>
+                    <Table
+                      columns={keyColumns}
+                      dataSource={keys}
+                      loading={scopedLoading}
+                      rowKey="id"
+                      pagination={{ pageSize: 10, showSizeChanger: false }}
+                      scroll={{ x: 880 }}
+                    />
+                    <div className={styles.appList}>
+                      <Typography.Title level={5}>已接入应用</Typography.Title>
+                      <div className={styles.appGrid}>
+                        {apps.map((app) => (
+                          <div className={styles.appItem} key={app.id}>
+                            <div>
+                              <Typography.Text strong>
+                                {app.name}
+                              </Typography.Text>
+                              <Typography.Text
+                                type="secondary"
+                                className={styles.blockText}
+                              >
+                                {app.ip_allowlist?.length
+                                  ? `IP 限制：${app.ip_allowlist.join(", ")}`
+                                  : "不限来源 IP"}
+                              </Typography.Text>
+                            </div>
+                            {statusTag(app.status || "enabled")}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ),
+              },
+              {
+                key: "knowledge",
+                label: "专属知识库",
+                children: (
+                  <div className={styles.tabPanel}>
+                    <div className={styles.toolbar}>
+                      <div>
+                        <Typography.Title level={5}>
+                          选择知识所属对象
+                        </Typography.Title>
+                        <Typography.Text type="secondary">
+                          名称优先展示，ID 仅用于辅助核对，避免上传到错误对象。
+                        </Typography.Text>
+                      </div>
+                      <Space wrap>
+                        <Select
+                          className={styles.publicationFilter}
+                          value={selectedPublicationId}
+                          options={publicationOptions}
+                          showSearch
+                          optionFilterProp="label"
+                          placeholder="选择发布对象"
+                          onChange={(value) => setSelectedPublicationId(value)}
+                        />
+                        <input
+                          ref={knowledgeFileInputRef}
+                          hidden
+                          type="file"
+                          onChange={(event) =>
+                            void handleKnowledgeUpload(event)
+                          }
+                        />
+                        <Button
+                          disabled={!selectedPublicationId}
+                          icon={<UploadCloud size={15} />}
+                          loading={knowledgeBusy}
+                          type="primary"
+                          onClick={() => knowledgeFileInputRef.current?.click()}
+                        >
+                          上传文档
+                        </Button>
+                      </Space>
+                    </div>
+                    {selectedPublication ? (
+                      <div
+                        className={styles.selectionBanner}
+                        role="region"
+                        aria-label={`当前知识对象：${
+                          publicationOptions.find(
+                            (option) => option.value === selectedPublicationId,
+                          )?.label || selectedPublication.public_id
+                        }`}
+                      >
+                        <Database size={18} />
+                        <div>
+                          <Typography.Text strong>
+                            {
+                              publicationOptions.find(
+                                (option) =>
+                                  option.value === selectedPublicationId,
+                              )?.label
+                            }
+                          </Typography.Text>
+                          <Typography.Text
+                            type="secondary"
+                            className={styles.blockText}
+                          >
+                            专属知识库：{selectedPublication.knowledge_base_id}
+                          </Typography.Text>
+                        </div>
+                        {statusTag(selectedPublication.status)}
+                      </div>
+                    ) : null}
+                    <Alert
+                      className={styles.inlineNotice}
+                      type="info"
+                      showIcon
+                      message="一对一绑定"
+                      description="该知识库只服务当前对外发布对象，不读取运行用户的个人知识库或企业共享知识库。"
+                    />
+                    <Table
+                      columns={knowledgeColumns}
+                      dataSource={knowledgeDocs}
+                      loading={scopedLoading || knowledgeBusy}
+                      rowKey="id"
+                      pagination={{ pageSize: 8, showSizeChanger: false }}
+                      scroll={{ x: 760 }}
+                    />
+                  </div>
+                ),
+              },
+              {
+                key: "invocations",
+                label: "调用记录",
+                children: (
+                  <div className={styles.tabPanel}>
+                    <div className={styles.toolbar}>
+                      <div>
+                        <Typography.Title level={5}>最近调用</Typography.Title>
+                        <Typography.Text type="secondary">
+                          查看调用状态、耗时和错误摘要。
+                        </Typography.Text>
+                      </div>
+                      <Select
+                        className={styles.publicationFilter}
+                        value={selectedPublicationId}
+                        options={publicationOptions}
+                        showSearch
+                        optionFilterProp="label"
+                        placeholder="选择发布对象"
+                        onChange={(value) => setSelectedPublicationId(value)}
+                      />
+                    </div>
+                    <Table
+                      columns={invocationColumns}
+                      dataSource={invocations}
+                      loading={scopedLoading}
+                      rowKey="id"
+                      pagination={{ pageSize: 10, showSizeChanger: false }}
+                      scroll={{ x: 1180 }}
+                    />
+                  </div>
+                ),
+              },
+            ]}
           />
         </Card>
       </div>
+
+      <Modal
+        title="创建发布对象"
+        open={openForm === "publication"}
+        onCancel={() => setOpenForm(null)}
+        footer={null}
+        destroyOnHidden
+        forceRender
+      >
+        <Form
+          className={styles.modalForm}
+          form={publicationForm}
+          layout="vertical"
+          onFinish={handleCreatePublication}
+        >
+          <Form.Item
+            name="public_id"
+            label="Public ID"
+            rules={[{ required: true, message: "请输入 public_id" }]}
+          >
+            <Input placeholder="support_agent" />
+          </Form.Item>
+          <div className={styles.targetRow}>
+            <Form.Item name="target_type" label="目标类型">
+              <Select
+                onChange={() =>
+                  publicationForm.setFieldValue("target_id", undefined)
+                }
+                options={[
+                  { label: "专家", value: "agent" },
+                  { label: "专家团", value: "expert_team" },
+                ]}
+              />
+            </Form.Item>
+            <Form.Item
+              name="target_id"
+              label="目标"
+              rules={[{ required: true, message: "请选择目标" }]}
+            >
+              <Select
+                showSearch
+                optionFilterProp="label"
+                placeholder="选择专家或专家团"
+                options={targetOptions}
+              />
+            </Form.Item>
+          </div>
+          <Form.Item name="title" label="发布标题">
+            <Input placeholder="客服专家" />
+          </Form.Item>
+          <Form.Item name="description" label="描述">
+            <Input.TextArea rows={2} placeholder="给外部应用识别的说明" />
+          </Form.Item>
+          <Form.Item
+            name="bound_user_id"
+            label="运行用户"
+            extra="外部调用使用该用户的会话和用户配置。"
+            rules={[{ required: true, message: "请选择绑定用户" }]}
+          >
+            <Select
+              showSearch
+              optionFilterProp="label"
+              placeholder="选择运行用户"
+              options={userOptions}
+            />
+          </Form.Item>
+          <Form.Item
+            name="scopes"
+            label="允许 scopes"
+            rules={[
+              {
+                required: true,
+                type: "array",
+                min: 1,
+                message: "至少选择一个 scope",
+              },
+            ]}
+          >
+            <Select mode="multiple" options={SCOPE_OPTIONS} />
+          </Form.Item>
+          <Form.Item name="status" label="初始状态">
+            <Select
+              options={[
+                { label: "启用", value: "enabled" },
+                { label: "禁用", value: "disabled" },
+              ]}
+            />
+          </Form.Item>
+          <div className={styles.actions}>
+            <Button onClick={() => setOpenForm(null)}>取消</Button>
+            <Button
+              htmlType="submit"
+              loading={creatingPublication}
+              type="primary"
+            >
+              创建发布对象
+            </Button>
+          </div>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="创建外部应用"
+        open={openForm === "app"}
+        onCancel={() => setOpenForm(null)}
+        footer={null}
+        destroyOnHidden
+        forceRender
+      >
+        <Form
+          className={styles.modalForm}
+          form={appForm}
+          layout="vertical"
+          onFinish={handleCreateApp}
+        >
+          <Form.Item
+            name="name"
+            label="应用名称"
+            rules={[{ required: true, message: "请输入应用名称" }]}
+          >
+            <Input placeholder="CRM / 小程序 / 内部系统" />
+          </Form.Item>
+          <Form.Item name="ip_allowlist" label="IP allowlist">
+            <Input.TextArea
+              rows={3}
+              placeholder="留空表示不限 IP；多个 IP 可用逗号或换行分隔"
+            />
+          </Form.Item>
+          <div className={styles.actions}>
+            <Button onClick={() => setOpenForm(null)}>取消</Button>
+            <Button htmlType="submit" loading={creatingApp} type="primary">
+              创建外部应用
+            </Button>
+          </div>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="创建 API Key"
+        open={openForm === "key"}
+        onCancel={() => setOpenForm(null)}
+        footer={null}
+        destroyOnHidden
+        forceRender
+      >
+        <Form
+          className={styles.modalForm}
+          form={keyForm}
+          layout="vertical"
+          onFinish={handleCreateKey}
+        >
+          <Form.Item
+            name="publication_id"
+            label="发布对象"
+            rules={[{ required: true, message: "请选择发布对象" }]}
+          >
+            <Select
+              disabled={publications.length === 0}
+              options={keyPublicationOptions}
+              showSearch
+              optionFilterProp="label"
+              onChange={(value) => setSelectedPublicationId(value)}
+            />
+          </Form.Item>
+          <Form.Item
+            name="app_id"
+            label="外部应用"
+            rules={[{ required: true, message: "请选择外部应用" }]}
+          >
+            <Select disabled={apps.length === 0} options={appOptions} />
+          </Form.Item>
+          <Form.Item
+            name="scopes"
+            label="Key scopes"
+            rules={[
+              {
+                required: true,
+                type: "array",
+                min: 1,
+                message: "至少选择一个 scope",
+              },
+            ]}
+          >
+            <Select mode="multiple" options={keyScopeOptions} />
+          </Form.Item>
+          <Form.Item name="expires_at" label="过期时间">
+            <DatePicker showTime style={{ width: "100%" }} />
+          </Form.Item>
+          <div className={styles.actions}>
+            <Button onClick={() => setOpenForm(null)}>取消</Button>
+            <Button
+              disabled={
+                !selectedPublication ||
+                selectedPublication.status !== "enabled" ||
+                getPublicationScopes(selectedPublication).length === 0
+              }
+              htmlType="submit"
+              loading={creatingKey}
+              type="primary"
+            >
+              创建 API Key
+            </Button>
+          </div>
+        </Form>
+      </Modal>
     </div>
   );
 }
