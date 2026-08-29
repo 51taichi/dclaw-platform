@@ -15,6 +15,7 @@ import type {
   PriceableModel,
   PricingAudit,
   PricingOverview,
+  PricingPolicy,
   PricingUnlock,
 } from "../../../api/types/billing";
 import PricingDrafts from "./PricingDrafts";
@@ -28,6 +29,7 @@ export default function PricingTab() {
   const [overview, setOverview] = useState<PricingOverview>();
   const [models, setModels] = useState<PriceableModel[]>([]);
   const [history, setHistory] = useState<PricingAudit[]>([]);
+  const [policies, setPolicies] = useState<PricingPolicy[]>([]);
   const [error, setError] = useState<string>();
   const [unlock, setUnlock] = useState<PricingUnlock>();
   const [unlockOpen, setUnlockOpen] = useState(false);
@@ -37,11 +39,13 @@ export default function PricingTab() {
       billingApi.getPricingOverview(),
       billingApi.listPricingModels(),
       billingApi.listPricingHistory(),
+      billingApi.listPricingPolicies(),
     ])
-      .then(([nextOverview, nextModels, nextHistory]) => {
+      .then(([nextOverview, nextModels, nextHistory, nextPolicies]) => {
         setOverview(nextOverview);
         setModels(nextModels);
         setHistory(nextHistory);
+        setPolicies(nextPolicies);
         setError(undefined);
       })
       .catch((reason) => setError(String(reason)));
@@ -175,6 +179,7 @@ export default function PricingTab() {
             children: (
               <PricingRules
                 disabled={!activeUnlock}
+                policies={policies}
                 onSave={async (value) => {
                   if (!activeUnlock) return;
                   await billingApi.savePricingPolicy(value, activeUnlock.token);

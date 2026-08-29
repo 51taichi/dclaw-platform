@@ -153,6 +153,12 @@ export interface PricingPolicyInput {
   expected_revision: number;
 }
 
+export interface PricingPolicy
+  extends Omit<PricingPolicyInput, "expected_revision"> {
+  id: string;
+  revision: number;
+}
+
 export interface PricingImportPreview {
   id: string;
   status: "ready" | "blocked";

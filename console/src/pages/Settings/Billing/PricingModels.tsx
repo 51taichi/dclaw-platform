@@ -53,18 +53,39 @@ export default function PricingModels({
                   rule.model_key === row.model_key,
               ) ?? [];
             return rules.length ? (
-              rules.map((rule) => (
-                <div key={rule.id}>
-                  ¥
-                  {String(
-                    rule.metadata.input_rmb_sale_price ??
-                      rule.metadata.rmb_sale_price ??
-                      "-",
-                  )}{" "}
-                  / {rule.unit_type} ·{" "}
-                  {rule.input_credits_per_1k || rule.credits_per_unit}积分
-                </div>
-              ))
+              rules.map((rule) => {
+                const metadata = rule.metadata;
+                const policy = `${String(metadata.applied_multiplier ?? "-")}倍（${String(
+                  metadata.multiplier_scope ?? "-",
+                )}: ${String(metadata.multiplier_scope_key ?? "-")}）`;
+                return rule.unit_type === "tokens" ? (
+                  <div key={rule.id}>
+                    <div>
+                      输入：成本 ¥{String(metadata.input_rmb_cost ?? "-")} →
+                      售价 ¥{String(metadata.input_rmb_sale_price ?? "-")} / 1K ·
+                      {rule.input_credits_per_1k}积分
+                    </div>
+                    <div>
+                      输出：成本 ¥{String(metadata.output_rmb_cost ?? "-")} →
+                      售价 ¥{String(metadata.output_rmb_sale_price ?? "-")} / 1K ·
+                      {rule.output_credits_per_1k}积分
+                    </div>
+                    <small>
+                      风险缓冲 {String(metadata.risk_buffer ?? "-")} · 生效倍率 {policy}
+                    </small>
+                  </div>
+                ) : (
+                  <div key={rule.id}>
+                    成本 ¥{String(metadata.rmb_cost ?? "-")} → 售价 ¥
+                    {String(metadata.rmb_sale_price ?? "-")} / {rule.unit_type} ·
+                    {rule.credits_per_unit}积分
+                    <br />
+                    <small>
+                      风险缓冲 {String(metadata.risk_buffer ?? "-")} · 生效倍率 {policy}
+                    </small>
+                  </div>
+                );
+              })
             ) : (
               <Tag color="warning">待配置可信成本</Tag>
             );

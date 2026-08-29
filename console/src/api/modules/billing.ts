@@ -14,6 +14,7 @@ import type {
   PricingImportPreview,
   PricingOverview,
   PricingPolicyInput,
+  PricingPolicy,
   PricingPreview,
   PricingUnlock,
 } from "../types/billing";
@@ -88,6 +89,8 @@ export const billingApi = {
     request<PriceableModel[]>("/admin/billing/pricing/models"),
   listPricingHistory: () =>
     request<PricingAudit[]>("/admin/billing/pricing/history"),
+  listPricingPolicies: () =>
+    request<PricingPolicy[]>("/admin/billing/pricing/policies"),
   exportPricing: () => request<Blob>("/admin/billing/pricing/export"),
   unlockPricing: (password: string) =>
     request<PricingUnlock>("/admin/billing/pricing/unlock", {

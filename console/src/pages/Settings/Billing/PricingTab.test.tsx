@@ -9,6 +9,7 @@ vi.mock("../../../api/modules/billing", () => ({
     getPricingOverview: vi.fn(),
     listPricingModels: vi.fn(),
     listPricingHistory: vi.fn(),
+    listPricingPolicies: vi.fn(),
   },
 }));
 
@@ -34,7 +35,16 @@ describe("PricingTab", () => {
               credits_per_unit: 0,
               input_credits_per_1k: 2,
               output_credits_per_1k: 4,
-              metadata: { input_rmb_sale_price: "0.0137" },
+              metadata: {
+                input_rmb_cost: "0.0100",
+                input_rmb_sale_price: "0.0137",
+                output_rmb_cost: "0.0200",
+                output_rmb_sale_price: "0.0273",
+                risk_buffer: "0.05",
+                applied_multiplier: "1.3",
+                multiplier_scope: "provider",
+                multiplier_scope_key: "dashscope",
+              },
             },
           ],
         },
@@ -50,6 +60,7 @@ describe("PricingTab", () => {
       },
     ]);
     vi.mocked(billingApi.listPricingHistory).mockResolvedValue([]);
+    vi.mocked(billingApi.listPricingPolicies).mockResolvedValue([]);
   });
 
   it("groups models and renders RMB without foreign currency", async () => {
@@ -59,6 +70,8 @@ describe("PricingTab", () => {
     expect(await screen.findByText("百炼")).toBeInTheDocument();
     expect(screen.getByText("文本/多模态对话")).toBeInTheDocument();
     expect(screen.getByText(/¥0.0137/)).toBeInTheDocument();
+    expect(screen.getByText(/输出：成本 ¥0.0200/)).toBeInTheDocument();
+    expect(screen.getByText(/售价 ¥0.0273/)).toBeInTheDocument();
     expect(screen.queryByText(/USD|美元/)).not.toBeInTheDocument();
   });
 });

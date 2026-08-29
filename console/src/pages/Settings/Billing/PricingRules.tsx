@@ -7,14 +7,20 @@ import {
   Input,
   Select,
   Space,
+  Table,
 } from "antd";
-import type { PricingPolicyInput } from "../../../api/types/billing";
+import type {
+  PricingPolicy,
+  PricingPolicyInput,
+} from "../../../api/types/billing";
 
 export default function PricingRules({
   disabled = true,
+  policies = [],
   onSave,
 }: {
   disabled?: boolean;
+  policies?: PricingPolicy[];
   onSave?: (value: PricingPolicyInput) => Promise<void>;
 }) {
   const [form] = Form.useForm<PricingPolicyInput>();
@@ -32,6 +38,36 @@ export default function PricingRules({
             { key: "credits", label: "积分兑换", children: "¥1 = 100积分" },
             { key: "buffer", label: "汇率风险缓冲", children: "5%" },
             { key: "floor", label: "最低销售倍数", children: "1.3倍" },
+          ]}
+        />
+      </Card>
+      <Card title="当前倍率规则">
+        <Table
+          rowKey="id"
+          pagination={false}
+          dataSource={policies}
+          columns={[
+            { title: "层级", dataIndex: "scope_type" },
+            { title: "范围", dataIndex: "scope_key" },
+            { title: "倍数", dataIndex: "multiplier_decimal" },
+            { title: "版本", dataIndex: "revision" },
+            {
+              title: "操作",
+              render: (_, policy: PricingPolicy) => (
+                <Button
+                  disabled={disabled}
+                  onClick={() => form.setFieldsValue({
+                    scope_type: policy.scope_type,
+                    scope_key: policy.scope_key,
+                    multiplier_decimal: policy.multiplier_decimal,
+                    settings: policy.settings ?? {},
+                    expected_revision: policy.revision,
+                  })}
+                >
+                  编辑
+                </Button>
+              ),
+            },
           ]}
         />
       </Card>
