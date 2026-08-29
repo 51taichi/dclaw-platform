@@ -407,17 +407,17 @@ def test_user_list_filters_and_detail_are_owner_scoped_and_redacted(reporting):
         owner_user_id="alice",
     )
     assert detail is not None
+    assert detail["actual_debited_credits"] == 5
     assert len(detail["items"]) == 2
     item = detail["items"][0]
     assert item == {
         "call_sequence": 1,
-        "model": {
-            "provider": "provider-a",
-            "id": "model-a",
-            "capability": "text",
-        },
+        "expert_role": None,
+        "model": "model-a",
+        "provider": "provider-a",
+        "capability": "text",
         "tokens": {"input": 1000, "output": 1000},
-        "credits": {"quoted": 6, "charged": 5},
+        "charged_credits": 5,
         "status": "captured",
         "catalog_version": "retail-report-v1",
     }
@@ -439,6 +439,199 @@ def test_user_list_filters_and_detail_are_owner_scoped_and_redacted(reporting):
     assert (
         service.get_usage_order("order-bob-new", owner_user_id="alice") is None
     )
+
+
+def test_user_reports_all_model_sources_with_safe_generic_details(reporting):
+    service, _repository, engine = reporting
+    with engine.begin() as conn:
+        template = dict(
+            conn.execute(
+                select(billing_usage_orders).where(
+                    billing_usage_orders.c.id == "order-alice-new",
+                ),
+            )
+            .mappings()
+            .one(),
+        )
+        item_template = dict(
+            conn.execute(
+                select(billing_usage_items).where(
+                    billing_usage_items.c.id == "item-alice-new",
+                ),
+            )
+            .mappings()
+            .one(),
+        )
+        order_id = "order-alice-team"
+        conn.execute(
+            insert(billing_usage_orders).values(
+                **{
+                    **template,
+                    "id": order_id,
+                    "business_key": (
+                        "billing:expert_team:team-public:request-1"
+                    ),
+                    "source_type": "expert_team",
+                    "source_id": "execution-internal-secret",
+                    "status": "reconciling",
+                    "held_credits": 7,
+                    "captured_credits": 5,
+                    "released_credits": 1,
+                    "reconciling_credits": 1,
+                    "request_snapshot_json": json.dumps(
+                        {
+                            "billing_mode": "enforced",
+                            "request_sha256": "request-secret",
+                            "source": {
+                                "type": "expert_team",
+                                "id": "team-public",
+                                "expert_id": "expert-public",
+                                "expert_team_run_id": "team-run-public",
+                            },
+                        },
+                    ),
+                    "created_at": NOW + timedelta(seconds=1),
+                    "updated_at": NOW + timedelta(seconds=1),
+                },
+            ),
+        )
+        conn.execute(
+            insert(billing_usage_items).values(
+                **{
+                    **item_template,
+                    "id": "item-team-internal-secret",
+                    "usage_order_id": order_id,
+                    "item_key": (
+                        "expert-team:team-run-public:member:researcher:call:1"
+                    ),
+                    "status": "reconciling",
+                    "quoted_credits": 7,
+                    "charged_credits": 5,
+                    "created_at": NOW + timedelta(seconds=1),
+                    "updated_at": NOW + timedelta(seconds=1),
+                },
+            ),
+        )
+        for sequence, source in enumerate(
+            ("client", "mobile", "automation", "schedule", "channel"),
+            start=2,
+        ):
+            generic_order_id = f"order-alice-{source}"
+            created_at = NOW + timedelta(seconds=sequence)
+            conn.execute(
+                insert(billing_usage_orders).values(
+                    **{
+                        **template,
+                        "id": generic_order_id,
+                        "business_key": f"billing:{source}:public:request-1",
+                        "source_type": source,
+                        "source_id": f"execution-secret-{source}",
+                        "request_snapshot_json": json.dumps(
+                            {
+                                "billing_mode": "enforced",
+                                "source": {
+                                    "type": source,
+                                    "id": f"public-{source}",
+                                    "expert_id": None,
+                                    "expert_team_run_id": None,
+                                },
+                            },
+                        ),
+                        "created_at": created_at,
+                        "updated_at": created_at,
+                    },
+                ),
+            )
+            conn.execute(
+                insert(billing_usage_items).values(
+                    **{
+                        **item_template,
+                        "id": f"item-secret-{source}",
+                        "usage_order_id": generic_order_id,
+                        "item_key": f"call-secret-{source}",
+                        "created_at": created_at,
+                        "updated_at": created_at,
+                    },
+                ),
+            )
+
+    page = service.list_usage_orders(
+        owner_user_id="alice",
+        filters=BillingReportFilters(source="expert_team"),
+        limit=10,
+    )
+    assert len(page["items"]) == 1
+    order = page["items"][0]
+    assert order["source"] == "expert_team"
+    assert order["expert"] == "expert-public"
+    assert order["expert_team"] == "team-run-public"
+    assert order["call_count"] == 1
+    assert order["tokens"] == {"input": 1000, "output": 1000}
+    assert order["credits"] == {
+        "held": 7,
+        "captured": 5,
+        "released": 1,
+        "reconciling": 1,
+    }
+    assert order["status"] == "reconciling"
+
+    detail = service.get_usage_order(order_id, owner_user_id="alice")
+    assert detail is not None
+    assert detail["items"] == [
+        {
+            "call_sequence": 1,
+            "expert_role": "researcher",
+            "model": "model-a",
+            "provider": "provider-a",
+            "capability": "text",
+            "tokens": {"input": 1000, "output": 1000},
+            "charged_credits": 5,
+            "status": "reconciling",
+            "catalog_version": "retail-report-v1",
+        },
+    ]
+    serialized = json.dumps(detail)
+    for forbidden in (
+        "execution-internal-secret",
+        "item-team-internal-secret",
+        "expert-team:team-run-public",
+        "request-secret",
+        "business_key",
+        "supplier-secret",
+        "supplier_evidence",
+        "price_rule_id",
+    ):
+        assert forbidden not in serialized
+
+    all_sources = {
+        item["source"]
+        for item in service.list_usage_orders(
+            owner_user_id="alice",
+            filters=BillingReportFilters(),
+            limit=20,
+        )["items"]
+    }
+    assert all_sources == {
+        "client",
+        "mobile",
+        "openapi",
+        "expert_team",
+        "automation",
+        "schedule",
+        "channel",
+    }
+    summary = service.open_api_summary(
+        "alice",
+        date_from=date(2026, 8, 1),
+        date_to=date(2026, 8, 30),
+    )
+    assert summary["totals"]["orders"] == 9
+    assert summary["totals"]["model_calls"] == 9
+
+    with pytest.raises(ValueError, match="unsupported billing source"):
+        BillingReportFilters(source="internal_system")
+    with pytest.raises(ValueError, match="unsupported billing status"):
+        BillingReportFilters(status="arbitrary")
 
 
 def test_admin_list_can_filter_by_internal_identity_without_raw_evidence(

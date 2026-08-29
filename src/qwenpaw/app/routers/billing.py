@@ -189,8 +189,10 @@ def get_pricing_admin_service() -> PricingAdminService:
     engine = get_app_engine()
     catalogs = PriceCatalogRepository(engine)
     return PricingAdminService(
-        PricingAdminRepository(engine), PriceCatalogService(catalogs),
-        catalogs, PricingModelInventory(ProviderManager.get_instance()),
+        PricingAdminRepository(engine),
+        PriceCatalogService(catalogs),
+        catalogs,
+        PricingModelInventory(ProviderManager.get_instance()),
     )
 
 
@@ -256,7 +258,11 @@ def _top_up_product(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _top_up_claim(row: dict[str, Any], *, admin: bool = False) -> dict[str, Any]:
+def _top_up_claim(
+    row: dict[str, Any],
+    *,
+    admin: bool = False,
+) -> dict[str, Any]:
     result = {
         key: row.get(key)
         for key in (
@@ -358,6 +364,7 @@ def _report_filters(
     api_key_id: str | None,
     status: str | None,
     owner_user_id: str | None = None,
+    source: str | None = None,
 ) -> BillingReportFilters:
     try:
         return BillingReportFilters(
@@ -370,6 +377,7 @@ def _report_filters(
             api_key_id=api_key_id,
             status=status,
             owner_user_id=owner_user_id,
+            source=source,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -474,6 +482,7 @@ def list_user_usage_orders(
     | None = Query(default=None, min_length=1, max_length=255),
     app_id: str | None = Query(default=None, min_length=1, max_length=255),
     status: str | None = Query(default=None, min_length=1, max_length=64),
+    source: str | None = Query(default=None, min_length=1, max_length=64),
 ) -> dict[str, Any]:
     owner_id = _authenticated_owner(request)
     return _report_page(
@@ -487,6 +496,7 @@ def list_user_usage_orders(
             app_id=app_id,
             api_key_id=None,
             status=status,
+            source=source,
         ),
         limit=limit,
         cursor=cursor,
@@ -521,15 +531,23 @@ def get_user_open_api_summary(
 
 
 @admin_router.post("/pricing/unlock")
-def unlock_pricing(payload: PricingUnlockBody, request: Request) -> dict[str, Any]:
+def unlock_pricing(
+    payload: PricingUnlockBody,
+    request: Request,
+) -> dict[str, Any]:
     actor_id = _authenticated_owner(request)
     ip_address = request.client.host if request.client else None
     try:
         unlock = get_pricing_unlock_service().unlock(
-            actor_id, payload.password, ip_address,
+            actor_id,
+            payload.password,
+            ip_address,
         )
     except PricingUnlockDenied as exc:
-        raise HTTPException(status_code=403, detail="Invalid admin password") from exc
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid admin password",
+        ) from exc
     return {"token": unlock.token, "expires_at": unlock.expires_at}
 
 
@@ -540,7 +558,10 @@ def pricing_overview() -> dict[str, Any]:
 
 @admin_router.get("/pricing/models")
 def pricing_models() -> list[dict[str, Any]]:
-    return [row.__dict__ for row in get_pricing_admin_service().inventory.list_enabled()]
+    return [
+        row.__dict__
+        for row in get_pricing_admin_service().inventory.list_enabled()
+    ]
 
 
 @admin_router.get("/pricing/history")
@@ -564,7 +585,9 @@ def export_pricing() -> Response:
         media_type=(
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         ),
-        headers={"Content-Disposition": 'attachment; filename="pricing-rmb.xlsx"'},
+        headers={
+            "Content-Disposition": 'attachment; filename="pricing-rmb.xlsx"',
+        },
     )
 
 
@@ -574,7 +597,9 @@ async def preview_pricing_import(
     filename: str = Query(min_length=1, max_length=255),
 ) -> dict[str, Any]:
     return get_pricing_excel_service().preview_import(
-        await request.body(), filename, _authenticated_owner(request),
+        await request.body(),
+        filename,
+        _authenticated_owner(request),
     )
 
 
@@ -586,11 +611,15 @@ def confirm_pricing_import(
 ) -> dict[str, Any]:
     try:
         return get_pricing_excel_service().confirm_import(
-            import_id, actor_id,
+            import_id,
+            actor_id,
             request.client.host if request.client else None,
         )
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Import not found") from exc
+        raise HTTPException(
+            status_code=404,
+            detail="Import not found",
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -603,8 +632,12 @@ def save_pricing_policy(
 ) -> dict[str, Any]:
     try:
         return get_pricing_admin_service().save_policy(
-            payload.scope_type, payload.scope_key, payload.multiplier_decimal,
-            payload.settings, actor_id, payload.expected_revision,
+            payload.scope_type,
+            payload.scope_key,
+            payload.multiplier_decimal,
+            payload.settings,
+            actor_id,
+            payload.expected_revision,
             request.client.host if request.client else None,
         )
     except ValueError as exc:
@@ -704,6 +737,7 @@ def list_admin_usage_orders(
     owner_user_id: str
     | None = Query(default=None, min_length=1, max_length=255),
     status: str | None = Query(default=None, min_length=1, max_length=64),
+    source: str | None = Query(default=None, min_length=1, max_length=64),
 ) -> dict[str, Any]:
     return _report_page(
         owner_user_id=None,
@@ -717,6 +751,7 @@ def list_admin_usage_orders(
             api_key_id=api_key_id,
             status=status,
             owner_user_id=owner_user_id,
+            source=source,
         ),
         limit=limit,
         cursor=cursor,
@@ -877,20 +912,27 @@ def get_top_up_config() -> dict[str, Any]:
     return {
         "enabled": enabled,
         "qr_url": qr_url if enabled else None,
-        "instructions": os.environ.get("DCLAW_TOP_UP_INSTRUCTIONS", "").strip(),
+        "instructions": os.environ.get(
+            "DCLAW_TOP_UP_INSTRUCTIONS",
+            "",
+        ).strip(),
     }
 
 
 @user_router.get("/top-up/products")
 def list_top_up_products() -> dict[str, Any]:
-    rows = get_top_up_service().top_up_repository.list_products(active_only=True)
+    rows = get_top_up_service().top_up_repository.list_products(
+        active_only=True,
+    )
     return {"items": [_top_up_product(row) for row in rows]}
 
 
 @user_router.get("/top-up/claims")
 def list_user_top_up_claims(request: Request) -> dict[str, Any]:
     owner_id = _authenticated_owner(request)
-    rows = get_top_up_service().top_up_repository.list_claims(owner_id=owner_id)
+    rows = get_top_up_service().top_up_repository.list_claims(
+        owner_id=owner_id,
+    )
     return {"items": [_top_up_claim(row) for row in rows]}
 
 
@@ -917,9 +959,15 @@ def submit_top_up_claim(
         )
         return _top_up_claim(row)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Product not found") from exc
+        raise HTTPException(
+            status_code=404,
+            detail="Product not found",
+        ) from exc
     except (TopUpIdempotencyConflict, TopUpConflictError) as exc:
-        raise HTTPException(status_code=409, detail="Idempotency conflict") from exc
+        raise HTTPException(
+            status_code=409,
+            detail="Idempotency conflict",
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -943,7 +991,9 @@ def create_admin_top_up_product(
     payload: TopUpProductBody,
     request: Request,
 ) -> dict[str, Any]:
-    values = payload.model_dump() | {"created_by": _authenticated_owner(request)}
+    values = payload.model_dump() | {
+        "created_by": _authenticated_owner(request),
+    }
     row = get_top_up_service().top_up_repository.create_product(values)
     return _top_up_product(row)
 
@@ -954,13 +1004,19 @@ def replace_admin_top_up_product(
     payload: TopUpProductBody,
     request: Request,
 ) -> dict[str, Any]:
-    values = payload.model_dump() | {"created_by": _authenticated_owner(request)}
+    values = payload.model_dump() | {
+        "created_by": _authenticated_owner(request),
+    }
     try:
         row = get_top_up_service().top_up_repository.replace_product(
-            public_id, values
+            public_id,
+            values,
         )
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Product not found") from exc
+        raise HTTPException(
+            status_code=404,
+            detail="Product not found",
+        ) from exc
     return _top_up_product(row)
 
 
@@ -973,7 +1029,10 @@ def _review_top_up_claim(
     approve: bool,
 ) -> dict[str, Any]:
     service = get_top_up_service()
-    command = ReviewCommand(idempotency_key=idempotency_key, reason=payload.reason)
+    command = ReviewCommand(
+        idempotency_key=idempotency_key,
+        reason=payload.reason,
+    )
     try:
         if approve:
             row = service.approve_claim(

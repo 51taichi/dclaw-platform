@@ -46,6 +46,18 @@ from ..storage.schema import (
 
 _BILLING_MODES = frozenset({"off", "shadow", "observe", "enforced"})
 _RESOLUTIONS = frozenset({"billable", "not_billable"})
+_REPORT_SOURCES = frozenset(
+    {
+        "client",
+        "mobile",
+        "openapi",
+        "expert_team",
+        "automation",
+        "schedule",
+        "channel",
+    },
+)
+_REPORT_STATUSES = frozenset({"quoted", "held", "settled", "reconciling"})
 _MAX_CURSOR_LENGTH = 2048
 _MAX_BIGINT = (1 << 63) - 1
 
@@ -71,6 +83,7 @@ class BillingReportFilters:
     api_key_id: str | None = None
     status: str | None = None
     owner_user_id: str | None = None
+    source: str | None = None
 
     def __post_init__(self) -> None:
         for value in (self.started_at, self.ended_at):
@@ -92,10 +105,15 @@ class BillingReportFilters:
             "api_key_id",
             "status",
             "owner_user_id",
+            "source",
         ):
             value = getattr(self, name)
             if value is not None and not str(value).strip():
                 raise ValueError(f"{name} must be non-empty")
+        if self.source is not None and self.source not in _REPORT_SOURCES:
+            raise ValueError("unsupported billing source")
+        if self.status is not None and self.status not in _REPORT_STATUSES:
+            raise ValueError("unsupported billing status")
 
 
 @dataclass(frozen=True)
@@ -266,7 +284,13 @@ class BillingReportingService:
             .subquery("summary_item_totals")
         )
         item_business_key = (
-            literal("open-api-item:")
+            case(
+                (
+                    eligible.c.source_type == "open_api",
+                    literal("open-api-item:"),
+                ),
+                else_=literal("billing-item:"),
+            )
             + billing_usage_items.c.usage_order_id
             + literal(":")
             + billing_usage_items.c.item_key
@@ -1060,17 +1084,17 @@ class BillingReportingService:
                     billing_wallets,
                     billing_usage_orders.c.wallet_id == billing_wallets.c.id,
                 )
-                .join(
+                .outerjoin(
                     open_api_invocations,
                     open_api_invocations.c.billing_usage_order_id
                     == billing_usage_orders.c.id,
                 )
-                .join(
+                .outerjoin(
                     open_api_publications,
                     open_api_invocations.c.publication_id
                     == open_api_publications.c.id,
                 )
-                .join(
+                .outerjoin(
                     open_api_external_apps,
                     open_api_invocations.c.app_id
                     == open_api_external_apps.c.id,
@@ -1082,9 +1106,11 @@ class BillingReportingService:
                 ),
             )
             .where(
-                billing_usage_orders.c.source_type == "open_api",
-                open_api_invocations.c.billing_status != "unbilled",
                 billing_wallets.c.owner_type == "user",
+                or_(
+                    open_api_invocations.c.id.is_(None),
+                    open_api_invocations.c.billing_status != "unbilled",
+                ),
             )
         )
         selected_owner = owner_user_id or filters.owner_user_id
@@ -1118,6 +1144,15 @@ class BillingReportingService:
         if filters.status is not None:
             statement = statement.where(
                 billing_usage_orders.c.status == filters.status,
+            )
+        if filters.source is not None:
+            statement = statement.where(
+                billing_usage_orders.c.source_type
+                == (
+                    "open_api"
+                    if filters.source == "openapi"
+                    else filters.source
+                ),
             )
         item_predicates = [
             item_filter.c.usage_order_id == billing_usage_orders.c.id,
@@ -1160,11 +1195,20 @@ class BillingReportingService:
         ]
         items_by_order: dict[str, list[dict[str, Any]]] = {}
         business_to_order: dict[str, str] = {}
+        sources_by_order = {
+            str(row["id"]): str(row["source_type"] or "openapi")
+            for row in rows
+        }
         for item in all_items:
             order_id = str(item["usage_order_id"])
             items_by_order.setdefault(order_id, []).append(item)
+            namespace = (
+                "open-api-item"
+                if sources_by_order[order_id] == "open_api"
+                else "billing-item"
+            )
             business_to_order[
-                _item_business_key(order_id, str(item["item_key"]))
+                f"{namespace}:{order_id}:{item['item_key']}"
             ] = order_id
         actual_by_order: dict[str, int] = {}
         if business_to_order:
@@ -1211,23 +1255,22 @@ class BillingReportingService:
         include_internal: bool,
         include_item_internal: bool,
     ) -> dict[str, Any]:
-        mode = str(
-            _load_json(row["request_snapshot_json"]).get("billing_mode")
-            or "shadow",
-        )
+        request_snapshot = _load_json(row["request_snapshot_json"])
+        source_snapshot = request_snapshot.get("source")
+        if not isinstance(source_snapshot, Mapping):
+            source_snapshot = {}
+        mode = str(request_snapshot.get("billing_mode") or "shadow")
+        source = _public_source(str(row["source_type"] or "open_api"))
+        invocation_billing_status = row.get("invocation_billing_status")
         result: dict[str, Any] = {
             "id": str(row["id"]),
-            "invocation_id": str(row["invocation_id"]),
-            "publication": {
-                "id": str(row["publication_id"]),
-                "name": str(row["publication_name"]),
-            },
-            "application": {
-                "id": str(row["app_id"]),
-                "name": str(row["app_name"]),
-            },
+            "source": source,
+            "expert": source_snapshot.get("expert_id"),
+            "expert_team": source_snapshot.get("expert_team_run_id"),
             "status": str(row["status"]),
-            "billing_status": str(row["invocation_billing_status"]),
+            "billing_status": str(
+                invocation_billing_status or row["status"],
+            ),
             "billing_mode": mode,
             "is_estimate": mode in {"shadow", "observe"},
             "catalog_version": str(row["catalog_version"]),
@@ -1236,7 +1279,13 @@ class BillingReportingService:
             "released_credits": int(row["released_credits"]),
             "reconciling_credits": int(row["reconciling_credits"]),
             "actual_debited_credits": actual_debited,
-            "item_count": len(item_rows),
+            "call_count": len(item_rows),
+            "credits": {
+                "held": int(row["held_credits"]),
+                "captured": int(row["captured_credits"]),
+                "released": int(row["released_credits"]),
+                "reconciling": int(row["reconciling_credits"]),
+            },
             "tokens": {
                 "input": sum(int(item["input_tokens"]) for item in item_rows),
                 "output": sum(
@@ -1246,10 +1295,28 @@ class BillingReportingService:
             "created_at": _aware_utc(row["created_at"]).isoformat(),
             "updated_at": _aware_utc(row["updated_at"]).isoformat(),
         }
+        if row.get("publication_id") is not None:
+            result["publication"] = {
+                "id": str(row["publication_id"]),
+                "name": str(row["publication_name"]),
+            }
+            result["application"] = {
+                "id": str(row["app_id"]),
+                "name": str(row["app_name"]),
+            }
         if include_internal:
             result.update(
                 owner_user_id=str(row["owner_user_id"]),
-                api_key_id=str(row["api_key_id"]),
+                invocation_id=(
+                    str(row["invocation_id"])
+                    if row.get("invocation_id") is not None
+                    else None
+                ),
+                api_key_id=(
+                    str(row["api_key_id"])
+                    if row.get("api_key_id") is not None
+                    else None
+                ),
             )
         if detail:
             result["items"] = [
@@ -1341,21 +1408,18 @@ def _public_item_row(
     catalog_version: str,
     include_internal: bool = False,
 ) -> dict[str, Any]:
+    expert_role = _expert_role(str(item["item_key"]))
     result = {
         "call_sequence": call_sequence,
-        "model": {
-            "provider": str(item["provider_id"]),
-            "id": str(item["model_key"]),
-            "capability": str(item["capability"]),
-        },
+        "expert_role": expert_role,
+        "model": str(item["model_key"]),
+        "provider": str(item["provider_id"]),
+        "capability": str(item["capability"]),
         "tokens": {
             "input": int(item["input_tokens"]),
             "output": int(item["output_tokens"]),
         },
-        "credits": {
-            "quoted": int(item["quoted_credits"]),
-            "charged": int(item["charged_credits"]),
-        },
+        "charged_credits": int(item["charged_credits"]),
         "status": str(item["status"]),
         "catalog_version": catalog_version,
     }
@@ -1365,6 +1429,22 @@ def _public_item_row(
         result["would_pass"] = bool(item["would_pass"])
         result["would_block_reason"] = item["would_block_reason"]
     return result
+
+
+def _expert_role(item_key: str) -> str | None:
+    parts = item_key.split(":")
+    try:
+        member_index = parts.index("member")
+    except ValueError:
+        return None
+    if member_index + 1 >= len(parts):
+        return None
+    role = parts[member_index + 1].strip()
+    return role or None
+
+
+def _public_source(source_type: str) -> str:
+    return "openapi" if source_type == "open_api" else source_type
 
 
 def _audit_row(
