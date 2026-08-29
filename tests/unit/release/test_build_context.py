@@ -64,7 +64,7 @@ def _fake_npm(tmp_path: Path, *, fail_build: bool = False) -> Path:
     npm = bin_dir / "npm"
     npm.write_text(
         "#!/bin/sh\n"
-        'printf \'%s\\n\' "$*" >>"$NPM_CALLS"\n'
+        'printf \'%s|%s\\n\' "${NODE_OPTIONS:-}" "$*" >>"$NPM_CALLS"\n'
         + (
             'case "$*" in *run\\ build*) exit 23;; esac\n'
             if fail_build
@@ -183,6 +183,6 @@ def test_assembler_copies_exact_sources_and_builds_console(
     assert (output / "console/src/index.ts").is_file()
     assert (output / "website/public/docs/intro.zh.md").is_file()
     assert (tmp_path / "npm-calls.txt").read_text().splitlines() == [
-        "ci --include=dev",
-        "run build",
+        "|ci --include=dev",
+        "--max-old-space-size=4096|run build",
     ]

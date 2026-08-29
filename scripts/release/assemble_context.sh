@@ -47,7 +47,7 @@ git -C "$CLIENT_DIR" archive "$CLIENT_SHA" website/public/docs |
 (
   cd "$temporary_output/console"
   npm ci --include=dev
-  npm run build
+  NODE_OPTIONS=${NODE_OPTIONS:---max-old-space-size=4096} npm run build
 )
 
 mv "$temporary_output" "$OUTPUT_DIR"
