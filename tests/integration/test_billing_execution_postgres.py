@@ -106,3 +106,44 @@ def test_postgres_concurrent_claim_has_one_fenced_owner(
     winners = [result for result in results if result is not None]
     assert len(winners) == 1
     assert winners[0].generation == 1
+
+
+@pytest.mark.integration
+def test_postgres_paused_execution_has_one_resume_owner(
+    postgres_execution_repo,
+):
+    postgres_execution_repo.create_or_replay(
+        BillingExecutionCommand(
+            execution_id="execution-paused",
+            usage_order_id="order-1",
+            payer_user_id="user-1",
+            source_type="expert_team",
+            source_id="run-1",
+            request_sha256="b" * 64,
+        ),
+    )
+    first = postgres_execution_repo.claim(
+        "execution-paused",
+        "worker-original",
+        lease_seconds=30,
+    )
+    assert first is not None
+    assert postgres_execution_repo.pause_for_insufficient_balance(
+        "execution-paused",
+        first,
+        resume_state_json='{"next_member_key":"two"}',
+    )
+
+    def resume(index: int):
+        return postgres_execution_repo.claim_paused(
+            "execution-paused",
+            f"resume-{index}",
+            lease_seconds=30,
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(resume, range(8)))
+
+    winners = [result for result in results if result is not None]
+    assert len(winners) == 1
+    assert winners[0].generation == 2

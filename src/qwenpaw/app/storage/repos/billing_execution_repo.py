@@ -96,6 +96,18 @@ class BillingExecutionRepository:
             ).mappings().one_or_none()
         return _record(row) if row is not None else None
 
+    def get_by_usage_order(
+        self,
+        usage_order_id: str,
+    ) -> BillingExecutionRecord | None:
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                select(billing_executions).where(
+                    billing_executions.c.usage_order_id == usage_order_id,
+                ),
+            ).mappings().one_or_none()
+        return _record(row) if row is not None else None
+
     def claim(
         self,
         execution_id: str,
@@ -184,6 +196,75 @@ class BillingExecutionRepository:
                         self.engine,
                         lease_seconds,
                     ),
+                    updated_at=now,
+                )
+                .returning(
+                    billing_executions.c.owner_token,
+                    billing_executions.c.fence_generation,
+                ),
+            ).mappings().one_or_none()
+        return _fence(row)
+
+    def pause_for_insufficient_balance(
+        self,
+        execution_id: str,
+        fence: BillingExecutionFence,
+        *,
+        resume_state_json: str,
+    ) -> bool:
+        """Release ownership while preserving a resumable execution."""
+        now = _db_now(self.engine)
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                update(billing_executions)
+                .where(
+                    billing_executions.c.id == execution_id,
+                    billing_executions.c.state == "running",
+                    billing_executions.c.owner_token == fence.owner_token,
+                    billing_executions.c.fence_generation == fence.generation,
+                    billing_executions.c.lease_expires_at > now,
+                )
+                .values(
+                    state="paused_insufficient_balance",
+                    owner_token=None,
+                    lease_expires_at=None,
+                    resume_state_json=resume_state_json,
+                    error_code="INSUFFICIENT_CREDITS",
+                    updated_at=now,
+                ),
+            )
+        return bool(result.rowcount)
+
+    def claim_paused(
+        self,
+        execution_id: str,
+        owner_token: str,
+        *,
+        lease_seconds: float,
+    ) -> BillingExecutionFence | None:
+        """Acquire one paused execution for a single continuation worker."""
+        normalized_owner = _required(owner_token, "owner_token")
+        now = _db_now(self.engine)
+        with self.engine.begin() as conn:
+            row = conn.execute(
+                update(billing_executions)
+                .where(
+                    billing_executions.c.id == execution_id,
+                    billing_executions.c.state
+                    == "paused_insufficient_balance",
+                    billing_executions.c.owner_token.is_(None),
+                )
+                .values(
+                    state="running",
+                    owner_token=normalized_owner,
+                    fence_generation=(
+                        billing_executions.c.fence_generation + 1
+                    ),
+                    lease_expires_at=_lease_deadline(
+                        self.engine,
+                        lease_seconds,
+                    ),
+                    error_code=None,
                     updated_at=now,
                 )
                 .returning(

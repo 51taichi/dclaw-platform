@@ -162,3 +162,41 @@ def test_sqlalchemy_expert_team_repo_tracks_run_and_member_lifecycle(repo):
     assert failed["state"] == "failed"
     assert failed["error"] == "boom"
     assert failed["finished_at"] is not None
+
+
+def test_expert_team_pause_and_resume_is_owner_scoped_cas(repo):
+    repo.seed_builtin_templates([_template_row()])
+    repo.create_run(
+        team_id="team-1",
+        run_row={
+            "id": "run-paused",
+            "team_id": "team-1",
+            "root_chat_id": "chat-paused",
+            "root_session_id": "session-paused",
+            "user_id": "7",
+            "state": "running",
+            "input_text": "继续完成",
+            "billing_usage_order_id": "order-1",
+        },
+        member_rows=[],
+    )
+
+    assert repo.pause_for_insufficient_balance(
+        "run-paused",
+        user_id="7",
+        next_member_key="producer",
+        required_credits=9,
+        billing_usage_order_id="order-1",
+    )
+    paused = repo.get_run_row("run-paused")
+    assert paused["state"] == "paused_insufficient_balance"
+    assert paused["next_member_key"] == "producer"
+    assert paused["required_credits"] == 9
+    assert paused["billing_usage_order_id"] == "order-1"
+
+    assert repo.resume_paused_run("run-paused", user_id="8") is False
+    assert repo.resume_paused_run("run-paused", user_id="7") is True
+    assert repo.resume_paused_run("run-paused", user_id="7") is False
+    resumed = repo.get_run_row("run-paused")
+    assert resumed["state"] == "running"
+    assert resumed["next_member_key"] == "producer"

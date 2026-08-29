@@ -71,6 +71,10 @@ _billing_required: ContextVar[bool] = ContextVar(
     "billing_required",
     default=False,
 )
+_billing_item_prefix: ContextVar[str | None] = ContextVar(
+    "billing_item_prefix",
+    default=None,
+)
 
 _SYSTEM_EXEMPTION_REASONS = frozenset({"model_catalog_validation"})
 
@@ -103,6 +107,24 @@ def billing_required() -> Iterator[None]:
         yield
     finally:
         _billing_required.reset(token)
+
+
+def get_billing_item_prefix() -> str | None:
+    """Return the durable item-key prefix selected by an orchestrator."""
+    return _billing_item_prefix.get()
+
+
+@contextmanager
+def billing_item_prefix(prefix: str) -> Iterator[None]:
+    """Install a stable per-stage prefix for actual model calls."""
+    normalized = str(prefix).strip()
+    if not normalized:
+        raise ValueError("billing item prefix is required")
+    token = _billing_item_prefix.set(normalized)
+    try:
+        yield
+    finally:
+        _billing_item_prefix.reset(token)
 
 
 @contextmanager
@@ -182,8 +204,10 @@ __all__ = [
     "BillingSource",
     "SystemBillingExemption",
     "billing_context",
+    "billing_item_prefix",
     "billing_required",
     "get_current_billing_meter",
+    "get_billing_item_prefix",
     "is_billing_required",
     "reset_current_billing_meter",
     "set_current_billing_meter",

@@ -7,7 +7,10 @@ from types import SimpleNamespace
 import pytest
 
 from qwenpaw.app.billing.context import BillingSource
-from qwenpaw.app.billing.entrypoint import prepare_user_billing_execution
+from qwenpaw.app.billing.entrypoint import (
+    prepare_user_billing_execution,
+    resume_user_billing_execution,
+)
 from qwenpaw.app.billing.pricing import (
     PriceCatalogDraft,
     PriceCatalogService,
@@ -138,3 +141,36 @@ async def test_funded_mobile_call_charges_once(console_billing_engine):
     assert len(items) == 1
     assert items[0]["status"] == "captured"
     assert repository.balance(prepared.session.wallet_id).available == 8
+
+
+def test_paused_expert_team_billing_has_one_resume_owner(
+    console_billing_engine,
+):
+    prepared = prepare_user_billing_execution(
+        "user-1",
+        BillingSource(
+            type="expert_team",
+            id="chat-team",
+            expert_team_run_id="run-1",
+        ),
+        "team-message-1",
+        {"message_sha256": "safe-team"},
+    )
+    assert prepared.pause_insufficient(
+        next_member_key="member-2",
+        required_credits=3,
+    )
+
+    winner = resume_user_billing_execution(
+        prepared.session.usage_order_id,
+        "user-1",
+    )
+    loser = resume_user_billing_execution(
+        prepared.session.usage_order_id,
+        "user-1",
+    )
+
+    assert winner is not None
+    assert winner.session.execution_id == prepared.session.execution_id
+    assert winner.session.source.expert_team_run_id == "run-1"
+    assert loser is None

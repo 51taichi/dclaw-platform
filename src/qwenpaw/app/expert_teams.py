@@ -12,6 +12,8 @@ from typing import Any, AsyncGenerator
 
 from pydantic import BaseModel, Field
 
+from .billing.context import billing_item_prefix
+from .billing.usage import InsufficientUsageCreditsError
 from .runtime.event_bus import RuntimeEvent, get_runtime_event_bus
 from .runner.models import ChatUpdate
 from .storage.repos.expert_team_repo import get_expert_team_repository
@@ -126,6 +128,9 @@ class ExpertTeamRun(BaseModel):
     input_text: str = ""
     final_summary: str | None = None
     error: str | None = None
+    next_member_key: str | None = None
+    required_credits: int | None = None
+    billing_usage_order_id: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
     finished_at: str | None = None
@@ -527,6 +532,13 @@ def get_expert_team_run(run_id: str) -> ExpertTeamRun | None:
         input_text=row["input_text"] or "",
         final_summary=row["final_summary"],
         error=row["error"],
+        next_member_key=row.get("next_member_key"),
+        required_credits=(
+            int(row["required_credits"])
+            if row.get("required_credits") is not None
+            else None
+        ),
+        billing_usage_order_id=row.get("billing_usage_order_id"),
         created_at=str(row["created_at"]) if row["created_at"] else None,
         updated_at=str(row["updated_at"]) if row["updated_at"] else None,
         finished_at=str(row["finished_at"]) if row["finished_at"] else None,
@@ -579,6 +591,71 @@ def update_member_run_state(
         error=error,
         task_id=task_id,
     )
+
+
+def pause_expert_team_run_for_billing(
+    run_id: str,
+    *,
+    user_id: str,
+    required_credits: int,
+    billing_usage_order_id: str,
+) -> ExpertTeamRun | None:
+    """Pause at the first unfinished member without discarding prior work."""
+    run = get_expert_team_run(run_id)
+    if run is None or run.user_id != str(user_id):
+        return None
+    next_member = next(
+        (
+            member
+            for member in run.members
+            if member.state not in {"completed", "failed", "cancelled"}
+        ),
+        None,
+    )
+    if next_member is None:
+        return None
+    changed = get_expert_team_repository().pause_for_insufficient_balance(
+        run_id,
+        user_id=str(user_id),
+        next_member_key=next_member.member_key,
+        required_credits=required_credits,
+        billing_usage_order_id=billing_usage_order_id,
+    )
+    paused = get_expert_team_run(run_id)
+    if changed and paused is not None:
+        _publish_expert_team_run_event(paused)
+    return paused if changed else None
+
+
+def resume_expert_team_run(
+    run_id: str,
+    payer_user_id: str,
+) -> ExpertTeamRun | None:
+    """CAS one owned paused run back to running without clearing progress."""
+    run = get_expert_team_run(run_id)
+    if (
+        run is None
+        or run.user_id != str(payer_user_id)
+        or run.state != "paused_insufficient_balance"
+    ):
+        return None
+    if not get_expert_team_repository().resume_paused_run(
+        run_id,
+        user_id=str(payer_user_id),
+    ):
+        return None
+    resumed = get_expert_team_run(run_id)
+    if resumed is not None:
+        _publish_expert_team_run_event(resumed)
+    return resumed
+
+
+def publish_expert_team_run_state(run_id: str) -> ExpertTeamRun | None:
+    """Publish the already-committed durable state for UI subscribers."""
+    run = get_expert_team_run(run_id)
+    if run is not None:
+        _publish_expert_team_run_event(run)
+    return run
 
 
 def cancel_expert_team_run(run_id: str) -> ExpertTeamRun | None:
@@ -726,21 +803,35 @@ class ExpertTeamOrchestrator:
             },
         )
 
-        member_keys = [member.key for member in template.members]
         try:
             update_expert_team_run_state(run_id, "running")
-            if member_keys:
-                first_key = member_keys[0]
+            current_run = get_expert_team_run(run_id)
+            next_member = next(
+                (
+                    member
+                    for member in (current_run.members if current_run else [])
+                    if member.state
+                    not in {"completed", "failed", "cancelled"}
+                ),
+                None,
+            )
+            if next_member is not None:
                 update_member_run_state(
                     run_id,
-                    first_key,
+                    next_member.member_key,
                     "running",
                     input_text=original_text,
                 )
             yield _status_sse(run_id)
 
-            async for sse in self.console_channel.stream_one(native_payload):
-                yield sse
+            member_key = (
+                next_member.member_key if next_member is not None else "leader"
+            )
+            with billing_item_prefix(
+                f"expert-team:{run_id}:member:{member_key}:call",
+            ):
+                async for sse in self.console_channel.stream_one(native_payload):
+                    yield sse
 
             for member in template.members:
                 run = get_expert_team_run(run_id)
@@ -762,7 +853,10 @@ class ExpertTeamOrchestrator:
                     run_id,
                     member.key,
                     "completed",
-                    output_text=f"{member.display_name} 已完成「{member.role or member.display_name}」阶段。",
+                    output_text=(
+                        f"{member.display_name} 已完成"
+                        f"「{member.role or member.display_name}」阶段。"
+                    ),
                 )
             update_expert_team_run_state(
                 run_id,
@@ -773,6 +867,8 @@ class ExpertTeamOrchestrator:
         except asyncio.CancelledError:
             cancel_expert_team_run(run_id)
             yield _status_sse(run_id)
+            raise
+        except InsufficientUsageCreditsError:
             raise
         except Exception as exc:
             logger.exception("Expert team run failed: %s", run_id)
@@ -789,7 +885,8 @@ class ExpertTeamOrchestrator:
         original_text: str,
     ) -> str:
         members = "\n".join(
-            f"- {member.display_name}（{member.role or member.key}）：{member.description or '完成对应阶段任务'}"
+            f"- {member.display_name}（{member.role or member.key}）："
+            f"{member.description or '完成对应阶段任务'}"
             for member in template.members
         )
         workflow = "\n".join(

@@ -20,13 +20,19 @@ from agentscope_runtime.engine.schemas.agent_schemas import AgentRequest
 from ...utils.logging import LOG_FILE_PATH
 from ..agent_context import get_agent_for_request, set_current_chat_model
 from ..billing.context import BillingSource
-from ..billing.entrypoint import prepare_user_billing_execution
+from ..billing.entrypoint import (
+    prepare_user_billing_execution,
+    resume_user_billing_execution,
+)
 from ..billing.usage import InsufficientUsageCreditsError
 from ..channels.base import ContentType, TextContent
 from ..expert_teams import (
     ExpertTeamOrchestrator,
     attach_run_to_chat,
     create_expert_team_run,
+    get_latest_expert_team_run_by_chat,
+    publish_expert_team_run_state,
+    resume_expert_team_run,
 )
 from ..runner.title_generator import generate_and_update_title
 from ..guards import require_admin
@@ -138,7 +144,7 @@ def _extract_session_and_payload(request_data: Union[AgentRequest, dict]):
                     ),
                 )
 
-    native_payload = {
+    native_payload: dict[str, Any] = {
         "channel_id": channel_id,
         "sender_id": sender_id,
         "content_parts": content_parts,
@@ -272,12 +278,12 @@ async def post_console_chat(
         native_payload["channel_id"],
         name=name,
     )
-    
+
     if chat and chat.meta and "active_model" in chat.meta:
         set_current_chat_model(chat.meta["active_model"])
     else:
         set_current_chat_model(None)
-        
+
     tracker = workspace.task_tracker
 
     is_reconnect = False
@@ -292,27 +298,67 @@ async def post_console_chat(
     else:
         expert_team_id = native_payload["meta"].get("expert_team_id")
         expert_team_run_id = None
+        resumed_prepared = None
+        resume_required_credits = 0
+        resume_next_member_key = ""
         stream_payload = native_payload
         stream_fn = console_channel.stream_one
+        if first_text.strip() == "继续":
+            latest_run = get_latest_expert_team_run_by_chat(chat.id)
+            request_user_id = _request_user_id(
+                request,
+                native_payload["sender_id"],
+            )
+            if (
+                latest_run is not None
+                and latest_run.user_id == request_user_id
+                and latest_run.state == "paused_insufficient_balance"
+                and latest_run.billing_usage_order_id
+            ):
+                resumed_prepared = resume_user_billing_execution(
+                    latest_run.billing_usage_order_id,
+                    request_user_id,
+                )
+                resumed_run = (
+                    resume_expert_team_run(latest_run.id, request_user_id)
+                    if resumed_prepared is not None
+                    else None
+                )
+                if resumed_run is None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Expert team run is resuming",
+                    )
+                expert_team_id = resumed_run.team_id
+                expert_team_run_id = resumed_run.id
+                resume_required_credits = latest_run.required_credits or 0
+                resume_next_member_key = latest_run.next_member_key or ""
+                native_payload["content_parts"] = [
+                    TextContent(
+                        type=ContentType.TEXT,
+                        text=resumed_run.input_text,
+                    ),
+                ]
         if expert_team_id:
-            try:
-                run_user_id = _request_user_id(
-                    request,
-                    native_payload["sender_id"],
-                )
-                run = create_expert_team_run(
-                    team_id=expert_team_id,
-                    root_chat_id=chat.id,
-                    root_session_id=session_id,
-                    user_id=run_user_id,
-                    input_text=first_text,
-                )
-            except ValueError as e:
-                raise HTTPException(status_code=404, detail=str(e)) from e
-            await attach_run_to_chat(workspace, chat.id, run)
-            expert_team_run_id = run.id
+            if expert_team_run_id is None:
+                try:
+                    run_user_id = _request_user_id(
+                        request,
+                        native_payload["sender_id"],
+                    )
+                    run = create_expert_team_run(
+                        team_id=expert_team_id,
+                        root_chat_id=chat.id,
+                        root_session_id=session_id,
+                        user_id=run_user_id,
+                        input_text=first_text,
+                    )
+                except ValueError as e:
+                    raise HTTPException(status_code=404, detail=str(e)) from e
+                await attach_run_to_chat(workspace, chat.id, run)
+                expert_team_run_id = run.id
             stream_payload = {
-                "run_id": run.id,
+                "run_id": expert_team_run_id,
                 "team_id": expert_team_id,
                 "root_chat_id": chat.id,
                 "root_session_id": session_id,
@@ -323,11 +369,29 @@ async def post_console_chat(
                 console_channel=console_channel,
             ).stream_one
 
-        permit = await _acquire_task_permit(
-            request,
-            agent_id=str(getattr(workspace, "agent_id", "") or "default"),
-            user_id=_request_user_id(request, native_payload["sender_id"]),
-        )
+        try:
+            permit = await _acquire_task_permit(
+                request,
+                agent_id=str(
+                    getattr(workspace, "agent_id", "") or "default",
+                ),
+                user_id=_request_user_id(
+                    request,
+                    native_payload["sender_id"],
+                ),
+            )
+        except BaseException:
+            if resumed_prepared is not None and expert_team_run_id:
+                resumed_prepared.pause_expert_team_insufficient(
+                    run_id=expert_team_run_id,
+                    payer_user_id=_request_user_id(
+                        request,
+                        native_payload["sender_id"],
+                    ),
+                    next_member_key=resume_next_member_key,
+                    required_credits=resume_required_credits,
+                )
+            raise
 
         payer_user_id = _request_user_id(
             request,
@@ -355,7 +419,7 @@ async def post_console_chat(
         }
 
         async def limited_stream_fn(payload):
-            prepared = prepare_user_billing_execution(
+            prepared = resumed_prepared or prepare_user_billing_execution(
                 payer_user_id,
                 BillingSource(
                     type=source_type,
@@ -387,10 +451,50 @@ async def post_console_chat(
                                     "Console title generation failed",
                                 )
                     except InsufficientUsageCreditsError as exc:
-                        prepared.finalize(
-                            "failed",
-                            error_code="INSUFFICIENT_CREDITS",
-                        )
+                        if expert_team_run_id:
+                            current_run = get_latest_expert_team_run_by_chat(
+                                chat.id,
+                            )
+                            next_member = next(
+                                (
+                                    member
+                                    for member in (
+                                        current_run.members
+                                        if current_run is not None
+                                        else []
+                                    )
+                                    if member.state
+                                    not in {
+                                        "completed",
+                                        "failed",
+                                        "cancelled",
+                                    }
+                                ),
+                                None,
+                            )
+                            pause_saved = bool(
+                                next_member is not None
+                                and prepared.pause_expert_team_insufficient(
+                                    run_id=expert_team_run_id,
+                                    payer_user_id=payer_user_id,
+                                    next_member_key=next_member.member_key,
+                                    required_credits=exc.required,
+                                )
+                            )
+                            if not pause_saved:
+                                prepared.finalize(
+                                    "failed",
+                                    error_code="INSUFFICIENT_CREDITS",
+                                )
+                            else:
+                                publish_expert_team_run_state(
+                                    expert_team_run_id,
+                                )
+                        else:
+                            prepared.finalize(
+                                "failed",
+                                error_code="INSUFFICIENT_CREDITS",
+                            )
                         yield _billing_error_sse(exc)
                         return
                     except asyncio.CancelledError:
@@ -399,7 +503,24 @@ async def post_console_chat(
                     except BaseException:
                         prepared.finalize("failed", error_code="MODEL_ERROR")
                         raise
-                    prepared.finalize_completed()
+                    final_team_run = (
+                        get_latest_expert_team_run_by_chat(chat.id)
+                        if expert_team_run_id
+                        else None
+                    )
+                    if final_team_run is not None and final_team_run.state in {
+                        "failed",
+                        "cancelled",
+                    }:
+                        prepared.finalize(
+                            "cancelled"
+                            if final_team_run.state == "cancelled"
+                            else "failed",
+                            error_code="TEAM_RUN_"
+                            + final_team_run.state.upper(),
+                        )
+                    else:
+                        prepared.finalize_completed()
             finally:
                 if permit is not None:
                     await permit.release()
@@ -414,9 +535,23 @@ async def post_console_chat(
         except Exception:
             if permit is not None:
                 await permit.release()
+            if resumed_prepared is not None and expert_team_run_id:
+                resumed_prepared.pause_expert_team_insufficient(
+                    run_id=expert_team_run_id,
+                    payer_user_id=payer_user_id,
+                    next_member_key=resume_next_member_key,
+                    required_credits=resume_required_credits,
+                )
             raise
         if not is_new_run and permit is not None:
             await permit.release()
+        if not is_new_run and resumed_prepared is not None and expert_team_run_id:
+            resumed_prepared.pause_expert_team_insufficient(
+                run_id=expert_team_run_id,
+                payer_user_id=payer_user_id,
+                next_member_key=resume_next_member_key,
+                required_credits=resume_required_credits,
+            )
     if isinstance(request_data, dict) and request_data.get("stream") is False:
         return JSONResponse(
             {

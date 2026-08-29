@@ -388,3 +388,68 @@ async def test_console_producer_emits_safe_insufficient_credit_event(
         "top_up_path": "/wallet",
     }
     assert prepared.finalized == [("failed", "INSUFFICIENT_CREDITS")]
+
+
+@pytest.mark.asyncio
+async def test_continue_message_resumes_paused_team_without_new_run(
+    monkeypatch,
+):
+    class _StartingTracker(_FakeTaskTracker):
+        async def attach_or_start(self, *args, **kwargs):
+            queue, _ = await super().attach_or_start(*args, **kwargs)
+            return queue, True
+
+    tracker = _StartingTracker()
+    workspace = SimpleNamespace(
+        channel_manager=_FakeChannelManager(),
+        chat_manager=_FakeChatManager(chat_id="chat-team"),
+        task_tracker=tracker,
+    )
+    paused = SimpleNamespace(
+        id="run-paused",
+        team_id="software_dev_team",
+        user_id="42",
+        state="paused_insufficient_balance",
+        billing_usage_order_id="order-1",
+        required_credits=5,
+        next_member_key="engineer",
+        input_text="build it",
+    )
+    prepared = SimpleNamespace(session=SimpleNamespace(usage_order_id="order-1"))
+
+    async def fake_get_agent_for_request(_request):
+        return workspace
+
+    monkeypatch.setattr(console, "get_agent_for_request", fake_get_agent_for_request)
+    monkeypatch.setattr(
+        console,
+        "get_latest_expert_team_run_by_chat",
+        lambda _chat_id: paused,
+    )
+    monkeypatch.setattr(
+        console,
+        "resume_user_billing_execution",
+        lambda *_args: prepared,
+    )
+    monkeypatch.setattr(
+        console,
+        "resume_expert_team_run",
+        lambda *_args: paused,
+    )
+    monkeypatch.setattr(
+        console,
+        "create_expert_team_run",
+        lambda **_kwargs: pytest.fail("continue must not create a new run"),
+    )
+
+    response = await console.post_console_chat(
+        {
+            "channel": "console",
+            "session_id": "chat-team",
+            "input": [{"role": "user", "content": "继续"}],
+        },
+        request=_FakeRequest(),
+    )
+
+    assert response.headers["x-qwenpaw-expert-team-run-id"] == "run-paused"
+    assert tracker.calls[0]["native_payload"]["run_id"] == "run-paused"

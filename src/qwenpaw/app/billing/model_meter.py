@@ -20,6 +20,7 @@ from .context import (
     BillingExecutionContext,
     BillingSession,
     SystemBillingExemption,
+    get_billing_item_prefix,
     is_billing_required,
 )
 from .execution import OpenApiBillingExecutionContext, OpenApiExecutionFence
@@ -119,6 +120,8 @@ class BillingModelMeter:
             if platform_max_output_tokens is None
             else platform_max_output_tokens
         )
+        self._item_sequence_lock = Lock()
+        self._item_sequences: dict[str, int] = {}
 
     def before_call(
         self,
@@ -167,7 +170,7 @@ class BillingModelMeter:
                 max_output_tokens,
                 "max_output_tokens",
             )
-        call_key = _item_key(session, item_key)
+        call_key = self._item_key(session, item_key)
         self.usage_service.reserve_model_call(
             ReserveModelCall(
                 usage_order_id=session.usage_order_id,
@@ -191,6 +194,32 @@ class BillingModelMeter:
             provider_id=normalized_provider,
             model_key=normalized_model,
         )
+
+    def _item_key(
+        self,
+        session: OpenApiBillingSession | BillingSession,
+        explicit: str | None,
+    ) -> str:
+        if explicit is not None:
+            return _item_key(session, explicit)
+        prefix = get_billing_item_prefix()
+        if not prefix:
+            return _item_key(session, None)
+        with self._item_sequence_lock:
+            sequence = self._item_sequences.get(prefix)
+            if sequence is None:
+                sequence = sum(
+                    1
+                    for item in self.usage_service.list_items(
+                        session.usage_order_id,
+                    )
+                    if str(item.get("item_key") or "").startswith(
+                        f"{prefix}:",
+                    )
+                )
+            sequence += 1
+            self._item_sequences[prefix] = sequence
+        return f"{prefix}:{sequence}"
 
     def mark_provider_call_started(
         self,

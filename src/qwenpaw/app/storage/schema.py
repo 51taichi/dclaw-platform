@@ -187,6 +187,9 @@ expert_team_runs = Table(
     Column("input_text", Text, server_default=""),
     Column("final_summary", Text),
     Column("error", Text),
+    Column("next_member_key", String),
+    Column("required_credits", BigInteger),
+    Column("billing_usage_order_id", String),
     Column("created_at", DateTime(timezone=True), server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), server_default=func.now()),
     Column("finished_at", DateTime(timezone=True)),
@@ -1367,6 +1370,7 @@ def create_all(engine: Engine) -> None:
     _ensure_open_api_publication_binding_columns(engine)
     _ensure_knowledge_metadata_columns(engine)
     _ensure_billing_usage_order_columns(engine)
+    _ensure_expert_team_billing_columns(engine)
     _ensure_open_api_billing_columns(engine)
     _ensure_billing_bigint_columns(engine)
     _ensure_billing_constraints(engine)
@@ -1622,6 +1626,30 @@ def _ensure_billing_usage_order_columns(engine: Engine) -> None:
                     "billability VARCHAR NOT NULL DEFAULT 'unknown'",
                 ),
             )
+
+
+def _ensure_expert_team_billing_columns(engine: Engine) -> None:
+    """Add resumable billing state to existing expert-team runs."""
+    inspector = inspect(engine)
+    if "expert_team_runs" not in inspector.get_table_names():
+        return
+    existing = {
+        column["name"] for column in inspector.get_columns("expert_team_runs")
+    }
+    additions = {
+        "next_member_key": "VARCHAR",
+        "required_credits": "BIGINT",
+        "billing_usage_order_id": "VARCHAR",
+    }
+    with engine.begin() as conn:
+        for column, column_type in additions.items():
+            if column not in existing:
+                conn.execute(
+                    text(
+                        f"ALTER TABLE expert_team_runs ADD COLUMN {column} "
+                        f"{column_type}",
+                    ),
+                )
 
 
 def _ensure_open_api_billing_columns(engine: Engine) -> None:

@@ -239,3 +239,77 @@ def test_user_run_guard_rejects_other_users(monkeypatch):
         expert_team_router._ensure_user_run(run, request)
 
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_continue_repauses_when_task_tracker_registration_fails(monkeypatch):
+    run = SimpleNamespace(
+        id="run-paused",
+        team_id="software_dev_team",
+        root_chat_id="chat-1",
+        root_session_id="session-1",
+        user_id="7",
+        state="paused_insufficient_balance",
+        billing_usage_order_id="order-1",
+        next_member_key="engineer",
+        required_credits=4,
+        input_text="build it",
+    )
+    repauses: list[dict[str, object]] = []
+
+    class _Prepared:
+        def pause_expert_team_insufficient(self, **kwargs):
+            repauses.append(kwargs)
+            return True
+
+    class _Tracker:
+        async def attach_or_start(self, *_args, **_kwargs):
+            raise RuntimeError("tracker unavailable")
+
+    class _Channels:
+        async def get_channel(self, name):
+            assert name == "console"
+            return SimpleNamespace(stream_one=None)
+
+    async def _workspace(_request):
+        return SimpleNamespace(
+            channel_manager=_Channels(),
+            task_tracker=_Tracker(),
+        )
+
+    monkeypatch.setattr(
+        expert_team_router,
+        "get_expert_team_run",
+        lambda _run_id: run,
+    )
+    monkeypatch.setattr(
+        expert_team_router,
+        "resume_user_billing_execution",
+        lambda *_args: _Prepared(),
+    )
+    monkeypatch.setattr(
+        expert_team_router,
+        "resume_expert_team_run",
+        lambda *_args: run,
+    )
+    monkeypatch.setattr(
+        expert_team_router,
+        "get_agent_for_request",
+        _workspace,
+    )
+
+    request = SimpleNamespace(state=SimpleNamespace(user_id=7))
+    with pytest.raises(RuntimeError, match="tracker unavailable"):
+        await expert_team_router.continue_user_expert_team_run(
+            "run-paused",
+            request,
+        )
+
+    assert repauses == [
+        {
+            "run_id": "run-paused",
+            "payer_user_id": "7",
+            "next_member_key": "engineer",
+            "required_credits": 4,
+        },
+    ]

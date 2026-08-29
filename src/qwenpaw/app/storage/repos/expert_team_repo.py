@@ -85,6 +85,20 @@ class ExpertTeamRepository(Protocol):
     def fail_open_member_runs(self, run_id: str, error: str) -> None:
         ...
 
+    def pause_for_insufficient_balance(
+        self,
+        run_id: str,
+        *,
+        user_id: str,
+        next_member_key: str,
+        required_credits: int,
+        billing_usage_order_id: str,
+    ) -> bool:
+        ...
+
+    def resume_paused_run(self, run_id: str, *, user_id: str) -> bool:
+        ...
+
 
 class SqlAlchemyExpertTeamRepository:
     """SQLAlchemy implementation for Postgres and SQLAlchemy-backed tests."""
@@ -287,6 +301,64 @@ class SqlAlchemyExpertTeamRepository:
                 .values(**values),
             )
 
+    def pause_for_insufficient_balance(
+        self,
+        run_id: str,
+        *,
+        user_id: str,
+        next_member_key: str,
+        required_credits: int,
+        billing_usage_order_id: str,
+    ) -> bool:
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                update(expert_team_runs)
+                .where(
+                    expert_team_runs.c.id == run_id,
+                    expert_team_runs.c.user_id == str(user_id),
+                    expert_team_runs.c.state == "running",
+                )
+                .values(
+                    state="paused_insufficient_balance",
+                    next_member_key=next_member_key,
+                    required_credits=required_credits,
+                    billing_usage_order_id=billing_usage_order_id,
+                    error=None,
+                    updated_at=_now(),
+                ),
+            )
+            if result.rowcount:
+                conn.execute(
+                    update(expert_team_member_runs)
+                    .where(
+                        expert_team_member_runs.c.run_id == run_id,
+                        expert_team_member_runs.c.member_key
+                        == next_member_key,
+                        expert_team_member_runs.c.state == "running",
+                    )
+                    .values(state="pending", updated_at=_now()),
+                )
+        return bool(result.rowcount)
+
+    def resume_paused_run(self, run_id: str, *, user_id: str) -> bool:
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                update(expert_team_runs)
+                .where(
+                    expert_team_runs.c.id == run_id,
+                    expert_team_runs.c.user_id == str(user_id),
+                    expert_team_runs.c.state
+                    == "paused_insufficient_balance",
+                )
+                .values(
+                    state="running",
+                    required_credits=None,
+                    error=None,
+                    updated_at=_now(),
+                ),
+            )
+        return bool(result.rowcount)
+
     def cancel_open_member_runs(self, run_id: str) -> None:
         self._update_open_members(run_id, {"state": "cancelled", "finished_at": _now()})
 
@@ -347,12 +419,31 @@ class SqliteExpertTeamRepository:
                 input_text TEXT DEFAULT '',
                 final_summary TEXT,
                 error TEXT,
+                next_member_key TEXT,
+                required_credits BIGINT,
+                billing_usage_order_id TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 finished_at TIMESTAMP
             )
             """,
         )
+        existing_run_columns = {
+            str(row["name"])
+            for row in conn.execute(
+                "PRAGMA table_info(expert_team_runs)",
+            ).fetchall()
+        }
+        for column, column_type in {
+            "next_member_key": "TEXT",
+            "required_credits": "BIGINT",
+            "billing_usage_order_id": "TEXT",
+        }.items():
+            if column not in existing_run_columns:
+                conn.execute(
+                    f"ALTER TABLE expert_team_runs ADD COLUMN {column} "
+                    f"{column_type}",
+                )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS expert_team_member_runs (
@@ -474,6 +565,58 @@ class SqliteExpertTeamRepository:
         )
         db.get_db().commit()
 
+    def pause_for_insufficient_balance(
+        self,
+        run_id: str,
+        *,
+        user_id: str,
+        next_member_key: str,
+        required_credits: int,
+        billing_usage_order_id: str,
+    ) -> bool:
+        cursor = db.get_db().execute(
+            """
+            UPDATE expert_team_runs
+            SET state = 'paused_insufficient_balance',
+                next_member_key = ?, required_credits = ?,
+                billing_usage_order_id = ?, error = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND user_id = ? AND state = 'running'
+            """,
+            (
+                next_member_key,
+                required_credits,
+                billing_usage_order_id,
+                run_id,
+                str(user_id),
+            ),
+        )
+        if cursor.rowcount > 0:
+            db.get_db().execute(
+                """
+                UPDATE expert_team_member_runs
+                SET state = 'pending', updated_at = CURRENT_TIMESTAMP
+                WHERE run_id = ? AND member_key = ? AND state = 'running'
+                """,
+                (run_id, next_member_key),
+            )
+        db.get_db().commit()
+        return cursor.rowcount > 0
+
+    def resume_paused_run(self, run_id: str, *, user_id: str) -> bool:
+        cursor = db.get_db().execute(
+            """
+            UPDATE expert_team_runs
+            SET state = 'running', required_credits = NULL, error = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND user_id = ?
+              AND state = 'paused_insufficient_balance'
+            """,
+            (run_id, str(user_id)),
+        )
+        db.get_db().commit()
+        return cursor.rowcount > 0
+
     def delete_template(self, team_id: str) -> bool:
         cur = db.get_db().execute(
             "DELETE FROM expert_team_templates WHERE id = ?",
@@ -494,9 +637,9 @@ class SqliteExpertTeamRepository:
             """
             INSERT INTO expert_team_runs (
                 id, team_id, root_chat_id, root_session_id, user_id, state,
-                input_text, created_at, updated_at
+                input_text, billing_usage_order_id, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             """,
             (
                 run_row["id"],
@@ -506,6 +649,7 @@ class SqliteExpertTeamRepository:
                 run_row["user_id"],
                 run_row.get("state", "pending"),
                 run_row.get("input_text", ""),
+                run_row.get("billing_usage_order_id"),
             ),
         )
         for row in member_rows:

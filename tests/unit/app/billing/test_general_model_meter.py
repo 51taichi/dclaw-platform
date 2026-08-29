@@ -11,6 +11,7 @@ from sqlalchemy import select
 from qwenpaw.app.billing.context import (
     BillingSource,
     billing_context,
+    billing_item_prefix,
     billing_required,
     system_billing_exemption,
 )
@@ -294,3 +295,31 @@ async def test_system_exemption_is_audited_before_model_call(general_meter):
     assert record.exemption_reason == "model_catalog_validation"
     assert record.usage_order_id is None
     assert model.calls == 1
+
+
+def test_expert_team_item_prefix_has_stable_call_sequence(general_meter):
+    meter, wallet_repo, _execution_repo, session, fence = general_meter
+    wallet_repo.grant(
+        session.wallet_id,
+        credits=20,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key="fund-team-prefix",
+    )
+
+    with billing_context(session, fence, meter):
+        with billing_item_prefix("expert-team:run-1:member:lead:call"):
+            first = meter.before_call(
+                provider_id="provider",
+                model_key="model",
+                messages=[],
+            )
+            second = meter.before_call(
+                provider_id="provider",
+                model_key="model",
+                messages=[],
+            )
+
+    assert first is not None and second is not None
+    assert first.item_key == "expert-team:run-1:member:lead:call:1"
+    assert second.item_key == "expert-team:run-1:member:lead:call:2"
