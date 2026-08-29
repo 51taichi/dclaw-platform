@@ -13,7 +13,12 @@ import {
   SortableContext,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
-import { EditOutlined, DeleteOutlined, RobotOutlined } from "@ant-design/icons";
+import {
+  DeleteOutlined,
+  EditOutlined,
+  LockOutlined,
+  RobotOutlined,
+} from "@ant-design/icons";
 import { EyeOff, Eye } from "lucide-react";
 import type { AgentSummary } from "../../../../api/types/agents";
 import { useTheme } from "../../../../contexts/ThemeContext";
@@ -98,6 +103,9 @@ export function AgentTable({
           <span style={{ opacity: record.enabled ? 1 : 0.5 }}>
             {getAgentDisplayName(record, t)}
           </span>
+          {record.agent_type === "sealed" && (
+            <Tag color="blue">{t("agent.sealed")}</Tag>
+          )}
           {!record.enabled && <Tag color="error">{t("agent.disabled")}</Tag>}
         </Space>
       ),
@@ -118,13 +126,22 @@ export function AgentTable({
       dataIndex: "workspace_dir",
       key: "workspace_dir",
       ellipsis: true,
+      render: (
+        workspaceDir: string | null | undefined,
+        record: AgentSummary,
+      ) =>
+        record.agent_type === "sealed" ? (
+          <span style={{ opacity: 0.65 }}>{t("agent.sealedWorkspace")}</span>
+        ) : (
+          workspaceDir
+        ),
     },
     {
       title: t("agent.modelColumn"),
       key: "active_model",
       width: 260,
       ellipsis: true,
-      render: (_: any, record: AgentSummary) => {
+      render: (_: unknown, record: AgentSummary) => {
         if (!record.active_model) {
           return (
             <span style={{ opacity: 0.45 }}>{t("agent.modelPlaceholder")}</span>
@@ -147,74 +164,87 @@ export function AgentTable({
     {
       title: t("common.actions"),
       key: "actions",
-      render: (_: any, record: AgentSummary) => (
-        <Space>
-          <Button
-            type="text"
-            size="middle"
-            icon={<EditOutlined />}
-            onClick={() => onEdit(record)}
-            disabled={record.id === "default"}
-            style={record.id === "default" ? disabledStyle : iconStyle}
-            title={
-              record.id === "default"
-                ? t("agent.defaultNotEditable")
-                : undefined
-            }
-          />
-          <Popconfirm
-            title={
-              record.enabled
-                ? t("agent.disableConfirm")
-                : t("agent.enableConfirm")
-            }
-            description={
-              record.enabled
-                ? t("agent.disableConfirmDesc")
-                : t("agent.enableConfirmDesc")
-            }
-            onConfirm={() => onToggle(record.id, record.enabled)}
-            disabled={record.id === "default"}
-            okText={t("common.confirm")}
-            cancelText={t("common.cancel")}
-          >
+      render: (_: unknown, record: AgentSummary) => {
+        if (record.agent_type === "sealed") {
+          return (
+            <Tooltip title={t("agent.sealedManageHint")}>
+              <Space size={6} style={{ opacity: 0.65 }}>
+                <LockOutlined />
+                <span>{t("agent.sealedManageHint")}</span>
+              </Space>
+            </Tooltip>
+          );
+        }
+
+        return (
+          <Space>
             <Button
               type="text"
               size="middle"
-              icon={record.enabled ? <EyeOff size={14} /> : <Eye size={14} />}
+              icon={<EditOutlined />}
+              onClick={() => onEdit(record)}
               disabled={record.id === "default"}
               style={record.id === "default" ? disabledStyle : iconStyle}
               title={
                 record.id === "default"
-                  ? t("agent.defaultNotDisablable")
+                  ? t("agent.defaultNotEditable")
                   : undefined
               }
             />
-          </Popconfirm>
-          <Popconfirm
-            title={t("agent.deleteConfirm")}
-            description={t("agent.deleteConfirmDesc")}
-            onConfirm={() => onDelete(record.id)}
-            disabled={record.id === "default"}
-            okText={t("common.confirm")}
-            cancelText={t("common.cancel")}
-          >
-            <Button
-              type="link"
-              size="middle"
-              danger
-              icon={<DeleteOutlined />}
-              disabled={record.id === "default"}
-              style={record.id === "default" ? disabledStyle : undefined}
+            <Popconfirm
               title={
-                record.id === "default"
-                  ? t("agent.defaultNotDeletable")
-                  : undefined
+                record.enabled
+                  ? t("agent.disableConfirm")
+                  : t("agent.enableConfirm")
               }
-            />
-          </Popconfirm>
-        </Space>
-      ),
+              description={
+                record.enabled
+                  ? t("agent.disableConfirmDesc")
+                  : t("agent.enableConfirmDesc")
+              }
+              onConfirm={() => onToggle(record.id, record.enabled)}
+              disabled={record.id === "default"}
+              okText={t("common.confirm")}
+              cancelText={t("common.cancel")}
+            >
+              <Button
+                type="text"
+                size="middle"
+                icon={record.enabled ? <EyeOff size={14} /> : <Eye size={14} />}
+                disabled={record.id === "default"}
+                style={record.id === "default" ? disabledStyle : iconStyle}
+                title={
+                  record.id === "default"
+                    ? t("agent.defaultNotDisablable")
+                    : undefined
+                }
+              />
+            </Popconfirm>
+            <Popconfirm
+              title={t("agent.deleteConfirm")}
+              description={t("agent.deleteConfirmDesc")}
+              onConfirm={() => onDelete(record.id)}
+              disabled={record.id === "default"}
+              okText={t("common.confirm")}
+              cancelText={t("common.cancel")}
+            >
+              <Button
+                type="link"
+                size="middle"
+                danger
+                icon={<DeleteOutlined />}
+                disabled={record.id === "default"}
+                style={record.id === "default" ? disabledStyle : undefined}
+                title={
+                  record.id === "default"
+                    ? t("agent.defaultNotDeletable")
+                    : undefined
+                }
+              />
+            </Popconfirm>
+          </Space>
+        );
+      },
     },
   ];
 
