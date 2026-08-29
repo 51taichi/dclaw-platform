@@ -381,6 +381,38 @@ def init_db():
                 f"{column} {definition}",
             )
 
+    # 15. General billing execution ownership.  The durable SQLAlchemy
+    # bootstrap creates the referenced usage-order table during application
+    # lifespan; SQLite permits this bridge table to be declared first.
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS billing_executions (
+            id TEXT PRIMARY KEY,
+            usage_order_id TEXT UNIQUE,
+            payer_user_id TEXT,
+            source_type TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            request_sha256 TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'accepted',
+            owner_token TEXT,
+            fence_generation INTEGER NOT NULL DEFAULT 0,
+            lease_expires_at TEXT,
+            resume_state_json TEXT NOT NULL DEFAULT '{}',
+            exemption_actor TEXT,
+            exemption_reason TEXT,
+            error_code TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (usage_order_id) REFERENCES billing_usage_orders (id),
+            CHECK (state IN (
+                'accepted', 'running', 'paused_insufficient_balance',
+                'succeeded', 'failed', 'cancelled', 'reconciling'
+            )),
+            CHECK (fence_generation >= 0)
+        )
+        """,
+    )
+
     cursor.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_chats_user_agent_updated
@@ -434,6 +466,24 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_open_api_invocations_publication_created
         ON open_api_invocations (publication_id, created_at DESC)
     """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_billing_executions_payer_created
+        ON billing_executions (payer_user_id, created_at DESC)
+        """,
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_billing_executions_source
+        ON billing_executions (source_type, source_id)
+        """,
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_billing_executions_state_lease
+        ON billing_executions (state, lease_expires_at)
+        """,
     )
 
     conn.commit()

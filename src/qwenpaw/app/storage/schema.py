@@ -815,6 +815,42 @@ billing_usage_orders = Table(
     ),
 )
 
+billing_executions = Table(
+    "billing_executions",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column(
+        "usage_order_id",
+        String,
+        ForeignKey("billing_usage_orders.id"),
+        unique=True,
+    ),
+    Column("payer_user_id", String),
+    Column("source_type", String, nullable=False),
+    Column("source_id", String, nullable=False),
+    Column("request_sha256", String, nullable=False),
+    Column("state", String, nullable=False, server_default="accepted"),
+    Column("owner_token", String),
+    Column("fence_generation", BigInteger, nullable=False, server_default="0"),
+    Column("lease_expires_at", DateTime(timezone=True)),
+    Column("resume_state_json", Text, nullable=False, server_default="{}"),
+    Column("exemption_actor", String),
+    Column("exemption_reason", String),
+    Column("error_code", String),
+    Column("created_at", DateTime(timezone=True), server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), server_default=func.now()),
+    CheckConstraint(
+        "state IN ('accepted', 'running', "
+        "'paused_insufficient_balance', 'succeeded', 'failed', "
+        "'cancelled', 'reconciling')",
+        name="ck_billing_executions_state",
+    ),
+    CheckConstraint(
+        "fence_generation >= 0",
+        name="ck_billing_executions_fence_generation_nonnegative",
+    ),
+)
+
 billing_usage_items = Table(
     "billing_usage_items",
     metadata,
@@ -1305,6 +1341,21 @@ Index(
     "idx_billing_top_up_audits_claim_created",
     billing_top_up_audits.c.claim_id,
     billing_top_up_audits.c.created_at.asc(),
+)
+Index(
+    "idx_billing_executions_payer_created",
+    billing_executions.c.payer_user_id,
+    billing_executions.c.created_at.desc(),
+)
+Index(
+    "idx_billing_executions_source",
+    billing_executions.c.source_type,
+    billing_executions.c.source_id,
+)
+Index(
+    "idx_billing_executions_state_lease",
+    billing_executions.c.state,
+    billing_executions.c.lease_expires_at,
 )
 
 

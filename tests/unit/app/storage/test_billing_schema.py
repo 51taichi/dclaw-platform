@@ -52,7 +52,45 @@ def test_billing_schema_is_idempotent(sqlite_engine):
         "billing_pricing_imports",
         "billing_pricing_unlocks",
         "billing_pricing_audits",
+        "billing_executions",
     } <= names
+
+    execution_columns = {
+        column["name"]
+        for column in inspector.get_columns("billing_executions")
+    }
+    assert {
+        "id",
+        "usage_order_id",
+        "payer_user_id",
+        "source_type",
+        "source_id",
+        "request_sha256",
+        "state",
+        "owner_token",
+        "fence_generation",
+        "lease_expires_at",
+        "resume_state_json",
+        "exemption_actor",
+        "exemption_reason",
+        "error_code",
+        "created_at",
+        "updated_at",
+    } <= execution_columns
+
+    execution_indexes = inspector.get_indexes("billing_executions")
+    execution_uniques = inspector.get_unique_constraints(
+        "billing_executions",
+    )
+    execution_unique_column_sets = {
+        tuple(index["column_names"])
+        for index in execution_indexes
+        if index.get("unique")
+    } | {
+        tuple(constraint["column_names"])
+        for constraint in execution_uniques
+    }
+    assert ("usage_order_id",) in execution_unique_column_sets
 
     catalog_columns = {
         column["name"]

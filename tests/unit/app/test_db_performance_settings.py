@@ -43,6 +43,40 @@ def test_init_db_creates_high_frequency_indexes(tmp_path, monkeypatch):
     assert "idx_messages_chat_timestamp" in message_indexes
 
 
+def test_init_db_prepares_general_billing_execution_bridge(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "qwenpaw.db")
+    _reset_db_connection()
+
+    db.init_db()
+    conn = db.get_db()
+
+    columns = {
+        row["name"]
+        for row in conn.execute(
+            "PRAGMA table_info(billing_executions)",
+        ).fetchall()
+    }
+    assert {
+        "id",
+        "usage_order_id",
+        "payer_user_id",
+        "source_type",
+        "source_id",
+        "request_sha256",
+        "state",
+        "owner_token",
+        "fence_generation",
+        "lease_expires_at",
+        "resume_state_json",
+        "exemption_actor",
+        "exemption_reason",
+        "error_code",
+    } <= columns
+
+
 def test_postgres_engine_uses_saas_pool_defaults(monkeypatch):
     captured = {}
 
