@@ -22,10 +22,6 @@ const {
       listPublications: vi.fn(),
       createPublication: vi.fn(),
       updatePublicationStatus: vi.fn(),
-      listKnowledgeDocuments: vi.fn(),
-      uploadKnowledgeDocument: vi.fn(),
-      syncKnowledgeDocument: vi.fn(),
-      deleteKnowledgeDocument: vi.fn(),
       listApps: vi.fn(),
       createApp: vi.fn(),
       listKeys: vi.fn(),
@@ -60,6 +56,12 @@ vi.mock("../../../hooks/useAppMessage", () => ({
 
 vi.mock("@/components/PageHeader", () => ({
   PageHeader: ({ current }: { current: string }) => <h1>{current}</h1>,
+}));
+
+vi.mock("@/components/AgentExperienceLibrary", () => ({
+  AgentExperienceLibrary: () => (
+    <div data-testid="shared-agent-experience-library">共享经验库组件</div>
+  ),
 }));
 
 describe("OpenApiPage", () => {
@@ -113,7 +115,6 @@ describe("OpenApiPage", () => {
     ]);
     mockOpenApiApi.listKeys.mockResolvedValue([]);
     mockOpenApiApi.listInvocations.mockResolvedValue([]);
-    mockOpenApiApi.listKnowledgeDocuments.mockResolvedValue([]);
     mockOpenApiApi.createKey.mockResolvedValue({
       secret: "qp_live_secret_once",
       key: {
@@ -142,7 +143,7 @@ describe("OpenApiPage", () => {
     const keyButtons = screen.getAllByRole("button", {
       name: "创建 API Key",
     });
-    await user.click(keyButtons.at(-1)!);
+    await user.click(keyButtons[keyButtons.length - 1]);
 
     await waitFor(() => {
       expect(mockOpenApiApi.createKey).toHaveBeenCalledWith(
@@ -183,7 +184,7 @@ describe("OpenApiPage", () => {
     const createButtons = screen.getAllByRole("button", {
       name: "创建外部应用",
     });
-    await user.click(createButtons.at(-1)!);
+    await user.click(createButtons[createButtons.length - 1]);
 
     await waitFor(() => {
       expect(mockOpenApiApi.createApp).toHaveBeenCalledWith({
@@ -255,7 +256,7 @@ describe("OpenApiPage", () => {
     expect(await screen.findByText("旧客服接口")).toBeInTheDocument();
   });
 
-  it("identifies the selected knowledge target by agent name instead of only ids", async () => {
+  it("reuses the shared agent experience library in the knowledge tab", async () => {
     const user = userEvent.setup();
 
     render(<OpenApiPage />);
@@ -263,9 +264,7 @@ describe("OpenApiPage", () => {
     await user.click(await screen.findByRole("tab", { name: "专属知识库" }));
 
     expect(
-      await screen.findByRole("region", {
-        name: "当前知识对象：客服专家 · 专家 · support_agent",
-      }),
+      await screen.findByTestId("shared-agent-experience-library"),
     ).toBeInTheDocument();
   });
 });

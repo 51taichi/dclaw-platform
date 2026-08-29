@@ -111,22 +111,6 @@ export interface OpenApiInvocation {
   created_at?: string | null;
 }
 
-export interface OpenApiKnowledgeDocument {
-  id: string;
-  name: string;
-  source_type?: string;
-  type?: string;
-  size?: string;
-  chunk_count?: number;
-  slices?: number;
-  status: string;
-  progress?: number;
-  updated_at?: string | null;
-  updatedAt?: string | null;
-  last_error?: string | null;
-  lastError?: string | null;
-}
-
 export interface ListOpenApiKeysParams {
   app_id?: string;
   publication_id?: string;

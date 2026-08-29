@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Input,
   Button,
@@ -29,6 +29,7 @@ import styles from "./TencentDocPage.module.less";
 import { request } from "../../../api";
 import { getApiUrl } from "../../../api/config";
 import { buildAuthHeaders } from "../../../api/authHeaders";
+import { AgentExperienceLibrary } from "@/components/AgentExperienceLibrary";
 
 interface DocItem {
   id: string;
@@ -114,7 +115,22 @@ interface MindspaceHit {
   rank?: number;
 }
 
-type KnowledgeScope = "all" | "enterprise" | "personal";
+interface WikiConcept {
+  concept: string;
+  scope?: DocItem["scope"];
+  size?: number;
+  modified_time?: string;
+  updated_at?: string;
+}
+
+type KnowledgeScope = "all" | "enterprise" | "personal" | "agent-experience";
+
+const KNOWLEDGE_SCOPE_OPTIONS = [
+  { value: "personal", label: "我的知识库" },
+  { value: "agent-experience", label: "我的Agent经验库" },
+  { value: "enterprise", label: "企业知识库" },
+  { value: "all", label: "跨库检索" },
+];
 
 const KNOWLEDGE_CATEGORIES = [
   { value: "uncategorized", label: "未分类" },
@@ -150,6 +166,9 @@ const statusLabel = (status: DocItem["status"]) => {
   if (status === "pending") return "等待处理";
   return "处理中";
 };
+
+const errorMessage = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
 
 export default function TencentDocPage() {
   const [searchQuery, setSearchQuery] = useState("");
@@ -191,66 +210,74 @@ export default function TencentDocPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Load documents on mount
-  const fetchDocuments = async (showLoading = false) => {
-    if (showLoading) setLoading(true);
-    try {
-      const [resDocs, resWiki, resConnectors, resCloudAuth, resCapabilities] =
-        await Promise.all([
-          request<DocItem[]>(`/workspace/knowledge/docs?scope=${activeScope}`),
-          request<{ concepts: any[] }>(
-            `/workspace/wiki/list?scope=${activeScope}`,
-          ).catch(() => ({ concepts: [] })),
-          request<{ connectors: ConnectorStatus[] }>(
-            "/workspace/mindspace/connectors",
-          ).catch(() => ({ connectors: [] })),
-          request<{
-            providers: CloudProviderState[];
-            accounts: CloudAccount[];
-          }>("/user/mindspace-cloud/accounts").catch(() => ({
-            providers: [],
-            accounts: [],
-          })),
-          request<{
-            semantic_search_enabled: boolean;
-            embedding_model?: string;
-          }>("/workspace/knowledge/capabilities").catch(() => ({
-            semantic_search_enabled: false,
-            embedding_model: "",
-          })),
-        ]);
-      setDocuments(resDocs);
+  const fetchDocuments = useCallback(
+    async (showLoading = false) => {
+      if (activeScope === "agent-experience") return;
+      if (showLoading) setLoading(true);
+      try {
+        const [resDocs, resWiki, resConnectors, resCloudAuth, resCapabilities] =
+          await Promise.all([
+            request<DocItem[]>(
+              `/workspace/knowledge/docs?scope=${activeScope}`,
+            ),
+            request<{ concepts: WikiConcept[] }>(
+              `/workspace/wiki/list?scope=${activeScope}`,
+            ).catch(() => ({ concepts: [] })),
+            request<{ connectors: ConnectorStatus[] }>(
+              "/workspace/mindspace/connectors",
+            ).catch(() => ({ connectors: [] })),
+            request<{
+              providers: CloudProviderState[];
+              accounts: CloudAccount[];
+            }>("/user/mindspace-cloud/accounts").catch(() => ({
+              providers: [],
+              accounts: [],
+            })),
+            request<{
+              semantic_search_enabled: boolean;
+              embedding_model?: string;
+            }>("/workspace/knowledge/capabilities").catch(() => ({
+              semantic_search_enabled: false,
+              embedding_model: "",
+            })),
+          ]);
+        setDocuments(resDocs);
 
-      const wikiDocs: DocItem[] = (resWiki.concepts || []).map((c) => ({
-        id: "wiki-" + c.concept,
-        name: c.concept + ".md",
-        type: "wiki",
-        scope: c.scope,
-        size: c.size ? (c.size / 1024).toFixed(1) + " KB" : "Wiki",
-        slices: 1,
-        status: "ready",
-        updatedAt: c.modified_time
-          ? new Date(c.modified_time).toLocaleString()
-          : c.updated_at || "",
-      }));
-      setWikiDocuments(wikiDocs);
-      setConnectors(resConnectors.connectors || []);
-      setCloudProviders(resCloudAuth.providers || []);
-      setCloudAccounts(resCloudAuth.accounts || []);
-      setSemanticSearchEnabled(
-        Boolean(resCapabilities.semantic_search_enabled),
-      );
-      setEmbeddingModel(resCapabilities.embedding_model || "");
-    } catch (err: any) {
-      console.error("Failed to load documents:", err);
-      message.error("获取知识库文档失败: " + err.message);
-    } finally {
-      if (showLoading) setLoading(false);
-    }
-  };
+        const wikiDocs: DocItem[] = (resWiki.concepts || []).map((c) => ({
+          id: "wiki-" + c.concept,
+          name: c.concept + ".md",
+          type: "wiki",
+          scope: c.scope,
+          size: c.size ? (c.size / 1024).toFixed(1) + " KB" : "Wiki",
+          slices: 1,
+          status: "ready",
+          updatedAt: c.modified_time
+            ? new Date(c.modified_time).toLocaleString()
+            : c.updated_at || "",
+        }));
+        setWikiDocuments(wikiDocs);
+        setConnectors(resConnectors.connectors || []);
+        setCloudProviders(resCloudAuth.providers || []);
+        setCloudAccounts(resCloudAuth.accounts || []);
+        setSemanticSearchEnabled(
+          Boolean(resCapabilities.semantic_search_enabled),
+        );
+        setEmbeddingModel(resCapabilities.embedding_model || "");
+      } catch (err: unknown) {
+        console.error("Failed to load documents:", err);
+        message.error("获取知识库文档失败: " + errorMessage(err));
+      } finally {
+        if (showLoading) setLoading(false);
+      }
+    },
+    [activeScope],
+  );
 
   useEffect(() => {
-    fetchDocuments(true);
-  }, [activeScope]);
+    if (activeScope !== "agent-experience") {
+      fetchDocuments(true);
+    }
+  }, [activeScope, fetchDocuments]);
 
   const handleViewWiki = async (
     conceptName: string,
@@ -263,8 +290,8 @@ export default function TencentDocPage() {
       setCurrentWikiTitle(res.concept);
       setCurrentWikiContent(res.content);
       setIsWikiModalOpen(true);
-    } catch (err: any) {
-      message.error("无法加载 Wiki 内容: " + err.message);
+    } catch (err: unknown) {
+      message.error("无法加载 Wiki 内容: " + errorMessage(err));
     }
   };
 
@@ -313,8 +340,8 @@ export default function TencentDocPage() {
       });
 
       message.info("已向后端发起重新同步请求");
-    } catch (err: any) {
-      message.error("同步失败: " + err.message);
+    } catch (err: unknown) {
+      message.error("同步失败: " + errorMessage(err));
       fetchDocuments();
     }
   };
@@ -337,8 +364,8 @@ export default function TencentDocPage() {
           );
           setDocuments((prev) => prev.filter((doc) => doc.id !== id));
           message.success("已成功从共享知识库中移出该文档");
-        } catch (err: any) {
-          message.error("移除文档失败: " + err.message);
+        } catch (err: unknown) {
+          message.error("移除文档失败: " + errorMessage(err));
         }
       },
     });
@@ -443,11 +470,11 @@ export default function TencentDocPage() {
         content: `「${file.name}」已提交，后台正在解析和建立索引`,
         duration: 4,
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
       message.error({
         key: "knowledge-file-upload",
-        content: "上传本地文档失败: " + err.message,
+        content: "上传本地文档失败: " + errorMessage(err),
         duration: 6,
       });
     } finally {
@@ -492,8 +519,8 @@ export default function TencentDocPage() {
       } else {
         message.success(`已关联云文档「${values.title}」，开始同步真实正文`);
       }
-    } catch (err: any) {
-      message.error("关联云文档失败: " + err.message);
+    } catch (err: unknown) {
+      message.error("关联云文档失败: " + errorMessage(err));
     }
   };
 
@@ -531,12 +558,15 @@ export default function TencentDocPage() {
       setEditingDoc(null);
       metadataForm.resetFields();
       message.success("分类与标签已更新，无需重新向量化");
-    } catch (err: any) {
-      message.error("更新分类标签失败: " + err.message);
+    } catch (err: unknown) {
+      message.error("更新分类标签失败: " + errorMessage(err));
     }
   };
 
-  const handleFormValuesChange = (changedValues: any) => {
+  const handleFormValuesChange = (changedValues: {
+    docType?: "tencent" | "lark";
+    url?: string;
+  }) => {
     if (changedValues.docType) {
       form.setFieldsValue({ cloudAccountId: undefined });
     }
@@ -658,10 +688,40 @@ export default function TencentDocPage() {
       );
       window.open(res.authorization_url, "_blank", "noopener,noreferrer");
       message.info("授权完成后返回本页刷新授权状态");
-    } catch (err: any) {
-      message.error("生成授权链接失败: " + err.message);
+    } catch (err: unknown) {
+      message.error("生成授权链接失败: " + errorMessage(err));
     }
   };
+
+  if (activeScope === "agent-experience") {
+    return (
+      <div className={styles.pageContainer}>
+        <div className={styles.pageHeader}>
+          <div className={styles.pageHeaderLeft}>
+            <div className={styles.pageTitle}>
+              <span className={styles.pageTitleIcon}>
+                <Database size={18} />
+              </span>
+              我的Agent经验库
+            </div>
+            <div className={styles.pageSubtitle}>
+              维护绑定到当前账号的 Agent 对外经验；接口禁用后仍可继续整理。
+            </div>
+          </div>
+          <div className={styles.headerActions}>
+            <Segmented
+              value={activeScope}
+              options={KNOWLEDGE_SCOPE_OPTIONS}
+              onChange={(value) => setActiveScope(value as KnowledgeScope)}
+            />
+          </div>
+        </div>
+        <div className={styles.experiencePanel}>
+          <AgentExperienceLibrary />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={styles.pageContainer}>
@@ -696,11 +756,7 @@ export default function TencentDocPage() {
         <div className={styles.headerActions}>
           <Segmented
             value={activeScope}
-            options={[
-              { value: "personal", label: "我的知识库" },
-              { value: "enterprise", label: "企业知识库" },
-              { value: "all", label: "跨库检索" },
-            ]}
+            options={KNOWLEDGE_SCOPE_OPTIONS}
             onChange={(value) => setActiveScope(value as KnowledgeScope)}
           />
           <button
