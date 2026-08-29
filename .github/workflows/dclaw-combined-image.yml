@@ -1,0 +1,132 @@
+name: DClaw Combined Image
+
+on:
+  push:
+    branches: [main]
+  repository_dispatch:
+    types: [dclaw_client_main]
+  workflow_dispatch:
+    inputs:
+      server_sha:
+        description: Full dclaw-server commit SHA; provide both SHAs or neither
+        required: false
+        type: string
+      client_sha:
+        description: Full dclaw-client commit SHA; provide both SHAs or neither
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: dclaw-combined-${{ github.event_name }}-${{ github.event.client_payload.client_sha || github.sha }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_REPOSITORY: ghcr.io/51taichi/dclaw
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout workflow implementation
+        uses: actions/checkout@v4
+        with:
+          path: bootstrap
+
+      - name: Resolve immutable release pair
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CLIENT_READ_TOKEN: ${{ secrets.DCLAW_CLIENT_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          server_main_sha=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)
+          client_main_sha=$(GH_TOKEN="$CLIENT_READ_TOKEN" \
+            gh api repos/51taichi/dclaw-client/commits/main --jq .sha)
+          python bootstrap/scripts/release/resolve_release.py \
+            --event-name "$GITHUB_EVENT_NAME" \
+            --event-path "$GITHUB_EVENT_PATH" \
+            --server-main-sha "$server_main_sha" \
+            --client-main-sha "$client_main_sha" \
+            --server-sha '${{ inputs.server_sha }}' \
+            --client-sha '${{ inputs.client_sha }}' \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Checkout exact server revision
+        id: checkout-server
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release.outputs.server_sha }}
+          path: inputs/server
+
+      - name: Checkout exact client revision
+        id: checkout-client
+        uses: actions/checkout@v4
+        with:
+          repository: 51taichi/dclaw-client
+          ref: ${{ steps.release.outputs.client_sha }}
+          token: ${{ secrets.DCLAW_CLIENT_READ_TOKEN }}
+          path: inputs/client
+
+      - name: Assemble and verify combined build context
+        id: assemble-context
+        run: |
+          inputs/server/scripts/release/assemble_context.sh \
+            "$GITHUB_WORKSPACE/inputs/server" \
+            "$GITHUB_WORKSPACE/inputs/client" \
+            "$RUNNER_TEMP/dclaw-build-context" \
+            '${{ steps.release.outputs.server_sha }}' \
+            '${{ steps.release.outputs.client_sha }}'
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        id: login-ghcr
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish immutable image
+        id: build-immutable-image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ runner.temp }}/dclaw-build-context
+          file: ${{ runner.temp }}/dclaw-build-context/deploy/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.IMAGE_REPOSITORY }}:${{ steps.release.outputs.pair_tag }}
+          labels: |
+            cn.deepmega.dclaw.server-revision=${{ steps.release.outputs.server_sha }}
+            cn.deepmega.dclaw.client-revision=${{ steps.release.outputs.client_sha }}
+
+      - name: Verify immutable image labels
+        id: verify-image-labels
+        env:
+          IMMUTABLE_IMAGE: ${{ env.IMAGE_REPOSITORY }}:${{ steps.release.outputs.pair_tag }}
+          SERVER_SHA: ${{ steps.release.outputs.server_sha }}
+          CLIENT_SHA: ${{ steps.release.outputs.client_sha }}
+        run: |
+          set -euo pipefail
+          docker pull "$IMMUTABLE_IMAGE"
+          actual_server=$(docker image inspect "$IMMUTABLE_IMAGE" --format \
+            '{{index .Config.Labels "cn.deepmega.dclaw.server-revision"}}')
+          actual_client=$(docker image inspect "$IMMUTABLE_IMAGE" --format \
+            '{{index .Config.Labels "cn.deepmega.dclaw.client-revision"}}')
+          test "$actual_server" = "$SERVER_SHA"
+          test "$actual_client" = "$CLIENT_SHA"
+
+      - name: Publish verified image as main
+        id: publish-main-tag
+        env:
+          IMMUTABLE_IMAGE: ${{ env.IMAGE_REPOSITORY }}:${{ steps.release.outputs.pair_tag }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --tag "${IMAGE_REPOSITORY}:main" \
+            "$IMMUTABLE_IMAGE"
