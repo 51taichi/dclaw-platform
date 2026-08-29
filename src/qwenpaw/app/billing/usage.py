@@ -26,6 +26,7 @@ from .execution import OpenApiExecutionFence
 from .pricing import PriceCatalogService, QuoteRequest, RetailQuote
 from ..storage.repos.billing_repo import BillingRepository
 from ..storage.schema import (
+    billing_executions,
     billing_price_catalogs,
     billing_usage_items,
     billing_usage_orders,
@@ -77,6 +78,16 @@ class BillingExecutionFencedError(UsageOrderError):
 
 
 @dataclass(frozen=True)
+class UsageExecutionGuard:
+    """Discriminated durable owner used by reserve and settlement."""
+
+    kind: Literal["open_api", "general"]
+    execution_id: str
+    owner_token: str
+    generation: int
+
+
+@dataclass(frozen=True)
 class ReserveModelCall:
     """Trusted reservation request for one call inside an OpenAPI order."""
 
@@ -90,6 +101,7 @@ class ReserveModelCall:
     max_output_tokens: int = 0
     invocation_id: str = ""
     execution_fence: OpenApiExecutionFence | None = None
+    execution_guard: UsageExecutionGuard | None = None
 
 
 @dataclass(frozen=True)
@@ -106,6 +118,7 @@ class SettleModelCall:
     actual_output_tokens: int = 0
     invocation_id: str = ""
     execution_fence: OpenApiExecutionFence | None = None
+    execution_guard: UsageExecutionGuard | None = None
 
 
 @dataclass(frozen=True)
@@ -524,10 +537,13 @@ class UsageService:
                     ),
                 )
 
+            source_type = str(order.get("source_type") or "")
             item_business_key = _item_business_key(
+                source_type,
                 normalized.usage_order_id,
                 normalized.item_key,
             )
+            idempotency_namespace = _item_idempotency_namespace(source_type)
             would_pass: bool | None = None
             would_block_reason: str | None = None
             if mode == "observe":
@@ -556,13 +572,14 @@ class UsageService:
                             business_type="usage_item",
                             business_key=item_business_key,
                             idempotency_key=(
-                                f"open-api:{normalized.usage_order_id}:"
+                                f"{idempotency_namespace}:"
+                                f"{normalized.usage_order_id}:"
                                 f"{normalized.item_key}:hold"
                             ),
                             metadata={
                                 "capability": normalized.capability,
                                 "tier": economic_tier,
-                                "source_type": "open_api",
+                                "source_type": source_type,
                                 "source_id": str(order["source_id"]),
                                 "item_key": normalized.item_key,
                             },
@@ -671,10 +688,13 @@ class UsageService:
                         "actual retail credits exceed the pre-call hold",
                     )
 
+            source_type = str(order.get("source_type") or "")
             item_business_key = _item_business_key(
+                source_type,
                 normalized.usage_order_id,
                 normalized.item_key,
             )
+            idempotency_namespace = _item_idempotency_namespace(source_type)
             if self._order_mode(order) == "enforced" and quoted:
                 if normalized.billability == "billable" and actual_credits:
                     self.repository.append_transaction_in_connection(
@@ -686,7 +706,8 @@ class UsageService:
                             business_type="usage_item",
                             business_key=item_business_key,
                             idempotency_key=(
-                                f"open-api:{normalized.usage_order_id}:"
+                                f"{idempotency_namespace}:"
+                                f"{normalized.usage_order_id}:"
                                 f"{normalized.item_key}:capture"
                             ),
                             metadata={
@@ -706,7 +727,8 @@ class UsageService:
                             business_type="usage_item",
                             business_key=item_business_key,
                             idempotency_key=(
-                                f"open-api:{normalized.usage_order_id}:"
+                                f"{idempotency_namespace}:"
+                                f"{normalized.usage_order_id}:"
                                 f"{normalized.item_key}:release"
                             ),
                             metadata={
@@ -760,7 +782,21 @@ class UsageService:
         command: ReserveModelCall | SettleModelCall,
     ) -> None:
         """Validate and lock the invocation claim in this transaction."""
-        if str(order.get("source_type") or "") != "open_api":
+        source_type = str(order.get("source_type") or "")
+        if source_type != "open_api":
+            if source_type in {
+                "client",
+                "mobile",
+                "expert_team",
+                "automation",
+                "schedule",
+                "channel",
+            }:
+                UsageService._validate_general_execution_guard(
+                    conn,
+                    order,
+                    command,
+                )
             return
         invocation_id = str(command.invocation_id or "").strip()
         fence = command.execution_fence
@@ -798,6 +834,48 @@ class UsageService:
         if guarded.rowcount != 1:
             raise BillingExecutionFencedError(
                 "Open API invocation execution fence is stale or expired",
+            )
+
+    @staticmethod
+    def _validate_general_execution_guard(
+        conn: Connection,
+        order: Mapping[str, Any],
+        command: ReserveModelCall | SettleModelCall,
+    ) -> None:
+        guard = command.execution_guard
+        if (
+            guard is None
+            or guard.kind != "general"
+            or not guard.execution_id
+            or not guard.owner_token
+            or guard.generation <= 0
+        ):
+            raise BillingExecutionFencedError(
+                "general billing command has no execution fence",
+            )
+        dialect = conn.engine.dialect.name
+        database_now = (
+            func.strftime("%Y-%m-%d %H:%M:%f", "now")
+            if dialect == "sqlite"
+            else func.current_timestamp()
+        )
+        guarded = conn.execute(
+            update(billing_executions)
+            .where(
+                billing_executions.c.id == guard.execution_id,
+                billing_executions.c.usage_order_id == str(order["id"]),
+                billing_executions.c.state == "running",
+                billing_executions.c.owner_token == guard.owner_token,
+                billing_executions.c.fence_generation == guard.generation,
+                billing_executions.c.lease_expires_at > database_now,
+            )
+            .values(
+                fence_generation=billing_executions.c.fence_generation,
+            ),
+        )
+        if guarded.rowcount != 1:
+            raise BillingExecutionFencedError(
+                "general billing execution fence is stale or expired",
             )
 
     def list_items(self, usage_order_id: str) -> list[dict[str, Any]]:
@@ -907,8 +985,13 @@ class UsageService:
                 ),
             ).mappings()
         ]
+        source_type = str(order.get("source_type") or "")
         active_keys = [
-            _item_business_key(str(order["id"]), str(row["item_key"]))
+            _item_business_key(
+                source_type,
+                str(order["id"]),
+                str(row["item_key"]),
+            )
             for row in rows
             if str(row["status"]) in {"held", "reconciling"}
         ]
@@ -936,7 +1019,11 @@ class UsageService:
                 conn,
                 str(order["wallet_id"]),
                 [
-                    _item_business_key(str(order["id"]), str(row["item_key"]))
+                    _item_business_key(
+                        source_type,
+                        str(order["id"]),
+                        str(row["item_key"]),
+                    )
                     for row in rows
                     if str(row["status"]) == "reconciling"
                 ],
@@ -1249,6 +1336,7 @@ def _normalize_reserve_model_call(
         max_output_tokens=command.max_output_tokens,
         invocation_id=str(command.invocation_id or "").strip(),
         execution_fence=command.execution_fence,
+        execution_guard=command.execution_guard,
     )
 
 
@@ -1288,11 +1376,21 @@ def _normalize_settle_model_call(command: SettleModelCall) -> SettleModelCall:
         actual_output_tokens=command.actual_output_tokens,
         invocation_id=str(command.invocation_id or "").strip(),
         execution_fence=command.execution_fence,
+        execution_guard=command.execution_guard,
     )
 
 
-def _item_business_key(usage_order_id: str, item_key: str) -> str:
-    return f"open-api-item:{usage_order_id}:{item_key}"
+def _item_business_key(
+    source_type: str,
+    usage_order_id: str,
+    item_key: str,
+) -> str:
+    namespace = "open-api-item" if source_type == "open_api" else "billing-item"
+    return f"{namespace}:{usage_order_id}:{item_key}"
+
+
+def _item_idempotency_namespace(source_type: str) -> str:
+    return "open-api" if source_type == "open_api" else "billing"
 
 
 def _economic_tier(snapshot: Mapping[str, Any]) -> str:

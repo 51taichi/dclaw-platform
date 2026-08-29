@@ -16,6 +16,12 @@ from typing import Any, Mapping, cast
 from uuid import uuid4
 
 from ..agent_context import get_current_billing_context
+from .context import (
+    BillingExecutionContext,
+    BillingSession,
+    SystemBillingExemption,
+    is_billing_required,
+)
 from .execution import OpenApiBillingExecutionContext, OpenApiExecutionFence
 from .open_api import OpenApiBillingSession
 from .supplier_reference_sidecar import (
@@ -29,16 +35,22 @@ from .usage import (
     ReserveModelCall,
     SettleModelCall,
     UsageItemResult,
+    UsageExecutionGuard,
     UsageService,
 )
+
+
+class MissingBillingContextError(RuntimeError):
+    """A user-originated model call has no durable payer execution."""
 
 
 @dataclass
 class MeteredModelCall:
     """The durable reservation associated with an in-flight provider call."""
 
-    session: OpenApiBillingSession
-    execution_fence: OpenApiExecutionFence
+    session: OpenApiBillingSession | BillingSession
+    execution_fence: OpenApiExecutionFence | None
+    execution_guard: UsageExecutionGuard | None
     item_key: str
     provider_id: str
     model_key: str
@@ -119,9 +131,31 @@ class BillingModelMeter:
     ) -> MeteredModelCall | None:
         """Durably reserve before provider execution, when OpenAPI-scoped."""
         context = get_current_billing_context()
-        if not isinstance(context, OpenApiBillingExecutionContext):
+        if isinstance(context, SystemBillingExemption):
+            return None
+        if not isinstance(
+            context,
+            (OpenApiBillingExecutionContext, BillingExecutionContext),
+        ):
+            if is_billing_required():
+                raise MissingBillingContextError(
+                    "user model call has no billing context",
+                )
             return None
         session = context.session
+        if isinstance(context, OpenApiBillingExecutionContext):
+            invocation_id = session.invocation_id
+            execution_fence = context.fence
+            execution_guard = None
+        else:
+            invocation_id = ""
+            execution_fence = None
+            execution_guard = UsageExecutionGuard(
+                kind="general",
+                execution_id=session.execution_id,
+                owner_token=context.fence.owner_token,
+                generation=context.fence.generation,
+            )
 
         normalized_provider = str(provider_id).strip()
         normalized_model = str(model_key).strip()
@@ -144,13 +178,15 @@ class BillingModelMeter:
                 parameters={},
                 input_tokens=_estimate_input_tokens(messages),
                 max_output_tokens=output_tokens,
-                invocation_id=session.invocation_id,
-                execution_fence=context.fence,
+                invocation_id=invocation_id,
+                execution_fence=execution_fence,
+                execution_guard=execution_guard,
             ),
         )
         return MeteredModelCall(
             session=session,
-            execution_fence=context.fence,
+            execution_fence=execution_fence,
+            execution_guard=execution_guard,
             item_key=call_key,
             provider_id=normalized_provider,
             model_key=normalized_model,
@@ -177,8 +213,7 @@ class BillingModelMeter:
                     ),
                     actual_input_tokens=0,
                     actual_output_tokens=0,
-                    invocation_id=call.session.invocation_id,
-                    execution_fence=call.execution_fence,
+                    **_execution_fields(call),
                 ),
             )
         except BillingExecutionFencedError:
@@ -295,8 +330,7 @@ class BillingModelMeter:
                     ),
                     actual_input_tokens=0,
                     actual_output_tokens=0,
-                    invocation_id=call.session.invocation_id,
-                    execution_fence=call.execution_fence,
+                    **_execution_fields(call),
                 ),
             )
         except BaseException as fallback_error:  # keep original hold if down
@@ -328,8 +362,7 @@ class BillingModelMeter:
                     ),
                     actual_input_tokens=actual_input_tokens,
                     actual_output_tokens=actual_output_tokens,
-                    invocation_id=call.session.invocation_id,
-                    execution_fence=call.execution_fence,
+                    **_execution_fields(call),
                 ),
             )
         except BillingExecutionFencedError:
@@ -350,7 +383,24 @@ class BillingModelMeter:
             ) from exc
 
 
-def _item_key(session: OpenApiBillingSession, explicit: str | None) -> str:
+def _execution_fields(call: MeteredModelCall) -> dict[str, Any]:
+    if isinstance(call.session, OpenApiBillingSession):
+        return {
+            "invocation_id": call.session.invocation_id,
+            "execution_fence": call.execution_fence,
+            "execution_guard": None,
+        }
+    return {
+        "invocation_id": "",
+        "execution_fence": None,
+        "execution_guard": call.execution_guard,
+    }
+
+
+def _item_key(
+    session: OpenApiBillingSession | BillingSession,
+    explicit: str | None,
+) -> str:
     if explicit is not None:
         key = str(explicit).strip()
         if not key:
