@@ -244,7 +244,11 @@ def test_update_same_digest_does_not_recreate_or_backup(
     calls = _calls(deployment)
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.endswith("NO_UPDATE_REQUIRED\n")
+    assert result.stdout.endswith(
+        "server：" + "a" * 40 + "\n"
+        "client：" + "b" * 40 + "\n"
+        "NO_UPDATE_REQUIRED\n",
+    )
     assert not _contains_call(calls, "compose", "up")
     assert not _contains_call(calls, "exec", "pg_dump")
 
@@ -321,7 +325,11 @@ def test_successful_update_writes_manifest_and_keeps_external_resources(
     assert isinstance(root, Path)
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.endswith("UPDATE_SUCCESS\n")
+    assert result.stdout.endswith(
+        "server：" + "a" * 40 + "\n"
+        "client：" + "b" * 40 + "\n"
+        "UPDATE_SUCCESS\n",
+    )
     assert _contains_call(calls, "exec", "pg_dump")
     assert _contains_call(calls, "run", "pg_restore", "--list")
     assert _contains_call(calls, "compose", "up")
