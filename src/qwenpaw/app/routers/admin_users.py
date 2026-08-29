@@ -2,11 +2,12 @@
 """Admin Users management API endpoints."""
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..auth import _hash_password
+from ..billing.service import get_wallet_service
 from ..storage.repos.user_repo import get_user_repository
 
 router = APIRouter(prefix="/users", tags=["admin_users"])
@@ -51,7 +52,7 @@ async def create_user(req: CreateUserRequest):
             status_code=400,
             detail="Username and password are required",
         )
-    
+
     if req.role not in ("admin", "user"):
         raise HTTPException(
             status_code=400,
@@ -60,12 +61,16 @@ async def create_user(req: CreateUserRequest):
 
     # Check if username exists
     username = req.username.strip()
-    if get_user_repository().get_user_by_username(username):
+    existing = get_user_repository().get_user_by_username(username)
+    if existing:
+        # Repair a prior user-created/wallet-failed attempt before returning
+        # the stable duplicate-user response.
+        get_wallet_service().get_or_create_personal_wallet(existing["id"])
         raise HTTPException(
             status_code=409,
             detail=f"Username '{req.username}' already exists",
         )
-    
+
     pw_hash, salt = _hash_password(req.password)
     try:
         row = get_user_repository().create_user(
@@ -74,6 +79,9 @@ async def create_user(req: CreateUserRequest):
             password_salt=salt,
             role=req.role,
         )
+        # New users get an empty wallet. Trial credits are deliberately not
+        # granted here because a username is not verified-mobile evidence.
+        get_wallet_service().get_or_create_personal_wallet(row["id"])
         return UserSpec(
             id=row["id"],
             username=row["username"],
@@ -84,7 +92,7 @@ async def create_user(req: CreateUserRequest):
         raise HTTPException(
             status_code=500,
             detail=f"Failed to create user: {e}",
-        )
+        ) from e
 
 
 @router.put("/{user_id}/password")
@@ -95,14 +103,14 @@ async def reset_password(user_id: int, req: ResetPasswordRequest):
             status_code=400,
             detail="Password cannot be empty",
         )
-    
+
     # Check if user exists
     if not get_user_repository().get_user_by_id(user_id):
         raise HTTPException(
             status_code=404,
             detail="User not found",
         )
-    
+
     pw_hash, salt = _hash_password(req.new_password)
     try:
         get_user_repository().update_user_password(user_id, pw_hash, salt)
@@ -111,7 +119,7 @@ async def reset_password(user_id: int, req: ResetPasswordRequest):
         raise HTTPException(
             status_code=500,
             detail=f"Failed to reset password: {e}",
-        )
+        ) from e
 
 
 @router.delete("/{user_id}")
@@ -125,7 +133,7 @@ async def delete_user(user_id: int):
             status_code=404,
             detail="User not found",
         )
-    
+
     if row["role"] == "admin":
         if repo.count_admins() <= 1:
             raise HTTPException(
@@ -140,4 +148,4 @@ async def delete_user(user_id: int):
         raise HTTPException(
             status_code=500,
             detail=f"Failed to delete user: {e}",
-        )
+        ) from e

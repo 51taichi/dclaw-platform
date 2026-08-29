@@ -290,7 +290,11 @@ BUILTIN_EXPERT_TEAMS: list[dict[str, Any]] = [
         "workflow": [
             {"key": "scope", "name": "研究框架", "members": ["lead"]},
             {"key": "collect", "name": "资料采集", "members": ["collector"]},
-            {"key": "synthesis", "name": "分析汇总", "members": ["analyst", "lead"]},
+            {
+                "key": "synthesis",
+                "name": "分析汇总",
+                "members": ["analyst", "lead"],
+            },
         ],
     },
 ]
@@ -319,7 +323,10 @@ def _builtin_template_rows() -> list[dict[str, Any]]:
     return rows
 
 
-def _template_input_row(team_id: str, data: ExpertTeamTemplateInput) -> dict[str, Any]:
+def _template_input_row(
+    team_id: str,
+    data: ExpertTeamTemplateInput,
+) -> dict[str, Any]:
     return {
         "id": team_id,
         "name": data.name,
@@ -329,8 +336,12 @@ def _template_input_row(team_id: str, data: ExpertTeamTemplateInput) -> dict[str
         "icon": data.icon,
         "enabled": bool(data.enabled),
         "leader_agent_id": data.leader_agent_id,
-        "members": _json_dumps([member.model_dump() for member in data.members]),
-        "workflow": _json_dumps([stage.model_dump() for stage in data.workflow]),
+        "members": _json_dumps(
+            [member.model_dump() for member in data.members],
+        ),
+        "workflow": _json_dumps(
+            [stage.model_dump() for stage in data.workflow],
+        ),
         "source": data.source,
         "sort_order": data.sort_order,
     }
@@ -346,6 +357,11 @@ def seed_builtin_expert_teams() -> None:
     repo.seed_builtin_templates(_builtin_template_rows())
 
 
+def bootstrap_expert_teams() -> None:
+    """Create expert-team storage and seed builtins at an explicit boundary."""
+    seed_builtin_expert_teams()
+
+
 def _template_from_row(row: Any) -> ExpertTeamTemplate:
     return ExpertTeamTemplate(
         id=row["id"],
@@ -356,7 +372,9 @@ def _template_from_row(row: Any) -> ExpertTeamTemplate:
         icon=row["icon"] or "",
         enabled=bool(row["enabled"]),
         leader_agent_id=row["leader_agent_id"] or "default",
-        members=[ExpertTeamMember(**m) for m in _json_loads(row["members"], [])],
+        members=[
+            ExpertTeamMember(**m) for m in _json_loads(row["members"], [])
+        ],
         workflow=[
             ExpertTeamWorkflowStage(**stage)
             for stage in _json_loads(row["workflow"], [])
@@ -369,28 +387,37 @@ def _template_from_row(row: Any) -> ExpertTeamTemplate:
     )
 
 
-def list_expert_team_templates(*, enabled_only: bool = False) -> list[ExpertTeamTemplate]:
-    seed_builtin_expert_teams()
-    rows = get_expert_team_repository().list_template_rows(enabled_only=enabled_only)
+def list_expert_team_templates(
+    *,
+    enabled_only: bool = False,
+) -> list[ExpertTeamTemplate]:
+    rows = get_expert_team_repository().list_template_rows(
+        enabled_only=enabled_only,
+    )
     return [_template_from_row(row) for row in rows]
 
 
 def get_expert_team_template(team_id: str) -> ExpertTeamTemplate | None:
-    seed_builtin_expert_teams()
     row = get_expert_team_repository().get_template_row(team_id)
     return _template_from_row(row) if row else None
 
 
-def upsert_expert_team_template(data: ExpertTeamTemplateInput) -> ExpertTeamTemplate:
-    seed_builtin_expert_teams()
+def upsert_expert_team_template(
+    data: ExpertTeamTemplateInput,
+) -> ExpertTeamTemplate:
     team_id = data.id or str(uuid.uuid4())
-    get_expert_team_repository().upsert_template_row(_template_input_row(team_id, data))
+    get_expert_team_repository().upsert_template_row(
+        _template_input_row(team_id, data),
+    )
     template = get_expert_team_template(team_id)
     assert template is not None
     return template
 
 
-def patch_expert_team_template(team_id: str, patch: dict[str, Any]) -> ExpertTeamTemplate | None:
+def patch_expert_team_template(
+    team_id: str,
+    patch: dict[str, Any],
+) -> ExpertTeamTemplate | None:
     template = get_expert_team_template(team_id)
     if template is None:
         return None
@@ -484,7 +511,6 @@ def _member_run_from_row(row: Any) -> ExpertTeamMemberRun:
 
 
 def get_expert_team_run(run_id: str) -> ExpertTeamRun | None:
-    seed_builtin_expert_teams()
     repo = get_expert_team_repository()
     row = repo.get_run_row(run_id)
     if not row:
@@ -505,7 +531,9 @@ def get_expert_team_run(run_id: str) -> ExpertTeamRun | None:
         updated_at=str(row["updated_at"]) if row["updated_at"] else None,
         finished_at=str(row["finished_at"]) if row["finished_at"] else None,
         team=team,
-        members=[_member_run_from_row(member_row) for member_row in member_rows],
+        members=[
+            _member_run_from_row(member_row) for member_row in member_rows
+        ],
     )
 
 
@@ -608,7 +636,10 @@ def _publish_expert_team_run_event(run: ExpertTeamRun) -> None:
         try:
             asyncio.run(_publish_expert_team_run_event_async(run))
         except Exception as exc:  # pragma: no cover - diagnostics only
-            logger.debug("Failed to publish expert team runtime event: %s", exc)
+            logger.debug(
+                "Failed to publish expert team runtime event: %s",
+                exc,
+            )
         return
 
     task = loop.create_task(_publish_expert_team_run_event_async(run))
@@ -617,7 +648,10 @@ def _publish_expert_team_run_event(run: ExpertTeamRun) -> None:
         try:
             done.result()
         except Exception as exc:  # pragma: no cover - diagnostics only
-            logger.debug("Failed to publish expert team runtime event: %s", exc)
+            logger.debug(
+                "Failed to publish expert team runtime event: %s",
+                exc,
+            )
 
     task.add_done_callback(_log_failure)
 
@@ -656,17 +690,29 @@ class ExpertTeamOrchestrator:
         self.workspace = workspace
         self.console_channel = console_channel
 
-    async def stream_one(self, payload: dict[str, Any]) -> AsyncGenerator[str, None]:
+    async def stream_one(
+        self,
+        payload: dict[str, Any],
+    ) -> AsyncGenerator[str, None]:
         run_id = payload["run_id"]
         template = get_expert_team_template(payload["team_id"])
         native_payload = copy.deepcopy(payload["native_payload"])
         if template is None:
-            update_expert_team_run_state(run_id, "failed", error="Expert team not found")
+            update_expert_team_run_state(
+                run_id,
+                "failed",
+                error="Expert team not found",
+            )
             yield _status_sse(run_id)
             return
 
-        original_text = _content_parts_text(native_payload.get("content_parts") or [])
-        team_instruction = self._build_team_instruction(template, original_text)
+        original_text = _content_parts_text(
+            native_payload.get("content_parts") or [],
+        )
+        team_instruction = self._build_team_instruction(
+            template,
+            original_text,
+        )
         native_payload["content_parts"] = [
             _make_text_part(team_instruction),
             *(native_payload.get("content_parts") or []),
@@ -699,10 +745,18 @@ class ExpertTeamOrchestrator:
             for member in template.members:
                 run = get_expert_team_run(run_id)
                 current = next(
-                    (m for m in (run.members if run else []) if m.member_key == member.key),
+                    (
+                        m
+                        for m in (run.members if run else [])
+                        if m.member_key == member.key
+                    ),
                     None,
                 )
-                if current and current.state in {"completed", "failed", "cancelled"}:
+                if current and current.state in {
+                    "completed",
+                    "failed",
+                    "cancelled",
+                }:
                     continue
                 update_member_run_state(
                     run_id,
@@ -710,7 +764,11 @@ class ExpertTeamOrchestrator:
                     "completed",
                     output_text=f"{member.display_name} 已完成「{member.role or member.display_name}」阶段。",
                 )
-            update_expert_team_run_state(run_id, "completed", final_summary="专家团任务已完成")
+            update_expert_team_run_state(
+                run_id,
+                "completed",
+                final_summary="专家团任务已完成",
+            )
             yield _status_sse(run_id)
         except asyncio.CancelledError:
             cancel_expert_team_run(run_id)
@@ -719,7 +777,10 @@ class ExpertTeamOrchestrator:
         except Exception as exc:
             logger.exception("Expert team run failed: %s", run_id)
             update_expert_team_run_state(run_id, "failed", error=str(exc))
-            get_expert_team_repository().fail_open_member_runs(run_id, str(exc))
+            get_expert_team_repository().fail_open_member_runs(
+                run_id,
+                str(exc),
+            )
             yield _status_sse(run_id)
 
     def _build_team_instruction(
@@ -746,7 +807,11 @@ class ExpertTeamOrchestrator:
         )
 
 
-async def attach_run_to_chat(workspace: Any, chat_id: str, run: ExpertTeamRun) -> None:
+async def attach_run_to_chat(
+    workspace: Any,
+    chat_id: str,
+    run: ExpertTeamRun,
+) -> None:
     chat_manager = getattr(workspace, "chat_manager", None)
     if chat_manager is None:
         return

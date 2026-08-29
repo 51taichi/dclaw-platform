@@ -5,6 +5,7 @@ import pytest
 from fastapi import HTTPException
 
 from qwenpaw.app.auth import verify_password
+from qwenpaw.app.billing.models import WalletBalance
 from qwenpaw.app.routers import admin_users
 
 
@@ -36,7 +37,11 @@ class FakeUserRepository:
 
     def get_user_by_username(self, username):
         return next(
-            (row for row in self.users.values() if row["username"] == username),
+            (
+                row
+                for row in self.users.values()
+                if row["username"] == username
+            ),
             None,
         )
 
@@ -76,6 +81,15 @@ class FakeUserRepository:
         return True
 
 
+class FakeWalletService:
+    def __init__(self):
+        self.wallet_users = []
+
+    def get_or_create_personal_wallet(self, user_id):
+        self.wallet_users.append(user_id)
+        return WalletBalance(0, 0, 0, 0, 0)
+
+
 @pytest.fixture
 def fake_repo(monkeypatch):
     repo = FakeUserRepository()
@@ -83,8 +97,18 @@ def fake_repo(monkeypatch):
     return repo
 
 
+@pytest.fixture
+def fake_wallet_service(monkeypatch):
+    service = FakeWalletService()
+    monkeypatch.setattr(admin_users, "get_wallet_service", lambda: service)
+    return service
+
+
 @pytest.mark.asyncio
-async def test_admin_user_routes_use_user_repository(fake_repo):
+async def test_admin_user_routes_use_user_repository(
+    fake_repo,
+    fake_wallet_service,
+):
     listed = await admin_users.list_users()
 
     assert [user.username for user in listed] == ["admin"]
@@ -103,6 +127,7 @@ async def test_admin_user_routes_use_user_repository(fake_repo):
         stored["password_hash"],
         stored["password_salt"],
     )
+    assert fake_wallet_service.wallet_users == [created.id]
 
     result = await admin_users.reset_password(
         created.id,
@@ -120,8 +145,16 @@ async def test_admin_user_routes_use_user_repository(fake_repo):
     assert fake_repo.deleted == [created.id]
 
 
+def test_admin_user_router_does_not_expose_a_signup_trial_path():
+    paths = {route.path for route in admin_users.router.routes}
+
+    assert "/users/{user_id}/signup-trial" not in paths
+
+
 @pytest.mark.asyncio
-async def test_admin_user_routes_prevent_duplicate_and_last_admin_delete(fake_repo):
+async def test_admin_user_routes_prevent_duplicate_and_last_admin_delete(
+    fake_repo,
+):
     with pytest.raises(HTTPException) as duplicate:
         await admin_users.create_user(
             admin_users.CreateUserRequest(

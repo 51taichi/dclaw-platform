@@ -114,23 +114,22 @@ async def register(req: RegisterRequest):
             detail="Authentication is not enabled",
         )
 
-    if has_registered_users():
-        raise HTTPException(
-            status_code=403,
-            detail="User already registered",
-        )
-
     if not req.username.strip() or not req.password.strip():
         raise HTTPException(
             status_code=400,
             detail="Username and password are required",
         )
 
+    already_registered = has_registered_users()
     token = register_user(req.username.strip(), req.password, req.expires_in)
     if token is None:
         raise HTTPException(
-            status_code=409,
-            detail="Registration failed",
+            status_code=403 if already_registered else 409,
+            detail=(
+                "User already registered"
+                if already_registered
+                else "Registration failed"
+            ),
         )
 
     return LoginResponse(token=token, username=req.username.strip())

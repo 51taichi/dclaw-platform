@@ -16,13 +16,10 @@ def ensure_durable_schema(
 ) -> bool:
     """Ensure SQLAlchemy-backed durable tables exist.
 
-    The legacy SQLite path still owns its own migrations in ``app.db``.  For
-    Postgres deployments we must create the SQLAlchemy schema before auth
-    auto-registration, repositories, diagnostics, or background tasks touch it.
+    This is the single application-startup boundary for SQLAlchemy schema
+    creation and legacy upgrades.  Request dependencies only assemble
+    repositories and services; they never run DDL.
     """
     resolved_settings = settings or get_storage_settings()
-    if resolved_settings.database_backend != "postgres":
-        return False
-
     create_all(engine or get_app_engine())
-    return True
+    return resolved_settings.database_backend == "postgres"

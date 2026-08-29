@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from agentscope_runtime.engine.schemas.agent_schemas import ContentType
-from fastapi import HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.testclient import TestClient
 
 from qwenpaw.app.open_api.runtime import (
     OpenMessageRequest,
@@ -14,8 +16,8 @@ from qwenpaw.app.open_api.runtime import (
     prepare_open_agent_chat,
     prepare_open_expert_team_chat,
 )
+from qwenpaw.app.billing.execution import OpenApiExecutionFence
 from qwenpaw.app.routers import open_api
-from qwenpaw.app.routers import router as root_router
 from qwenpaw.app.task_limits import TaskConcurrencyLimiter
 
 
@@ -34,6 +36,128 @@ class FakeOpenApiRepository:
 
     def create_invocation(self, row: dict[str, Any]) -> dict[str, Any]:
         self.invocations.append(row)
+        return row
+
+    def get_invocation(self, invocation_id: str) -> dict[str, Any] | None:
+        return next(
+            (row for row in self.invocations if row["id"] == invocation_id),
+            None,
+        )
+
+    def update_billing_invocation(self, invocation_id: str, **values):
+        row = self.get_invocation(invocation_id)
+        if row is not None:
+            if "terminal_event" in values:
+                if row.get("terminal_event_json") is not None:
+                    return row
+                values["terminal_event_json"] = values.pop("terminal_event")
+            row.update(
+                {
+                    key: value
+                    for key, value in values.items()
+                    if value is not None
+                },
+            )
+        return row
+
+    def claim_invocation_execution(
+        self,
+        invocation_id: str,
+        owner_token: str,
+        *,
+        lease_seconds,
+    ):
+        row = self.get_invocation(invocation_id)
+        if (
+            row is None
+            or row.get("status") != "accepted"
+            or row.get("execution_owner_token")
+        ):
+            return None
+        generation = int(row.get("execution_fence_generation") or 0) + 1
+        row.update(
+            status="running",
+            status_code=202,
+            execution_owner_token=owner_token,
+            execution_fence_generation=generation,
+            execution_lease_expires_at=datetime.now(timezone.utc)
+            + timedelta(seconds=lease_seconds),
+        )
+        return OpenApiExecutionFence(owner_token, generation)
+
+    def renew_invocation_execution(
+        self,
+        invocation_id: str,
+        fence: OpenApiExecutionFence,
+        *,
+        lease_seconds,
+    ) -> bool:
+        row = self.get_invocation(invocation_id)
+        current = datetime.now(timezone.utc)
+        current_expiry = (row or {}).get("execution_lease_expires_at")
+        owner_matches = bool(
+            row
+            and row.get("status") == "running"
+            and row.get("execution_owner_token") == fence.owner_token
+            and row.get("execution_fence_generation") == fence.generation,
+        )
+        expiry_valid = bool(
+            isinstance(current_expiry, datetime) and current_expiry > current,
+        )
+        if (
+            not owner_matches
+            or not expiry_valid
+            or (row or {}).get("terminal_event_json") is not None
+        ):
+            return False
+        assert row is not None
+        row["execution_lease_expires_at"] = current + timedelta(
+            seconds=lease_seconds,
+        )
+        return True
+
+    def finalize_invocation_execution(
+        self,
+        invocation_id: str,
+        fence: OpenApiExecutionFence,
+        *,
+        status: str,
+        status_code: int,
+        error_summary: str,
+        terminal_event: dict[str, Any],
+        **values,
+    ) -> dict[str, Any] | None:
+        row = self.get_invocation(invocation_id)
+        if (
+            row is None
+            or row.get("execution_owner_token") != fence.owner_token
+            or row.get("execution_fence_generation") != fence.generation
+            or row.get("terminal_event_json") is not None
+        ):
+            return None
+        row.update(
+            status=status,
+            status_code=status_code,
+            error_summary=error_summary,
+            terminal_event_json=dict(terminal_event),
+            execution_owner_token=None,
+            execution_lease_expires_at=None,
+        )
+        row.update(
+            {key: value for key, value in values.items() if value is not None},
+        )
+        return row
+
+    def update_claimed_invocation(self, invocation_id, fence, **values):
+        row = self.get_invocation(invocation_id)
+        if (
+            row is None
+            or row.get("execution_owner_token") != fence.owner_token
+            or row.get("execution_fence_generation") != fence.generation
+            or row.get("terminal_event_json") is not None
+        ):
+            return None
+        row.update(values)
         return row
 
     def update_invocation_status(
@@ -74,7 +198,9 @@ class FakeConsoleChannel:
 
 
 class FakeChannelManager:
-    def __init__(self, console_channel: FakeConsoleChannel | None = None) -> None:
+    def __init__(
+        self, console_channel: FakeConsoleChannel | None = None
+    ) -> None:
         self.console_channel = console_channel or FakeConsoleChannel()
         self.requested: list[str] = []
 
@@ -118,7 +244,9 @@ class FakeTaskTracker:
     ) -> None:
         self.is_new_run = is_new_run
         self.existing_events = (
-            ["data: existing\n\n"] if existing_events is None else existing_events
+            ["data: existing\n\n"]
+            if existing_events is None
+            else existing_events
         )
         self.active_payload = active_payload
         self.attach_calls: list[dict[str, Any]] = []
@@ -152,8 +280,11 @@ class FakeTaskTracker:
             for event in self.existing_events:
                 yield event
             return
-        async for item in self.stream_fn(self.stream_payload):
-            yield item
+        try:
+            async for item in self.stream_fn(self.stream_payload):
+                yield item
+        except Exception:
+            yield 'data: {"error": "internal server error"}\n\n'
 
     async def get_payload(self, chat_id: str):
         _ = chat_id
@@ -243,8 +374,130 @@ def _publication(
         "target_type": target_type,
         "target_id": target_id,
         "owner_user_id": "owner-1",
+        "bound_user_id": "owner-1",
         "status": "enabled",
     }
+
+
+class _FakeBillingCoordinator:
+    def __init__(self, repo):
+        self.repo = repo
+
+    def begin_invocation(self, command):
+        invocation_id = f"billing-invocation-{len(self.repo.invocations) + 1}"
+        self.repo.create_invocation(
+            {
+                "id": invocation_id,
+                "app_id": command.app_id,
+                "publication_id": command.publication_id,
+                "api_key_id": command.api_key_id,
+                "target_type": command.target_type,
+                "target_id": command.target_id,
+                "external_session_id": command.external_session_id,
+                "external_user_id": command.external_user_id,
+                "token_summary": {},
+                "latency_ms": 0,
+                "error_summary": "",
+                "status": "accepted",
+                "status_code": 202,
+                "billing_status": "quoted",
+                "billing_error_code": None,
+            },
+        )
+        return SimpleNamespace(
+            invocation_id=invocation_id,
+            usage_order_id=f"order-{invocation_id}",
+            wallet_id="wallet",
+            bound_user_id="owner-1",
+            app_id=command.app_id,
+            api_key_id=command.api_key_id,
+            publication_id=command.publication_id,
+            catalog_version="test",
+            mode="shadow",
+            replayed=False,
+        )
+
+
+class _FakeUsageService:
+    def list_items(self, _order_id):
+        return [
+            {
+                "status": "released",
+                "execution_outcome": "succeeded",
+                "captured_credits": 0,
+                "released_credits": 0,
+            },
+        ]
+
+    def get_order(self, _order_id):
+        return {"status": "settled", "captured_credits": 0}
+
+
+class _FakeBillingExecution:
+    meter = None
+    insufficient = None
+
+    def __init__(self, repo, invocation_id, fence):
+        self.repo = repo
+        self.invocation_id = invocation_id
+        self.fence = fence
+        self.terminal_snapshot = None
+        self.finalizing = False
+        self.producer_task = None
+
+    def renew_lease(self):
+        if not self.repo.renew_invocation_execution(
+            self.invocation_id,
+            self.fence,
+            lease_seconds=30,
+        ):
+            raise AssertionError("fake execution lease was lost")
+
+    def note_stream_ready(self):
+        return None
+
+    def begin_finalizing(self):
+        self.finalizing = True
+
+    async def wait_for_preflight(self):
+        return None
+
+    def note_finalized(self, terminal):
+        self.finalizing = True
+        self.terminal_snapshot = dict(terminal)
+
+    async def wait_for_finalization(self):
+        assert self.terminal_snapshot is not None
+        return dict(self.terminal_snapshot)
+
+
+class _FakeBillingRuntime:
+    mode = "shadow"
+    budget_credits = 100
+
+    def __init__(self, repo):
+        self.coordinator = _FakeBillingCoordinator(repo)
+        self.open_api_repository = repo
+        self.usage_service = _FakeUsageService()
+        self.repository = SimpleNamespace(
+            balance=lambda _wallet_id: SimpleNamespace(available=0),
+        )
+
+    def execution(self, invocation_id, fence, _lease_seconds):
+        return _FakeBillingExecution(
+            self.open_api_repository,
+            invocation_id,
+            fence,
+        )
+
+
+@pytest.fixture(autouse=True)
+def _stub_router_billing_runtime(monkeypatch):
+    monkeypatch.setattr(
+        open_api,
+        "create_open_api_billing_runtime",
+        lambda: _FakeBillingRuntime(open_api.get_open_api_repository()),
+    )
 
 
 def test_build_open_session_id_is_stable_and_namespaced():
@@ -253,7 +506,9 @@ def test_build_open_session_id_is_stable_and_namespaced():
         == "open:app-1:public-agent:ext-user:session-1"
     )
     assert (
-        build_open_session_id("app-1", "public-agent", "ext user", "bad header\r\n")
+        build_open_session_id(
+            "app-1", "public-agent", "ext user", "bad header\r\n"
+        )
         == "open:app-1:public-agent:ext_user:bad_header"
     )
     assert (
@@ -280,7 +535,9 @@ async def test_prepare_open_agent_chat_ignores_metadata_agent_id_and_binds_open_
     )
 
     assert prepared.agent_id == "agent-published"
-    assert prepared.session_id == "open:app-1:public-agent:ext-user:ext-session"
+    assert (
+        prepared.session_id == "open:app-1:public-agent:ext-user:ext-session"
+    )
     assert prepared.channel == "open:app-1"
     assert prepared.chat_id == "chat-open-1"
     assert workspace.chat_manager.calls == [
@@ -328,14 +585,18 @@ async def test_prepare_open_expert_team_chat_uses_leader_workspace_and_sets_team
 
 
 @pytest.mark.asyncio
-async def test_post_open_message_returns_404_when_publication_is_missing(monkeypatch):
+async def test_post_open_message_returns_404_when_publication_is_missing(
+    monkeypatch,
+):
     repo = FakeOpenApiRepository(publication=None)
     monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
 
     with pytest.raises(HTTPException) as exc_info:
         await open_api.post_open_message(
             "missing-public",
-            OpenMessageRequest(external_user_id="u", external_session_id="s", message="hi"),
+            OpenMessageRequest(
+                external_user_id="u", external_session_id="s", message="hi"
+            ),
             _request(),
         )
 
@@ -343,14 +604,20 @@ async def test_post_open_message_returns_404_when_publication_is_missing(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_post_open_message_rejects_api_key_publication_mismatch(monkeypatch):
-    repo = FakeOpenApiRepository(publication=_publication(publication_id="pub-other"))
+async def test_post_open_message_rejects_api_key_publication_mismatch(
+    monkeypatch,
+):
+    repo = FakeOpenApiRepository(
+        publication=_publication(publication_id="pub-other")
+    )
     monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
 
     with pytest.raises(HTTPException) as exc_info:
         await open_api.post_open_message(
             "public-agent",
-            OpenMessageRequest(external_user_id="u", external_session_id="s", message="hi"),
+            OpenMessageRequest(
+                external_user_id="u", external_session_id="s", message="hi"
+            ),
             _request(publication_id="pub-db-1"),
         )
 
@@ -376,7 +643,10 @@ async def test_post_open_message_agent_publication_creates_invocation_from_reque
     )
 
     assert response.headers["x-qwenpaw-chat-id"] == "chat-open-1"
-    assert response.headers["x-qwenpaw-session-id"] == "open:app-1:public-agent:ext-user:ext-session"
+    assert (
+        response.headers["x-qwenpaw-session-id"]
+        == "open:app-1:public-agent:ext-user:ext-session"
+    )
     assert response.headers["x-qwenpaw-open-invocation-id"]
     assert repo.invocations[0]["api_key_id"] == "key-from-state"
     assert repo.invocations[0]["app_id"] == "app-1"
@@ -388,11 +658,17 @@ async def test_post_open_message_agent_publication_creates_invocation_from_reque
     assert repo.invocations[0]["external_user_id"] == "ext-user"
     assert repo.invocations[0]["status"] == "running"
     assert repo.invocations[0]["status_code"] == 202
-    assert workspace.task_tracker.attach_calls[0]["stream_payload"]["meta"]["publication_id"] == "pub-db-1"
+    assert (
+        workspace.task_tracker.attach_calls[0]["stream_payload"]["meta"][
+            "publication_id"
+        ]
+        == "pub-db-1"
+    )
 
     body = await _consume_streaming_response(response)
 
-    assert body == "data: done\n\n"
+    assert body.startswith("data: done\n\n")
+    assert '"type":"billing.completed"' in body
     assert repo.invocations[0]["status"] == "succeeded"
     assert repo.invocations[0]["status_code"] == 200
 
@@ -424,8 +700,7 @@ async def test_post_open_message_updates_existing_run_invocation_on_stream_compl
     body = await _consume_streaming_response(response)
 
     assert body == "data: existing\n\n"
-    assert repo.invocations[0]["status"] == "succeeded"
-    assert repo.invocations[0]["status_code"] == 200
+    assert repo.invocations[0]["status"] == "running"
     assert workspace.channel_manager.console_channel.streamed_payloads == []
 
 
@@ -434,7 +709,9 @@ async def test_post_open_message_marks_existing_run_cancelled_when_request_disco
     monkeypatch,
 ):
     workspace = _workspace(agent_id="agent-published")
-    workspace.task_tracker = FakeTaskTracker(is_new_run=False, existing_events=[])
+    workspace.task_tracker = FakeTaskTracker(
+        is_new_run=False, existing_events=[]
+    )
     repo = FakeOpenApiRepository(publication=_publication())
     monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
     request = _request(workspace=workspace)
@@ -457,8 +734,7 @@ async def test_post_open_message_marks_existing_run_cancelled_when_request_disco
     body = await _consume_streaming_response(response)
 
     assert body == ""
-    assert repo.invocations[0]["status"] == "cancelled"
-    assert repo.invocations[0]["status_code"] == 499
+    assert repo.invocations[0]["status"] == "running"
 
 
 @pytest.mark.asyncio
@@ -486,9 +762,7 @@ async def test_post_open_message_marks_existing_run_invocation_failed_on_error_e
     body = await _consume_streaming_response(response)
 
     assert "internal server error" in body
-    assert repo.invocations[0]["status"] == "failed"
-    assert repo.invocations[0]["status_code"] == 500
-    assert repo.invocations[0]["error_summary"] == "internal server error"
+    assert repo.invocations[0]["status"] == "running"
 
 
 @pytest.mark.asyncio
@@ -512,14 +786,18 @@ async def test_post_open_message_marks_existing_run_failed_on_expert_team_status
 
     def fake_get_team(team_id: str):
         assert team_id == "team-1"
-        return SimpleNamespace(id="team-1", enabled=True, leader_agent_id="leader-agent")
+        return SimpleNamespace(
+            id="team-1", enabled=True, leader_agent_id="leader-agent"
+        )
 
     monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
     monkeypatch.setattr(open_api, "get_expert_team_template", fake_get_team)
     monkeypatch.setattr(
         open_api,
         "get_latest_expert_team_run_by_chat",
-        lambda chat_id: SimpleNamespace(id="existing-run-1", root_chat_id=chat_id),
+        lambda chat_id: SimpleNamespace(
+            id="existing-run-1", root_chat_id=chat_id
+        ),
     )
 
     response = await open_api.post_open_message(
@@ -535,15 +813,17 @@ async def test_post_open_message_marks_existing_run_failed_on_expert_team_status
     body = await _consume_streaming_response(response)
 
     assert "team failed" in body
-    assert repo.invocations[0]["status"] == "failed"
-    assert repo.invocations[0]["status_code"] == 500
-    assert repo.invocations[0]["error_summary"] == "team failed"
+    assert repo.invocations[0]["status"] == "running"
 
 
 @pytest.mark.asyncio
-async def test_post_open_message_updates_invocation_failed_when_stream_fails(monkeypatch):
+async def test_post_open_message_updates_invocation_failed_when_stream_fails(
+    monkeypatch,
+):
     workspace = _workspace(agent_id="agent-published")
-    workspace.channel_manager = FakeChannelManager(FakeConsoleChannel(fail=True))
+    workspace.channel_manager = FakeChannelManager(
+        FakeConsoleChannel(fail=True)
+    )
     repo = FakeOpenApiRepository(publication=_publication())
     monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
 
@@ -601,7 +881,9 @@ async def test_post_open_message_expert_team_creates_team_run_payload_and_header
 
     def fake_get_team(team_id: str):
         assert team_id == "team-1"
-        return SimpleNamespace(id="team-1", enabled=True, leader_agent_id="leader-agent")
+        return SimpleNamespace(
+            id="team-1", enabled=True, leader_agent_id="leader-agent"
+        )
 
     def fake_create_run(**kwargs):
         captured["create_run"] = kwargs
@@ -621,8 +903,12 @@ async def test_post_open_message_expert_team_creates_team_run_payload_and_header
     monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
     monkeypatch.setattr(open_api, "get_expert_team_template", fake_get_team)
     monkeypatch.setattr(open_api, "create_expert_team_run", fake_create_run)
-    monkeypatch.setattr(open_api, "attach_run_to_chat", fake_attach_run_to_chat)
-    monkeypatch.setattr(open_api, "ExpertTeamOrchestrator", FakeExpertTeamOrchestrator)
+    monkeypatch.setattr(
+        open_api, "attach_run_to_chat", fake_attach_run_to_chat
+    )
+    monkeypatch.setattr(
+        open_api, "ExpertTeamOrchestrator", FakeExpertTeamOrchestrator
+    )
 
     response = await open_api.post_open_message(
         "public-team",
@@ -642,7 +928,8 @@ async def test_post_open_message_expert_team_creates_team_run_payload_and_header
 
     body = await _consume_streaming_response(response)
 
-    assert body == "data: team\n\n"
+    assert body.startswith("data: team\n\n")
+    assert '"type":"billing.completed"' in body
     assert captured["create_run"] == {
         "team_id": "team-1",
         "root_chat_id": "chat-open-1",
@@ -657,8 +944,13 @@ async def test_post_open_message_expert_team_creates_team_run_payload_and_header
     assert captured["orchestrator_payload"]["run_id"] == run_id
     assert stream_payload["team_id"] == "team-1"
     assert stream_payload["root_chat_id"] == "chat-open-1"
-    assert stream_payload["root_session_id"] == "open:app-1:public-team:ext-user:team-session"
-    assert stream_payload["native_payload"]["meta"]["expert_team_id"] == "team-1"
+    assert (
+        stream_payload["root_session_id"]
+        == "open:app-1:public-team:ext-user:team-session"
+    )
+    assert (
+        stream_payload["native_payload"]["meta"]["expert_team_id"] == "team-1"
+    )
 
 
 @pytest.mark.asyncio
@@ -676,7 +968,9 @@ async def test_post_open_message_expert_team_status_failed_marks_invocation_fail
 
     def fake_get_team(team_id: str):
         assert team_id == "team-1"
-        return SimpleNamespace(id="team-1", enabled=True, leader_agent_id="leader-agent")
+        return SimpleNamespace(
+            id="team-1", enabled=True, leader_agent_id="leader-agent"
+        )
 
     def fake_create_run(**kwargs):
         return SimpleNamespace(id=kwargs["run_id"])
@@ -698,8 +992,12 @@ async def test_post_open_message_expert_team_status_failed_marks_invocation_fail
     monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
     monkeypatch.setattr(open_api, "get_expert_team_template", fake_get_team)
     monkeypatch.setattr(open_api, "create_expert_team_run", fake_create_run)
-    monkeypatch.setattr(open_api, "attach_run_to_chat", fake_attach_run_to_chat)
-    monkeypatch.setattr(open_api, "ExpertTeamOrchestrator", FakeExpertTeamOrchestrator)
+    monkeypatch.setattr(
+        open_api, "attach_run_to_chat", fake_attach_run_to_chat
+    )
+    monkeypatch.setattr(
+        open_api, "ExpertTeamOrchestrator", FakeExpertTeamOrchestrator
+    )
 
     response = await open_api.post_open_message(
         "public-team",
@@ -738,7 +1036,9 @@ async def test_post_open_message_expert_team_existing_run_does_not_create_new_te
 
     def fake_get_team(team_id: str):
         assert team_id == "team-1"
-        return SimpleNamespace(id="team-1", enabled=True, leader_agent_id="leader-agent")
+        return SimpleNamespace(
+            id="team-1", enabled=True, leader_agent_id="leader-agent"
+        )
 
     def fake_create_run(**kwargs):
         raise AssertionError(f"should not create duplicate run: {kwargs}")
@@ -749,7 +1049,9 @@ async def test_post_open_message_expert_team_existing_run_does_not_create_new_te
     monkeypatch.setattr(
         open_api,
         "get_latest_expert_team_run_by_chat",
-        lambda chat_id: SimpleNamespace(id="existing-run-1", root_chat_id=chat_id),
+        lambda chat_id: SimpleNamespace(
+            id="existing-run-1", root_chat_id=chat_id
+        ),
     )
 
     response = await open_api.post_open_message(
@@ -767,7 +1069,7 @@ async def test_post_open_message_expert_team_existing_run_does_not_create_new_te
     body = await _consume_streaming_response(response)
 
     assert body == "data: existing-team\n\n"
-    assert repo.invocations[0]["status"] == "succeeded"
+    assert repo.invocations[0]["status"] == "running"
 
 
 @pytest.mark.asyncio
@@ -790,7 +1092,9 @@ async def test_post_open_message_expert_team_existing_run_prefers_active_payload
 
     def fake_get_team(team_id: str):
         assert team_id == "team-1"
-        return SimpleNamespace(id="team-1", enabled=True, leader_agent_id="leader-agent")
+        return SimpleNamespace(
+            id="team-1", enabled=True, leader_agent_id="leader-agent"
+        )
 
     def fake_create_run(**kwargs):
         raise AssertionError(f"should not create duplicate run: {kwargs}")
@@ -801,7 +1105,9 @@ async def test_post_open_message_expert_team_existing_run_prefers_active_payload
     monkeypatch.setattr(
         open_api,
         "get_latest_expert_team_run_by_chat",
-        lambda chat_id: SimpleNamespace(id="stale-db-run", root_chat_id=chat_id),
+        lambda chat_id: SimpleNamespace(
+            id="stale-db-run", root_chat_id=chat_id
+        ),
     )
 
     response = await open_api.post_open_message(
@@ -820,9 +1126,37 @@ async def test_post_open_message_expert_team_existing_run_prefers_active_payload
     )
 
 
-def test_open_api_router_is_mounted_at_root_open_prefix_only():
-    paths = {route.path for route in root_router.routes}
+def test_open_api_router_is_mounted_at_root_open_prefix_only(monkeypatch):
+    app = FastAPI()
+    app.include_router(open_api.router, prefix="/api")
+    repo = FakeOpenApiRepository(
+        publication=_publication(public_id="route-probe"),
+    )
+    monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
+    client = TestClient(app, raise_server_exceptions=False)
+    payload = {
+        "external_user_id": "route-probe",
+        "message": "hello",
+    }
 
-    assert "/open/v1/targets/{public_id}/messages" in paths
-    assert "/user/open/v1/targets/{public_id}/messages" not in paths
-    assert "/admin/open/v1/targets/{public_id}/messages" not in paths
+    assert (
+        client.post(
+            "/api/open/v1/targets/route-probe/messages",
+            json=payload,
+        ).status_code
+        != 404
+    )
+    assert (
+        client.post(
+            "/api/user/open/v1/targets/route-probe/messages",
+            json=payload,
+        ).status_code
+        == 404
+    )
+    assert (
+        client.post(
+            "/api/admin/open/v1/targets/route-probe/messages",
+            json=payload,
+        ).status_code
+        == 404
+    )

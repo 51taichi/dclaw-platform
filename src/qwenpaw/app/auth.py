@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# pylint: disable=too-many-return-statements,unreachable
 """Authentication module: password hashing, JWT tokens, and FastAPI middleware.
 
 Login is disabled by default and only enabled when the environment
@@ -32,6 +33,7 @@ from fastapi import HTTPException, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from . import backup_endpoint_policy
+from .billing.service import get_wallet_service
 from .open_api.auth import authenticate_open_api_request
 from .storage.repos.user_repo import get_user_repository
 from ..constant import SECRET_DIR, EnvVarLoader
@@ -90,7 +92,12 @@ def _get_positive_int_env(name: str, default: int) -> int:
     try:
         value = int(raw)
     except ValueError:
-        logger.warning("Invalid integer for %s=%r; using %s", name, raw, default)
+        logger.warning(
+            "Invalid integer for %s=%r; using %s",
+            name,
+            raw,
+            default,
+        )
         return default
     return value if value > 0 else default
 
@@ -160,7 +167,10 @@ class LoginAttemptLimiter:
     def record_failure(self, client_ip: str, username: str) -> None:
         now = time.monotonic()
         with self._lock:
-            for key, max_failures in self._keys_with_limits(client_ip, username):
+            for key, max_failures in self._keys_with_limits(
+                client_ip,
+                username,
+            ):
                 failures = self._recent_failures(key, now)
                 failures.append(now)
                 self._failures[key] = failures
@@ -564,8 +574,8 @@ def _ensure_db_user(
     """Ensure the auth user also exists in durable user storage.
 
     Older single-user installs stored the first account only in auth.json.
-    Newer route guards read request roles from durable storage, so registration must
-    keep both stores in sync.
+    Newer route guards read request roles from durable storage, so registration
+    must keep both stores in sync.
     """
     try:
         return get_user_repository().ensure_user(
@@ -596,7 +606,11 @@ def _update_db_user_credentials(
             role=role,
         )
     except Exception as exc:
-        logger.debug("Failed to update auth user '%s' in DB: %s", username, exc)
+        logger.debug(
+            "Failed to update auth user '%s' in DB: %s",
+            username,
+            exc,
+        )
         return None
 
 
@@ -646,12 +660,39 @@ def register_user(
 
     # Only one user allowed
     if data.get("user"):
+        existing = data["user"]
+        if (
+            data.get("registration_pending_wallet")
+            and existing.get("username") == username
+            and verify_password(
+                password,
+                existing.get("password_hash", ""),
+                existing.get("password_salt", ""),
+            )
+        ):
+            user = _ensure_db_user(
+                username,
+                existing.get("password_hash", ""),
+                existing.get("password_salt", ""),
+                "admin",
+            )
+            if user is None:
+                raise RuntimeError(
+                    "durable registration could not be completed",
+                )
+            get_wallet_service().get_or_create_personal_wallet(user["id"])
+            data.pop("registration_pending_wallet", None)
+            _save_auth_data(data)
+            return create_token(username, expiry_seconds)
         return None
     try:
         if get_user_repository().count_users() > 0:
             return None
     except Exception as exc:
-        logger.debug("DB user count lookup failed during registration: %s", exc)
+        logger.debug(
+            "DB user count lookup failed during registration: %s",
+            exc,
+        )
         return None
 
     pw_hash, salt = _hash_password(password)
@@ -660,13 +701,19 @@ def register_user(
         "password_hash": pw_hash,
         "password_salt": salt,
     }
+    data["registration_pending_wallet"] = True
 
     # Ensure jwt_secret exists
     if not data.get("jwt_secret"):
         data["jwt_secret"] = secrets.token_hex(32)
 
     _save_auth_data(data)
-    _ensure_db_user(username, pw_hash, salt, "admin")
+    user = _ensure_db_user(username, pw_hash, salt, "admin")
+    if user is None:
+        raise RuntimeError("durable registration could not be completed")
+    get_wallet_service().get_or_create_personal_wallet(user["id"])
+    data.pop("registration_pending_wallet", None)
+    _save_auth_data(data)
     logger.info("User '%s' registered", username)
     return create_token(username, expiry_seconds)
 
@@ -914,7 +961,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     request.state.role = row["role"]
                 elif not skip_auth:
                     return Response(
-                        content=json.dumps({"detail": "User no longer exists"}),
+                        content=json.dumps(
+                            {"detail": "User no longer exists"},
+                        ),
                         status_code=401,
                         media_type="application/json",
                     )
@@ -1012,7 +1061,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
             referer = request.headers.get("referer", "")
             if referer:
-                ref_token = parse_qs(urlparse(referer).query).get("token", [""])[0]
+                ref_token = parse_qs(urlparse(referer).query).get(
+                    "token",
+                    [""],
+                )[0]
                 if ref_token:
                     return ref_token
         return None

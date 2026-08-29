@@ -14,10 +14,9 @@ Concurrency and rate-limit control (LLMRateLimiter):
 Semaphore ownership rules:
 - Non-streaming: __call__'s finally block always releases the slot
   (owns_semaphore stays True throughout).
-- Streaming: ownership transfers to _consume_stream_with_slot the moment
-  __call__ returns the generator.  owns_semaphore is set to False before
-  the return so __call__'s finally skips the release.
-  _consume_stream_with_slot releases after the first chunk arrives.
+- Streaming: ownership transfers to an explicit async-iterator owner before
+  __call__ returns. The owner can therefore close the already-created inner
+  stream and release its slot even if no chunk is ever requested.
 - Cancellation safety: the boolean flag `acquired` tracks whether the
   semaphore slot has actually been taken; the final block only releases
   when acquired is True, preventing a spurious release on CancelledError.
@@ -26,9 +25,11 @@ Semaphore ownership rules:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
+from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
-from typing import Any, AsyncGenerator
+from typing import Any
 
 from agentscope.model import ChatModelBase
 from agentscope.model._model_response import ChatResponse
@@ -305,45 +306,11 @@ class RetryChatModel(ChatModelBase):
         name = self._inner.model_name
         return f"{provider_id}:{name}" if provider_id else name
 
-    async def _consume_stream_with_slot(
-        self,
-        stream: AsyncGenerator[ChatResponse, None],
-        limiter: LLMRateLimiter,
-    ) -> AsyncGenerator[ChatResponse, None]:
-        """Yield all chunks from *stream*, managing the semaphore slot
-        lifecycle.
-
-        Releases the semaphore slot after the first chunk arrives — once the
-        API starts streaming the request has been accepted and will not be
-        rate-limited mid-flight, so holding the slot for the full streaming
-        duration would unnecessarily starve other callers.
-
-        Always closes *stream* on completion or error.  Any exception raised
-        during iteration propagates to the caller's ``async for`` loop
-        (i.e. _wrap_stream), which handles retry decisions.  The exception
-        does not propagate to the final consumer unless all retries are
-        exhausted.
-        """
-        first_chunk = True
-        try:
-            async for chunk in stream:
-                if first_chunk:
-                    first_chunk = False
-                    # return the slot once the API starts delivering
-                    limiter.release()
-                yield chunk
-        finally:
-            await stream.aclose()
-            if first_chunk:
-                # Stream failed before producing any chunk;
-                # slot not yet released.
-                limiter.release()
-
     async def __call__(
         self,
         *args: Any,
         **kwargs: Any,
-    ) -> ChatResponse | AsyncGenerator[ChatResponse, None]:
+    ) -> ChatResponse | AsyncIterator[ChatResponse]:
         cache = get_capability_cache()
         key = self.model_key
 
@@ -404,19 +371,25 @@ class RetryChatModel(ChatModelBase):
                     )
                     result = await self._inner(*args, **kwargs)
 
-                if isinstance(result, AsyncGenerator):
-                    # Transfer semaphore ownership to _wrap_stream, which uses
-                    # _consume_stream_with_slot internally and handles
-                    # retries on stream failure.
-                    owns_semaphore = False
-                    return self._wrap_stream(
-                        result,
-                        args,
-                        kwargs,
-                        attempt,
-                        attempts,
-                        limiter,
+                if _is_async_iterable(result):
+                    owner = await _RetryStreamOwner.create(
+                        inner=self._inner,
+                        retry_config=self._retry_config,
+                        acquire_timeout=(
+                            self._rate_limit_config.acquire_timeout
+                        ),
+                        stream=result,
+                        call_args=args,
+                        call_kwargs=kwargs,
+                        current_attempt=attempt,
+                        max_attempts=attempts,
+                        limiter=limiter,
                     )
+                    # Transfer only after the explicit owner exists. If
+                    # __aiter__ or construction raises, this frame still owns
+                    # and releases the acquired permit in its finally block.
+                    owns_semaphore = False
+                    return owner
 
                 return result
 
@@ -446,124 +419,261 @@ class RetryChatModel(ChatModelBase):
         # Should be unreachable, but satisfies the type-checker.
         raise last_exc  # type: ignore[misc]
 
-    # pylint: disable=too-many-branches
-    async def _wrap_stream(
+
+class _RetryStreamOwner(AsyncIterator[ChatResponse]):
+    """Own one retrying stream and its current concurrency permit eagerly."""
+
+    def __init__(
         self,
-        stream: AsyncGenerator[ChatResponse, None],
+        *,
+        inner: ChatModelBase,
+        retry_config: RetryConfig,
+        acquire_timeout: float,
+        stream: AsyncIterable[ChatResponse],
+        iterator: AsyncIterator[ChatResponse],
         call_args: tuple,
         call_kwargs: dict,
         current_attempt: int,
         max_attempts: int,
         limiter: LLMRateLimiter,
-    ) -> AsyncGenerator[ChatResponse, None]:
-        """Yield chunks from *stream*; on transient failure, retry the full
-        request and yield from the new stream instead."""
+    ) -> None:
+        self._inner = inner
+        self._retry_config = retry_config
+        self._acquire_timeout = acquire_timeout
+        self._stream: AsyncIterable[ChatResponse] | None = stream
+        self._iterator: AsyncIterator[ChatResponse] | None = iterator
+        self._call_args = call_args
+        self._call_kwargs = call_kwargs
+        self._attempt = current_attempt
+        self._max_attempts = max_attempts
+        self._limiter = limiter
+        self._owns_permit = True
+        self._closed = False
+
+    @classmethod
+    async def create(
+        cls,
+        *,
+        inner: ChatModelBase,
+        retry_config: RetryConfig,
+        acquire_timeout: float,
+        stream: AsyncIterable[ChatResponse],
+        call_args: tuple,
+        call_kwargs: dict,
+        current_attempt: int,
+        max_attempts: int,
+        limiter: LLMRateLimiter,
+    ) -> "_RetryStreamOwner":
+        """Resolve the iterator before the caller transfers its permit."""
         try:
-            async for chunk in self._consume_stream_with_slot(stream, limiter):
-                yield chunk
-            return  # stream completed without error
-        except Exception as failed_exc:
-            if _is_retryable(failed_exc) and _is_rate_limit(failed_exc):
-                await limiter.report_rate_limit(
-                    _extract_retry_after(failed_exc),
-                )
-
-            if (
-                not _is_retryable(failed_exc)
-                or current_attempt >= max_attempts
-            ):
-                raise failed_exc
-
-            delay = _compute_backoff(current_attempt, self._retry_config)
-            logger.warning(
-                "LLM stream failed (attempt %d/%d): %s. Retrying in %.1fs ...",
-                current_attempt,
-                max_attempts,
-                failed_exc,
-                delay,
-            )
-            await asyncio.sleep(delay)
-
-        # Retry loop for stream failures
-        for attempt in range(current_attempt + 1, max_attempts + 1):
-            acquired = False
-            owns_semaphore = True
+            iterator = _get_async_iterator(stream)
+        except BaseException:
             try:
-                try:
-                    await asyncio.wait_for(
-                        limiter.acquire(),
-                        timeout=self._rate_limit_config.acquire_timeout,
-                    )
-                    acquired = True
-                except asyncio.TimeoutError as exc:
-                    raise RateLimitExceededException(
-                        operation="LLM execution (stream retry)",
-                        retry_after=int(
-                            self._rate_limit_config.acquire_timeout,
-                        ),
-                        details={
-                            "reason": "Timed out waiting for execution slot",
-                        },
-                    ) from exc
-
-                result = await self._inner(*call_args, **call_kwargs)
-
-                if isinstance(result, AsyncGenerator):
-                    owns_semaphore = False
-                    try:
-                        async for chunk in self._consume_stream_with_slot(
-                            result,
-                            limiter,
-                        ):
-                            yield chunk
-                        return  # stream completed without error
-                    except Exception as retry_failed:
-                        if _is_retryable(retry_failed) and _is_rate_limit(
-                            retry_failed,
-                        ):
-                            await limiter.report_rate_limit(
-                                _extract_retry_after(retry_failed),
-                            )
-                        if (
-                            not _is_retryable(retry_failed)
-                            or attempt >= max_attempts
-                        ):
-                            raise retry_failed
-                        retry_delay = _compute_backoff(
-                            attempt,
-                            self._retry_config,
-                        )
-                        logger.warning(
-                            "LLM stream retry failed (attempt %d/%d): %s. "
-                            "Retrying in %.1fs ...",
-                            attempt,
-                            max_attempts,
-                            retry_failed,
-                            retry_delay,
-                        )
-                        await asyncio.sleep(retry_delay)
-                else:
-                    yield result
-                    return
-
-            except Exception as retry_exc:
-                if _is_retryable(retry_exc) and _is_rate_limit(retry_exc):
-                    await limiter.report_rate_limit(
-                        _extract_retry_after(retry_exc),
-                    )
-                if not _is_retryable(retry_exc) or attempt >= max_attempts:
-                    raise
-                retry_delay = _compute_backoff(attempt, self._retry_config)
+                await _close_async_iterable(stream)
+            except BaseException as cleanup_error:
                 logger.warning(
-                    "LLM stream retry failed (attempt %d/%d): %s. "
-                    "Retrying in %.1fs ...",
-                    attempt,
-                    max_attempts,
-                    retry_exc,
-                    retry_delay,
+                    "LLM stream cleanup failed while resolving its iterator",
+                    exc_info=(
+                        type(cleanup_error),
+                        cleanup_error,
+                        cleanup_error.__traceback__,
+                    ),
                 )
-                await asyncio.sleep(retry_delay)
+            raise
+        return cls(
+            inner=inner,
+            retry_config=retry_config,
+            acquire_timeout=acquire_timeout,
+            stream=stream,
+            iterator=iterator,
+            call_args=call_args,
+            call_kwargs=call_kwargs,
+            current_attempt=current_attempt,
+            max_attempts=max_attempts,
+            limiter=limiter,
+        )
 
-            finally:
-                if owns_semaphore and acquired:
-                    limiter.release()
+    def __aiter__(self) -> "_RetryStreamOwner":
+        return self
+
+    async def __anext__(self) -> ChatResponse:
+        if self._closed:
+            raise StopAsyncIteration
+
+        failure: BaseException | None = None
+        while True:
+            if failure is not None:
+                if (
+                    not isinstance(failure, Exception)
+                    or not _is_retryable(failure)
+                    or self._attempt >= self._max_attempts
+                ):
+                    self._closed = True
+                    raise failure
+                try:
+                    await self._prepare_retry(failure)
+                    self._attempt += 1
+                    await self._acquire_permit()
+                    result = await self._inner(
+                        *self._call_args,
+                        **self._call_kwargs,
+                    )
+                    if not _is_async_iterable(result):
+                        self._closed = True
+                        self._release_permit()
+                        return result
+                    self._install_stream(result)
+                    failure = None
+                except BaseException as retry_exc:
+                    await self._cleanup_current(retry_exc)
+                    failure = retry_exc
+                continue
+
+            iterator = self._iterator
+            if iterator is None:
+                self._closed = True
+                raise StopAsyncIteration
+            try:
+                chunk = await iterator.__anext__()
+            except StopAsyncIteration:
+                self._closed = True
+                cleanup_errors = await self._cleanup_current()
+                _raise_cleanup_cancellation(cleanup_errors)
+                raise
+            except BaseException as stream_exc:
+                await self._cleanup_current(stream_exc)
+                failure = stream_exc
+                continue
+
+            # Once the provider starts delivering, the request has been
+            # accepted and no longer consumes a retry concurrency permit.
+            self._release_permit()
+            return chunk
+
+    async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        cleanup_errors = await self._cleanup_current()
+        _raise_cleanup_cancellation(cleanup_errors)
+
+    async def _prepare_retry(self, failure: Exception) -> None:
+        if _is_rate_limit(failure):
+            await self._limiter.report_rate_limit(
+                _extract_retry_after(failure),
+            )
+        delay = _compute_backoff(
+            self._attempt,
+            self._retry_config,
+        )
+        logger.warning(
+            "LLM stream failed (attempt %d/%d): %s. Retrying in %.1fs ...",
+            self._attempt,
+            self._max_attempts,
+            failure,
+            delay,
+        )
+        await asyncio.sleep(delay)
+
+    async def _acquire_permit(self) -> None:
+        try:
+            await asyncio.wait_for(
+                self._limiter.acquire(),
+                timeout=self._acquire_timeout,
+            )
+        except asyncio.TimeoutError as exc:
+            raise RateLimitExceededException(
+                operation="LLM execution (stream retry)",
+                retry_after=int(self._acquire_timeout),
+                details={
+                    "reason": "Timed out waiting for execution slot",
+                },
+            ) from exc
+        self._owns_permit = True
+
+    def _install_stream(self, stream: AsyncIterable[ChatResponse]) -> None:
+        self._stream = stream
+        self._iterator = _get_async_iterator(stream)
+
+    async def _cleanup_current(
+        self,
+        primary_error: BaseException | None = None,
+    ) -> list[BaseException]:
+        iterator = self._iterator
+        stream = self._stream
+        self._iterator = None
+        self._stream = None
+        cleanup_errors: list[BaseException] = []
+        try:
+            candidates: list[Any | None] = [iterator]
+            if stream is not iterator:
+                candidates.append(stream)
+            for candidate in candidates:
+                if candidate is None:
+                    continue
+                try:
+                    await _close_async_iterable(candidate)
+                except BaseException as cleanup_error:
+                    cleanup_errors.append(cleanup_error)
+                    logger.warning(
+                        "LLM stream cleanup failed; preserving %s",
+                        (
+                            type(primary_error).__name__
+                            if primary_error is not None
+                            else "stream outcome"
+                        ),
+                        exc_info=(
+                            type(cleanup_error),
+                            cleanup_error,
+                            cleanup_error.__traceback__,
+                        ),
+                    )
+        finally:
+            self._release_permit()
+        return cleanup_errors
+
+    def _release_permit(self) -> None:
+        if not self._owns_permit:
+            return
+        self._owns_permit = False
+        self._limiter.release()
+
+
+def _is_async_iterable(value: Any) -> bool:
+    """Recognize SDK iterator wrappers as well as native async generators."""
+    try:
+        return isinstance(value, AsyncIterable) or callable(
+            getattr(value, "__aiter__", None),
+        )
+    except (AttributeError, KeyError, TypeError):
+        return False
+
+
+def _get_async_iterator(
+    stream: AsyncIterable[ChatResponse],
+) -> AsyncIterator[ChatResponse]:
+    """Resolve the concrete iterator while the caller still owns cleanup."""
+    iterator = stream.__aiter__()
+    if not callable(getattr(iterator, "__anext__", None)):
+        raise TypeError("async iterable returned an invalid iterator")
+    return iterator
+
+
+def _raise_cleanup_cancellation(errors: list[BaseException]) -> None:
+    """Do not swallow cancellation raised by cleanup without a primary."""
+    for error in errors:
+        if not isinstance(error, Exception):
+            raise error
+
+
+async def _close_async_iterable(stream: Any) -> None:
+    """Close native generators and SDK async iterators when supported."""
+    try:
+        close = getattr(stream, "aclose", None)
+    except (AttributeError, KeyError, TypeError):
+        return
+    if not callable(close):
+        return
+    result = close()
+    if inspect.isawaitable(result):
+        await result

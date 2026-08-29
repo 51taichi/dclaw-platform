@@ -7,13 +7,21 @@ import sqlite3
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, event
+from sqlalchemy.pool import StaticPool
 
 from qwenpaw.app.routers import expert_teams as expert_team_router
 from qwenpaw.app import expert_teams
 from qwenpaw.app.runtime.event_bus import MemoryRuntimeEventBus
 from qwenpaw.app.storage.repos import expert_team_repo
-from qwenpaw.app.storage.repos.expert_team_repo import SqliteExpertTeamRepository
+from qwenpaw.app.storage.repos.expert_team_repo import (
+    SqliteExpertTeamRepository,
+)
+from qwenpaw.app.storage.repos.expert_team_repo import (
+    SqlAlchemyExpertTeamRepository,
+)
 
 
 def _make_db() -> sqlite3.Connection:
@@ -35,6 +43,7 @@ def test_builtin_templates_seed_and_user_list_hides_disabled(monkeypatch):
     conn = _make_db()
     _use_sqlite_repo(monkeypatch, conn)
 
+    expert_teams.bootstrap_expert_teams()
     templates = expert_teams.list_expert_team_templates(enabled_only=True)
 
     assert {template.id for template in templates} >= {
@@ -64,6 +73,54 @@ def test_builtin_templates_seed_and_user_list_hides_disabled(monkeypatch):
     visible = expert_teams.list_expert_team_templates(enabled_only=True)
 
     assert "ai_video_team" not in {template.id for template in visible}
+
+
+def test_bootstrap_is_explicit_and_list_request_has_no_schema_or_seed_writes(
+    monkeypatch,
+):
+    engine = create_engine(
+        "sqlite:///:memory:",
+        future=True,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    repo = SqlAlchemyExpertTeamRepository(engine)
+    monkeypatch.setattr(
+        expert_teams,
+        "get_expert_team_repository",
+        lambda: repo,
+    )
+
+    expert_teams.bootstrap_expert_teams()
+    first_ids = {row["id"] for row in repo.list_template_rows()}
+    expert_teams.bootstrap_expert_teams()
+    assert {row["id"] for row in repo.list_template_rows()} == first_ids
+
+    statements: list[str] = []
+    event.listen(
+        engine,
+        "before_cursor_execute",
+        lambda _conn, _cursor, statement, *_args: statements.append(statement),
+    )
+    app = FastAPI()
+    app.include_router(expert_team_router.user_router)
+
+    client = TestClient(app)
+    response = client.get("/expert-teams")
+    detail_response = client.get("/expert-teams/software_dev_team")
+
+    assert response.status_code == 200
+    assert detail_response.status_code == 200
+    assert {row["id"] for row in response.json()} >= {
+        "ai_video_team",
+        "software_dev_team",
+        "deep_research_team",
+    }
+    assert statements
+    assert all(
+        statement.lstrip().upper().startswith("SELECT ")
+        for statement in statements
+    )
 
 
 def test_create_run_initializes_members_and_usage(monkeypatch):
@@ -130,7 +187,12 @@ async def test_expert_team_run_state_publishes_runtime_events(monkeypatch):
     conn = _make_db()
     _use_sqlite_repo(monkeypatch, conn)
     bus = MemoryRuntimeEventBus(max_events=20, max_age_seconds=60)
-    monkeypatch.setattr(expert_teams, "get_runtime_event_bus", lambda: bus, raising=False)
+    monkeypatch.setattr(
+        expert_teams,
+        "get_runtime_event_bus",
+        lambda: bus,
+        raising=False,
+    )
     expert_teams.seed_builtin_expert_teams()
     run = expert_teams.create_expert_team_run(
         team_id="deep_research_team",
@@ -151,7 +213,11 @@ async def test_expert_team_run_state_publishes_runtime_events(monkeypatch):
         "expert_team.run.updated",
         "expert_team.run.updated",
     ]
-    assert [event.status for event in events] == ["pending", "running", "cancelled"]
+    assert [event.status for event in events] == [
+        "pending",
+        "running",
+        "cancelled",
+    ]
     assert {event.job_id for event in events} == {run.id}
     assert events[-1].payload["root_chat_id"] == "chat-2"
 

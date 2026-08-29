@@ -42,6 +42,8 @@ from .aigc_studio import public_router as public_aigc_studio_router
 from .aigc_studio import router as aigc_studio_router
 from .desktop import router as desktop_router
 from .mobile import router as mobile_router
+from .billing import admin_router as admin_billing_router
+from .billing import user_router as user_billing_router
 from .expert_teams import (
     admin_router as admin_expert_teams_router,
     user_router as user_expert_teams_router,
@@ -52,7 +54,6 @@ from .mindspace_cloud import (
     public_router as public_mindspace_cloud_router,
     user_router as user_mindspace_cloud_router,
 )
-
 
 
 router = APIRouter()
@@ -91,6 +92,7 @@ user_api_router.include_router(aigc_studio_router)
 user_api_router.include_router(user_expert_teams_router)
 user_api_router.include_router(user_mindspace_cloud_router)
 user_api_router.include_router(mobile_router)
+user_api_router.include_router(user_billing_router)
 
 
 router.include_router(user_api_router)
@@ -119,6 +121,7 @@ admin_api_router.include_router(admin_mindspace_cloud_router)
 admin_api_router.include_router(admin_knowledge_router)
 admin_api_router.include_router(open_api_admin_router)
 admin_api_router.include_router(sealed_agents_router)
+admin_api_router.include_router(admin_billing_router)
 
 
 router.include_router(admin_api_router)

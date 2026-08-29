@@ -488,10 +488,14 @@ def _get_formatter_for_chat_model(
     Returns:
         Corresponding formatter class, defaults to OpenAIChatFormatter
     """
-    return _CHAT_MODEL_FORMATTER_MAP.get(
-        chat_model_class,
-        OpenAIChatFormatter,
-    )
+    # Task4 provider adapters subclass AgentScope's concrete classes.  An
+    # exact lookup silently classified those adapters as OpenAI, including in
+    # auto-routing, so select the first mapped ancestor in the class MRO.
+    for candidate in getattr(chat_model_class, "__mro__", ()):
+        formatter = _CHAT_MODEL_FORMATTER_MAP.get(candidate)
+        if formatter is not None:
+            return formatter
+    return OpenAIChatFormatter
 
 
 def _substitute_video_blocks(
@@ -1010,8 +1014,13 @@ def _wrap_chat_model(
     *,
     retry_config: RetryConfig | None,
     rate_limit_config: RateLimitConfig | None,
+    billing_meter: Any | None = None,
 ) -> ChatModelBase:
-    wrapped_model = TokenRecordingModelWrapper(provider_id, model)
+    wrapped_model = TokenRecordingModelWrapper(
+        provider_id,
+        model,
+        meter=billing_meter,
+    )
     return RetryChatModel(
         wrapped_model,
         retry_config=retry_config,
@@ -1024,6 +1033,7 @@ def _build_auto_routing_model_and_formatter(
     *,
     retry_config: RetryConfig | None,
     rate_limit_config: RateLimitConfig | None,
+    billing_meter: Any | None = None,
 ) -> tuple[ChatModelBase, FormatterBase]:
     endpoints: list[RoutingEndpoint] = []
     seen: set[tuple[str, str]] = set()
@@ -1071,7 +1081,9 @@ def _build_auto_routing_model_and_formatter(
         formatter_family = _get_formatter_for_chat_model(raw_model.__class__)
         if fallback_family is None:
             fallback_family = formatter_family
-            fallback_formatter = _create_formatter_instance(raw_model.__class__)
+            fallback_formatter = _create_formatter_instance(
+                raw_model.__class__,
+            )
         if formatter_family is not fallback_family:
             continue
 
@@ -1084,6 +1096,7 @@ def _build_auto_routing_model_and_formatter(
                     raw_model,
                     retry_config=retry_config,
                     rate_limit_config=rate_limit_config,
+                    billing_meter=billing_meter,
                 ),
                 formatter=fallback_formatter,
                 formatter_family=formatter_family,
@@ -1125,8 +1138,14 @@ def create_model_and_formatter(
     Example:
         >>> model, formatter = create_model_and_formatter()
     """
-    from ..app.agent_context import get_current_agent_id, get_current_chat_model
-    from ..config.config import load_agent_config
+    from ..app.agent_context import (
+        get_current_agent_id,
+        get_current_chat_model,
+    )
+    from ..config.config import ModelSlotConfig, load_agent_config
+    from ..app.open_api.runtime import get_current_billing_meter
+
+    billing_meter = get_current_billing_meter()
 
     # Determine agent_id (parameter > context > None)
     if agent_id is None:
@@ -1145,7 +1164,8 @@ def create_model_and_formatter(
             model=chat_model.get("model", ""),
         )
 
-    # Try to get agent-specific model config (retry config, rate limit, fallback model)
+    # Try to get agent-specific model config (retry config, rate limit,
+    # fallback model).
     retry_config = None
     rate_limit_config = None
     if agent_id:
@@ -1169,13 +1189,15 @@ def create_model_and_formatter(
         except Exception:
             pass
 
-    # Create chat model from chat-specific, agent-specific, auto, or global config
+    # Create a chat model from chat-specific, agent-specific, auto, or global
+    # config.
     manager = ProviderManager.get_instance()
     if model_slot and is_auto_model_slot(model_slot):
         return _build_auto_routing_model_and_formatter(
             manager,
             retry_config=retry_config,
             rate_limit_config=rate_limit_config,
+            billing_meter=billing_meter,
         )
 
     if model_slot and model_slot.provider_id and model_slot.model:
@@ -1211,6 +1233,7 @@ def create_model_and_formatter(
         model,
         retry_config=retry_config,
         rate_limit_config=rate_limit_config,
+        billing_meter=billing_meter,
     )
 
     return wrapped_model, formatter

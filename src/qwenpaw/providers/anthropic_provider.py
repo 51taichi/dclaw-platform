@@ -230,7 +230,9 @@ class AnthropicProvider(Provider):
             )
 
     def get_chat_model_instance(self, model_id: str) -> ChatModelBase:
-        from agentscope.model import AnthropicChatModel
+        from qwenpaw.providers.billing_chat_model_adapters import (
+            BillingAnthropicChatModel,
+        )
 
         client_kwargs: Dict[str, Any] = {"base_url": self.base_url}
 
@@ -275,7 +277,7 @@ class AnthropicProvider(Provider):
         )
         max_tokens = effective_generate_kwargs.pop("max_tokens", 16384)
 
-        return AnthropicChatModel(
+        return BillingAnthropicChatModel(
             model_name=model_id,
             max_tokens=max_tokens,
             stream=True,
