@@ -27,11 +27,11 @@ export interface SealedAgentOperational {
 }
 
 export const sealedAgentsApi = {
-  list: () => request<SealedAgentOperational[]>("/sealed-agents"),
+  list: () => request<SealedAgentOperational[]>("/admin/sealed-agents"),
   uploadRelease: async (file: File) => {
     const body = new FormData();
     body.append("file", file);
-    const response = await fetch(getApiUrl("/sealed-agents/releases"), {
+    const response = await fetch(getApiUrl("/admin/sealed-agents/releases"), {
       method: "POST",
       headers: buildAuthHeaders(),
       body,
@@ -41,14 +41,14 @@ export const sealedAgentsApi = {
   },
   activate: (agentId: string, releaseId: string) =>
     request<SealedAgentOperational>(
-      `/sealed-agents/${encodeURIComponent(
+      `/admin/sealed-agents/${encodeURIComponent(
         agentId,
       )}/releases/${encodeURIComponent(releaseId)}/activate`,
       { method: "POST" },
     ),
   setEnabled: (agentId: string, enabled: boolean) =>
     request<SealedAgentOperational>(
-      `/sealed-agents/${encodeURIComponent(agentId)}/${
+      `/admin/sealed-agents/${encodeURIComponent(agentId)}/${
         enabled ? "enable" : "disable"
       }`,
       { method: "POST" },
