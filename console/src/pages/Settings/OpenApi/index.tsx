@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Button,
@@ -21,16 +21,14 @@ import type { Dayjs } from "dayjs";
 import dayjs from "dayjs";
 import {
   Ban,
-  Database,
   KeyRound,
   Plus,
   RefreshCw,
   RotateCcw,
   ShieldCheck,
-  Trash2,
-  UploadCloud,
 } from "lucide-react";
 
+import { AgentExperienceLibrary } from "@/components/AgentExperienceLibrary";
 import { PageHeader } from "@/components/PageHeader";
 import {
   adminUsersApi,
@@ -45,7 +43,6 @@ import type {
   OpenApiExternalApp,
   OpenApiInvocation,
   OpenApiKey,
-  OpenApiKnowledgeDocument,
   OpenApiPublication,
   OpenApiPublicationStatus,
   OpenApiScope,
@@ -158,16 +155,12 @@ export default function OpenApiPage() {
   const [apps, setApps] = useState<OpenApiExternalApp[]>([]);
   const [keys, setKeys] = useState<OpenApiKey[]>([]);
   const [invocations, setInvocations] = useState<OpenApiInvocation[]>([]);
-  const [knowledgeDocs, setKnowledgeDocs] = useState<
-    OpenApiKnowledgeDocument[]
-  >([]);
   const [agents, setAgents] = useState<AgentSummary[]>([]);
   const [expertTeams, setExpertTeams] = useState<ExpertTeamTemplate[]>([]);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [selectedPublicationId, setSelectedPublicationId] = useState<string>();
   const [initialLoading, setInitialLoading] = useState(false);
   const [scopedLoading, setScopedLoading] = useState(false);
-  const [knowledgeBusy, setKnowledgeBusy] = useState(false);
   const [creatingPublication, setCreatingPublication] = useState(false);
   const [creatingApp, setCreatingApp] = useState(false);
   const [creatingKey, setCreatingKey] = useState(false);
@@ -183,7 +176,6 @@ export default function OpenApiPage() {
     secret: string;
     keyId?: string;
   }>();
-  const knowledgeFileInputRef = useRef<HTMLInputElement>(null);
 
   const selectedPublication = useMemo(
     () =>
@@ -285,24 +277,21 @@ export default function OpenApiPage() {
       if (!publicationId) {
         setKeys([]);
         setInvocations([]);
-        setKnowledgeDocs([]);
         return;
       }
 
       setScopedLoading(true);
       try {
-        const [keyRows, invocationRows, knowledgeRows] = await Promise.all([
+        const [keyRows, invocationRows] = await Promise.all([
           openApiApi.listKeys({ publication_id: publicationId }),
           openApiApi.listInvocations({
             publication_id: publicationId,
             limit: 50,
             offset: 0,
           }),
-          openApiApi.listKnowledgeDocuments(publicationId),
         ]);
         setKeys(keyRows);
         setInvocations(invocationRows);
-        setKnowledgeDocs(knowledgeRows);
       } catch (error) {
         message.error(getErrorMessage(error, "加载 Open API 记录失败"));
       } finally {
@@ -507,56 +496,6 @@ export default function OpenApiPage() {
     }
   };
 
-  const handleKnowledgeUpload = async (
-    event: React.ChangeEvent<HTMLInputElement>,
-  ) => {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file || !selectedPublicationId) return;
-    setKnowledgeBusy(true);
-    try {
-      await openApiApi.uploadKnowledgeDocument(selectedPublicationId, file);
-      setKnowledgeDocs(
-        await openApiApi.listKnowledgeDocuments(selectedPublicationId),
-      );
-      message.success(`「${file.name}」已加入专属知识库`);
-    } catch (error) {
-      message.error(getErrorMessage(error, "上传知识文档失败"));
-    } finally {
-      setKnowledgeBusy(false);
-    }
-  };
-
-  const handleKnowledgeSync = async (doc: OpenApiKnowledgeDocument) => {
-    if (!selectedPublicationId) return;
-    setKnowledgeBusy(true);
-    try {
-      await openApiApi.syncKnowledgeDocument(selectedPublicationId, doc.id);
-      setKnowledgeDocs(
-        await openApiApi.listKnowledgeDocuments(selectedPublicationId),
-      );
-      message.success("知识索引已重建");
-    } catch (error) {
-      message.error(getErrorMessage(error, "重建知识索引失败"));
-    } finally {
-      setKnowledgeBusy(false);
-    }
-  };
-
-  const handleKnowledgeDelete = async (doc: OpenApiKnowledgeDocument) => {
-    if (!selectedPublicationId) return;
-    setKnowledgeBusy(true);
-    try {
-      await openApiApi.deleteKnowledgeDocument(selectedPublicationId, doc.id);
-      setKnowledgeDocs((prev) => prev.filter((item) => item.id !== doc.id));
-      message.success("知识文档已删除");
-    } catch (error) {
-      message.error(getErrorMessage(error, "删除知识文档失败"));
-    } finally {
-      setKnowledgeBusy(false);
-    }
-  };
-
   const handleRevokeKey = async (key: OpenApiKey) => {
     setRevokeBusyId(key.id);
     try {
@@ -753,68 +692,6 @@ export default function OpenApiPage() {
     },
   ];
 
-  const knowledgeColumns: ColumnsType<OpenApiKnowledgeDocument> = [
-    {
-      title: "文档",
-      dataIndex: "name",
-      render: (name: string, record) => (
-        <Space direction="vertical" size={2}>
-          <Typography.Text strong>{name}</Typography.Text>
-          <Typography.Text type="secondary">
-            {record.source_type || record.type || "文件"} · {record.size || "-"}
-          </Typography.Text>
-        </Space>
-      ),
-    },
-    {
-      title: "切片",
-      width: 90,
-      render: (_, record) => record.chunk_count ?? record.slices ?? 0,
-    },
-    {
-      title: "状态",
-      dataIndex: "status",
-      width: 110,
-      render: statusTag,
-    },
-    {
-      title: "更新时间",
-      width: 160,
-      render: (_, record) => formatDate(record.updated_at || record.updatedAt),
-    },
-    {
-      title: "操作",
-      width: 180,
-      render: (_, record) => (
-        <Space>
-          <Button
-            disabled={knowledgeBusy}
-            icon={<RefreshCw size={14} />}
-            onClick={() => void handleKnowledgeSync(record)}
-            size="small"
-          >
-            重建索引
-          </Button>
-          <Popconfirm
-            title="删除知识文档"
-            description="文档、切片和索引都会从该专属知识库移除。"
-            okText="删除"
-            cancelText="取消"
-            okButtonProps={{ danger: true }}
-            onConfirm={() => void handleKnowledgeDelete(record)}
-          >
-            <Button
-              danger
-              disabled={knowledgeBusy}
-              icon={<Trash2 size={14} />}
-              size="small"
-            />
-          </Popconfirm>
-        </Space>
-      ),
-    },
-  ];
-
   const invocationColumns: ColumnsType<OpenApiInvocation> = [
     {
       title: "调用",
@@ -914,8 +791,14 @@ export default function OpenApiPage() {
             <div className={styles.summaryValue}>{keys.length}</div>
           </div>
           <div className={styles.summaryItem}>
-            <p className={styles.summaryLabel}>专属知识文档</p>
-            <div className={styles.summaryValue}>{knowledgeDocs.length}</div>
+            <p className={styles.summaryLabel}>已启用发布</p>
+            <div className={styles.summaryValue}>
+              {
+                publications.filter(
+                  (publication) => publication.status === "enabled",
+                ).length
+              }
+            </div>
           </div>
         </div>
 
@@ -1088,89 +971,7 @@ export default function OpenApiPage() {
                 label: "专属知识库",
                 children: (
                   <div className={styles.tabPanel}>
-                    <div className={styles.toolbar}>
-                      <div>
-                        <Typography.Title level={5}>
-                          选择知识所属对象
-                        </Typography.Title>
-                        <Typography.Text type="secondary">
-                          名称优先展示，ID 仅用于辅助核对，避免上传到错误对象。
-                        </Typography.Text>
-                      </div>
-                      <Space wrap>
-                        <Select
-                          className={styles.publicationFilter}
-                          value={selectedPublicationId}
-                          options={publicationOptions}
-                          showSearch
-                          optionFilterProp="label"
-                          placeholder="选择发布对象"
-                          onChange={(value) => setSelectedPublicationId(value)}
-                        />
-                        <input
-                          ref={knowledgeFileInputRef}
-                          hidden
-                          type="file"
-                          onChange={(event) =>
-                            void handleKnowledgeUpload(event)
-                          }
-                        />
-                        <Button
-                          disabled={!selectedPublicationId}
-                          icon={<UploadCloud size={15} />}
-                          loading={knowledgeBusy}
-                          type="primary"
-                          onClick={() => knowledgeFileInputRef.current?.click()}
-                        >
-                          上传文档
-                        </Button>
-                      </Space>
-                    </div>
-                    {selectedPublication ? (
-                      <div
-                        className={styles.selectionBanner}
-                        role="region"
-                        aria-label={`当前知识对象：${
-                          publicationOptions.find(
-                            (option) => option.value === selectedPublicationId,
-                          )?.label || selectedPublication.public_id
-                        }`}
-                      >
-                        <Database size={18} />
-                        <div>
-                          <Typography.Text strong>
-                            {
-                              publicationOptions.find(
-                                (option) =>
-                                  option.value === selectedPublicationId,
-                              )?.label
-                            }
-                          </Typography.Text>
-                          <Typography.Text
-                            type="secondary"
-                            className={styles.blockText}
-                          >
-                            专属知识库：{selectedPublication.knowledge_base_id}
-                          </Typography.Text>
-                        </div>
-                        {statusTag(selectedPublication.status)}
-                      </div>
-                    ) : null}
-                    <Alert
-                      className={styles.inlineNotice}
-                      type="info"
-                      showIcon
-                      message="一对一绑定"
-                      description="该知识库只服务当前对外发布对象，不读取运行用户的个人知识库或企业共享知识库。"
-                    />
-                    <Table
-                      columns={knowledgeColumns}
-                      dataSource={knowledgeDocs}
-                      loading={scopedLoading || knowledgeBusy}
-                      rowKey="id"
-                      pagination={{ pageSize: 8, showSizeChanger: false }}
-                      scroll={{ x: 760 }}
-                    />
+                    <AgentExperienceLibrary />
                   </div>
                 ),
               },
