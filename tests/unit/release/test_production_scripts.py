@@ -89,9 +89,15 @@ elif args[:1] == ["inspect"]:
             print("dclaw-backups|/app/working.backups")
     elif "NetworkSettings.Networks" in format_value:
         print("dclaw-net")
+    elif "json .Config.Env" in format_value:
+        print(json.dumps([
+            "QWENPAW_DATABASE_BACKEND=postgres",
+            "QWENPAW_DATABASE_URL=postgresql+psycopg://protected",
+        ]))
     elif "range .Config.Env" in format_value:
         print("QWENPAW_DATABASE_BACKEND=postgres")
         print("QWENPAW_DATABASE_URL=postgresql+psycopg://protected")
+        print("")
     else:
         print("{}")
 elif args[:2] == ["volume", "inspect"] or args[:2] == ["network", "inspect"]:

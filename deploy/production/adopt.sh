@@ -12,6 +12,7 @@ source "$SCRIPT_DIR/lib.sh"
 require_command docker
 require_command curl
 require_command flock
+require_command python3
 acquire_deploy_lock
 
 test -f "$COMPOSE_FILE" || die "missing $COMPOSE_FILE"
@@ -59,11 +60,33 @@ backup_postgres "$adoption_dir"
 
 umask 077
 environment_tmp=$(mktemp "$DEPLOY_ROOT/production.env.tmp.XXXXXX")
-docker inspect dclaw --format '{{range .Config.Env}}{{println .}}{{end}}' >"$environment_tmp"
-if grep -q $'\r' "$environment_tmp" || grep -Evq '^[A-Za-z_][A-Za-z0-9_]*=.*$' "$environment_tmp"; then
-  rm -f "$environment_tmp"
+environment_json=$(mktemp "$DEPLOY_ROOT/production.env.json.tmp.XXXXXX")
+docker inspect dclaw --format '{{json .Config.Env}}' >"$environment_json"
+if ! python3 - "$environment_json" "$environment_tmp" <<'PY'
+import json
+import re
+import sys
+
+source, destination = sys.argv[1:]
+entries = json.load(open(source, encoding="utf-8"))
+pattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
+if not isinstance(entries, list) or any(
+    not isinstance(entry, str)
+    or "\r" in entry
+    or "\n" in entry
+    or not pattern.fullmatch(entry)
+    for entry in entries
+):
+    raise SystemExit(1)
+with open(destination, "w", encoding="utf-8") as stream:
+    for entry in entries:
+        stream.write(entry + "\n")
+PY
+then
+  rm -f "$environment_json" "$environment_tmp"
   die "current container environment contains an unsupported entry"
 fi
+rm -f "$environment_json"
 chmod 600 "$environment_tmp"
 mv "$environment_tmp" "$PRODUCTION_ENV"
 write_release_env "$CURRENT_IMAGE" "$CURRENT_SERVER_SHA" "$CURRENT_CLIENT_SHA"
