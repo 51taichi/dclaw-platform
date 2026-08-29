@@ -6,8 +6,9 @@ from contextlib import AbstractContextManager
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import BigInteger, Integer, inspect
+from sqlalchemy import BigInteger, Integer, inspect, text
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import DatabaseError, IntegrityError
 
 import qwenpaw.app.storage.schema as schema_module
 from qwenpaw.app.storage.engine import create_engine_from_settings
@@ -221,6 +222,112 @@ def test_billing_schema_is_idempotent(sqlite_engine):
             for foreign_key in inspector.get_foreign_keys(table_name)
         }
         assert expected_targets <= targets
+
+
+def test_manual_top_up_schema_is_idempotent_and_uses_bigints(sqlite_engine):
+    create_all(sqlite_engine)
+    create_all(sqlite_engine)
+
+    inspector = inspect(sqlite_engine)
+    assert {
+        "billing_top_up_products",
+        "billing_top_up_claims",
+        "billing_top_up_audits",
+    } <= set(inspector.get_table_names())
+
+    bigint_columns = {
+        "billing_top_up_products": {
+            "payment_amount_fen",
+            "purchased_credits",
+            "promotional_credits",
+        },
+        "billing_top_up_claims": {"payment_amount_fen"},
+        "billing_top_up_audits": {
+            "payment_amount_fen",
+            "purchased_credits",
+            "promotional_credits",
+        },
+    }
+    for table_name, expected in bigint_columns.items():
+        columns = {
+            column["name"]: column["type"]
+            for column in inspector.get_columns(table_name)
+        }
+        assert expected <= columns.keys()
+        assert all(isinstance(columns[name], BigInteger) for name in expected)
+
+    claim_targets = {
+        foreign_key["referred_table"]
+        for foreign_key in inspector.get_foreign_keys("billing_top_up_claims")
+    }
+    audit_targets = {
+        foreign_key["referred_table"]
+        for foreign_key in inspector.get_foreign_keys("billing_top_up_audits")
+    }
+    assert {"billing_wallets", "billing_top_up_products"} <= claim_targets
+    assert {"billing_top_up_claims"} <= audit_targets
+
+
+def test_manual_top_up_constraints_and_audits_are_immutable(sqlite_engine):
+    create_all(sqlite_engine)
+    with sqlite_engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO billing_wallets "
+                "(id, owner_type, owner_id) VALUES ('wallet-1', 'user', 'u1')",
+            ),
+        )
+        connection.execute(
+            text(
+                "INSERT INTO billing_top_up_products "
+                "(id, public_id, name, payment_amount_fen, purchased_credits, "
+                "promotional_credits, status) VALUES "
+                "('p1', 'product-public', '1000 credits', 1000, 1000, 0, 'active')",
+            ),
+        )
+
+    with sqlite_engine.begin() as connection, pytest.raises(IntegrityError):
+        connection.execute(
+            text(
+                "INSERT INTO billing_top_up_claims "
+                "(id, public_id, wallet_id, product_id, owner_type, owner_id, "
+                "product_snapshot_json, payment_channel, payer_reference, status, "
+                "submission_idempotency_key, submission_request_sha256, "
+                "reviewed_by, review_reason, reviewed_at) VALUES "
+                "('c1', 'claim-public', 'wallet-1', 'p1', 'user', 'u1', '{}', "
+                "'wechat', '1234', 'approved', 'submit-1', 'hash-1', "
+                "'admin-1', 'ok', CURRENT_TIMESTAMP)",
+            ),
+        )
+
+    with sqlite_engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO billing_top_up_claims "
+                "(id, public_id, wallet_id, product_id, owner_type, owner_id, "
+                "product_snapshot_json, payment_channel, payer_reference, "
+                "submission_idempotency_key, submission_request_sha256, status) "
+                "VALUES ('c2', 'claim-pending', 'wallet-1', 'p1', 'user', 'u1', "
+                "'{}', 'wechat', '5678', 'submit-2', 'hash-2', 'pending')",
+            ),
+        )
+        connection.execute(
+            text(
+                "INSERT INTO billing_top_up_audits "
+                "(id, claim_id, action, actor_id, reason, idempotency_key, "
+                "request_sha256, payment_amount_fen, purchased_credits, "
+                "promotional_credits) VALUES "
+                "('a1', 'c2', 'submitted', 'u1', 'submitted', 'audit-1', "
+                "'hash', 1000, 1000, 0)",
+            ),
+        )
+
+    for statement in (
+        "UPDATE billing_top_up_audits SET reason = 'changed' WHERE id = 'a1'",
+        "DELETE FROM billing_top_up_audits WHERE id = 'a1'",
+    ):
+        with sqlite_engine.begin() as connection, pytest.raises(DatabaseError):
+            connection.execute(text(statement))
 
 
 def test_postgresql_bigint_upgrade_only_targets_existing_billing_amounts(
