@@ -63,6 +63,8 @@ describe("BillingSettings", () => {
         <BillingSettings />
       </MemoryRouter>,
     );
+    expect(screen.getByText("设置")).toBeInTheDocument();
+    expect(screen.getByText("积分与计费")).toBeInTheDocument();
     expect(await screen.findByText("tail-1234")).toBeInTheDocument();
     expect(screen.queryByLabelText(/直接修改余额/)).not.toBeInTheDocument();
     expect(

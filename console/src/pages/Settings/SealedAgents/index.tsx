@@ -73,7 +73,7 @@ export default function SealedAgentsPage() {
     <div className={styles.page}>
       <PageHeader
         parent="设置"
-        current="密封/Agent"
+        current="超级专家"
         subRow={
           <Typography.Text type="secondary">
             管理只可调用、不可查看内部资产的全局 Agent 发布包。
