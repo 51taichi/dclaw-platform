@@ -52,6 +52,7 @@ def test_combined_workflow_has_minimal_permissions_and_concurrency() -> None:
     assert workflow["permissions"] == {"contents": "read", "packages": "write"}
     concurrency = workflow["concurrency"]
     assert isinstance(concurrency, dict)
+    assert concurrency["group"] == "dclaw-combined-image-promotion"
     assert concurrency["cancel-in-progress"] == "true"
 
 
@@ -93,3 +94,28 @@ def test_workflow_uses_github_token_only_for_ghcr_write() -> None:
     login = _step("login-ghcr")
     assert login["with"]["password"] == "${{ secrets.GITHUB_TOKEN }}"
     assert login["with"]["registry"] == "ghcr.io"
+
+
+def test_manual_sha_inputs_reach_shell_only_through_environment() -> None:
+    release = _step("release")
+    script = str(release["run"])
+
+    assert "${{ inputs.server_sha }}" not in script
+    assert "${{ inputs.client_sha }}" not in script
+    assert release["env"]["MANUAL_SERVER_SHA"] == "${{ inputs.server_sha }}"
+    assert release["env"]["MANUAL_CLIENT_SHA"] == "${{ inputs.client_sha }}"
+    assert '--server-sha "$MANUAL_SERVER_SHA"' in script
+    assert '--client-sha "$MANUAL_CLIENT_SHA"' in script
+
+
+def test_main_promotion_requires_resolved_pair_to_still_match_both_mains() -> (
+    None
+):
+    assert _step_index("verify-current-main-pair") < _step_index(
+        "publish-main-tag",
+    )
+    gate = str(_step("verify-current-main-pair")["run"])
+    assert "steps.release.outputs.server_sha" not in gate
+    assert "RESOLVED_SERVER_SHA" in gate
+    assert "RESOLVED_CLIENT_SHA" in gate
+    assert "commits/main" in gate

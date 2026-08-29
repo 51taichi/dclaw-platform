@@ -7,6 +7,7 @@ source "$SCRIPT_DIR/lib.sh"
 
 require_command docker
 require_command curl
+require_command python3
 
 echo '=== DClaw application ==='
 docker inspect dclaw --format \
@@ -19,8 +20,12 @@ printf 'server_sha=%s\n' "$(image_label "$CURRENT_ID" "$SERVER_LABEL")"
 printf 'client_sha=%s\n' "$(image_label "$CURRENT_ID" "$CLIENT_LABEL")"
 
 echo '=== GHCR main (read-only) ==='
-docker buildx imagetools inspect "${IMAGE_REPOSITORY}:main" \
-  --format '{{json .Image.Config.Labels}}' 2>/dev/null || echo 'remote_labels=unavailable'
+remote_server=$(docker buildx imagetools inspect "${IMAGE_REPOSITORY}:main" \
+  --format "{{index .Image.Config.Labels \"$SERVER_LABEL\"}}" 2>/dev/null || true)
+remote_client=$(docker buildx imagetools inspect "${IMAGE_REPOSITORY}:main" \
+  --format "{{index .Image.Config.Labels \"$CLIENT_LABEL\"}}" 2>/dev/null || true)
+printf 'remote_server_sha=%s\n' "${remote_server:-unavailable}"
+printf 'remote_client_sha=%s\n' "${remote_client:-unavailable}"
 
 echo '=== dependencies ==='
 for container in dclaw-postgres dclaw-redis; do

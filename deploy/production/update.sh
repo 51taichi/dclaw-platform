@@ -39,6 +39,7 @@ fi
 require_command docker
 require_command curl
 require_command flock
+require_command python3
 acquire_deploy_lock
 assert_runtime_resources
 
@@ -69,7 +70,6 @@ write_safe_facts "$release_dir" "$CURRENT_ID" "$CURRENT_DIGEST" "$CURRENT_SERVER
 docker tag "$CURRENT_ID" "dclaw-local:rollback-$timestamp"
 backup_postgres "$release_dir"
 
-previous_release=$(cat "$RELEASE_ENV")
 write_release_env "$TARGET_DIGEST" "$RESOLVED_SERVER_SHA" "$RESOLVED_CLIENT_SHA"
 
 update_ok=false
@@ -88,9 +88,9 @@ if [ "$update_ok" = true ]; then
 fi
 
 save_failed_logs "$release_dir"
-printf '%s\n' "$previous_release" >"$RELEASE_ENV"
-chmod 600 "$RELEASE_ENV"
-if compose_recreate && wait_for_health "$HEALTH_TIMEOUT"; then
+write_release_env "$CURRENT_ID" "$CURRENT_SERVER_SHA" "$CURRENT_CLIENT_SHA"
+if compose_recreate && wait_for_health "$HEALTH_TIMEOUT" && verify_public_api && \
+  verify_running_identity "$CURRENT_ID" "$CURRENT_SERVER_SHA" "$CURRENT_CLIENT_SHA"; then
   write_manifest "$release_dir" UPDATE_FAILED_ROLLBACK_READY "$CURRENT_ID" "$TARGET_DIGEST" \
     "$RESOLVED_SERVER_SHA" "$RESOLVED_CLIENT_SHA"
   echo UPDATE_FAILED_ROLLBACK_READY

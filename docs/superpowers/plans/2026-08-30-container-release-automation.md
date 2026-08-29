@@ -871,4 +871,3 @@ Use `superpowers:requesting-code-review` twice: first for the server branch agai
 Report both branch names, full commit lists, fresh test outputs, workflow secret prerequisites, and the fact that production has not changed. Do not merge or push to `main` until the user explicitly authorizes it.
 
 After authorization, push the client commit first, then the server commit so the client dispatch target exists when the server workflow is enabled. Confirm remote `main` SHAs and wait for the combined immutable image workflow to finish before installing or running production scripts.
-

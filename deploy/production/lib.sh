@@ -40,7 +40,24 @@ image_id() {
 }
 
 image_repo_digest() {
-  docker image inspect "$1" --format '{{index .RepoDigests 0}}'
+  local digests
+  digests=$(docker image inspect "$1" --format '{{json .RepoDigests}}')
+  python3 - "$IMAGE_REPOSITORY" "$digests" <<'PY'
+import json
+import sys
+
+repository = sys.argv[1]
+matches = [
+    value
+    for value in (json.loads(sys.argv[2]) or [])
+    if value.startswith(f"{repository}@sha256:")
+]
+if len(matches) != 1:
+    raise SystemExit(
+        f"expected exactly one digest for {repository}, found {len(matches)}",
+    )
+print(matches[0])
+PY
 }
 
 image_label() {

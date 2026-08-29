@@ -21,7 +21,7 @@ permissions:
   packages: write
 
 concurrency:
-  group: dclaw-combined-${{ github.event_name }}-${{ github.event.client_payload.client_sha || github.sha }}
+  group: dclaw-combined-image-promotion
   cancel-in-progress: true
 
 env:
@@ -41,6 +41,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CLIENT_READ_TOKEN: ${{ secrets.DCLAW_CLIENT_READ_TOKEN }}
+          MANUAL_SERVER_SHA: ${{ inputs.server_sha }}
+          MANUAL_CLIENT_SHA: ${{ inputs.client_sha }}
         run: |
           set -euo pipefail
           server_main_sha=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)
@@ -51,8 +53,8 @@ jobs:
             --event-path "$GITHUB_EVENT_PATH" \
             --server-main-sha "$server_main_sha" \
             --client-main-sha "$client_main_sha" \
-            --server-sha '${{ inputs.server_sha }}' \
-            --client-sha '${{ inputs.client_sha }}' \
+            --server-sha "$MANUAL_SERVER_SHA" \
+            --client-sha "$MANUAL_CLIENT_SHA" \
             --github-output "$GITHUB_OUTPUT"
 
       - name: Checkout exact server revision
@@ -121,8 +123,30 @@ jobs:
           test "$actual_server" = "$SERVER_SHA"
           test "$actual_client" = "$CLIENT_SHA"
 
+      - name: Verify release pair is still current
+        id: verify-current-main-pair
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CLIENT_READ_TOKEN: ${{ secrets.DCLAW_CLIENT_READ_TOKEN }}
+          RESOLVED_SERVER_SHA: ${{ steps.release.outputs.server_sha }}
+          RESOLVED_CLIENT_SHA: ${{ steps.release.outputs.client_sha }}
+        run: |
+          set -euo pipefail
+          current_server_sha=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)
+          current_client_sha=$(GH_TOKEN="$CLIENT_READ_TOKEN" \
+            gh api repos/51taichi/dclaw-client/commits/main --jq .sha)
+          if [ "$RESOLVED_SERVER_SHA" = "$current_server_sha" ] && \
+            [ "$RESOLVED_CLIENT_SHA" = "$current_client_sha" ]; then
+            echo 'promote=true' >>"$GITHUB_OUTPUT"
+          else
+            echo 'promote=false' >>"$GITHUB_OUTPUT"
+            echo 'Immutable image published; main moved, so main tag was not advanced.'
+          fi
+
       - name: Publish verified image as main
         id: publish-main-tag
+        if: steps.verify-current-main-pair.outputs.promote == 'true'
         env:
           IMMUTABLE_IMAGE: ${{ env.IMAGE_REPOSITORY }}:${{ steps.release.outputs.pair_tag }}
         run: |

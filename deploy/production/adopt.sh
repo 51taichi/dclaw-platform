@@ -69,13 +69,33 @@ mv "$environment_tmp" "$PRODUCTION_ENV"
 write_release_env "$CURRENT_IMAGE" "$CURRENT_SERVER_SHA" "$CURRENT_CLIENT_SHA"
 docker tag "$CURRENT_ID" "dclaw-local:pre-compose-$timestamp"
 
+adoption_committed=false
+production_stopped=false
+rollback_renamed=false
+restore_original_on_exit() {
+  local exit_code=$?
+  if [ "$adoption_committed" != true ] && [ "$production_stopped" = true ]; then
+    if [ "$rollback_renamed" = true ]; then
+      docker rm -f dclaw >/dev/null 2>&1 || true
+      docker rename "$rollback_name" dclaw >/dev/null 2>&1 || true
+    fi
+    docker start dclaw >/dev/null 2>&1 || true
+    wait_for_health "$HEALTH_TIMEOUT" >/dev/null 2>&1 || true
+  fi
+  return "$exit_code"
+}
+trap restore_original_on_exit EXIT
+
+production_stopped=true
 docker stop dclaw >/dev/null
 docker rename dclaw "$rollback_name"
+rollback_renamed=true
 
 if compose_recreate && wait_for_health "$HEALTH_TIMEOUT" && verify_public_api && \
   verify_running_identity "$CURRENT_ID" "$CURRENT_SERVER_SHA" "$CURRENT_CLIENT_SHA"; then
   printf '%s\n' "$adoption_dir" >"$DEPLOY_ROOT/LATEST_ADOPTION"
   chmod 600 "$DEPLOY_ROOT/LATEST_ADOPTION"
+  adoption_committed=true
   echo ADOPTION_SUCCESS
   exit 0
 fi
@@ -83,7 +103,9 @@ fi
 save_failed_logs "$adoption_dir"
 docker rm -f dclaw >/dev/null 2>&1 || true
 docker rename "$rollback_name" dclaw
+rollback_renamed=false
 docker start dclaw >/dev/null
+production_stopped=false
 if wait_for_health "$HEALTH_TIMEOUT"; then
   die "adoption failed; original production restored"
 fi

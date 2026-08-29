@@ -30,6 +30,7 @@ with log.open("a") as stream:
 current_id = os.environ.get("FAKE_CURRENT_ID", "sha256:" + "1" * 64)
 target_id = os.environ.get("FAKE_TARGET_ID", "sha256:" + "2" * 64)
 current_digest = os.environ.get("FAKE_CURRENT_DIGEST", "ghcr.io/51taichi/dclaw@sha256:" + "1" * 64)  # noqa: E501
+current_digests = json.loads(os.environ.get("FAKE_CURRENT_DIGESTS", json.dumps([current_digest])))
 target_digest = os.environ.get("FAKE_TARGET_DIGEST", "ghcr.io/51taichi/dclaw@sha256:" + "2" * 64)  # noqa: E501
 target_server = os.environ.get("FAKE_TARGET_SERVER", "a" * 40)
 target_client = os.environ.get("FAKE_TARGET_CLIENT", "b" * 40)
@@ -47,7 +48,7 @@ def value_for_image(image, format_value):
     if ".Id" in format_value:
         return target_id if target else current_id
     if "RepoDigests" in format_value:
-        return target_digest if target else current_digest
+        return json.dumps([target_digest]) if target else json.dumps(current_digests)
     if "server-revision" in format_value:
         if target and os.environ.get("FAKE_LABEL_DRIFT") == "1" and state["compose_count"] > 0:  # noqa: E501
             return "f" * 40
@@ -116,6 +117,8 @@ elif args[:1] == ["start"]:
     state["compose_count"] += 1
     state_path.write_text(json.dumps(state))
 elif args[:1] in (["stop"], ["rename"], ["rm"]):
+    if args[:1] == ["rename"] and os.environ.get("FAKE_RENAME_FAIL") == "1":
+        raise SystemExit(42)
     pass
 elif args[:1] in (["tag"], ["logs"]):
     pass
@@ -270,6 +273,33 @@ def test_invalid_backup_never_recreates_production(
     assert not _contains_call(calls, "stop", "dclaw")
 
 
+def test_failed_update_restores_running_image_not_stale_release_env(
+    deployment: dict[str, Any],
+) -> None:
+    root = deployment["root"]
+    assert isinstance(root, Path)
+    (root / "release.env").write_text(
+        "DCLAW_IMAGE=sha256:" + "9" * 64 + "\n"
+        "SERVER_SHA=" + "9" * 40 + "\n"
+        "CLIENT_SHA=" + "8" * 40 + "\n",
+    )
+    env = deployment["env"]
+    env["FAKE_HEALTH_FAILURE"] = "local_api"
+
+    result = _run(deployment, "update.sh")
+    selected = dict(
+        line.split("=", 1)
+        for line in (root / "release.env").read_text().splitlines()
+    )
+
+    assert result.returncode == 1, result.stderr
+    assert selected == {
+        "DCLAW_IMAGE": "sha256:" + "1" * 64,
+        "SERVER_SHA": "c" * 40,
+        "CLIENT_SHA": "d" * 40,
+    }
+
+
 def test_health_window_is_at_least_420_seconds() -> None:
     text = (PRODUCTION / "update.sh").read_text()
 
@@ -377,6 +407,26 @@ def test_status_is_read_only_and_redacts_secrets(
     assert not _contains_call(calls, "pull")
 
 
+def test_status_selects_only_the_configured_repository_digest(
+    deployment: dict[str, Any],
+) -> None:
+    env = deployment["env"]
+    assert isinstance(env, dict)
+    expected = "ghcr.io/51taichi/dclaw@sha256:" + "1" * 64
+    env["FAKE_CURRENT_DIGESTS"] = json.dumps(
+        [
+            "registry.example.invalid/foreign/dclaw@sha256:" + "9" * 64,
+            expected,
+        ],
+    )
+
+    result = _run(deployment, "status.sh")
+
+    assert result.returncode == 0, result.stderr
+    assert f"repo_digest={expected}" in result.stdout
+    assert "registry.example.invalid" not in result.stdout
+
+
 def test_rollback_only_switches_application_image(
     deployment: dict[str, Any],
 ) -> None:
@@ -446,6 +496,54 @@ def test_failed_adoption_restores_original_container(
     assert _contains_call(calls, "rename", "dclaw")
     assert _contains_call(calls, "rm", "-f", "dclaw")
     assert _contains_call(calls, "start", "dclaw")
+
+
+def test_rename_failure_after_stop_restarts_original_container(
+    deployment: dict[str, Any],
+) -> None:
+    env = deployment["env"]
+    env["FAKE_RENAME_FAIL"] = "1"
+
+    result = _run(deployment, "adopt.sh")
+    calls = _calls(deployment)
+
+    assert result.returncode != 0
+    assert _contains_call(calls, "stop", "dclaw")
+    assert _contains_call(calls, "rename", "dclaw")
+    assert _contains_call(calls, "start", "dclaw")
+
+
+def test_failed_rollback_verifies_restoration_of_pre_rollback_image(
+    deployment: dict[str, Any],
+) -> None:
+    root = deployment["root"]
+    assert isinstance(root, Path)
+    release = root / "releases" / "successful"
+    release.mkdir(parents=True)
+    (release / "manifest.json").write_text(
+        json.dumps(
+            {
+                "result": "UPDATE_SUCCESS",
+                "previous_image": "sha256:" + "2" * 64,
+                "target_image": "sha256:" + "1" * 64,
+                "server_sha": "c" * 40,
+                "client_sha": "d" * 40,
+            },
+        ),
+    )
+    (root / "LATEST_SUCCESS").write_text(str(release) + "\n")
+    env = deployment["env"]
+    env["FAKE_HEALTH_FAILURE"] = "local_api"
+
+    result = _run(deployment, "rollback.sh")
+    state_path = deployment["state"]
+    assert isinstance(state_path, Path)
+    state = json.loads(state_path.read_text())
+
+    assert result.returncode != 0
+    assert state["running_id"] == "sha256:" + "1" * 64
+    assert state["compose_count"] == 2
+    assert "ROLLBACK_FAILED" in result.stderr
 
 
 def test_successful_adoption_preserves_protected_environment_file(
