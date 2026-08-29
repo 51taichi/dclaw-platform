@@ -6,7 +6,7 @@ from contextlib import AbstractContextManager
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import BigInteger, Integer, inspect, text
+from sqlalchemy import BigInteger, Integer, insert, inspect, text, update
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import DatabaseError, IntegrityError
 
@@ -14,6 +14,7 @@ import qwenpaw.app.storage.schema as schema_module
 from qwenpaw.app.storage.engine import create_engine_from_settings
 from qwenpaw.app.storage.schema import (
     _ensure_billing_bigint_columns,
+    billing_pricing_audits,
     create_all,
 )
 from qwenpaw.app.storage.settings import get_storage_settings
@@ -46,7 +47,19 @@ def test_billing_schema_is_idempotent(sqlite_engine):
         "billing_price_rules",
         "billing_usage_orders",
         "billing_usage_items",
+        "billing_cost_snapshots",
+        "billing_pricing_policies",
+        "billing_pricing_imports",
+        "billing_pricing_unlocks",
+        "billing_pricing_audits",
     } <= names
+
+    catalog_columns = {
+        column["name"]
+        for column in inspector.get_columns("billing_price_catalogs")
+    }
+    assert "revision" in catalog_columns
+
 
     wallet_indexes = inspector.get_indexes("billing_wallets")
     wallet_uniques = inspector.get_unique_constraints("billing_wallets")
@@ -222,6 +235,15 @@ def test_billing_schema_is_idempotent(sqlite_engine):
             for foreign_key in inspector.get_foreign_keys(table_name)
         }
         assert expected_targets <= targets
+
+
+def test_pricing_audit_is_append_only(sqlite_engine):
+    create_all(sqlite_engine)
+    with sqlite_engine.begin() as conn:
+        conn.execute(insert(billing_pricing_audits).values(
+            id="audit-1", action="policy.updated", actor_id="1"))
+        with pytest.raises(DatabaseError):
+            conn.execute(update(billing_pricing_audits).values(action="changed"))
 
 
 def test_manual_top_up_schema_is_idempotent_and_uses_bigints(sqlite_engine):
