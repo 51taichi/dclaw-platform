@@ -29,6 +29,7 @@ describe("AgentTable", () => {
             id: "luyu_traffic_operator",
             name: "陆羽",
             description: "AI 流量操盘手",
+            workspace_dir: "/private/sealed/luyu",
             enabled: true,
             agent_type: "sealed",
             capabilities: {
@@ -54,6 +55,7 @@ describe("AgentTable", () => {
 
     expect(screen.getByText("密封")).toBeInTheDocument();
     expect(screen.getByText("内部资产已密封")).toBeInTheDocument();
+    expect(screen.queryByText("/private/sealed/luyu")).not.toBeInTheDocument();
     expect(
       screen.getByText("请在密封/Agent页面管理版本与运行状态"),
     ).toBeInTheDocument();
@@ -61,5 +63,33 @@ describe("AgentTable", () => {
     expect(container.querySelector(".anticon-delete")).not.toBeInTheDocument();
     expect(container.querySelector(".lucide-eye-off")).not.toBeInTheDocument();
     expect(container.querySelector(".lucide-eye")).not.toBeInTheDocument();
+  });
+
+  it("keeps standard agent management actions available", () => {
+    const { container } = render(
+      <AgentTable
+        agents={[
+          {
+            id: "writer",
+            name: "Writer",
+            description: "Writing assistant",
+            workspace_dir: "/workspaces/writer",
+            enabled: true,
+            agent_type: "standard",
+          },
+        ]}
+        loading={false}
+        reordering={false}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+        onToggle={vi.fn()}
+        onReorder={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("/workspaces/writer")).toBeInTheDocument();
+    expect(container.querySelector(".anticon-edit")).toBeInTheDocument();
+    expect(container.querySelector(".anticon-delete")).toBeInTheDocument();
+    expect(container.querySelector(".lucide-eye-off")).toBeInTheDocument();
   });
 });
