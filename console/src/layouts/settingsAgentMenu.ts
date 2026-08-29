@@ -11,12 +11,12 @@ export function getAgentManagementMenuItems(
 ): AgentManagementMenuItem[] {
   return [
     {
-      key: "sealed-agents",
-      label: collapsed ? null : "密封/Agent",
-    },
-    {
       key: "agents",
       label: collapsed ? null : t("nav.agents"),
+    },
+    {
+      key: "sealed-agents",
+      label: collapsed ? null : "超级专家",
     },
   ];
 }
