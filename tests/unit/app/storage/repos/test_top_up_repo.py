@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 from qwenpaw.app.storage.engine import create_engine_from_settings
+from qwenpaw.app.storage.bootstrap import bootstrap_top_up_products
 from qwenpaw.app.storage.schema import create_all
 from qwenpaw.app.storage.settings import get_storage_settings
 from qwenpaw.app.storage.repos.billing_repo import BillingRepository
@@ -118,3 +119,27 @@ def test_products_use_opaque_public_ids_and_filter_disabled(repo):
     assert [row["public_id"] for row in repo.list_products(active_only=True)] == [
         active["public_id"],
     ]
+
+
+def test_product_bootstrap_seeds_once_without_overwriting_operator_data(tmp_path):
+    engine = create_engine_from_settings(
+        get_storage_settings(
+            {"QWENPAW_SQLITE_PATH": str(tmp_path / "bootstrap.db")},
+        ),
+    )
+    create_all(engine)
+    try:
+        assert bootstrap_top_up_products(engine=engine) == 5
+        assert bootstrap_top_up_products(engine=engine) == 0
+        products = TopUpRepository(engine).list_products()
+        assert [
+            (row["payment_amount_fen"], row["purchased_credits"]) for row in products
+        ] == [
+            (1_000, 1_000),
+            (5_000, 5_000),
+            (10_000, 10_000),
+            (50_000, 50_000),
+            (100_000, 100_000),
+        ]
+    finally:
+        engine.dispose()

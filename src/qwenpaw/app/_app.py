@@ -68,7 +68,7 @@ from .migration import (
     ensure_qa_agent_exists,
     migrate_all_agents_global_data,
 )
-from .storage.bootstrap import ensure_durable_schema
+from .storage.bootstrap import bootstrap_top_up_products, ensure_durable_schema
 from .expert_teams import bootstrap_expert_teams
 from .channels.registry import register_custom_channel_routes
 
@@ -292,6 +292,7 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
 
     if ensure_durable_schema():
         logger.info("Durable Postgres schema ensured")
+    bootstrap_top_up_products()
     bootstrap_expert_teams()
 
     # Recover only bridge-created OpenAPI billing orders. Historical token

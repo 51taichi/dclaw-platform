@@ -26,6 +26,12 @@ from ..billing.usage import (
     UsageService,
     wallet_balance_dict,
 )
+from ..billing.top_up import (
+    ReviewCommand,
+    SubmitClaimCommand,
+    TopUpConflictError,
+    TopUpService,
+)
 from ..billing.reporting import (
     BillingReportFilters,
     BillingReportingService,
@@ -37,6 +43,10 @@ from ..billing.reporting import (
 from ..storage.engine import get_app_engine
 from ..storage.repos.billing_repo import BillingRepository
 from ..storage.repos.price_catalog_repo import PriceCatalogRepository
+from ..storage.repos.top_up_repo import (
+    TopUpIdempotencyConflict,
+    TopUpRepository,
+)
 
 
 user_router = APIRouter(prefix="/billing", tags=["billing"])
@@ -114,6 +124,34 @@ class RolloutActivationBody(BaseModel):
     mode: Literal["off", "shadow", "observe", "enforced"]
 
 
+class TopUpClaimBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    product_id: str = Field(min_length=1, max_length=255)
+    payment_channel: Literal["wechat", "alipay", "bank", "other"]
+    payer_reference: str = Field(min_length=1, max_length=255)
+    customer_note: str | None = Field(default=None, max_length=2000)
+
+
+class TopUpReviewBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class TopUpProductBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=2000)
+    payment_amount_fen: int = Field(gt=0, le=(1 << 63) - 1)
+    purchased_credits: int = Field(gt=0, le=(1 << 63) - 1)
+    promotional_credits: int = Field(default=0, ge=0, le=(1 << 63) - 1)
+    promotional_expiry_days: int | None = Field(default=None, gt=0, le=3650)
+    status: Literal["active", "disabled"] = "active"
+    display_order: int = Field(default=0, ge=0, le=10000)
+
+
 def get_billing_repository() -> BillingRepository:
     return BillingRepository(get_app_engine())
 
@@ -139,6 +177,51 @@ def get_billing_reporting_service() -> BillingReportingService:
         get_billing_repository(),
         get_price_catalog_service(),
     )
+
+
+def get_top_up_service() -> TopUpService:
+    engine = get_app_engine()
+    return TopUpService(TopUpRepository(engine), BillingRepository(engine))
+
+
+def _top_up_product(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: row[key]
+        for key in (
+            "public_id",
+            "name",
+            "description",
+            "payment_amount_fen",
+            "purchased_credits",
+            "promotional_credits",
+            "promotional_expiry_days",
+            "status",
+            "display_order",
+        )
+    }
+
+
+def _top_up_claim(row: dict[str, Any], *, admin: bool = False) -> dict[str, Any]:
+    result = {
+        key: row.get(key)
+        for key in (
+            "public_id",
+            "product_snapshot",
+            "payment_amount_fen",
+            "payment_channel",
+            "payer_reference",
+            "customer_note",
+            "status",
+            "review_reason",
+            "reviewed_at",
+            "created_at",
+            "updated_at",
+        )
+    }
+    if admin:
+        result["owner_id"] = row["owner_id"]
+        result["reviewed_by"] = row.get("reviewed_by")
+    return result
 
 
 def _authenticated_owner(request: Request) -> str:
@@ -627,6 +710,170 @@ def activate_admin_rollout(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@user_router.get("/top-up/config")
+def get_top_up_config() -> dict[str, Any]:
+    qr_url = os.environ.get("DCLAW_TOP_UP_QR_URL", "").strip()
+    enabled = qr_url.startswith("https://")
+    return {
+        "enabled": enabled,
+        "qr_url": qr_url if enabled else None,
+        "instructions": os.environ.get("DCLAW_TOP_UP_INSTRUCTIONS", "").strip(),
+    }
+
+
+@user_router.get("/top-up/products")
+def list_top_up_products() -> dict[str, Any]:
+    rows = get_top_up_service().top_up_repository.list_products(active_only=True)
+    return {"items": [_top_up_product(row) for row in rows]}
+
+
+@user_router.get("/top-up/claims")
+def list_user_top_up_claims(request: Request) -> dict[str, Any]:
+    owner_id = _authenticated_owner(request)
+    rows = get_top_up_service().top_up_repository.list_claims(owner_id=owner_id)
+    return {"items": [_top_up_claim(row) for row in rows]}
+
+
+@user_router.post("/top-up/claims")
+def submit_top_up_claim(
+    payload: TopUpClaimBody,
+    request: Request,
+    idempotency_key: str = Header(
+        alias="Idempotency-Key",
+        min_length=1,
+        max_length=255,
+    ),
+) -> dict[str, Any]:
+    try:
+        row = get_top_up_service().submit_claim(
+            _authenticated_owner(request),
+            SubmitClaimCommand(
+                product_id=payload.product_id,
+                payment_channel=payload.payment_channel,
+                payer_reference=payload.payer_reference,
+                customer_note=payload.customer_note,
+                idempotency_key=idempotency_key,
+            ),
+        )
+        return _top_up_claim(row)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Product not found") from exc
+    except (TopUpIdempotencyConflict, TopUpConflictError) as exc:
+        raise HTTPException(status_code=409, detail="Idempotency conflict") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@admin_router.get("/top-up/claims")
+def list_admin_top_up_claims(
+    status: Literal["pending", "approved", "rejected"] | None = None,
+) -> dict[str, Any]:
+    rows = get_top_up_service().top_up_repository.list_claims(status=status)
+    return {"items": [_top_up_claim(row, admin=True) for row in rows]}
+
+
+@admin_router.get("/top-up/products")
+def list_admin_top_up_products() -> dict[str, Any]:
+    rows = get_top_up_service().top_up_repository.list_products()
+    return {"items": [_top_up_product(row) for row in rows]}
+
+
+@admin_router.post("/top-up/products")
+def create_admin_top_up_product(
+    payload: TopUpProductBody,
+    request: Request,
+) -> dict[str, Any]:
+    values = payload.model_dump() | {"created_by": _authenticated_owner(request)}
+    row = get_top_up_service().top_up_repository.create_product(values)
+    return _top_up_product(row)
+
+
+@admin_router.put("/top-up/products/{public_id}")
+def replace_admin_top_up_product(
+    public_id: str,
+    payload: TopUpProductBody,
+    request: Request,
+) -> dict[str, Any]:
+    values = payload.model_dump() | {"created_by": _authenticated_owner(request)}
+    try:
+        row = get_top_up_service().top_up_repository.replace_product(
+            public_id, values
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Product not found") from exc
+    return _top_up_product(row)
+
+
+def _review_top_up_claim(
+    *,
+    public_id: str,
+    payload: TopUpReviewBody,
+    request: Request,
+    idempotency_key: str,
+    approve: bool,
+) -> dict[str, Any]:
+    service = get_top_up_service()
+    command = ReviewCommand(idempotency_key=idempotency_key, reason=payload.reason)
+    try:
+        if approve:
+            row = service.approve_claim(
+                public_id,
+                _authenticated_owner(request),
+                command,
+            )
+        else:
+            row = service.reject_claim(
+                public_id,
+                _authenticated_owner(request),
+                command,
+            )
+        return _top_up_claim(row, admin=True)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Claim not found") from exc
+    except (TopUpConflictError, TopUpIdempotencyConflict) as exc:
+        raise HTTPException(status_code=409, detail="Claim conflict") from exc
+
+
+@admin_router.post("/top-up/claims/{public_id}/approve")
+def approve_top_up_claim(
+    public_id: str,
+    payload: TopUpReviewBody,
+    request: Request,
+    idempotency_key: str = Header(
+        alias="Idempotency-Key",
+        min_length=1,
+        max_length=255,
+    ),
+) -> dict[str, Any]:
+    return _review_top_up_claim(
+        public_id=public_id,
+        payload=payload,
+        request=request,
+        idempotency_key=idempotency_key,
+        approve=True,
+    )
+
+
+@admin_router.post("/top-up/claims/{public_id}/reject")
+def reject_top_up_claim(
+    public_id: str,
+    payload: TopUpReviewBody,
+    request: Request,
+    idempotency_key: str = Header(
+        alias="Idempotency-Key",
+        min_length=1,
+        max_length=255,
+    ),
+) -> dict[str, Any]:
+    return _review_top_up_claim(
+        public_id=public_id,
+        payload=payload,
+        request=request,
+        idempotency_key=idempotency_key,
+        approve=False,
+    )
 
 
 __all__ = ["admin_router", "user_router"]

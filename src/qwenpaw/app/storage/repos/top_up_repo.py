@@ -258,6 +258,49 @@ class TopUpRepository:  # pylint: disable=too-many-public-methods
                 ).mappings()
             ]
 
+    def get_audit_by_idempotency_key(
+        self, conn: Connection, idempotency_key: str
+    ) -> dict[str, Any] | None:
+        row = (
+            conn.execute(
+                select(billing_top_up_audits).where(
+                    billing_top_up_audits.c.idempotency_key == idempotency_key,
+                ),
+            )
+            .mappings()
+            .first()
+        )
+        return dict(row) if row else None
+
+    def transition_claim(
+        self,
+        conn: Connection,
+        public_id: str,
+        *,
+        status: str,
+        reviewed_by: str,
+        review_reason: str,
+        reviewed_at: Any,
+        ledger_business_key: str | None,
+    ) -> dict[str, Any]:
+        result = conn.execute(
+            update(billing_top_up_claims)
+            .where(
+                billing_top_up_claims.c.public_id == public_id,
+                billing_top_up_claims.c.status == "pending",
+            )
+            .values(
+                status=status,
+                reviewed_by=reviewed_by,
+                review_reason=review_reason,
+                reviewed_at=reviewed_at,
+                ledger_business_key=ledger_business_key,
+            ),
+        )
+        if result.rowcount != 1:
+            raise TopUpIdempotencyConflict(public_id)
+        return self._get_claim(conn, public_id)
+
     @staticmethod
     def _product_values(values: dict[str, Any]) -> dict[str, Any]:
         allowed = {
