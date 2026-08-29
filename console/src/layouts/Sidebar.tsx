@@ -57,6 +57,7 @@ import {
   WandSparkles,
   CloudUpload,
   KeyRound,
+  CreditCard,
 } from "lucide-react";
 import { clearAuthToken } from "../api/config";
 import { authApi } from "../api/modules/auth";
@@ -502,6 +503,11 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
   // ── WorkBuddy-style primary navigation ────────────────────────────────
 
   const agentMenuItems: MenuProps["items"] = [
+    {
+      key: "wallet",
+      label: collapsed ? null : t("nav.wallet", "积分钱包"),
+      icon: <CreditCard size={16} />,
+    },
     {
       key: "claw",
       label: collapsed ? null : t("nav.claw"),

@@ -27,6 +27,7 @@ export const KEY_TO_PATH: Record<string, string> = {
   connectors: "/connectors",
   library: "/tencent-doc",
   automations: "/automations",
+  wallet: "/wallet",
   channels: "/admin/channels",
   sessions: "/admin/sessions",
   inbox: "/admin/inbox",
@@ -63,6 +64,7 @@ export const KEY_TO_PATH: Record<string, string> = {
 
 export const KEY_TO_LABEL: Record<string, string> = {
   "aigc-studio": "nav.aigcStudio",
+  wallet: "nav.wallet",
   channels: "nav.channels",
   sessions: "nav.sessions",
   inbox: "nav.inbox",

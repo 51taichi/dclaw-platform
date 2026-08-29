@@ -14,6 +14,7 @@ import ClawPage from "../../pages/Claw";
 import WorkbenchPage from "../../pages/Workbench";
 import TaskPage from "../../pages/Task";
 import AigcStudioPage from "../../pages/AigcStudio";
+import WalletPage from "../../pages/Wallet";
 
 // ── Ecosystem pages (WorkBuddy-style) ─────────────────────────────────────────
 const ExpertsPage = lazyImportWithRetry("../../pages/Experts");
@@ -37,6 +38,7 @@ const pathToKey: Record<string, string> = {
   "/connectors": "connectors",
   "/automations": "automations",
   "/tencent-doc": "tencent-doc",
+  "/wallet": "wallet",
 };
 
 export default function ClientLayout() {
@@ -90,6 +92,7 @@ export default function ClientLayout() {
                   <Route path="/connectors" element={<ConnectorsPage />} />
                   <Route path="/automations" element={<AutomationsPage />} />
                   <Route path="/tencent-doc" element={<TencentDocPage />} />
+                  <Route path="/wallet" element={<WalletPage />} />
 
                   {/* Admin Routes have been moved to AdminLayout */}
 

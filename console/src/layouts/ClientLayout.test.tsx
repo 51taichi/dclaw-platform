@@ -41,6 +41,10 @@ vi.mock("../pages/AigcStudio", () => ({
   default: () => <div data-testid="aigc-studio-page">AIGC Studio</div>,
 }));
 
+vi.mock("../pages/Wallet", () => ({
+  default: () => <div data-testid="wallet-page">Wallet</div>,
+}));
+
 function renderAt(pathname: string) {
   return render(
     <MemoryRouter initialEntries={[pathname]}>
@@ -64,5 +68,14 @@ describe("ClientLayout routing", () => {
 
     renderAt("/claw/claw-id");
     expect(await screen.findByTestId("claw-page")).toBeInTheDocument();
+  });
+
+  it("exposes the customer wallet route", async () => {
+    renderAt("/wallet");
+    expect(await screen.findByTestId("wallet-page")).toBeInTheDocument();
+    expect(screen.getByTestId("sidebar")).toHaveAttribute(
+      "data-selected-key",
+      "wallet",
+    );
   });
 });
