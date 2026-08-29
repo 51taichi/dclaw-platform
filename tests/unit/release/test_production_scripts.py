@@ -71,6 +71,22 @@ elif args[:1] == ["inspect"]:
     elif ".State.OOMKilled" in format_value:
         failed = os.environ.get("FAKE_HEALTH_FAILURE") == "oom" and state["running_id"] == target_id
         print("true" if failed else "false")
+    elif ".HostConfig.RestartPolicy.Name" in format_value:
+        print("unless-stopped")
+    elif ".NetworkSettings.Ports" in format_value:
+        print("127.0.0.1:18088:8088/tcp")
+    elif "range .Mounts" in format_value:
+        if os.environ.get("FAKE_BAD_MOUNTS") == "1":
+            print("dclaw-data|/app/working")
+        else:
+            print("dclaw-data|/app/working")
+            print("dclaw-secrets|/app/working.secret")
+            print("dclaw-backups|/app/working.backups")
+    elif "NetworkSettings.Networks" in format_value:
+        print("dclaw-net")
+    elif "range .Config.Env" in format_value:
+        print("QWENPAW_DATABASE_BACKEND=postgres")
+        print("QWENPAW_DATABASE_URL=postgresql+psycopg://protected")
     else:
         print("{}")
 elif args[:2] == ["volume", "inspect"] or args[:2] == ["network", "inspect"]:
@@ -91,6 +107,12 @@ elif args[:1] == ["compose"]:
     state["running_id"] = target_id if selected in (target_digest, target_id) else current_id
     state["compose_count"] += 1
     state_path.write_text(json.dumps(state))
+elif args[:1] == ["start"]:
+    state["running_id"] = current_id
+    state["compose_count"] += 1
+    state_path.write_text(json.dumps(state))
+elif args[:1] in (["stop"], ["rename"], ["rm"]):
+    pass
 elif args[:1] in (["tag"], ["logs"]):
     pass
 else:
@@ -117,6 +139,8 @@ if state["running_id"] == target_id:
         raise SystemExit(22)
     if failure == "public_api" and "dclaw.deepmega.cn" in url:
         raise SystemExit(22)
+if os.environ.get("FAKE_ADOPTION_FAIL") == "1" and state["compose_count"] == 1:
+    raise SystemExit(22)
 print('{"version":"1.1.10"}')
 '''
 
@@ -380,3 +404,52 @@ def test_rollback_only_switches_application_image(
     assert not _contains_call(calls, "exec", "pg_dump")
     assert not _contains_call(calls, "volume", "rm")
     assert not _contains_call(calls, "network", "rm")
+
+
+def test_adoption_refuses_resource_drift_before_stopping_production(
+    deployment: dict[str, object],
+) -> None:
+    env = deployment["env"]
+    assert isinstance(env, dict)
+    env["FAKE_BAD_MOUNTS"] = "1"
+
+    result = _run(deployment, "adopt.sh")
+    calls = _calls(deployment)
+
+    assert result.returncode != 0
+    assert "required mount is missing" in result.stderr
+    assert not _contains_call(calls, "stop", "dclaw")
+    assert not _contains_call(calls, "compose", "up")
+
+
+def test_failed_adoption_restores_original_container(
+    deployment: dict[str, object],
+) -> None:
+    env = deployment["env"]
+    assert isinstance(env, dict)
+    env["FAKE_ADOPTION_FAIL"] = "1"
+
+    result = _run(deployment, "adopt.sh")
+    calls = _calls(deployment)
+
+    assert result.returncode != 0
+    assert "original production restored" in result.stderr
+    assert _contains_call(calls, "stop", "dclaw")
+    assert _contains_call(calls, "rename", "dclaw")
+    assert _contains_call(calls, "rm", "-f", "dclaw")
+    assert _contains_call(calls, "start", "dclaw")
+
+
+def test_successful_adoption_preserves_protected_environment_file(
+    deployment: dict[str, object],
+) -> None:
+    result = _run(deployment, "adopt.sh")
+    root = deployment["root"]
+    assert isinstance(root, Path)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.endswith("ADOPTION_SUCCESS\n")
+    production_env = root / "production.env"
+    assert production_env.stat().st_mode & 0o777 == 0o600
+    assert "QWENPAW_DATABASE_URL=postgresql+psycopg://protected" in production_env.read_text()
+    assert "postgresql+psycopg://protected" not in result.stdout
