@@ -1,10 +1,14 @@
-import { Table, Tag } from "antd";
+import { Button, Table, Tag } from "antd";
 import type { PricingCatalogSummary } from "../../../api/types/billing";
 
 export default function PricingDrafts({
   catalogs,
+  canMutate = false,
+  onRollback,
 }: {
   catalogs: PricingCatalogSummary[];
+  canMutate?: boolean;
+  onRollback?: (id: string) => void;
 }) {
   return (
     <Table
@@ -23,6 +27,19 @@ export default function PricingDrafts({
           ),
         },
         { title: "生效时间", dataIndex: "effective_at" },
+        {
+          title: "操作",
+          render: (_, row) =>
+            row.status === "published" ? (
+              <Button
+                danger
+                disabled={!canMutate}
+                onClick={() => onRollback?.(row.id)}
+              >
+                回滚到此版本
+              </Button>
+            ) : null,
+        },
       ]}
     />
   );

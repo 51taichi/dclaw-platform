@@ -88,6 +88,7 @@ export const billingApi = {
     request<PriceableModel[]>("/admin/billing/pricing/models"),
   listPricingHistory: () =>
     request<PricingAudit[]>("/admin/billing/pricing/history"),
+  exportPricing: () => request<Blob>("/admin/billing/pricing/export"),
   unlockPricing: (password: string) =>
     request<PricingUnlock>("/admin/billing/pricing/unlock", {
       method: "POST",
