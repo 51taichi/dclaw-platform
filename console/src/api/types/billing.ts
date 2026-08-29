@@ -73,3 +73,95 @@ export interface BillingUsageOrder {
   captured_credits: number;
   created_at: string;
 }
+
+export type PricingCategory =
+  | "text"
+  | "image"
+  | "video"
+  | "audio"
+  | "embedding_rerank"
+  | "other";
+
+export interface PricingCatalogSummary {
+  id: string;
+  version: string;
+  status: "draft" | "published";
+  effective_at: string;
+  published_at?: string | null;
+  metadata: Record<string, unknown>;
+  rules?: PricingRuleSummary[];
+}
+
+export interface PricingRuleSummary {
+  id: string;
+  provider_id: string;
+  model_key: string;
+  capability: string;
+  unit_type: string;
+  credits_per_unit: number;
+  input_credits_per_1k: number;
+  output_credits_per_1k: number;
+  metadata: Record<string, unknown>;
+}
+
+export interface PricingOverview {
+  enabled_models: number;
+  covered_models: number;
+  catalogs: PricingCatalogSummary[];
+}
+
+export interface PriceableModel {
+  provider_id: string;
+  provider_name: string;
+  model_key: string;
+  model_name: string;
+  category: PricingCategory;
+}
+
+export interface PricingAudit {
+  id: string;
+  action: string;
+  actor_id: string;
+  before_json: string;
+  after_json: string;
+  created_at: string;
+}
+
+export interface PricingUnlock {
+  token: string;
+  expires_at: string;
+}
+
+export interface PricingPreview {
+  publishable: boolean;
+  catalog_id?: string;
+  version?: string;
+  rule_count?: number;
+  blockers: Array<{
+    code: string;
+    provider_id: string;
+    model_key: string;
+    unit_key: string;
+  }>;
+}
+
+export interface PricingPolicyInput {
+  scope_type: "global" | "provider" | "category" | "model";
+  scope_key: string;
+  multiplier_decimal: string;
+  settings?: Record<string, unknown>;
+  expected_revision: number;
+}
+
+export interface PricingPolicy
+  extends Omit<PricingPolicyInput, "expected_revision"> {
+  id: string;
+  revision: number;
+}
+
+export interface PricingImportPreview {
+  id: string;
+  status: "ready" | "blocked";
+  rows: Array<Record<string, unknown>>;
+  valid_rows: Array<Record<string, unknown>>;
+}

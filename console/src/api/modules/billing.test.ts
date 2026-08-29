@@ -72,4 +72,19 @@ describe("billingApi", () => {
       "/api/user/billing/open-api-summary?date_from=2026-08-01&date_to=2026-08-29",
     );
   });
+
+  it("sends the scoped billing unlock only on pricing mutations", async () => {
+    await billingApi.publishPricingPreview("draft-1", "unlock-token");
+    const options = vi.mocked(fetch).mock.calls[0][1];
+    expect(options?.method).toBe("POST");
+    expect((options?.headers as Headers).get("X-Billing-Unlock")).toBe(
+      "unlock-token",
+    );
+
+    await billingApi.getPricingOverview();
+    const readOptions = vi.mocked(fetch).mock.calls[1][1];
+    expect((readOptions?.headers as Headers).has("X-Billing-Unlock")).toBe(
+      false,
+    );
+  });
 });
