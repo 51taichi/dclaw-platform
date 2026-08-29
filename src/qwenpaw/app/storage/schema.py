@@ -887,6 +887,144 @@ billing_rollout_settings = Table(
     ),
 )
 
+billing_top_up_products = Table(
+    "billing_top_up_products",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("public_id", String, nullable=False, unique=True),
+    Column("name", String, nullable=False),
+    Column("description", Text),
+    Column("payment_amount_fen", BigInteger, nullable=False),
+    Column("purchased_credits", BigInteger, nullable=False),
+    Column(
+        "promotional_credits",
+        BigInteger,
+        nullable=False,
+        server_default="0",
+    ),
+    Column("promotional_expiry_days", Integer),
+    Column("status", String, nullable=False, server_default="active"),
+    Column("display_order", Integer, nullable=False, server_default="0"),
+    Column("created_by", String),
+    Column("created_at", DateTime(timezone=True), server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), server_default=func.now()),
+    CheckConstraint(
+        "payment_amount_fen > 0",
+        name="ck_billing_top_up_products_amount_positive",
+    ),
+    CheckConstraint(
+        "purchased_credits > 0",
+        name="ck_billing_top_up_products_purchased_positive",
+    ),
+    CheckConstraint(
+        "promotional_credits >= 0",
+        name="ck_billing_top_up_products_promotional_nonnegative",
+    ),
+    CheckConstraint(
+        "promotional_expiry_days IS NULL OR promotional_expiry_days > 0",
+        name="ck_billing_top_up_products_expiry_positive",
+    ),
+    CheckConstraint(
+        "status IN ('active', 'disabled')",
+        name="ck_billing_top_up_products_status",
+    ),
+)
+
+billing_top_up_claims = Table(
+    "billing_top_up_claims",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("public_id", String, nullable=False, unique=True),
+    Column(
+        "wallet_id",
+        String,
+        ForeignKey("billing_wallets.id"),
+        nullable=False,
+    ),
+    Column(
+        "product_id",
+        String,
+        ForeignKey("billing_top_up_products.id"),
+        nullable=False,
+    ),
+    Column("owner_type", String, nullable=False),
+    Column("owner_id", String, nullable=False),
+    Column("product_snapshot_json", Text, nullable=False),
+    Column(
+        "payment_amount_fen", BigInteger, nullable=False, server_default="0"
+    ),
+    Column("payment_channel", String, nullable=False),
+    Column("payer_reference", String, nullable=False),
+    Column("customer_note", Text),
+    Column("submission_idempotency_key", String, nullable=False, unique=True),
+    Column("submission_request_sha256", String, nullable=False),
+    Column("status", String, nullable=False, server_default="pending"),
+    Column("reviewed_by", String),
+    Column("review_reason", Text),
+    Column("reviewed_at", DateTime(timezone=True)),
+    Column("ledger_business_key", String, unique=True),
+    Column("created_at", DateTime(timezone=True), server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), server_default=func.now()),
+    CheckConstraint(
+        "owner_type = 'user'",
+        name="ck_billing_top_up_claims_owner_type",
+    ),
+    CheckConstraint(
+        "payment_amount_fen >= 0",
+        name="ck_billing_top_up_claims_amount_nonnegative",
+    ),
+    CheckConstraint(
+        "payment_channel IN ('wechat', 'alipay', 'bank', 'other')",
+        name="ck_billing_top_up_claims_channel",
+    ),
+    CheckConstraint(
+        "status IN ('pending', 'approved', 'rejected')",
+        name="ck_billing_top_up_claims_status",
+    ),
+    CheckConstraint(
+        "status = 'pending' OR (reviewed_by IS NOT NULL AND "
+        "review_reason IS NOT NULL AND reviewed_at IS NOT NULL)",
+        name="ck_billing_top_up_claims_review_fields",
+    ),
+    CheckConstraint(
+        "status != 'approved' OR ledger_business_key IS NOT NULL",
+        name="ck_billing_top_up_claims_approved_ledger_key",
+    ),
+)
+
+billing_top_up_audits = Table(
+    "billing_top_up_audits",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column(
+        "claim_id",
+        String,
+        ForeignKey("billing_top_up_claims.id"),
+        nullable=False,
+    ),
+    Column("action", String, nullable=False),
+    Column("actor_id", String, nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("idempotency_key", String, nullable=False, unique=True),
+    Column("request_sha256", String, nullable=False),
+    Column("payment_amount_fen", BigInteger, nullable=False),
+    Column("purchased_credits", BigInteger, nullable=False),
+    Column(
+        "promotional_credits", BigInteger, nullable=False, server_default="0"
+    ),
+    Column("claim_snapshot_json", Text, nullable=False, server_default="{}"),
+    Column("created_at", DateTime(timezone=True), server_default=func.now()),
+    CheckConstraint(
+        "action IN ('submitted', 'approved', 'rejected')",
+        name="ck_billing_top_up_audits_action",
+    ),
+    CheckConstraint(
+        "payment_amount_fen >= 0 AND purchased_credits >= 0 "
+        "AND promotional_credits >= 0",
+        name="ck_billing_top_up_audits_amounts_nonnegative",
+    ),
+)
+
 Index(
     "idx_chats_user_agent_updated",
     chats.c.user_id,
@@ -1064,6 +1202,27 @@ Index(
     billing_reconciliation_audits.c.usage_item_id,
     billing_reconciliation_audits.c.created_at.desc(),
 )
+Index(
+    "idx_billing_top_up_products_status_order",
+    billing_top_up_products.c.status,
+    billing_top_up_products.c.display_order,
+)
+Index(
+    "idx_billing_top_up_claims_owner_created",
+    billing_top_up_claims.c.owner_type,
+    billing_top_up_claims.c.owner_id,
+    billing_top_up_claims.c.created_at.desc(),
+)
+Index(
+    "idx_billing_top_up_claims_status_created",
+    billing_top_up_claims.c.status,
+    billing_top_up_claims.c.created_at.asc(),
+)
+Index(
+    "idx_billing_top_up_audits_claim_created",
+    billing_top_up_audits.c.claim_id,
+    billing_top_up_audits.c.created_at.asc(),
+)
 
 
 def create_all(engine: Engine) -> None:
@@ -1076,6 +1235,7 @@ def create_all(engine: Engine) -> None:
     _ensure_billing_bigint_columns(engine)
     _ensure_billing_constraints(engine)
     _ensure_reconciliation_audit_immutable(engine)
+    _ensure_top_up_audit_immutable(engine)
     _backfill_personal_wallets(engine)
 
 
@@ -1118,6 +1278,45 @@ def _ensure_reconciliation_audit_immutable(engine: Engine) -> None:
                     "billing_reconciliation_audits FOR EACH ROW EXECUTE "
                     "FUNCTION billing_reconciliation_audits_immutable(); "
                     "END IF; END $$",
+                ),
+            )
+
+
+def _ensure_top_up_audit_immutable(engine: Engine) -> None:
+    """Reject updates and deletes against manual top-up audit rows."""
+    if engine.dialect.name == "sqlite":
+        statements = (
+            "CREATE TRIGGER IF NOT EXISTS billing_top_up_audits_no_update "
+            "BEFORE UPDATE ON billing_top_up_audits BEGIN SELECT RAISE(ABORT, "
+            "'billing top-up audits are immutable'); END",
+            "CREATE TRIGGER IF NOT EXISTS billing_top_up_audits_no_delete "
+            "BEFORE DELETE ON billing_top_up_audits BEGIN SELECT RAISE(ABORT, "
+            "'billing top-up audits are immutable'); END",
+        )
+        with engine.begin() as conn:
+            for statement in statements:
+                conn.execute(text(statement))
+        return
+    if engine.dialect.name != "postgresql":
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE OR REPLACE FUNCTION billing_top_up_audits_immutable() "
+                "RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION "
+                "'billing top-up audits are immutable'; END $$",
+            ),
+        )
+        for operation in ("UPDATE", "DELETE"):
+            trigger = f"billing_top_up_audits_no_{operation.lower()}"
+            conn.execute(
+                text(
+                    "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_trigger "
+                    f"WHERE tgname = '{trigger}' AND tgrelid = "
+                    "'billing_top_up_audits'::regclass) THEN "
+                    f"CREATE TRIGGER {trigger} BEFORE {operation} ON "
+                    "billing_top_up_audits FOR EACH ROW EXECUTE FUNCTION "
+                    "billing_top_up_audits_immutable(); END IF; END $$",
                 ),
             )
 

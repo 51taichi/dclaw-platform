@@ -384,6 +384,18 @@ class BillingRepository:
             self._assert_projection(conn, wallet_id, balance)
             return balance
 
+    def list_lots(self, wallet_id: str) -> list[dict[str, Any]]:
+        """Return durable lots for trusted billing services and diagnostics."""
+        with self.engine.connect() as conn:
+            return [
+                dict(row)
+                for row in conn.execute(
+                    select(billing_credit_lots)
+                    .where(billing_credit_lots.c.wallet_id == wallet_id)
+                    .order_by(billing_credit_lots.c.created_at.asc()),
+                ).mappings()
+            ]
+
     def allocations(self, business_key: str) -> list[tuple[str, int]]:
         source_entry = billing_ledger_entries.alias("source_entry")
         expiry_is_null = case(

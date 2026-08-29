@@ -19,12 +19,14 @@ from qwenpaw.app.billing.pricing import (
     QuoteRequest,
 )
 from qwenpaw.app.billing.usage import UsageOrderStateError, UsageService
+from qwenpaw.app.billing.top_up import TopUpService
 from qwenpaw.app import auth as app_auth
 from qwenpaw.app.guards import require_admin, require_user
 from qwenpaw.app.routers import billing
 from qwenpaw.app.storage.engine import create_engine_from_settings
 from qwenpaw.app.storage.repos.billing_repo import BillingRepository
 from qwenpaw.app.storage.repos.price_catalog_repo import PriceCatalogRepository
+from qwenpaw.app.storage.repos.top_up_repo import TopUpRepository
 from qwenpaw.app.storage.schema import (
     billing_usage_orders,
     create_all,
@@ -137,6 +139,81 @@ def test_billing_mode_defaults_to_shadow(monkeypatch, wallet_repo, pricing):
     service = UsageService(wallet_repo, pricing)
 
     assert service.mode == "shadow"
+
+
+def test_manual_top_up_routes_use_auth_owner_and_server_product_snapshot(
+    monkeypatch,
+    engine,
+    wallet_repo,
+    pricing,
+):
+    wallet_repo.ensure_wallet("user", "alice")
+    top_up_repo = TopUpRepository(engine)
+    product = top_up_repo.create_product(
+        {
+            "name": "1000 credits",
+            "payment_amount_fen": 1000,
+            "purchased_credits": 1000,
+            "promotional_credits": 0,
+            "promotional_expiry_days": None,
+            "status": "active",
+            "display_order": 1,
+            "created_by": "admin-1",
+        },
+    )
+    top_up_service = TopUpService(top_up_repo, wallet_repo)
+    monkeypatch.setattr(
+        billing,
+        "get_top_up_service",
+        lambda: top_up_service,
+        raising=False,
+    )
+    client = TestClient(
+        _app(
+            monkeypatch,
+            UsageService(wallet_repo, pricing, mode="shadow"),
+            wallet_repo,
+            pricing,
+        ),
+    )
+
+    rejected = client.post(
+        "/api/user/billing/top-up/claims",
+        headers={**_headers("alice"), "Idempotency-Key": "claim-1"},
+        json={
+            "product_id": product["public_id"],
+            "payment_channel": "wechat",
+            "payer_reference": "tail-1234",
+            "purchased_credits": 999999,
+        },
+    )
+    assert rejected.status_code == 422
+
+    submitted = client.post(
+        "/api/user/billing/top-up/claims",
+        headers={**_headers("alice"), "Idempotency-Key": "claim-1"},
+        json={
+            "product_id": product["public_id"],
+            "payment_channel": "wechat",
+            "payer_reference": "tail-1234",
+        },
+    )
+    assert submitted.status_code == 200
+    claim_id = submitted.json()["public_id"]
+    assert "owner_id" not in submitted.json()
+    assert "reviewed_by" not in submitted.json()
+
+    approved = client.post(
+        f"/api/admin/billing/top-up/claims/{claim_id}/approve",
+        headers={
+            **_headers("real-admin", "admin"),
+            "Idempotency-Key": "approve-1",
+        },
+        json={"reason": "receipt verified"},
+    )
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "approved"
+    assert wallet_repo.get_wallet("user", "alice")["available_credits"] == 1000
 
 
 def test_user_wallet_and_ledger_are_resolved_only_from_auth_context(
