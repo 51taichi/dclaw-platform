@@ -163,6 +163,8 @@ def test_import_draft_cannot_publish_until_import_is_confirmed(service):
 
     with pytest.raises(ValueError, match="import is not confirmed"):
         pricing.publish_preview(preview["catalog_id"], "1")
+    with pytest.raises(ValueError, match="published catalog"):
+        pricing.rollback(preview["catalog_id"], "1")
 
     repo.apply_import_rows(
         imported["id"],

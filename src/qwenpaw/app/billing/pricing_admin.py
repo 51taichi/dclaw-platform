@@ -226,6 +226,8 @@ class PricingAdminService:
         ip_address: str | None = None,
     ) -> dict[str, Any]:
         source = self.catalogs.get_catalog(catalog_id)
+        if source["status"] != "published":
+            raise ValueError("rollback source must be a published catalog")
         rules = tuple(
             PriceRule(
                 id=f"rollback:{rule['id']}",
