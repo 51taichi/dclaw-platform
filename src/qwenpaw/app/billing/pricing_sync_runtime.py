@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -121,9 +122,13 @@ class AutoProtectionPublisher:
     def __init__(self, repository: PricingAdminRepository) -> None:
         self.admin = repository
         self.catalogs = PriceCatalogRepository(repository.engine)
+        self._last_effective_at: datetime | None = None
 
     def __call__(self, result: ProtectionResult) -> None:
         now = result.created_at
+        if self._last_effective_at is not None and now <= self._last_effective_at:
+            now = self._last_effective_at + timedelta(microseconds=1)
+        self._last_effective_at = now
         current = self.catalogs.effective_catalog(now)
         provider_id, model_key = result.model_key.split("/", 1)
         factor = Decimal(1) + result.applied_raise
@@ -193,7 +198,10 @@ class AutoProtectionPublisher:
             clock=lambda: now,
         ).publish(
             PriceCatalogDraft(
-                version=f"protect-{now.strftime('%Y%m%d%H%M%S')}",
+                version=(
+                    f"protect-{now.strftime('%Y%m%d%H%M%S%f')}-"
+                    f"{hashlib.sha256(result.model_key.encode()).hexdigest()[:8]}"
+                ),
                 effective_at=now,
                 rules=rules,
                 created_by="system:pricing-protection",

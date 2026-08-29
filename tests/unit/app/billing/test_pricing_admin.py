@@ -133,3 +133,44 @@ def test_policy_cost_preview_publish_and_rollback(service):
         "catalog.published",
         "catalog.rolled_back",
     }
+
+
+def test_import_draft_cannot_publish_until_import_is_confirmed(service):
+    pricing, repo = service
+    rows = []
+    for unit, amount in (
+        ("input_tokens", "0.004"),
+        ("output_tokens", "0.012"),
+    ):
+        rows.append(
+            {
+                "provider_id": "dashscope",
+                "model_key": "qwen-plus",
+                "category": "text",
+                "unit_key": unit,
+                "rmb_cost_decimal": amount,
+                "multiplier_decimal": "1.5",
+                "verification_status": "verified",
+                "verified_at": NOW.isoformat(),
+            }
+        )
+    imported = repo.record_import(
+        "digest", "prices.xlsx", "1", {"status": "ready", "valid_rows": rows}
+    )
+    preview = pricing.preview_initial_catalog(
+        "1", rows, import_id=imported["id"]
+    )
+
+    with pytest.raises(ValueError, match="import is not confirmed"):
+        pricing.publish_preview(preview["catalog_id"], "1")
+
+    repo.apply_import_rows(
+        imported["id"],
+        rows,
+        "prices.xlsx",
+        "1",
+        preview,
+    )
+    assert pricing.publish_preview(preview["catalog_id"], "1")["status"] == (
+        "published"
+    )

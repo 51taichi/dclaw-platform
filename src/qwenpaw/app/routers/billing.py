@@ -629,9 +629,14 @@ def publish_pricing_preview(
     request: Request,
     actor_id: str = Depends(require_pricing_unlock),
 ) -> dict[str, Any]:
-    return get_pricing_admin_service().publish_preview(
-        catalog_id, actor_id, request.client.host if request.client else None,
-    )
+    try:
+        return get_pricing_admin_service().publish_preview(
+            catalog_id,
+            actor_id,
+            request.client.host if request.client else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @admin_router.post("/pricing/catalogs/{catalog_id}/rollback")

@@ -81,6 +81,7 @@ class PricingAdminService:
         self,
         actor_id: str,
         imported_rows: list[dict[str, Any]] | None = None,
+        import_id: str | None = None,
     ) -> dict[str, Any]:
         models = self.inventory.list_enabled()
         costs = {
@@ -173,13 +174,19 @@ class PricingAdminService:
             tuple(identities), costs, policies, PricingDefaults()
         )
         version = f"admin-{self.clock().strftime('%Y%m%d%H%M%S')}"
+        metadata = {"source": "pricing_admin"}
+        if import_id is not None:
+            metadata = {
+                "source": "pricing_excel",
+                "pricing_import_id": import_id,
+            }
         catalog_id = self.pricing.create_draft(
             PriceCatalogDraft(
                 version=version,
                 effective_at=self.clock(),
                 rules=rules,
                 created_by=f"admin:{actor_id}",
-                metadata={"source": "pricing_admin"},
+                metadata=metadata,
             )
         )
         return {
@@ -196,6 +203,12 @@ class PricingAdminService:
         actor_id: str,
         ip_address: str | None = None,
     ) -> dict[str, Any]:
+        catalog = self.catalogs.get_catalog(catalog_id)
+        import_id = catalog["metadata"].get("pricing_import_id")
+        if import_id is not None and not self.repository.import_allows_publish(
+            str(import_id), catalog_id
+        ):
+            raise ValueError("pricing import is not confirmed")
         published = self.pricing.publish_draft(catalog_id)
         self.repository.append_audit(
             "catalog.published",

@@ -198,6 +198,13 @@ class PricingAdminRepository:
             result["preview"] = json.loads(result["preview_json"])
             return result
 
+    def import_allows_publish(self, import_id: str, catalog_id: str) -> bool:
+        imported = self.get_import(import_id)
+        if imported is None or imported["status"] != "confirmed":
+            return False
+        pricing_preview = imported["preview"].get("pricing_preview", {})
+        return pricing_preview.get("catalog_id") == catalog_id
+
     def confirm_import(self, import_id: str) -> None:
         with self.engine.begin() as conn:
             result = conn.execute(

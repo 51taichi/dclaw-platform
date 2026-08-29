@@ -42,7 +42,10 @@ class PricingExcelService:
         repository: ImportRepository,
         *,
         preview_builder: (
-            Callable[[str, list[dict[str, Any]] | None], dict[str, Any]] | None
+            Callable[
+                [str, list[dict[str, Any]] | None, str], dict[str, Any]
+            ]
+            | None
         ) = None,
     ) -> None:
         self.repository = repository
@@ -186,7 +189,7 @@ class PricingExcelService:
         if preview["status"] != "ready":
             raise ValueError("blocked import cannot be confirmed")
         pricing_preview = (
-            self.preview_builder(actor_id, preview["valid_rows"])
+            self.preview_builder(actor_id, preview["valid_rows"], import_id)
             if self.preview_builder
             else None
         )
