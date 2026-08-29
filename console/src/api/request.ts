@@ -1,6 +1,16 @@
 import { getApiUrl, clearAuthToken } from "./config";
 import { buildAuthHeaders } from "./authHeaders";
 
+export class ApiRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "ApiRequestError";
+  }
+}
+
 function getErrorMessageFromBody(
   text: string,
   contentType: string,
@@ -88,7 +98,7 @@ export async function request<T = unknown>(
       ? `${errorMessage} - ${text}`
       : `Request failed: ${response.status} ${response.statusText}`;
 
-    throw new Error(finalMessage);
+    throw new ApiRequestError(finalMessage, response.status);
   }
 
   if (response.status === 204) {

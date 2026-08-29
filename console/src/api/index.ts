@@ -33,6 +33,7 @@ import { expertTeamsApi } from "./modules/expertTeams";
 import { desktopUpdateApi } from "./modules/desktopUpdate";
 import { openApiApi } from "./modules/openApi";
 import { webSearchApi } from "./modules/webSearch";
+import { agentExperienceLibraryApi } from "./modules/agentExperienceLibrary";
 
 export const api = {
   // Root
@@ -116,6 +117,9 @@ export const api = {
 
   // Shared Web Search
   ...webSearchApi,
+
+  // Agent Experience Library
+  ...agentExperienceLibraryApi,
 };
 
 export default api;
@@ -128,4 +132,5 @@ export {
   desktopUpdateApi,
   openApiApi,
   webSearchApi,
+  agentExperienceLibraryApi,
 };
