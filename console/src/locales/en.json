@@ -2644,6 +2644,13 @@
     "noTasksHint": "Click the button above to start a new task",
     "taskLabel": "Tasks"
   },
+  "billing": {
+    "insufficientTitle": "Insufficient credits; this call did not continue",
+    "balanceRequired": "Available {{available}}, required {{required}}",
+    "topUp": "Top up",
+    "continueAfterTopUp": "Continue after top-up",
+    "continueFailed": "Could not continue. Confirm the top-up was credited and try again."
+  },
   "chatToolbar": {
     "craft": "Craft",
     "plan": "Plan",

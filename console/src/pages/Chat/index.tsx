@@ -74,6 +74,9 @@ import WhisperSpeechButton, {
 } from "./components/WhisperSpeechButton";
 import ArtifactPanel from "./components/ArtifactPanel";
 import ExpertTeamStatusStrip from "./components/ExpertTeamStatusStrip";
+import BillingFailureAlert from "../../features/billing/BillingFailureAlert";
+import { parseInsufficientCreditsFailure } from "../../features/billing/billingFailure";
+import type { InsufficientCreditsFailure } from "../../api/types/billing";
 
 import {
   toDisplayUrl,
@@ -568,6 +571,8 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
   >("idle");
   const [isGenerating, setIsGenerating] = useState(false);
   const [runtimeReloadKey, setRuntimeReloadKey] = useState(0);
+  const [billingFailure, setBillingFailure] =
+    useState<InsufficientCreditsFailure | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const persistedExpertTeamRef = useRef<string>("");
 
@@ -579,6 +584,20 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
     setActiveSessionId(sessionId);
     return () => setActiveSessionId(null);
   }, [chatId, setActiveSessionId]);
+
+  useEffect(() => {
+    if (
+      currentExpertTeamRun?.state === "paused_insufficient_balance" &&
+      !billingFailure
+    ) {
+      setBillingFailure({
+        code: "INSUFFICIENT_CREDITS",
+        available_credits: 0,
+        required_credits: currentExpertTeamRun.required_credits ?? 0,
+        top_up_path: "/wallet",
+      });
+    }
+  }, [billingFailure, currentExpertTeamRun]);
 
   useEffect(() => {
     const locState = location.state as {
@@ -756,7 +775,11 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
             const dataStr = line.slice(6);
             try {
               const parsed = JSON.parse(dataStr);
-              if (parsed.object === "message" && parsed.content) {
+              const parsedBillingFailure =
+                parseInsufficientCreditsFailure(parsed);
+              if (parsedBillingFailure) {
+                setBillingFailure(parsedBillingFailure);
+              } else if (parsed.object === "message" && parsed.content) {
                 accumulatedText += parsed.content;
                 appendLiveResponseText(startedChatId, parsed.content);
               } else if (
@@ -1669,6 +1692,7 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
       }
 
       setDetectedSkill(null);
+      setBillingFailure(null);
       setShowMagicImport(false);
       setImportStatus("idle");
 
@@ -1909,7 +1933,11 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
             }
           }
           const currentId = window.currentSessionId || chatId || "";
-          return rewritePayloadMediaUrls(payload, currentId, selectedAgent) as any;
+          return rewritePayloadMediaUrls(
+            payload,
+            currentId,
+            selectedAgent,
+          ) as any;
         },
         replaceMediaURL: (url: string) => {
           const currentId = window.currentSessionId || chatId || "";
@@ -2012,6 +2040,21 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
             ref={chatRef}
             options={options}
           />
+          {billingFailure && (
+            <BillingFailureAlert
+              failure={billingFailure}
+              pausedRunId={
+                currentExpertTeamRun?.state === "paused_insufficient_balance"
+                  ? currentExpertTeamRun.id
+                  : null
+              }
+              onContinue={async (runId) => {
+                const resumed = await expertTeamsApi.continueRun(runId);
+                setCurrentExpertTeamRun(resumed);
+                setBillingFailure(null);
+              }}
+            />
+          )}
           <WorkbenchInput
             isClawMode={isClawMode}
             isGenerating={isGenerating}

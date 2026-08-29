@@ -2653,6 +2653,13 @@
     "noTasksHint": "在上方输入框描述你的需求，开始新任务",
     "taskLabel": "任务"
   },
+  "billing": {
+    "insufficientTitle": "积分不足，本次调用未继续",
+    "balanceRequired": "当前 {{available}}，需要 {{required}}",
+    "topUp": "去充值",
+    "continueAfterTopUp": "充值后继续",
+    "continueFailed": "继续失败，请确认充值已到账后重试。"
+  },
   "chatToolbar": {
     "craft": "Craft",
     "plan": "Plan",

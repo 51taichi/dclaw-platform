@@ -6,6 +6,13 @@ export interface BillingWallet {
   package: number;
 }
 
+export interface InsufficientCreditsFailure {
+  code: "INSUFFICIENT_CREDITS";
+  available_credits: number;
+  required_credits: number;
+  top_up_path: string;
+}
+
 export interface TopUpProduct {
   public_id: string;
   name: string;
@@ -63,15 +70,83 @@ export interface BillingLedgerEntry {
   created_at: string;
 }
 
+export type BillingUsageSource =
+  | "client"
+  | "mobile"
+  | "openapi"
+  | "expert_team"
+  | "automation"
+  | "schedule"
+  | "channel";
+
+export type BillingUsageStatus = "quoted" | "held" | "settled" | "reconciling";
+
+export interface BillingUsageItem {
+  call_sequence: number;
+  expert_role: string | null;
+  model: string;
+  provider: string;
+  capability: string;
+  tokens: { input: number; output: number };
+  charged_credits: number;
+  status: string;
+  catalog_version: string;
+}
+
 export interface BillingUsageOrder {
   id: string;
-  status: string;
-  provider_id: string;
-  model_key: string;
-  capability: string;
+  source: BillingUsageSource;
+  expert: string | null;
+  expert_team: string | null;
+  status: BillingUsageStatus;
+  billing_status: string;
+  billing_mode: "off" | "shadow" | "observe" | "enforced";
+  is_estimate: boolean;
+  catalog_version: string;
   quoted_credits: number;
   captured_credits: number;
+  released_credits: number;
+  reconciling_credits: number;
+  actual_debited_credits: number;
+  call_count: number;
+  credits: {
+    held: number;
+    captured: number;
+    released: number;
+    reconciling: number;
+  };
+  tokens: { input: number; output: number };
   created_at: string;
+  updated_at: string;
+  items?: BillingUsageItem[];
+}
+
+export interface BillingUsageSummaryValues {
+  orders: number;
+  model_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  retail_credits: number;
+  actual_debited_credits: number;
+  shadow_estimated_credits: number;
+  reconciling_credits: number;
+}
+
+export interface BillingUsageSummary {
+  window: {
+    date_from: string;
+    date_to: string;
+    timezone: "UTC";
+    lifetime: false;
+  };
+  totals: BillingUsageSummaryValues;
+  by_day: Array<{ date: string } & BillingUsageSummaryValues>;
+  by_month: Array<{
+    month: string;
+    orders: number;
+    retail_credits: number;
+    actual_debited_credits: number;
+  }>;
 }
 
 export type PricingCategory =

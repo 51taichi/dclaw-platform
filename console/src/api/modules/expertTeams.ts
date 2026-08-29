@@ -1,8 +1,5 @@
 import { request } from "../request";
-import type {
-  ExpertTeamRun,
-  ExpertTeamTemplate,
-} from "../types/expertTeams";
+import type { ExpertTeamRun, ExpertTeamTemplate } from "../types/expertTeams";
 
 export const expertTeamsApi = {
   listExpertTeams: () => request<ExpertTeamTemplate[]>("/expert-teams"),
@@ -31,6 +28,11 @@ export const expertTeamsApi = {
 
   cancelRun: (runId: string) =>
     request<ExpertTeamRun>(`/expert-team-runs/${runId}/cancel`, {
+      method: "POST",
+    }),
+
+  continueRun: (runId: string) =>
+    request<ExpertTeamRun>(`/expert-teams/runs/${runId}/continue`, {
       method: "POST",
     }),
 

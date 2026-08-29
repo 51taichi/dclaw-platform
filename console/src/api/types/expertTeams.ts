@@ -61,10 +61,18 @@ export interface ExpertTeamRun {
   root_chat_id: string;
   root_session_id: string;
   user_id: string;
-  state: "pending" | "running" | "completed" | "failed" | "cancelled";
+  state:
+    | "pending"
+    | "running"
+    | "paused_insufficient_balance"
+    | "completed"
+    | "failed"
+    | "cancelled";
   input_text?: string;
   final_summary?: string | null;
   error?: string | null;
+  next_member_key?: string | null;
+  required_credits?: number | null;
   team?: ExpertTeamTemplate | null;
   members: ExpertTeamMemberRun[];
   created_at?: string | null;

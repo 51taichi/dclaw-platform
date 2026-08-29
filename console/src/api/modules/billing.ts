@@ -2,6 +2,7 @@ import { request } from "../request";
 import type {
   BillingLedgerEntry,
   BillingUsageOrder,
+  BillingUsageSummary,
   BillingWallet,
   Page,
   SubmitTopUpClaim,
@@ -42,9 +43,10 @@ export const billingApi = {
     request<Page<BillingLedgerEntry>>(`/billing/ledger${query(params)}`),
   listUsage: (params: Record<string, string | number | undefined> = {}) =>
     request<Page<BillingUsageOrder>>(`/billing/usage-orders${query(params)}`),
-  getUsage: (id: string) => request(`/billing/usage-orders/${id}`),
+  getUsage: (id: string) =>
+    request<BillingUsageOrder>(`/billing/usage-orders/${id}`),
   getSummary: (params: { date_from?: string; date_to?: string } = {}) =>
-    request(`/billing/open-api-summary${query(params)}`),
+    request<BillingUsageSummary>(`/billing/open-api-summary${query(params)}`),
   getTopUpConfig: () => request<TopUpConfig>("/billing/top-up/config"),
   listProducts: () => request<Page<TopUpProduct>>("/billing/top-up/products"),
   listClaims: () => request<Page<TopUpClaim>>("/billing/top-up/claims"),

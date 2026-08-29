@@ -5,6 +5,7 @@ import { billingApi } from "../../api/modules/billing";
 import type {
   BillingLedgerEntry,
   BillingUsageOrder,
+  BillingUsageSummary,
   BillingWallet,
   TopUpClaim,
   TopUpConfig,
@@ -24,6 +25,10 @@ export default function WalletPage() {
   const [claims, setClaims] = useState<TopUpClaim[]>([]);
   const [ledger, setLedger] = useState<BillingLedgerEntry[]>([]);
   const [usage, setUsage] = useState<BillingUsageOrder[]>([]);
+  const [usageSummary, setUsageSummary] = useState<BillingUsageSummary | null>(
+    null,
+  );
+  const [usageSource, setUsageSource] = useState<BillingUsageOrder["source"]>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -37,13 +42,15 @@ export default function WalletPage() {
         nextClaims,
         nextLedger,
         nextUsage,
+        nextUsageSummary,
       ] = await Promise.all([
         billingApi.getWallet(),
         billingApi.getTopUpConfig(),
         billingApi.listProducts(),
         billingApi.listClaims(),
         billingApi.listLedger({ limit: 50 }),
-        billingApi.listUsage({ limit: 50 }),
+        billingApi.listUsage({ limit: 50, source: usageSource }),
+        billingApi.getSummary(),
       ]);
       setWallet(nextWallet);
       setConfig(nextConfig);
@@ -51,13 +58,14 @@ export default function WalletPage() {
       setClaims(nextClaims.items);
       setLedger(nextLedger.items);
       setUsage(nextUsage.items);
+      setUsageSummary(nextUsageSummary);
       setError(null);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "积分数据加载失败");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [usageSource]);
 
   useEffect(() => void load(), [load]);
   if (loading) return <Spin />;
@@ -136,8 +144,23 @@ export default function WalletPage() {
           },
           {
             key: "usage",
-            label: "OpenAPI 消费",
-            children: <UsageOrders rows={usage} />,
+            label: "模型消费",
+            children: (
+              <div>
+                {usageSummary && (
+                  <Alert
+                    type="info"
+                    showIcon
+                    message={`近 30 天：${usageSummary.totals.model_calls.toLocaleString()} 次模型调用，实际扣除 ${usageSummary.totals.actual_debited_credits.toLocaleString()} 积分，待对账 ${usageSummary.totals.reconciling_credits.toLocaleString()} 积分`}
+                  />
+                )}
+                <UsageOrders
+                  rows={usage}
+                  source={usageSource}
+                  onSourceChange={setUsageSource}
+                />
+              </div>
+            ),
           },
         ]}
       />

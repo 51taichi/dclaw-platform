@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { billingApi } from "../../api/modules/billing";
+import type { BillingUsageOrder } from "../../api/types/billing";
 import WalletPage from "./index";
 
 vi.mock("../../api/modules/billing", () => ({
@@ -13,6 +14,8 @@ vi.mock("../../api/modules/billing", () => ({
     listClaims: vi.fn(),
     listLedger: vi.fn(),
     listUsage: vi.fn(),
+    getUsage: vi.fn(),
+    getSummary: vi.fn(),
     submitClaim: vi.fn(),
   },
 }));
@@ -48,6 +51,26 @@ describe("WalletPage", () => {
     vi.mocked(billingApi.listClaims).mockResolvedValue({ items: [] });
     vi.mocked(billingApi.listLedger).mockResolvedValue({ items: [] });
     vi.mocked(billingApi.listUsage).mockResolvedValue({ items: [] });
+    vi.mocked(billingApi.getSummary).mockResolvedValue({
+      window: {
+        date_from: "2026-08-01",
+        date_to: "2026-08-30",
+        timezone: "UTC",
+        lifetime: false,
+      },
+      totals: {
+        orders: 0,
+        model_calls: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        retail_credits: 0,
+        actual_debited_credits: 0,
+        shadow_estimated_credits: 0,
+        reconciling_credits: 0,
+      },
+      by_day: [],
+      by_month: [],
+    });
     vi.mocked(billingApi.submitClaim).mockResolvedValue({
       public_id: "claim-1",
       product_snapshot: product,
@@ -153,5 +176,67 @@ describe("WalletPage", () => {
       await screen.findByText("平台尚未配置收款二维码，请联系平台管理员。"),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "选择 CNY 10" })).toBeDisabled();
+  });
+
+  it("shows mixed-source billing totals and safe per-call details", async () => {
+    const usageOrder: BillingUsageOrder = {
+      id: "order-public-1",
+      source: "expert_team",
+      expert: "research-agent",
+      expert_team: "market-research-team",
+      status: "reconciling",
+      billing_status: "reconciling",
+      billing_mode: "enforced",
+      is_estimate: false,
+      catalog_version: "retail-v3",
+      quoted_credits: 7,
+      captured_credits: 5,
+      released_credits: 1,
+      reconciling_credits: 1,
+      credits: {
+        held: 7,
+        captured: 5,
+        released: 1,
+        reconciling: 1,
+      },
+      actual_debited_credits: 5,
+      call_count: 1,
+      tokens: { input: 1200, output: 300 },
+      created_at: "2026-08-30T01:00:00Z",
+      updated_at: "2026-08-30T01:01:00Z",
+      items: [
+        {
+          call_sequence: 1,
+          expert_role: "researcher",
+          model: "deepseek-v4",
+          provider: "deepseek",
+          capability: "text",
+          tokens: { input: 1200, output: 300 },
+          charged_credits: 5,
+          status: "reconciling",
+          catalog_version: "retail-v3",
+        },
+      ],
+    };
+    vi.mocked(billingApi.listUsage).mockResolvedValue({ items: [usageOrder] });
+    vi.mocked(billingApi.getUsage).mockResolvedValue(usageOrder);
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <WalletPage />
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole("tab", { name: "模型消费" }));
+    expect(screen.getByText("专家团")).toBeInTheDocument();
+    expect(screen.getByText("待对账")).toBeInTheDocument();
+    expect(screen.getByText("1,200 / 300")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "展开调用明细" }));
+    expect(screen.getByText("researcher")).toBeInTheDocument();
+    expect(screen.getByText("deepseek-v4 / deepseek")).toBeInTheDocument();
+    expect(screen.getByText("retail-v3")).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("supplier_reference");
+    expect(document.body.textContent).not.toContain("item_key");
   });
 });
