@@ -1,0 +1,239 @@
+"""Build safe multidimensional pricing drafts from enabled models."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from decimal import Decimal, ROUND_CEILING
+from typing import Any, Mapping, Sequence
+
+from .official_pricing import OfficialPriceRegistry
+from .pricing_inventory import PriceableModel
+
+
+@dataclass(frozen=True)
+class PricingDraftRow:
+    provider_id: str
+    provider_name: str
+    model_key: str
+    model_name: str
+    official_provider_id: str | None
+    official_model_id: str | None
+    category: str
+    capability: str
+    unit_key: str
+    unit_size: int
+    conditions: Mapping[str, Any]
+    rmb_cost: Decimal | None
+    multiplier: Decimal
+    rmb_sale_price: Decimal | None
+    credits: int | None
+    source_type: str
+    source_url: str | None
+    verification_status: str
+    include_in_publish: bool
+    exclusion_reason: str | None
+    registry_version: str | None
+
+
+@dataclass(frozen=True)
+class PricingDraftRisk:
+    code: str
+    provider_id: str
+    model_key: str
+    unit_key: str | None = None
+
+
+@dataclass(frozen=True)
+class PricingCoverage:
+    enabled_models: int
+    matched_models: int
+    missing_models: int
+    excluded_models: int
+    blocking_models: int
+
+
+@dataclass(frozen=True)
+class PricingDraftResult:
+    rows: tuple[PricingDraftRow, ...]
+    risks: tuple[PricingDraftRisk, ...]
+    coverage: PricingCoverage
+
+
+class PricingDraftBuilder:
+    def __init__(
+        self,
+        registry: OfficialPriceRegistry,
+        *,
+        default_multiplier: Decimal = Decimal("1.5"),
+        credits_per_yuan: int = 100,
+    ) -> None:
+        self.registry = registry
+        self.default_multiplier = default_multiplier
+        self.credits_per_yuan = credits_per_yuan
+
+    def build(
+        self,
+        models: Sequence[PriceableModel],
+        costs: Sequence[Mapping[str, Any]],
+        mappings: Sequence[Mapping[str, Any]],
+        exclusions: Sequence[Mapping[str, Any]],
+    ) -> PricingDraftResult:
+        mapping_index = {
+            (str(row["provider_id"]), str(row["model_key"])): row
+            for row in mappings
+        }
+        cost_index = {
+            (
+                str(row["provider_id"]),
+                str(row["model_key"]),
+                str(row["unit_key"]),
+            ): row
+            for row in costs
+            if row.get("verification_status") == "verified"
+        }
+        exclusion_index = {
+            (str(row["provider_id"]), str(row["model_key"])): row
+            for row in exclusions
+            if row.get("excluded") is True
+        }
+        rows: list[PricingDraftRow] = []
+        risks: list[PricingDraftRisk] = []
+        matched: set[tuple[str, str]] = set()
+        missing: set[tuple[str, str]] = set()
+        excluded: set[tuple[str, str]] = set()
+
+        for model in models:
+            model_key = (model.provider_id, model.model_key)
+            mapping = mapping_index.get(model_key)
+            official_provider_id = (
+                str(mapping["official_provider_id"])
+                if mapping and mapping.get("official_provider_id")
+                else model.provider_id
+                if model.official_model_id
+                else None
+            )
+            official_model_id = (
+                str(mapping["official_model_id"])
+                if mapping
+                else model.official_model_id
+            )
+            dimensions = (
+                self.registry.dimensions(
+                    official_provider_id, official_model_id
+                )
+                if official_provider_id and official_model_id
+                else ()
+            )
+            exclusion = exclusion_index.get(model_key)
+            exclusion_reason = str(exclusion["reason"]) if exclusion else None
+            if exclusion:
+                excluded.add(model_key)
+            if not dimensions:
+                missing.add(model_key)
+                code = (
+                    "official_model_unmatched"
+                    if official_model_id is None
+                    else "official_price_missing"
+                )
+                risks.append(
+                    PricingDraftRisk(code, model.provider_id, model.model_key)
+                )
+                rows.append(
+                    PricingDraftRow(
+                        model.provider_id,
+                        model.provider_name,
+                        model.model_key,
+                        model.model_name,
+                        official_provider_id,
+                        official_model_id,
+                        model.category,
+                        "",
+                        "",
+                        1,
+                        {},
+                        None,
+                        self.default_multiplier,
+                        None,
+                        None,
+                        "missing",
+                        None,
+                        "unmatched"
+                        if official_model_id is None
+                        else "missing",
+                        False,
+                        exclusion_reason,
+                        None,
+                    )
+                )
+                continue
+            matched.add(model_key)
+            for dimension in dimensions:
+                override = cost_index.get(
+                    (model.provider_id, model.model_key, dimension.unit_key)
+                )
+                rmb_cost = (
+                    Decimal(str(override["rmb_cost_decimal"]))
+                    if override
+                    else dimension.rmb_cost
+                )
+                source_type = (
+                    "trusted_cost" if override else "official_registry"
+                )
+                sale = rmb_cost * self.default_multiplier
+                credits = int(
+                    (sale * self.credits_per_yuan).to_integral_value(
+                        rounding=ROUND_CEILING
+                    )
+                )
+                conditions = (
+                    json.loads(str(override.get("conditions_json", "{}")))
+                    if override
+                    else dimension.conditions
+                )
+                rows.append(
+                    PricingDraftRow(
+                        model.provider_id,
+                        model.provider_name,
+                        model.model_key,
+                        model.model_name,
+                        official_provider_id,
+                        official_model_id,
+                        model.category,
+                        dimension.capability,
+                        dimension.unit_key,
+                        dimension.unit_size,
+                        conditions,
+                        rmb_cost,
+                        self.default_multiplier,
+                        sale,
+                        credits,
+                        source_type,
+                        dimension.source_url,
+                        "verified",
+                        not bool(exclusion),
+                        exclusion_reason,
+                        dimension.registry_version,
+                    )
+                )
+        rows.sort(
+            key=lambda row: (
+                row.provider_id,
+                row.category,
+                row.model_key,
+                row.unit_key,
+                json.dumps(row.conditions, sort_keys=True),
+            )
+        )
+        blocking = missing - excluded
+        return PricingDraftResult(
+            tuple(rows),
+            tuple(risks),
+            PricingCoverage(
+                len(models),
+                len(matched),
+                len(missing),
+                len(excluded),
+                len(blocking),
+            ),
+        )

@@ -14,6 +14,8 @@ class PriceableModel:
     model_key: str
     model_name: str
     category: str
+    official_model_id: str | None = None
+    capabilities: tuple[str, ...] = ()
 
 
 def classify_model(model: ModelInfo) -> str:
@@ -39,22 +41,42 @@ class PricingModelInventory:
         self.manager = manager
 
     def list_enabled(self) -> tuple[PriceableModel, ...]:
-        providers = list(self.manager.builtin_providers.values())
-        providers.extend(self.manager.custom_providers.values())
         rows: list[PriceableModel] = []
-        for provider in providers:
-            if provider.require_api_key and not provider.api_key and not provider.is_local:
+        providers = [
+            (provider, True)
+            for provider in self.manager.builtin_providers.values()
+        ]
+        providers.extend(
+            (provider, False)
+            for provider in self.manager.custom_providers.values()
+        )
+        for provider, has_official_identity in providers:
+            if (
+                provider.require_api_key
+                and not provider.api_key
+                and not provider.is_local
+            ):
                 continue
             hidden = set(provider.meta.get("hidden_builtin_model_ids", []))
             for model in (*provider.models, *provider.extra_models):
                 if model.id in hidden:
                     continue
-                rows.append(PriceableModel(
-                    provider_id=provider.id,
-                    provider_name=provider.name,
-                    model_key=model.id,
-                    model_name=model.name,
-                    category=classify_model(model),
-                ))
-        return tuple(sorted(rows, key=lambda row: (
-            row.provider_id, row.category, row.model_key)))
+                rows.append(
+                    PriceableModel(
+                        provider_id=provider.id,
+                        provider_name=provider.name,
+                        model_key=model.id,
+                        model_name=model.name,
+                        category=classify_model(model),
+                        official_model_id=(
+                            model.id if has_official_identity else None
+                        ),
+                        capabilities=tuple(sorted(model.aigc_capabilities)),
+                    )
+                )
+        return tuple(
+            sorted(
+                rows,
+                key=lambda row: (row.provider_id, row.category, row.model_key),
+            )
+        )

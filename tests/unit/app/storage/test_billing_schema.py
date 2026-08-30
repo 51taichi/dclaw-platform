@@ -318,6 +318,29 @@ def test_official_price_candidates_are_append_only(sqlite_engine):
             )
 
 
+def test_pricing_model_mapping_upgrade_adds_official_provider(sqlite_engine):
+    with sqlite_engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE billing_pricing_model_mappings ("
+                "id TEXT PRIMARY KEY, provider_id TEXT NOT NULL, "
+                "model_key TEXT NOT NULL, official_model_id TEXT NOT NULL, "
+                "revision INTEGER NOT NULL DEFAULT 0, "
+                "updated_by TEXT NOT NULL, updated_at DATETIME)"
+            )
+        )
+
+    create_all(sqlite_engine)
+
+    columns = {
+        column["name"]
+        for column in inspect(sqlite_engine).get_columns(
+            "billing_pricing_model_mappings"
+        )
+    }
+    assert "official_provider_id" in columns
+
+
 def test_manual_top_up_schema_is_idempotent_and_uses_bigints(sqlite_engine):
     create_all(sqlite_engine)
     create_all(sqlite_engine)

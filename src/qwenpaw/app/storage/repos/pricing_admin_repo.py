@@ -113,6 +113,7 @@ class PricingAdminRepository:
         self,
         provider_id: str,
         model_key: str,
+        official_provider_id: str,
         official_model_id: str,
         actor_id: str,
         expected_revision: int,
@@ -137,6 +138,7 @@ class PricingAdminRepository:
                     "id": str(uuid4()),
                     "provider_id": provider_id,
                     "model_key": model_key,
+                    "official_provider_id": official_provider_id,
                     "official_model_id": official_model_id,
                     "revision": 1,
                     "updated_by": actor_id,
@@ -150,6 +152,7 @@ class PricingAdminRepository:
                 row = dict(current)
                 row.update(
                     official_model_id=official_model_id,
+                    official_provider_id=official_provider_id,
                     revision=expected_revision + 1,
                     updated_by=actor_id,
                 )
@@ -162,6 +165,7 @@ class PricingAdminRepository:
                     )
                     .values(
                         official_model_id=official_model_id,
+                        official_provider_id=official_provider_id,
                         revision=expected_revision + 1,
                         updated_by=actor_id,
                     )
@@ -172,6 +176,7 @@ class PricingAdminRepository:
                 "id": str(row["id"]),
                 "provider_id": provider_id,
                 "model_key": model_key,
+                "official_provider_id": official_provider_id,
                 "official_model_id": official_model_id,
                 "revision": int(row["revision"]),
             }

@@ -123,14 +123,14 @@ def test_official_candidate_is_append_only_and_digest_idempotent(repo):
 
 def test_exact_model_mapping_uses_optimistic_revision(repo):
     saved = repo.replace_model_mapping(
-        "custom-provider", "qwen-alias", "qwen-plus", "1", 0
+        "custom-provider", "qwen-alias", "dashscope", "qwen-plus", "1", 0
     )
     assert saved["revision"] == 1
     assert repo.list_model_mappings()[0]["official_model_id"] == "qwen-plus"
 
     with pytest.raises(PricingRevisionConflict):
         repo.replace_model_mapping(
-            "custom-provider", "qwen-alias", "qwen-max", "1", 0
+            "custom-provider", "qwen-alias", "dashscope", "qwen-max", "1", 0
         )
 
 

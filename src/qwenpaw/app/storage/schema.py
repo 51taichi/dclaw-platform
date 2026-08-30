@@ -718,6 +718,7 @@ billing_pricing_model_mappings = Table(
     Column("id", String, primary_key=True),
     Column("provider_id", String, nullable=False),
     Column("model_key", String, nullable=False),
+    Column("official_provider_id", String, nullable=False),
     Column("official_model_id", String, nullable=False),
     Column("revision", Integer, nullable=False, server_default="0"),
     Column("updated_by", String, nullable=False),
@@ -1435,6 +1436,7 @@ def create_all(engine: Engine) -> None:
     _ensure_pricing_catalog_revision(engine)
     _ensure_pricing_audit_immutable(engine)
     _ensure_official_price_candidate_immutable(engine)
+    _ensure_pricing_model_mapping_columns(engine)
     _ensure_open_api_publication_binding_columns(engine)
     _ensure_knowledge_metadata_columns(engine)
     _ensure_billing_usage_order_columns(engine)
@@ -1542,6 +1544,29 @@ def _ensure_official_price_candidate_immutable(engine: Engine) -> None:
                     f"ROW EXECUTE FUNCTION {function_name}(); END IF; END $$"
                 )
             )
+
+
+def _ensure_pricing_model_mapping_columns(engine: Engine) -> None:
+    """Add explicit official-provider identity to legacy mappings."""
+    table_name = "billing_pricing_model_mappings"
+    columns = {
+        column["name"] for column in inspect(engine).get_columns(table_name)
+    }
+    if "official_provider_id" in columns:
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                f"ALTER TABLE {table_name} ADD COLUMN "
+                "official_provider_id VARCHAR"
+            )
+        )
+        conn.execute(
+            text(
+                f"UPDATE {table_name} SET official_provider_id = provider_id "
+                "WHERE official_provider_id IS NULL"
+            )
+        )
 
 
 def _ensure_reconciliation_audit_immutable(engine: Engine) -> None:
