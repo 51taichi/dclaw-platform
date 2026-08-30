@@ -14,6 +14,7 @@ export default function PricingDrafts({
   onExclusion,
   onMapping,
   onModelDecision,
+  onBatchDecision,
 }: {
   catalogs: PricingCatalogSummary[];
   draft?: PricingDraft;
@@ -38,6 +39,11 @@ export default function PricingDrafts({
     includeInPublish: boolean,
     reason: string | null,
   ) => Promise<void>;
+  onBatchDecision?: (
+    includeInPublish: boolean,
+    evidenceLevels: string[],
+    reason: string | null,
+  ) => Promise<void>;
 }) {
   const [pending, setPending] = useState<{
     providerId: string;
@@ -59,6 +65,39 @@ export default function PricingDrafts({
   const [decisionReason, setDecisionReason] = useState("");
   return (
     <Space direction="vertical" style={{ width: "100%" }}>
+      {draft && (
+        <Space wrap>
+          <Button
+            disabled={!canMutate}
+            onClick={() =>
+              void onBatchDecision?.(
+                true,
+                ["official_verified"],
+                "官方可信价格批量纳入",
+              )
+            }
+          >
+            官方可信模型全部发布
+          </Button>
+          <Button
+            disabled={!canMutate}
+            onClick={() =>
+              void onBatchDecision?.(
+                false,
+                [
+                  "ai_official_extract",
+                  "ai_multi_source",
+                  "ai_no_evidence",
+                  "failed",
+                ],
+                "价格证据待人工复核",
+              )
+            }
+          >
+            模糊价格模型全部不发布
+          </Button>
+        </Space>
+      )}
       {draft && (
         <Table
           rowKey={(row) =>

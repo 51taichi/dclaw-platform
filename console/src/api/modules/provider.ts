@@ -52,6 +52,8 @@ export const providerApi = {
     });
     return listProvidersPromise;
   },
+  listAllProviders: () =>
+    request<ProviderInfo[]>("/models?include_unpublished=true"),
 
   configureProvider: (providerId: string, body: ProviderConfigRequest) =>
     request<ProviderInfo>(`/models/${encodeURIComponent(providerId)}/config`, {

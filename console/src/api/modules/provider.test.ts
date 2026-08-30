@@ -21,6 +21,11 @@ describe("providerApi", () => {
     expect(request).toHaveBeenCalledWith("/models");
   });
 
+  it("listAllProviders requests the admin-only unpublished inventory", async () => {
+    await providerApi.listAllProviders();
+    expect(request).toHaveBeenCalledWith("/models?include_unpublished=true");
+  });
+
   it("getActiveModels with no params calls /models/active", async () => {
     await providerApi.getActiveModels();
     expect(request).toHaveBeenCalledWith("/models/active");

@@ -134,6 +134,27 @@ export const billingApi = {
         body: JSON.stringify({ decisions }),
       },
     ),
+  batchSetPricingModelDecision: (
+    draftKey: string,
+    payload: {
+      include_in_publish: boolean;
+      provider_ids?: string[];
+      evidence_levels?: string[];
+      model_keys?: string[];
+      reason?: string | null;
+    },
+    token: string,
+  ) =>
+    request(
+      `/admin/billing/pricing/drafts/${encodeURIComponent(
+        draftKey,
+      )}/batch-decision`,
+      {
+        method: "POST",
+        headers: pricingHeaders(token),
+        body: JSON.stringify(payload),
+      },
+    ),
   exportPricingDraft: (draftKey: string) =>
     request<Blob>(
       `/admin/billing/pricing/drafts/${encodeURIComponent(draftKey)}/export`,

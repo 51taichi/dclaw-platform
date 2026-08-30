@@ -398,6 +398,28 @@ export default function PricingTab() {
                   );
                   message.success("模型本次发布状态已保存");
                 }}
+                onBatchDecision={async (
+                  includeInPublish,
+                  evidenceLevels,
+                  reason,
+                ) => {
+                  if (!activeUnlock || !draft) return;
+                  const result = (await billingApi.batchSetPricingModelDecision(
+                    draft.draft_key,
+                    {
+                      include_in_publish: includeInPublish,
+                      evidence_levels: evidenceLevels,
+                      reason,
+                    },
+                    activeUnlock.token,
+                  )) as { updated_models?: number };
+                  setDraft(
+                    await billingApi.generatePricingDraft(activeUnlock.token),
+                  );
+                  message.success(
+                    `已更新 ${result.updated_models ?? 0} 个模型的发布状态`,
+                  );
+                }}
                 onExclusion={async (providerId, modelKey, excluded, reason) => {
                   if (!activeUnlock || !draft) return;
                   await billingApi.setPricingExclusion(

@@ -19,7 +19,7 @@ export function useProviders() {
     setError(null);
     try {
       const [provData, activeData] = await Promise.all([
-        api.listProviders(),
+        api.listAllProviders(),
         api.getActiveModels({ scope: "global" }),
       ]);
       if (!Array.isArray(provData)) {
