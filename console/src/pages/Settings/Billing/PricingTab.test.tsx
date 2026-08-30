@@ -15,6 +15,9 @@ vi.mock("../../../api/modules/billing", () => ({
     exportPricingDraft: vi.fn(),
     setPricingExclusion: vi.fn(),
     refreshOfficialPricingCandidates: vi.fn(),
+    startPricingCollection: vi.fn(),
+    getPricingCollectionJob: vi.fn(),
+    listPricingCollectionJobs: vi.fn(),
     savePricingModelMapping: vi.fn(),
   },
 }));
@@ -68,6 +71,7 @@ describe("PricingTab", () => {
     vi.mocked(billingApi.listPricingHistory).mockResolvedValue([]);
     vi.mocked(billingApi.listPricingPolicies).mockResolvedValue([]);
     vi.mocked(billingApi.listPricingModelMappings).mockResolvedValue([]);
+    vi.mocked(billingApi.listPricingCollectionJobs).mockResolvedValue([]);
   });
 
   it("groups models and renders RMB without foreign currency", async () => {
@@ -112,5 +116,23 @@ describe("PricingTab", () => {
     expect(await screen.findByText("尚未发布价格目录")).toBeInTheDocument();
     expect(screen.getByText(/默认按官方成本的 1.5 倍/)).toBeInTheDocument();
     expect(screen.getByText(/1 元人民币 = 100 积分/)).toBeInTheDocument();
+  });
+
+  it("shows durable official price collection progress without unlock", async () => {
+    vi.mocked(billingApi.startPricingCollection).mockResolvedValue({
+      id: "job-1",
+      status: "pending",
+      progress: {},
+      items: [],
+    });
+    const user = userEvent.setup();
+    render(<PricingTab />);
+
+    await user.click(await screen.findByText("同步官网价格"));
+
+    expect(
+      await screen.findByText(/官网价格同步任务已提交/),
+    ).toBeInTheDocument();
+    expect(billingApi.startPricingCollection).toHaveBeenCalledOnce();
   });
 });

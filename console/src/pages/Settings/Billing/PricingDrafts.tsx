@@ -13,6 +13,7 @@ export default function PricingDrafts({
   onPublish,
   onExclusion,
   onMapping,
+  onModelDecision,
 }: {
   catalogs: PricingCatalogSummary[];
   draft?: PricingDraft;
@@ -31,6 +32,12 @@ export default function PricingDrafts({
     officialProviderId: string,
     officialModelId: string,
   ) => Promise<void>;
+  onModelDecision?: (
+    providerId: string,
+    modelKey: string,
+    includeInPublish: boolean,
+    reason: string | null,
+  ) => Promise<void>;
 }) {
   const [pending, setPending] = useState<{
     providerId: string;
@@ -43,6 +50,13 @@ export default function PricingDrafts({
     officialProviderId: string;
     officialModelId: string;
   }>();
+  const [decision, setDecision] = useState<{
+    providerId: string;
+    modelKey: string;
+    includeInPublish: boolean;
+    requiresReason: boolean;
+  }>();
+  const [decisionReason, setDecisionReason] = useState("");
   return (
     <Space direction="vertical" style={{ width: "100%" }}>
       {draft && (
@@ -81,37 +95,88 @@ export default function PricingDrafts({
             },
             {
               title: "来源",
-              render: (_, row) =>
-                row.source_url ? (
-                  <a href={row.source_url} target="_blank" rel="noreferrer">
-                    {row.source_type} / {row.verification_status}
-                  </a>
-                ) : (
-                  `${row.source_type} / ${row.verification_status}`
-                ),
+              render: (_, row) => (
+                <Space direction="vertical" size={0}>
+                  {row.source_url ? (
+                    <a href={row.source_url} target="_blank" rel="noreferrer">
+                      {row.source_type} / {row.verification_status}
+                    </a>
+                  ) : (
+                    <span>
+                      {row.source_type} / {row.verification_status}
+                    </span>
+                  )}
+                  <Tag>{row.evidence_level ?? "价格证据待确认"}</Tag>
+                </Space>
+              ),
             },
             {
               title: "纳入状态",
-              render: (_, row) =>
-                row.include_in_publish ? (
-                  <Tag color="green">纳入</Tag>
-                ) : row.exclusion_reason ? (
-                  <Button
-                    type="link"
-                    disabled={!canMutate}
-                    onClick={() =>
-                      void onExclusion?.(
-                        row.provider_id,
-                        row.model_key,
-                        false,
-                        null,
-                      )
-                    }
-                  >
-                    已排除：{row.exclusion_reason}（恢复）
-                  </Button>
-                ) : (
+              render: (_, row, index) => {
+                const firstModelRow =
+                  draft.rows.findIndex(
+                    (candidate) =>
+                      candidate.provider_id === row.provider_id &&
+                      candidate.model_key === row.model_key,
+                  ) === index;
+                if (!firstModelRow) return null;
+                if (row.include_in_publish)
+                  return (
+                    <Space direction="vertical" size={0}>
+                      <Tag color="green">本次发布</Tag>
+                      <Button
+                        type="link"
+                        disabled={!canMutate}
+                        onClick={() => {
+                          setDecision({
+                            providerId: row.provider_id,
+                            modelKey: row.model_key,
+                            includeInPublish: false,
+                            requiresReason: false,
+                          });
+                          setDecisionReason("");
+                        }}
+                      >
+                        本次不发布
+                      </Button>
+                    </Space>
+                  );
+                if (row.exclusion_reason)
+                  return (
+                    <Button
+                      type="link"
+                      disabled={!canMutate}
+                      onClick={() =>
+                        void onExclusion?.(
+                          row.provider_id,
+                          row.model_key,
+                          false,
+                          null,
+                        )
+                      }
+                    >
+                      已排除：{row.exclusion_reason}（恢复）
+                    </Button>
+                  );
+                return (
                   <Space direction="vertical" size={0}>
+                    <Tag>本次不发布</Tag>
+                    <Button
+                      type="link"
+                      disabled={!canMutate}
+                      onClick={() => {
+                        setDecision({
+                          providerId: row.provider_id,
+                          modelKey: row.model_key,
+                          includeInPublish: true,
+                          requiresReason:
+                            row.evidence_level !== "official_verified",
+                        });
+                        setDecisionReason("");
+                      }}
+                    >
+                      本次发布
+                    </Button>
                     <Button
                       type="link"
                       disabled={!canMutate}
@@ -140,7 +205,8 @@ export default function PricingDrafts({
                       填写原因并排除
                     </Button>
                   </Space>
-                ),
+                );
+              },
             },
           ]}
         />
@@ -184,6 +250,42 @@ export default function PricingDrafts({
           },
         ]}
       />
+      <Modal
+        open={Boolean(decision)}
+        title={
+          decision?.includeInPublish ? "确认本次发布模型" : "确认本次不发布模型"
+        }
+        okText="保存发布状态"
+        okButtonProps={{
+          disabled: Boolean(decision?.requiresReason && !decisionReason.trim()),
+        }}
+        onCancel={() => setDecision(undefined)}
+        onOk={async () => {
+          if (!decision) return;
+          await onModelDecision?.(
+            decision.providerId,
+            decision.modelKey,
+            decision.includeInPublish,
+            decisionReason.trim() || null,
+          );
+          setDecision(undefined);
+        }}
+      >
+        <p>
+          此状态仅决定当前草案发布时该模型是否对客户可见；不会自动发布目录。
+        </p>
+        <Input.TextArea
+          aria-label="发布决策原因"
+          value={decisionReason}
+          onChange={(event) => setDecisionReason(event.target.value)}
+          placeholder={
+            decision?.requiresReason
+              ? "AI或模糊价格必须填写人工审批依据"
+              : "可选：填写本次发布决策原因"
+          }
+          maxLength={2000}
+        />
+      </Modal>
       <Modal
         open={Boolean(pending)}
         title="填写模型排除原因"

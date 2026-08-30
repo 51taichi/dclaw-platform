@@ -14,6 +14,7 @@ import { billingApi } from "../../../api/modules/billing";
 import type {
   PriceableModel,
   PricingAudit,
+  PricingCollectionJob,
   PricingDraft,
   PricingModelMapping,
   PricingOverview,
@@ -33,6 +34,8 @@ export default function PricingTab() {
   const [history, setHistory] = useState<PricingAudit[]>([]);
   const [policies, setPolicies] = useState<PricingPolicy[]>([]);
   const [draft, setDraft] = useState<PricingDraft>();
+  const [collectionJob, setCollectionJob] = useState<PricingCollectionJob>();
+  const [activeTab, setActiveTab] = useState("overview");
   const [mappings, setMappings] = useState<PricingModelMapping[]>([]);
   const [error, setError] = useState<string>();
   const [unlock, setUnlock] = useState<PricingUnlock>();
@@ -45,6 +48,7 @@ export default function PricingTab() {
       billingApi.listPricingHistory(),
       billingApi.listPricingPolicies(),
       billingApi.listPricingModelMappings(),
+      billingApi.listPricingCollectionJobs(),
     ])
       .then(
         ([
@@ -53,12 +57,14 @@ export default function PricingTab() {
           nextHistory,
           nextPolicies,
           nextMappings,
+          nextCollectionJobs,
         ]) => {
           setOverview(nextOverview);
           setModels(nextModels);
           setHistory(nextHistory);
           setPolicies(nextPolicies);
           setMappings(nextMappings);
+          setCollectionJob(nextCollectionJobs[0]);
           setError(undefined);
         },
       )
@@ -66,6 +72,19 @@ export default function PricingTab() {
   useEffect(() => {
     void load();
   }, []);
+  useEffect(() => {
+    if (
+      !collectionJob ||
+      !["pending", "running"].includes(collectionJob.status)
+    )
+      return;
+    const timer = window.setInterval(() => {
+      void billingApi
+        .getPricingCollectionJob(collectionJob.id)
+        .then(setCollectionJob);
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [collectionJob?.id, collectionJob?.status]);
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
@@ -81,7 +100,14 @@ export default function PricingTab() {
     }
     const generated = await billingApi.generatePricingDraft(activeUnlock.token);
     setDraft(generated);
+    setActiveTab("drafts");
     message.success("已按当前启用平台与模型生成价格草案");
+  };
+  const collectOfficialPricing = async () => {
+    const job = await billingApi.startPricingCollection();
+    setCollectionJob(job);
+    setActiveTab("drafts");
+    message.success("官网价格同步任务已提交，可离开页面后稍后查看");
   };
   const importFile = async (file: File) => {
     if (!activeUnlock) {
@@ -193,6 +219,20 @@ export default function PricingTab() {
           description="优先在价格草稿中配置官方平台与模型的精确映射；若供应商没有可核验的内置价，可在 Excel 缺价行中按填写说明新增多个人工计价维度并提供 HTTPS 价格来源，再导入审批。"
         />
       ) : null}
+      {collectionJob && (
+        <Alert
+          type={collectionJob.status === "failed" ? "error" : "info"}
+          showIcon
+          message={`官网价格同步：${collectionJob.status}`}
+          description={`已处理 ${collectionJob.progress.completed ?? 0} / ${
+            collectionJob.progress.total ?? 0
+          } 个模型；官方 ${collectionJob.progress.official ?? 0}，AI候选 ${
+            collectionJob.progress.ai ?? 0
+          }，失败 ${
+            collectionJob.progress.failed ?? 0
+          }。同步不受15分钟解锁倒计时限制。`}
+        />
+      )}
       <Space wrap>
         <Button
           type={activeUnlock ? "default" : "primary"}
@@ -208,6 +248,15 @@ export default function PricingTab() {
         )}
         <Button disabled={!activeUnlock} onClick={() => void initialize()}>
           生成价格草案
+        </Button>
+        <Button
+          loading={Boolean(
+            collectionJob &&
+              ["pending", "running"].includes(collectionJob.status),
+          )}
+          onClick={() => void collectOfficialPricing()}
+        >
+          同步官网价格
         </Button>
         <Upload
           accept=".xlsx"
@@ -236,6 +285,8 @@ export default function PricingTab() {
         </Button>
       </Space>
       <Tabs
+        activeKey={activeTab}
+        onChange={setActiveTab}
         items={[
           {
             key: "overview",
@@ -322,6 +373,30 @@ export default function PricingTab() {
                   );
                   setMappings(await billingApi.listPricingModelMappings());
                   message.success("官方模型精确映射已保存，草案已重新生成");
+                }}
+                onModelDecision={async (
+                  providerId,
+                  modelKey,
+                  includeInPublish,
+                  reason,
+                ) => {
+                  if (!activeUnlock || !draft) return;
+                  await billingApi.setPricingModelDecisions(
+                    draft.draft_key,
+                    [
+                      {
+                        provider_id: providerId,
+                        model_key: modelKey,
+                        include_in_publish: includeInPublish,
+                        reason,
+                      },
+                    ],
+                    activeUnlock.token,
+                  );
+                  setDraft(
+                    await billingApi.generatePricingDraft(activeUnlock.token),
+                  );
+                  message.success("模型本次发布状态已保存");
                 }}
                 onExclusion={async (providerId, modelKey, excluded, reason) => {
                   if (!activeUnlock || !draft) return;

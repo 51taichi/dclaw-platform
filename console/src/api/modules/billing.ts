@@ -20,6 +20,7 @@ import type {
   PricingPreview,
   PricingUnlock,
   PricingDraft,
+  PricingCollectionJob,
 } from "../types/billing";
 
 function query(params: Record<string, string | number | undefined>): string {
@@ -103,6 +104,36 @@ export const billingApi = {
       method: "POST",
       headers: pricingHeaders(token),
     }),
+  startPricingCollection: () =>
+    request<PricingCollectionJob>("/admin/billing/pricing/collection-jobs", {
+      method: "POST",
+    }),
+  listPricingCollectionJobs: () =>
+    request<PricingCollectionJob[]>("/admin/billing/pricing/collection-jobs"),
+  getPricingCollectionJob: (jobId: string) =>
+    request<PricingCollectionJob>(
+      `/admin/billing/pricing/collection-jobs/${encodeURIComponent(jobId)}`,
+    ),
+  setPricingModelDecisions: (
+    draftKey: string,
+    decisions: Array<{
+      provider_id: string;
+      model_key: string;
+      include_in_publish: boolean;
+      reason: string | null;
+    }>,
+    token: string,
+  ) =>
+    request(
+      `/admin/billing/pricing/drafts/${encodeURIComponent(
+        draftKey,
+      )}/model-decisions`,
+      {
+        method: "PUT",
+        headers: pricingHeaders(token),
+        body: JSON.stringify({ decisions }),
+      },
+    ),
   exportPricingDraft: (draftKey: string) =>
     request<Blob>(
       `/admin/billing/pricing/drafts/${encodeURIComponent(draftKey)}/export`,

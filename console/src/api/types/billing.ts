@@ -286,6 +286,7 @@ export interface PricingDraftRow {
   include_in_publish: boolean;
   exclusion_reason?: string | null;
   registry_version?: string | null;
+  evidence_level?: string | null;
 }
 
 export interface PricingDraft {
@@ -293,6 +294,36 @@ export interface PricingDraft {
   coverage: PricingDraftCoverage;
   rows: PricingDraftRow[];
   risks: PricingDraftRisk[];
+}
+
+export interface PricingCollectionItem {
+  id: string;
+  provider_id: string;
+  model_key: string;
+  pricing_region: string;
+  status: string;
+  error_summary?: string | null;
+  result?: Record<string, unknown>;
+}
+
+export interface PricingCollectionJob {
+  id: string;
+  status:
+    | "pending"
+    | "running"
+    | "succeeded"
+    | "partially_succeeded"
+    | "failed";
+  progress: Partial<{
+    total: number;
+    completed: number;
+    official: number;
+    ai: number;
+    manual: number;
+    failed: number;
+  }>;
+  items?: PricingCollectionItem[];
+  error_summary?: string | null;
 }
 
 export interface PricingModelMapping {

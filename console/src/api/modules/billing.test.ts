@@ -117,4 +117,38 @@ describe("billingApi", () => {
       "/pricing/official-candidates/refresh",
     );
   });
+
+  it("starts and reads durable pricing collection jobs without unlock", async () => {
+    await billingApi.startPricingCollection();
+    await billingApi.getPricingCollectionJob("job/1");
+    await billingApi.listPricingCollectionJobs();
+
+    const calls = vi.mocked(fetch).mock.calls;
+    expect(String(calls[0][0])).toContain("/pricing/collection-jobs");
+    expect(calls[0][1]?.method).toBe("POST");
+    expect(String(calls[1][0])).toContain("/pricing/collection-jobs/job%2F1");
+    expect(String(calls[2][0])).toContain("/pricing/collection-jobs");
+  });
+
+  it("saves an explicit per-model publication decision", async () => {
+    await billingApi.setPricingModelDecisions(
+      "draft-1",
+      [
+        {
+          provider_id: "dashscope",
+          model_key: "qwen-plus",
+          include_in_publish: false,
+          reason: "本次不上线",
+        },
+      ],
+      "unlock-token",
+    );
+
+    const [url, options] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toContain("/pricing/drafts/draft-1/model-decisions");
+    expect(options?.method).toBe("PUT");
+    expect((options?.headers as Headers).get("X-Billing-Unlock")).toBe(
+      "unlock-token",
+    );
+  });
 });
