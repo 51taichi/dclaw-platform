@@ -44,6 +44,12 @@ def test_registry_requires_verifiable_evidence():
         OfficialPriceRegistry.from_records([_row(source_url="")])
     with pytest.raises(OfficialPriceRegistryError, match="currency"):
         OfficialPriceRegistry.from_records([_row(original_currency="DOGE")])
+    with pytest.raises(OfficialPriceRegistryError, match="verified"):
+        OfficialPriceRegistry.from_records(
+            [_row(verification_status="unverified")]
+        )
+    with pytest.raises(OfficialPriceRegistryError, match="registry_version"):
+        OfficialPriceRegistry.from_records([_row(registry_version="")])
 
 
 def test_bundled_registry_contains_reviewed_multidimensional_prices():

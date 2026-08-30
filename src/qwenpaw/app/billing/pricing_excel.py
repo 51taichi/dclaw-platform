@@ -34,6 +34,7 @@ DRAFT_HEADERS = (
     "官方平台ID",
     "官方模型ID",
     "分类",
+    "能力",
     "计价维度",
     "单位数量",
     "规格条件",
@@ -71,9 +72,19 @@ class PricingExcelService:
             Callable[[str, list[dict[str, Any]] | None, str], dict[str, Any]]
             | None
         ) = None,
+        confirmation_builder: (
+            Callable[[str, list[dict[str, Any]] | None, str], dict[str, Any]]
+            | None
+        ) = None,
+        draft_builder: (
+            Callable[[str, list[dict[str, Any]] | None, str], dict[str, Any]]
+            | None
+        ) = None,
     ) -> None:
         self.repository = repository
         self.preview_builder = preview_builder
+        self.confirmation_builder = confirmation_builder or preview_builder
+        self.draft_builder = draft_builder or self.confirmation_builder
 
     def preview_import(
         self, content: bytes, filename: str, actor_id: str
@@ -95,7 +106,7 @@ class PricingExcelService:
                 if header not in (HEADERS, DRAFT_HEADERS):
                     problems.append({"row": 1, "code": "invalid_headers"})
                 else:
-                    seen: set[tuple[str, str, str]] = set()
+                    seen: set[tuple[str, ...]] = set()
                     for number, values in enumerate(
                         sheet.iter_rows(min_row=2, values_only=True),
                         start=2,
@@ -140,11 +151,35 @@ class PricingExcelService:
             actor_id,
             preview,
         )
+        stored_preview = json.loads(str(stored.get("preview_json") or "{}"))
+        if stored_preview.get("pricing_preview"):
+            return {"id": stored["id"], **stored_preview}
+        if not problems and self.preview_builder:
+            try:
+                pricing_preview = self.preview_builder(
+                    actor_id, rows, str(stored["id"])
+                )
+                preview["pricing_preview"] = pricing_preview
+                if pricing_preview.get("publishable") is False:
+                    preview["status"] = "blocked"
+                    preview["rows"] = pricing_preview.get("blockers", [])
+            except ValueError as exc:
+                preview["status"] = "blocked"
+                preview["rows"] = [
+                    {
+                        "row": 0,
+                        "code": "pricing_preflight_failed",
+                        "detail": str(exc),
+                    }
+                ]
+            self.repository.replace_import_preview(  # type: ignore[attr-defined]
+                str(stored["id"]), preview
+            )
         return {"id": stored["id"], **preview}
 
     @staticmethod
     def _parse_row(
-        number: int, values: tuple[Any, ...], seen: set[tuple[str, str, str]]
+        number: int, values: tuple[Any, ...], seen: set[tuple[str, ...]]
     ):
         (
             provider,
@@ -183,7 +218,7 @@ class PricingExcelService:
 
     @staticmethod
     def _parse_draft_row(
-        number: int, values: tuple[Any, ...], seen: set[tuple[str, str, str]]
+        number: int, values: tuple[Any, ...], seen: set[tuple[str, ...]]
     ):
         (
             provider_id,
@@ -193,6 +228,7 @@ class PricingExcelService:
             official_provider_id,
             official_model_id,
             category,
+            capability,
             unit_key,
             unit_size,
             conditions,
@@ -207,10 +243,21 @@ class PricingExcelService:
             include,
             exclusion_reason,
         ) = values
+        try:
+            parsed_conditions = json.loads(str(conditions or "{}"))
+        except json.JSONDecodeError:
+            return {"row": number, "code": "invalid_conditions"}, None
+        conditions_identity = json.dumps(
+            parsed_conditions,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         key = (
             str(provider_id).strip(),
             str(model_key).strip(),
             str(unit_key or "").strip(),
+            conditions_identity,
         )
         if key in seen:
             return {"row": number, "code": "duplicate_key"}, None
@@ -233,12 +280,17 @@ class PricingExcelService:
                 "model_key": key[1],
                 "official_provider_id": str(official_provider_id or ""),
                 "official_model_id": str(official_model_id or ""),
-                "category": str(category),
+                "category": str(category or ""),
+                "capability": str(capability or ""),
                 "unit_key": key[2],
+                "unit_size": int(unit_size or 0),
+                "conditions": parsed_conditions,
                 "excluded": True,
                 "exclusion_reason": reason,
                 "verification_status": str(verification_status),
                 "registry_version": str(registry_version or ""),
+                "source_type": str(source_type or ""),
+                "source_url": str(source_url or ""),
             }
         try:
             cost_value = Decimal(str(cost))
@@ -259,16 +311,13 @@ class PricingExcelService:
             or int(credits) != expected_credits
         ):
             return {"row": number, "code": "derived_price_mismatch"}, None
-        try:
-            parsed_conditions = json.loads(str(conditions or "{}"))
-        except json.JSONDecodeError:
-            return {"row": number, "code": "invalid_conditions"}, None
         return None, {
             "provider_id": key[0],
             "model_key": key[1],
             "official_provider_id": str(official_provider_id or ""),
             "official_model_id": str(official_model_id or ""),
-            "category": str(category),
+            "category": str(category or ""),
+            "capability": str(capability or ""),
             "unit_key": key[2],
             "unit_size": unit_size_value,
             "conditions": parsed_conditions,
@@ -322,6 +371,7 @@ class PricingExcelService:
                     row.official_provider_id,
                     row.official_model_id,
                     row.category,
+                    row.capability,
                     row.unit_key,
                     row.unit_size,
                     json.dumps(
@@ -373,6 +423,18 @@ class PricingExcelService:
             )
         )
         instructions.append(("缺价模型", "必须补齐可信价格，或选择不纳入并填写排除原因"))
+        instructions.append(
+            (
+                "人工补价",
+                "缺价行可复制为多个维度；填写能力、计价维度、单位数量、规格条件、人民币成本、HTTPS来源，将来源类型改为manual、验证状态改为manual_pending，再导入审批。",
+            )
+        )
+        instructions.append(
+            (
+                "精确映射",
+                "模型别名应先在管理页面配置官方平台ID与官方模型ID，再重新生成草案；禁止模糊匹配。",
+            )
+        )
         output = BytesIO()
         workbook.save(output)
         return output.getvalue()
@@ -395,12 +457,26 @@ class PricingExcelService:
         preview = stored["preview"]
         if preview["status"] != "ready":
             raise ValueError("blocked import cannot be confirmed")
-        pricing_preview = (
-            self.preview_builder(actor_id, preview["valid_rows"], import_id)
-            if self.preview_builder
-            else None
-        )
+        pricing_preview = preview.get("pricing_preview")
         if stored["status"] == "previewed":
+            if self.confirmation_builder is not None:
+                current_review = self.confirmation_builder(
+                    actor_id,
+                    preview["valid_rows"],
+                    import_id,
+                )
+                if _approval_view(current_review) != _approval_view(
+                    pricing_preview or {}
+                ):
+                    raise ValueError(
+                        "pricing preview is stale; upload and approve again"
+                    )
+            if self.draft_builder is not None:
+                pricing_preview = self.draft_builder(
+                    actor_id,
+                    preview["valid_rows"],
+                    import_id,
+                )
             self.repository.apply_import_rows(  # type: ignore[attr-defined]
                 import_id,
                 preview["valid_rows"],
@@ -414,3 +490,11 @@ class PricingExcelService:
             "status": "confirmed",
             "pricing_preview": pricing_preview,
         }
+
+
+def _approval_view(preview: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in preview.items()
+        if key not in {"catalog_id", "version"}
+    }

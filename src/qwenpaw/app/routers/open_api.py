@@ -19,6 +19,7 @@ from ..billing.open_api import (
     OpenApiBillingCommand,
     OpenApiPublicationNotFoundError,
 )
+from ..billing.pricing import ModelNotPricedError
 from ..billing.execution import OpenApiExecutionFence
 from ..billing.usage import (
     IdempotencyConflictError,
@@ -78,11 +79,10 @@ async def post_open_message(
             detail="Open API key is not allowed for this publication",
         )
 
-    sealed_target = (
-        str(publication.get("target_type")) == "agent"
-        and get_sealed_agent_registry().is_sealed(
-            str(publication.get("target_id")),
-        )
+    sealed_target = str(
+        publication.get("target_type")
+    ) == "agent" and get_sealed_agent_registry().is_sealed(
+        str(publication.get("target_id")),
     )
     if sealed_target:
         sealed_record = get_sealed_agent_registry().get_agent(
@@ -645,6 +645,14 @@ async def _shielded_finalize(
             public_code = "request_cancelled"
             public_message = "Request cancelled"
             required_credits = None
+        elif isinstance(stream_exception, ModelNotPricedError):
+            status = "failed"
+            status_code = 409
+            error_summary = str(stream_exception)
+            billing_error_code = "model_not_priced"
+            public_code = "model_not_priced"
+            public_message = "Selected model is not priced"
+            required_credits = None
         elif stream_exception is not None:
             status = "failed"
             status_code = 500
@@ -677,6 +685,9 @@ async def _shielded_finalize(
             required_credits=required_credits,
             billing_status=str(terminal.get("billing_status") or "settled"),
         )
+        if isinstance(stream_exception, ModelNotPricedError):
+            terminal["provider_id"] = stream_exception.provider_id
+            terminal["model_key"] = stream_exception.model_key
         execution.begin_finalizing()
         finalize_kwargs = {
             "status": status,
@@ -689,21 +700,17 @@ async def _shielded_finalize(
         }
         repository = billing.open_api_repository
         if no_items:
-            updated = (
-                repository.finalize_empty_invocation_execution(
-                    session.invocation_id,
-                    session.usage_order_id,
-                    execution_fence,
-                    **finalize_kwargs,
-                )
+            updated = repository.finalize_empty_invocation_execution(
+                session.invocation_id,
+                session.usage_order_id,
+                execution_fence,
+                **finalize_kwargs,
             )
         else:
-            updated = (
-                repository.finalize_invocation_execution(
-                    session.invocation_id,
-                    execution_fence,
-                    **finalize_kwargs,
-                )
+            updated = repository.finalize_invocation_execution(
+                session.invocation_id,
+                execution_fence,
+                **finalize_kwargs,
             )
         if updated is None:
             updated = billing.open_api_repository.get_invocation(
@@ -1005,11 +1012,15 @@ _SEALED_PUBLIC_EVENT_TYPES = {
 
 
 def _sealed_failure_event() -> str:
-    return "data: " + json.dumps(
-        {"type": "response.failed", "error": "sealed_agent_failed"},
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ) + "\n\n"
+    return (
+        "data: "
+        + json.dumps(
+            {"type": "response.failed", "error": "sealed_agent_failed"},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        + "\n\n"
+    )
 
 
 def _public_stream_event(

@@ -15,6 +15,18 @@ from qwenpaw.app.storage.settings import get_storage_settings
 NOW = datetime(2026, 8, 30, tzinfo=timezone.utc)
 
 
+def _import_rows(pricing):
+    return [
+        {
+            **row,
+            "rmb_cost_decimal": row.pop("rmb_cost"),
+            "multiplier_decimal": row.pop("multiplier"),
+            "excluded": not row.pop("include_in_publish"),
+        }
+        for row in map(dict, pricing.generate_draft("1")["rows"])
+    ]
+
+
 @pytest.fixture
 def service(tmp_path):
     engine = create_engine_from_settings(
@@ -195,6 +207,7 @@ def test_generated_draft_lists_enabled_models_and_allows_reasoned_subset(
                     "Qwen3 Max",
                     "text",
                     official_model_id="qwen3-max",
+                    pricing_region="cn-beijing",
                 ),
                 PriceableModel(
                     "volcengine-cn",
@@ -238,6 +251,36 @@ def test_generated_draft_lists_enabled_models_and_allows_reasoned_subset(
     assert exclusions[0]["reason"] == "暂未获得可核验的官方价格"
 
 
+def test_admin_can_save_exact_mapping_and_regenerate_verified_rows(service):
+    pricing, repo = service
+    pricing.inventory = type(
+        "Inventory",
+        (),
+        {
+            "list_enabled": lambda self: (
+                PriceableModel(
+                    "custom-qwen",
+                    "Custom",
+                    "alias",
+                    "Alias",
+                    "text",
+                    pricing_region="cn-beijing",
+                ),
+            )
+        },
+    )()
+
+    saved = pricing.save_model_mapping(
+        "custom-qwen", "alias", "dashscope", "qwen3-max", 0, "1"
+    )
+    regenerated = pricing.generate_draft("1")
+
+    assert saved["revision"] == 1
+    assert regenerated["coverage"]["matched_models"] == 1
+    assert len(regenerated["rows"]) == 6
+    assert repo.list_audits()[-1]["action"] == "model.mapping.updated"
+
+
 def test_imported_exclusion_publishes_only_eligible_models(service):
     pricing, _repo = service
     pricing.inventory = type(
@@ -252,6 +295,7 @@ def test_imported_exclusion_publishes_only_eligible_models(service):
                     "Qwen3 Max",
                     "text",
                     official_model_id="qwen3-max",
+                    pricing_region="cn-beijing",
                 ),
                 PriceableModel(
                     "volcengine-cn",
@@ -264,35 +308,9 @@ def test_imported_exclusion_publishes_only_eligible_models(service):
             )
         },
     )()
-    registry = OfficialPriceRegistry.load_bundled()
-    rows = []
-    dimensions = registry.dimensions("dashscope", "qwen3-max")
-    for dimension in (dimensions[2], dimensions[5]):
-        rows.append(
-            {
-                "provider_id": "dashscope",
-                "model_key": "qwen3-max",
-                "category": "text",
-                "unit_key": dimension.unit_key,
-                "unit_size": dimension.unit_size,
-                "conditions": dict(dimension.conditions),
-                "rmb_cost_decimal": str(dimension.rmb_cost),
-                "multiplier_decimal": "1.5",
-                "verification_status": "verified",
-                "excluded": False,
-            }
-        )
-    rows.append(
-        {
-            "provider_id": "volcengine-cn",
-            "model_key": "unpriced-model",
-            "category": "text",
-            "unit_key": "",
-            "verification_status": "missing",
-            "excluded": True,
-            "exclusion_reason": "暂不纳入",
-        }
-    )
+    rows = _import_rows(pricing)
+    rows[-1]["excluded"] = True
+    rows[-1]["exclusion_reason"] = "暂不纳入"
 
     preview = pricing.preview_initial_catalog("1", rows)
 
@@ -315,29 +333,12 @@ def test_imported_multidimensional_token_prices_keep_official_tiers(service):
                     "Qwen3 Max",
                     "text",
                     official_model_id="qwen3-max",
+                    pricing_region="cn-beijing",
                 ),
             )
         },
     )()
-    rows = []
-    for dimension in OfficialPriceRegistry.load_bundled().dimensions(
-        "dashscope", "qwen3-max"
-    ):
-        rows.append(
-            {
-                "provider_id": "dashscope",
-                "model_key": "qwen3-max",
-                "category": "text",
-                "capability": "chat",
-                "unit_key": dimension.unit_key,
-                "unit_size": dimension.unit_size,
-                "conditions": dict(dimension.conditions),
-                "rmb_cost_decimal": str(dimension.rmb_cost),
-                "multiplier_decimal": "1.5",
-                "verification_status": "verified",
-                "excluded": False,
-            }
-        )
+    rows = _import_rows(pricing)
 
     preview = pricing.preview_initial_catalog("1", rows)
     pricing.publish_preview(preview["catalog_id"], "1")
@@ -346,7 +347,7 @@ def test_imported_multidimensional_token_prices_keep_official_tiers(service):
             "dashscope",
             "qwen3-max",
             "chat",
-            {},
+            {"pricing_region": "cn-beijing"},
             input_tokens=30_000,
         )
     )
@@ -355,11 +356,164 @@ def test_imported_multidimensional_token_prices_keep_official_tiers(service):
             "dashscope",
             "qwen3-max",
             "chat",
-            {},
+            {"pricing_region": "cn-beijing"},
             input_tokens=40_000,
         )
     )
 
     assert low.credits == 12
     assert medium.credits == 24
-    assert low.snapshot["rule"]["metadata"]["token_unit_size"] == 1_000_000
+    assert {
+        item["unit_size"]
+        for item in low.snapshot["rule"]["metadata"]["dimensions"]
+    } == {1_000_000}
+
+
+def test_imported_draft_rejects_missing_dimension_and_read_only_tampering(
+    service,
+):
+    pricing, _repo = service
+    pricing.inventory = type(
+        "Inventory",
+        (),
+        {
+            "list_enabled": lambda self: (
+                PriceableModel(
+                    "dashscope",
+                    "百炼",
+                    "qwen3-max",
+                    "Qwen3 Max",
+                    "text",
+                    official_model_id="qwen3-max",
+                    pricing_region="cn-beijing",
+                ),
+            )
+        },
+    )()
+    rows = _import_rows(pricing)
+
+    with pytest.raises(ValueError, match="dimensions are incomplete"):
+        pricing.preview_initial_catalog("1", rows[:-1])
+
+    rows[0]["unit_size"] = 1_000_000_000_000
+    with pytest.raises(ValueError, match="read-only field changed: unit_size"):
+        pricing.preview_initial_catalog("1", rows)
+
+    rows = _import_rows(pricing)
+    rows[0]["rmb_cost_decimal"] = "0.000001"
+    with pytest.raises(ValueError, match="manual_pending HTTPS evidence"):
+        pricing.preview_initial_catalog("1", rows)
+
+    rows[0].update(
+        source_type="manual",
+        verification_status="manual_pending",
+        source_url="https://example.com/reviewed-price",
+    )
+    assert pricing.preview_initial_catalog("1", rows)["publishable"] is True
+
+    rows = _import_rows(pricing)
+    rows[0].update(excluded=True, exclusion_reason="only one dimension")
+    with pytest.raises(ValueError, match="included together"):
+        pricing.preview_initial_catalog("1", rows)
+
+
+def test_missing_model_accepts_explicit_manual_multidimensional_completion(
+    service,
+):
+    pricing, _repo = service
+    rows = _import_rows(pricing)
+    missing = rows[0]
+    manual_rows = []
+    for unit, amount in (
+        ("input_tokens", "0.01"),
+        ("output_tokens", "0.03"),
+        ("cache_read_tokens", "0.002"),
+    ):
+        manual_rows.append(
+            {
+                **missing,
+                "capability": "chat",
+                "unit_key": unit,
+                "unit_size": 1000,
+                "conditions": {},
+                "rmb_cost_decimal": amount,
+                "multiplier_decimal": "1.5",
+                "source_type": "manual",
+                "source_url": "https://example.com/vendor-price",
+                "verification_status": "manual_pending",
+                "excluded": False,
+            }
+        )
+
+    preview = pricing.preview_initial_catalog("1", manual_rows)
+
+    assert preview["publishable"] is True
+    catalog = pricing.catalogs.get_catalog(preview["catalog_id"])
+    dimensions = catalog["rules"][0]["metadata"]["dimensions"]
+    assert {item["unit_key"] for item in dimensions} == {
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+    }
+
+
+def test_publish_rejects_when_enabled_model_endpoint_region_changed(service):
+    pricing, repo = service
+    pricing.save_policy("global", "*", "1.5", {}, "1", 0)
+    for unit, amount in (
+        ("input_tokens", "0.004"),
+        ("output_tokens", "0.012"),
+    ):
+        repo.append_cost_snapshot(
+            {
+                "provider_id": "dashscope",
+                "model_key": "qwen-plus",
+                "capability": "chat",
+                "unit_key": unit,
+                "source_type": "manual",
+                "source_reference": "https://example.com/prices",
+                "original_currency": "CNY",
+                "original_price_decimal": amount,
+                "fx_rate_decimal": "1",
+                "rmb_cost_decimal": amount,
+                "conditions": {},
+                "verification_status": "verified",
+                "verified_at": NOW,
+            }
+        )
+    pricing.inventory = type(
+        "Inventory",
+        (),
+        {
+            "list_enabled": lambda self: (
+                PriceableModel(
+                    "dashscope",
+                    "百炼",
+                    "qwen-plus",
+                    "Qwen Plus",
+                    "text",
+                    pricing_region="cn-beijing",
+                ),
+            )
+        },
+    )()
+    preview = pricing.preview_initial_catalog("1")
+    pricing.inventory = type(
+        "Inventory",
+        (),
+        {
+            "list_enabled": lambda self: (
+                PriceableModel(
+                    "dashscope",
+                    "百炼",
+                    "qwen-plus",
+                    "Qwen Plus",
+                    "text",
+                    pricing_region="ap-southeast-1",
+                ),
+            )
+        },
+    )()
+
+    with pytest.raises(ValueError, match="inventory changed"):
+        pricing.publish_preview(preview["catalog_id"], "1")

@@ -92,6 +92,49 @@ class PricingAdminService:
         )
         return saved
 
+    def save_model_mapping(
+        self,
+        provider_id: str,
+        model_key: str,
+        official_provider_id: str,
+        official_model_id: str,
+        expected_revision: int,
+        actor_id: str,
+        ip_address: str | None = None,
+    ) -> dict[str, Any]:
+        if not official_provider_id.strip() or not official_model_id.strip():
+            raise ValueError("official pricing identity is required")
+        if not any(
+            (model.provider_id, model.model_key) == (provider_id, model_key)
+            for model in self.inventory.list_enabled()
+        ):
+            raise ValueError("enabled pricing model was not found")
+        before = next(
+            (
+                row
+                for row in self.repository.list_model_mappings()
+                if (row["provider_id"], row["model_key"])
+                == (provider_id, model_key)
+            ),
+            {},
+        )
+        saved = self.repository.replace_model_mapping(
+            provider_id,
+            model_key,
+            official_provider_id.strip(),
+            official_model_id.strip(),
+            actor_id,
+            expected_revision,
+        )
+        self.repository.append_audit(
+            "model.mapping.updated",
+            actor_id,
+            before,
+            saved,
+            {"ip_address": ip_address},
+        )
+        return saved
+
     @staticmethod
     def _draft_key(models: tuple[Any, ...]) -> str:
         identity = [
@@ -100,6 +143,7 @@ class PricingAdminService:
                 "model_key": model.model_key,
                 "official_model_id": model.official_model_id,
                 "category": model.category,
+                "pricing_region": model.pricing_region,
             }
             for model in models
         ]
@@ -158,10 +202,13 @@ class PricingAdminService:
         actor_id: str,
         imported_rows: list[dict[str, Any]] | None = None,
         import_id: str | None = None,
+        *,
+        persist: bool = True,
     ) -> dict[str, Any]:
         models = self.inventory.list_enabled()
         if imported_rows and any(
-            "official_model_id" in row for row in imported_rows
+            "unit_size" in row or "official_model_id" in row
+            for row in imported_rows
         ):
             self._validate_imported_draft_rows(models, imported_rows)
         excluded_models = {
@@ -179,7 +226,8 @@ class PricingAdminService:
         }
         for row in imported_rows or []:
             if (
-                row.get("verification_status") == "verified"
+                row.get("verification_status")
+                in {"verified", "manual_pending"}
                 and row.get("excluded") is not True
             ):
                 amount = Decimal(row["rmb_cost_decimal"])
@@ -288,6 +336,7 @@ class PricingAdminService:
         version = f"admin-{self.clock().strftime('%Y%m%d%H%M%S')}"
         metadata = {
             "source": "pricing_admin",
+            "inventory_binding": self._draft_key(tuple(models)),
             "exclusions": [
                 {
                     "provider_id": row["provider_id"],
@@ -303,21 +352,62 @@ class PricingAdminService:
                 source="pricing_excel",
                 pricing_import_id=import_id,
             )
-        catalog_id = self.pricing.create_draft(
-            PriceCatalogDraft(
-                version=version,
-                effective_at=self.clock(),
-                rules=rules,
-                created_by=f"admin:{actor_id}",
-                metadata=metadata,
+        catalog_id = None
+        if persist:
+            catalog_id = self.pricing.create_draft(
+                PriceCatalogDraft(
+                    version=version,
+                    effective_at=self.clock(),
+                    rules=rules,
+                    created_by=f"admin:{actor_id}",
+                    metadata=metadata,
+                )
             )
-        )
         return {
             "publishable": True,
             "blockers": [],
             "catalog_id": catalog_id,
             "version": version,
             "rule_count": len(rules),
+            "review": {
+                "included_models": len(
+                    {
+                        (str(row["provider_id"]), str(row["model_key"]))
+                        for row in imported_rows or []
+                        if row.get("excluded") is not True
+                    }
+                ),
+                "included_dimensions": sum(
+                    row.get("excluded") is not True
+                    for row in imported_rows or []
+                ),
+                "excluded_models": len(excluded_models),
+                "manual_dimensions": sum(
+                    row.get("source_type") == "manual"
+                    for row in imported_rows or []
+                    if row.get("excluded") is not True
+                ),
+                "rows": [
+                    {
+                        key: row.get(key)
+                        for key in (
+                            "provider_id",
+                            "model_key",
+                            "capability",
+                            "unit_key",
+                            "unit_size",
+                            "conditions",
+                            "rmb_cost_decimal",
+                            "multiplier_decimal",
+                            "source_type",
+                            "verification_status",
+                            "excluded",
+                            "exclusion_reason",
+                        )
+                    }
+                    for row in imported_rows or []
+                ],
+            },
         }
 
     def _validate_imported_draft_rows(
@@ -345,13 +435,30 @@ class PricingAdminService:
                     separators=(",", ":"),
                 ),
                 row.registry_version or "",
-            )
+            ): {
+                "category": row.category,
+                "capability": row.capability,
+                "unit_size": row.unit_size,
+                "source_type": row.source_type,
+                "source_url": row.source_url or "",
+                "verification_status": row.verification_status,
+                "rmb_cost_decimal": (
+                    str(row.rmb_cost) if row.rmb_cost is not None else None
+                ),
+            }
             for row in current.rows
         }
+        missing_models = {
+            (row.provider_id, row.model_key): row
+            for row in current.rows
+            if row.source_type == "missing"
+        }
+        manual_models: set[tuple[str, str]] = set()
+        supplied: set[tuple[str, ...]] = set()
         for row in imported_rows:
+            model_identity = (str(row["provider_id"]), str(row["model_key"]))
             identity = (
-                str(row["provider_id"]),
-                str(row["model_key"]),
+                *model_identity,
                 str(row.get("official_provider_id") or ""),
                 str(row.get("official_model_id") or ""),
                 str(row.get("unit_key") or ""),
@@ -364,7 +471,82 @@ class PricingAdminService:
                 str(row.get("registry_version") or ""),
             )
             if identity not in allowed:
+                missing = missing_models.get(model_identity)
+                if missing and self._is_manual_completion(row, missing):
+                    manual_models.add(model_identity)
+                    continue
                 raise ValueError("pricing draft identity or registry is stale")
+            supplied.add(identity)
+            canonical = allowed[identity]
+            for field in ("category", "capability", "unit_size"):
+                imported = row.get(field)
+                if field == "unit_size":
+                    imported = int(imported or 0)
+                else:
+                    imported = str(imported or "")
+                if imported != canonical[field]:
+                    raise ValueError(
+                        "pricing draft read-only field changed: "
+                        f"{field} ({model_identity[0]}/{model_identity[1]})"
+                    )
+            imported_cost = row.get("rmb_cost_decimal")
+            canonical_cost = canonical["rmb_cost_decimal"]
+            if imported_cost is None and canonical_cost is None:
+                pass
+            elif Decimal(str(imported_cost)) == Decimal(str(canonical_cost)):
+                for field in (
+                    "source_type",
+                    "source_url",
+                    "verification_status",
+                ):
+                    if str(row.get(field) or "") != canonical[field]:
+                        raise ValueError(
+                            "pricing draft read-only field changed: "
+                            f"{field} ({model_identity[0]}/{model_identity[1]})"
+                        )
+            elif not (
+                str(row.get("source_type") or "") == "manual"
+                and str(row.get("verification_status") or "")
+                == "manual_pending"
+                and str(row.get("source_url") or "").startswith("https://")
+            ):
+                raise ValueError(
+                    "modified cost requires manual_pending HTTPS evidence"
+                )
+        expected = {
+            identity
+            for identity in allowed
+            if identity[:2] not in manual_models
+        }
+        if supplied != expected:
+            raise ValueError("pricing draft dimensions are incomplete")
+        inclusion_by_model: dict[tuple[str, str], set[bool]] = {}
+        for row in imported_rows:
+            inclusion_by_model.setdefault(
+                (str(row["provider_id"]), str(row["model_key"])), set()
+            ).add(row.get("excluded") is not True)
+        if any(len(states) != 1 for states in inclusion_by_model.values()):
+            raise ValueError(
+                "all dimensions of a model must be included together"
+            )
+
+    @staticmethod
+    def _is_manual_completion(row: dict[str, Any], missing: Any) -> bool:
+        if (
+            str(row.get("category") or "") != missing.category
+            or str(row.get("official_provider_id") or "")
+            != (missing.official_provider_id or "")
+            or str(row.get("official_model_id") or "")
+            != (missing.official_model_id or "")
+            or str(row.get("source_type") or "") != "manual"
+            or str(row.get("verification_status") or "") != "manual_pending"
+            or not str(row.get("source_url") or "").startswith("https://")
+            or not str(row.get("capability") or "").strip()
+            or not str(row.get("unit_key") or "").strip()
+            or int(row.get("unit_size") or 0) <= 0
+        ):
+            return False
+        return True
 
     @staticmethod
     def _build_imported_rules(
@@ -374,91 +556,59 @@ class PricingAdminService:
             row
             for row in imported_rows
             if row.get("excluded") is not True
-            and row.get("verification_status") == "verified"
+            and row.get("verification_status")
+            in {"verified", "manual_pending"}
         ]
-        token_groups: dict[
-            tuple[str, str, str], dict[str, dict[str, Any]]
-        ] = {}
-        other_rows: list[dict[str, Any]] = []
+        groups: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
         for row in included:
-            if row.get("category") != "text":
-                other_rows.append(row)
-                continue
-            conditions = {
-                key: value
-                for key, value in dict(row.get("conditions") or {}).items()
-                if key in {"input_tokens_min_exclusive", "input_tokens_max"}
-            }
+            conditions = dict(row.get("conditions") or {})
+            if "region" in conditions:
+                conditions["pricing_region"] = conditions.pop("region")
             group_key = (
                 str(row["provider_id"]),
                 str(row["model_key"]),
+                str(row.get("capability") or row.get("category")),
                 json.dumps(conditions, sort_keys=True, separators=(",", ":")),
             )
-            token_groups.setdefault(group_key, {})[str(row["unit_key"])] = row
+            groups.setdefault(group_key, []).append(row)
 
         rules: list[PriceRule] = []
-        for (provider_id, model_key, conditions_json), components in sorted(
-            token_groups.items()
-        ):
-            if set(components) != {"input_tokens", "output_tokens"}:
-                raise ValueError(
-                    f"incomplete token price dimensions: {provider_id}/{model_key}"
-                )
-            input_row = components["input_tokens"]
-            output_row = components["output_tokens"]
-            input_unit = int(input_row.get("unit_size") or 1_000)
-            output_unit = int(output_row.get("unit_size") or 1_000)
-            if input_unit != output_unit:
-                raise ValueError("token price dimensions use different units")
-            input_credits = PricingAdminService._row_credits(input_row)
-            output_credits = PricingAdminService._row_credits(output_row)
+        for (
+            provider_id,
+            model_key,
+            capability,
+            conditions_json,
+        ), rows in sorted(groups.items()):
             digest = hashlib.sha256(conditions_json.encode()).hexdigest()[:12]
+            dimensions = [
+                {
+                    "unit_key": str(row["unit_key"]),
+                    "unit_size": int(
+                        row.get("unit_size")
+                        or (
+                            1000
+                            if str(row["unit_key"])
+                            in {"input_tokens", "output_tokens"}
+                            else 1
+                        )
+                    ),
+                    "credits_per_unit": PricingAdminService._row_credits(row),
+                    "rmb_cost": str(row["rmb_cost_decimal"]),
+                    "multiplier": str(row["multiplier_decimal"]),
+                }
+                for row in sorted(rows, key=lambda item: str(item["unit_key"]))
+            ]
             rules.append(
                 PriceRule(
-                    id=f"imported:{provider_id}:{model_key}:tokens:{digest}",
+                    id=f"imported:{provider_id}:{model_key}:metered:{digest}",
                     provider_id=provider_id,
                     model_key=model_key,
-                    capability=str(input_row.get("capability") or "chat"),
-                    unit_type="tokens",
-                    unit_size=input_unit,
-                    input_credits_per_1k=input_credits,
-                    output_credits_per_1k=output_credits,
+                    capability=capability,
+                    unit_type="metered_dimensions",
                     parameter_match=json.loads(conditions_json),
                     metadata={
                         "currency": "CNY",
-                        "token_unit_size": input_unit,
-                        "input_rmb_cost": str(input_row["rmb_cost_decimal"]),
-                        "output_rmb_cost": str(output_row["rmb_cost_decimal"]),
-                        "applied_multiplier": str(
-                            input_row["multiplier_decimal"]
-                        ),
-                    },
-                )
-            )
-        for row in other_rows:
-            unit_type = {
-                "image": "image_count",
-                "video": "video_duration",
-            }.get(str(row.get("category")), "fixed_workflow")
-            rules.append(
-                PriceRule(
-                    id=(
-                        f"imported:{row['provider_id']}:{row['model_key']}:"
-                        f"{row['unit_key']}"
-                    ),
-                    provider_id=str(row["provider_id"]),
-                    model_key=str(row["model_key"]),
-                    capability=str(
-                        row.get("capability") or row.get("category")
-                    ),
-                    unit_type=unit_type,
-                    unit_size=int(row.get("unit_size") or 1),
-                    credits_per_unit=PricingAdminService._row_credits(row),
-                    parameter_match=dict(row.get("conditions") or {}),
-                    metadata={
-                        "currency": "CNY",
-                        "rmb_cost": str(row["rmb_cost_decimal"]),
-                        "applied_multiplier": str(row["multiplier_decimal"]),
+                        "dimensions": dimensions,
                     },
                 )
             )
@@ -485,6 +635,14 @@ class PricingAdminService:
         ip_address: str | None = None,
     ) -> dict[str, Any]:
         catalog = self.catalogs.get_catalog(catalog_id)
+        expected_inventory = catalog["metadata"].get("inventory_binding")
+        current_inventory = self._draft_key(
+            tuple(self.inventory.list_enabled())
+        )
+        if expected_inventory != current_inventory:
+            raise ValueError(
+                "enabled model inventory changed; generate and approve again"
+            )
         import_id = catalog["metadata"].get("pricing_import_id")
         if (
             import_id is not None

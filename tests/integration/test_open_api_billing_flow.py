@@ -216,7 +216,7 @@ def _billing_flow(tmp_path, monkeypatch):
                     id="router-rule",
                     provider_id="provider",
                     model_key="model",
-                    capability="text",
+                    capability="chat",
                     unit_type="tokens",
                     input_credits_per_1k=1,
                     output_credits_per_1k=1,
@@ -510,21 +510,68 @@ def test_szzz_admin_runs_unpriced_when_no_catalog_exists(
     assert price_snapshot["snapshot"]["pricing_status"] == "unpriced"
 
 
+def test_published_subset_returns_model_not_priced_before_supplier(
+    billing_flow,
+):
+    billing_flow.runtime.pricing.publish(
+        PriceCatalogDraft(
+            version="subset-without-runtime-model",
+            effective_at=datetime.now(timezone.utc),
+            rules=(
+                PriceRule(
+                    id="other-model-only",
+                    provider_id="provider",
+                    model_key="other-model",
+                    capability="chat",
+                    unit_type="tokens",
+                    input_credits_per_1k=1,
+                    output_credits_per_1k=1,
+                ),
+            ),
+        )
+    )
+    wallet = billing_flow.repository.ensure_wallet("user", "wallet-owner")
+    billing_flow.repository.grant(
+        str(wallet["id"]),
+        credits=20,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key="fund-unpriced-model",
+    )
+
+    response = _post(billing_flow, key="unpriced-model-request")
+
+    assert response.status_code == 200
+    terminal = _events(response)[-1]
+    assert terminal["code"] == "model_not_priced"
+    assert terminal["http_status"] == 409
+    assert terminal["provider_id"] == "provider"
+    assert terminal["model_key"] == "model"
+    assert billing_flow.console.calls == 0
+
+
 def test_stale_price_source_metadata_does_not_interrupt_supplier(
     billing_flow,
 ):
     wallet = billing_flow.repository.ensure_wallet("user", "wallet-owner")
     billing_flow.repository.grant(
-        str(wallet["id"]), credits=10, credit_type="purchased",
-        expires_at=None, idempotency_key="fund-stale-source-test",
+        str(wallet["id"]),
+        credits=10,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key="fund-stale-source-test",
     )
     with billing_flow.engine.begin() as conn:
-        conn.execute(update(billing_price_catalogs).values(
-            metadata_json=json.dumps({
-                "source_stale": True,
-                "risk_status": "high",
-            }),
-        ))
+        conn.execute(
+            update(billing_price_catalogs).values(
+                metadata_json=json.dumps(
+                    {
+                        "source_stale": True,
+                        "risk_status": "high",
+                    }
+                ),
+            )
+        )
 
     response = _post(billing_flow, key="stale-source-still-runs")
 
@@ -655,7 +702,7 @@ def test_recovery_releases_only_precontact_holds_once(billing_flow):
             item_key="held-before-contact",
             provider_id="provider",
             model_key="model",
-            capability="text",
+            capability="chat",
             parameters={"tier": "standard"},
             input_tokens=1,
             max_output_tokens=1,
@@ -929,7 +976,7 @@ def test_sqlite_late_provider_response_is_fenced_from_capture_and_terminal(
             item_key="late-call",
             provider_id="provider",
             model_key="model",
-            capability="text",
+            capability="chat",
             parameters={"tier": "standard"},
             input_tokens=1,
             max_output_tokens=1,

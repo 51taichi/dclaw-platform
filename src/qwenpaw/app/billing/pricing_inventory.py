@@ -16,6 +16,20 @@ class PriceableModel:
     category: str
     official_model_id: str | None = None
     capabilities: tuple[str, ...] = ()
+    pricing_region: str | None = None
+
+
+def pricing_region_for_endpoint(base_url: str) -> str | None:
+    hostname = base_url.lower()
+    if "dashscope-intl.aliyuncs.com" in hostname:
+        return "ap-southeast-1"
+    if "dashscope-us.aliyuncs.com" in hostname:
+        return "us-east-1"
+    if "dashscope.aliyuncs.com" in hostname:
+        return "cn-beijing"
+    if "ark.cn-beijing.volces.com" in hostname:
+        return "cn-beijing"
+    return None
 
 
 def classify_model(model: ModelInfo) -> str:
@@ -50,12 +64,21 @@ class PricingModelInventory:
             (provider, False)
             for provider in self.manager.custom_providers.values()
         )
+        providers.extend(
+            (entry["info"], False)
+            for entry in self.manager.plugin_providers.values()
+        )
         for provider, has_official_identity in providers:
+            if getattr(provider, "disabled", False):
+                continue
             if (
                 provider.require_api_key
                 and not provider.api_key
                 and not provider.is_local
             ):
+                continue
+            base_url = str(getattr(provider, "base_url", "") or "").strip()
+            if not provider.is_local and not base_url:
                 continue
             hidden = set(provider.meta.get("hidden_builtin_model_ids", []))
             for model in (*provider.models, *provider.extra_models):
@@ -72,6 +95,7 @@ class PricingModelInventory:
                             model.id if has_official_identity else None
                         ),
                         capabilities=tuple(sorted(model.aigc_capabilities)),
+                        pricing_region=pricing_region_for_endpoint(base_url),
                     )
                 )
         return tuple(

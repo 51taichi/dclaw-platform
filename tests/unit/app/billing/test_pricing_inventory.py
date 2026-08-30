@@ -50,6 +50,8 @@ def test_inventory_excludes_unconfigured_and_hidden_models():
         api_key="secret",
         require_api_key=True,
         is_local=False,
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        disabled=False,
         models=[visible, hidden],
         extra_models=[],
         meta={"hidden_builtin_model_ids": ["qwen-hidden"]},
@@ -60,6 +62,8 @@ def test_inventory_excludes_unconfigured_and_hidden_models():
         api_key="",
         require_api_key=True,
         is_local=False,
+        base_url="https://api.openai.com/v1",
+        disabled=False,
         models=[visible],
         extra_models=[],
         meta={},
@@ -86,6 +90,8 @@ def test_custom_inventory_requires_explicit_official_mapping():
         api_key="secret",
         require_api_key=True,
         is_local=False,
+        base_url="https://example.invalid/v1",
+        disabled=False,
         models=[model],
         extra_models=[],
         meta={},
@@ -100,3 +106,63 @@ def test_custom_inventory_requires_explicit_official_mapping():
         PricingModelInventory(manager).list_enabled()[0].official_model_id
         is None
     )
+
+
+def test_inventory_excludes_disabled_and_unready_and_includes_plugins():
+    model = ModelInfo(id="m", name="Model")
+
+    def provider(provider_id, **overrides):
+        values = {
+            "id": provider_id,
+            "name": provider_id,
+            "api_key": "secret",
+            "require_api_key": True,
+            "is_local": False,
+            "disabled": False,
+            "base_url": "https://example.invalid/v1",
+            "models": [model],
+            "extra_models": [],
+            "meta": {},
+        }
+        values.update(overrides)
+        return SimpleNamespace(**values)
+
+    manager = SimpleNamespace(
+        builtin_providers={
+            "disabled": provider("disabled", disabled=True),
+            "unready": provider("unready", base_url=""),
+        },
+        custom_providers={},
+        plugin_providers={"plugin": {"info": provider("plugin")}},
+    )
+
+    rows = PricingModelInventory(manager).list_enabled()
+
+    assert [(row.provider_id, row.model_key) for row in rows] == [
+        ("plugin", "m")
+    ]
+    assert rows[0].official_model_id is None
+
+
+def test_inventory_derives_dashscope_pricing_region_from_endpoint():
+    provider = SimpleNamespace(
+        id="dashscope",
+        name="DashScope",
+        api_key="secret",
+        require_api_key=True,
+        is_local=False,
+        disabled=False,
+        base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        models=[ModelInfo(id="qwen3-max", name="Qwen3 Max")],
+        extra_models=[],
+        meta={},
+    )
+    manager = SimpleNamespace(
+        builtin_providers={"dashscope": provider},
+        custom_providers={},
+        plugin_providers={},
+    )
+
+    row = PricingModelInventory(manager).list_enabled()[0]
+
+    assert row.pricing_region == "ap-southeast-1"

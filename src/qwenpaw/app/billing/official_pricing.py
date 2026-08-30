@@ -105,12 +105,24 @@ class OfficialPriceRegistry:
             unit_key = str(source.get("unit_key", "")).strip()
             source_url = str(source.get("source_url", "")).strip()
             currency = str(source.get("original_currency", "")).upper()
+            verification_status = str(
+                source.get("verification_status", "")
+            ).strip()
+            registry_version = str(source.get("registry_version", "")).strip()
             if not provider_id or not model_id or not unit_key:
                 raise OfficialPriceRegistryError("model identity is required")
             if not source_url.startswith("https://"):
                 raise OfficialPriceRegistryError("source_url must use HTTPS")
             if currency not in {"CNY", "USD"}:
                 raise OfficialPriceRegistryError("unsupported currency")
+            if verification_status != "verified":
+                raise OfficialPriceRegistryError(
+                    "official prices must be verified"
+                )
+            if not registry_version:
+                raise OfficialPriceRegistryError(
+                    "registry_version is required"
+                )
             unit_size = source.get("unit_size")
             if not isinstance(unit_size, int) or unit_size <= 0:
                 raise OfficialPriceRegistryError("unit_size must be positive")
@@ -145,10 +157,8 @@ class OfficialPriceRegistry:
                     collected_at=_timestamp(
                         source.get("collected_at"), "collected_at"
                     ),
-                    verification_status=str(
-                        source.get("verification_status", "")
-                    ),
-                    registry_version=str(source.get("registry_version", "")),
+                    verification_status=verification_status,
+                    registry_version=registry_version,
                 )
             )
         return cls(parsed)

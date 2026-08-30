@@ -20,6 +20,7 @@ from ..storage.repos.price_catalog_repo import (
 
 _SUPPORTED_UNITS = {
     "tokens",
+    "metered_dimensions",
     "image_count",
     "video_duration",
     "fixed_workflow",
@@ -39,6 +40,7 @@ _ALLOWED_SELECTOR_KEYS = frozenset(
         "size",
         "input_tokens_min_exclusive",
         "input_tokens_max",
+        "pricing_region",
     },
 )
 
@@ -549,6 +551,26 @@ class PriceCatalogService:
                 raise ValueError(
                     "token rule must define an input or output rate",
                 )
+        elif rule.unit_type == "metered_dimensions":
+            dimensions = rule.metadata.get("dimensions")
+            if not isinstance(dimensions, Sequence) or not dimensions:
+                raise ValueError(
+                    "metered_dimensions rule must define dimensions"
+                )
+            seen_dimensions: set[str] = set()
+            for dimension in dimensions:
+                if not isinstance(dimension, Mapping):
+                    raise ValueError("invalid metered price dimension")
+                unit_key = str(dimension.get("unit_key") or "")
+                unit_size = dimension.get("unit_size")
+                credits = dimension.get("credits_per_unit")
+                if not unit_key or unit_key in seen_dimensions:
+                    raise ValueError("invalid metered price dimension key")
+                if not _is_integer(unit_size) or int(unit_size) <= 0:
+                    raise ValueError("invalid metered price dimension unit")
+                if not _is_integer(credits) or int(credits) <= 0:
+                    raise ValueError("invalid metered price dimension credits")
+                seen_dimensions.add(unit_key)
         elif rule.credits_per_unit <= 0:
             raise ValueError(
                 f"{rule.unit_type} rule must define credits_per_unit",
@@ -652,6 +674,18 @@ def _calculate_rule(
                 "output_tokens": request.output_tokens,
             },
         )
+    if unit_type == "metered_dimensions":
+        breakdown: dict[str, int] = {}
+        usage: dict[str, int] = {}
+        for dimension in rule["metadata"]["dimensions"]:
+            unit_key = str(dimension["unit_key"])
+            quantity = _metered_quantity(unit_key, request)
+            usage[unit_key] = quantity
+            breakdown[unit_key] = _ceil_div(
+                quantity * int(dimension["credits_per_unit"]),
+                int(dimension["unit_size"]),
+            )
+        return breakdown, usage
     if unit_type == "image_count":
         count = _positive_parameter(request.parameters, "count", default=1)
         return (
@@ -692,6 +726,25 @@ def _video_duration(parameters: Mapping[str, Any]) -> int:
     if key not in parameters:
         raise ValueError("video quote requires duration_seconds")
     return _positive_parameter(parameters, key)
+
+
+def _metered_quantity(unit_key: str, request: QuoteRequest) -> int:
+    if unit_key == "input_tokens":
+        return request.input_tokens
+    if unit_key == "output_tokens":
+        return request.output_tokens
+    if unit_key in {"video_duration", "video_duration_seconds"}:
+        return _video_duration(request.parameters)
+    if unit_key in {"image", "image_count"}:
+        return _positive_parameter(request.parameters, "count", default=1)
+    if unit_key in {"workflow", "workflow_invocation"}:
+        return 1
+    if unit_key not in request.parameters:
+        raise ValueError(f"quote parameter {unit_key} is required")
+    value = request.parameters[unit_key]
+    if not _is_integer(value) or int(value) < 0:
+        raise ValueError(f"{unit_key} must be a non-negative integer")
+    return int(value)
 
 
 def _positive_parameter(

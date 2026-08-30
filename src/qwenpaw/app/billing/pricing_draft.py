@@ -87,7 +87,9 @@ class PricingDraftBuilder:
             (
                 str(row["provider_id"]),
                 str(row["model_key"]),
+                str(row.get("capability") or ""),
                 str(row["unit_key"]),
+                _conditions_key(row.get("conditions_json", "{}")),
             ): row
             for row in costs
             if row.get("verification_status") == "verified"
@@ -119,8 +121,14 @@ class PricingDraftBuilder:
                 else model.official_model_id
             )
             dimensions = (
-                self.registry.dimensions(
-                    official_provider_id, official_model_id
+                tuple(
+                    dimension
+                    for dimension in self.registry.dimensions(
+                        official_provider_id, official_model_id
+                    )
+                    if _region_matches(
+                        dimension.conditions, model.pricing_region
+                    )
                 )
                 if official_provider_id and official_model_id
                 else ()
@@ -130,6 +138,79 @@ class PricingDraftBuilder:
             if exclusion:
                 excluded.add(model_key)
             if not dimensions:
+                trusted_rows = sorted(
+                    (
+                        row
+                        for key, row in cost_index.items()
+                        if key[:2] == model_key
+                        and _region_matches(
+                            json.loads(
+                                str(row.get("conditions_json") or "{}")
+                            ),
+                            model.pricing_region,
+                        )
+                    ),
+                    key=lambda row: (
+                        str(row["unit_key"]),
+                        str(row.get("conditions_json") or "{}"),
+                    ),
+                )
+                if trusted_rows:
+                    matched.add(model_key)
+                    for trusted in trusted_rows:
+                        cost = Decimal(str(trusted["rmb_cost_decimal"]))
+                        sale = cost * self.default_multiplier
+                        credits = int(
+                            (sale * self.credits_per_yuan).to_integral_value(
+                                rounding=ROUND_CEILING
+                            )
+                        )
+                        conditions = json.loads(
+                            str(trusted.get("conditions_json") or "{}")
+                        )
+                        unit_size = int(
+                            trusted.get("unit_size")
+                            or conditions.pop(
+                                "unit_size",
+                                1000
+                                if str(trusted["unit_key"])
+                                in {"input_tokens", "output_tokens"}
+                                else 1,
+                            )
+                        )
+                        source_reference = str(
+                            trusted.get("source_reference") or ""
+                        )
+                        rows.append(
+                            PricingDraftRow(
+                                model.provider_id,
+                                model.provider_name,
+                                model.model_key,
+                                model.model_name,
+                                official_provider_id,
+                                official_model_id,
+                                model.category,
+                                str(
+                                    trusted.get("capability") or model.category
+                                ),
+                                str(trusted["unit_key"]),
+                                unit_size,
+                                conditions,
+                                cost,
+                                self.default_multiplier,
+                                sale,
+                                credits,
+                                "trusted_cost",
+                                source_reference
+                                if source_reference.startswith("https://")
+                                else None,
+                                "verified",
+                                not bool(exclusion),
+                                exclusion_reason,
+                                None,
+                            )
+                        )
+                    continue
                 missing.add(model_key)
                 code = (
                     "official_model_unmatched"
@@ -169,8 +250,43 @@ class PricingDraftBuilder:
                 continue
             matched.add(model_key)
             for dimension in dimensions:
-                override = cost_index.get(
-                    (model.provider_id, model.model_key, dimension.unit_key)
+                override = (
+                    cost_index.get(
+                        (
+                            model.provider_id,
+                            model.model_key,
+                            dimension.capability,
+                            dimension.unit_key,
+                            _conditions_key(dimension.conditions),
+                        )
+                    )
+                    or cost_index.get(
+                        (
+                            model.provider_id,
+                            model.model_key,
+                            "",
+                            dimension.unit_key,
+                            _conditions_key(dimension.conditions),
+                        )
+                    )
+                    or cost_index.get(
+                        (
+                            model.provider_id,
+                            model.model_key,
+                            dimension.capability,
+                            dimension.unit_key,
+                            "{}",
+                        )
+                    )
+                    or cost_index.get(
+                        (
+                            model.provider_id,
+                            model.model_key,
+                            "",
+                            dimension.unit_key,
+                            "{}",
+                        )
+                    )
                 )
                 rmb_cost = (
                     Decimal(str(override["rmb_cost_decimal"]))
@@ -186,11 +302,7 @@ class PricingDraftBuilder:
                         rounding=ROUND_CEILING
                     )
                 )
-                conditions = (
-                    json.loads(str(override.get("conditions_json", "{}")))
-                    if override
-                    else dimension.conditions
-                )
+                conditions = dimension.conditions
                 rows.append(
                     PricingDraftRow(
                         model.provider_id,
@@ -237,3 +349,17 @@ class PricingDraftBuilder:
                 len(blocking),
             ),
         )
+
+
+def _conditions_key(value: Any) -> str:
+    parsed = json.loads(value) if isinstance(value, str) else value
+    return json.dumps(parsed or {}, sort_keys=True, separators=(",", ":"))
+
+
+def _region_matches(
+    conditions: Mapping[str, Any], pricing_region: str | None
+) -> bool:
+    official_region = conditions.get("region")
+    if official_region is None:
+        return True
+    return pricing_region is not None and official_region == pricing_region

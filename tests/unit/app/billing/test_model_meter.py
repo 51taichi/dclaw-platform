@@ -90,7 +90,7 @@ def usage_service(tmp_path):
                     id="meter-text",
                     provider_id="provider",
                     model_key="meter-model",
-                    capability="text",
+                    capability="chat",
                     unit_type="tokens",
                     input_credits_per_1k=1,
                     output_credits_per_1k=1,
@@ -1498,6 +1498,35 @@ def test_only_started_marker_permits_one_unknown_evidence_replacement(
             )
     finally:
         reset_current_billing_context(token)
+
+
+def test_model_meter_persists_authoritative_provider_pricing_region(
+    usage_service,
+):
+    from qwenpaw.app.billing.model_meter import BillingModelMeter
+
+    service, session = usage_service
+    meter = BillingModelMeter(
+        service,
+        pricing_region_resolver=lambda provider_id: (
+            "cn-beijing" if provider_id == "provider" else None
+        ),
+    )
+    token = _scope(session)
+    try:
+        call = meter.before_call(
+            provider_id="provider",
+            model_key="meter-model",
+            messages=[],
+        )
+        assert call is not None
+    finally:
+        reset_current_billing_context(token)
+
+    stored = _stored_item(service, session.usage_order_id)
+    reservation = json.loads(stored["usage_snapshot_json"])["reservation"]
+    assert stored["capability"] == "chat"
+    assert reservation["parameters"] == {"pricing_region": "cn-beijing"}
 
 
 @pytest.mark.asyncio

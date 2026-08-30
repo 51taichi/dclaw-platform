@@ -111,12 +111,16 @@ def test_confirm_creates_cost_policy_and_draft_only(tmp_path):
     service = PricingExcelService(
         repo,
         preview_builder=lambda actor, rows, import_id: {
-            "catalog_id": "draft-1"
+            "catalog_id": "draft-1",
+            "review": {"included_dimensions": 1},
         },
     )
     preview = service.preview_import(_workbook(), "prices.xlsx", "1")
     result = service.confirm_import(preview["id"], "1")
-    assert result["pricing_preview"] == {"catalog_id": "draft-1"}
+    assert result["pricing_preview"] == {
+        "catalog_id": "draft-1",
+        "review": {"included_dimensions": 1},
+    }
     assert repo.latest_trusted_costs()[0]["rmb_cost_decimal"] == "0.004"
     assert repo.list_policies()[0]["multiplier_decimal"] == "1.5"
     with pytest.raises(ValueError, match="already confirmed"):
@@ -139,9 +143,12 @@ def test_confirm_can_resume_draft_creation_without_reapplying_rows(tmp_path):
     def preview_builder(_actor, _rows, _import_id):
         nonlocal attempts
         attempts += 1
-        if attempts == 1:
+        if attempts == 2:
             raise RuntimeError("draft creation interrupted")
-        return {"catalog_id": "draft-1"}
+        return {
+            "catalog_id": f"draft-{attempts}",
+            "review": {"included_dimensions": 1},
+        }
 
     service = PricingExcelService(repo, preview_builder=preview_builder)
     preview = service.preview_import(_workbook(), "prices.xlsx", "1")
@@ -150,9 +157,47 @@ def test_confirm_can_resume_draft_creation_without_reapplying_rows(tmp_path):
         service.confirm_import(preview["id"], "1")
     result = service.confirm_import(preview["id"], "1")
 
-    assert result["pricing_preview"] == {"catalog_id": "draft-1"}
+    assert result["pricing_preview"]["catalog_id"] == "draft-4"
     assert len(repo.list_cost_snapshots()) == 1
     assert repo.list_policies()[0]["revision"] == 1
+    engine.dispose()
+
+
+def test_confirm_rejects_when_authoritative_pricing_review_changed(tmp_path):
+    engine = create_engine_from_settings(
+        get_storage_settings(
+            {
+                "QWENPAW_SQLITE_PATH": str(tmp_path / "excel-stale.db"),
+            }
+        )
+    )
+    create_all(engine)
+    repo = PricingAdminRepository(engine)
+    calls = 0
+
+    def preview_builder(_actor, _rows, _import_id):
+        nonlocal calls
+        calls += 1
+        return {
+            "catalog_id": f"draft-{calls}",
+            "review": {
+                "rows": [
+                    {
+                        "provider_id": "dashscope",
+                        "model_key": "qwen-plus",
+                        "conditions": {"region": f"region-{calls}"},
+                    }
+                ]
+            },
+        }
+
+    service = PricingExcelService(repo, preview_builder=preview_builder)
+    preview = service.preview_import(_workbook(), "prices.xlsx", "1")
+
+    with pytest.raises(ValueError, match="pricing preview is stale"):
+        service.confirm_import(preview["id"], "1")
+
+    assert repo.list_cost_snapshots() == []
     engine.dispose()
 
 
@@ -233,3 +278,30 @@ def test_draft_round_trip_recomputes_prices_and_requires_exclusion_reason():
     blocked = service.preview_import(output.getvalue(), "draft.xlsx", "1")
     assert blocked["status"] == "blocked"
     assert blocked["rows"][0]["code"] == "exclusion_reason_required"
+
+
+def test_multitier_official_draft_round_trips_without_false_duplicates():
+    draft = PricingDraftBuilder(OfficialPriceRegistry.load_bundled()).build(
+        [
+            PriceableModel(
+                "dashscope",
+                "百炼",
+                "qwen3-max",
+                "Qwen3 Max",
+                "text",
+                official_model_id="qwen3-max",
+                pricing_region="cn-beijing",
+            )
+        ],
+        [],
+        [],
+        [],
+    )
+    service = PricingExcelService(Repo())
+
+    preview = service.preview_import(
+        service.export_draft(draft), "qwen3-max.xlsx", "1"
+    )
+
+    assert preview["status"] == "ready"
+    assert len(preview["valid_rows"]) == 6

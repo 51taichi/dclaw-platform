@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -61,18 +61,16 @@ class PricingAdminRepository:
             ]
 
     def latest_trusted_costs(self) -> list[dict[str, Any]]:
-        latest: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+        latest: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
         for row in self.list_cost_snapshots():
             if row["verification_status"] != "verified":
                 continue
-            key = tuple(
-                str(row[name])
-                for name in (
-                    "provider_id",
-                    "model_key",
-                    "capability",
-                    "unit_key",
-                )
+            key = (
+                str(row["provider_id"]),
+                str(row["model_key"]),
+                str(row["capability"]),
+                str(row["unit_key"]),
+                str(row["conditions_json"]),
             )
             latest.setdefault(key, row)
         return list(latest.values())
@@ -143,6 +141,7 @@ class PricingAdminRepository:
                     "revision": 1,
                     "updated_by": actor_id,
                 }
+                revision = 1
                 conn.execute(
                     insert(billing_pricing_model_mappings).values(**row)
                 )
@@ -150,6 +149,7 @@ class PricingAdminRepository:
                 if int(current["revision"]) != expected_revision:
                     raise PricingRevisionConflict(model_key)
                 row = dict(current)
+                revision = expected_revision + 1
                 row.update(
                     official_model_id=official_model_id,
                     official_provider_id=official_provider_id,
@@ -178,7 +178,7 @@ class PricingAdminRepository:
                 "model_key": model_key,
                 "official_provider_id": official_provider_id,
                 "official_model_id": official_model_id,
-                "revision": int(row["revision"]),
+                "revision": revision,
             }
 
     def list_model_mappings(self) -> list[dict[str, Any]]:
@@ -392,6 +392,21 @@ class PricingAdminRepository:
             result["preview"] = json.loads(result["preview_json"])
             return result
 
+    def replace_import_preview(
+        self, import_id: str, preview: Mapping[str, Any]
+    ) -> None:
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                update(billing_pricing_imports)
+                .where(
+                    billing_pricing_imports.c.id == import_id,
+                    billing_pricing_imports.c.status == "previewed",
+                )
+                .values(preview_json=_json(preview))
+            )
+            if result.rowcount != 1:
+                raise ValueError("import already confirmed or missing")
+
     def import_allows_publish(self, import_id: str, catalog_id: str) -> bool:
         imported = self.get_import(import_id)
         if imported is None or imported["status"] != "confirmed":
@@ -436,22 +451,35 @@ class PricingAdminRepository:
                 raise ValueError("import already confirmed or missing")
             policy_revisions: dict[str, int] = {}
             for source in rows:
+                if source.get("excluded") is True:
+                    continue
+                verified_at = source.get("verified_at")
+                conditions = dict(source.get("conditions") or {})
+                if source.get("source_type") == "manual":
+                    conditions.setdefault(
+                        "unit_size", int(source.get("unit_size") or 1)
+                    )
                 row = {
                     "id": str(uuid4()),
                     "provider_id": source["provider_id"],
                     "model_key": source["model_key"],
-                    "capability": source["category"],
+                    "capability": source.get("capability")
+                    or source["category"],
                     "unit_key": source["unit_key"],
-                    "source_type": "excel",
-                    "source_reference": filename,
+                    "source_type": source.get("source_type") or "excel",
+                    "source_reference": source.get("source_url") or filename,
                     "original_currency": "CNY",
                     "original_price_decimal": source["rmb_cost_decimal"],
                     "fx_rate_decimal": "1",
                     "rmb_cost_decimal": source["rmb_cost_decimal"],
-                    "conditions_json": "{}",
-                    "verification_status": source["verification_status"],
-                    "verified_at": datetime.fromisoformat(
-                        str(source["verified_at"]).replace("Z", "+00:00")
+                    "conditions_json": _json(conditions),
+                    "verification_status": "verified",
+                    "verified_at": (
+                        datetime.fromisoformat(
+                            str(verified_at).replace("Z", "+00:00")
+                        )
+                        if verified_at
+                        else datetime.now(timezone.utc)
                     ),
                 }
                 conn.execute(insert(billing_cost_snapshots).values(**row))

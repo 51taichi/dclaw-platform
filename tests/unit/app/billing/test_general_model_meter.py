@@ -82,7 +82,7 @@ def general_meter(tmp_path):
                     id="general-meter-rule",
                     provider_id="provider",
                     model_key="model",
-                    capability="text",
+                    capability="chat",
                     unit_type="tokens",
                     input_credits_per_1k=1,
                     output_credits_per_1k=1,
@@ -145,11 +145,15 @@ def test_general_context_reserves_before_provider_contact(general_meter):
     assert items[0]["item_key"] == "model-call-1"
     assert items[0]["status"] == "held"
     with wallet_repo.engine.connect() as conn:
-        ledger = conn.execute(
-            select(billing_ledger_entries).where(
-                billing_ledger_entries.c.event_type == "usage_hold",
-            ),
-        ).mappings().one()
+        ledger = (
+            conn.execute(
+                select(billing_ledger_entries).where(
+                    billing_ledger_entries.c.event_type == "usage_hold",
+                ),
+            )
+            .mappings()
+            .one()
+        )
     assert str(ledger["idempotency_key"]).startswith("billing:")
     assert json.loads(ledger["metadata_json"])["source_type"] == "client"
 

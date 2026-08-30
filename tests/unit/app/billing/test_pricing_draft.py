@@ -13,6 +13,7 @@ def test_builder_expands_verified_dimensions_with_default_multiplier():
         "Qwen3 Max",
         "text",
         official_model_id="qwen3-max",
+        pricing_region="cn-beijing",
     )
     draft = PricingDraftBuilder(OfficialPriceRegistry.load_bundled()).build(
         [model], costs=[], mappings=[], exclusions=[]
@@ -102,3 +103,111 @@ def test_exclusion_resolves_missing_model_only_with_reason():
 
     assert draft.coverage.excluded_models == 1
     assert draft.coverage.blocking_models == 0
+
+
+def test_verified_tier_cost_overrides_only_the_same_conditions():
+    model = PriceableModel(
+        "dashscope",
+        "百炼",
+        "qwen3-max",
+        "Qwen3 Max",
+        "text",
+        official_model_id="qwen3-max",
+        pricing_region="cn-beijing",
+    )
+    conditions = {
+        "input_tokens_min_exclusive": 0,
+        "input_tokens_max": 32000,
+        "region": "cn-beijing",
+    }
+    costs = [
+        {
+            "provider_id": "dashscope",
+            "model_key": "qwen3-max",
+            "capability": "chat",
+            "unit_key": "input_tokens",
+            "rmb_cost_decimal": "9.99",
+            "verification_status": "verified",
+            "conditions_json": (
+                '{"input_tokens_max":32000,'
+                '"input_tokens_min_exclusive":0,"region":"cn-beijing"}'
+            ),
+        }
+    ]
+
+    draft = PricingDraftBuilder(OfficialPriceRegistry.load_bundled()).build(
+        [model], costs, [], []
+    )
+
+    inputs = [row for row in draft.rows if row.unit_key == "input_tokens"]
+    assert len(inputs) == 3
+    assert sum(row.conditions == conditions for row in inputs) == 1
+    matching = next(row for row in inputs if row.conditions == conditions)
+    others = [row for row in inputs if row.conditions != conditions]
+    assert matching.rmb_cost == Decimal("9.99")
+    assert all(row.rmb_cost != Decimal("9.99") for row in others)
+
+
+def test_verified_manual_costs_cover_model_without_bundled_registry():
+    model = PriceableModel(
+        "custom-provider", "Custom", "private-model", "Private", "text"
+    )
+    costs = [
+        {
+            "provider_id": "custom-provider",
+            "model_key": "private-model",
+            "capability": "chat",
+            "unit_key": unit,
+            "rmb_cost_decimal": amount,
+            "verification_status": "verified",
+            "conditions_json": '{"unit_size":1000}',
+        }
+        for unit, amount in (
+            ("input_tokens", "0.01"),
+            ("output_tokens", "0.02"),
+        )
+    ]
+
+    draft = PricingDraftBuilder(OfficialPriceRegistry.load_bundled()).build(
+        [model], costs, [], []
+    )
+
+    assert draft.coverage.matched_models == 1
+    assert draft.coverage.missing_models == 0
+    assert {row.unit_key for row in draft.rows} == {
+        "input_tokens",
+        "output_tokens",
+    }
+    assert all(row.source_type == "trusted_cost" for row in draft.rows)
+
+
+def test_region_specific_registry_price_never_crosses_provider_endpoint():
+    singapore = PriceableModel(
+        "dashscope",
+        "DashScope",
+        "qwen3-max",
+        "Qwen3 Max",
+        "text",
+        official_model_id="qwen3-max",
+        pricing_region="ap-southeast-1",
+    )
+
+    draft = PricingDraftBuilder(OfficialPriceRegistry.load_bundled()).build(
+        [singapore],
+        [
+            {
+                "provider_id": "dashscope",
+                "model_key": "qwen3-max",
+                "capability": "chat",
+                "unit_key": "input_tokens",
+                "rmb_cost_decimal": "2.5",
+                "verification_status": "verified",
+                "conditions_json": '{"region":"cn-beijing"}',
+            }
+        ],
+        [],
+        [],
+    )
+
+    assert draft.rows[0].source_type == "missing"
+    assert draft.coverage.blocking_models == 1

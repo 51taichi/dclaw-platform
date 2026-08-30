@@ -158,6 +158,13 @@ class PricingExclusionBody(BaseModel):
     reason: str | None = Field(default=None, max_length=2000)
 
 
+class PricingModelMappingBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    official_provider_id: str = Field(min_length=1, max_length=255)
+    official_model_id: str = Field(min_length=1, max_length=255)
+    expected_revision: int = Field(default=0, ge=0)
+
+
 def get_billing_repository() -> BillingRepository:
     return BillingRepository(get_app_engine())
 
@@ -207,9 +214,26 @@ def get_pricing_admin_service() -> PricingAdminService:
 
 def get_pricing_excel_service() -> PricingExcelService:
     repository = PricingAdminRepository(get_app_engine())
+    admin = get_pricing_admin_service()
     return PricingExcelService(
         repository,
-        preview_builder=get_pricing_admin_service().preview_initial_catalog,
+        preview_builder=lambda actor, rows, import_id: (
+            admin.preview_initial_catalog(
+                actor,
+                rows,
+                import_id,
+                persist=False,
+            )
+        ),
+        confirmation_builder=lambda actor, rows, import_id: (
+            admin.preview_initial_catalog(
+                actor,
+                rows,
+                import_id,
+                persist=False,
+            )
+        ),
+        draft_builder=admin.preview_initial_catalog,
     )
 
 
@@ -670,6 +694,35 @@ def refresh_pricing_candidates(
         OfficialPriceRegistry.load_bundled(),
         get_pricing_admin_service().repository,
     )
+
+
+@admin_router.get("/pricing/model-mappings")
+def list_pricing_model_mappings() -> list[dict[str, Any]]:
+    return get_pricing_admin_service().repository.list_model_mappings()
+
+
+@admin_router.put("/pricing/model-mappings/{provider_id}/{model_key}")
+def save_pricing_model_mapping(
+    provider_id: str,
+    model_key: str,
+    payload: PricingModelMappingBody,
+    request: Request,
+    actor_id: str = Depends(require_pricing_unlock),
+) -> dict[str, Any]:
+    try:
+        return get_pricing_admin_service().save_model_mapping(
+            provider_id,
+            model_key,
+            payload.official_provider_id,
+            payload.official_model_id,
+            payload.expected_revision,
+            actor_id,
+            request.client.host if request.client else None,
+        )
+    except PricingRevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @admin_router.post("/pricing/imports/preview")

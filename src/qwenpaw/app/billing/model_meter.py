@@ -12,7 +12,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from threading import Lock
-from typing import Any, Mapping, cast
+from typing import Any, Callable, Mapping, cast
 from uuid import uuid4
 
 from ..agent_context import get_current_billing_context
@@ -107,6 +107,7 @@ class BillingModelMeter:
         *,
         default_max_output_tokens: int = 1024,
         platform_max_output_tokens: int | None = None,
+        pricing_region_resolver: Callable[[str], str | None] | None = None,
     ) -> None:
         if default_max_output_tokens < 0 or (
             platform_max_output_tokens is not None
@@ -119,6 +120,9 @@ class BillingModelMeter:
             default_max_output_tokens
             if platform_max_output_tokens is None
             else platform_max_output_tokens
+        )
+        self.pricing_region_resolver = (
+            pricing_region_resolver or _configured_pricing_region
         )
         self._item_sequence_lock = Lock()
         self._item_sequences: dict[str, int] = {}
@@ -171,14 +175,18 @@ class BillingModelMeter:
                 "max_output_tokens",
             )
         call_key = self._item_key(session, item_key)
+        pricing_region = self.pricing_region_resolver(normalized_provider)
+        parameters = (
+            {"pricing_region": pricing_region} if pricing_region else {}
+        )
         self.usage_service.reserve_model_call(
             ReserveModelCall(
                 usage_order_id=session.usage_order_id,
                 item_key=call_key,
                 provider_id=normalized_provider,
                 model_key=normalized_model,
-                capability="text",
-                parameters={},
+                capability="chat",
+                parameters=parameters,
                 input_tokens=_estimate_input_tokens(messages),
                 max_output_tokens=output_tokens,
                 invocation_id=invocation_id,
@@ -537,6 +545,19 @@ def _non_negative_int(value: Any, field_name: str) -> int:
     if result < 0:
         raise ValueError(f"{field_name} must be a non-negative integer")
     return result
+
+
+def _configured_pricing_region(provider_id: str) -> str | None:
+    # Resolve lazily so billing primitives remain importable during bootstrap.
+    from ...providers.provider_manager import ProviderManager
+    from .pricing_inventory import pricing_region_for_endpoint
+
+    provider = ProviderManager.get_instance().get_provider(provider_id)
+    if provider is None:
+        return None
+    return pricing_region_for_endpoint(
+        str(getattr(provider, "base_url", "") or "")
+    )
 
 
 __all__ = ["BillingModelMeter", "BillingSettlementError", "MeteredModelCall"]

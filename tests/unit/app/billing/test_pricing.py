@@ -296,6 +296,88 @@ def test_fixed_workflow_price_is_one_published_invocation_price(
     assert quote.unit_breakdown == {"workflow_invocation": 900}
 
 
+def test_metered_dimensions_add_tokens_cache_and_audio_quantities(
+    service, clock
+):
+    service.publish(
+        _catalog(
+            "2026-08-multidimensional",
+            clock,
+            PriceRule(
+                "multi",
+                "aliyun",
+                "model-1",
+                "chat",
+                "metered_dimensions",
+                metadata={
+                    "dimensions": [
+                        {
+                            "unit_key": "input_tokens",
+                            "unit_size": 1000,
+                            "credits_per_unit": 2,
+                        },
+                        {
+                            "unit_key": "cache_read_tokens",
+                            "unit_size": 1000,
+                            "credits_per_unit": 1,
+                        },
+                        {
+                            "unit_key": "audio_seconds",
+                            "unit_size": 60,
+                            "credits_per_unit": 30,
+                        },
+                    ]
+                },
+            ),
+        )
+    )
+
+    quote = service.quote(
+        QuoteRequest(
+            "aliyun",
+            "model-1",
+            "chat",
+            {"cache_read_tokens": 500, "audio_seconds": 30},
+            input_tokens=1500,
+        )
+    )
+
+    assert quote.credits == 19
+    assert quote.unit_breakdown == {
+        "audio_seconds": 15,
+        "cache_read_tokens": 1,
+        "input_tokens": 3,
+    }
+
+
+def test_metered_dimensions_rejects_missing_non_token_quantity(service, clock):
+    service.publish(
+        _catalog(
+            "2026-08-required-dimension",
+            clock,
+            PriceRule(
+                "audio-required",
+                "aliyun",
+                "audio-model",
+                "audio",
+                "metered_dimensions",
+                metadata={
+                    "dimensions": [
+                        {
+                            "unit_key": "audio_seconds",
+                            "unit_size": 1,
+                            "credits_per_unit": 2,
+                        }
+                    ]
+                },
+            ),
+        )
+    )
+
+    with pytest.raises(ValueError, match="audio_seconds"):
+        service.quote(QuoteRequest("aliyun", "audio-model", "audio", {}))
+
+
 def test_more_specific_parameter_rule_wins_before_priority(service, clock):
     service.publish(
         _catalog(
