@@ -15,15 +15,6 @@ from sqlalchemy import func, insert, select, update
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError, OperationalError
 
-from .models import (
-    BillingInvariantError,
-    DuplicateLedgerTransactionError,
-    InsufficientCreditsError,
-    LedgerTransaction,
-    WalletBalance,
-)
-from .execution import OpenApiExecutionFence
-from .pricing import PriceCatalogService, QuoteRequest, RetailQuote
 from ..storage.repos.billing_repo import BillingRepository
 from ..storage.schema import (
     billing_executions,
@@ -32,7 +23,16 @@ from ..storage.schema import (
     billing_usage_orders,
     open_api_invocations,
 )
-
+from .complimentary import COMPLIMENTARY_UNPRICED_CATALOG_VERSION
+from .execution import OpenApiExecutionFence
+from .models import (
+    BillingInvariantError,
+    DuplicateLedgerTransactionError,
+    InsufficientCreditsError,
+    LedgerTransaction,
+    WalletBalance,
+)
+from .pricing import PriceCatalogService, QuoteRequest, RetailQuote
 
 BillingMode = Literal["off", "shadow", "observe", "enforced"]
 Billability = Literal["unknown", "billable", "not_billable"]
@@ -512,10 +512,7 @@ class UsageService:
                 input_tokens=normalized.input_tokens,
                 output_tokens=normalized.max_output_tokens,
             )
-            quote = self.pricing.quote_locked_catalog(
-                str(order["catalog_id"]),
-                request,
-            )
+            quote = self._quote_for_order(order, request)
             economic_tier = _economic_tier(quote.snapshot)
             budget = int(order["budget_credits"])
             budget_blocked = bool(
@@ -597,7 +594,11 @@ class UsageService:
                 insert(billing_usage_items).values(
                     id=str(uuid4()),
                     usage_order_id=normalized.usage_order_id,
-                    price_rule_id=quote.storage_rule_id or quote.rule_id,
+                    price_rule_id=(
+                        None
+                        if _is_complimentary_unpriced(order)
+                        else quote.storage_rule_id or quote.rule_id
+                    ),
                     item_key=normalized.item_key,
                     status="held",
                     provider_id=normalized.provider_id,
@@ -671,8 +672,8 @@ class UsageService:
             quoted = int(item["quoted_credits"])
             actual_credits = 0
             if normalized.billability == "billable":
-                actual_quote = self.pricing.quote_locked_catalog(
-                    str(order["catalog_id"]),
+                actual_quote = self._quote_for_order(
+                    order,
                     QuoteRequest(
                         provider_id=str(item["provider_id"]),
                         model_key=str(item["model_key"]),
@@ -774,6 +775,29 @@ class UsageService:
             )
             assert settled is not None
             return _usage_item_result(settled)
+
+    def _quote_for_order(
+        self,
+        order: Mapping[str, Any],
+        request: QuoteRequest,
+    ) -> RetailQuote:
+        if not _is_complimentary_unpriced(order):
+            return self.pricing.quote_locked_catalog(
+                str(order["catalog_id"]),
+                request,
+            )
+        return RetailQuote(
+            catalog_version=COMPLIMENTARY_UNPRICED_CATALOG_VERSION,
+            rule_id="complimentary-unpriced",
+            credits=0,
+            unit_breakdown={},
+            snapshot={
+                "pricing_status": "unpriced",
+                "complimentary_reason": "szzz_admin",
+                "rule": {"metadata": {"economic_tier": "standard"}},
+            },
+            request=request,
+        )
 
     @staticmethod
     def _validate_execution_fence(
@@ -1391,6 +1415,21 @@ def _item_business_key(
 
 def _item_idempotency_namespace(source_type: str) -> str:
     return "open-api" if source_type == "open_api" else "billing"
+
+
+def _is_complimentary_unpriced(order: Mapping[str, Any]) -> bool:
+    if str(order.get("source_type") or "") != "open_api":
+        return False
+    try:
+        snapshot = json.loads(
+            str(order.get("request_snapshot_json") or "{}"),
+        )
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return bool(
+        snapshot.get("complimentary_reason") == "szzz_admin"
+        and snapshot.get("complimentary_unpriced") is True
+    )
 
 
 def _economic_tier(snapshot: Mapping[str, Any]) -> str:

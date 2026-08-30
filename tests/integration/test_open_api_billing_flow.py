@@ -50,6 +50,8 @@ from qwenpaw.app.storage.schema import (
     billing_usage_orders,
     create_all,
     open_api_invocations,
+    open_api_publications,
+    users,
 )
 from qwenpaw.app.storage.settings import get_storage_settings
 from qwenpaw.app.task_limits import TaskConcurrencyLimiter
@@ -444,6 +446,68 @@ def test_missing_catalog_is_503_before_supplier(billing_flow):
     assert response.status_code == 503
     assert response.json() == {"code": "catalog_not_ready"}
     assert billing_flow.console.calls == 0
+
+
+@pytest.mark.parametrize("mode", ("enforced", "shadow", "observe"))
+def test_szzz_admin_runs_unpriced_when_no_catalog_exists(
+    billing_flow,
+    mode,
+):
+    billing_flow.runtime.mode = mode
+    billing_flow.runtime.usage_service = UsageService(
+        billing_flow.repository,
+        billing_flow.runtime.pricing,
+        mode=mode,
+    )
+    with billing_flow.engine.begin() as conn:
+        user_id = conn.execute(
+            insert(users)
+            .values(
+                username="szzz_admin",
+                password_hash="hash",
+                password_salt="salt",
+                role="admin",
+            )
+            .returning(users.c.id),
+        ).scalar_one()
+        conn.execute(
+            update(open_api_publications)
+            .where(open_api_publications.c.id == "publication")
+            .values(bound_user_id=str(user_id)),
+        )
+        conn.execute(delete(billing_price_rules))
+        conn.execute(delete(billing_price_catalogs))
+
+    response = _post(billing_flow, key="complimentary-no-catalog")
+
+    assert response.status_code == 200
+    assert billing_flow.console.calls == 1
+    with billing_flow.engine.connect() as conn:
+        invocation = conn.execute(
+            select(open_api_invocations)
+            .order_by(open_api_invocations.c.created_at.desc())
+            .limit(1),
+        ).mappings().one()
+        order = conn.execute(
+            select(billing_usage_orders).where(
+                billing_usage_orders.c.id
+                == invocation["billing_usage_order_id"],
+            ),
+        ).mappings().one()
+        items = conn.execute(
+            select(billing_usage_items).where(
+                billing_usage_items.c.usage_order_id == order["id"],
+            ),
+        ).mappings().all()
+    snapshot = json.loads(order["request_snapshot_json"])
+    assert snapshot["complimentary_reason"] == "szzz_admin"
+    assert snapshot["complimentary_unpriced"] is True
+    assert order["captured_credits"] == 0
+    assert items
+    assert all(item["charged_credits"] == 0 for item in items)
+    assert all(item["price_rule_id"] is None for item in items)
+    price_snapshot = json.loads(items[0]["price_snapshot_json"])
+    assert price_snapshot["snapshot"]["pricing_status"] == "unpriced"
 
 
 def test_stale_price_source_metadata_does_not_interrupt_supplier(

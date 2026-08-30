@@ -14,9 +14,6 @@ from sqlalchemy import insert, select
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
 
-from .pricing import PriceCatalogService
-from .complimentary import is_complimentary_user
-from .usage import IdempotencyConflictError
 from ..storage.repos.billing_repo import BillingRepository
 from ..storage.repos.price_catalog_repo import CatalogNotFoundError
 from ..storage.schema import (
@@ -28,7 +25,12 @@ from ..storage.schema import (
     open_api_keys,
     open_api_publications,
 )
-
+from .complimentary import (
+    ensure_complimentary_unpriced_catalog,
+    is_complimentary_user,
+)
+from .pricing import PriceCatalogService
+from .usage import IdempotencyConflictError
 
 BillingMode = Literal["off", "shadow", "observe", "enforced"]
 _BILLING_MODES = frozenset({"off", "shadow", "observe", "enforced"})
@@ -118,15 +120,23 @@ class OpenApiBillingCoordinator:
                     normalized,
                 )
                 bound_user_id = str(publication["bound_user_id"])
+                complimentary = is_complimentary_user(conn, bound_user_id)
                 wallet = self.repository.ensure_wallet_in_connection(
                     conn,
                     "user",
                     bound_user_id,
                 )
-                catalog = self._lock_catalog(conn)
+                complimentary_unpriced = False
+                try:
+                    catalog = self._lock_catalog(conn)
+                except CatalogNotReadyError:
+                    if not complimentary:
+                        raise
+                    catalog = ensure_complimentary_unpriced_catalog(conn)
+                    complimentary_unpriced = True
                 billing_mode: BillingMode = (
                     "observe"
-                    if is_complimentary_user(conn, bound_user_id)
+                    if complimentary
                     else normalized.mode
                 )
                 invocation_id = str(uuid4())
@@ -139,11 +149,9 @@ class OpenApiBillingCoordinator:
                     {
                         "billing_mode": billing_mode,
                         "complimentary_reason": (
-                            "szzz_admin"
-                            if billing_mode == "observe"
-                            and normalized.mode == "enforced"
-                            else None
+                            "szzz_admin" if complimentary else None
                         ),
+                        "complimentary_unpriced": complimentary_unpriced,
                         "client_idempotency_key": normalized.idempotency_key,
                         "request_sha256": payload_hash,
                     },
