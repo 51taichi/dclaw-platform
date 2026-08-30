@@ -22,6 +22,7 @@ import dayjs from "dayjs";
 import {
   Ban,
   KeyRound,
+  Pencil,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -73,6 +74,10 @@ interface KeyFormValues {
   publication_id: string;
   expires_at?: Dayjs;
   scopes: OpenApiScope[];
+}
+
+interface PublicationOwnerFormValues {
+  bound_user_id: number;
 }
 
 const SCOPE_OPTIONS: { label: string; value: OpenApiScope }[] = [
@@ -151,6 +156,7 @@ export default function OpenApiPage() {
   const [publicationForm] = Form.useForm<PublicationFormValues>();
   const [appForm] = Form.useForm<AppFormValues>();
   const [keyForm] = Form.useForm<KeyFormValues>();
+  const [publicationOwnerForm] = Form.useForm<PublicationOwnerFormValues>();
   const [publications, setPublications] = useState<OpenApiPublication[]>([]);
   const [apps, setApps] = useState<OpenApiExternalApp[]>([]);
   const [keys, setKeys] = useState<OpenApiKey[]>([]);
@@ -165,6 +171,9 @@ export default function OpenApiPage() {
   const [creatingApp, setCreatingApp] = useState(false);
   const [creatingKey, setCreatingKey] = useState(false);
   const [statusBusyId, setStatusBusyId] = useState<string>();
+  const [editingPublication, setEditingPublication] =
+    useState<OpenApiPublication>();
+  const [updatingBoundUser, setUpdatingBoundUser] = useState(false);
   const [revokeBusyId, setRevokeBusyId] = useState<string>();
   const [onlyEnabled, setOnlyEnabled] = useState(true);
   const [publicationSearch, setPublicationSearch] = useState("");
@@ -505,6 +514,33 @@ export default function OpenApiPage() {
     }
   };
 
+  const openBoundUserEditor = (publication: OpenApiPublication) => {
+    setEditingPublication(publication);
+    publicationOwnerForm.setFieldsValue({
+      bound_user_id: Number(publication.bound_user_id),
+    });
+  };
+
+  const handleBoundUserChange = async (values: PublicationOwnerFormValues) => {
+    if (!editingPublication) return;
+    setUpdatingBoundUser(true);
+    try {
+      const updated = await openApiApi.updatePublicationBoundUser(
+        editingPublication.id,
+        values.bound_user_id,
+      );
+      setPublications((prev) =>
+        prev.map((item) => (item.id === updated.id ? updated : item)),
+      );
+      setEditingPublication(undefined);
+      message.success("归属用户已更新，后续调用将使用新用户");
+    } catch (error) {
+      message.error(getErrorMessage(error, "更新归属用户失败"));
+    } finally {
+      setUpdatingBoundUser(false);
+    }
+  };
+
   const handleRevokeKey = async (key: OpenApiKey) => {
     setRevokeBusyId(key.id);
     try {
@@ -576,7 +612,7 @@ export default function OpenApiPage() {
       ),
     },
     {
-      title: "运行用户",
+      title: "归属用户",
       dataIndex: "bound_user_id",
       width: 180,
       render: (userId: string) =>
@@ -607,19 +643,28 @@ export default function OpenApiPage() {
     {
       title: "操作",
       key: "actions",
-      width: 120,
+      width: 240,
       render: (_, record) => {
         const enabled = record.status === "enabled";
         return (
-          <Button
-            danger={enabled}
-            icon={enabled ? <Ban size={14} /> : <RotateCcw size={14} />}
-            loading={statusBusyId === record.id}
-            onClick={() => void handleStatusChange(record)}
-            size="small"
-          >
-            {enabled ? "禁用" : "启用"}
-          </Button>
+          <Space size={8}>
+            <Button
+              icon={<Pencil size={14} />}
+              onClick={() => openBoundUserEditor(record)}
+              size="small"
+            >
+              修改归属用户
+            </Button>
+            <Button
+              danger={enabled}
+              icon={enabled ? <Ban size={14} /> : <RotateCcw size={14} />}
+              loading={statusBusyId === record.id}
+              onClick={() => void handleStatusChange(record)}
+              size="small"
+            >
+              {enabled ? "禁用" : "启用"}
+            </Button>
+          </Space>
         );
       },
     },
@@ -1076,14 +1121,14 @@ export default function OpenApiPage() {
           </Form.Item>
           <Form.Item
             name="bound_user_id"
-            label="运行用户"
-            extra="外部调用使用该用户的会话和用户配置。"
+            label="归属用户"
+            extra="外部调用使用该用户的会话、用户配置和积分钱包。"
             rules={[{ required: true, message: "请选择绑定用户" }]}
           >
             <Select
               showSearch
               optionFilterProp="label"
-              placeholder="选择运行用户"
+              placeholder="选择归属用户"
               options={userOptions}
             />
           </Form.Item>
@@ -1117,6 +1162,53 @@ export default function OpenApiPage() {
               type="primary"
             >
               创建发布对象
+            </Button>
+          </div>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="修改归属用户"
+        open={Boolean(editingPublication)}
+        onCancel={() => setEditingPublication(undefined)}
+        footer={null}
+        destroyOnHidden
+        forceRender
+      >
+        <Alert
+          message="修改仅影响后续 OpenAPI 调用，历史调用和计费记录不会改变。"
+          showIcon
+          type="info"
+        />
+        <Form
+          className={styles.modalForm}
+          form={publicationOwnerForm}
+          layout="vertical"
+          name="publication-owner"
+          onFinish={handleBoundUserChange}
+        >
+          <Form.Item
+            name="bound_user_id"
+            label="归属用户"
+            rules={[{ required: true, message: "请选择归属用户" }]}
+          >
+            <Select
+              showSearch
+              optionFilterProp="label"
+              placeholder="选择归属用户"
+              options={userOptions}
+            />
+          </Form.Item>
+          <div className={styles.actions}>
+            <Button onClick={() => setEditingPublication(undefined)}>
+              取消
+            </Button>
+            <Button
+              htmlType="submit"
+              loading={updatingBoundUser}
+              type="primary"
+            >
+              保存
             </Button>
           </div>
         </Form>

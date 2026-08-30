@@ -259,7 +259,7 @@ export function AgentExperienceLibrary() {
                 暂无可维护的 Agent 经验库
               </Typography.Text>
               <Typography.Text type="secondary">
-                请联系管理员先发布 OpenAPI，并将运行用户绑定到当前账号。
+                请联系管理员先发布 OpenAPI，并将归属用户设置为当前账号。
               </Typography.Text>
             </Space>
           }

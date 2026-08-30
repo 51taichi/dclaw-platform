@@ -22,6 +22,7 @@ const {
       listPublications: vi.fn(),
       createPublication: vi.fn(),
       updatePublicationStatus: vi.fn(),
+      updatePublicationBoundUser: vi.fn(),
       listApps: vi.fn(),
       createApp: vi.fn(),
       listKeys: vi.fn(),
@@ -111,6 +112,12 @@ describe("OpenApiPage", () => {
         username: "knowledge-owner",
         role: "user",
         created_at: "2026-07-02T08:00:00Z",
+      },
+      {
+        id: 9,
+        username: "new-owner",
+        role: "user",
+        created_at: "2026-07-03T08:00:00Z",
       },
     ]);
     mockOpenApiApi.listKeys.mockResolvedValue([]);
@@ -254,14 +261,18 @@ describe("OpenApiPage", () => {
     });
     await user.click(within(credentialsPanel).getByRole("combobox"));
 
-    expect((await screen.findAllByText(/在线客服接口/)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/在线客服接口/)).length).toBeGreaterThan(
+      0,
+    );
     expect(screen.queryByText(/legacy_support/)).not.toBeInTheDocument();
 
     await user.keyboard("{Escape}");
     await user.click(screen.getByRole("button", { name: /创建 API Key/ }));
     await user.click(screen.getAllByRole("combobox").at(-3)!);
 
-    expect((await screen.findAllByText(/在线客服接口/)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/在线客服接口/)).length).toBeGreaterThan(
+      0,
+    );
     expect(screen.queryByText(/legacy_support/)).not.toBeInTheDocument();
   });
 
@@ -300,6 +311,42 @@ describe("OpenApiPage", () => {
     await user.click(screen.getByRole("switch", { name: "仅显示启用" }));
 
     expect(await screen.findByText("旧客服接口")).toBeInTheDocument();
+  });
+
+  it("edits the publication owner used by future OpenAPI calls", async () => {
+    const user = userEvent.setup();
+    mockOpenApiApi.updatePublicationBoundUser.mockResolvedValue({
+      id: "pub-1",
+      public_id: "support_agent",
+      target_type: "agent",
+      target_id: "agent-1",
+      bound_user_id: "9",
+      knowledge_base_id: "openapi-pub-1",
+      name: "客服专家",
+      status: "enabled",
+      allowed_scopes: ["messages:create"],
+    });
+
+    render(<OpenApiPage />);
+
+    expect((await screen.findAllByText("归属用户")).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: "修改归属用户" }));
+    const notice = await screen.findByText(
+      "修改仅影响后续 OpenAPI 调用，历史调用和计费记录不会改变。",
+    );
+    const dialog = notice.closest<HTMLElement>('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    await user.click(within(dialog!).getByRole("combobox"));
+    await user.click(await screen.findByText(/new-owner/));
+    await user.click(within(dialog!).getByRole("button", { name: /保\s*存/ }));
+
+    await waitFor(() => {
+      expect(mockOpenApiApi.updatePublicationBoundUser).toHaveBeenCalledWith(
+        "pub-1",
+        9,
+      );
+    });
+    expect(await screen.findByText("new-owner")).toBeInTheDocument();
   });
 
   it("reuses the shared agent experience library in the knowledge tab", async () => {

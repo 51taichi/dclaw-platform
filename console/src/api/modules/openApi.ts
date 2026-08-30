@@ -52,6 +52,15 @@ export const openApiApi = {
       },
     ),
 
+  updatePublicationBoundUser: (publicationId: string, boundUserId: number) =>
+    request<OpenApiPublication>(
+      `/open-api/publications/${publicationId}/bound-user`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ bound_user_id: boundUserId }),
+      },
+    ),
+
   listApps: () => request<OpenApiExternalApp[]>("/open-api/apps"),
 
   createApp: (payload: CreateOpenApiExternalAppRequest) =>
