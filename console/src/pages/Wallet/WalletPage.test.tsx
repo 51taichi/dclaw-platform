@@ -94,6 +94,7 @@ describe("WalletPage", () => {
       </MemoryRouter>,
     );
     expect(await screen.findByText("1,000 永久积分")).toBeInTheDocument();
+    expect(screen.getByTestId("promotion-product-10")).toBeEmptyDOMElement();
     expect(
       screen.getByText("查看积分余额、购买积分并跟踪充值记录。"),
     ).toBeInTheDocument();

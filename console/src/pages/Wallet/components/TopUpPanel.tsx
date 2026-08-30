@@ -91,13 +91,18 @@ export default function TopUpPanel({ config, products, onSubmit }: Props) {
               <Typography.Text>
                 {product.purchased_credits.toLocaleString()} 永久积分
               </Typography.Text>
-              {product.promotional_credits > 0 && (
-                <Typography.Text type="success">
-                  另赠 {product.promotional_credits.toLocaleString()}{" "}
-                  积分，有效期
-                  {product.promotional_expiry_days} 天
-                </Typography.Text>
-              )}
+              <Typography.Text
+                className={styles.promotionRow}
+                data-testid={`promotion-${product.public_id}`}
+                type={product.promotional_credits > 0 ? "success" : undefined}
+                aria-hidden={product.promotional_credits <= 0}
+              >
+                {product.promotional_credits > 0
+                  ? `另赠 ${product.promotional_credits.toLocaleString()} 积分，有效期${
+                      product.promotional_expiry_days
+                    } 天`
+                  : null}
+              </Typography.Text>
               <Typography.Text strong>
                 ¥{(product.payment_amount_fen / 100).toFixed(2)}
               </Typography.Text>
