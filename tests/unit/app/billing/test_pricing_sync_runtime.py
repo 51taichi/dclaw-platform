@@ -403,3 +403,42 @@ def test_active_model_pricing_extractor_returns_strict_json_rows():
 
     assert rows[0]["price_decimal"] == "3.2"
     assert rows[0]["source_urls"] == []
+
+
+def test_active_model_pricing_extractor_reads_agentscope_chat_response():
+    class ChatResponse(dict):
+        __getattr__ = dict.__getitem__
+
+    class Model:
+        async def __call__(self, _messages):
+            return ChatResponse(
+                content=[
+                    {
+                        "type": "text",
+                        "text": (
+                            '{"prices":[{"capability":"chat",'
+                            '"unit_key":"input_tokens","unit_size":1000000,'
+                            '"conditions":{"region":"cn-beijing"},'
+                            '"currency":"CNY","price_decimal":"3.2",'
+                            '"fx_rate_decimal":"1","source_urls":[],'
+                            '"confidence_decimal":"0.4",'
+                            '"evidence_excerpt":"AI estimate"}]}'
+                        ),
+                    }
+                ]
+            )
+
+    rows = ActiveModelPricingExtractor(lambda: Model())(
+        PriceableModel(
+            "dashscope",
+            "百炼",
+            "future-model",
+            "Future Model",
+            "text",
+            official_model_id="future-model",
+            pricing_region="cn-beijing",
+        ),
+        (),
+    )
+
+    assert rows[0]["price_decimal"] == "3.2"

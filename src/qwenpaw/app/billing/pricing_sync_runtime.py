@@ -70,21 +70,35 @@ class _ConfiguredMultiSourceCollector:
         ).collect(model)
 
 
+def _safe_response_attr(response: Any, name: str) -> Any:
+    if isinstance(response, dict):
+        return response.get(name)
+    try:
+        return getattr(response, name, None)
+    except (AttributeError, KeyError, TypeError):
+        return None
+
+
 def _response_text(response: Any) -> str:
     if response is None:
         return ""
     if isinstance(response, str):
         return response
     for name in ("text", "content"):
-        value = getattr(response, name, None)
+        value = _safe_response_attr(response, name)
         if isinstance(value, str):
             return value
+        if isinstance(value, list):
+            for item in value:
+                text = _safe_response_attr(item, "text")
+                if isinstance(text, str):
+                    return text
     return ""
 
 
 async def _consume_pricing_model(model: Any, messages: list[dict]) -> str:
     response = await model(messages)
-    if hasattr(response, "__aiter__"):
+    if _safe_response_attr(response, "__aiter__") is not None:
         latest = ""
         async for chunk in response:
             text = _response_text(chunk)
