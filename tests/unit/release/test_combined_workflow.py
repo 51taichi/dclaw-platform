@@ -38,13 +38,11 @@ def _step_index(step_id: str) -> int:
     )
 
 
-def test_combined_workflow_has_all_three_entry_points() -> None:
+def test_combined_workflow_is_manual_only() -> None:
     workflow = _load_workflow()
     events = workflow["on"]
     assert isinstance(events, dict)
-    assert events["push"] == {"branches": ["main"]}
-    assert events["repository_dispatch"] == {"types": ["dclaw_client_main"]}
-    assert "workflow_dispatch" in events
+    assert set(events) == {"workflow_dispatch"}
 
 
 def test_combined_workflow_has_minimal_permissions_and_concurrency() -> None:
