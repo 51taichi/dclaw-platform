@@ -2,25 +2,32 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any, Protocol
 
+from .official_pricing import OfficialPriceRegistry
+
 
 class PricingSourceAdapter(Protocol):
-    def fetch(self) -> Sequence[Any]: ...  # noqa: E704
+    def fetch(self) -> Sequence[Any]:
+        ...  # noqa: E704
 
 
 class PricingSyncStateStore(Protocol):
     def get_pricing_sync_time(  # noqa: E704
         self, state_key: str
-    ) -> datetime | None: ...
+    ) -> datetime | None:
+        ...
 
     def set_pricing_sync_time(  # noqa: E704
         self, state_key: str, occurred_at: datetime
-    ) -> None: ...
+    ) -> None:
+        ...
 
 
 class ProtectionRateLimited(RuntimeError):
@@ -52,6 +59,72 @@ DEFAULT_INTERVALS = {
     "price_page": timedelta(days=7),
     "manual": timedelta(days=30),
 }
+
+
+def refresh_official_candidates(
+    registry: OfficialPriceRegistry,
+    repository: Any,
+) -> dict[str, Any]:
+    candidate_ids: list[str] = []
+    for record in registry.records:
+        conditions_json = json.dumps(
+            record.conditions,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        conditions_digest = hashlib.sha256(
+            conditions_json.encode()
+        ).hexdigest()
+        identity = {
+            "provider_id": record.provider_id,
+            "official_model_id": record.official_model_id,
+            "capability": record.capability,
+            "unit_key": record.unit_key,
+            "unit_size": record.unit_size,
+            "conditions": record.conditions,
+            "source_url": record.source_url,
+            "original_currency": record.original_currency,
+            "original_price_decimal": str(record.original_price),
+            "fx_rate_decimal": str(record.fx_rate),
+            "registry_version": record.registry_version,
+        }
+        content_sha256 = hashlib.sha256(
+            json.dumps(
+                identity,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        candidate_ids.append(
+            repository.append_official_candidate(
+                {
+                    "content_sha256": content_sha256,
+                    "provider_id": record.provider_id,
+                    "official_model_id": record.official_model_id,
+                    "capability": record.capability,
+                    "unit_key": record.unit_key,
+                    "conditions_digest": conditions_digest,
+                    "conditions": dict(record.conditions)
+                    | {"unit_size": record.unit_size},
+                    "source_url": record.source_url,
+                    "source_published_at": record.source_published_at,
+                    "original_currency": record.original_currency,
+                    "original_price_decimal": str(record.original_price),
+                    "fx_rate_decimal": str(record.fx_rate),
+                    "rmb_cost_decimal": str(record.rmb_cost),
+                    "verification_status": record.verification_status,
+                    "registry_version": record.registry_version,
+                }
+            )
+        )
+    return {
+        "candidate_count": len(set(candidate_ids)),
+        "registry_versions": sorted(
+            {record.registry_version for record in registry.records}
+        ),
+    }
 
 
 def _comparable(

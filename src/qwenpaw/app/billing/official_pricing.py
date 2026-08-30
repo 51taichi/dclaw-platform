@@ -172,3 +172,7 @@ class OfficialPriceRegistry:
         self, provider_id: str, official_model_id: str
     ) -> tuple[OfficialPriceDimension, ...]:
         return self._grouped.get((provider_id, official_model_id), ())
+
+    @property
+    def records(self) -> tuple[OfficialPriceDimension, ...]:
+        return self._records

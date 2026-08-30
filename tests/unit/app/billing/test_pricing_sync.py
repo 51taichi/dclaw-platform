@@ -7,7 +7,9 @@ from qwenpaw.app.billing.pricing_sync import (
     PricingSource,
     PricingSyncService,
     ProtectionRateLimited,
+    refresh_official_candidates,
 )
+from qwenpaw.app.billing.official_pricing import OfficialPriceRegistry
 from qwenpaw.app.storage.engine import create_engine_from_settings
 from qwenpaw.app.storage.repos.pricing_admin_repo import PricingAdminRepository
 from qwenpaw.app.storage.schema import create_all
@@ -95,4 +97,29 @@ def test_protection_rate_limit_survives_service_restart(tmp_path):
             Decimal("0.10"),
             NOW + timedelta(hours=1),
         )
+    engine.dispose()
+
+
+def test_official_refresh_appends_candidates_without_trusting_or_publishing(
+    tmp_path,
+):
+    engine = create_engine_from_settings(
+        get_storage_settings(
+            {"QWENPAW_SQLITE_PATH": str(tmp_path / "candidates.db")}
+        )
+    )
+    create_all(engine)
+    repo = PricingAdminRepository(engine)
+
+    first = refresh_official_candidates(
+        OfficialPriceRegistry.load_bundled(), repo
+    )
+    second = refresh_official_candidates(
+        OfficialPriceRegistry.load_bundled(), repo
+    )
+
+    assert first["candidate_count"] == 6
+    assert second == first
+    assert len(repo.latest_official_candidates()) == 6
+    assert repo.latest_trusted_costs() == []
     engine.dispose()

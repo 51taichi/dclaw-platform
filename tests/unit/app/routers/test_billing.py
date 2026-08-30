@@ -18,6 +18,10 @@ from qwenpaw.app.billing.pricing import (
     PriceRule,
     QuoteRequest,
 )
+from qwenpaw.app.billing.official_pricing import OfficialPriceRegistry
+from qwenpaw.app.billing.pricing_draft import PricingDraftBuilder
+from qwenpaw.app.billing.pricing_excel import PricingExcelService
+from qwenpaw.app.billing.pricing_inventory import PriceableModel
 from qwenpaw.app.billing.usage import UsageOrderStateError, UsageService
 from qwenpaw.app.billing.top_up import TopUpService
 from qwenpaw.app import auth as app_auth
@@ -98,7 +102,9 @@ def _app(
     monkeypatch.setattr(
         billing,
         "get_pricing_unlock_service",
-        lambda: type("Unlocked", (), {"is_valid": lambda self, token, actor: True})(),
+        lambda: type(
+            "Unlocked", (), {"is_valid": lambda self, token, actor: True}
+        )(),
     )
 
     app = FastAPI()
@@ -1175,3 +1181,137 @@ def test_concurrent_capture_and_release_has_one_controlled_winner(
     expected_available = 80 if terminal["status"] == "captured" else 150
     assert wallet_repo.balance(wallet["id"]).available == expected_available
     assert wallet_repo.balance(wallet["id"]).held == 0
+
+
+def test_admin_pricing_draft_routes_use_authenticated_actor_and_export_xlsx(
+    monkeypatch,
+    wallet_repo,
+    pricing,
+):
+    model = PriceableModel(
+        "dashscope",
+        "百炼",
+        "qwen3-max",
+        "Qwen3 Max",
+        "text",
+        official_model_id="qwen3-max",
+    )
+    result = PricingDraftBuilder(OfficialPriceRegistry.load_bundled()).build(
+        (model,), (), (), ()
+    )
+
+    class FakeAdmin:
+        def __init__(self):
+            self.exclusion_actor = None
+
+        def generate_draft(self, actor_id):
+            return {
+                "draft_key": "draft-current",
+                "coverage": {
+                    "enabled_models": 1,
+                    "matched_models": 1,
+                    "missing_models": 0,
+                    "excluded_models": 0,
+                    "blocking_models": 0,
+                },
+                "rows": [],
+                "risks": [],
+                "result": result,
+            }
+
+        def set_exclusion(
+            self,
+            draft_key,
+            provider_id,
+            model_key,
+            excluded,
+            reason,
+            actor_id,
+            ip_address=None,
+        ):
+            self.exclusion_actor = actor_id
+            return {
+                "draft_key": draft_key,
+                "provider_id": provider_id,
+                "model_key": model_key,
+                "excluded": excluded,
+                "reason": reason,
+            }
+
+    class ExcelRepo:
+        def record_import(self, *_args):
+            return {"id": "unused"}
+
+    fake = FakeAdmin()
+    monkeypatch.setattr(billing, "get_pricing_admin_service", lambda: fake)
+    monkeypatch.setattr(
+        billing,
+        "get_pricing_excel_service",
+        lambda: PricingExcelService(ExcelRepo()),
+    )
+    client = TestClient(
+        _app(
+            monkeypatch,
+            UsageService(wallet_repo, pricing, mode="shadow"),
+            wallet_repo,
+            pricing,
+        )
+    )
+    headers = _headers("admin-7", "admin")
+
+    generated = client.post(
+        "/api/admin/billing/pricing/drafts",
+        headers=headers | {"X-Billing-Unlock": "valid"},
+    )
+    exported = client.get(
+        "/api/admin/billing/pricing/drafts/draft-current/export",
+        headers=headers,
+    )
+    excluded = client.put(
+        "/api/admin/billing/pricing/drafts/draft-current/exclusions/"
+        "dashscope/qwen3-max",
+        headers=headers | {"X-Billing-Unlock": "valid"},
+        json={"excluded": True, "reason": "暂不发布"},
+    )
+
+    assert generated.status_code == 200
+    assert "result" not in generated.json()
+    assert exported.status_code == 200
+    assert exported.headers["content-type"].startswith(
+        "application/vnd.openxmlformats"
+    )
+    assert excluded.status_code == 200
+    assert fake.exclusion_actor == "admin-7"
+
+
+def test_user_quote_returns_stable_model_not_priced_error(
+    monkeypatch,
+    wallet_repo,
+    pricing,
+):
+    _publish_catalog(pricing)
+    client = TestClient(
+        _app(
+            monkeypatch,
+            UsageService(wallet_repo, pricing, mode="shadow"),
+            wallet_repo,
+            pricing,
+        )
+    )
+    payload = _quote_payload("unpriced-job") | {
+        "provider_id": "volcengine-cn",
+        "model_key": "unpriced-model",
+    }
+
+    response = client.post(
+        "/api/user/billing/quotes",
+        headers=_headers("unpriced-user"),
+        json=payload,
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "code": "model_not_priced",
+        "provider_id": "volcengine-cn",
+        "model_key": "unpriced-model",
+    }

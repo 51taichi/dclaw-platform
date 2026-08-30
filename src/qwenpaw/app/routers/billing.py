@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..billing.pricing import (
     CatalogNotFoundError,
+    ModelNotPricedError,
     PriceCatalogService,
     PriceRuleNotFoundError,
     QuoteRequest,
@@ -24,6 +25,8 @@ from ..billing.pricing_unlock import (
 from ..billing.pricing_admin import PricingAdminService
 from ..billing.pricing_inventory import PricingModelInventory
 from ..billing.pricing_excel import PricingExcelService
+from ..billing.official_pricing import OfficialPriceRegistry
+from ..billing.pricing_sync import refresh_official_candidates
 from ..auth import verify_password
 from ..billing.usage import (
     IdempotencyConflictError,
@@ -147,6 +150,12 @@ class PricingPolicyBody(BaseModel):
     multiplier_decimal: str = Field(pattern=r"^\d+(\.\d+)?$")
     settings: dict[str, Any] = Field(default_factory=dict)
     expected_revision: int = Field(ge=0)
+
+
+class PricingExclusionBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    excluded: bool
+    reason: str | None = Field(default=None, max_length=2000)
 
 
 def get_billing_repository() -> BillingRepository:
@@ -463,6 +472,15 @@ def create_user_quote(
             status_code=503,
             content={"code": "catalog_not_ready"},
         )
+    except ModelNotPricedError as exc:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "code": "model_not_priced",
+                "provider_id": exc.provider_id,
+                "model_key": exc.model_key,
+            },
+        )
     except PriceRuleNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (ValueError, TypeError) as exc:
@@ -588,6 +606,69 @@ def export_pricing() -> Response:
         headers={
             "Content-Disposition": 'attachment; filename="pricing-rmb.xlsx"',
         },
+    )
+
+
+@admin_router.post("/pricing/drafts")
+def generate_pricing_draft(
+    actor_id: str = Depends(require_pricing_unlock),
+) -> dict[str, Any]:
+    generated = get_pricing_admin_service().generate_draft(actor_id)
+    return {key: value for key, value in generated.items() if key != "result"}
+
+
+@admin_router.get("/pricing/drafts/{draft_key}/export")
+def export_pricing_draft(draft_key: str) -> Response:
+    generated = get_pricing_admin_service().generate_draft("read-only")
+    if generated["draft_key"] != draft_key:
+        raise HTTPException(status_code=409, detail="Pricing draft is stale")
+    content = get_pricing_excel_service().export_draft(generated["result"])
+    return Response(
+        content=content,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="pricing-draft-{draft_key[:12]}.xlsx"'
+            )
+        },
+    )
+
+
+@admin_router.put(
+    "/pricing/drafts/{draft_key}/exclusions/{provider_id}/{model_key}"
+)
+def set_pricing_draft_exclusion(
+    draft_key: str,
+    provider_id: str,
+    model_key: str,
+    payload: PricingExclusionBody,
+    request: Request,
+    actor_id: str = Depends(require_pricing_unlock),
+) -> dict[str, Any]:
+    try:
+        return get_pricing_admin_service().set_exclusion(
+            draft_key,
+            provider_id,
+            model_key,
+            payload.excluded,
+            payload.reason,
+            actor_id,
+            request.client.host if request.client else None,
+        )
+    except ValueError as exc:
+        status_code = 409 if "stale" in str(exc) else 422
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@admin_router.post("/pricing/official-candidates/refresh")
+def refresh_pricing_candidates(
+    _actor_id: str = Depends(require_pricing_unlock),
+) -> dict[str, Any]:
+    return refresh_official_candidates(
+        OfficialPriceRegistry.load_bundled(),
+        get_pricing_admin_service().repository,
     )
 
 

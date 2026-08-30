@@ -160,6 +160,10 @@ class PricingAdminService:
         import_id: str | None = None,
     ) -> dict[str, Any]:
         models = self.inventory.list_enabled()
+        if imported_rows and any(
+            "official_model_id" in row for row in imported_rows
+        ):
+            self._validate_imported_draft_rows(models, imported_rows)
         excluded_models = {
             (str(row["provider_id"]), str(row["model_key"]))
             for row in imported_rows or []
@@ -315,6 +319,52 @@ class PricingAdminService:
             "version": version,
             "rule_count": len(rules),
         }
+
+    def _validate_imported_draft_rows(
+        self,
+        models: Any,
+        imported_rows: list[dict[str, Any]],
+    ) -> None:
+        current = self.draft_builder.build(
+            models,
+            self.repository.latest_trusted_costs(),
+            self.repository.list_model_mappings(),
+            (),
+        )
+        allowed = {
+            (
+                row.provider_id,
+                row.model_key,
+                row.official_provider_id or "",
+                row.official_model_id or "",
+                row.unit_key,
+                json.dumps(
+                    row.conditions,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                row.registry_version or "",
+            )
+            for row in current.rows
+        }
+        for row in imported_rows:
+            identity = (
+                str(row["provider_id"]),
+                str(row["model_key"]),
+                str(row.get("official_provider_id") or ""),
+                str(row.get("official_model_id") or ""),
+                str(row.get("unit_key") or ""),
+                json.dumps(
+                    row.get("conditions") or {},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                str(row.get("registry_version") or ""),
+            )
+            if identity not in allowed:
+                raise ValueError("pricing draft identity or registry is stale")
 
     @staticmethod
     def _build_imported_rules(

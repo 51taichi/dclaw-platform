@@ -44,6 +44,7 @@ DRAFT_HEADERS = (
     "来源类型",
     "官方来源",
     "验证状态",
+    "登记版本",
     "是否纳入本次发布",
     "排除原因",
 )
@@ -202,6 +203,7 @@ class PricingExcelService:
             source_type,
             source_url,
             verification_status,
+            registry_version,
             include,
             exclusion_reason,
         ) = values
@@ -213,7 +215,10 @@ class PricingExcelService:
         if key in seen:
             return {"row": number, "code": "duplicate_key"}, None
         seen.add(key)
-        included = str(include).strip() == "是"
+        include_value = str(include).strip()
+        if include_value not in {"是", "否"}:
+            return {"row": number, "code": "invalid_inclusion"}, None
+        included = include_value == "是"
         reason = str(exclusion_reason or "").strip() or None
         if not included and reason is None:
             return {
@@ -233,6 +238,7 @@ class PricingExcelService:
                 "excluded": True,
                 "exclusion_reason": reason,
                 "verification_status": str(verification_status),
+                "registry_version": str(registry_version or ""),
             }
         try:
             cost_value = Decimal(str(cost))
@@ -269,6 +275,7 @@ class PricingExcelService:
             "rmb_cost_decimal": str(cost_value),
             "multiplier_decimal": str(multiplier_value),
             "verification_status": str(verification_status),
+            "registry_version": str(registry_version or ""),
             "source_type": str(source_type),
             "source_url": str(source_url or ""),
             "excluded": not included,
@@ -334,6 +341,7 @@ class PricingExcelService:
                     row.source_type,
                     row.source_url,
                     row.verification_status,
+                    row.registry_version,
                     "是" if row.include_in_publish else "否",
                     row.exclusion_reason,
                 )
