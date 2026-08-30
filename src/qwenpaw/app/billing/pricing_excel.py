@@ -48,6 +48,9 @@ DRAFT_HEADERS = (
     "登记版本",
     "是否纳入本次发布",
     "排除原因",
+    "证据等级",
+    "候选摘要",
+    "审批理由",
 )
 MAX_WORKBOOK_BYTES = 5 * 1024 * 1024
 
@@ -242,6 +245,9 @@ class PricingExcelService:
             registry_version,
             include,
             exclusion_reason,
+            evidence_level,
+            candidate_digest,
+            approval_reason,
         ) = values
         try:
             parsed_conditions = json.loads(str(conditions or "{}"))
@@ -291,6 +297,9 @@ class PricingExcelService:
                 "registry_version": str(registry_version or ""),
                 "source_type": str(source_type or ""),
                 "source_url": str(source_url or ""),
+                "evidence_level": str(evidence_level or ""),
+                "candidate_digest": str(candidate_digest or ""),
+                "approval_reason": str(approval_reason or ""),
             }
         try:
             cost_value = Decimal(str(cost))
@@ -329,6 +338,9 @@ class PricingExcelService:
             "source_url": str(source_url or ""),
             "excluded": not included,
             "exclusion_reason": reason,
+            "evidence_level": str(evidence_level or ""),
+            "candidate_digest": str(candidate_digest or ""),
+            "approval_reason": str(approval_reason or ""),
         }
 
     def export_workbook(self, rows: list[dict[str, Any]]) -> bytes:
@@ -394,6 +406,9 @@ class PricingExcelService:
                     row.registry_version,
                     "是" if row.include_in_publish else "否",
                     row.exclusion_reason,
+                    row.evidence_level,
+                    row.candidate_digest,
+                    row.approval_reason,
                 )
             )
         sheet.freeze_panes = "A2"

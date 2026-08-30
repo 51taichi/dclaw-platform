@@ -76,6 +76,14 @@ class ModelInfo(BaseModel):
         default=None,
         description="Optional embedding-specific endpoint override.",
     )
+    billing_eligible: bool | None = Field(
+        default=None,
+        description="Admin-only effective price-catalog publication state.",
+    )
+    billing_catalog_version: str | None = Field(
+        default=None,
+        description="Effective catalog version used for publication state.",
+    )
 
 
 def normalize_embedding_model(

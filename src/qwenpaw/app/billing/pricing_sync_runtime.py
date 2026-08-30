@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import ipaddress
 import json
 import logging
 import os
+import socket
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
-from urllib.request import Request, urlopen
+from urllib.parse import urlparse
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 from ..storage.engine import get_app_engine
 from ..storage.repos.pricing_admin_repo import PricingAdminRepository
@@ -32,6 +35,39 @@ from .pricing_sync import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _ConfiguredMultiSourceCollector:
+    """Use explicitly configured public sources before evidence-free AI."""
+
+    def __init__(self, config: dict[str, list[str]], extractor: Any, ai_model: str):
+        self.config = config
+        self.extractor = extractor
+        self.ai_model = ai_model
+
+    def collect(self, model: Any) -> Any:
+        urls = self.config.get(f"{model.provider_id}/{model.model_key}", [])
+        if len(urls) < 2:
+            return ()
+        blocks: list[str] = []
+        hosts: set[str] = set()
+        for url in urls:
+            parsed = urlparse(url)
+            if parsed.scheme != "https" or not parsed.hostname:
+                raise ValueError("multi-source pricing URL must use HTTPS")
+            hosts.add(parsed.hostname)
+            blocks.append(
+                f"SOURCE_URL={url}\nCONTENT={_fetch_official_pricing_page(url)}"
+            )
+        return StructuredAiCollector(
+            extractor=self.extractor,
+            evidence_level="ai_multi_source",
+            ai_model=self.ai_model,
+            prompt_version="pricing-multi-source-v1",
+            collector_version="configured-multi-source-v1",
+            official_hosts=frozenset(hosts),
+            evidence_blocks=tuple(blocks),
+        ).collect(model)
 
 
 def _response_text(response: Any) -> str:
@@ -68,7 +104,7 @@ class ActiveModelPricingExtractor:
         evidence = "\n\n".join(str(block) for block in _evidence)
         prompt = (
             "Estimate the public API cost for the named model. Return only "
-            "strict JSON as {\"prices\":[...]}. Each item must contain "
+            'strict JSON as {"prices":[...]}. Each item must contain '
             "capability, unit_key, unit_size, conditions, currency (CNY or "
             "USD), price_decimal, fx_rate_decimal, source_urls, "
             "confidence_decimal, evidence_excerpt. When no verifiable "
@@ -132,17 +168,43 @@ class PricingCollectionRuntime:
                 separators=(",", ":"),
             ).encode()
         ).hexdigest()
-        return self.repository.create_collection_job(
+        job = self.repository.create_collection_job(
             inventory_digest,
             actor_id,
             self.clock(),
         )
+        if job["status"] == "pending":
+            for model in models:
+                self.repository.update_collection_item(
+                    str(job["id"]),
+                    model.provider_id,
+                    model.model_key,
+                    model.pricing_region,
+                    status="pending",
+                    result={},
+                    candidate_id=None,
+                    error_summary=None,
+                    now=self.clock(),
+                )
+        return self.repository.get_collection_job(str(job["id"])) or job
 
     def get(self, job_id: str) -> dict[str, Any] | None:
         return self.repository.get_collection_job(job_id)
 
     def list(self) -> list[dict[str, Any]]:
         return self.repository.list_collection_jobs()
+
+    def enqueue_if_due(self, interval: timedelta = timedelta(days=7)) -> None:
+        jobs = self.repository.list_collection_jobs(limit=1)
+        now = self.clock()
+        if jobs:
+            created = jobs[0].get("created_at")
+            if isinstance(created, datetime):
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+                if now - created < interval:
+                    return
+        self.enqueue("system-pricing-scheduler")
 
     async def run_pending_once(self, worker_id: str) -> str | None:
         now = self.clock()
@@ -154,6 +216,17 @@ class PricingCollectionRuntime:
         if job is None:
             return None
         for model in tuple(self.inventory.list_enabled()):
+            self.repository.update_collection_item(
+                str(job["id"]),
+                model.provider_id,
+                model.model_key,
+                model.pricing_region,
+                status="running",
+                result={},
+                candidate_id=None,
+                error_summary=None,
+                now=self.clock(),
+            )
             try:
                 result = await asyncio.to_thread(self.pipeline.collect, model)
             except Exception as exc:
@@ -179,20 +252,19 @@ class PricingCollectionRuntime:
                     self.clock(),
                     self.lease_seconds,
                 ):
-                    raise RuntimeError(
-                        "pricing collection job ownership lost"
-                    ) from exc
+                    raise RuntimeError("pricing collection job ownership lost") from exc
                 continue
             candidate_ids = [
-                self._persist_candidate(candidate)
-                for candidate in result.candidates
+                self._persist_candidate(candidate) for candidate in result.candidates
             ]
             status = (
                 "official_succeeded"
                 if result.evidence_level == "official_verified"
-                else result.evidence_level
-                if result.evidence_level.startswith("ai_")
-                else "failed"
+                else (
+                    result.evidence_level
+                    if result.evidence_level.startswith("ai_")
+                    else "failed"
+                )
             )
             self.repository.update_collection_item(
                 str(job["id"]),
@@ -207,15 +279,11 @@ class PricingCollectionRuntime:
                         if result.default_multiplier is not None
                         else None
                     ),
-                    "default_include_in_publish": (
-                        result.default_include_in_publish
-                    ),
+                    "default_include_in_publish": (result.default_include_in_publish),
                     "attempt_errors": list(result.attempt_errors),
                 },
                 candidate_id=candidate_ids[0] if candidate_ids else None,
-                error_summary=(
-                    "; ".join(result.attempt_errors) or None
-                ),
+                error_summary=("; ".join(result.attempt_errors) or None),
                 now=self.clock(),
             )
             if not self.repository.renew_collection_job(
@@ -230,9 +298,7 @@ class PricingCollectionRuntime:
         )
 
     def _persist_candidate(self, candidate: Any) -> str:
-        conditions = dict(candidate.conditions) | {
-            "unit_size": candidate.unit_size
-        }
+        conditions = dict(candidate.conditions) | {"unit_size": candidate.unit_size}
         conditions_json = json.dumps(
             conditions,
             ensure_ascii=False,
@@ -315,7 +381,9 @@ async def pricing_collection_loop(
     """Continuously drain durable pricing jobs; cancellation is cooperative."""
     while True:
         try:
-            await runtime.run_pending_once(worker_id)
+            processed = await runtime.run_pending_once(worker_id)
+            if processed is None:
+                runtime.enqueue_if_due()
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -326,6 +394,19 @@ async def pricing_collection_loop(
 
 
 def _fetch_official_pricing_page(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError("official pricing URL must use HTTPS")
+    for address in socket.getaddrinfo(parsed.hostname, 443):
+        ip = ipaddress.ip_address(address[4][0])
+        if not ip.is_global:
+            raise ValueError("official pricing URL resolved to a private address")
+
+    class _NoRedirect(HTTPRedirectHandler):
+        def redirect_request(self, *args: Any, **kwargs: Any) -> None:
+            del args, kwargs
+            return None
+
     request = Request(
         url,
         headers={
@@ -333,7 +414,9 @@ def _fetch_official_pricing_page(url: str) -> str:
             "User-Agent": "DClaw-Pricing-Collector/1.0",
         },
     )
-    with urlopen(request, timeout=20) as response:
+    with build_opener(_NoRedirect).open(request, timeout=20) as response:
+        if response.geturl() != url:
+            raise ValueError("official pricing page redirected")
         return response.read(1_000_000).decode("utf-8", errors="replace")
 
 
@@ -341,17 +424,18 @@ def build_pricing_collection_runtime(
     provider_manager: Any,
 ) -> PricingCollectionRuntime:
     official_hosts = {
-        "dashscope": frozenset(
-            {"help.aliyun.com", "dashscope.aliyun.com"}
-        ),
-        "volcengine": frozenset(
-            {"www.volcengine.com", "ark.cn-beijing.volces.com"}
-        ),
-        "volcengine-cn": frozenset(
-            {"www.volcengine.com", "ark.cn-beijing.volces.com"}
-        ),
+        "dashscope": frozenset({"help.aliyun.com", "dashscope.aliyun.com"}),
+        "volcengine": frozenset({"www.volcengine.com", "ark.cn-beijing.volces.com"}),
+        "volcengine-cn": frozenset({"www.volcengine.com", "ark.cn-beijing.volces.com"}),
     }
-    stages: list[CollectionStage] = []
+    stages: list[CollectionStage] = [
+        CollectionStage(
+            "bundled-official",
+            OfficialRegistryCollector(
+                OfficialPriceRegistry.load_bundled(), official_hosts
+            ),
+        )
+    ]
     active = provider_manager.get_active_model()
     if active is not None and active.provider_id and active.model:
         provider = provider_manager.get_provider(active.provider_id)
@@ -368,12 +452,8 @@ def build_pricing_collection_runtime(
                                 "https://help.aliyun.com/zh/model-studio/"
                                 "model-pricing"
                             ),
-                            "volcengine": (
-                                "https://www.volcengine.com/product/ark"
-                            ),
-                            "volcengine-cn": (
-                                "https://www.volcengine.com/product/ark"
-                            ),
+                            "volcengine": ("https://www.volcengine.com/product/ark"),
+                            "volcengine-cn": ("https://www.volcengine.com/product/ark"),
                         },
                         official_hosts=official_hosts,
                         fetcher=_fetch_official_pricing_page,
@@ -382,14 +462,26 @@ def build_pricing_collection_runtime(
                     ),
                 )
             )
-    stages.append(
-        CollectionStage(
-            "bundled-official",
-            OfficialRegistryCollector(
-                OfficialPriceRegistry.load_bundled(), official_hosts
-            ),
-        )
-    )
+            raw_multi_source = os.environ.get("DCLAW_PRICING_MULTI_SOURCE_URLS", "{}")
+            try:
+                multi_source = json.loads(raw_multi_source)
+            except json.JSONDecodeError:
+                multi_source = {}
+            if isinstance(multi_source, dict) and multi_source:
+                stages.append(
+                    CollectionStage(
+                        "configured-multi-source-ai",
+                        _ConfiguredMultiSourceCollector(
+                            {
+                                str(key): [str(url) for url in value]
+                                for key, value in multi_source.items()
+                                if isinstance(value, list)
+                            },
+                            extractor,
+                            active.model,
+                        ),
+                    )
+                )
     if active is not None and active.provider_id and active.model:
         provider = provider_manager.get_provider(active.provider_id)
         if provider is not None:
@@ -438,9 +530,7 @@ class NormalizedHttpPricingAdapter:
             payload = json.loads(response.read().decode("utf-8"))
         rows = payload.get("prices") if isinstance(payload, dict) else payload
         if not isinstance(rows, list):
-            raise TypeError(
-                "normalized pricing feed must contain a prices list"
-            )
+            raise TypeError("normalized pricing feed must contain a prices list")
 
         trusted = bool(self.config.get("trusted", False))
         previous = {
@@ -551,11 +641,7 @@ def build_pricing_sync_from_env() -> PricingSyncService | None:
                 str(config["id"]),
                 str(config.get("source_type", "official_api")),
                 NormalizedHttpPricingAdapter(config, repository, service),
-                (
-                    timedelta(hours=float(interval))
-                    if interval is not None
-                    else None
-                ),
+                (timedelta(hours=float(interval)) if interval is not None else None),
             )
         )
     service.sources = tuple(sources)
@@ -570,7 +656,5 @@ async def pricing_sync_loop(service: PricingSyncService) -> None:
                 datetime.now(timezone.utc),
             )
         except Exception:
-            logger.exception(
-                "Pricing source check failed; published catalog retained"
-            )
+            logger.exception("Pricing source check failed; published catalog retained")
         await asyncio.sleep(3600)

@@ -34,9 +34,7 @@ class PricingRevisionConflict(RuntimeError):
 
 
 def _json(value: Mapping[str, Any]) -> str:
-    return json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    )
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 class PricingAdminRepository:
@@ -84,9 +82,7 @@ class PricingAdminRepository:
         row["conditions_json"] = _json(row.pop("conditions", {}))
         try:
             with self.engine.begin() as conn:
-                conn.execute(
-                    insert(billing_official_price_candidates).values(**row)
-                )
+                conn.execute(insert(billing_official_price_candidates).values(**row))
         except IntegrityError:
             pass
         with self.engine.connect() as conn:
@@ -123,10 +119,8 @@ class PricingAdminRepository:
             current = (
                 conn.execute(
                     select(billing_pricing_model_mappings).where(
-                        billing_pricing_model_mappings.c.provider_id
-                        == provider_id,
-                        billing_pricing_model_mappings.c.model_key
-                        == model_key,
+                        billing_pricing_model_mappings.c.provider_id == provider_id,
+                        billing_pricing_model_mappings.c.model_key == model_key,
                     )
                 )
                 .mappings()
@@ -145,9 +139,7 @@ class PricingAdminRepository:
                     "updated_by": actor_id,
                 }
                 revision = 1
-                conn.execute(
-                    insert(billing_pricing_model_mappings).values(**row)
-                )
+                conn.execute(insert(billing_pricing_model_mappings).values(**row))
             else:
                 if int(current["revision"]) != expected_revision:
                     raise PricingRevisionConflict(model_key)
@@ -163,8 +155,7 @@ class PricingAdminRepository:
                     update(billing_pricing_model_mappings)
                     .where(
                         billing_pricing_model_mappings.c.id == current["id"],
-                        billing_pricing_model_mappings.c.revision
-                        == expected_revision,
+                        billing_pricing_model_mappings.c.revision == expected_revision,
                     )
                     .values(
                         official_model_id=official_model_id,
@@ -212,12 +203,9 @@ class PricingAdminRepository:
             current = (
                 conn.execute(
                     select(billing_pricing_draft_exclusions).where(
-                        billing_pricing_draft_exclusions.c.draft_key
-                        == draft_key,
-                        billing_pricing_draft_exclusions.c.provider_id
-                        == provider_id,
-                        billing_pricing_draft_exclusions.c.model_key
-                        == model_key,
+                        billing_pricing_draft_exclusions.c.draft_key == draft_key,
+                        billing_pricing_draft_exclusions.c.provider_id == provider_id,
+                        billing_pricing_draft_exclusions.c.model_key == model_key,
                     )
                 )
                 .mappings()
@@ -260,10 +248,7 @@ class PricingAdminRepository:
                 dict(row)
                 for row in conn.execute(
                     select(billing_pricing_draft_exclusions)
-                    .where(
-                        billing_pricing_draft_exclusions.c.draft_key
-                        == draft_key
-                    )
+                    .where(billing_pricing_draft_exclusions.c.draft_key == draft_key)
                     .order_by(
                         billing_pricing_draft_exclusions.c.provider_id,
                         billing_pricing_draft_exclusions.c.model_key,
@@ -277,45 +262,61 @@ class PricingAdminRepository:
         requested_by: str,
         now: datetime,
     ) -> dict[str, Any]:
-        with self.engine.begin() as conn:
-            active = (
-                conn.execute(
-                    select(billing_pricing_collection_jobs).where(
-                        billing_pricing_collection_jobs.c.inventory_digest
-                        == inventory_digest,
-                        billing_pricing_collection_jobs.c.status.in_(
-                            ("pending", "running")
-                        ),
+        try:
+            with self.engine.begin() as conn:
+                active = (
+                    conn.execute(
+                        select(billing_pricing_collection_jobs)
+                        .where(
+                            billing_pricing_collection_jobs.c.inventory_digest
+                            == inventory_digest,
+                            billing_pricing_collection_jobs.c.status.in_(
+                                ("pending", "running")
+                            ),
+                        )
+                        .order_by(billing_pricing_collection_jobs.c.created_at.desc())
+                        .limit(1)
                     )
-                    .order_by(
-                        billing_pricing_collection_jobs.c.created_at.desc()
-                    )
-                    .limit(1)
+                    .mappings()
+                    .first()
                 )
-                .mappings()
-                .first()
-            )
-            if active is not None:
-                return dict(active)
-            row = {
-                "id": str(uuid4()),
-                "inventory_digest": inventory_digest,
-                "status": "pending",
-                "requested_by": requested_by,
-                "progress_json": "{}",
-                "created_at": now,
-            }
-            conn.execute(insert(billing_pricing_collection_jobs).values(**row))
-        return dict(row)
+                if active is not None:
+                    return dict(active)
+                row = {
+                    "id": str(uuid4()),
+                    "inventory_digest": inventory_digest,
+                    "status": "pending",
+                    "requested_by": requested_by,
+                    "progress_json": "{}",
+                    "created_at": now,
+                }
+                conn.execute(insert(billing_pricing_collection_jobs).values(**row))
+            return dict(row)
+        except IntegrityError:
+            with self.engine.connect() as conn:
+                winner = (
+                    conn.execute(
+                        select(billing_pricing_collection_jobs)
+                        .where(
+                            billing_pricing_collection_jobs.c.inventory_digest
+                            == inventory_digest,
+                            billing_pricing_collection_jobs.c.status.in_(
+                                ("pending", "running")
+                            ),
+                        )
+                        .limit(1)
+                    )
+                    .mappings()
+                    .one()
+                )
+            return dict(winner)
 
     def list_collection_jobs(self, limit: int = 20) -> list[dict[str, Any]]:
         with self.engine.connect() as conn:
             rows = list(
                 conn.execute(
                     select(billing_pricing_collection_jobs)
-                    .order_by(
-                        billing_pricing_collection_jobs.c.created_at.desc()
-                    )
+                    .order_by(billing_pricing_collection_jobs.c.created_at.desc())
                     .limit(max(1, min(limit, 100)))
                 ).mappings()
             )
@@ -360,9 +361,7 @@ class PricingAdminRepository:
     @staticmethod
     def _collection_job_result(row: Mapping[str, Any]) -> dict[str, Any]:
         result = dict(row)
-        result["progress"] = json.loads(
-            str(result.pop("progress_json") or "{}")
-        )
+        result["progress"] = json.loads(str(result.pop("progress_json") or "{}"))
         return result
 
     def claim_collection_job(
@@ -374,12 +373,8 @@ class PricingAdminRepository:
         with self.engine.begin() as conn:
             claimable = or_(
                 billing_pricing_collection_jobs.c.status == "pending",
-                (
-                    billing_pricing_collection_jobs.c.status == "running"
-                )
-                & (
-                    billing_pricing_collection_jobs.c.lease_expires_at < now
-                ),
+                (billing_pricing_collection_jobs.c.status == "running")
+                & (billing_pricing_collection_jobs.c.lease_expires_at < now),
             )
             candidate_id = conn.execute(
                 select(billing_pricing_collection_jobs.c.id)
@@ -434,12 +429,9 @@ class PricingAdminRepository:
                 conn.execute(
                     select(billing_pricing_collection_items).where(
                         billing_pricing_collection_items.c.job_id == job_id,
-                        billing_pricing_collection_items.c.provider_id
-                        == provider_id,
-                        billing_pricing_collection_items.c.model_key
-                        == model_key,
-                        billing_pricing_collection_items.c.pricing_region
-                        == region,
+                        billing_pricing_collection_items.c.provider_id == provider_id,
+                        billing_pricing_collection_items.c.model_key == model_key,
+                        billing_pricing_collection_items.c.pricing_region == region,
                     )
                 )
                 .mappings()
@@ -450,21 +442,48 @@ class PricingAdminRepository:
                 "candidate_id": candidate_id,
                 "result_json": _json(result),
                 "error_summary": error_summary,
-                "started_at": now,
-                "finished_at": now,
+                "started_at": None if status == "pending" else now,
+                "finished_at": (None if status in {"pending", "running"} else now),
             }
             if current is None:
                 row_id = str(uuid4())
-                conn.execute(
-                    insert(billing_pricing_collection_items).values(
-                        id=row_id,
-                        job_id=job_id,
-                        provider_id=provider_id,
-                        model_key=model_key,
-                        pricing_region=region,
-                        **values,
+                try:
+                    with conn.begin_nested():
+                        conn.execute(
+                            insert(billing_pricing_collection_items).values(
+                                id=row_id,
+                                job_id=job_id,
+                                provider_id=provider_id,
+                                model_key=model_key,
+                                pricing_region=region,
+                                **values,
+                            )
+                        )
+                except IntegrityError:
+                    winner = (
+                        conn.execute(
+                            select(billing_pricing_collection_items).where(
+                                billing_pricing_collection_items.c.job_id
+                                == job_id,
+                                billing_pricing_collection_items.c.provider_id
+                                == provider_id,
+                                billing_pricing_collection_items.c.model_key
+                                == model_key,
+                                billing_pricing_collection_items.c.pricing_region
+                                == region,
+                            )
+                        )
+                        .mappings()
+                        .one()
                     )
-                )
+                    row_id = str(winner["id"])
+                    conn.execute(
+                        update(billing_pricing_collection_items)
+                        .where(
+                            billing_pricing_collection_items.c.id == row_id
+                        )
+                        .values(**values)
+                    )
             else:
                 row_id = str(current["id"])
                 conn.execute(
@@ -482,17 +501,13 @@ class PricingAdminRepository:
             progress = {
                 "total": len(item_rows),
                 "completed": sum(
-                    value != "pending" for value in item_rows
+                    value not in {"pending", "running"} for value in item_rows
                 ),
-                "official": sum(
-                    value == "official_succeeded" for value in item_rows
-                ),
-                "ai": sum(
-                    value.startswith("ai_") for value in item_rows
-                ),
-                "manual": sum(
-                    value == "manual_required" for value in item_rows
-                ),
+                "pending": sum(value == "pending" for value in item_rows),
+                "running": sum(value == "running" for value in item_rows),
+                "official": sum(value == "official_succeeded" for value in item_rows),
+                "ai": sum(value.startswith("ai_") for value in item_rows),
+                "manual": sum(value == "manual_required" for value in item_rows),
                 "failed": sum(value == "failed" for value in item_rows),
             }
             conn.execute(
@@ -525,9 +540,7 @@ class PricingAdminRepository:
                     billing_pricing_collection_jobs.c.status == "running",
                     billing_pricing_collection_jobs.c.worker_id == worker_id,
                 )
-                .values(
-                    lease_expires_at=now + timedelta(seconds=lease_seconds)
-                )
+                .values(lease_expires_at=now + timedelta(seconds=lease_seconds))
             )
         return result.rowcount == 1
 
@@ -538,6 +551,20 @@ class PricingAdminRepository:
         now: datetime,
     ) -> str:
         with self.engine.begin() as conn:
+            conn.execute(
+                update(billing_pricing_collection_items)
+                .where(
+                    billing_pricing_collection_items.c.job_id == job_id,
+                    billing_pricing_collection_items.c.status.in_(
+                        ("pending", "running")
+                    ),
+                )
+                .values(
+                    status="failed",
+                    error_summary="model inventory changed before collection",
+                    finished_at=now,
+                )
+            )
             item_statuses = tuple(
                 conn.execute(
                     select(billing_pricing_collection_items.c.status).where(
@@ -553,6 +580,20 @@ class PricingAdminRepository:
                 status = "failed"
             else:
                 status = "succeeded"
+            progress = {
+                "total": len(item_statuses),
+                "completed": len(item_statuses),
+                "pending": 0,
+                "running": 0,
+                "official": sum(
+                    value == "official_succeeded" for value in item_statuses
+                ),
+                "ai": sum(value.startswith("ai_") for value in item_statuses),
+                "manual": sum(
+                    value == "manual_required" for value in item_statuses
+                ),
+                "failed": failed,
+            }
             result = conn.execute(
                 update(billing_pricing_collection_jobs)
                 .where(
@@ -564,6 +605,7 @@ class PricingAdminRepository:
                     status=status,
                     lease_expires_at=None,
                     finished_at=now,
+                    progress_json=_json(progress),
                 )
             )
             if result.rowcount != 1:
@@ -584,21 +626,17 @@ class PricingAdminRepository:
                 current = (
                     conn.execute(
                         select(billing_pricing_model_decisions).where(
-                            billing_pricing_model_decisions.c.draft_key
-                            == draft_key,
+                            billing_pricing_model_decisions.c.draft_key == draft_key,
                             billing_pricing_model_decisions.c.provider_id
                             == provider_id,
-                            billing_pricing_model_decisions.c.model_key
-                            == model_key,
+                            billing_pricing_model_decisions.c.model_key == model_key,
                         )
                     )
                     .mappings()
                     .first()
                 )
                 values = {
-                    "include_in_publish": bool(
-                        decision["include_in_publish"]
-                    ),
+                    "include_in_publish": bool(decision["include_in_publish"]),
                     "reason": decision.get("reason"),
                     "updated_by": actor_id,
                     "updated_at": datetime.now(timezone.utc),
@@ -632,18 +670,13 @@ class PricingAdminRepository:
                 )
         return saved
 
-    def list_model_publication_decisions(
-        self, draft_key: str
-    ) -> list[dict[str, Any]]:
+    def list_model_publication_decisions(self, draft_key: str) -> list[dict[str, Any]]:
         with self.engine.connect() as conn:
             return [
                 dict(row)
                 for row in conn.execute(
                     select(billing_pricing_model_decisions)
-                    .where(
-                        billing_pricing_model_decisions.c.draft_key
-                        == draft_key
-                    )
+                    .where(billing_pricing_model_decisions.c.draft_key == draft_key)
                     .order_by(
                         billing_pricing_model_decisions.c.provider_id,
                         billing_pricing_model_decisions.c.model_key,
@@ -695,8 +728,7 @@ class PricingAdminRepository:
                     update(billing_pricing_policies)
                     .where(
                         billing_pricing_policies.c.id == policy_id,
-                        billing_pricing_policies.c.revision
-                        == expected_revision,
+                        billing_pricing_policies.c.revision == expected_revision,
                     )
                     .values(
                         multiplier_decimal=multiplier_decimal,
@@ -846,8 +878,7 @@ class PricingAdminRepository:
                     "id": str(uuid4()),
                     "provider_id": source["provider_id"],
                     "model_key": source["model_key"],
-                    "capability": source.get("capability")
-                    or source["category"],
+                    "capability": source.get("capability") or source["category"],
                     "unit_key": source["unit_key"],
                     "source_type": source.get("source_type") or "excel",
                     "source_reference": source.get("source_url") or filename,
@@ -858,9 +889,7 @@ class PricingAdminRepository:
                     "conditions_json": _json(conditions),
                     "verification_status": "verified",
                     "verified_at": (
-                        datetime.fromisoformat(
-                            str(verified_at).replace("Z", "+00:00")
-                        )
+                        datetime.fromisoformat(str(verified_at).replace("Z", "+00:00"))
                         if verified_at
                         else datetime.now(timezone.utc)
                     ),
@@ -930,9 +959,7 @@ class PricingAdminRepository:
                     after_json=_json(
                         {
                             "import_id": import_id,
-                            "catalog_id": (pricing_preview or {}).get(
-                                "catalog_id"
-                            ),
+                            "catalog_id": (pricing_preview or {}).get("catalog_id"),
                         }
                     ),
                     metadata_json=_json({"ip_address": ip_address}),
@@ -1050,9 +1077,7 @@ class PricingAdminRepository:
             ).first()
             return row[0] if row else None
 
-    def set_pricing_sync_time(
-        self, state_key: str, occurred_at: datetime
-    ) -> None:
+    def set_pricing_sync_time(self, state_key: str, occurred_at: datetime) -> None:
         with self.engine.begin() as conn:
             result = conn.execute(
                 update(billing_pricing_sync_state)

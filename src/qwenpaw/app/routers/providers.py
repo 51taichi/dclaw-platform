@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Dict, List, Literal, Optional
 from fastapi import (
     APIRouter,
@@ -207,9 +208,7 @@ def _validate_model_slot(
     if not provider.has_model(model_id):
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"Model '{model_id}' not found in provider '{provider_id}'."
-            ),
+            detail=(f"Model '{model_id}' not found in provider '{provider_id}'."),
         )
     selected_model = _registered_model(provider, model_id)
     if selected_model and selected_model.model_type == "embedding":
@@ -246,21 +245,57 @@ async def list_all_providers(
     if include_unpublished:
         if getattr(request.state, "role", None) != "admin":
             raise HTTPException(status_code=403, detail="Admin required")
-        return providers
+        catalogs = PriceCatalogRepository(get_app_engine())
+        try:
+            catalog = catalogs.effective_catalog(datetime.now(timezone.utc))
+        except LookupError:
+            catalog = None
+        published = {
+            (str(rule["provider_id"]), str(rule["model_key"]))
+            for rule in (catalog or {}).get("rules", ())
+        }
+        version = str((catalog or {}).get("version") or "") or None
+        return [
+            provider.model_copy(
+                update={
+                    "models": [
+                        model.model_copy(
+                            update={
+                                "billing_eligible": (
+                                    provider.id, model.id
+                                ) in published,
+                                "billing_catalog_version": version,
+                            }
+                        )
+                        for model in provider.models
+                    ],
+                    "extra_models": [
+                        model.model_copy(
+                            update={
+                                "billing_eligible": (
+                                    provider.id, model.id
+                                ) in published,
+                                "billing_catalog_version": version,
+                            }
+                        )
+                        for model in provider.extra_models
+                    ],
+                }
+            )
+            for provider in providers
+        ]
     published = ModelPublicationService(
         PriceCatalogRepository(get_app_engine())
     ).effective_pairs()
     if published is None:
-        return providers
+        return []
     filtered: list[ProviderInfo] = []
     for provider in providers:
         if provider.id == AUTO_MODEL_PROVIDER_ID:
             filtered.append(provider)
             continue
         models = [
-            model
-            for model in provider.models
-            if (provider.id, model.id) in published
+            model for model in provider.models if (provider.id, model.id) in published
         ]
         extra_models = [
             model
@@ -495,9 +530,7 @@ def _embedding_model_for_test(provider_id: str, model_id: str) -> ModelInfo:
         name=model_id,
         model_type="embedding",
         embedding_protocol=(
-            "dashscope_multimodal"
-            if dashscope_multimodal
-            else "openai_compatible"
+            "dashscope_multimodal" if dashscope_multimodal else "openai_compatible"
         ),
     )
     return normalize_embedding_model(provider_id, model)
@@ -549,9 +582,7 @@ async def test_provider(
         ok, msg = await tmp_provider.check_connection()
         return TestConnectionResponse(
             success=ok,
-            message=(
-                "Connection successful" if ok else f"Connection failed: {msg}"
-            ),
+            message=("Connection successful" if ok else f"Connection failed: {msg}"),
         )
     except (ValueError, AppBaseException) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -900,9 +931,20 @@ async def get_active_models(
     - global: ProviderManager global model only
     - agent: a specific agent's configured model only
     """
+    published = ModelPublicationService(
+        PriceCatalogRepository(get_app_engine())
+    ).effective_pairs()
+
+    def visible(slot: ModelSlotConfig | None) -> ModelSlotConfig | None:
+        if slot is None or published is None:
+            return None
+        if slot.provider_id == AUTO_MODEL_PROVIDER_ID:
+            return slot if published else None
+        return slot if (slot.provider_id, slot.model) in published else None
+
     if scope == "global":
         return ActiveModelsInfo(
-            active_llm=manager.get_active_model(),
+            active_llm=visible(manager.get_active_model()),
             active_embedding=manager.get_active_embedding_model(),
         )
 
@@ -913,7 +955,7 @@ async def get_active_models(
                 detail="agent_id is required when scope is 'agent'",
             )
         return ActiveModelsInfo(
-            active_llm=await _load_agent_model(request, agent_id),
+            active_llm=visible(await _load_agent_model(request, agent_id)),
         )
 
     if scope in ("chat", "effective") and chat_id:
@@ -931,9 +973,11 @@ async def get_active_models(
                 and chat_model.get("model")
             ):
                 return ActiveModelsInfo(
-                    active_llm=ModelSlotConfig(
-                        provider_id=chat_model.get("provider_id"),
-                        model=chat_model.get("model"),
+                    active_llm=visible(
+                        ModelSlotConfig(
+                            provider_id=chat_model.get("provider_id"),
+                            model=chat_model.get("model"),
+                        )
                     )
                 )
             elif scope == "chat":
@@ -956,7 +1000,7 @@ async def get_active_models(
                 target_agent_id,
                 agent_model,
             )
-            return ActiveModelsInfo(active_llm=agent_model)
+            return ActiveModelsInfo(active_llm=visible(agent_model))
     except (
         HTTPException,
         OSError,
@@ -972,7 +1016,7 @@ async def get_active_models(
 
     global_model = manager.get_active_model()
     logger.info("Returning global model: %s", global_model)
-    return ActiveModelsInfo(active_llm=global_model)
+    return ActiveModelsInfo(active_llm=visible(global_model))
 
 
 @router.put(
@@ -987,8 +1031,7 @@ async def set_active_model(
 ) -> ActiveModelsInfo:
     """Set active model by scope."""
     is_auto_slot = (
-        body.provider_id == AUTO_MODEL_PROVIDER_ID
-        and body.model == AUTO_MODEL_ID
+        body.provider_id == AUTO_MODEL_PROVIDER_ID and body.model == AUTO_MODEL_ID
     )
     if body.scope == "global":
         if is_auto_slot:
@@ -1024,6 +1067,7 @@ async def set_active_model(
         chat_row = ensure_chat_access(request, body.chat_id)
 
         from ..runner.models import ChatUpdate
+
         await workspace.chat_manager.patch_chat(
             str(chat_row["id"]),
             ChatUpdate(
@@ -1123,9 +1167,9 @@ async def clear_active_model(
         workspace = await get_agent_for_request(request)
         chat_row = ensure_chat_access(request, chat_id)
         from ..runner.models import ChatUpdate
+
         await workspace.chat_manager.patch_chat(
-            str(chat_row["id"]),
-            ChatUpdate(meta={"active_model": None})
+            str(chat_row["id"]), ChatUpdate(meta={"active_model": None})
         )
         return {"status": "success"}
 
@@ -1349,9 +1393,7 @@ async def filter_openrouter_models(
         filtered_models = provider.filter_models(
             models=models,
             providers=body.providers if body.providers else None,
-            input_modalities=(
-                body.input_modalities if body.input_modalities else None
-            ),
+            input_modalities=(body.input_modalities if body.input_modalities else None),
             output_modalities=(
                 body.output_modalities if body.output_modalities else None
             ),

@@ -12,12 +12,31 @@ from unittest.mock import patch
 
 from fastapi import FastAPI
 import httpx
+import pytest
 from httpx import ASGITransport, AsyncClient
 
 from qwenpaw.providers.provider import ModelInfo, ProviderInfo
 from qwenpaw.app.routers import aigc_studio
 from qwenpaw.app.routers.aigc_studio import public_router, router
 from qwenpaw.app.runtime.event_bus import MemoryRuntimeEventBus
+from qwenpaw.app.billing.model_publication import ModelPublicationService
+
+
+class _AllPublished(set):
+    def __bool__(self):
+        return True
+
+    def __contains__(self, _value):
+        return True
+
+
+@pytest.fixture(autouse=True)
+def _publish_fixture_models(monkeypatch):
+    monkeypatch.setattr(
+        ModelPublicationService,
+        "effective_pairs",
+        lambda _self: _AllPublished(),
+    )
 
 
 class FakeProviderManager:
@@ -146,6 +165,7 @@ class FakeTextModel:
     async def __call__(self, messages):
         self.calls.append(messages)
         if self.stream:
+
             async def chunks():
                 yield SimpleNamespace(content=[{"type": "text", "text": self.text}])
 
@@ -389,13 +409,21 @@ class FakeMxapiProviderManager:
                     ModelInfo(
                         id="gpt-image-2",
                         name="GPT Image 2",
-                        aigc_capabilities=["text_to_image", "image_to_image", "image_edit"],
+                        aigc_capabilities=[
+                            "text_to_image",
+                            "image_to_image",
+                            "image_edit",
+                        ],
                     ),
                     ModelInfo(
                         id="nano2",
                         name="Nano Banana2",
                         generate_kwargs={"aigc_adapter": "mxapi_nano2"},
-                        aigc_capabilities=["text_to_image", "image_to_image", "image_edit"],
+                        aigc_capabilities=[
+                            "text_to_image",
+                            "image_to_image",
+                            "image_edit",
+                        ],
                     ),
                     ModelInfo(
                         id="seedance2",
@@ -578,8 +606,7 @@ async def test_capabilities_are_loaded_from_model_registry(tmp_path):
     )
     assert gpt_image["parameter_schema"]["max_reference_images"] == 16
     assert (
-        gpt_image["parameter_schema"]["properties"]["referenceImages"]["maxItems"]
-        == 16
+        gpt_image["parameter_schema"]["properties"]["referenceImages"]["maxItems"] == 16
     )
     assert any(
         item["provider_id"] == "volcengine"
@@ -595,9 +622,7 @@ async def test_capabilities_are_loaded_from_model_registry(tmp_path):
         and item["model_id"] == "seedance-pro"
         and item["capability"] == "text_to_video"
     )
-    duration_schema = seedance_video["parameter_schema"]["properties"][
-        "duration"
-    ]
+    duration_schema = seedance_video["parameter_schema"]["properties"]["duration"]
     assert duration_schema["minimum"] == 4
     assert duration_schema["maximum"] == 15
     assert duration_schema["default"] == 5
@@ -618,8 +643,7 @@ async def test_capabilities_are_loaded_from_model_registry(tmp_path):
     storyboard_models = {
         item["model_id"]
         for item in capabilities
-        if item["provider_id"] == "volcengine"
-        and item["capability"] == "storyboard"
+        if item["provider_id"] == "volcengine" and item["capability"] == "storyboard"
     }
     assert {"glm-5-chat", "deepseek-chat"}.issubset(
         storyboard_models,
@@ -629,8 +653,7 @@ async def test_capabilities_are_loaded_from_model_registry(tmp_path):
     assert "kimi-k2" not in storyboard_models
     assert "doubao-seedream-3-0-t2i" not in storyboard_models
     assert not any(
-        item["provider_id"] == "opencode"
-        and item["model_id"] == "big-pickle"
+        item["provider_id"] == "opencode" and item["model_id"] == "big-pickle"
         for item in capabilities
     )
     assert not any(
@@ -638,6 +661,23 @@ async def test_capabilities_are_loaded_from_model_registry(tmp_path):
         and item["model_id"] == "Qwen/Qwen3.5-122B-A10B"
         for item in capabilities
     )
+
+
+async def test_capabilities_fail_closed_without_effective_catalog(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        ModelPublicationService,
+        "effective_pairs",
+        lambda _self: None,
+    )
+    app = make_app(tmp_path)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/aigc-studio/capabilities")
+
+    assert response.status_code == 200
+    assert response.json() == {"capabilities": []}
 
 
 async def test_visual_dna_catalog_search_and_compile_endpoints(tmp_path):
@@ -853,9 +893,10 @@ async def test_default_style_templates_include_brand_strength_poster_prompt(tmp_
     assert template["prompt_template"] != template["description"]
     assert "【视觉风格】" not in template["prompt_template"]
     assert template["visual_dna"] == []
-    assert "不要复刻原图构图、字体、光线、产品角度、文字内容或具体排版。" not in template[
-        "prompt_template"
-    ]
+    assert (
+        "不要复刻原图构图、字体、光线、产品角度、文字内容或具体排版。"
+        not in template["prompt_template"]
+    )
 
 
 async def test_aesthetic_profile_and_creation_templates_are_queryable_separately(
@@ -949,46 +990,56 @@ async def test_default_style_templates_include_poster_scene_suite(tmp_path):
         "style-social-seeding-poster": "朋友圈种草海报",
         "style-store-display-poster": "门店陈列海报",
     }
-    assert {template_id: by_id[template_id]["title"] for template_id in expected} == expected
-    assert all(by_id[template_id]["runtime_mode"] == "prompt_style" for template_id in expected)
+    assert {
+        template_id: by_id[template_id]["title"] for template_id in expected
+    } == expected
+    assert all(
+        by_id[template_id]["runtime_mode"] == "prompt_style" for template_id in expected
+    )
     assert all(by_id[template_id]["type"] == "play" for template_id in expected)
     assert all(by_id[template_id]["prompt_template"] for template_id in expected)
-    assert "品牌名称：{品牌名称}" in by_id["style-product-selling-points-poster"][
-        "prompt_template"
-    ]
-    assert "产品名称：{产品名称}" in by_id["style-store-display-poster"][
-        "prompt_template"
-    ]
-    assert "【画面结构】" not in by_id["style-product-selling-points-poster"][
-        "prompt_template"
-    ]
-    assert by_id["style-product-selling-points-poster"]["prompt_template"] != by_id[
-        "style-product-selling-points-poster"
-    ]["description"]
+    assert (
+        "品牌名称：{品牌名称}"
+        in by_id["style-product-selling-points-poster"]["prompt_template"]
+    )
+    assert (
+        "产品名称：{产品名称}" in by_id["style-store-display-poster"]["prompt_template"]
+    )
+    assert (
+        "【画面结构】"
+        not in by_id["style-product-selling-points-poster"]["prompt_template"]
+    )
+    assert (
+        by_id["style-product-selling-points-poster"]["prompt_template"]
+        != by_id["style-product-selling-points-poster"]["description"]
+    )
     assert all("【画面结构】" not in item["description"] for item in templates)
     assert all("【文字要求】" not in item["description"] for item in templates)
     assert all("【画面内容】" in item["prompt_template"] for item in templates)
     assert all("【文字内容】" in item["prompt_template"] for item in templates)
-    assert "突出产品核心利益点" in by_id["style-product-selling-points-poster"][
-        "description"
-    ]
-    assert "原料产地、采摘、筛选" in by_id["style-source-ingredient-poster"][
-        "description"
-    ]
+    assert (
+        "突出产品核心利益点"
+        in by_id["style-product-selling-points-poster"]["description"]
+    )
+    assert (
+        "原料产地、采摘、筛选" in by_id["style-source-ingredient-poster"]["description"]
+    )
     assert "步骤编号或流程线" in by_id["style-process-flow-poster"]["description"]
-    assert "渠道政策、供货能力" in by_id["style-channel-recruitment-poster"][
-        "description"
-    ]
-    assert "新品发布会、首发上市" in by_id["style-new-product-launch-poster"][
-        "description"
-    ]
-    assert "节日氛围、限时活动" in by_id["style-festival-promotion-poster"][
-        "description"
-    ]
+    assert (
+        "渠道政策、供货能力" in by_id["style-channel-recruitment-poster"]["description"]
+    )
+    assert (
+        "新品发布会、首发上市"
+        in by_id["style-new-product-launch-poster"]["description"]
+    )
+    assert (
+        "节日氛围、限时活动" in by_id["style-festival-promotion-poster"]["description"]
+    )
     assert "真实生活方式场景" in by_id["style-social-seeding-poster"]["description"]
-    assert "门店货架、收银台、陈列端架" in by_id["style-store-display-poster"][
-        "description"
-    ]
+    assert (
+        "门店货架、收银台、陈列端架"
+        in by_id["style-store-display-poster"]["description"]
+    )
 
 
 async def test_default_style_templates_refresh_existing_builtin_metadata(tmp_path):
@@ -1251,8 +1302,11 @@ async def test_admin_delete_builtin_style_template_disables_it(tmp_path):
             )
 
         disabled_payload = json.loads(
-            (tmp_path / "style_templates" / "style-product-selling-points-poster.json")
-            .read_text("utf-8")
+            (
+                tmp_path
+                / "style_templates"
+                / "style-product-selling-points-poster.json"
+            ).read_text("utf-8")
         )
 
     assert deleted.status_code == 204
@@ -1289,11 +1343,18 @@ async def test_canvas_crud_persists_nodes_edges_and_viewport(tmp_path):
             fetched = await client.get(f"/api/aigc-studio/canvases/{canvas_id}")
             assert fetched.status_code == 200
             assert fetched.json()["name"] == "Launch film board"
-            assert fetched.json()["nodes"][0]["data"]["text"] == payload["nodes"][0]["data"]["text"]
+            assert (
+                fetched.json()["nodes"][0]["data"]["text"]
+                == payload["nodes"][0]["data"]["text"]
+            )
 
             updated = await client.put(
                 f"/api/aigc-studio/canvases/{canvas_id}",
-                json={**payload, "name": "Updated board", "edges": [{"id": "e1", "source": "prompt-1", "target": "image-1"}]},
+                json={
+                    **payload,
+                    "name": "Updated board",
+                    "edges": [{"id": "e1", "source": "prompt-1", "target": "image-1"}],
+                },
             )
             assert updated.status_code == 200
             assert updated.json()["name"] == "Updated board"
@@ -1381,15 +1442,15 @@ async def test_aigc_canvas_job_and_asset_routes_are_user_isolated(tmp_path):
                     headers=user_2,
                 )
             ).status_code == 404
-            assert (
-                await client.get("/api/aigc-studio/jobs", headers=user_2)
-            ).json()["jobs"] == []
+            assert (await client.get("/api/aigc-studio/jobs", headers=user_2)).json()[
+                "jobs"
+            ] == []
             assert (
                 await client.get(f"/api/aigc-studio/jobs/{job_id}", headers=user_2)
             ).status_code == 404
-            assert (
-                await client.get("/api/aigc-studio/assets", headers=user_2)
-            ).json()["assets"] == []
+            assert (await client.get("/api/aigc-studio/assets", headers=user_2)).json()[
+                "assets"
+            ] == []
             assert (
                 await client.get(
                     f"/api/aigc-studio/assets/{asset_id}/file",
@@ -1570,7 +1631,9 @@ async def test_aigc_job_status_changes_publish_runtime_events(tmp_path, monkeypa
     app = make_app(tmp_path)
     transport = ASGITransport(app=app)
     bus = MemoryRuntimeEventBus(max_events=20, max_age_seconds=60)
-    monkeypatch.setattr(aigc_studio, "get_runtime_event_bus", lambda: bus, raising=False)
+    monkeypatch.setattr(
+        aigc_studio, "get_runtime_event_bus", lambda: bus, raising=False
+    )
     canvas_payload = {
         "name": "Launch film board",
         "nodes": [
@@ -1821,9 +1884,13 @@ async def test_delete_canvas_removes_canvas_jobs_but_keeps_assets(tmp_path):
             )
             assert deleted.status_code == 204
 
-            assert (await client.get(f"/api/aigc-studio/canvases/{canvas.json()['id']}")).status_code == 404
+            assert (
+                await client.get(f"/api/aigc-studio/canvases/{canvas.json()['id']}")
+            ).status_code == 404
             assert (await client.get("/api/aigc-studio/jobs")).json()["jobs"] == []
-            assert len((await client.get("/api/aigc-studio/assets")).json()["assets"]) == 1
+            assert (
+                len((await client.get("/api/aigc-studio/assets")).json()["assets"]) == 1
+            )
 
 
 async def test_run_job_creates_workspace_artifact_and_asset(tmp_path):
@@ -2169,9 +2236,7 @@ async def test_run_storyboard_script_job_instructs_json_shot_output(tmp_path):
                             "id": "script-1",
                             "type": "script_generate",
                             "position": {"x": 120, "y": 80},
-                            "data": {
-                                "scriptPrompt": "把瓦房院子的童年记忆拆成分镜"
-                            },
+                            "data": {"scriptPrompt": "把瓦房院子的童年记忆拆成分镜"},
                         }
                     ],
                     "edges": [],
@@ -2186,9 +2251,7 @@ async def test_run_storyboard_script_job_instructs_json_shot_output(tmp_path):
                     "capability": "storyboard",
                     "provider_id": "text-provider",
                     "model_id": "gvlm-3-1",
-                    "inputs": {
-                        "prompt": "小时候我住在瓦房的大院里，院子里有梧桐树"
-                    },
+                    "inputs": {"prompt": "小时候我住在瓦房的大院里，院子里有梧桐树"},
                     "parameters": {
                         "textMode": "storyboard_script",
                         "outputFormat": "storyboard_shots_json",
@@ -2613,7 +2676,9 @@ async def test_upload_asset_url_uses_public_base_url_for_https_deploy(
     transport = ASGITransport(app=app)
 
     with patch("qwenpaw.app.routers.aigc_studio.STUDIO_ROOT", tmp_path / "studio"):
-        async with AsyncClient(transport=transport, base_url="http://internal") as client:
+        async with AsyncClient(
+            transport=transport, base_url="http://internal"
+        ) as client:
             uploaded = await client.post(
                 "/api/aigc-studio/assets/upload",
                 files={"file": ("reference.png", b"reference-bytes", "image/png")},
@@ -2621,9 +2686,7 @@ async def test_upload_asset_url_uses_public_base_url_for_https_deploy(
 
     assert uploaded.status_code == 201
     asset = uploaded.json()
-    assert asset["url"].startswith(
-        "https://dclaw.deepmega.cn/api/aigc-studio/assets/"
-    )
+    assert asset["url"].startswith("https://dclaw.deepmega.cn/api/aigc-studio/assets/")
     assert asset["url"].endswith("/file")
     assert "http://internal" not in asset["url"]
 
@@ -2799,7 +2862,10 @@ async def test_run_unconfigured_aigc_model_fails_without_stub_artifact(tmp_path)
     assert ran.status_code == 200
     job = ran.json()
     assert job["status"] == "failed"
-    assert "No AIGC adapter is configured for volcengine/custom-image-model" in job["error"]
+    assert (
+        "No AIGC adapter is configured for volcengine/custom-image-model"
+        in job["error"]
+    )
     assert job["outputs"] == []
     assert list((tmp_path / "workspace").glob("aigc_studio/**/*.svg")) == []
 
@@ -2815,7 +2881,9 @@ async def test_run_volcengine_seedream_job_saves_url_image(tmp_path, monkeypatch
     class FakeImages:
         async def generate(self, **kwargs):
             calls.update(kwargs)
-            return SimpleNamespace(data=[{"url": "https://cdn.example.test/seedream.png"}])
+            return SimpleNamespace(
+                data=[{"url": "https://cdn.example.test/seedream.png"}]
+            )
 
     class FakeOpenAIClient:
         images = FakeImages()
@@ -2829,7 +2897,9 @@ async def test_run_volcengine_seedream_job_saves_url_image(tmp_path, monkeypatch
         return b"seedream-png-bytes", "image/png"
 
     monkeypatch.setattr(aigc_studio, "_openai_client", fake_openai_client)
-    monkeypatch.setattr(aigc_studio, "_download_remote_asset", fake_download, raising=False)
+    monkeypatch.setattr(
+        aigc_studio, "_download_remote_asset", fake_download, raising=False
+    )
 
     with patch("qwenpaw.app.routers.aigc_studio.STUDIO_ROOT", tmp_path / "studio"):
         async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -2893,10 +2963,7 @@ async def test_run_volcengine_seedream_job_saves_url_image(tmp_path, monkeypatch
     assert downloads == ["https://cdn.example.test/seedream.png"]
     assert job["outputs"][0]["meta"]["adapter"] == "volcengine_seedream"
     assert job["outputs"][0]["meta"]["parameters"]["aspectRatio"] == "16:9"
-    assert (
-        updated_canvas.json()["nodes"][0]["data"]["generatedAspectRatio"]
-        == "16:9"
-    )
+    assert updated_canvas.json()["nodes"][0]["data"]["generatedAspectRatio"] == "16:9"
     artifact = tmp_path / "workspace" / job["outputs"][0]["path"]
     assert artifact.suffix == ".png"
     assert artifact.read_bytes() == b"seedream-png-bytes"
@@ -3022,8 +3089,7 @@ async def test_run_mxapi_gpt_image_job_polls_and_saves_url_image(
         for item in requests
     )
     assert any(
-        item["type"] == "get"
-        and item["url"] == "https://cdn.example.test/mxapi.png"
+        item["type"] == "get" and item["url"] == "https://cdn.example.test/mxapi.png"
         for item in requests
     )
     artifact = tmp_path / "workspace" / job["outputs"][0]["path"]
@@ -3641,8 +3707,7 @@ async def test_run_mxapi_seedance_text_to_video_job_polls_and_saves_video(
         for item in requests
     )
     assert any(
-        item["type"] == "get"
-        and item["url"] == "https://cdn.example.test/seedance.mp4"
+        item["type"] == "get" and item["url"] == "https://cdn.example.test/seedance.mp4"
         for item in requests
     )
     artifact = tmp_path / "workspace" / job["outputs"][0]["path"]
@@ -3652,7 +3717,10 @@ async def test_run_mxapi_seedance_text_to_video_job_polls_and_saves_video(
     assert job["outputs"][0]["mime_type"] == "video/mp4"
     assert job["outputs"][0]["meta"]["adapter"] == "mxapi_seedance2"
     assert job["outputs"][0]["meta"]["seedance_task_id"] == "seedance-task"
-    assert job["outputs"][0]["meta"]["source_url"] == "https://cdn.example.test/seedance.mp4"
+    assert (
+        job["outputs"][0]["meta"]["source_url"]
+        == "https://cdn.example.test/seedance.mp4"
+    )
 
 
 async def test_run_mxapi_seedance_first_last_frames_maps_reference_roles(
@@ -4251,7 +4319,9 @@ def test_external_asset_reference_url_uses_long_ttl_signed_oss_without_public_ba
     signed_gets: list[tuple[str, int | None]] = []
 
     class FakeObjectStorageClient:
-        def signed_get_url(self, object_key: str, ttl_seconds: int | None = None) -> str:
+        def signed_get_url(
+            self, object_key: str, ttl_seconds: int | None = None
+        ) -> str:
             signed_gets.append((object_key, ttl_seconds))
             return f"https://oss.example.test/{object_key}?Expires={ttl_seconds}"
 
@@ -4351,9 +4421,10 @@ async def test_run_mxapi_gpt_image_surfaces_submit_error_body(
 
     assert ran.status_code == 200
     assert ran.json()["status"] == "failed"
-    assert "MXAPI task submission failed: 参考图片无法访问或格式不支持" in ran.json()[
-        "error"
-    ]
+    assert (
+        "MXAPI task submission failed: 参考图片无法访问或格式不支持"
+        in ran.json()["error"]
+    )
 
 
 async def test_run_mxapi_gpt_image_job_applies_selected_style_to_prompt(
@@ -4630,7 +4701,9 @@ async def test_seedream_prompt_style_template_is_applied_to_prompt(
     class FakeImages:
         async def generate(self, **kwargs):
             calls.update(kwargs)
-            return SimpleNamespace(data=[{"url": "https://cdn.example.test/styled.png"}])
+            return SimpleNamespace(
+                data=[{"url": "https://cdn.example.test/styled.png"}]
+            )
 
     class FakeOpenAIClient:
         images = FakeImages()
@@ -4710,7 +4783,9 @@ async def test_seedream_reference_image_prompt_protects_subject_from_style_overr
     class FakeImages:
         async def generate(self, **kwargs):
             calls.update(kwargs)
-            return SimpleNamespace(data=[{"url": "https://cdn.example.test/result.png"}])
+            return SimpleNamespace(
+                data=[{"url": "https://cdn.example.test/result.png"}]
+            )
 
     class FakeOpenAIClient:
         images = FakeImages()
@@ -4723,7 +4798,9 @@ async def test_seedream_reference_image_prompt_protects_subject_from_style_overr
         "_openai_client",
         lambda api_key, base_url=None: FakeOpenAIClient(),
     )
-    monkeypatch.setattr(aigc_studio, "_download_remote_asset", fake_download, raising=False)
+    monkeypatch.setattr(
+        aigc_studio, "_download_remote_asset", fake_download, raising=False
+    )
 
     with patch("qwenpaw.app.routers.aigc_studio.STUDIO_ROOT", tmp_path / "studio"):
         async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -4868,7 +4945,9 @@ async def test_seedream_libtv_style_annotation_runs_as_prompt_guided_edit(
     class FakeImages:
         async def generate(self, **kwargs):
             calls.update(kwargs)
-            return SimpleNamespace(data=[{"url": "https://cdn.example.test/result.png"}])
+            return SimpleNamespace(
+                data=[{"url": "https://cdn.example.test/result.png"}]
+            )
 
     class FakeOpenAIClient:
         images = FakeImages()
@@ -4881,7 +4960,9 @@ async def test_seedream_libtv_style_annotation_runs_as_prompt_guided_edit(
         "_openai_client",
         lambda api_key, base_url=None: FakeOpenAIClient(),
     )
-    monkeypatch.setattr(aigc_studio, "_download_remote_asset", fake_download, raising=False)
+    monkeypatch.setattr(
+        aigc_studio, "_download_remote_asset", fake_download, raising=False
+    )
 
     with patch("qwenpaw.app.routers.aigc_studio.STUDIO_ROOT", tmp_path / "studio"):
         async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -5119,8 +5200,7 @@ async def test_run_seedream_group_job_uses_streaming_sequential_request(
     assert calls == {
         "model": "doubao-seedream-4-5-251128",
         "prompt": (
-            "生成一组共4张连贯插画\n\n"
-            "务必一次生成 4 张图片结果（不是 1 张）。"
+            "生成一组共4张连贯插画\n\n" "务必一次生成 4 张图片结果（不是 1 张）。"
         ),
         "size": "2K",
         "response_format": "b64_json",
@@ -5135,8 +5215,12 @@ async def test_run_seedream_group_job_uses_streaming_sequential_request(
         f"image-1-{job['id']}.1.png",
         f"image-1-{job['id']}.2.png",
     ]
-    assert (tmp_path / "workspace" / job["outputs"][0]["path"]).read_bytes() == b"first-png"
-    assert (tmp_path / "workspace" / job["outputs"][1]["path"]).read_bytes() == b"second-png"
+    assert (
+        tmp_path / "workspace" / job["outputs"][0]["path"]
+    ).read_bytes() == b"first-png"
+    assert (
+        tmp_path / "workspace" / job["outputs"][1]["path"]
+    ).read_bytes() == b"second-png"
 
 
 async def test_run_seedream_reference_job_embeds_uploaded_asset_as_image(
@@ -5152,7 +5236,9 @@ async def test_run_seedream_reference_job_embeds_uploaded_asset_as_image(
     class FakeImages:
         async def generate(self, **kwargs):
             calls.update(kwargs)
-            return SimpleNamespace(data=[{"url": "https://cdn.example.test/result.png"}])
+            return SimpleNamespace(
+                data=[{"url": "https://cdn.example.test/result.png"}]
+            )
 
     class FakeOpenAIClient:
         images = FakeImages()
@@ -5166,7 +5252,9 @@ async def test_run_seedream_reference_job_embeds_uploaded_asset_as_image(
         "_openai_client",
         lambda api_key, base_url=None: FakeOpenAIClient(),
     )
-    monkeypatch.setattr(aigc_studio, "_download_remote_asset", fake_download, raising=False)
+    monkeypatch.setattr(
+        aigc_studio, "_download_remote_asset", fake_download, raising=False
+    )
 
     with patch("qwenpaw.app.routers.aigc_studio.STUDIO_ROOT", tmp_path / "studio"):
         async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -5253,7 +5341,9 @@ def test_seedream_size_uses_documented_recommended_ratios():
         )
         == "1344x3136"
     )
-    assert aigc_studio._seedream_size_from_image_parameters({"resolution": "2K"}) == "2K"
+    assert (
+        aigc_studio._seedream_size_from_image_parameters({"resolution": "2K"}) == "2K"
+    )
 
 
 async def test_run_openai_image_job_saves_base64_png(tmp_path, monkeypatch):

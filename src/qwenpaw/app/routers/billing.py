@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Authenticated user and trusted-admin credit accounting APIs."""
+
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -66,7 +67,6 @@ from ..storage.repos.top_up_repo import (
     TopUpIdempotencyConflict,
     TopUpRepository,
 )
-
 
 user_router = APIRouter(prefix="/billing", tags=["billing"])
 admin_router = APIRouter(prefix="/billing", tags=["admin-billing"])
@@ -172,18 +172,14 @@ class PricingModelDecisionItem(BaseModel):
 
 class PricingModelDecisionsBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    decisions: list[PricingModelDecisionItem] = Field(
-        min_length=1, max_length=1000
-    )
+    decisions: list[PricingModelDecisionItem] = Field(min_length=1, max_length=1000)
 
 
 class PricingBatchDecisionBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     include_in_publish: bool
     provider_ids: list[str] = Field(default_factory=list, max_length=1000)
-    evidence_levels: list[str] = Field(
-        default_factory=list, max_length=10
-    )
+    evidence_levels: list[str] = Field(default_factory=list, max_length=10)
     model_keys: list[str] = Field(default_factory=list, max_length=1000)
     reason: str | None = Field(default=None, max_length=2000)
 
@@ -381,9 +377,7 @@ def _ledger_page(
         items = repository.list_ledger(wallet_id, limit, cursor)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    serialized = (
-        items if include_internal else [_user_ledger_row(row) for row in items]
-    )
+    serialized = items if include_internal else [_user_ledger_row(row) for row in items]
     return {
         "items": serialized,
         "next_cursor": items[-1]["id"] if len(items) == limit else None,
@@ -554,8 +548,7 @@ def list_user_usage_orders(
     ended_at: datetime | None = None,
     model: str | None = Query(default=None, min_length=1, max_length=255),
     provider: str | None = Query(default=None, min_length=1, max_length=255),
-    publication_id: str
-    | None = Query(default=None, min_length=1, max_length=255),
+    publication_id: str | None = Query(default=None, min_length=1, max_length=255),
     app_id: str | None = Query(default=None, min_length=1, max_length=255),
     status: str | None = Query(default=None, min_length=1, max_length=64),
     source: str | None = Query(default=None, min_length=1, max_length=64),
@@ -635,8 +628,7 @@ def pricing_overview() -> dict[str, Any]:
 @admin_router.get("/pricing/models")
 def pricing_models() -> list[dict[str, Any]]:
     return [
-        row.__dict__
-        for row in get_pricing_admin_service().inventory.list_enabled()
+        row.__dict__ for row in get_pricing_admin_service().inventory.list_enabled()
     ]
 
 
@@ -669,8 +661,9 @@ def export_pricing() -> Response:
 
 @admin_router.post("/pricing/drafts")
 def generate_pricing_draft(
-    actor_id: str = Depends(require_pricing_unlock),
+    request: Request,
 ) -> dict[str, Any]:
+    actor_id = _authenticated_owner(request)
     generated = get_pricing_admin_service().generate_draft(actor_id)
     return {key: value for key, value in generated.items() if key != "result"}
 
@@ -694,9 +687,7 @@ def export_pricing_draft(draft_key: str) -> Response:
     )
 
 
-@admin_router.put(
-    "/pricing/drafts/{draft_key}/exclusions/{provider_id}/{model_key}"
-)
+@admin_router.put("/pricing/drafts/{draft_key}/exclusions/{provider_id}/{model_key}")
 def set_pricing_draft_exclusion(
     draft_key: str,
     provider_id: str,
@@ -774,9 +765,7 @@ def refresh_pricing_candidates(
 
 @admin_router.post("/pricing/collection-jobs", status_code=202)
 def start_pricing_collection(request: Request) -> dict[str, Any]:
-    return get_pricing_collection_runtime().enqueue(
-        _authenticated_owner(request)
-    )
+    return get_pricing_collection_runtime().enqueue(_authenticated_owner(request))
 
 
 @admin_router.get("/pricing/collection-jobs")
@@ -788,9 +777,7 @@ def list_pricing_collection_jobs() -> list[dict[str, Any]]:
 def get_pricing_collection_job(job_id: str) -> dict[str, Any]:
     job = get_pricing_collection_runtime().get(job_id)
     if job is None:
-        raise HTTPException(
-            status_code=404, detail="Pricing collection job not found"
-        )
+        raise HTTPException(status_code=404, detail="Pricing collection job not found")
     return job
 
 
@@ -962,12 +949,10 @@ def list_admin_usage_orders(
     ended_at: datetime | None = None,
     model: str | None = Query(default=None, min_length=1, max_length=255),
     provider: str | None = Query(default=None, min_length=1, max_length=255),
-    publication_id: str
-    | None = Query(default=None, min_length=1, max_length=255),
+    publication_id: str | None = Query(default=None, min_length=1, max_length=255),
     app_id: str | None = Query(default=None, min_length=1, max_length=255),
     api_key_id: str | None = Query(default=None, min_length=1, max_length=255),
-    owner_user_id: str
-    | None = Query(default=None, min_length=1, max_length=255),
+    owner_user_id: str | None = Query(default=None, min_length=1, max_length=255),
     status: str | None = Query(default=None, min_length=1, max_length=64),
     source: str | None = Query(default=None, min_length=1, max_length=64),
 ) -> dict[str, Any]:
@@ -1009,12 +994,10 @@ def list_admin_reconciliation(
     ended_at: datetime | None = None,
     model: str | None = Query(default=None, min_length=1, max_length=255),
     provider: str | None = Query(default=None, min_length=1, max_length=255),
-    publication_id: str
-    | None = Query(default=None, min_length=1, max_length=255),
+    publication_id: str | None = Query(default=None, min_length=1, max_length=255),
     app_id: str | None = Query(default=None, min_length=1, max_length=255),
     api_key_id: str | None = Query(default=None, min_length=1, max_length=255),
-    owner_user_id: str
-    | None = Query(default=None, min_length=1, max_length=255),
+    owner_user_id: str | None = Query(default=None, min_length=1, max_length=255),
 ) -> dict[str, Any]:
     filters = _report_filters(
         started_at=started_at,
@@ -1081,12 +1064,10 @@ def resolve_admin_reconciliation(
 @admin_router.get("/reconciliation-audits")
 def list_admin_reconciliation_audits(
     actor_id: str | None = Query(default=None, min_length=1, max_length=255),
-    reconciliation_id: str
-    | None = Query(default=None, min_length=1, max_length=255),
+    reconciliation_id: str | None = Query(default=None, min_length=1, max_length=255),
     order_id: str | None = Query(default=None, min_length=1, max_length=255),
     outcome: str | None = Query(default=None, min_length=1, max_length=64),
-    idempotency_key: str
-    | None = Query(default=None, min_length=1, max_length=255),
+    idempotency_key: str | None = Query(default=None, min_length=1, max_length=255),
     started_at: datetime | None = None,
     ended_at: datetime | None = None,
     limit: int = Query(default=50, ge=1, le=100),

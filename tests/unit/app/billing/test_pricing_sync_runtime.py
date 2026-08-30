@@ -20,6 +20,7 @@ from qwenpaw.app.billing.pricing_sync_runtime import (
     ActiveModelPricingExtractor,
     AutoProtectionPublisher,
     PricingCollectionRuntime,
+    _fetch_official_pricing_page,
     pricing_collection_loop,
 )
 from qwenpaw.app.storage.engine import create_engine_from_settings
@@ -27,6 +28,16 @@ from qwenpaw.app.storage.repos.price_catalog_repo import PriceCatalogRepository
 from qwenpaw.app.storage.repos.pricing_admin_repo import PricingAdminRepository
 from qwenpaw.app.storage.schema import create_all
 from qwenpaw.app.storage.settings import get_storage_settings
+
+
+def test_official_page_fetch_rejects_private_dns_before_network(monkeypatch):
+    monkeypatch.setattr(
+        "qwenpaw.app.billing.pricing_sync_runtime.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [(2, 1, 6, "", ("127.0.0.1", 443))],
+    )
+
+    with pytest.raises(ValueError, match="private address"):
+        _fetch_official_pricing_page("https://help.aliyun.com/pricing")
 
 
 def test_auto_protection_records_candidate_without_publishing_catalog(
@@ -158,9 +169,7 @@ def test_auto_protection_never_changes_any_model_in_same_sync_batch(tmp_path):
 def test_durable_collection_job_records_partial_progress(tmp_path):
     now = datetime(2026, 8, 30, tzinfo=timezone.utc)
     engine = create_engine_from_settings(
-        get_storage_settings(
-            {"QWENPAW_SQLITE_PATH": str(tmp_path / "collection.db")}
-        )
+        get_storage_settings({"QWENPAW_SQLITE_PATH": str(tmp_path / "collection.db")})
     )
     create_all(engine)
     repository = PricingAdminRepository(engine)
@@ -191,11 +200,7 @@ def test_durable_collection_job_records_partial_progress(tmp_path):
 
     class Pipeline:
         def collect(self, model):
-            level = (
-                "official_verified"
-                if model.model_key == "official"
-                else "failed"
-            )
+            level = "official_verified" if model.model_key == "official" else "failed"
             candidates = (
                 (
                     CollectedPriceCandidate(
@@ -240,6 +245,8 @@ def test_durable_collection_job_records_partial_progress(tmp_path):
 
     queued = runtime.enqueue("admin-1")
     assert queued["status"] == "pending"
+    assert queued["progress"]["total"] == 2
+    assert queued["progress"]["pending"] == 2
 
     status = asyncio.run(runtime.run_pending_once("worker-1"))
     completed = repository.get_collection_job(queued["id"])
@@ -249,6 +256,8 @@ def test_durable_collection_job_records_partial_progress(tmp_path):
     assert completed["progress"] == {
         "total": 2,
         "completed": 2,
+        "pending": 0,
+        "running": 0,
         "official": 1,
         "ai": 0,
         "manual": 0,
@@ -260,14 +269,10 @@ def test_durable_collection_job_records_partial_progress(tmp_path):
     engine.dispose()
 
 
-def test_collection_loop_processes_pending_job_before_sleep(
-    tmp_path, monkeypatch
-):
+def test_collection_loop_processes_pending_job_before_sleep(tmp_path, monkeypatch):
     now = datetime(2026, 8, 30, tzinfo=timezone.utc)
     engine = create_engine_from_settings(
-        get_storage_settings(
-            {"QWENPAW_SQLITE_PATH": str(tmp_path / "loop.db")}
-        )
+        get_storage_settings({"QWENPAW_SQLITE_PATH": str(tmp_path / "loop.db")})
     )
     create_all(engine)
     repository = PricingAdminRepository(engine)
@@ -358,9 +363,12 @@ def test_durable_collection_job_isolates_one_model_pipeline_failure(tmp_path):
         "broken",
         "healthy",
     }
-    assert next(
-        item for item in detail["items"] if item["model_key"] == "broken"
-    )["status"] == "failed"
+    assert (
+        next(item for item in detail["items"] if item["model_key"] == "broken")[
+            "status"
+        ]
+        == "failed"
+    )
     engine.dispose()
 
 

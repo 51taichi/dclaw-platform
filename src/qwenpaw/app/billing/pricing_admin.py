@@ -342,7 +342,7 @@ class PricingAdminService:
         for row in imported_rows or []:
             if (
                 row.get("verification_status")
-                in {"verified", "manual_pending"}
+                in {"verified", "manual_pending", "candidate"}
                 and row.get("excluded") is not True
             ):
                 amount = Decimal(row["rmb_cost_decimal"])
@@ -535,6 +535,10 @@ class PricingAdminService:
             self.repository.latest_trusted_costs(),
             self.repository.list_model_mappings(),
             (),
+            self.repository.latest_official_candidates(),
+            self.repository.list_model_publication_decisions(
+                self._draft_key(tuple(models))
+            ),
         )
         allowed = {
             (
@@ -560,6 +564,9 @@ class PricingAdminService:
                 "rmb_cost_decimal": (
                     str(row.rmb_cost) if row.rmb_cost is not None else None
                 ),
+                "evidence_level": row.evidence_level,
+                "candidate_digest": row.candidate_digest or "",
+                "approval_reason": row.approval_reason or "",
             }
             for row in current.rows
         }
@@ -613,6 +620,9 @@ class PricingAdminService:
                     "source_type",
                     "source_url",
                     "verification_status",
+                    "evidence_level",
+                    "candidate_digest",
+                    "approval_reason",
                 ):
                     if str(row.get(field) or "") != canonical[field]:
                         raise ValueError(
@@ -672,7 +682,7 @@ class PricingAdminService:
             for row in imported_rows
             if row.get("excluded") is not True
             and row.get("verification_status")
-            in {"verified", "manual_pending"}
+            in {"verified", "manual_pending", "candidate"}
         ]
         groups: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
         for row in included:

@@ -693,7 +693,9 @@ DEFAULT_STYLE_TEMPLATES: list[dict[str, Any]] = [
         for template in POSTER_SCENE_STYLE_TEMPLATES
     ],
 ]
-DEFAULT_STYLE_TEMPLATE_IDS = {str(template["id"]) for template in DEFAULT_STYLE_TEMPLATES}
+DEFAULT_STYLE_TEMPLATE_IDS = {
+    str(template["id"]) for template in DEFAULT_STYLE_TEMPLATES
+}
 REFERENCE_IMAGE_PRESERVATION_PROMPT = (
     "参考图使用规则：已上传或连接的参考图优先作为主体、产品或构图参考。"
     "生成时必须保留参考图主体的外形、主色、比例和主要识别元素；"
@@ -742,9 +744,13 @@ def _read_json(path: Path) -> dict[str, Any]:
         _JSON_CACHE[cache_key] = (stat.st_mtime_ns, payload)
         return dict(payload)
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="AIGC Studio resource not found") from exc
+        raise HTTPException(
+            status_code=404, detail="AIGC Studio resource not found"
+        ) from exc
     except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=500, detail=f"Corrupt Studio file: {path.name}") from exc
+        raise HTTPException(
+            status_code=500, detail=f"Corrupt Studio file: {path.name}"
+        ) from exc
 
 
 def _write_json(path: Path, payload: BaseModel | dict[str, Any]) -> None:
@@ -1085,10 +1091,12 @@ async def _validate_job_submission(request: Request, body: AigcJobCreate) -> Non
                 "Requested capability is not available for provider "
                 f"'{body.provider_id}' model '{body.model_id}'."
             ),
-    )
+        )
 
 
-def _create_queued_job(body: AigcJobCreate, extra_logs: list[str] | None = None) -> AigcJob:
+def _create_queued_job(
+    body: AigcJobCreate, extra_logs: list[str] | None = None
+) -> AigcJob:
     now = _now()
     logs = [
         "Job queued. AIGC adapter execution is handled asynchronously by configured providers.",
@@ -1156,7 +1164,9 @@ async def _artifact_root_for_request(request: Request) -> Path:
         return fallback
 
 
-def _asset_kind_for_capability(capability: str) -> Literal["image", "video", "audio", "file"]:
+def _asset_kind_for_capability(
+    capability: str,
+) -> Literal["image", "video", "audio", "file"]:
     if "image" in capability:
         return "image"
     if "video" in capability:
@@ -1330,7 +1340,9 @@ async def _cloud_asset_file_response(asset: AigcAsset) -> Response | None:
         )
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 404:
-            raise HTTPException(status_code=404, detail="Asset file not found.") from exc
+            raise HTTPException(
+                status_code=404, detail="Asset file not found."
+            ) from exc
         raise HTTPException(
             status_code=502,
             detail="Asset file could not be downloaded.",
@@ -1357,7 +1369,9 @@ async def _asset_file_path_for_request(request: Request, asset: AigcAsset) -> Pa
 
     allowed_roots = [artifact_root.resolve(), asset_files_root]
     if not any(_path_is_relative_to(target, root) for root in allowed_roots):
-        raise HTTPException(status_code=403, detail="Asset file is outside allowed roots.")
+        raise HTTPException(
+            status_code=403, detail="Asset file is outside allowed roots."
+        )
     return target
 
 
@@ -1661,12 +1675,16 @@ async def _render_long_image(
     draw = ImageDraw.Draw(measure)
     blocks: list[dict[str, Any]] = []
     y = padding
-    header_lines = _wrap_long_image_text(draw, title or "公众号长图", title_font, content_width)
+    header_lines = _wrap_long_image_text(
+        draw, title or "公众号长图", title_font, content_width
+    )
     y += len(header_lines) * 50 + 28
 
     for section in sections:
         if section["kind"] == "text":
-            lines = _wrap_long_image_text(draw, str(section["text"]), body_font, content_width - 40)
+            lines = _wrap_long_image_text(
+                draw, str(section["text"]), body_font, content_width - 40
+            )
             height = 24 + len(lines) * line_height + 28
             blocks.append({**section, "lines": lines, "height": height})
             y += height + gap
@@ -1691,7 +1709,9 @@ async def _render_long_image(
     for line in header_lines:
         draw.text((padding, y), line, fill="#111827", font=title_font)
         y += 50
-    draw.text((padding, y), "自动排版 · 公众号上传切片", fill="#6b7280", font=label_font)
+    draw.text(
+        (padding, y), "自动排版 · 公众号上传切片", fill="#6b7280", font=label_font
+    )
     y += 42
 
     for block in blocks:
@@ -1775,7 +1795,10 @@ def _merge_long_image_export_output(
             "job_status": "succeeded",
             "longImageState": "exported",
             "longImageExportedAt": now,
-            "outputs": [full_asset.model_dump(), *[asset.model_dump() for asset in slice_assets]],
+            "outputs": [
+                full_asset.model_dump(),
+                *[asset.model_dump() for asset in slice_assets],
+            ],
             "longImageFullAssetId": full_asset.id,
             "longImageSliceAssetIds": [asset.id for asset in slice_assets],
         }
@@ -1792,18 +1815,18 @@ async def _create_stub_artifact(request: Request, job: AigcJob) -> AigcAsset:
     if kind == "image":
         safe_prompt = escape(prompt[:260])
         content = (
-            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1024\" height=\"1024\" "
-            "viewBox=\"0 0 1024 1024\">"
-            "<defs><linearGradient id=\"g\" x1=\"0\" x2=\"1\" y1=\"0\" y2=\"1\">"
-            "<stop offset=\"0\" stop-color=\"#dbeafe\"/>"
-            "<stop offset=\"1\" stop-color=\"#fee2e2\"/>"
+            '<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" '
+            'viewBox="0 0 1024 1024">'
+            '<defs><linearGradient id="g" x1="0" x2="1" y1="0" y2="1">'
+            '<stop offset="0" stop-color="#dbeafe"/>'
+            '<stop offset="1" stop-color="#fee2e2"/>'
             "</linearGradient></defs>"
-            "<rect width=\"1024\" height=\"1024\" fill=\"url(#g)\"/>"
-            "<rect x=\"96\" y=\"384\" width=\"832\" height=\"256\" rx=\"28\" fill=\"#ffffff\" opacity=\"0.82\"/>"
-            "<text x=\"512\" y=\"478\" text-anchor=\"middle\" font-size=\"42\" "
-            "font-family=\"Arial, sans-serif\" fill=\"#0f172a\">AIGC Studio</text>"
-            f"<text x=\"512\" y=\"548\" text-anchor=\"middle\" font-size=\"26\" "
-            f"font-family=\"Arial, sans-serif\" fill=\"#475569\">{safe_prompt}</text>"
+            '<rect width="1024" height="1024" fill="url(#g)"/>'
+            '<rect x="96" y="384" width="832" height="256" rx="28" fill="#ffffff" opacity="0.82"/>'
+            '<text x="512" y="478" text-anchor="middle" font-size="42" '
+            'font-family="Arial, sans-serif" fill="#0f172a">AIGC Studio</text>'
+            f'<text x="512" y="548" text-anchor="middle" font-size="26" '
+            f'font-family="Arial, sans-serif" fill="#475569">{safe_prompt}</text>'
             "</svg>"
         )
     else:
@@ -2031,12 +2054,16 @@ def _size_from_image_parameters(parameters: dict[str, Any]) -> str | None:
     if ratio_width <= 0 or ratio_height <= 0:
         return None
 
-    resolution = str(
-        parameters.get("resolution")
-        or parameters.get("imageResolution")
-        or parameters.get("clarity")
-        or "2K",
-    ).strip().lower()
+    resolution = (
+        str(
+            parameters.get("resolution")
+            or parameters.get("imageResolution")
+            or parameters.get("clarity")
+            or "2K",
+        )
+        .strip()
+        .lower()
+    )
     long_edge = _IMAGE_RESOLUTION_LONG_EDGE.get(resolution)
     if long_edge is None:
         numeric = re.search(r"\d+", resolution)
@@ -2144,13 +2171,16 @@ def _mxapi_base_url(provider: Any) -> str:
 
 def _mxapi_channel(provider: Any, parameters: dict[str, Any]) -> str:
     provider_meta = getattr(provider, "meta", {}) or {}
-    return _clean_text(
-        parameters.get("mxapiChannel")
-        or parameters.get("channel")
-        or provider_meta.get("channel")
-        or os.environ.get("MXAPI_CHANNEL")
-        or "default",
-    ) or "default"
+    return (
+        _clean_text(
+            parameters.get("mxapiChannel")
+            or parameters.get("channel")
+            or provider_meta.get("channel")
+            or os.environ.get("MXAPI_CHANNEL")
+            or "default",
+        )
+        or "default"
+    )
 
 
 def _mxapi_reference_candidates(job: AigcJob) -> list[str]:
@@ -2866,9 +2896,13 @@ def _mxapi_seedance_reference_content(
     frame_roles = {str(item.get("role") or "") for item in content}
     if job.capability == "image_to_video" and mode != "all_reference":
         if "first_frame" not in frame_roles:
-            raise RuntimeError("Seedance image-to-video requires a first-frame image URL.")
+            raise RuntimeError(
+                "Seedance image-to-video requires a first-frame image URL."
+            )
         if mode == "first_last_frames" and "last_frame" not in frame_roles:
-            raise RuntimeError("Seedance first-last-frame mode requires a last-frame image URL.")
+            raise RuntimeError(
+                "Seedance first-last-frame mode requires a last-frame image URL."
+            )
 
     return content
 
@@ -2933,7 +2967,10 @@ async def _mxapi_seedance_submit_task(
     payload = response.json()
     task_id = _mxapi_task_id(payload)
     if payload.get("code") not in {None, 200, "200"} or not task_id:
-        message = _clean_text(payload.get("message")) or "MXAPI Seedance task submission failed."
+        message = (
+            _clean_text(payload.get("message"))
+            or "MXAPI Seedance task submission failed."
+        )
         raise RuntimeError(message)
     return task_id
 
@@ -3126,7 +3163,9 @@ def _mxapi_jimeng_reference_images(request: Request, job: AigcJob) -> list[str]:
         if not raw_url:
             continue
         if _seedance_reference_kind(item, raw_url) != "image":
-            raise RuntimeError("Jimeng video generation only supports image references.")
+            raise RuntimeError(
+                "Jimeng video generation only supports image references."
+            )
         values.append(raw_url)
 
     for key in (
@@ -3488,7 +3527,6 @@ def _mxapi_grok_response_meta(payload: dict[str, Any]) -> dict[str, Any]:
     return meta
 
 
-
 def _image_resolution_tier(parameters: dict[str, Any]) -> str:
     resolution = str(
         parameters.get("resolution")
@@ -3565,10 +3603,7 @@ def _aigc_adapter_for(provider: Any, model: Any, job: AigcJob) -> str | None:
 
     if (
         "video" in job.capability
-        and (
-            "seedance" in model_id
-            or model_id in _MXAPI_SEEDANCE_ENDPOINTS
-        )
+        and ("seedance" in model_id or model_id in _MXAPI_SEEDANCE_ENDPOINTS)
         and ("mxapi" in provider_id or "open.mxapi.org" in base_url)
     ):
         return "mxapi_seedance2"
@@ -3584,9 +3619,8 @@ def _aigc_adapter_for(provider: Any, model: Any, job: AigcJob) -> str | None:
     if provider_configured:
         return str(provider_configured)
 
-    if (
-        job.capability in {"text_to_image", "image_to_image", "image_edit"}
-        and ("mxapi" in provider_id or "open.mxapi.org" in base_url)
+    if job.capability in {"text_to_image", "image_to_image", "image_edit"} and (
+        "mxapi" in provider_id or "open.mxapi.org" in base_url
     ):
         return "mxapi_gpt_image"
     if (
@@ -3682,7 +3716,9 @@ def _ensure_reference_image_mime(mime_type: str | None, source: str) -> str:
     return clean
 
 
-async def _image_file_to_data_url(path: Path, mime_type: str | None, source: str) -> str:
+async def _image_file_to_data_url(
+    path: Path, mime_type: str | None, source: str
+) -> str:
     if not path.is_file():
         raise RuntimeError(f"Reference image '{source}' was not found.")
     clean_mime = _ensure_reference_image_mime(
@@ -4026,9 +4062,7 @@ def _annotation_prompt_sections(job: AigcJob) -> list[str]:
     return [
         ANNOTATION_IMAGE_EDITING_PROMPT,
         "标注说明：\n"
-        + "\n".join(
-            f"{index}. {line}" for index, line in enumerate(lines, start=1)
-        ),
+        + "\n".join(f"{index}. {line}" for index, line in enumerate(lines, start=1)),
     ]
 
 
@@ -4113,7 +4147,12 @@ async def _execute_seedream_image(
     *,
     adapter: str,
 ) -> list[AigcAsset]:
-    if job.capability not in {"text_to_image", "image_to_image", "image_edit", "mask_edit"}:
+    if job.capability not in {
+        "text_to_image",
+        "image_to_image",
+        "image_edit",
+        "mask_edit",
+    }:
         raise RuntimeError(f"Seedream image adapter does not support {job.capability}.")
 
     api_key = getattr(provider, "api_key", "") or ""
@@ -4228,8 +4267,7 @@ async def _execute_seedream_image(
                 "Seedream image batch partially succeeded: "
                 f"{len(assets)}/{count} generated; {len(fill_failures)} failed. "
                 + "; ".join(
-                    f"Image {index}: {message}"
-                    for index, message in fill_failures
+                    f"Image {index}: {message}" for index, message in fill_failures
                 ),
             )
         return assets
@@ -4260,7 +4298,9 @@ async def _execute_mxapi_gpt_image(
 
     reference_images = _mxapi_reference_images(request, job)
     if job.capability != "text_to_image" and not reference_images:
-        raise RuntimeError("MXAPI image editing requires at least one reference image URL.")
+        raise RuntimeError(
+            "MXAPI image editing requires at least one reference image URL."
+        )
 
     count = _image_count(job.parameters) or 1
 
@@ -4353,9 +4393,7 @@ async def _execute_mxapi_gpt_image(
         job.logs.append(
             "Image batch partially succeeded: "
             f"{succeeded_count}/{count} generated; {failed_count} failed. "
-            + "; ".join(
-                f"Image {index + 1}: {message}" for index, message in failures
-            ),
+            + "; ".join(f"Image {index + 1}: {message}" for index, message in failures),
         )
     return assets
 
@@ -4401,9 +4439,7 @@ async def _execute_mxapi_grok_video(
     adapter: str,
 ) -> list[AigcAsset]:
     if job.capability not in {"text_to_video", "image_to_video"}:
-        raise RuntimeError(
-            f"MXAPI Grok adapter does not support {job.capability}."
-        )
+        raise RuntimeError(f"MXAPI Grok adapter does not support {job.capability}.")
 
     task_id = await _mxapi_grok_submit_task(request, provider, model, job)
     video_url, payload = await _mxapi_grok_poll_task(provider, task_id)
@@ -4436,9 +4472,7 @@ async def _execute_mxapi_jimeng_video(
     adapter: str,
 ) -> list[AigcAsset]:
     if job.capability not in {"text_to_video", "image_to_video"}:
-        raise RuntimeError(
-            f"MXAPI Jimeng adapter does not support {job.capability}."
-        )
+        raise RuntimeError(f"MXAPI Jimeng adapter does not support {job.capability}.")
 
     task_id = await _mxapi_jimeng_submit_task(request, provider, model, job)
     video_url, payload = await _mxapi_seedance_poll_task(provider, task_id)
@@ -4469,7 +4503,12 @@ async def _execute_openai_image(
     *,
     adapter: str = "openai_image",
 ) -> list[AigcAsset]:
-    if job.capability not in {"text_to_image", "image_to_image", "image_edit", "mask_edit"}:
+    if job.capability not in {
+        "text_to_image",
+        "image_to_image",
+        "image_edit",
+        "mask_edit",
+    }:
         raise RuntimeError(f"OpenAI image adapter does not support {job.capability}.")
     if job.capability != "text_to_image":
         raise RuntimeError(
@@ -4577,9 +4616,13 @@ def _text_reference_urls(job: AigcJob) -> list[str]:
 
 
 def _model_supports_text_images(model: Any) -> bool:
-    if getattr(model, "supports_image", False) or getattr(model, "supports_vision", False):
+    if getattr(model, "supports_image", False) or getattr(
+        model, "supports_vision", False
+    ):
         return True
-    capabilities = set(str(item) for item in getattr(model, "aigc_capabilities", []) or [])
+    capabilities = set(
+        str(item) for item in getattr(model, "aigc_capabilities", []) or []
+    )
     return "reference_image" in capabilities or "image_to_prompt" in capabilities
 
 
@@ -4641,9 +4684,7 @@ def _text_job_messages(
         )
         fallback_prompt = "请把参考图片反推成可用于图像生成的结构化中文提示词。"
     else:
-        system_prompt = (
-            "你是 AIGC Studio 的文本生成助手。请根据用户输入生成清晰、可直接用于创意生产的中文文本。"
-        )
+        system_prompt = "你是 AIGC Studio 的文本生成助手。请根据用户输入生成清晰、可直接用于创意生产的中文文本。"
         fallback_prompt = "请生成一段适合 AIGC 创意生产的中文文本。"
 
     user_text = prompt or fallback_prompt
@@ -4655,8 +4696,7 @@ def _text_job_messages(
 
     content: list[dict[str, Any]] = [{"type": "text", "text": user_text}]
     content.extend(
-        {"type": "image_url", "image_url": {"url": url}}
-        for url in reference_urls
+        {"type": "image_url", "image_url": {"url": url}} for url in reference_urls
     )
     return [
         {"role": "system", "content": system_prompt},
@@ -4818,6 +4858,14 @@ async def _run_job_to_completion(request: Request, job_id: str) -> AigcJob:
         job = await _mark_job_running(job)
 
     try:
+        from ..billing.model_publication import ModelPublicationService
+        from ..storage.engine import get_app_engine
+        from ..storage.repos.price_catalog_repo import PriceCatalogRepository
+
+        if not ModelPublicationService(
+            PriceCatalogRepository(get_app_engine())
+        ).is_published(job.provider_id, job.model_id):
+            raise RuntimeError("Model is not published in the active price catalog")
         outputs = await _execute_job(request, job)
         job.outputs = outputs
         job.status = "succeeded"
@@ -5125,9 +5173,7 @@ def _parameter_schema_for(
             )
         elif normalized_model_id in _MXAPI_GROK_VIDEO_MODELS:
             is_fast = normalized_model_id.endswith("-fast")
-            minimum, maximum, default = (
-                (6, 30, 10) if is_fast else (5, 15, 5)
-            )
+            minimum, maximum, default = (6, 30, 10) if is_fast else (5, 15, 5)
             reference_max = 7 if is_fast else 1
             common["max_reference_images"] = reference_max
             common["properties"].update(
@@ -5146,9 +5192,7 @@ def _parameter_schema_for(
                     "resolution": {
                         "type": "string",
                         "enum": (
-                            ["480P", "720P"]
-                            if is_fast
-                            else ["480P", "720P", "1080P"]
+                            ["480P", "720P"] if is_fast else ["480P", "720P", "1080P"]
                         ),
                         "default": "720P",
                     },
@@ -5252,6 +5296,8 @@ async def list_capabilities(request: Request) -> CapabilityList:
         published = ModelPublicationService(
             PriceCatalogRepository(get_app_engine())
         ).effective_pairs()
+        if published is None:
+            return CapabilityList(capabilities=[])
         for provider in await manager.list_provider_info():
             if not _provider_configured_for_aigc(provider):
                 continue
@@ -5259,9 +5305,7 @@ async def list_capabilities(request: Request) -> CapabilityList:
                 getattr(provider, "extra_models", []) or [],
             )
             for model in models:
-                if published is not None and (
-                    provider.id, model.id
-                ) not in published:
+                if (provider.id, model.id) not in published:
                     continue
                 for capability in _capabilities_from_model(model, provider):
                     capabilities.append(
@@ -5311,8 +5355,7 @@ async def list_capabilities(request: Request) -> CapabilityList:
         pass
 
     deduped = {
-        (c.provider_id, c.model_id, c.capability, c.source): c
-        for c in capabilities
+        (c.provider_id, c.model_id, c.capability, c.source): c for c in capabilities
     }
     return CapabilityList(capabilities=list(deduped.values()))
 
@@ -5366,36 +5409,52 @@ async def list_style_templates(
         )
     ]
     templates.sort(
-        key=lambda item: (item.last_used_at or "", item.use_count, item.updated_at or ""),
+        key=lambda item: (
+            item.last_used_at or "",
+            item.use_count,
+            item.updated_at or "",
+        ),
         reverse=True,
     )
-    return StyleTemplateList(templates=_slice_items(templates, limit=limit, offset=offset))
+    return StyleTemplateList(
+        templates=_slice_items(templates, limit=limit, offset=offset)
+    )
 
 
 @router.get("/style-templates/recent", response_model=StyleTemplateList)
-async def list_recent_style_templates(limit: int = 30, offset: int = 0) -> StyleTemplateList:
+async def list_recent_style_templates(
+    limit: int = 30, offset: int = 0
+) -> StyleTemplateList:
     templates = [
         template
         for template in _list_style_templates()
         if template.status == "enabled" and template.last_used_at
     ]
     templates.sort(key=lambda item: item.last_used_at or "", reverse=True)
-    return StyleTemplateList(templates=_slice_items(templates, limit=limit, offset=offset))
+    return StyleTemplateList(
+        templates=_slice_items(templates, limit=limit, offset=offset)
+    )
 
 
 @router.get("/style-templates/favorites", response_model=StyleTemplateList)
-async def list_favorite_style_templates(limit: int = 50, offset: int = 0) -> StyleTemplateList:
+async def list_favorite_style_templates(
+    limit: int = 50, offset: int = 0
+) -> StyleTemplateList:
     templates = [
         template
         for template in _list_style_templates()
         if template.status == "enabled" and template.favorite
     ]
     templates.sort(key=lambda item: item.updated_at or "", reverse=True)
-    return StyleTemplateList(templates=_slice_items(templates, limit=limit, offset=offset))
+    return StyleTemplateList(
+        templates=_slice_items(templates, limit=limit, offset=offset)
+    )
 
 
 @router.post("/style-templates", response_model=AigcStyleTemplate, status_code=201)
-async def upsert_style_template(body: AigcStyleTemplate = Body(...)) -> AigcStyleTemplate:
+async def upsert_style_template(
+    body: AigcStyleTemplate = Body(...),
+) -> AigcStyleTemplate:
     _safe_id(body.id)
     return _save_style_template(body)
 
@@ -5470,10 +5529,14 @@ async def mark_style_template_used(template_id: str) -> AigcStyleTemplate:
     return _save_style_template(updated)
 
 
-@router.post("/style-templates/{template_id}/favorite", response_model=AigcStyleTemplate)
+@router.post(
+    "/style-templates/{template_id}/favorite", response_model=AigcStyleTemplate
+)
 async def update_style_template_favorite(
     template_id: str,
-    body: StyleTemplateFavoriteUpdate = Body(default_factory=StyleTemplateFavoriteUpdate),
+    body: StyleTemplateFavoriteUpdate = Body(
+        default_factory=StyleTemplateFavoriteUpdate
+    ),
 ) -> AigcStyleTemplate:
     template = _load_style_template(template_id)
     return _save_style_template(template.model_copy(update={"favorite": body.favorite}))
@@ -5486,8 +5549,7 @@ async def list_canvases(
     offset: int = 0,
 ) -> CanvasList:
     canvases = [
-        Canvas(**_read_json(path))
-        for path in sorted(_dir("canvases").glob("*.json"))
+        Canvas(**_read_json(path)) for path in sorted(_dir("canvases").glob("*.json"))
     ]
     canvases = [canvas for canvas in canvases if _request_owns_canvas(request, canvas)]
     canvases.sort(key=lambda item: item.updated_at, reverse=True)
@@ -5639,7 +5701,9 @@ async def export_long_image(
     if target is None:
         raise HTTPException(status_code=400, detail="Long-image node not found.")
     if target.type != "long_image_export":
-        raise HTTPException(status_code=400, detail="Node is not a long-image export node.")
+        raise HTTPException(
+            status_code=400, detail="Node is not a long-image export node."
+        )
 
     sections = _long_image_sections(canvas, target.id)
     if not sections:
@@ -5719,8 +5783,7 @@ async def list_assets(
     offset: int = 0,
 ) -> AssetList:
     assets = [
-        AigcAsset(**_read_json(path))
-        for path in sorted(_dir("assets").glob("*.json"))
+        AigcAsset(**_read_json(path)) for path in sorted(_dir("assets").glob("*.json"))
     ]
     if canvas_id:
         _load_canvas_for_request(request, canvas_id)
@@ -5841,9 +5904,10 @@ async def complete_direct_asset_upload(
     if str(token_payload.get("owner_user_id") or "0") != current_user_id(request):
         raise HTTPException(status_code=403, detail="Invalid or expired upload token.")
     now = _now()
-    mime_type = str(
-        token_payload.get("mime_type") or "application/octet-stream"
-    ).strip() or "application/octet-stream"
+    mime_type = (
+        str(token_payload.get("mime_type") or "application/octet-stream").strip()
+        or "application/octet-stream"
+    )
     object_key = str(token_payload["object_key"])
     bucket = str(token_payload.get("bucket") or "")
     storage_meta: dict[str, Any] = {

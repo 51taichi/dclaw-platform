@@ -245,6 +245,8 @@ def test_collection_item_progress_is_idempotent(repo):
     assert repo.get_collection_job(job["id"])["progress"] == {
         "total": 1,
         "completed": 1,
+        "pending": 0,
+        "running": 0,
         "official": 1,
         "ai": 0,
         "manual": 0,

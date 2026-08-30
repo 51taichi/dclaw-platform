@@ -749,6 +749,17 @@ Index(
     billing_pricing_collection_jobs.c.status,
     billing_pricing_collection_jobs.c.lease_expires_at,
 )
+billing_pricing_collection_active_digest_index = Index(
+    "uq_billing_pricing_collection_jobs_active_digest",
+    billing_pricing_collection_jobs.c.inventory_digest,
+    unique=True,
+    sqlite_where=billing_pricing_collection_jobs.c.status.in_(
+        ("pending", "running")
+    ),
+    postgresql_where=billing_pricing_collection_jobs.c.status.in_(
+        ("pending", "running")
+    ),
+)
 
 billing_pricing_collection_items = Table(
     "billing_pricing_collection_items",
@@ -1524,6 +1535,7 @@ def create_all(engine: Engine) -> None:
     _ensure_pricing_audit_immutable(engine)
     _ensure_official_price_candidate_immutable(engine)
     _ensure_official_price_candidate_evidence_columns(engine)
+    _ensure_pricing_collection_active_digest_index(engine)
     _ensure_pricing_model_mapping_columns(engine)
     _ensure_open_api_publication_binding_columns(engine)
     _ensure_knowledge_metadata_columns(engine)
@@ -1535,6 +1547,48 @@ def create_all(engine: Engine) -> None:
     _ensure_reconciliation_audit_immutable(engine)
     _ensure_top_up_audit_immutable(engine)
     _backfill_personal_wallets(engine)
+
+
+def _ensure_pricing_collection_active_digest_index(engine: Engine) -> None:
+    """Deduplicate legacy active jobs before installing the partial index."""
+    with engine.begin() as conn:
+        rows = list(
+            conn.execute(
+                select(
+                    billing_pricing_collection_jobs.c.id,
+                    billing_pricing_collection_jobs.c.inventory_digest,
+                )
+                .where(
+                    billing_pricing_collection_jobs.c.status.in_(
+                        ("pending", "running")
+                    )
+                )
+                .order_by(
+                    billing_pricing_collection_jobs.c.created_at.desc()
+                )
+            ).mappings()
+        )
+        seen: set[str] = set()
+        duplicates: list[str] = []
+        for row in rows:
+            digest = str(row["inventory_digest"])
+            if digest in seen:
+                duplicates.append(str(row["id"]))
+            else:
+                seen.add(digest)
+        if duplicates:
+            conn.execute(
+                update(billing_pricing_collection_jobs)
+                .where(billing_pricing_collection_jobs.c.id.in_(duplicates))
+                .values(
+                    status="failed",
+                    error_summary="superseded during active-job migration",
+                    finished_at=func.now(),
+                )
+            )
+    billing_pricing_collection_active_digest_index.create(
+        bind=engine, checkfirst=True
+    )
 
 
 def _ensure_official_price_candidate_evidence_columns(
