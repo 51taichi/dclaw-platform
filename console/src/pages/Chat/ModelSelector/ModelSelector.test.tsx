@@ -103,13 +103,16 @@ describe("ModelSelector", () => {
     ).toBeInTheDocument();
   });
 
-  it("displays bare model id when active model is outside the eligible list", async () => {
+  it("does not display an active model outside the eligible list", async () => {
     // provider has no api_key configured, so it is excluded from eligible list
     vi.mocked(providerApi.listProviders).mockResolvedValue([
       { ...mockProvider, api_key: "" },
     ]);
     renderWithProviders(<ModelSelector />);
-    expect(await screen.findByText("gpt-4")).toBeInTheDocument();
+    expect(
+      await screen.findByText("modelSelector.selectModel"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("gpt-4")).not.toBeInTheDocument();
   });
 
   it("hides generation-only AIGC models from the chat selector", async () => {

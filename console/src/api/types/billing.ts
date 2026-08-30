@@ -150,12 +150,7 @@ export interface BillingUsageSummary {
 }
 
 export type PricingCategory =
-  | "text"
-  | "image"
-  | "video"
-  | "audio"
-  | "embedding_rerank"
-  | "other";
+  "text" | "image" | "video" | "audio" | "embedding_rerank" | "other";
 
 export interface PricingCatalogSummary {
   id: string;
@@ -235,8 +230,10 @@ export interface PricingPolicyInput {
   expected_revision: number;
 }
 
-export interface PricingPolicy
-  extends Omit<PricingPolicyInput, "expected_revision"> {
+export interface PricingPolicy extends Omit<
+  PricingPolicyInput,
+  "expected_revision"
+> {
   id: string;
   revision: number;
 }
@@ -287,6 +284,9 @@ export interface PricingDraftRow {
   exclusion_reason?: string | null;
   registry_version?: string | null;
   evidence_level?: string | null;
+  evidence_excerpt?: string | null;
+  confidence?: string | number | null;
+  ai_model?: string | null;
 }
 
 export interface PricingDraft {
@@ -309,14 +309,12 @@ export interface PricingCollectionItem {
 export interface PricingCollectionJob {
   id: string;
   status:
-    | "pending"
-    | "running"
-    | "succeeded"
-    | "partially_succeeded"
-    | "failed";
+    "pending" | "running" | "succeeded" | "partially_succeeded" | "failed";
   progress: Partial<{
     total: number;
     completed: number;
+    pending: number;
+    running: number;
     official: number;
     ai: number;
     manual: number;

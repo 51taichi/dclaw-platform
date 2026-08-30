@@ -6,6 +6,7 @@ import {
   Modal,
   Space,
   Spin,
+  Table,
   Tabs,
   Tag,
   Upload,
@@ -94,11 +95,7 @@ export default function PricingTab() {
     : 0;
   const activeUnlock = remaining > 0 ? unlock : undefined;
   const initialize = async () => {
-    if (!activeUnlock) {
-      setUnlockOpen(true);
-      return;
-    }
-    const generated = await billingApi.generatePricingDraft(activeUnlock.token);
+    const generated = await billingApi.generatePricingDraft();
     setDraft(generated);
     setActiveTab("drafts");
     message.success("已按当前启用平台与模型生成价格草案");
@@ -226,13 +223,30 @@ export default function PricingTab() {
           message={`官网价格同步：${collectionJob.status}`}
           description={`已处理 ${collectionJob.progress.completed ?? 0} / ${
             collectionJob.progress.total ?? 0
-          } 个模型；官方 ${collectionJob.progress.official ?? 0}，AI候选 ${
+          } 个模型；等待 ${collectionJob.progress.pending ?? 0}，采集中 ${
+            collectionJob.progress.running ?? 0
+          }，官方 ${collectionJob.progress.official ?? 0}，AI候选 ${
             collectionJob.progress.ai ?? 0
           }，失败 ${
             collectionJob.progress.failed ?? 0
           }。同步不受15分钟解锁倒计时限制。`}
         />
       )}
+      {collectionJob?.items?.length ? (
+        <Table
+          size="small"
+          rowKey="id"
+          dataSource={collectionJob.items}
+          pagination={{ pageSize: 10 }}
+          columns={[
+            { title: "平台", dataIndex: "provider_id" },
+            { title: "模型", dataIndex: "model_key" },
+            { title: "区域", dataIndex: "pricing_region" },
+            { title: "同步状态", dataIndex: "status" },
+            { title: "失败原因", dataIndex: "error_summary" },
+          ]}
+        />
+      ) : null}
       <Space wrap>
         <Button
           type={activeUnlock ? "default" : "primary"}
@@ -246,9 +260,7 @@ export default function PricingTab() {
             {String(remaining % 60).padStart(2, "0")}
           </Tag>
         )}
-        <Button disabled={!activeUnlock} onClick={() => void initialize()}>
-          生成价格草案
-        </Button>
+        <Button onClick={() => void initialize()}>生成价格草案</Button>
         <Button
           loading={Boolean(
             collectionJob &&
@@ -318,7 +330,13 @@ export default function PricingTab() {
           },
           {
             key: "drafts",
-            label: "价格草稿",
+            label: `价格草稿 (${
+              new Set(
+                draft?.rows.map(
+                  (row) => `${row.provider_id}/${row.model_key}`,
+                ) ?? [],
+              ).size
+            })`,
             children: (
               <PricingDrafts
                 catalogs={overview.catalogs}
@@ -368,9 +386,7 @@ export default function PricingTab() {
                     )?.revision ?? 0,
                     activeUnlock.token,
                   );
-                  setDraft(
-                    await billingApi.generatePricingDraft(activeUnlock.token),
-                  );
+                  setDraft(await billingApi.generatePricingDraft());
                   setMappings(await billingApi.listPricingModelMappings());
                   message.success("官方模型精确映射已保存，草案已重新生成");
                 }}
@@ -393,9 +409,7 @@ export default function PricingTab() {
                     ],
                     activeUnlock.token,
                   );
-                  setDraft(
-                    await billingApi.generatePricingDraft(activeUnlock.token),
-                  );
+                  setDraft(await billingApi.generatePricingDraft());
                   message.success("模型本次发布状态已保存");
                 }}
                 onBatchDecision={async (
@@ -413,9 +427,7 @@ export default function PricingTab() {
                     },
                     activeUnlock.token,
                   )) as { updated_models?: number };
-                  setDraft(
-                    await billingApi.generatePricingDraft(activeUnlock.token),
-                  );
+                  setDraft(await billingApi.generatePricingDraft());
                   message.success(
                     `已更新 ${result.updated_models ?? 0} 个模型的发布状态`,
                   );
@@ -430,9 +442,7 @@ export default function PricingTab() {
                     reason,
                     activeUnlock.token,
                   );
-                  setDraft(
-                    await billingApi.generatePricingDraft(activeUnlock.token),
-                  );
+                  setDraft(await billingApi.generatePricingDraft());
                 }}
                 onRollback={(id) => {
                   if (!activeUnlock) return;

@@ -146,7 +146,7 @@ export default function ModelSelector({ chatId }: ModelSelectorProps = {}) {
       ...(provider?.models ?? []),
       ...(provider?.extra_models ?? []),
     ].find((item) => item.id === activeModelId);
-    return Boolean(model && !isChatSelectableModel(model));
+    return Boolean(!model || !isChatSelectableModel(model));
   })();
 
   // Display label for trigger button
@@ -160,7 +160,7 @@ export default function ModelSelector({ chatId }: ModelSelectorProps = {}) {
         if (m) return m.name || m.id;
       }
     }
-    return activeModelId;
+    return t("modelSelector.selectModel");
   })();
 
   const showActiveProviderIcon = Boolean(

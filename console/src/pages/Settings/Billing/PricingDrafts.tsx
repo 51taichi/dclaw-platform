@@ -5,6 +5,27 @@ import type {
   PricingDraft,
 } from "../../../api/types/billing";
 
+const sourceLabels: Record<string, string> = {
+  official_registry: "内置官方价目",
+  trusted_cost: "已核验成本",
+  missing: "暂无价格来源",
+};
+
+const verificationLabels: Record<string, string> = {
+  verified: "已核验",
+  candidate: "候选待审批",
+  unmatched: "模型未匹配",
+  missing: "缺少价格",
+};
+
+const evidenceLabels: Record<string, string> = {
+  official_verified: "官方核验价格",
+  ai_official_extract: "AI 提取官网价格（待审批）",
+  ai_multi_source: "AI 多来源估算（待审批）",
+  ai_no_evidence: "AI 无证据估算（默认不发布）",
+  failed: "采集失败",
+};
+
 export default function PricingDrafts({
   catalogs,
   draft,
@@ -138,14 +159,30 @@ export default function PricingDrafts({
                 <Space direction="vertical" size={0}>
                   {row.source_url ? (
                     <a href={row.source_url} target="_blank" rel="noreferrer">
-                      {row.source_type} / {row.verification_status}
+                      {sourceLabels[row.source_type] ?? row.source_type} /{" "}
+                      {verificationLabels[row.verification_status] ??
+                        row.verification_status}
                     </a>
                   ) : (
                     <span>
-                      {row.source_type} / {row.verification_status}
+                      {sourceLabels[row.source_type] ?? row.source_type} /{" "}
+                      {verificationLabels[row.verification_status] ??
+                        row.verification_status}
                     </span>
                   )}
-                  <Tag>{row.evidence_level ?? "价格证据待确认"}</Tag>
+                  <Tag>
+                    {evidenceLabels[row.evidence_level ?? ""] ??
+                      "价格证据待确认"}
+                  </Tag>
+                  {row.confidence != null ? (
+                    <span>置信度：{String(row.confidence)}</span>
+                  ) : null}
+                  {row.ai_model ? <span>评估模型：{row.ai_model}</span> : null}
+                  {row.evidence_excerpt ? (
+                    <span title={row.evidence_excerpt}>
+                      证据摘要：{row.evidence_excerpt.slice(0, 80)}
+                    </span>
+                  ) : null}
                 </Space>
               ),
             },

@@ -424,8 +424,11 @@ export default function ChatToolbar({
         activeData?.active_llm?.provider_id &&
         activeData?.active_llm?.model
       ) {
+        const candidate = `${activeData.active_llm.provider_id}/${activeData.active_llm.model}`;
         setSelectedModel(
-          `${activeData.active_llm.provider_id}/${activeData.active_llm.model}`,
+          availableModels.some((option) => option.id === candidate)
+            ? candidate
+            : "",
         );
       } else {
         setSelectedModel(""); // Auto
@@ -433,7 +436,7 @@ export default function ChatToolbar({
     } catch (err) {
       console.error("ChatToolbar: failed to load active model", err);
     }
-  }, [chatId, selectedAgent]);
+  }, [availableModels, chatId, selectedAgent]);
 
   useEffect(() => {
     fetchActiveModel();

@@ -99,10 +99,9 @@ export const billingApi = {
   listPricingModelMappings: () =>
     request<PricingModelMapping[]>("/admin/billing/pricing/model-mappings"),
   exportPricing: () => request<Blob>("/admin/billing/pricing/export"),
-  generatePricingDraft: (token: string) =>
+  generatePricingDraft: () =>
     request<PricingDraft>("/admin/billing/pricing/drafts", {
       method: "POST",
-      headers: pricingHeaders(token),
     }),
   startPricingCollection: () =>
     request<PricingCollectionJob>("/admin/billing/pricing/collection-jobs", {

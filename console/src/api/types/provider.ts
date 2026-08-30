@@ -12,6 +12,8 @@ export interface ModelInfo {
   embedding_protocol?: "openai_compatible" | "dashscope_multimodal" | null;
   embedding_dimensions?: number | null;
   embedding_base_url?: string | null;
+  billing_eligible?: boolean | null;
+  billing_catalog_version?: string | null;
 }
 
 export interface ProviderInfo {

@@ -89,7 +89,7 @@ describe("billingApi", () => {
   });
 
   it("uses the draft, workbook, exclusion and refresh contracts", async () => {
-    await billingApi.generatePricingDraft("unlock-token");
+    await billingApi.generatePricingDraft();
     await billingApi.exportPricingDraft("draft key");
     await billingApi.setPricingExclusion(
       "draft key",
