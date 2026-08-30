@@ -20,7 +20,7 @@ from ..storage.repos.billing_execution_repo import (
 )
 
 
-BillingMode = Literal["enforced"]
+BillingMode = Literal["observe", "enforced"]
 
 
 @dataclass(frozen=True)

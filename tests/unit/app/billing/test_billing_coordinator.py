@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, insert, select
 
 from qwenpaw.app.billing.context import BillingSource
 from qwenpaw.app.billing.coordinator import (
@@ -26,6 +26,7 @@ from qwenpaw.app.storage.schema import (
     billing_usage_orders,
     billing_wallets,
     create_all,
+    users,
 )
 from qwenpaw.app.storage.settings import get_storage_settings
 
@@ -89,7 +90,9 @@ def test_begin_execution_atomically_locks_wallet_catalog_and_safe_snapshot(
     assert first.catalog_version == "2026-08-general"
     assert first.mode == "enforced"
     with engine.connect() as conn:
-        assert conn.scalar(select(func.count()).select_from(billing_wallets)) == 1
+        assert (
+            conn.scalar(select(func.count()).select_from(billing_wallets)) == 1
+        )
         assert (
             conn.scalar(select(func.count()).select_from(billing_usage_orders))
             == 1
@@ -117,6 +120,74 @@ def test_begin_execution_rejects_same_key_payload_drift(coordinator):
 
     with pytest.raises(BillingRequestConflictError):
         service.begin_execution(_command({"message": "changed"}))
+
+
+def test_szzz_admin_execution_is_complimentary_but_other_admin_is_enforced(
+    coordinator,
+):
+    service, engine = coordinator
+    with engine.begin() as conn:
+        szzz_id = conn.execute(
+            insert(users)
+            .values(
+                username="szzz_admin",
+                password_hash="hash",
+                password_salt="salt",
+                role="admin",
+            )
+            .returning(users.c.id),
+        ).scalar_one()
+        other_id = conn.execute(
+            insert(users)
+            .values(
+                username="other_admin",
+                password_hash="hash",
+                password_salt="salt",
+                role="admin",
+            )
+            .returning(users.c.id),
+        ).scalar_one()
+
+    complimentary = service.begin_execution(
+        BillingCommand(
+            payer_user_id=str(szzz_id),
+            source=BillingSource(type="client", id="complimentary-chat"),
+            request_key="message-1",
+            payload={"message": "hello"},
+        ),
+    )
+    enforced = service.begin_execution(
+        BillingCommand(
+            payer_user_id=str(other_id),
+            source=BillingSource(type="client", id="enforced-chat"),
+            request_key="message-1",
+            payload={"message": "hello"},
+        ),
+    )
+
+    assert complimentary.mode == "observe"
+    assert enforced.mode == "enforced"
+    with engine.connect() as conn:
+        modes = {
+            row.id: json.loads(row.request_snapshot_json)["billing_mode"]
+            for row in conn.execute(
+                select(
+                    billing_usage_orders.c.id,
+                    billing_usage_orders.c.request_snapshot_json,
+                ),
+            )
+        }
+    assert modes[complimentary.usage_order_id] == "observe"
+    assert modes[enforced.usage_order_id] == "enforced"
+    with engine.connect() as conn:
+        complimentary_snapshot = json.loads(
+            conn.scalar(
+                select(billing_usage_orders.c.request_snapshot_json).where(
+                    billing_usage_orders.c.id == complimentary.usage_order_id,
+                ),
+            ),
+        )
+    assert complimentary_snapshot["complimentary_reason"] == "szzz_admin"
 
 
 def test_begin_execution_rolls_back_wallet_order_and_execution(tmp_path):
@@ -158,7 +229,9 @@ def test_begin_execution_rolls_back_wallet_order_and_execution(tmp_path):
         service.begin_execution(_command())
 
     with engine.connect() as conn:
-        assert conn.scalar(select(func.count()).select_from(billing_wallets)) == 0
+        assert (
+            conn.scalar(select(func.count()).select_from(billing_wallets)) == 0
+        )
         assert conn.scalar(
             select(func.count()).select_from(billing_usage_orders),
         ) == 0

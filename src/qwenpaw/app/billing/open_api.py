@@ -15,6 +15,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
 
 from .pricing import PriceCatalogService
+from .complimentary import is_complimentary_user
 from .usage import IdempotencyConflictError
 from ..storage.repos.billing_repo import BillingRepository
 from ..storage.repos.price_catalog_repo import CatalogNotFoundError
@@ -123,6 +124,11 @@ class OpenApiBillingCoordinator:
                     bound_user_id,
                 )
                 catalog = self._lock_catalog(conn)
+                billing_mode: BillingMode = (
+                    "observe"
+                    if is_complimentary_user(conn, bound_user_id)
+                    else normalized.mode
+                )
                 invocation_id = str(uuid4())
                 usage_order_id = str(uuid4())
                 persisted_key = business_key or (
@@ -131,7 +137,13 @@ class OpenApiBillingCoordinator:
                 now = datetime.now(timezone.utc)
                 snapshot = json.dumps(
                     {
-                        "billing_mode": normalized.mode,
+                        "billing_mode": billing_mode,
+                        "complimentary_reason": (
+                            "szzz_admin"
+                            if billing_mode == "observe"
+                            and normalized.mode == "enforced"
+                            else None
+                        ),
                         "client_idempotency_key": normalized.idempotency_key,
                         "request_sha256": payload_hash,
                     },
@@ -206,7 +218,7 @@ class OpenApiBillingCoordinator:
                     api_key_id=normalized.api_key_id,
                     publication_id=normalized.publication_id,
                     catalog_version=str(catalog["version"]),
-                    mode=normalized.mode,
+                    mode=billing_mode,
                 )
         except IntegrityError:
             # A concurrent request can win the namespaced business key. Read

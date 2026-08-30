@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from threading import Barrier, Lock
 
 import pytest
-from sqlalchemy import func, select, update
+from sqlalchemy import func, insert, select, update
 
 from qwenpaw.app.billing.open_api import (
     IdempotencyConflictError,
@@ -42,6 +42,7 @@ from qwenpaw.app.storage.schema import (
     create_all,
     open_api_invocations,
     open_api_publications,
+    users,
 )
 from qwenpaw.app.storage.settings import get_storage_settings
 
@@ -193,6 +194,52 @@ def test_begin_resolves_wallet_only_from_publication_bound_user(
         )["id"]
     )
     assert session.bound_user_id != "caller-controlled-user"
+
+
+def test_szzz_admin_open_api_is_free_at_zero_balance_and_keeps_usage_detail(
+    coordinator,
+    engine,
+):
+    with engine.begin() as conn:
+        user_id = conn.execute(
+            insert(users)
+            .values(
+                username="szzz_admin",
+                password_hash="hash",
+                password_salt="salt",
+                role="admin",
+            )
+            .returning(users.c.id),
+        ).scalar_one()
+        conn.execute(
+            update(open_api_publications)
+            .where(open_api_publications.c.id == "pub-1")
+            .values(bound_user_id=str(user_id)),
+        )
+
+    session = coordinator.begin_invocation(_command(mode="enforced"))
+    service = UsageService(coordinator.repository, coordinator.pricing)
+    reserved = service.reserve_model_call(_reserve(session, "free-call"))
+    settled = service.settle_model_call(
+        _settle(session, "free-call", "billable", output_tokens=0),
+    )
+
+    assert session.mode == "observe"
+    assert reserved.quoted_credits == 2
+    assert settled.status == "captured"
+    assert settled.captured_credits == 1
+    assert coordinator.repository.balance(session.wallet_id).available == 0
+    assert coordinator.repository.balance(session.wallet_id).held == 0
+    with engine.connect() as conn:
+        assert (
+            conn.scalar(
+                select(func.count()).select_from(billing_ledger_entries)
+            )
+            == 0
+        )
+        item = conn.execute(select(billing_usage_items)).mappings().one()
+    assert item["input_tokens"] == 1000
+    assert item["billability"] == "billable"
 
 
 def test_same_key_and_canonical_payload_replays_existing_pair(

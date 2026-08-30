@@ -6,14 +6,15 @@ import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 from sqlalchemy import insert, select
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
 
-from .context import BillingSession, BillingSource
+from .context import BillingMode, BillingSession, BillingSource
+from .complimentary import is_complimentary_user
 from .pricing import PriceCatalogService
 from ..storage.repos.billing_repo import BillingRepository
 from ..storage.schema import billing_executions, billing_usage_orders
@@ -63,11 +64,19 @@ class BillingCoordinator:
                     normalized.payer_user_id,
                 )
                 catalog = self.pricing.lock_effective_catalog(conn)
+                billing_mode: BillingMode = (
+                    "observe"
+                    if is_complimentary_user(conn, normalized.payer_user_id)
+                    else "enforced"
+                )
                 execution_id = str(uuid4())
                 usage_order_id = str(uuid4())
                 snapshot = _dump_json(
                     {
-                        "billing_mode": "enforced",
+                        "billing_mode": billing_mode,
+                        "complimentary_reason": (
+                            "szzz_admin" if billing_mode == "observe" else None
+                        ),
                         "request_sha256": request_hash,
                         "source": _source_snapshot(normalized.source),
                     },
@@ -111,7 +120,7 @@ class BillingCoordinator:
                     payer_user_id=normalized.payer_user_id,
                     catalog_version=str(catalog["version"]),
                     source=normalized.source,
-                    mode="enforced",
+                    mode=billing_mode,
                 )
         except IntegrityError:
             with self.repository.engine.connect() as conn:
@@ -163,6 +172,7 @@ class BillingCoordinator:
         ):
             raise BillingRequestConflictError(command.request_key)
         price_snapshot = json.loads(order["price_snapshot_json"] or "{}")
+        request_snapshot = json.loads(order["request_snapshot_json"] or "{}")
         return BillingSession(
             execution_id=str(execution["id"]),
             usage_order_id=str(order["id"]),
@@ -170,7 +180,10 @@ class BillingCoordinator:
             payer_user_id=command.payer_user_id,
             catalog_version=str(price_snapshot["catalog_version"]),
             source=command.source,
-            mode="enforced",
+            mode=cast(
+                BillingMode,
+                str(request_snapshot.get("billing_mode") or "enforced"),
+            ),
         )
 
 
