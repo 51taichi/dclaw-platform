@@ -15,16 +15,20 @@ read_pending() {
   SERVER_SHA=
   CLIENT_SHA=
   IMAGE_TAG=
+  IMAGE_ID=
   while IFS='=' read -r key value; do
     case "$key" in
       SERVER_SHA) SERVER_SHA=$value ;;
       CLIENT_SHA) CLIENT_SHA=$value ;;
       IMAGE_TAG) IMAGE_TAG=$value ;;
+      IMAGE_ID) IMAGE_ID=$value ;;
     esac
   done <"$PENDING"
   [[ $SERVER_SHA =~ ^[0-9a-f]{40}$ ]] || exit 1
   [[ $CLIENT_SHA =~ ^[0-9a-f]{40}$ ]] || exit 1
   test -n "$IMAGE_TAG"
+  [[ $IMAGE_TAG =~ ^[a-zA-Z0-9._/-]+:[a-zA-Z0-9._-]+$ ]] || exit 1
+  [[ $IMAGE_ID =~ ^sha256:[0-9a-f]{64}$ ]] || exit 1
 }
 
 write_result() {
@@ -51,10 +55,10 @@ run_worker() {
   mkdir -p "$DEPLOY_ROOT/logs"
   chmod 700 "$DEPLOY_ROOT/logs"
   log_file="$DEPLOY_ROOT/logs/deploy-$timestamp.log"
-  chmod 600 "$PENDING"
   if bash "$SCRIPT_DIR/update.sh" \
     --server-sha "$SERVER_SHA" \
-    --client-sha "$CLIENT_SHA" >"$log_file" 2>&1; then
+    --client-sha "$CLIENT_SHA" \
+    --image "$IMAGE_ID" >"$log_file" 2>&1; then
     chmod 600 "$log_file"
     write_result UPDATE_SUCCESS
     return 0
@@ -68,11 +72,19 @@ run_worker() {
   return 1
 }
 
-read_pending
 if test "${1:-}" = --worker; then
+  test "$#" -eq 4 || exit 1
+  SERVER_SHA=$2
+  CLIENT_SHA=$3
+  IMAGE_ID=$4
+  [[ $SERVER_SHA =~ ^[0-9a-f]{40}$ ]] || exit 1
+  [[ $CLIENT_SHA =~ ^[0-9a-f]{40}$ ]] || exit 1
+  [[ $IMAGE_ID =~ ^sha256:[0-9a-f]{64}$ ]] || exit 1
   run_worker
   exit $?
 fi
+
+read_pending
 
 if test -s "$PID_FILE" && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
   echo "ERROR: deployment is already running" >&2
@@ -83,7 +95,8 @@ write_result UPDATE_RUNNING
 if test "${DCLAW_DEPLOY_FOREGROUND:-0}" = 1; then
   run_worker
 else
-  nohup "$0" --worker >/dev/null 2>&1 &
+  nohup "$0" --worker "$SERVER_SHA" "$CLIENT_SHA" "$IMAGE_ID" \
+    >/dev/null 2>&1 &
   printf '%s\n' "$!" >"$PID_FILE"
   chmod 600 "$PID_FILE"
 fi

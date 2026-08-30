@@ -2,97 +2,91 @@
 set -euo pipefail
 
 DEPLOY_ROOT=${DCLAW_DEPLOY_ROOT:-/opt/dclaw-deploy}
-REPOSITORY=51taichi/dclaw-server
-WORKFLOW=dclaw-combined-image.yml
-IMAGE_REPOSITORY=ghcr.io/51taichi/dclaw
-DISCOVERY_TIMEOUT=${DCLAW_BUILD_DISCOVERY_TIMEOUT:-60}
-DISCOVERY_INTERVAL=${DCLAW_BUILD_DISCOVERY_INTERVAL:-2}
+SERVER_REPOSITORY=${DCLAW_SERVER_REPOSITORY:-https://github.com/51taichi/dclaw-server.git}
+CLIENT_REPOSITORY=${DCLAW_CLIENT_REPOSITORY:-https://github.com/51taichi/dclaw-client.git}
+LOCAL_IMAGE_REPOSITORY=${DCLAW_LOCAL_IMAGE_REPOSITORY:-dclaw-local}
 SHA_PATTERN='^[0-9a-f]{40}$'
 
-command -v gh >/dev/null 2>&1 || {
+fail() {
   echo "BUILD_FAILED"
-  echo "reason：GitHub CLI is not installed"
-  exit 1
-}
-gh auth status --hostname github.com >/dev/null 2>&1 || {
-  echo "BUILD_FAILED"
-  echo "reason：GitHub CLI is not authenticated"
+  printf 'reason：%s\n' "$1"
   exit 1
 }
 
-mkdir -p "$DEPLOY_ROOT/logs"
-chmod 700 "$DEPLOY_ROOT" "$DEPLOY_ROOT/logs"
+for command in gh git docker flock; do
+  command -v "$command" >/dev/null 2>&1 || fail "$command is not installed"
+done
+gh auth status --hostname github.com >/dev/null 2>&1 ||
+  fail "GitHub CLI is not authenticated"
+
+mkdir -p "$DEPLOY_ROOT/logs" "$DEPLOY_ROOT/build-sources"
+chmod 700 "$DEPLOY_ROOT" "$DEPLOY_ROOT/logs" "$DEPLOY_ROOT/build-sources"
+exec 9>"$DEPLOY_ROOT/build-release.lock"
+flock -n 9 || fail "another local build is already running"
+rm -f "$DEPLOY_ROOT/pending-release.env"
+
 timestamp=$(date +%Y%m%d-%H%M%S)
 log_file="$DEPLOY_ROOT/logs/build-$timestamp.log"
-before_file=$(mktemp "$DEPLOY_ROOT/build-before.XXXXXX")
-after_file=$(mktemp "$DEPLOY_ROOT/build-after.XXXXXX")
-trap 'rm -f "$before_file" "$after_file"' EXIT
-chmod 600 "$before_file" "$after_file"
+context_dir=$(mktemp -d "$DEPLOY_ROOT/build-context.XXXXXX")
+trap 'rm -rf "$context_dir"' EXIT
+chmod 700 "$context_dir"
 
-SERVER_SHA=$(gh api repos/51taichi/dclaw-server/commits/main --jq .sha)
-CLIENT_SHA=$(gh api repos/51taichi/dclaw-client/commits/main --jq .sha)
-[[ $SERVER_SHA =~ $SHA_PATTERN ]] || exit 1
-[[ $CLIENT_SHA =~ $SHA_PATTERN ]] || exit 1
+SERVER_DIR="$DEPLOY_ROOT/build-sources/server"
+CLIENT_DIR="$DEPLOY_ROOT/build-sources/client"
 
-gh run list \
-  --repo "$REPOSITORY" \
-  --workflow "$WORKFLOW" \
-  --event workflow_dispatch \
-  --limit 20 \
-  --json databaseId >"$before_file"
+sync_checkout() {
+  local repository=$1
+  local directory=$2
+  if test ! -d "$directory/.git"; then
+    test ! -e "$directory" || return 1
+    git clone --no-checkout "$repository" "$directory"
+  fi
+  git -C "$directory" fetch --force --prune origin main
+  local revision
+  revision=$(git -C "$directory" rev-parse refs/remotes/origin/main)
+  [[ $revision =~ $SHA_PATTERN ]] || return 1
+  git -C "$directory" checkout --detach --force "$revision"
+  printf '%s\n' "$revision"
+}
 
-gh workflow run "$WORKFLOW" \
-  --repo "$REPOSITORY" \
-  --field "server_sha=$SERVER_SHA" \
-  --field "client_sha=$CLIENT_SHA" \
-  >"$log_file" 2>&1
+build_local_release() {
+  gh auth setup-git --hostname github.com || return 1
+  SERVER_SHA=$(sync_checkout "$SERVER_REPOSITORY" "$SERVER_DIR") || return 1
+  CLIENT_SHA=$(sync_checkout "$CLIENT_REPOSITORY" "$CLIENT_DIR") || return 1
+  [[ $SERVER_SHA =~ $SHA_PATTERN ]] || return 1
+  [[ $CLIENT_SHA =~ $SHA_PATTERN ]] || return 1
 
-RUN_ID=
-started=$SECONDS
-while ((SECONDS - started < DISCOVERY_TIMEOUT)); do
-  gh run list \
-    --repo "$REPOSITORY" \
-    --workflow "$WORKFLOW" \
-    --event workflow_dispatch \
-    --limit 20 \
-    --json databaseId >"$after_file"
-  RUN_ID=$(python3 - "$before_file" "$after_file" <<'PY'
-import json
-import sys
+  "$SERVER_DIR/scripts/release/assemble_context.sh" \
+    "$SERVER_DIR" "$CLIENT_DIR" "$context_dir/release" \
+    "$SERVER_SHA" "$CLIENT_SHA" || return 1
 
-before = {int(row["databaseId"]) for row in json.load(open(sys.argv[1]))}
-after = [int(row["databaseId"]) for row in json.load(open(sys.argv[2]))]
-print(next((value for value in after if value not in before), ""))
-PY
-  )
-  test -z "$RUN_ID" || break
-  sleep "$DISCOVERY_INTERVAL"
-done
+  IMAGE_TAG="$LOCAL_IMAGE_REPOSITORY:server-${SERVER_SHA:0:12}-client-${CLIENT_SHA:0:12}"
+  docker build \
+    --label "cn.deepmega.dclaw.server-revision=$SERVER_SHA" \
+    --label "cn.deepmega.dclaw.client-revision=$CLIENT_SHA" \
+    --tag "$IMAGE_TAG" \
+    --file "$context_dir/release/deploy/Dockerfile" \
+    "$context_dir/release" || return 1
 
-if test -z "$RUN_ID"; then
-  echo "BUILD_FAILED"
-  echo "reason：workflow run was not discovered"
-  exit 1
+  test "$(docker image inspect "$IMAGE_TAG" --format \
+    '{{index .Config.Labels "cn.deepmega.dclaw.server-revision"}}')" = "$SERVER_SHA" || return 1
+  test "$(docker image inspect "$IMAGE_TAG" --format \
+    '{{index .Config.Labels "cn.deepmega.dclaw.client-revision"}}')" = "$CLIENT_SHA"
+  IMAGE_ID=$(docker image inspect "$IMAGE_TAG" --format '{{.Id}}') || return 1
+  [[ $IMAGE_ID =~ ^sha256:[0-9a-f]{64}$ ]]
+}
+
+if ! build_local_release >"$log_file" 2>&1; then
+  chmod 600 "$log_file"
+  fail "local image build failed; log=$log_file"
 fi
 
-if ! gh run watch "$RUN_ID" \
-  --repo "$REPOSITORY" \
-  --exit-status >>"$log_file" 2>&1; then
-  echo "BUILD_FAILED"
-  printf 'server/main：%s\n' "${SERVER_SHA:0:7}"
-  printf 'client/main：%s\n' "${CLIENT_SHA:0:7}"
-  printf 'run：https://github.com/%s/actions/runs/%s\n' \
-    "$REPOSITORY" "$RUN_ID"
-  exit 1
-fi
-
-IMAGE_TAG="$IMAGE_REPOSITORY:server-${SERVER_SHA:0:12}-client-${CLIENT_SHA:0:12}"
 pending_tmp=$(mktemp "$DEPLOY_ROOT/pending-release.env.tmp.XXXXXX")
 {
   printf 'SERVER_SHA=%s\n' "$SERVER_SHA"
   printf 'CLIENT_SHA=%s\n' "$CLIENT_SHA"
   printf 'IMAGE_TAG=%s\n' "$IMAGE_TAG"
-  printf 'BUILD_RUN_ID=%s\n' "$RUN_ID"
+  printf 'IMAGE_ID=%s\n' "$IMAGE_ID"
   printf 'BUILD_LOG=%s\n' "$log_file"
 } >"$pending_tmp"
 chmod 600 "$pending_tmp" "$log_file"

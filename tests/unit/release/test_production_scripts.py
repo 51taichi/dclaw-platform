@@ -353,6 +353,7 @@ def test_quiet_deploy_uses_pinned_build_and_writes_result_summary(
     (root / "pending-release.env").write_text(
         "SERVER_SHA=" + "a" * 40 + "\n"
         "CLIENT_SHA=" + "b" * 40 + "\n"
+        "IMAGE_ID=sha256:" + "2" * 64 + "\n"
         "IMAGE_TAG=ghcr.io/51taichi/dclaw:server-"
         + "a" * 12
         + "-client-"
@@ -363,6 +364,7 @@ def test_quiet_deploy_uses_pinned_build_and_writes_result_summary(
 
     launch = _run(deployment, "deploy-release.sh")
     summary = _run(deployment, "deploy-result.sh")
+    calls = _calls(deployment)
 
     assert launch.returncode == 0, launch.stderr
     assert launch.stdout == "DEPLOY_STARTED\n"
@@ -375,6 +377,14 @@ def test_quiet_deploy_uses_pinned_build_and_writes_result_summary(
         "local_api：200\n"
         "public_api：200\n"
     )
+    assert _contains_call(calls, "image", "inspect", "sha256:" + "2" * 64)
+    assert not _contains_call(
+        calls,
+        "image",
+        "inspect",
+        "ghcr.io/51taichi/dclaw:server-aaaaaaaaaaaa-client-bbbbbbbbbbbb",
+    )
+    assert not _contains_call(calls, "pull")
 
 
 def test_quiet_deploy_failure_reports_rollback_without_success(
@@ -385,6 +395,7 @@ def test_quiet_deploy_failure_reports_rollback_without_success(
     (root / "pending-release.env").write_text(
         "SERVER_SHA=" + "a" * 40 + "\n"
         "CLIENT_SHA=" + "b" * 40 + "\n"
+        "IMAGE_ID=sha256:" + "2" * 64 + "\n"
         "IMAGE_TAG=ghcr.io/51taichi/dclaw:server-"
         + "a" * 12
         + "-client-"
@@ -433,6 +444,39 @@ def test_exact_pair_uses_immutable_tag_and_validates_both_labels(
         "ghcr.io/51taichi/dclaw:"
         f"server-{server_sha[:12]}-client-{client_sha[:12]}",
     )
+
+
+def test_exact_local_image_is_used_without_registry_pull(
+    deployment: dict[str, Any],
+) -> None:
+    server_sha = "a" * 40
+    client_sha = "b" * 40
+    local_image = (
+        "dclaw-local:server-"
+        f"{server_sha[:12]}-client-{client_sha[:12]}"
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(PRODUCTION / "update.sh"),
+            "--server-sha",
+            server_sha,
+            "--client-sha",
+            client_sha,
+            "--image",
+            local_image,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=deployment["env"],
+    )
+    calls = _calls(deployment)
+
+    assert result.returncode == 0, result.stderr
+    assert _contains_call(calls, "image", "inspect", local_image)
+    assert not _contains_call(calls, "pull", local_image)
 
 
 @pytest.mark.parametrize(

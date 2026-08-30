@@ -11,6 +11,7 @@ source "$SCRIPT_DIR/lib.sh"
 
 SERVER_SHA=
 CLIENT_SHA=
+EXPLICIT_IMAGE=
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --server-sha)
@@ -21,6 +22,11 @@ while [ "$#" -gt 0 ]; do
     --client-sha)
       test "$#" -ge 2 || die "--client-sha requires a value"
       CLIENT_SHA=$2
+      shift 2
+      ;;
+    --image)
+      test "$#" -ge 2 || die "--image requires a value"
+      EXPLICIT_IMAGE=$2
       shift 2
       ;;
     *) die "unknown argument: $1" ;;
@@ -43,10 +49,17 @@ require_command python3
 acquire_deploy_lock
 assert_runtime_resources
 
-TARGET_REFERENCE="$IMAGE_REPOSITORY:$TARGET_TAG"
-docker pull "$TARGET_REFERENCE" >/dev/null
+if [ -n "$EXPLICIT_IMAGE" ]; then
+  test -n "$SERVER_SHA" && test -n "$CLIENT_SHA" ||
+    die "--image requires both revision arguments"
+  TARGET_REFERENCE=$EXPLICIT_IMAGE
+  docker image inspect "$TARGET_REFERENCE" >/dev/null
+else
+  TARGET_REFERENCE="$IMAGE_REPOSITORY:$TARGET_TAG"
+  docker pull "$TARGET_REFERENCE" >/dev/null
+fi
 TARGET_ID=$(image_id "$TARGET_REFERENCE")
-TARGET_DIGEST=$(image_repo_digest "$TARGET_REFERENCE")
+TARGET_DIGEST=$(image_repo_digest "$TARGET_REFERENCE" 2>/dev/null || printf '%s\n' "$TARGET_ID")
 validate_immutable_digest "$TARGET_DIGEST"
 validate_image_pair "$TARGET_REFERENCE" "$SERVER_SHA" "$CLIENT_SHA"
 

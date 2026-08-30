@@ -44,11 +44,5 @@ git -C "$CLIENT_DIR" archive "$CLIENT_SHA" console |
 git -C "$CLIENT_DIR" archive "$CLIENT_SHA" website/public/docs |
   tar -x -C "$temporary_output"
 
-(
-  cd "$temporary_output/console"
-  npm ci --include=dev
-  NODE_OPTIONS=${NODE_OPTIONS:---max-old-space-size=4096} npm run build
-)
-
 mv "$temporary_output" "$OUTPUT_DIR"
 trap - EXIT

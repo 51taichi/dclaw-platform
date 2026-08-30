@@ -144,7 +144,7 @@ def test_assembler_rejects_head_mismatch(tmp_path: Path) -> None:
     assert not (tmp_path / "out").exists()
 
 
-def test_frontend_build_failure_does_not_publish_partial_context(
+def test_assembler_does_not_require_a_host_frontend_build(
     tmp_path: Path,
 ) -> None:
     server, client, server_sha, client_sha = _make_inputs(tmp_path)
@@ -159,11 +159,11 @@ def test_frontend_build_failure_does_not_publish_partial_context(
         fail_build=True,
     )
 
-    assert result.returncode == 23
-    assert not (tmp_path / "out").exists()
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "out").exists()
 
 
-def test_assembler_copies_exact_sources_and_builds_console(
+def test_assembler_copies_exact_sources_for_the_docker_build(
     tmp_path: Path,
 ) -> None:
     server, client, server_sha, client_sha = _make_inputs(tmp_path)
@@ -182,7 +182,4 @@ def test_assembler_copies_exact_sources_and_builds_console(
     assert (output / "server.txt").read_text() == "server-source\n"
     assert (output / "console/src/index.ts").is_file()
     assert (output / "website/public/docs/intro.zh.md").is_file()
-    assert (tmp_path / "npm-calls.txt").read_text().splitlines() == [
-        "|ci --include=dev",
-        "--max-old-space-size=4096|run build",
-    ]
+    assert not (tmp_path / "npm-calls.txt").exists()
