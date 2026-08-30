@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -7,16 +7,8 @@ const workflowPath = resolve(
   "../.github/workflows/dispatch-dclaw-server-image.yml",
 );
 
-describe("DClaw combined-image dispatch workflow", () => {
-  it("dispatches the immutable client main SHA to dclaw-server", () => {
-    const workflow = readFileSync(workflowPath, "utf8");
-
-    expect(workflow).toContain("branches: [main]");
-    expect(workflow).toContain("event_type=dclaw_client_main");
-    expect(workflow).toContain(
-      "client_payload[client_sha]=${{ github.sha }}",
-    );
-    expect(workflow).toContain("DCLAW_SERVER_DISPATCH_TOKEN");
-    expect(workflow).not.toContain("docker build");
+describe("DClaw combined-image release policy", () => {
+  it("does not dispatch image builds from client pushes", () => {
+    expect(existsSync(workflowPath)).toBe(false);
   });
 });
