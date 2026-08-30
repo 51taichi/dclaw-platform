@@ -150,12 +150,7 @@ export interface BillingUsageSummary {
 }
 
 export type PricingCategory =
-  | "text"
-  | "image"
-  | "video"
-  | "audio"
-  | "embedding_rerank"
-  | "other";
+  "text" | "image" | "video" | "audio" | "embedding_rerank" | "other";
 
 export interface PricingCatalogSummary {
   id: string;
@@ -228,8 +223,10 @@ export interface PricingPolicyInput {
   expected_revision: number;
 }
 
-export interface PricingPolicy
-  extends Omit<PricingPolicyInput, "expected_revision"> {
+export interface PricingPolicy extends Omit<
+  PricingPolicyInput,
+  "expected_revision"
+> {
   id: string;
   revision: number;
 }
@@ -239,4 +236,50 @@ export interface PricingImportPreview {
   status: "ready" | "blocked";
   rows: Array<Record<string, unknown>>;
   valid_rows: Array<Record<string, unknown>>;
+}
+
+export interface PricingDraftCoverage {
+  enabled_models: number;
+  matched_models: number;
+  missing_models: number;
+  excluded_models: number;
+  blocking_models: number;
+}
+
+export interface PricingDraftRisk {
+  code: string;
+  provider_id: string;
+  model_key: string;
+  unit_key?: string | null;
+}
+
+export interface PricingDraftRow {
+  provider_id: string;
+  provider_name: string;
+  model_key: string;
+  model_name: string;
+  official_provider_id?: string | null;
+  official_model_id?: string | null;
+  category: PricingCategory;
+  capability: string;
+  unit_key: string;
+  unit_size: number;
+  conditions: Record<string, unknown>;
+  rmb_cost?: string | number | null;
+  multiplier: string | number;
+  rmb_sale_price?: string | number | null;
+  credits?: number | null;
+  source_type: string;
+  source_url?: string | null;
+  verification_status: string;
+  include_in_publish: boolean;
+  exclusion_reason?: string | null;
+  registry_version?: string | null;
+}
+
+export interface PricingDraft {
+  draft_key: string;
+  coverage: PricingDraftCoverage;
+  rows: PricingDraftRow[];
+  risks: PricingDraftRisk[];
 }

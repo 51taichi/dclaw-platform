@@ -10,6 +10,10 @@ vi.mock("../../../api/modules/billing", () => ({
     listPricingModels: vi.fn(),
     listPricingHistory: vi.fn(),
     listPricingPolicies: vi.fn(),
+    generatePricingDraft: vi.fn(),
+    exportPricingDraft: vi.fn(),
+    setPricingExclusion: vi.fn(),
+    refreshOfficialPricingCandidates: vi.fn(),
   },
 }));
 
@@ -73,5 +77,37 @@ describe("PricingTab", () => {
     expect(screen.getByText(/输出：成本 ¥0.0200/)).toBeInTheDocument();
     expect(screen.getByText(/售价 ¥0.0273/)).toBeInTheDocument();
     expect(screen.queryByText(/USD|美元/)).not.toBeInTheDocument();
+  });
+
+  it("shows the first catalog workflow and draft coverage", async () => {
+    vi.mocked(billingApi.getPricingOverview).mockResolvedValue({
+      enabled_models: 2,
+      covered_models: 0,
+      catalogs: [],
+    });
+    vi.mocked(billingApi.generatePricingDraft).mockResolvedValue({
+      draft_key: "draft-1",
+      coverage: {
+        enabled_models: 2,
+        matched_models: 1,
+        missing_models: 1,
+        excluded_models: 0,
+        blocking_models: 1,
+      },
+      rows: [],
+      risks: [
+        {
+          code: "official_price_missing",
+          provider_id: "volcengine-cn",
+          model_key: "missing-model",
+        },
+      ],
+    });
+
+    render(<PricingTab />);
+
+    expect(await screen.findByText("尚未发布价格目录")).toBeInTheDocument();
+    expect(screen.getByText(/默认按官方成本的 1.5 倍/)).toBeInTheDocument();
+    expect(screen.getByText(/1 元人民币 = 100 积分/)).toBeInTheDocument();
   });
 });

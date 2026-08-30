@@ -18,6 +18,7 @@ import type {
   PricingPolicy,
   PricingPreview,
   PricingUnlock,
+  PricingDraft,
 } from "../types/billing";
 
 function query(params: Record<string, string | number | undefined>): string {
@@ -94,6 +95,40 @@ export const billingApi = {
   listPricingPolicies: () =>
     request<PricingPolicy[]>("/admin/billing/pricing/policies"),
   exportPricing: () => request<Blob>("/admin/billing/pricing/export"),
+  generatePricingDraft: (token: string) =>
+    request<PricingDraft>("/admin/billing/pricing/drafts", {
+      method: "POST",
+      headers: pricingHeaders(token),
+    }),
+  exportPricingDraft: (draftKey: string) =>
+    request<Blob>(
+      `/admin/billing/pricing/drafts/${encodeURIComponent(draftKey)}/export`,
+    ),
+  setPricingExclusion: (
+    draftKey: string,
+    providerId: string,
+    modelKey: string,
+    excluded: boolean,
+    reason: string | null,
+    token: string,
+  ) =>
+    request(
+      `/admin/billing/pricing/drafts/${encodeURIComponent(
+        draftKey,
+      )}/exclusions/${encodeURIComponent(providerId)}/${encodeURIComponent(
+        modelKey,
+      )}`,
+      {
+        method: "PUT",
+        headers: pricingHeaders(token),
+        body: JSON.stringify({ excluded, reason }),
+      },
+    ),
+  refreshOfficialPricingCandidates: (token: string) =>
+    request<{ candidate_count: number; registry_versions: string[] }>(
+      "/admin/billing/pricing/official-candidates/refresh",
+      { method: "POST", headers: pricingHeaders(token) },
+    ),
   unlockPricing: (password: string) =>
     request<PricingUnlock>("/admin/billing/pricing/unlock", {
       method: "POST",

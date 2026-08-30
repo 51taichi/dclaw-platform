@@ -14,6 +14,7 @@ import { billingApi } from "../../../api/modules/billing";
 import type {
   PriceableModel,
   PricingAudit,
+  PricingDraft,
   PricingOverview,
   PricingPolicy,
   PricingUnlock,
@@ -30,6 +31,7 @@ export default function PricingTab() {
   const [models, setModels] = useState<PriceableModel[]>([]);
   const [history, setHistory] = useState<PricingAudit[]>([]);
   const [policies, setPolicies] = useState<PricingPolicy[]>([]);
+  const [draft, setDraft] = useState<PricingDraft>();
   const [error, setError] = useState<string>();
   const [unlock, setUnlock] = useState<PricingUnlock>();
   const [unlockOpen, setUnlockOpen] = useState(false);
@@ -65,28 +67,9 @@ export default function PricingTab() {
       setUnlockOpen(true);
       return;
     }
-    const preview = await billingApi.initializePricingPreview(
-      activeUnlock.token,
-    );
-    if (!preview.publishable || !preview.catalog_id) {
-      Modal.warning({
-        title: "价格草稿暂不可发布",
-        content: `仍有 ${preview.blockers.length} 项可信成本缺失。`,
-      });
-      return;
-    }
-    Modal.confirm({
-      title: "发布首份价格目录？",
-      content: `版本 ${preview.version}，共 ${preview.rule_count} 条规则。`,
-      onOk: async () => {
-        await billingApi.publishPricingPreview(
-          preview.catalog_id!,
-          activeUnlock.token,
-        );
-        await load();
-        message.success("价格目录已发布");
-      },
-    });
+    const generated = await billingApi.generatePricingDraft(activeUnlock.token);
+    setDraft(generated);
+    message.success("已按当前启用平台与模型生成价格草案");
   };
   const importFile = async (file: File) => {
     if (!activeUnlock) {
@@ -111,11 +94,13 @@ export default function PricingTab() {
     return false;
   };
   const exportExcel = async () => {
-    const blob = await billingApi.exportPricing();
+    const blob = draft
+      ? await billingApi.exportPricingDraft(draft.draft_key)
+      : await billingApi.exportPricing();
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = "pricing-rmb.xlsx";
+    anchor.download = draft ? "pricing-draft.xlsx" : "pricing-rmb.xlsx";
     anchor.click();
     URL.revokeObjectURL(url);
   };
@@ -131,6 +116,28 @@ export default function PricingTab() {
   if (!overview) return <Spin />;
   return (
     <Space direction="vertical" style={{ width: "100%" }}>
+      {!overview.catalogs.some((item) => item.status === "published") && (
+        <Alert
+          type="warning"
+          showIcon
+          message="尚未发布价格目录"
+          description={
+            "先生成当前启用模型的价格草案。系统默认按官方成本的 1.5 倍计算，1 元人民币 = 100 积分；缺少可信价格的模型必须补价或填写原因后排除。"
+          }
+        />
+      )}
+      {draft && (
+        <Alert
+          type={draft.coverage.blocking_models ? "warning" : "success"}
+          showIcon
+          message={`草案覆盖：启用 ${draft.coverage.enabled_models}，已匹配 ${draft.coverage.matched_models}，缺价 ${draft.coverage.missing_models}，已排除 ${draft.coverage.excluded_models}`}
+          description={
+            draft.coverage.blocking_models
+              ? `仍有 ${draft.coverage.blocking_models} 个模型阻塞发布。`
+              : "草案覆盖检查已通过，可下载调整后导入审批。"
+          }
+        />
+      )}
       <Space wrap>
         <Button
           type={activeUnlock ? "default" : "primary"}
@@ -145,7 +152,7 @@ export default function PricingTab() {
           </Tag>
         )}
         <Button disabled={!activeUnlock} onClick={() => void initialize()}>
-          生成初始化草稿
+          生成价格草案
         </Button>
         <Upload
           accept=".xlsx"
@@ -157,7 +164,21 @@ export default function PricingTab() {
         >
           <Button disabled={!activeUnlock}>导入Excel</Button>
         </Upload>
-        <Button onClick={() => void exportExcel()}>导出Excel</Button>
+        <Button onClick={() => void exportExcel()}>
+          {draft ? "下载价格草案" : "导出当前价格"}
+        </Button>
+        <Button
+          disabled={!activeUnlock}
+          onClick={async () => {
+            if (!activeUnlock) return;
+            const result = await billingApi.refreshOfficialPricingCandidates(
+              activeUnlock.token,
+            );
+            message.success(`已刷新 ${result.candidate_count} 条官方候选价格`);
+          }}
+        >
+          刷新官方候选
+        </Button>
       </Space>
       <Tabs
         items={[
@@ -195,7 +216,37 @@ export default function PricingTab() {
             children: (
               <PricingDrafts
                 catalogs={overview.catalogs}
+                draft={draft}
                 canMutate={Boolean(activeUnlock)}
+                onPublish={(id) => {
+                  if (!activeUnlock) return;
+                  Modal.confirm({
+                    title: "确认发布价格目录？",
+                    content: "发布后只影响新请求，历史价格快照保持不变。",
+                    onOk: async () => {
+                      await billingApi.publishPricingPreview(
+                        id,
+                        activeUnlock.token,
+                      );
+                      await load();
+                      message.success("价格目录已发布");
+                    },
+                  });
+                }}
+                onExclusion={async (providerId, modelKey, excluded, reason) => {
+                  if (!activeUnlock || !draft) return;
+                  await billingApi.setPricingExclusion(
+                    draft.draft_key,
+                    providerId,
+                    modelKey,
+                    excluded,
+                    reason,
+                    activeUnlock.token,
+                  );
+                  setDraft(
+                    await billingApi.generatePricingDraft(activeUnlock.token),
+                  );
+                }}
                 onRollback={(id) => {
                   if (!activeUnlock) return;
                   Modal.confirm({

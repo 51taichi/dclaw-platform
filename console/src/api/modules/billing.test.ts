@@ -87,4 +87,34 @@ describe("billingApi", () => {
       false,
     );
   });
+
+  it("uses the draft, workbook, exclusion and refresh contracts", async () => {
+    await billingApi.generatePricingDraft("unlock-token");
+    await billingApi.exportPricingDraft("draft key");
+    await billingApi.setPricingExclusion(
+      "draft key",
+      "volcengine-cn",
+      "model/x",
+      true,
+      "no verified price",
+      "unlock-token",
+    );
+    await billingApi.refreshOfficialPricingCandidates("unlock-token");
+
+    const calls = vi.mocked(fetch).mock.calls;
+    expect(String(calls[0][0])).toContain("/api/admin/billing/pricing/drafts");
+    expect(calls[0][1]?.method).toBe("POST");
+    expect(String(calls[1][0])).toContain("/pricing/drafts/draft%20key/export");
+    expect(String(calls[2][0])).toContain(
+      "/exclusions/volcengine-cn/model%2Fx",
+    );
+    expect(calls[2][1]?.method).toBe("PUT");
+    expect(JSON.parse(String(calls[2][1]?.body))).toEqual({
+      excluded: true,
+      reason: "no verified price",
+    });
+    expect(String(calls[3][0])).toContain(
+      "/pricing/official-candidates/refresh",
+    );
+  });
 });
