@@ -10,10 +10,12 @@ vi.mock("../../../api/modules/billing", () => ({
     listPricingModels: vi.fn(),
     listPricingHistory: vi.fn(),
     listPricingPolicies: vi.fn(),
+    listPricingModelMappings: vi.fn(),
     generatePricingDraft: vi.fn(),
     exportPricingDraft: vi.fn(),
     setPricingExclusion: vi.fn(),
     refreshOfficialPricingCandidates: vi.fn(),
+    savePricingModelMapping: vi.fn(),
   },
 }));
 
@@ -65,6 +67,7 @@ describe("PricingTab", () => {
     ]);
     vi.mocked(billingApi.listPricingHistory).mockResolvedValue([]);
     vi.mocked(billingApi.listPricingPolicies).mockResolvedValue([]);
+    vi.mocked(billingApi.listPricingModelMappings).mockResolvedValue([]);
   });
 
   it("groups models and renders RMB without foreign currency", async () => {

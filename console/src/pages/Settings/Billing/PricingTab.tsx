@@ -15,6 +15,7 @@ import type {
   PriceableModel,
   PricingAudit,
   PricingDraft,
+  PricingModelMapping,
   PricingOverview,
   PricingPolicy,
   PricingUnlock,
@@ -32,6 +33,7 @@ export default function PricingTab() {
   const [history, setHistory] = useState<PricingAudit[]>([]);
   const [policies, setPolicies] = useState<PricingPolicy[]>([]);
   const [draft, setDraft] = useState<PricingDraft>();
+  const [mappings, setMappings] = useState<PricingModelMapping[]>([]);
   const [error, setError] = useState<string>();
   const [unlock, setUnlock] = useState<PricingUnlock>();
   const [unlockOpen, setUnlockOpen] = useState(false);
@@ -42,14 +44,24 @@ export default function PricingTab() {
       billingApi.listPricingModels(),
       billingApi.listPricingHistory(),
       billingApi.listPricingPolicies(),
+      billingApi.listPricingModelMappings(),
     ])
-      .then(([nextOverview, nextModels, nextHistory, nextPolicies]) => {
-        setOverview(nextOverview);
-        setModels(nextModels);
-        setHistory(nextHistory);
-        setPolicies(nextPolicies);
-        setError(undefined);
-      })
+      .then(
+        ([
+          nextOverview,
+          nextModels,
+          nextHistory,
+          nextPolicies,
+          nextMappings,
+        ]) => {
+          setOverview(nextOverview);
+          setModels(nextModels);
+          setHistory(nextHistory);
+          setPolicies(nextPolicies);
+          setMappings(nextMappings);
+          setError(undefined);
+        },
+      )
       .catch((reason) => setError(String(reason)));
   useEffect(() => {
     void load();
@@ -82,15 +94,50 @@ export default function PricingTab() {
         title: "Excel预检未通过",
         content: `发现 ${preview.rows.length} 项问题。`,
       });
-    else
+    else {
+      const included = preview.valid_rows.filter(
+        (row) => row.excluded !== true,
+      );
+      const excluded = preview.valid_rows.filter(
+        (row) => row.excluded === true,
+      );
+      const models = new Set(
+        included.map(
+          (row) => `${String(row.provider_id)}/${String(row.model_key)}`,
+        ),
+      );
+      const review = preview.pricing_preview?.review;
       Modal.confirm({
-        title: "确认导入价格草稿？",
-        content: `预检通过 ${preview.valid_rows.length} 行，导入后仍需单独发布。`,
+        title: "审批并导入价格草稿？",
+        width: 900,
+        okText: "确认审批导入",
+        content: (
+          <Space direction="vertical" style={{ width: "100%" }}>
+            <div>
+              服务端权威预检：
+              {review?.included_dimensions ?? included.length}
+              个纳入维度、{review?.included_models ?? models.size}
+              个纳入模型、{review?.excluded_models ?? excluded.length}
+              个排除模型、{review?.manual_dimensions ?? 0} 个人工价格维度。
+            </div>
+            <div>确认后价格证据即完成审批，仍需单独发布才会正式计费。</div>
+            <pre
+              style={{
+                maxHeight: 320,
+                overflow: "auto",
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {JSON.stringify(review?.rows ?? preview.valid_rows, null, 2)}
+            </pre>
+          </Space>
+        ),
         onOk: async () => {
           await billingApi.confirmPricingImport(preview.id, activeUnlock.token);
           await load();
         },
       });
+    }
     return false;
   };
   const exportExcel = async () => {
@@ -138,6 +185,14 @@ export default function PricingTab() {
           }
         />
       )}
+      {draft?.coverage.missing_models ? (
+        <Alert
+          type="info"
+          showIcon
+          message="缺价模型可精确映射或人工补齐"
+          description="优先在价格草稿中配置官方平台与模型的精确映射；若供应商没有可核验的内置价，可在 Excel 缺价行中按填写说明新增多个人工计价维度并提供 HTTPS 价格来源，再导入审批。"
+        />
+      ) : null}
       <Space wrap>
         <Button
           type={activeUnlock ? "default" : "primary"}
@@ -220,9 +275,19 @@ export default function PricingTab() {
                 canMutate={Boolean(activeUnlock)}
                 onPublish={(id) => {
                   if (!activeUnlock) return;
+                  const selected = overview.catalogs.find(
+                    (catalog) => catalog.id === id,
+                  );
+                  const exclusions = Array.isArray(
+                    selected?.metadata.exclusions,
+                  )
+                    ? selected.metadata.exclusions.length
+                    : 0;
                   Modal.confirm({
                     title: "确认发布价格目录？",
-                    content: "发布后只影响新请求，历史价格快照保持不变。",
+                    content: `将发布版本 ${selected?.version ?? id}：${
+                      selected?.rules?.length ?? 0
+                    } 条分层计价规则，${exclusions} 个明确排除模型。发布后只影响新请求，历史价格快照保持不变。`,
                     onOk: async () => {
                       await billingApi.publishPricingPreview(
                         id,
@@ -232,6 +297,31 @@ export default function PricingTab() {
                       message.success("价格目录已发布");
                     },
                   });
+                }}
+                onMapping={async (
+                  providerId,
+                  modelKey,
+                  officialProviderId,
+                  officialModelId,
+                ) => {
+                  if (!activeUnlock) return;
+                  await billingApi.savePricingModelMapping(
+                    providerId,
+                    modelKey,
+                    officialProviderId,
+                    officialModelId,
+                    mappings.find(
+                      (item) =>
+                        item.provider_id === providerId &&
+                        item.model_key === modelKey,
+                    )?.revision ?? 0,
+                    activeUnlock.token,
+                  );
+                  setDraft(
+                    await billingApi.generatePricingDraft(activeUnlock.token),
+                  );
+                  setMappings(await billingApi.listPricingModelMappings());
+                  message.success("官方模型精确映射已保存，草案已重新生成");
                 }}
                 onExclusion={async (providerId, modelKey, excluded, reason) => {
                   if (!activeUnlock || !draft) return;

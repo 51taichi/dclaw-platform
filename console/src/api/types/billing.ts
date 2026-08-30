@@ -150,7 +150,12 @@ export interface BillingUsageSummary {
 }
 
 export type PricingCategory =
-  "text" | "image" | "video" | "audio" | "embedding_rerank" | "other";
+  | "text"
+  | "image"
+  | "video"
+  | "audio"
+  | "embedding_rerank"
+  | "other";
 
 export interface PricingCatalogSummary {
   id: string;
@@ -213,6 +218,13 @@ export interface PricingPreview {
     model_key: string;
     unit_key: string;
   }>;
+  review?: {
+    included_models: number;
+    included_dimensions: number;
+    excluded_models: number;
+    manual_dimensions: number;
+    rows: Array<Record<string, unknown>>;
+  };
 }
 
 export interface PricingPolicyInput {
@@ -223,10 +235,8 @@ export interface PricingPolicyInput {
   expected_revision: number;
 }
 
-export interface PricingPolicy extends Omit<
-  PricingPolicyInput,
-  "expected_revision"
-> {
+export interface PricingPolicy
+  extends Omit<PricingPolicyInput, "expected_revision"> {
   id: string;
   revision: number;
 }
@@ -236,6 +246,7 @@ export interface PricingImportPreview {
   status: "ready" | "blocked";
   rows: Array<Record<string, unknown>>;
   valid_rows: Array<Record<string, unknown>>;
+  pricing_preview?: PricingPreview;
 }
 
 export interface PricingDraftCoverage {
@@ -282,4 +293,13 @@ export interface PricingDraft {
   coverage: PricingDraftCoverage;
   rows: PricingDraftRow[];
   risks: PricingDraftRisk[];
+}
+
+export interface PricingModelMapping {
+  id: string;
+  provider_id: string;
+  model_key: string;
+  official_provider_id: string;
+  official_model_id: string;
+  revision: number;
 }

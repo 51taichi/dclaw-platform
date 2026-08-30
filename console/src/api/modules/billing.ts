@@ -14,6 +14,7 @@ import type {
   PriceableModel,
   PricingImportPreview,
   PricingOverview,
+  PricingModelMapping,
   PricingPolicyInput,
   PricingPolicy,
   PricingPreview,
@@ -94,6 +95,8 @@ export const billingApi = {
     request<PricingAudit[]>("/admin/billing/pricing/history"),
   listPricingPolicies: () =>
     request<PricingPolicy[]>("/admin/billing/pricing/policies"),
+  listPricingModelMappings: () =>
+    request<PricingModelMapping[]>("/admin/billing/pricing/model-mappings"),
   exportPricing: () => request<Blob>("/admin/billing/pricing/export"),
   generatePricingDraft: (token: string) =>
     request<PricingDraft>("/admin/billing/pricing/drafts", {
@@ -122,6 +125,28 @@ export const billingApi = {
         method: "PUT",
         headers: pricingHeaders(token),
         body: JSON.stringify({ excluded, reason }),
+      },
+    ),
+  savePricingModelMapping: (
+    providerId: string,
+    modelKey: string,
+    officialProviderId: string,
+    officialModelId: string,
+    expectedRevision: number,
+    token: string,
+  ) =>
+    request<PricingModelMapping>(
+      `/admin/billing/pricing/model-mappings/${encodeURIComponent(
+        providerId,
+      )}/${encodeURIComponent(modelKey)}`,
+      {
+        method: "PUT",
+        headers: pricingHeaders(token),
+        body: JSON.stringify({
+          official_provider_id: officialProviderId,
+          official_model_id: officialModelId,
+          expected_revision: expectedRevision,
+        }),
       },
     ),
   refreshOfficialPricingCandidates: (token: string) =>
