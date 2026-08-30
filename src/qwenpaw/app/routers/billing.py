@@ -27,6 +27,10 @@ from ..billing.pricing_inventory import PricingModelInventory
 from ..billing.pricing_excel import PricingExcelService
 from ..billing.official_pricing import OfficialPriceRegistry
 from ..billing.pricing_sync import refresh_official_candidates
+from ..billing.pricing_sync_runtime import (
+    PricingCollectionRuntime,
+    build_pricing_collection_runtime,
+)
 from ..auth import verify_password
 from ..billing.usage import (
     IdempotencyConflictError,
@@ -158,6 +162,32 @@ class PricingExclusionBody(BaseModel):
     reason: str | None = Field(default=None, max_length=2000)
 
 
+class PricingModelDecisionItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider_id: str = Field(min_length=1, max_length=255)
+    model_key: str = Field(min_length=1, max_length=255)
+    include_in_publish: bool
+    reason: str | None = Field(default=None, max_length=2000)
+
+
+class PricingModelDecisionsBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    decisions: list[PricingModelDecisionItem] = Field(
+        min_length=1, max_length=1000
+    )
+
+
+class PricingBatchDecisionBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    include_in_publish: bool
+    provider_ids: list[str] = Field(default_factory=list, max_length=1000)
+    evidence_levels: list[str] = Field(
+        default_factory=list, max_length=10
+    )
+    model_keys: list[str] = Field(default_factory=list, max_length=1000)
+    reason: str | None = Field(default=None, max_length=2000)
+
+
 class PricingModelMappingBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     official_provider_id: str = Field(min_length=1, max_length=255)
@@ -210,6 +240,10 @@ def get_pricing_admin_service() -> PricingAdminService:
         catalogs,
         PricingModelInventory(ProviderManager.get_instance()),
     )
+
+
+def get_pricing_collection_runtime() -> PricingCollectionRuntime:
+    return build_pricing_collection_runtime(ProviderManager.get_instance())
 
 
 def get_pricing_excel_service() -> PricingExcelService:
@@ -686,6 +720,48 @@ def set_pricing_draft_exclusion(
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 
+@admin_router.put("/pricing/drafts/{draft_key}/model-decisions")
+def set_pricing_model_decisions(
+    draft_key: str,
+    payload: PricingModelDecisionsBody,
+    request: Request,
+    actor_id: str = Depends(require_pricing_unlock),
+) -> list[dict[str, Any]]:
+    try:
+        return get_pricing_admin_service().set_model_decisions(
+            draft_key,
+            [decision.model_dump() for decision in payload.decisions],
+            actor_id,
+            request.client.host if request.client else None,
+        )
+    except ValueError as exc:
+        status_code = 409 if "stale" in str(exc) else 422
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@admin_router.post("/pricing/drafts/{draft_key}/batch-decision")
+def batch_set_pricing_model_decision(
+    draft_key: str,
+    payload: PricingBatchDecisionBody,
+    request: Request,
+    actor_id: str = Depends(require_pricing_unlock),
+) -> dict[str, Any]:
+    try:
+        return get_pricing_admin_service().batch_set_model_decision(
+            draft_key,
+            include_in_publish=payload.include_in_publish,
+            provider_ids=payload.provider_ids,
+            evidence_levels=payload.evidence_levels,
+            model_keys=payload.model_keys,
+            reason=payload.reason,
+            actor_id=actor_id,
+            ip_address=request.client.host if request.client else None,
+        )
+    except ValueError as exc:
+        status_code = 409 if "stale" in str(exc) else 422
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
 @admin_router.post("/pricing/official-candidates/refresh")
 def refresh_pricing_candidates(
     _actor_id: str = Depends(require_pricing_unlock),
@@ -694,6 +770,28 @@ def refresh_pricing_candidates(
         OfficialPriceRegistry.load_bundled(),
         get_pricing_admin_service().repository,
     )
+
+
+@admin_router.post("/pricing/collection-jobs", status_code=202)
+def start_pricing_collection(request: Request) -> dict[str, Any]:
+    return get_pricing_collection_runtime().enqueue(
+        _authenticated_owner(request)
+    )
+
+
+@admin_router.get("/pricing/collection-jobs")
+def list_pricing_collection_jobs() -> list[dict[str, Any]]:
+    return get_pricing_collection_runtime().list()
+
+
+@admin_router.get("/pricing/collection-jobs/{job_id}")
+def get_pricing_collection_job(job_id: str) -> dict[str, Any]:
+    job = get_pricing_collection_runtime().get(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=404, detail="Pricing collection job not found"
+        )
+    return job
 
 
 @admin_router.get("/pricing/model-mappings")

@@ -277,17 +277,49 @@ class PricingAdminRepository:
         requested_by: str,
         now: datetime,
     ) -> dict[str, Any]:
-        row = {
-            "id": str(uuid4()),
-            "inventory_digest": inventory_digest,
-            "status": "pending",
-            "requested_by": requested_by,
-            "progress_json": "{}",
-            "created_at": now,
-        }
         with self.engine.begin() as conn:
+            active = (
+                conn.execute(
+                    select(billing_pricing_collection_jobs).where(
+                        billing_pricing_collection_jobs.c.inventory_digest
+                        == inventory_digest,
+                        billing_pricing_collection_jobs.c.status.in_(
+                            ("pending", "running")
+                        ),
+                    )
+                    .order_by(
+                        billing_pricing_collection_jobs.c.created_at.desc()
+                    )
+                    .limit(1)
+                )
+                .mappings()
+                .first()
+            )
+            if active is not None:
+                return dict(active)
+            row = {
+                "id": str(uuid4()),
+                "inventory_digest": inventory_digest,
+                "status": "pending",
+                "requested_by": requested_by,
+                "progress_json": "{}",
+                "created_at": now,
+            }
             conn.execute(insert(billing_pricing_collection_jobs).values(**row))
         return dict(row)
+
+    def list_collection_jobs(self, limit: int = 20) -> list[dict[str, Any]]:
+        with self.engine.connect() as conn:
+            rows = list(
+                conn.execute(
+                    select(billing_pricing_collection_jobs)
+                    .order_by(
+                        billing_pricing_collection_jobs.c.created_at.desc()
+                    )
+                    .limit(max(1, min(limit, 100)))
+                ).mappings()
+            )
+        return [self._collection_job_result(row) for row in rows]
 
     def get_collection_job(self, job_id: str) -> dict[str, Any] | None:
         with self.engine.connect() as conn:
@@ -302,6 +334,31 @@ class PricingAdminRepository:
             )
         if row is None:
             return None
+        result = self._collection_job_result(row)
+        with self.engine.connect() as conn:
+            items = list(
+                conn.execute(
+                    select(billing_pricing_collection_items)
+                    .where(billing_pricing_collection_items.c.job_id == job_id)
+                    .order_by(
+                        billing_pricing_collection_items.c.provider_id,
+                        billing_pricing_collection_items.c.model_key,
+                    )
+                ).mappings()
+            )
+        result["items"] = [
+            {
+                **dict(item),
+                "result": json.loads(str(item["result_json"] or "{}")),
+            }
+            for item in items
+        ]
+        for item in result["items"]:
+            item.pop("result_json", None)
+        return result
+
+    @staticmethod
+    def _collection_job_result(row: Mapping[str, Any]) -> dict[str, Any]:
         result = dict(row)
         result["progress"] = json.loads(
             str(result.pop("progress_json") or "{}")
@@ -453,6 +510,66 @@ class PricingAdminRepository:
             "result": dict(result),
         }
 
+    def renew_collection_job(
+        self,
+        job_id: str,
+        worker_id: str,
+        now: datetime,
+        lease_seconds: int,
+    ) -> bool:
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                update(billing_pricing_collection_jobs)
+                .where(
+                    billing_pricing_collection_jobs.c.id == job_id,
+                    billing_pricing_collection_jobs.c.status == "running",
+                    billing_pricing_collection_jobs.c.worker_id == worker_id,
+                )
+                .values(
+                    lease_expires_at=now + timedelta(seconds=lease_seconds)
+                )
+            )
+        return result.rowcount == 1
+
+    def finish_collection_job(
+        self,
+        job_id: str,
+        worker_id: str,
+        now: datetime,
+    ) -> str:
+        with self.engine.begin() as conn:
+            item_statuses = tuple(
+                conn.execute(
+                    select(billing_pricing_collection_items.c.status).where(
+                        billing_pricing_collection_items.c.job_id == job_id
+                    )
+                ).scalars()
+            )
+            failed = sum(value == "failed" for value in item_statuses)
+            succeeded = len(item_statuses) - failed
+            if failed and succeeded:
+                status = "partially_succeeded"
+            elif failed:
+                status = "failed"
+            else:
+                status = "succeeded"
+            result = conn.execute(
+                update(billing_pricing_collection_jobs)
+                .where(
+                    billing_pricing_collection_jobs.c.id == job_id,
+                    billing_pricing_collection_jobs.c.status == "running",
+                    billing_pricing_collection_jobs.c.worker_id == worker_id,
+                )
+                .values(
+                    status=status,
+                    lease_expires_at=None,
+                    finished_at=now,
+                )
+            )
+            if result.rowcount != 1:
+                raise RuntimeError("pricing collection job ownership lost")
+        return status
+
     def set_model_publication_decisions(
         self,
         draft_key: str,
@@ -514,6 +631,25 @@ class PricingAdminRepository:
                     }
                 )
         return saved
+
+    def list_model_publication_decisions(
+        self, draft_key: str
+    ) -> list[dict[str, Any]]:
+        with self.engine.connect() as conn:
+            return [
+                dict(row)
+                for row in conn.execute(
+                    select(billing_pricing_model_decisions)
+                    .where(
+                        billing_pricing_model_decisions.c.draft_key
+                        == draft_key
+                    )
+                    .order_by(
+                        billing_pricing_model_decisions.c.provider_id,
+                        billing_pricing_model_decisions.c.model_key,
+                    )
+                ).mappings()
+            ]
 
     def replace_policy(
         self,

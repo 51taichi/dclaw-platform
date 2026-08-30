@@ -168,6 +168,36 @@ def test_collection_job_claim_has_one_winner(repo):
     assert repo.get_collection_job(job["id"])["status"] == "running"
 
 
+def test_collection_job_creation_reuses_active_inventory_job(repo):
+    now = datetime(2026, 8, 30, tzinfo=timezone.utc)
+    first = repo.create_collection_job("digest-1", "admin-1", now)
+    replay = repo.create_collection_job("digest-1", "admin-2", now)
+
+    assert replay["id"] == first["id"]
+    assert len(repo.list_collection_jobs()) == 1
+
+
+def test_collection_job_detail_contains_model_items(repo):
+    now = datetime(2026, 8, 30, tzinfo=timezone.utc)
+    job = repo.create_collection_job("digest-1", "admin-1", now)
+    repo.update_collection_item(
+        job["id"],
+        "dashscope",
+        "qwen-plus",
+        "cn-beijing",
+        status="failed",
+        result={"evidence_level": "failed"},
+        candidate_id=None,
+        error_summary="not found",
+        now=now,
+    )
+
+    detail = repo.get_collection_job(job["id"])
+    assert detail is not None
+    assert detail["items"][0]["model_key"] == "qwen-plus"
+    assert detail["items"][0]["result"]["evidence_level"] == "failed"
+
+
 def test_expired_collection_job_can_be_reclaimed(repo):
     now = datetime.now(timezone.utc)
     job = repo.create_collection_job("inventory-digest", "admin-1", now)

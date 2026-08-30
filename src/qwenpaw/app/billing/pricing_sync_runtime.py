@@ -7,15 +7,22 @@ import hashlib
 import json
 import logging
 import os
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
-from decimal import ROUND_CEILING, Decimal
+from decimal import Decimal
 from typing import Any
 from urllib.request import Request, urlopen
 
 from ..storage.engine import get_app_engine
-from ..storage.repos.price_catalog_repo import PriceCatalogRepository
 from ..storage.repos.pricing_admin_repo import PricingAdminRepository
-from .pricing import PriceCatalogDraft, PriceCatalogService, PriceRule
+from .official_pricing import OfficialPriceRegistry
+from .pricing_collectors import (
+    CollectionStage,
+    EVIDENCE_DEFAULTS,
+    OfficialRegistryCollector,
+    PricingCollectionPipeline,
+)
+from .pricing_inventory import PricingModelInventory
 from .pricing_sync import (
     PricingSource,
     PricingSyncService,
@@ -23,6 +30,255 @@ from .pricing_sync import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class PricingCollectionRuntime:
+    """Run durable price collection jobs independently of HTTP requests."""
+
+    def __init__(
+        self,
+        repository: PricingAdminRepository,
+        inventory: Any,
+        pipeline: Any,
+        *,
+        clock: Any | None = None,
+        lease_seconds: int = 60,
+    ) -> None:
+        self.repository = repository
+        self.inventory = inventory
+        self.pipeline = pipeline
+        self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.lease_seconds = lease_seconds
+
+    def enqueue(self, actor_id: str) -> dict[str, Any]:
+        models = tuple(self.inventory.list_enabled())
+        inventory_digest = hashlib.sha256(
+            json.dumps(
+                [asdict(model) for model in models],
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        return self.repository.create_collection_job(
+            inventory_digest,
+            actor_id,
+            self.clock(),
+        )
+
+    def get(self, job_id: str) -> dict[str, Any] | None:
+        return self.repository.get_collection_job(job_id)
+
+    def list(self) -> list[dict[str, Any]]:
+        return self.repository.list_collection_jobs()
+
+    async def run_pending_once(self, worker_id: str) -> str | None:
+        now = self.clock()
+        job = self.repository.claim_collection_job(
+            worker_id,
+            now,
+            self.lease_seconds,
+        )
+        if job is None:
+            return None
+        for model in tuple(self.inventory.list_enabled()):
+            try:
+                result = await asyncio.to_thread(self.pipeline.collect, model)
+            except Exception as exc:
+                logger.exception(
+                    "Pricing collection failed for %s/%s",
+                    model.provider_id,
+                    model.model_key,
+                )
+                self.repository.update_collection_item(
+                    str(job["id"]),
+                    model.provider_id,
+                    model.model_key,
+                    model.pricing_region,
+                    status="failed",
+                    result={"evidence_level": "failed"},
+                    candidate_id=None,
+                    error_summary=str(exc),
+                    now=self.clock(),
+                )
+                if not self.repository.renew_collection_job(
+                    str(job["id"]),
+                    worker_id,
+                    self.clock(),
+                    self.lease_seconds,
+                ):
+                    raise RuntimeError(
+                        "pricing collection job ownership lost"
+                    ) from exc
+                continue
+            candidate_ids = [
+                self._persist_candidate(candidate)
+                for candidate in result.candidates
+            ]
+            status = (
+                "official_succeeded"
+                if result.evidence_level == "official_verified"
+                else result.evidence_level
+                if result.evidence_level.startswith("ai_")
+                else "failed"
+            )
+            self.repository.update_collection_item(
+                str(job["id"]),
+                model.provider_id,
+                model.model_key,
+                model.pricing_region,
+                status=status,
+                result={
+                    "evidence_level": result.evidence_level,
+                    "default_multiplier": (
+                        str(result.default_multiplier)
+                        if result.default_multiplier is not None
+                        else None
+                    ),
+                    "default_include_in_publish": (
+                        result.default_include_in_publish
+                    ),
+                    "attempt_errors": list(result.attempt_errors),
+                },
+                candidate_id=candidate_ids[0] if candidate_ids else None,
+                error_summary=(
+                    "; ".join(result.attempt_errors) or None
+                ),
+                now=self.clock(),
+            )
+            if not self.repository.renew_collection_job(
+                str(job["id"]),
+                worker_id,
+                self.clock(),
+                self.lease_seconds,
+            ):
+                raise RuntimeError("pricing collection job ownership lost")
+        return self.repository.finish_collection_job(
+            str(job["id"]), worker_id, self.clock()
+        )
+
+    def _persist_candidate(self, candidate: Any) -> str:
+        conditions = dict(candidate.conditions) | {
+            "unit_size": candidate.unit_size
+        }
+        conditions_json = json.dumps(
+            conditions,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        identity = {
+            "provider_id": candidate.provider_id,
+            "official_model_id": candidate.official_model_id,
+            "pricing_region": candidate.pricing_region,
+            "capability": candidate.capability,
+            "unit_key": candidate.unit_key,
+            "conditions": conditions,
+            "original_currency": candidate.original_currency,
+            "original_price_decimal": str(candidate.original_price),
+            "rmb_cost_decimal": str(candidate.rmb_cost),
+            "source_url": candidate.source_url,
+            "evidence_level": candidate.evidence_level,
+            "collector_version": candidate.collector_version,
+        }
+        multiplier = EVIDENCE_DEFAULTS[candidate.evidence_level][0]
+        fx_rate = (
+            candidate.rmb_cost / candidate.original_price
+            if candidate.original_price
+            else Decimal(1)
+        )
+        return self.repository.append_official_candidate(
+            {
+                "content_sha256": hashlib.sha256(
+                    json.dumps(
+                        identity,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest(),
+                "provider_id": candidate.provider_id,
+                "official_model_id": candidate.official_model_id,
+                "capability": candidate.capability,
+                "unit_key": candidate.unit_key,
+                "conditions_digest": hashlib.sha256(
+                    conditions_json.encode()
+                ).hexdigest(),
+                "conditions": conditions,
+                "source_url": candidate.source_url or "",
+                "source_published_at": None,
+                "original_currency": candidate.original_currency,
+                "original_price_decimal": str(candidate.original_price),
+                "fx_rate_decimal": str(fx_rate),
+                "rmb_cost_decimal": str(candidate.rmb_cost),
+                "verification_status": (
+                    "verified"
+                    if candidate.evidence_level == "official_verified"
+                    else "candidate"
+                ),
+                "registry_version": candidate.collector_version,
+                "evidence_level": candidate.evidence_level,
+                "evidence_excerpt": candidate.evidence_excerpt,
+                "collector_version": candidate.collector_version,
+                "ai_model": candidate.ai_model,
+                "prompt_version": candidate.prompt_version,
+                "confidence_decimal": (
+                    str(candidate.confidence)
+                    if candidate.confidence is not None
+                    else None
+                ),
+                "default_multiplier_decimal": (
+                    str(multiplier) if multiplier is not None else None
+                ),
+            }
+        )
+
+
+async def pricing_collection_loop(
+    runtime: PricingCollectionRuntime,
+    worker_id: str,
+    *,
+    poll_seconds: float = 5,
+) -> None:
+    """Continuously drain durable pricing jobs; cancellation is cooperative."""
+    while True:
+        try:
+            await runtime.run_pending_once(worker_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "Pricing collection job failed; published catalog retained"
+            )
+        await asyncio.sleep(poll_seconds)
+
+
+def build_pricing_collection_runtime(
+    provider_manager: Any,
+) -> PricingCollectionRuntime:
+    official_hosts = {
+        "dashscope": frozenset(
+            {"help.aliyun.com", "dashscope.aliyun.com"}
+        ),
+        "volcengine": frozenset(
+            {"www.volcengine.com", "ark.cn-beijing.volces.com"}
+        ),
+    }
+    pipeline = PricingCollectionPipeline(
+        (
+            CollectionStage(
+                "bundled-official",
+                OfficialRegistryCollector(
+                    OfficialPriceRegistry.load_bundled(), official_hosts
+                ),
+            ),
+        )
+    )
+    return PricingCollectionRuntime(
+        PricingAdminRepository(get_app_engine()),
+        PricingModelInventory(provider_manager),
+        pipeline,
+    )
 
 
 class NormalizedHttpPricingAdapter:
@@ -117,109 +373,25 @@ class NormalizedHttpPricingAdapter:
 
 
 class AutoProtectionPublisher:
-    """Clone the active catalog and raise one model by a bounded percentage."""
+    """Record a protection candidate without changing the formal catalog."""
 
     def __init__(self, repository: PricingAdminRepository) -> None:
         self.admin = repository
-        self.catalogs = PriceCatalogRepository(repository.engine)
-        self._last_effective_at: datetime | None = None
 
     def __call__(self, result: ProtectionResult) -> None:
-        now = result.created_at
-        if self._last_effective_at is not None and now <= self._last_effective_at:
-            now = self._last_effective_at + timedelta(microseconds=1)
-        self._last_effective_at = now
-        current = self.catalogs.effective_catalog(now)
-        provider_id, model_key = result.model_key.split("/", 1)
-        factor = Decimal(1) + result.applied_raise
-
-        def raised(value: int) -> int:
-            return (
-                int(
-                    (Decimal(value) * factor).to_integral_value(
-                        rounding=ROUND_CEILING
-                    )
-                )
-                if value
-                else 0
-            )
-
-        def metadata_for(rule: dict[str, Any]) -> dict[str, Any]:
-            metadata = dict(rule["metadata"])
-            if (rule["provider_id"], rule["model_key"]) != (
-                provider_id,
-                model_key,
-            ):
-                return metadata
-            for key in (
-                "rmb_sale_price",
-                "input_rmb_sale_price",
-                "output_rmb_sale_price",
-            ):
-                if metadata.get(key) is not None:
-                    metadata[key] = str(Decimal(str(metadata[key])) * factor)
-            metadata["auto_protection_raise"] = str(result.applied_raise)
-            return metadata
-
-        rules = tuple(
-            PriceRule(
-                id=rule["id"],
-                provider_id=rule["provider_id"],
-                model_key=rule["model_key"],
-                capability=rule["capability"],
-                unit_type=rule["unit_type"],
-                priority=rule["priority"],
-                unit_size=rule["unit_size"],
-                credits_per_unit=(
-                    raised(rule["credits_per_unit"])
-                    if (rule["provider_id"], rule["model_key"])
-                    == (provider_id, model_key)
-                    else rule["credits_per_unit"]
-                ),
-                input_credits_per_1k=(
-                    raised(rule["input_credits_per_1k"])
-                    if (rule["provider_id"], rule["model_key"])
-                    == (provider_id, model_key)
-                    else rule["input_credits_per_1k"]
-                ),
-                output_credits_per_1k=(
-                    raised(rule["output_credits_per_1k"])
-                    if (rule["provider_id"], rule["model_key"])
-                    == (provider_id, model_key)
-                    else rule["output_credits_per_1k"]
-                ),
-                parameter_match=rule["parameter_match"],
-                metadata=metadata_for(rule),
-            )
-            for rule in current["rules"]
-        )
-        catalog_id = PriceCatalogService(
-            self.catalogs,
-            clock=lambda: now,
-        ).publish(
-            PriceCatalogDraft(
-                version=(
-                    f"protect-{now.strftime('%Y%m%d%H%M%S%f')}-"
-                    f"{hashlib.sha256(result.model_key.encode()).hexdigest()[:8]}"
-                ),
-                effective_at=now,
-                rules=rules,
-                created_by="system:pricing-protection",
-                metadata={
-                    "protected_model": result.model_key,
-                    "previous_catalog_id": current["id"],
-                    "applied_raise": str(result.applied_raise),
-                },
-            )
-        )
         self.admin.append_audit(
-            "catalog.auto_protected",
+            "pricing.protection_candidate",
             "system:pricing-protection",
-            {"catalog_id": current["id"]},
-            {"catalog_id": catalog_id},
+            {},
             {
                 "model_key": result.model_key,
+                "required_raise": str(result.required_raise),
+                "suggested_raise": str(result.applied_raise),
+            },
+            {
                 "remaining_risk": str(result.remaining_risk),
+                "alert_level": result.alert_level,
+                "created_at": result.created_at.isoformat(),
             },
         )
 

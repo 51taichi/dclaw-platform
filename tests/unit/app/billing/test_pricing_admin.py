@@ -73,6 +73,105 @@ def test_initial_preview_blocks_model_without_trusted_cost(service):
     }
 
 
+def test_generate_draft_reads_persisted_ai_candidate(service):
+    pricing, repo = service
+    pricing.inventory = type(
+        "Inventory",
+        (),
+        {
+            "list_enabled": lambda self: (
+                PriceableModel(
+                    "dashscope",
+                    "百炼",
+                    "future-model",
+                    "Future",
+                    "text",
+                    official_model_id="future-model",
+                    pricing_region="cn-beijing",
+                ),
+            )
+        },
+    )()
+    repo.append_official_candidate(
+        {
+            "content_sha256": "candidate-digest",
+            "provider_id": "dashscope",
+            "official_model_id": "future-model",
+            "capability": "chat",
+            "unit_key": "input_tokens",
+            "conditions_digest": "conditions-digest",
+            "conditions": {
+                "region": "cn-beijing",
+                "unit_size": 1_000_000,
+            },
+            "source_url": "",
+            "source_published_at": None,
+            "original_currency": "CNY",
+            "original_price_decimal": "3",
+            "fx_rate_decimal": "1",
+            "rmb_cost_decimal": "3",
+            "verification_status": "candidate",
+            "registry_version": "ai-v1",
+            "evidence_level": "ai_no_evidence",
+            "collector_version": "ai-v1",
+            "default_multiplier_decimal": "2.0",
+        }
+    )
+
+    generated = pricing.generate_draft("1")
+
+    assert generated["rows"][0]["evidence_level"] == "ai_no_evidence"
+    assert generated["rows"][0]["include_in_publish"] is False
+
+    draft_key = generated["draft_key"]
+    with pytest.raises(ValueError, match="approval reason"):
+        pricing.set_model_decisions(
+            draft_key,
+            [
+                {
+                    "provider_id": "dashscope",
+                    "model_key": "future-model",
+                    "include_in_publish": True,
+                    "reason": None,
+                }
+            ],
+            "admin-1",
+        )
+
+    saved = pricing.set_model_decisions(
+        draft_key,
+        [
+            {
+                "provider_id": "dashscope",
+                "model_key": "future-model",
+                "include_in_publish": True,
+                "reason": "已人工核对并接受估算风险",
+            }
+        ],
+        "admin-1",
+    )
+
+    assert saved[0]["include_in_publish"] is True
+    assert pricing.generate_draft("1")["rows"][0][
+        "include_in_publish"
+    ] is True
+    assert repo.list_audits()[0]["action"] == "draft.model_decisions.updated"
+
+    batch = pricing.batch_set_model_decision(
+        draft_key,
+        include_in_publish=False,
+        provider_ids=["dashscope"],
+        evidence_levels=["ai_no_evidence"],
+        model_keys=[],
+        reason="下一版再审核",
+        actor_id="admin-1",
+    )
+    assert batch["updated_models"] == 1
+    assert pricing.generate_draft("1")["rows"][0][
+        "include_in_publish"
+    ] is False
+
+
 def test_initial_preview_blocks_non_text_model_without_any_trusted_cost(
     service,
 ):

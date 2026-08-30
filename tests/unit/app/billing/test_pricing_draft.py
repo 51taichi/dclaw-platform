@@ -211,3 +211,40 @@ def test_region_specific_registry_price_never_crosses_provider_endpoint():
 
     assert draft.rows[0].source_type == "missing"
     assert draft.coverage.blocking_models == 1
+
+
+def test_ai_estimate_candidate_appears_with_safe_multiplier_and_nonpublish():
+    builder = PricingDraftBuilder(OfficialPriceRegistry.from_records(()))
+    model = PriceableModel(
+        "dashscope",
+        "百炼",
+        "future-model",
+        "Future Model",
+        "text",
+        official_model_id="future-model",
+        pricing_region="cn-beijing",
+    )
+    candidate = {
+        "provider_id": "dashscope",
+        "official_model_id": "future-model",
+        "capability": "chat",
+        "unit_key": "input_tokens",
+        "conditions_json": (
+            '{"region":"cn-beijing","unit_size":1000000}'
+        ),
+        "source_url": "",
+        "rmb_cost_decimal": "3",
+        "evidence_level": "ai_no_evidence",
+        "verification_status": "candidate",
+        "registry_version": "ai-v1",
+        "default_multiplier_decimal": "2.0",
+    }
+
+    result = builder.build((model,), (), (), (), (candidate,), ())
+
+    assert len(result.rows) == 1
+    row = result.rows[0]
+    assert row.evidence_level == "ai_no_evidence"
+    assert row.multiplier == Decimal("2.0")
+    assert row.include_in_publish is False
+    assert row.rmb_sale_price == Decimal("6.0")

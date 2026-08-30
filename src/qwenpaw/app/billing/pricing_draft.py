@@ -34,6 +34,7 @@ class PricingDraftRow:
     include_in_publish: bool
     exclusion_reason: str | None
     registry_version: str | None
+    evidence_level: str = "official_verified"
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,8 @@ class PricingDraftBuilder:
         costs: Sequence[Mapping[str, Any]],
         mappings: Sequence[Mapping[str, Any]],
         exclusions: Sequence[Mapping[str, Any]],
+        candidates: Sequence[Mapping[str, Any]] = (),
+        decisions: Sequence[Mapping[str, Any]] = (),
     ) -> PricingDraftResult:
         mapping_index = {
             (str(row["provider_id"]), str(row["model_key"])): row
@@ -99,6 +102,22 @@ class PricingDraftBuilder:
             for row in exclusions
             if row.get("excluded") is True
         }
+        decision_index = {
+            (str(row["provider_id"]), str(row["model_key"])): row
+            for row in decisions
+        }
+        candidate_index: dict[
+            tuple[str, str, str, str, str], Mapping[str, Any]
+        ] = {}
+        for row in candidates:
+            key = (
+                str(row["provider_id"]),
+                str(row["official_model_id"]),
+                str(row.get("capability") or ""),
+                str(row["unit_key"]),
+                _conditions_key(row.get("conditions_json", "{}")),
+            )
+            candidate_index.setdefault(key, row)
         rows: list[PricingDraftRow] = []
         risks: list[PricingDraftRisk] = []
         matched: set[tuple[str, str]] = set()
@@ -134,10 +153,102 @@ class PricingDraftBuilder:
                 else ()
             )
             exclusion = exclusion_index.get(model_key)
+            decision = decision_index.get(model_key)
             exclusion_reason = str(exclusion["reason"]) if exclusion else None
             if exclusion:
                 excluded.add(model_key)
             if not dimensions:
+                candidate_rows = sorted(
+                    (
+                        row
+                        for key, row in candidate_index.items()
+                        if key[:2]
+                        == (official_provider_id, official_model_id)
+                        and _region_matches(
+                            json.loads(
+                                str(row.get("conditions_json") or "{}")
+                            ),
+                            model.pricing_region,
+                        )
+                    ),
+                    key=lambda row: (
+                        str(row["unit_key"]),
+                        str(row.get("conditions_json") or "{}"),
+                    ),
+                )
+                if candidate_rows:
+                    matched.add(model_key)
+                    for candidate in candidate_rows:
+                        conditions = json.loads(
+                            str(candidate.get("conditions_json") or "{}")
+                        )
+                        unit_size = int(conditions.pop("unit_size", 1))
+                        evidence_level = str(
+                            candidate.get("evidence_level") or "failed"
+                        )
+                        multiplier_value = candidate.get(
+                            "default_multiplier_decimal"
+                        )
+                        multiplier = (
+                            Decimal(str(multiplier_value))
+                            if multiplier_value is not None
+                            else self.default_multiplier
+                        )
+                        cost = Decimal(str(candidate["rmb_cost_decimal"]))
+                        sale = cost * multiplier
+                        include_default = (
+                            evidence_level == "official_verified"
+                        )
+                        include = (
+                            bool(decision["include_in_publish"])
+                            if decision is not None
+                            else include_default
+                        ) and not bool(exclusion)
+                        reason = (
+                            str(decision.get("reason") or "") or None
+                            if decision is not None
+                            else exclusion_reason
+                        )
+                        rows.append(
+                            PricingDraftRow(
+                                model.provider_id,
+                                model.provider_name,
+                                model.model_key,
+                                model.model_name,
+                                official_provider_id,
+                                official_model_id,
+                                model.category,
+                                str(candidate.get("capability") or ""),
+                                str(candidate["unit_key"]),
+                                unit_size,
+                                conditions,
+                                cost,
+                                multiplier,
+                                sale,
+                                int(
+                                    (
+                                        sale * self.credits_per_yuan
+                                    ).to_integral_value(
+                                        rounding=ROUND_CEILING
+                                    )
+                                ),
+                                f"candidate:{evidence_level}",
+                                str(candidate.get("source_url") or "")
+                                or None,
+                                str(
+                                    candidate.get("verification_status")
+                                    or "candidate"
+                                ),
+                                include,
+                                reason,
+                                str(
+                                    candidate.get("registry_version") or ""
+                                )
+                                or None,
+                                evidence_level,
+                            )
+                        )
+                    continue
                 trusted_rows = sorted(
                     (
                         row

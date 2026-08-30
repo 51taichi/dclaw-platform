@@ -120,6 +120,14 @@ def test_official_refresh_appends_candidates_without_trusting_or_publishing(
 
     assert first["candidate_count"] == 6
     assert second == first
-    assert len(repo.latest_official_candidates()) == 6
+    candidates = repo.latest_official_candidates()
+    assert len(candidates) == 6
+    assert {row["evidence_level"] for row in candidates} == {
+        "official_verified"
+    }
+    assert {row["default_multiplier_decimal"] for row in candidates} == {
+        "1.5"
+    }
+    assert all(row["collector_version"] for row in candidates)
     assert repo.latest_trusted_costs() == []
     engine.dispose()

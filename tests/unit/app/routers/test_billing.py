@@ -1203,6 +1203,7 @@ def test_admin_pricing_draft_routes_use_authenticated_actor_and_export_xlsx(
     class FakeAdmin:
         def __init__(self):
             self.exclusion_actor = None
+            self.decision_actor = None
 
         def generate_draft(self, actor_id):
             return {
@@ -1237,6 +1238,20 @@ def test_admin_pricing_draft_routes_use_authenticated_actor_and_export_xlsx(
                 "excluded": excluded,
                 "reason": reason,
             }
+
+        def set_model_decisions(
+            self,
+            draft_key,
+            decisions,
+            actor_id,
+            ip_address=None,
+        ):
+            self.decision_actor = actor_id
+            return decisions
+
+        def batch_set_model_decision(self, draft_key, **values):
+            self.decision_actor = values["actor_id"]
+            return {"updated_models": 1, "decisions": []}
 
     class ExcelRepo:
         def record_import(self, *_args):
@@ -1273,6 +1288,31 @@ def test_admin_pricing_draft_routes_use_authenticated_actor_and_export_xlsx(
         headers=headers | {"X-Billing-Unlock": "valid"},
         json={"excluded": True, "reason": "暂不发布"},
     )
+    decisions = client.put(
+        "/api/admin/billing/pricing/drafts/draft-current/model-decisions",
+        headers=headers | {"X-Billing-Unlock": "valid"},
+        json={
+            "decisions": [
+                {
+                    "provider_id": "dashscope",
+                    "model_key": "qwen3-max",
+                    "include_in_publish": True,
+                    "reason": None,
+                }
+            ]
+        },
+    )
+    batch = client.post(
+        "/api/admin/billing/pricing/drafts/draft-current/batch-decision",
+        headers=headers | {"X-Billing-Unlock": "valid"},
+        json={
+            "include_in_publish": False,
+            "provider_ids": ["dashscope"],
+            "evidence_levels": ["ai_no_evidence"],
+            "model_keys": [],
+            "reason": "等待复核",
+        },
+    )
 
     assert generated.status_code == 200
     assert "result" not in generated.json()
@@ -1282,6 +1322,77 @@ def test_admin_pricing_draft_routes_use_authenticated_actor_and_export_xlsx(
     )
     assert excluded.status_code == 200
     assert fake.exclusion_actor == "admin-7"
+    assert decisions.status_code == 200
+    assert fake.decision_actor == "admin-7"
+    assert batch.status_code == 200
+    assert batch.json()["updated_models"] == 1
+
+
+def test_admin_can_start_and_read_collection_job_without_pricing_unlock(
+    monkeypatch,
+    wallet_repo,
+    pricing,
+):
+    class Runtime:
+        def enqueue(self, actor_id):
+            return {"id": "job-1", "status": "pending", "actor": actor_id}
+
+        def get(self, job_id):
+            return {
+                "id": job_id,
+                "status": "running",
+                "progress": {"total": 2, "completed": 1},
+            }
+
+        def list(self):
+            return [
+                {
+                    "id": "job-1",
+                    "status": "running",
+                    "progress": {"total": 2, "completed": 1},
+                }
+            ]
+
+    monkeypatch.setattr(
+        billing, "get_pricing_collection_runtime", lambda: Runtime()
+    )
+    monkeypatch.setattr(
+        billing,
+        "get_pricing_unlock_service",
+        lambda: type(
+            "Locked", (), {"is_valid": lambda self, token, actor: False}
+        )(),
+    )
+    client = TestClient(
+        _app(
+            monkeypatch,
+            UsageService(wallet_repo, pricing, mode="shadow"),
+            wallet_repo,
+            pricing,
+        )
+    )
+    headers = _headers("admin-7", "admin")
+
+    started = client.post(
+        "/api/admin/billing/pricing/collection-jobs", headers=headers
+    )
+    loaded = client.get(
+        "/api/admin/billing/pricing/collection-jobs/job-1", headers=headers
+    )
+    listed = client.get(
+        "/api/admin/billing/pricing/collection-jobs", headers=headers
+    )
+
+    assert started.status_code == 202
+    assert started.json() == {
+        "id": "job-1",
+        "status": "pending",
+        "actor": "admin-7",
+    }
+    assert loaded.status_code == 200
+    assert loaded.json()["progress"]["completed"] == 1
+    assert listed.status_code == 200
+    assert listed.json()[0]["id"] == "job-1"
 
 
 def test_user_quote_returns_stable_model_not_priced_error(

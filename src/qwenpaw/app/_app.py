@@ -367,6 +367,21 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
     local_model_manager = LocalModelManager.get_instance()
     task_limiter = create_task_limiter_from_env()
 
+    from .billing.pricing_sync_runtime import (
+        build_pricing_collection_runtime,
+        pricing_collection_loop,
+    )
+
+    pricing_collection_runtime = build_pricing_collection_runtime(
+        provider_manager
+    )
+    pricing_collection_task = asyncio.create_task(
+        pricing_collection_loop(
+            pricing_collection_runtime,
+            f"pricing-{os.getpid()}-{uuid.uuid4().hex}",
+        )
+    )
+
     # Start token usage manager background tasks
     logger.debug("Starting TokenUsageManager background tasks...")
     from ..token_usage import get_token_usage_manager
@@ -394,6 +409,7 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
     app.state.provider_manager = provider_manager
     app.state.local_model_manager = local_model_manager
     app.state.task_limiter = task_limiter
+    app.state.pricing_collection_runtime = pricing_collection_runtime
     app.state.knowledge_job_manager = knowledge_job_manager
     app.state.plugin_loader = None
     app.state.plugin_registry = None
@@ -579,6 +595,10 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
     try:
         yield
     finally:
+        pricing_collection_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await pricing_collection_task
+
         if pricing_sync_task is not None:
             pricing_sync_task.cancel()
             with suppress(asyncio.CancelledError):

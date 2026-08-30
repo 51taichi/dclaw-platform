@@ -53,6 +53,8 @@ class PricingAdminService:
             self.repository.latest_trusted_costs(),
             self.repository.list_model_mappings(),
             self.repository.list_draft_exclusions(draft_key),
+            self.repository.latest_official_candidates(),
+            self.repository.list_model_publication_decisions(draft_key),
         )
         return {
             "draft_key": draft_key,
@@ -91,6 +93,119 @@ class PricingAdminService:
             {"ip_address": ip_address},
         )
         return saved
+
+    def set_model_decisions(
+        self,
+        draft_key: str,
+        decisions: list[dict[str, Any]],
+        actor_id: str,
+        ip_address: str | None = None,
+    ) -> list[dict[str, Any]]:
+        generated = self.generate_draft(actor_id)
+        if generated["draft_key"] != draft_key:
+            raise ValueError("pricing draft is stale")
+        rows_by_model: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for row in generated["rows"]:
+            rows_by_model.setdefault(
+                (str(row["provider_id"]), str(row["model_key"])), []
+            ).append(row)
+        normalized: list[dict[str, Any]] = []
+        for decision in decisions:
+            key = (
+                str(decision["provider_id"]),
+                str(decision["model_key"]),
+            )
+            model_rows = rows_by_model.get(key)
+            if not model_rows:
+                raise ValueError("pricing draft model was not found")
+            reason = str(decision.get("reason") or "").strip() or None
+            include = bool(decision["include_in_publish"])
+            if include and any(
+                row.get("evidence_level") != "official_verified"
+                for row in model_rows
+            ):
+                if reason is None:
+                    raise ValueError(
+                        "approval reason is required for non-official price"
+                    )
+            normalized.append(
+                {
+                    "provider_id": key[0],
+                    "model_key": key[1],
+                    "include_in_publish": include,
+                    "reason": reason,
+                }
+            )
+        before = self.repository.list_model_publication_decisions(draft_key)
+        saved = self.repository.set_model_publication_decisions(
+            draft_key, normalized, actor_id
+        )
+        self.repository.append_audit(
+            "draft.model_decisions.updated",
+            actor_id,
+            {
+                "decisions": [
+                    {
+                        key: row.get(key)
+                        for key in (
+                            "provider_id",
+                            "model_key",
+                            "include_in_publish",
+                            "reason",
+                        )
+                    }
+                    for row in before
+                ]
+            },
+            {"decisions": normalized},
+            {"ip_address": ip_address},
+        )
+        return saved
+
+    def batch_set_model_decision(
+        self,
+        draft_key: str,
+        *,
+        include_in_publish: bool,
+        provider_ids: list[str],
+        evidence_levels: list[str],
+        model_keys: list[str],
+        reason: str | None,
+        actor_id: str,
+        ip_address: str | None = None,
+    ) -> dict[str, Any]:
+        generated = self.generate_draft(actor_id)
+        if generated["draft_key"] != draft_key:
+            raise ValueError("pricing draft is stale")
+        selected: set[tuple[str, str]] = set()
+        for row in generated["rows"]:
+            if provider_ids and row["provider_id"] not in provider_ids:
+                continue
+            if model_keys and row["model_key"] not in model_keys:
+                continue
+            if (
+                evidence_levels
+                and row.get("evidence_level") not in evidence_levels
+            ):
+                continue
+            selected.add((row["provider_id"], row["model_key"]))
+        if not selected:
+            raise ValueError("no pricing draft models matched the batch filter")
+        saved = self.set_model_decisions(
+            draft_key,
+            [
+                {
+                    "provider_id": provider_id,
+                    "model_key": model_key,
+                    "include_in_publish": include_in_publish,
+                    "reason": reason,
+                }
+                for provider_id, model_key in sorted(selected)
+            ],
+            actor_id,
+            ip_address,
+        )
+        return {"updated_models": len(saved), "decisions": saved}
 
     def save_model_mapping(
         self,

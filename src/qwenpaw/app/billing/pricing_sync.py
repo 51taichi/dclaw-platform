@@ -116,6 +116,13 @@ def refresh_official_candidates(
                     "rmb_cost_decimal": str(record.rmb_cost),
                     "verification_status": record.verification_status,
                     "registry_version": record.registry_version,
+                    "evidence_level": "official_verified",
+                    "evidence_excerpt": None,
+                    "collector_version": record.registry_version,
+                    "ai_model": None,
+                    "prompt_version": None,
+                    "confidence_decimal": "1",
+                    "default_multiplier_decimal": "1.5",
                 }
             )
         )
