@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import insert, select, update
+from sqlalchemy import insert, or_, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
@@ -16,9 +16,12 @@ from ..schema import (
     billing_cost_snapshots,
     billing_official_price_candidates,
     billing_pricing_audits,
+    billing_pricing_collection_items,
+    billing_pricing_collection_jobs,
     billing_pricing_draft_exclusions,
     billing_pricing_imports,
     billing_pricing_model_mappings,
+    billing_pricing_model_decisions,
     billing_pricing_policies,
     billing_pricing_sync_state,
     billing_pricing_unlock_attempts,
@@ -267,6 +270,250 @@ class PricingAdminRepository:
                     )
                 ).mappings()
             ]
+
+    def create_collection_job(
+        self,
+        inventory_digest: str,
+        requested_by: str,
+        now: datetime,
+    ) -> dict[str, Any]:
+        row = {
+            "id": str(uuid4()),
+            "inventory_digest": inventory_digest,
+            "status": "pending",
+            "requested_by": requested_by,
+            "progress_json": "{}",
+            "created_at": now,
+        }
+        with self.engine.begin() as conn:
+            conn.execute(insert(billing_pricing_collection_jobs).values(**row))
+        return dict(row)
+
+    def get_collection_job(self, job_id: str) -> dict[str, Any] | None:
+        with self.engine.connect() as conn:
+            row = (
+                conn.execute(
+                    select(billing_pricing_collection_jobs).where(
+                        billing_pricing_collection_jobs.c.id == job_id
+                    )
+                )
+                .mappings()
+                .first()
+            )
+        if row is None:
+            return None
+        result = dict(row)
+        result["progress"] = json.loads(
+            str(result.pop("progress_json") or "{}")
+        )
+        return result
+
+    def claim_collection_job(
+        self,
+        worker_id: str,
+        now: datetime,
+        lease_seconds: int,
+    ) -> dict[str, Any] | None:
+        with self.engine.begin() as conn:
+            claimable = or_(
+                billing_pricing_collection_jobs.c.status == "pending",
+                (
+                    billing_pricing_collection_jobs.c.status == "running"
+                )
+                & (
+                    billing_pricing_collection_jobs.c.lease_expires_at < now
+                ),
+            )
+            candidate_id = conn.execute(
+                select(billing_pricing_collection_jobs.c.id)
+                .where(claimable)
+                .order_by(billing_pricing_collection_jobs.c.created_at)
+                .limit(1)
+            ).scalar_one_or_none()
+            if candidate_id is None:
+                return None
+            result = conn.execute(
+                update(billing_pricing_collection_jobs)
+                .where(
+                    billing_pricing_collection_jobs.c.id == candidate_id,
+                    claimable,
+                )
+                .values(
+                    status="running",
+                    worker_id=worker_id,
+                    started_at=now,
+                    lease_expires_at=now + timedelta(seconds=lease_seconds),
+                )
+            )
+            if result.rowcount != 1:
+                return None
+            row = (
+                conn.execute(
+                    select(billing_pricing_collection_jobs).where(
+                        billing_pricing_collection_jobs.c.id == candidate_id
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            return dict(row)
+
+    def update_collection_item(
+        self,
+        job_id: str,
+        provider_id: str,
+        model_key: str,
+        pricing_region: str | None,
+        *,
+        status: str,
+        result: Mapping[str, Any],
+        candidate_id: str | None,
+        error_summary: str | None,
+        now: datetime,
+    ) -> dict[str, Any]:
+        region = pricing_region or ""
+        with self.engine.begin() as conn:
+            current = (
+                conn.execute(
+                    select(billing_pricing_collection_items).where(
+                        billing_pricing_collection_items.c.job_id == job_id,
+                        billing_pricing_collection_items.c.provider_id
+                        == provider_id,
+                        billing_pricing_collection_items.c.model_key
+                        == model_key,
+                        billing_pricing_collection_items.c.pricing_region
+                        == region,
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            values = {
+                "status": status,
+                "candidate_id": candidate_id,
+                "result_json": _json(result),
+                "error_summary": error_summary,
+                "started_at": now,
+                "finished_at": now,
+            }
+            if current is None:
+                row_id = str(uuid4())
+                conn.execute(
+                    insert(billing_pricing_collection_items).values(
+                        id=row_id,
+                        job_id=job_id,
+                        provider_id=provider_id,
+                        model_key=model_key,
+                        pricing_region=region,
+                        **values,
+                    )
+                )
+            else:
+                row_id = str(current["id"])
+                conn.execute(
+                    update(billing_pricing_collection_items)
+                    .where(billing_pricing_collection_items.c.id == row_id)
+                    .values(**values)
+                )
+            item_rows = list(
+                conn.execute(
+                    select(billing_pricing_collection_items.c.status).where(
+                        billing_pricing_collection_items.c.job_id == job_id
+                    )
+                ).scalars()
+            )
+            progress = {
+                "total": len(item_rows),
+                "completed": sum(
+                    value != "pending" for value in item_rows
+                ),
+                "official": sum(
+                    value == "official_succeeded" for value in item_rows
+                ),
+                "ai": sum(
+                    value.startswith("ai_") for value in item_rows
+                ),
+                "manual": sum(
+                    value == "manual_required" for value in item_rows
+                ),
+                "failed": sum(value == "failed" for value in item_rows),
+            }
+            conn.execute(
+                update(billing_pricing_collection_jobs)
+                .where(billing_pricing_collection_jobs.c.id == job_id)
+                .values(progress_json=_json(progress))
+            )
+        return {
+            "id": row_id,
+            "job_id": job_id,
+            "provider_id": provider_id,
+            "model_key": model_key,
+            "pricing_region": pricing_region,
+            **values,
+            "result": dict(result),
+        }
+
+    def set_model_publication_decisions(
+        self,
+        draft_key: str,
+        decisions: list[Mapping[str, Any]],
+        actor_id: str,
+    ) -> list[dict[str, Any]]:
+        saved: list[dict[str, Any]] = []
+        with self.engine.begin() as conn:
+            for decision in decisions:
+                provider_id = str(decision["provider_id"])
+                model_key = str(decision["model_key"])
+                current = (
+                    conn.execute(
+                        select(billing_pricing_model_decisions).where(
+                            billing_pricing_model_decisions.c.draft_key
+                            == draft_key,
+                            billing_pricing_model_decisions.c.provider_id
+                            == provider_id,
+                            billing_pricing_model_decisions.c.model_key
+                            == model_key,
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+                values = {
+                    "include_in_publish": bool(
+                        decision["include_in_publish"]
+                    ),
+                    "reason": decision.get("reason"),
+                    "updated_by": actor_id,
+                    "updated_at": datetime.now(timezone.utc),
+                }
+                if current is None:
+                    row_id = str(uuid4())
+                    conn.execute(
+                        insert(billing_pricing_model_decisions).values(
+                            id=row_id,
+                            draft_key=draft_key,
+                            provider_id=provider_id,
+                            model_key=model_key,
+                            **values,
+                        )
+                    )
+                else:
+                    row_id = str(current["id"])
+                    conn.execute(
+                        update(billing_pricing_model_decisions)
+                        .where(billing_pricing_model_decisions.c.id == row_id)
+                        .values(**values)
+                    )
+                saved.append(
+                    {
+                        "id": row_id,
+                        "draft_key": draft_key,
+                        "provider_id": provider_id,
+                        "model_key": model_key,
+                        **values,
+                    }
+                )
+        return saved
 
     def replace_policy(
         self,

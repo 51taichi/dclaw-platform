@@ -153,3 +153,95 @@ def test_draft_exclusion_requires_reason_and_can_be_reversed(repo):
         "draft-1", "custom-provider", "model-x", False, None, "1"
     )
     assert included["excluded"] is False
+
+
+def test_collection_job_claim_has_one_winner(repo):
+    now = datetime.now(timezone.utc)
+    job = repo.create_collection_job("inventory-digest", "admin-1", now)
+
+    winners = [
+        repo.claim_collection_job(f"worker-{index}", now, 60)
+        for index in range(2)
+    ]
+
+    assert sum(row is not None for row in winners) == 1
+    assert repo.get_collection_job(job["id"])["status"] == "running"
+
+
+def test_expired_collection_job_can_be_reclaimed(repo):
+    now = datetime.now(timezone.utc)
+    job = repo.create_collection_job("inventory-digest", "admin-1", now)
+    first = repo.claim_collection_job("worker-1", now, 1)
+
+    reclaimed = repo.claim_collection_job(
+        "worker-2", now + timedelta(seconds=2), 60
+    )
+
+    assert first is not None
+    assert reclaimed is not None
+    assert reclaimed["id"] == job["id"]
+    assert reclaimed["worker_id"] == "worker-2"
+
+
+def test_collection_item_progress_is_idempotent(repo):
+    now = datetime.now(timezone.utc)
+    job = repo.create_collection_job("inventory-digest", "admin-1", now)
+    repo.claim_collection_job("worker-1", now, 60)
+
+    first = repo.update_collection_item(
+        job["id"],
+        "dashscope",
+        "qwen3-max",
+        "cn-beijing",
+        status="official_succeeded",
+        result={"candidate_count": 6},
+        candidate_id="candidate-1",
+        error_summary=None,
+        now=now,
+    )
+    second = repo.update_collection_item(
+        job["id"],
+        "dashscope",
+        "qwen3-max",
+        "cn-beijing",
+        status="official_succeeded",
+        result={"candidate_count": 6},
+        candidate_id="candidate-1",
+        error_summary=None,
+        now=now,
+    )
+
+    assert first["id"] == second["id"]
+    assert repo.get_collection_job(job["id"])["progress"] == {
+        "total": 1,
+        "completed": 1,
+        "official": 1,
+        "ai": 0,
+        "manual": 0,
+        "failed": 0,
+    }
+
+
+def test_model_publication_decisions_are_model_scoped(repo):
+    rows = repo.set_model_publication_decisions(
+        "draft-1",
+        [
+            {
+                "provider_id": "dashscope",
+                "model_key": "qwen3-max",
+                "include_in_publish": True,
+                "reason": None,
+            },
+            {
+                "provider_id": "dashscope",
+                "model_key": "unknown",
+                "include_in_publish": False,
+                "reason": "价格待审核",
+            },
+        ],
+        "admin-1",
+    )
+
+    assert {
+        (row["model_key"], row["include_in_publish"]) for row in rows
+    } == {("qwen3-max", True), ("unknown", False)}

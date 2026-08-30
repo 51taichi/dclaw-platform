@@ -709,7 +709,94 @@ billing_official_price_candidates = Table(
     Column("rmb_cost_decimal", String, nullable=False),
     Column("verification_status", String, nullable=False),
     Column("registry_version", String, nullable=False),
+    Column(
+        "evidence_level",
+        String,
+        nullable=False,
+        server_default="official_verified",
+    ),
+    Column("evidence_excerpt", Text),
+    Column("collector_version", String, nullable=False, server_default="bundled"),
+    Column("ai_model", String),
+    Column("prompt_version", String),
+    Column("confidence_decimal", String),
+    Column("default_multiplier_decimal", String),
     Column("created_at", DateTime(timezone=True), server_default=func.now()),
+)
+
+billing_pricing_collection_jobs = Table(
+    "billing_pricing_collection_jobs",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("inventory_digest", String, nullable=False),
+    Column("status", String, nullable=False, server_default="pending"),
+    Column("requested_by", String, nullable=False),
+    Column("worker_id", String),
+    Column("lease_expires_at", DateTime(timezone=True)),
+    Column("progress_json", Text, nullable=False, server_default="{}"),
+    Column("error_summary", Text),
+    Column("created_at", DateTime(timezone=True), server_default=func.now()),
+    Column("started_at", DateTime(timezone=True)),
+    Column("finished_at", DateTime(timezone=True)),
+    CheckConstraint(
+        "status IN ('pending','running','succeeded',"
+        "'partially_succeeded','failed')",
+        name="ck_billing_pricing_collection_jobs_status",
+    ),
+)
+Index(
+    "idx_billing_pricing_collection_jobs_status_lease",
+    billing_pricing_collection_jobs.c.status,
+    billing_pricing_collection_jobs.c.lease_expires_at,
+)
+
+billing_pricing_collection_items = Table(
+    "billing_pricing_collection_items",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column(
+        "job_id",
+        String,
+        ForeignKey("billing_pricing_collection_jobs.id"),
+        nullable=False,
+    ),
+    Column("provider_id", String, nullable=False),
+    Column("model_key", String, nullable=False),
+    Column("pricing_region", String, nullable=False, server_default=""),
+    Column("status", String, nullable=False, server_default="pending"),
+    Column("candidate_id", String),
+    Column("result_json", Text, nullable=False, server_default="{}"),
+    Column("error_summary", Text),
+    Column("started_at", DateTime(timezone=True)),
+    Column("finished_at", DateTime(timezone=True)),
+)
+Index(
+    "uq_billing_pricing_collection_item",
+    billing_pricing_collection_items.c.job_id,
+    billing_pricing_collection_items.c.provider_id,
+    billing_pricing_collection_items.c.model_key,
+    billing_pricing_collection_items.c.pricing_region,
+    unique=True,
+)
+
+billing_pricing_model_decisions = Table(
+    "billing_pricing_model_decisions",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("draft_key", String, nullable=False),
+    Column("provider_id", String, nullable=False),
+    Column("model_key", String, nullable=False),
+    Column("include_in_publish", Boolean, nullable=False),
+    Column("reason", Text),
+    Column("updated_by", String, nullable=False),
+    Column("updated_at", DateTime(timezone=True), server_default=func.now()),
+)
+Index(
+    "uq_billing_pricing_model_decision",
+    billing_pricing_model_decisions.c.draft_key,
+    billing_pricing_model_decisions.c.provider_id,
+    billing_pricing_model_decisions.c.model_key,
+    unique=True,
 )
 
 billing_pricing_model_mappings = Table(
@@ -1436,6 +1523,7 @@ def create_all(engine: Engine) -> None:
     _ensure_pricing_catalog_revision(engine)
     _ensure_pricing_audit_immutable(engine)
     _ensure_official_price_candidate_immutable(engine)
+    _ensure_official_price_candidate_evidence_columns(engine)
     _ensure_pricing_model_mapping_columns(engine)
     _ensure_open_api_publication_binding_columns(engine)
     _ensure_knowledge_metadata_columns(engine)
@@ -1447,6 +1535,36 @@ def create_all(engine: Engine) -> None:
     _ensure_reconciliation_audit_immutable(engine)
     _ensure_top_up_audit_immutable(engine)
     _backfill_personal_wallets(engine)
+
+
+def _ensure_official_price_candidate_evidence_columns(
+    engine: Engine,
+) -> None:
+    """Upgrade price candidates created before evidence classification."""
+    columns = {
+        column["name"]
+        for column in inspect(engine).get_columns(
+            "billing_official_price_candidates"
+        )
+    }
+    definitions = {
+        "evidence_level": "VARCHAR NOT NULL DEFAULT 'official_verified'",
+        "evidence_excerpt": "TEXT",
+        "collector_version": "VARCHAR NOT NULL DEFAULT 'bundled'",
+        "ai_model": "VARCHAR",
+        "prompt_version": "VARCHAR",
+        "confidence_decimal": "VARCHAR",
+        "default_multiplier_decimal": "VARCHAR",
+    }
+    with engine.begin() as conn:
+        for name, definition in definitions.items():
+            if name not in columns:
+                conn.execute(
+                    text(
+                        "ALTER TABLE billing_official_price_candidates "
+                        f"ADD COLUMN {name} {definition}"
+                    )
+                )
 
 
 def _ensure_pricing_catalog_revision(engine: Engine) -> None:

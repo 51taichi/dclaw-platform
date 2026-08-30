@@ -56,8 +56,27 @@ def test_billing_schema_is_idempotent(sqlite_engine):
         "billing_official_price_candidates",
         "billing_pricing_model_mappings",
         "billing_pricing_draft_exclusions",
+        "billing_pricing_collection_jobs",
+        "billing_pricing_collection_items",
+        "billing_pricing_model_decisions",
         "billing_executions",
     } <= names
+
+    candidate_columns = {
+        column["name"]
+        for column in inspector.get_columns(
+            "billing_official_price_candidates"
+        )
+    }
+    assert {
+        "evidence_level",
+        "evidence_excerpt",
+        "collector_version",
+        "ai_model",
+        "prompt_version",
+        "confidence_decimal",
+        "default_multiplier_decimal",
+    } <= candidate_columns
 
     execution_columns = {
         column["name"]
