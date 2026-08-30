@@ -602,7 +602,8 @@ billing_price_catalogs = Table(
 )
 
 billing_cost_snapshots = Table(
-    "billing_cost_snapshots", metadata,
+    "billing_cost_snapshots",
+    metadata,
     Column("id", String, primary_key=True),
     Column("provider_id", String, nullable=False),
     Column("model_key", String, nullable=False),
@@ -622,7 +623,8 @@ billing_cost_snapshots = Table(
 )
 
 billing_pricing_policies = Table(
-    "billing_pricing_policies", metadata,
+    "billing_pricing_policies",
+    metadata,
     Column("id", String, primary_key=True),
     Column("scope_type", String, nullable=False),
     Column("scope_key", String, nullable=False),
@@ -634,7 +636,8 @@ billing_pricing_policies = Table(
 )
 
 billing_pricing_imports = Table(
-    "billing_pricing_imports", metadata,
+    "billing_pricing_imports",
+    metadata,
     Column("id", String, primary_key=True),
     Column("content_sha256", String, nullable=False, unique=True),
     Column("filename", String, nullable=False),
@@ -645,7 +648,8 @@ billing_pricing_imports = Table(
 )
 
 billing_pricing_unlocks = Table(
-    "billing_pricing_unlocks", metadata,
+    "billing_pricing_unlocks",
+    metadata,
     Column("id", String, primary_key=True),
     Column("actor_id", String, nullable=False),
     Column("token_hash", String, nullable=False, unique=True),
@@ -657,7 +661,8 @@ billing_pricing_unlocks = Table(
 )
 
 billing_pricing_unlock_attempts = Table(
-    "billing_pricing_unlock_attempts", metadata,
+    "billing_pricing_unlock_attempts",
+    metadata,
     Column("id", String, primary_key=True),
     Column("actor_id", String, nullable=False),
     Column("ip_address", String),
@@ -666,7 +671,8 @@ billing_pricing_unlock_attempts = Table(
 )
 
 billing_pricing_audits = Table(
-    "billing_pricing_audits", metadata,
+    "billing_pricing_audits",
+    metadata,
     Column("id", String, primary_key=True),
     Column("action", String, nullable=False),
     Column("actor_id", String, nullable=False),
@@ -677,10 +683,71 @@ billing_pricing_audits = Table(
 )
 
 billing_pricing_sync_state = Table(
-    "billing_pricing_sync_state", metadata,
+    "billing_pricing_sync_state",
+    metadata,
     Column("state_key", String, primary_key=True),
     Column("occurred_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), server_default=func.now()),
+)
+
+billing_official_price_candidates = Table(
+    "billing_official_price_candidates",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("content_sha256", String, nullable=False, unique=True),
+    Column("provider_id", String, nullable=False),
+    Column("official_model_id", String, nullable=False),
+    Column("capability", String, nullable=False),
+    Column("unit_key", String, nullable=False),
+    Column("conditions_digest", String, nullable=False),
+    Column("conditions_json", Text, nullable=False, server_default="{}"),
+    Column("source_url", Text, nullable=False),
+    Column("source_published_at", DateTime(timezone=True)),
+    Column("original_currency", String, nullable=False),
+    Column("original_price_decimal", String, nullable=False),
+    Column("fx_rate_decimal", String, nullable=False),
+    Column("rmb_cost_decimal", String, nullable=False),
+    Column("verification_status", String, nullable=False),
+    Column("registry_version", String, nullable=False),
+    Column("created_at", DateTime(timezone=True), server_default=func.now()),
+)
+
+billing_pricing_model_mappings = Table(
+    "billing_pricing_model_mappings",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("provider_id", String, nullable=False),
+    Column("model_key", String, nullable=False),
+    Column("official_model_id", String, nullable=False),
+    Column("revision", Integer, nullable=False, server_default="0"),
+    Column("updated_by", String, nullable=False),
+    Column("updated_at", DateTime(timezone=True), server_default=func.now()),
+)
+Index(
+    "uq_billing_pricing_model_mapping",
+    billing_pricing_model_mappings.c.provider_id,
+    billing_pricing_model_mappings.c.model_key,
+    unique=True,
+)
+
+billing_pricing_draft_exclusions = Table(
+    "billing_pricing_draft_exclusions",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("draft_key", String, nullable=False),
+    Column("provider_id", String, nullable=False),
+    Column("model_key", String, nullable=False),
+    Column("excluded", Boolean, nullable=False, server_default=false()),
+    Column("reason", Text),
+    Column("updated_by", String, nullable=False),
+    Column("updated_at", DateTime(timezone=True), server_default=func.now()),
+)
+Index(
+    "uq_billing_pricing_draft_exclusion",
+    billing_pricing_draft_exclusions.c.draft_key,
+    billing_pricing_draft_exclusions.c.provider_id,
+    billing_pricing_draft_exclusions.c.model_key,
+    unique=True,
 )
 
 billing_price_rules = Table(
@@ -1367,6 +1434,7 @@ def create_all(engine: Engine) -> None:
     metadata.create_all(engine)
     _ensure_pricing_catalog_revision(engine)
     _ensure_pricing_audit_immutable(engine)
+    _ensure_official_price_candidate_immutable(engine)
     _ensure_open_api_publication_binding_columns(engine)
     _ensure_knowledge_metadata_columns(engine)
     _ensure_billing_usage_order_columns(engine)
@@ -1381,14 +1449,19 @@ def create_all(engine: Engine) -> None:
 
 def _ensure_pricing_catalog_revision(engine: Engine) -> None:
     """Add optimistic catalog revision to databases created before pricing UI."""
-    columns = {column["name"] for column in inspect(engine).get_columns(
-        "billing_price_catalogs")}
+    columns = {
+        column["name"]
+        for column in inspect(engine).get_columns("billing_price_catalogs")
+    }
     if "revision" in columns:
         return
     with engine.begin() as conn:
-        conn.execute(text(
-            "ALTER TABLE billing_price_catalogs ADD COLUMN revision "
-            "INTEGER NOT NULL DEFAULT 0"))
+        conn.execute(
+            text(
+                "ALTER TABLE billing_price_catalogs ADD COLUMN revision "
+                "INTEGER NOT NULL DEFAULT 0"
+            )
+        )
 
 
 def _ensure_pricing_audit_immutable(engine: Engine) -> None:
@@ -1409,19 +1482,66 @@ def _ensure_pricing_audit_immutable(engine: Engine) -> None:
     if engine.dialect.name != "postgresql":
         return
     with engine.begin() as conn:
-        conn.execute(text(
-            "CREATE OR REPLACE FUNCTION billing_pricing_audits_immutable() "
-            "RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION "
-            "'billing pricing audits are immutable'; END $$"))
+        conn.execute(
+            text(
+                "CREATE OR REPLACE FUNCTION billing_pricing_audits_immutable() "
+                "RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION "
+                "'billing pricing audits are immutable'; END $$"
+            )
+        )
         for operation in ("UPDATE", "DELETE"):
             trigger = f"billing_pricing_audits_no_{operation.lower()}"
-            conn.execute(text(
-                "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_trigger "
-                f"WHERE tgname = '{trigger}' AND tgrelid = "
-                "'billing_pricing_audits'::regclass) THEN "
-                f"CREATE TRIGGER {trigger} BEFORE {operation} ON "
-                "billing_pricing_audits FOR EACH ROW EXECUTE FUNCTION "
-                "billing_pricing_audits_immutable(); END IF; END $$"))
+            conn.execute(
+                text(
+                    "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_trigger "
+                    f"WHERE tgname = '{trigger}' AND tgrelid = "
+                    "'billing_pricing_audits'::regclass) THEN "
+                    f"CREATE TRIGGER {trigger} BEFORE {operation} ON "
+                    "billing_pricing_audits FOR EACH ROW EXECUTE FUNCTION "
+                    "billing_pricing_audits_immutable(); END IF; END $$"
+                )
+            )
+
+
+def _ensure_official_price_candidate_immutable(engine: Engine) -> None:
+    """Reject changes to append-only official price evidence."""
+    table_name = "billing_official_price_candidates"
+    message = "official price candidates are immutable"
+    if engine.dialect.name == "sqlite":
+        statements = (
+            f"CREATE TRIGGER IF NOT EXISTS {table_name}_no_update "
+            f"BEFORE UPDATE ON {table_name} BEGIN SELECT RAISE(ABORT, "
+            f"'{message}'); END",
+            f"CREATE TRIGGER IF NOT EXISTS {table_name}_no_delete "
+            f"BEFORE DELETE ON {table_name} BEGIN SELECT RAISE(ABORT, "
+            f"'{message}'); END",
+        )
+        with engine.begin() as conn:
+            for statement in statements:
+                conn.execute(text(statement))
+        return
+    if engine.dialect.name != "postgresql":
+        return
+    function_name = "billing_official_price_candidates_immutable"
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                f"CREATE OR REPLACE FUNCTION {function_name}() RETURNS "
+                "trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION "
+                f"'{message}'; END $$"
+            )
+        )
+        for operation in ("UPDATE", "DELETE"):
+            trigger = f"{table_name}_no_{operation.lower()}"
+            conn.execute(
+                text(
+                    "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_trigger "
+                    f"WHERE tgname = '{trigger}' AND tgrelid = "
+                    f"'{table_name}'::regclass) THEN CREATE TRIGGER "
+                    f"{trigger} BEFORE {operation} ON {table_name} FOR EACH "
+                    f"ROW EXECUTE FUNCTION {function_name}(); END IF; END $$"
+                )
+            )
 
 
 def _ensure_reconciliation_audit_immutable(engine: Engine) -> None:

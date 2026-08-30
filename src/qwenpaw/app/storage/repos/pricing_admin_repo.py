@@ -14,8 +14,11 @@ from sqlalchemy.exc import IntegrityError
 
 from ..schema import (
     billing_cost_snapshots,
+    billing_official_price_candidates,
     billing_pricing_audits,
+    billing_pricing_draft_exclusions,
     billing_pricing_imports,
+    billing_pricing_model_mappings,
     billing_pricing_policies,
     billing_pricing_sync_state,
     billing_pricing_unlock_attempts,
@@ -73,6 +76,175 @@ class PricingAdminRepository:
             )
             latest.setdefault(key, row)
         return list(latest.values())
+
+    def append_official_candidate(self, values: Mapping[str, Any]) -> str:
+        row = dict(values)
+        row["id"] = str(uuid4())
+        row["conditions_json"] = _json(row.pop("conditions", {}))
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(
+                    insert(billing_official_price_candidates).values(**row)
+                )
+        except IntegrityError:
+            pass
+        with self.engine.connect() as conn:
+            return str(
+                conn.execute(
+                    select(billing_official_price_candidates.c.id).where(
+                        billing_official_price_candidates.c.content_sha256
+                        == values["content_sha256"]
+                    )
+                ).scalar_one()
+            )
+
+    def latest_official_candidates(self) -> list[dict[str, Any]]:
+        with self.engine.connect() as conn:
+            return [
+                dict(row)
+                for row in conn.execute(
+                    select(billing_official_price_candidates).order_by(
+                        billing_official_price_candidates.c.created_at.desc()
+                    )
+                ).mappings()
+            ]
+
+    def replace_model_mapping(
+        self,
+        provider_id: str,
+        model_key: str,
+        official_model_id: str,
+        actor_id: str,
+        expected_revision: int,
+    ) -> dict[str, Any]:
+        with self.engine.begin() as conn:
+            current = (
+                conn.execute(
+                    select(billing_pricing_model_mappings).where(
+                        billing_pricing_model_mappings.c.provider_id
+                        == provider_id,
+                        billing_pricing_model_mappings.c.model_key
+                        == model_key,
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if current is None:
+                if expected_revision != 0:
+                    raise PricingRevisionConflict(model_key)
+                row = {
+                    "id": str(uuid4()),
+                    "provider_id": provider_id,
+                    "model_key": model_key,
+                    "official_model_id": official_model_id,
+                    "revision": 1,
+                    "updated_by": actor_id,
+                }
+                conn.execute(
+                    insert(billing_pricing_model_mappings).values(**row)
+                )
+            else:
+                if int(current["revision"]) != expected_revision:
+                    raise PricingRevisionConflict(model_key)
+                row = dict(current)
+                row.update(
+                    official_model_id=official_model_id,
+                    revision=expected_revision + 1,
+                    updated_by=actor_id,
+                )
+                result = conn.execute(
+                    update(billing_pricing_model_mappings)
+                    .where(
+                        billing_pricing_model_mappings.c.id == current["id"],
+                        billing_pricing_model_mappings.c.revision
+                        == expected_revision,
+                    )
+                    .values(
+                        official_model_id=official_model_id,
+                        revision=expected_revision + 1,
+                        updated_by=actor_id,
+                    )
+                )
+                if result.rowcount != 1:
+                    raise PricingRevisionConflict(model_key)
+            return {
+                "id": str(row["id"]),
+                "provider_id": provider_id,
+                "model_key": model_key,
+                "official_model_id": official_model_id,
+                "revision": int(row["revision"]),
+            }
+
+    def list_model_mappings(self) -> list[dict[str, Any]]:
+        with self.engine.connect() as conn:
+            return [
+                dict(row)
+                for row in conn.execute(
+                    select(billing_pricing_model_mappings).order_by(
+                        billing_pricing_model_mappings.c.provider_id,
+                        billing_pricing_model_mappings.c.model_key,
+                    )
+                ).mappings()
+            ]
+
+    def replace_draft_exclusion(
+        self,
+        draft_key: str,
+        provider_id: str,
+        model_key: str,
+        excluded: bool,
+        reason: str | None,
+        actor_id: str,
+    ) -> dict[str, Any]:
+        normalized_reason = (reason or "").strip() or None
+        if excluded and normalized_reason is None:
+            raise ValueError("exclusion reason is required")
+        with self.engine.begin() as conn:
+            current = (
+                conn.execute(
+                    select(billing_pricing_draft_exclusions).where(
+                        billing_pricing_draft_exclusions.c.draft_key
+                        == draft_key,
+                        billing_pricing_draft_exclusions.c.provider_id
+                        == provider_id,
+                        billing_pricing_draft_exclusions.c.model_key
+                        == model_key,
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            values = {
+                "excluded": excluded,
+                "reason": normalized_reason,
+                "updated_by": actor_id,
+            }
+            if current is None:
+                row_id = str(uuid4())
+                conn.execute(
+                    insert(billing_pricing_draft_exclusions).values(
+                        id=row_id,
+                        draft_key=draft_key,
+                        provider_id=provider_id,
+                        model_key=model_key,
+                        **values,
+                    )
+                )
+            else:
+                row_id = str(current["id"])
+                conn.execute(
+                    update(billing_pricing_draft_exclusions)
+                    .where(billing_pricing_draft_exclusions.c.id == row_id)
+                    .values(**values)
+                )
+        return {
+            "id": row_id,
+            "draft_key": draft_key,
+            "provider_id": provider_id,
+            "model_key": model_key,
+            **values,
+        }
 
     def replace_policy(
         self,

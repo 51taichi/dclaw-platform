@@ -14,6 +14,7 @@ import qwenpaw.app.storage.schema as schema_module
 from qwenpaw.app.storage.engine import create_engine_from_settings
 from qwenpaw.app.storage.schema import (
     _ensure_billing_bigint_columns,
+    billing_official_price_candidates,
     billing_pricing_audits,
     create_all,
 )
@@ -52,6 +53,9 @@ def test_billing_schema_is_idempotent(sqlite_engine):
         "billing_pricing_imports",
         "billing_pricing_unlocks",
         "billing_pricing_audits",
+        "billing_official_price_candidates",
+        "billing_pricing_model_mappings",
+        "billing_pricing_draft_exclusions",
         "billing_executions",
     } <= names
 
@@ -86,10 +90,7 @@ def test_billing_schema_is_idempotent(sqlite_engine):
         tuple(index["column_names"])
         for index in execution_indexes
         if index.get("unique")
-    } | {
-        tuple(constraint["column_names"])
-        for constraint in execution_uniques
-    }
+    } | {tuple(constraint["column_names"]) for constraint in execution_uniques}
     assert ("usage_order_id",) in execution_unique_column_sets
 
     catalog_columns = {
@@ -97,7 +98,6 @@ def test_billing_schema_is_idempotent(sqlite_engine):
         for column in inspector.get_columns("billing_price_catalogs")
     }
     assert "revision" in catalog_columns
-
 
     wallet_indexes = inspector.get_indexes("billing_wallets")
     wallet_uniques = inspector.get_unique_constraints("billing_wallets")
@@ -278,10 +278,44 @@ def test_billing_schema_is_idempotent(sqlite_engine):
 def test_pricing_audit_is_append_only(sqlite_engine):
     create_all(sqlite_engine)
     with sqlite_engine.begin() as conn:
-        conn.execute(insert(billing_pricing_audits).values(
-            id="audit-1", action="policy.updated", actor_id="1"))
+        conn.execute(
+            insert(billing_pricing_audits).values(
+                id="audit-1", action="policy.updated", actor_id="1"
+            )
+        )
         with pytest.raises(DatabaseError):
-            conn.execute(update(billing_pricing_audits).values(action="changed"))
+            conn.execute(
+                update(billing_pricing_audits).values(action="changed")
+            )
+
+
+def test_official_price_candidates_are_append_only(sqlite_engine):
+    create_all(sqlite_engine)
+    with sqlite_engine.begin() as conn:
+        conn.execute(
+            insert(billing_official_price_candidates).values(
+                id="candidate-1",
+                content_sha256="digest-1",
+                provider_id="dashscope",
+                official_model_id="qwen-plus",
+                capability="chat",
+                unit_key="input_tokens",
+                conditions_digest="conditions-1",
+                source_url="https://help.aliyun.com/pricing",
+                original_currency="CNY",
+                original_price_decimal="0.004",
+                fx_rate_decimal="1",
+                rmb_cost_decimal="0.004",
+                verification_status="verified",
+                registry_version="2026-08-30",
+            )
+        )
+        with pytest.raises(DatabaseError):
+            conn.execute(
+                update(billing_official_price_candidates).values(
+                    rmb_cost_decimal="0.001"
+                )
+            )
 
 
 def test_manual_top_up_schema_is_idempotent_and_uses_bigints(sqlite_engine):
