@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { billingApi } from "../../../api/modules/billing";
+import { adminUsersApi } from "../../../api/modules/adminUsers";
 import BillingSettings from "./index";
 
 vi.mock("../../../api/modules/billing", () => ({
@@ -11,6 +12,12 @@ vi.mock("../../../api/modules/billing", () => ({
     listAdminProducts: vi.fn(),
     approveClaim: vi.fn(),
     rejectClaim: vi.fn(),
+  },
+}));
+
+vi.mock("../../../api/modules/adminUsers", () => ({
+  adminUsersApi: {
+    listUsers: vi.fn(),
   },
 }));
 
@@ -29,6 +36,14 @@ const product = {
 describe("BillingSettings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(adminUsersApi.listUsers).mockResolvedValue([
+      {
+        id: 24,
+        username: "dingmai",
+        role: "user",
+        created_at: "2026-08-28T12:53:23Z",
+      },
+    ]);
     vi.mocked(billingApi.listAdminClaims).mockResolvedValue({
       items: [
         {
@@ -43,7 +58,7 @@ describe("BillingSettings", () => {
           reviewed_at: null,
           created_at: "2026-08-29T00:00:00Z",
           updated_at: "2026-08-29T00:00:00Z",
-          owner_id: "user-1",
+          owner_id: "24",
         },
       ],
     });
@@ -66,6 +81,8 @@ describe("BillingSettings", () => {
     expect(screen.getByText("设置")).toBeInTheDocument();
     expect(screen.getByText("积分与计费")).toBeInTheDocument();
     expect(await screen.findByText("tail-1234")).toBeInTheDocument();
+    expect(screen.getByText("dingmai")).toBeInTheDocument();
+    expect(screen.getByText("ID 24")).toBeInTheDocument();
     expect(screen.queryByLabelText(/直接修改余额/)).not.toBeInTheDocument();
     expect(
       screen.queryByRole("spinbutton", { name: /赠送积分/ }),

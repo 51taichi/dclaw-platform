@@ -1,16 +1,32 @@
 import { useEffect, useState } from "react";
 import { Button, Input, Modal, Space, Table, Tag, Typography } from "antd";
 import { billingApi } from "../../../api/modules/billing";
+import { adminUsersApi } from "../../../api/modules/adminUsers";
 import type { TopUpClaim } from "../../../api/types/billing";
 
 export default function TopUpClaimsTab() {
   const [claims, setClaims] = useState<TopUpClaim[]>([]);
+  const [userNames, setUserNames] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<TopUpClaim | null>(null);
   const [action, setAction] = useState<"approve" | "reject">("approve");
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
-  const load = async () =>
-    setClaims((await billingApi.listAdminClaims()).items);
+  const load = async () => {
+    const [claimResult, userResult] = await Promise.allSettled([
+      billingApi.listAdminClaims(),
+      adminUsersApi.listUsers(),
+    ]);
+    if (claimResult.status === "fulfilled") {
+      setClaims(claimResult.value.items);
+    }
+    if (userResult.status === "fulfilled") {
+      setUserNames(
+        Object.fromEntries(
+          userResult.value.map((user) => [String(user.id), user.username]),
+        ),
+      );
+    }
+  };
   useEffect(() => void load(), []);
 
   const review = async () => {
@@ -39,7 +55,18 @@ export default function TopUpClaimsTab() {
         rowKey="public_id"
         dataSource={claims}
         columns={[
-          { title: "客户", dataIndex: "owner_id" },
+          {
+            title: "客户",
+            dataIndex: "owner_id",
+            render: (ownerId: string) => (
+              <Space direction="vertical" size={0}>
+                <Typography.Text strong>
+                  {userNames[ownerId] ?? "未知账号"}
+                </Typography.Text>
+                <Typography.Text type="secondary">ID {ownerId}</Typography.Text>
+              </Space>
+            ),
+          },
           { title: "套餐快照", render: (_, row) => row.product_snapshot.name },
           { title: "付款凭证", dataIndex: "payer_reference" },
           { title: "金额(分)", dataIndex: "payment_amount_fen" },
