@@ -345,6 +345,68 @@ def test_successful_update_writes_manifest_and_keeps_external_resources(
     assert (root / "release.env").stat().st_mode & 0o777 == 0o600
 
 
+def test_quiet_deploy_uses_pinned_build_and_writes_result_summary(
+    deployment: dict[str, Any],
+) -> None:
+    root = deployment["root"]
+    assert isinstance(root, Path)
+    (root / "pending-release.env").write_text(
+        "SERVER_SHA=" + "a" * 40 + "\n"
+        "CLIENT_SHA=" + "b" * 40 + "\n"
+        "IMAGE_TAG=ghcr.io/51taichi/dclaw:server-"
+        + "a" * 12
+        + "-client-"
+        + "b" * 12
+        + "\n",
+    )
+    deployment["env"]["DCLAW_DEPLOY_FOREGROUND"] = "1"
+
+    launch = _run(deployment, "deploy-release.sh")
+    summary = _run(deployment, "deploy-result.sh")
+
+    assert launch.returncode == 0, launch.stderr
+    assert launch.stdout == "DEPLOY_STARTED\n"
+    assert summary.returncode == 0, summary.stderr
+    assert summary.stdout == (
+        "UPDATE_SUCCESS\n"
+        "server/main：aaaaaaa\n"
+        "client/main：bbbbbbb\n"
+        "container：running\n"
+        "local_api：200\n"
+        "public_api：200\n"
+    )
+
+
+def test_quiet_deploy_failure_reports_rollback_without_success(
+    deployment: dict[str, Any],
+) -> None:
+    root = deployment["root"]
+    assert isinstance(root, Path)
+    (root / "pending-release.env").write_text(
+        "SERVER_SHA=" + "a" * 40 + "\n"
+        "CLIENT_SHA=" + "b" * 40 + "\n"
+        "IMAGE_TAG=ghcr.io/51taichi/dclaw:server-"
+        + "a" * 12
+        + "-client-"
+        + "b" * 12
+        + "\n",
+    )
+    deployment["env"].update(
+        {
+            "DCLAW_DEPLOY_FOREGROUND": "1",
+            "FAKE_HEALTH_FAILURE": "local_api",
+        },
+    )
+
+    launch = _run(deployment, "deploy-release.sh")
+    summary = _run(deployment, "deploy-result.sh")
+
+    assert launch.returncode != 0
+    assert "UPDATE_SUCCESS" not in launch.stdout
+    assert summary.stdout.startswith("UPDATE_FAILED_ROLLBACK_READY\n")
+    assert "UPDATE_SUCCESS" not in summary.stdout
+
+
 def test_exact_pair_uses_immutable_tag_and_validates_both_labels(
     deployment: dict[str, Any],
 ) -> None:
