@@ -247,11 +247,16 @@ export default function OpenApiPage() {
             expertTeamsApi.listAdminExpertTeams(),
             adminUsersApi.listUsers(),
           ]);
+        const enabledPublicationRows = publicationRows.filter(
+          (item) => item.status === "enabled",
+        );
         const nextPublicationId =
           preferredPublicationId &&
-          publicationRows.some((item) => item.id === preferredPublicationId)
+          enabledPublicationRows.some(
+            (item) => item.id === preferredPublicationId,
+          )
             ? preferredPublicationId
-            : publicationRows[0]?.id;
+            : enabledPublicationRows[0]?.id;
 
         setPublications(publicationRows);
         setApps(appRows);
@@ -349,13 +354,17 @@ export default function OpenApiPage() {
     value: publication.id,
   }));
 
-  const keyPublicationOptions = publications.map((publication) => ({
-    label: `${getPublicationTitle(publication)} (${publication.public_id})`,
-    value: publication.id,
-    disabled:
-      publication.status !== "enabled" ||
-      getPublicationScopes(publication).length === 0,
-  }));
+  const enabledPublicationOptions = publicationOptions.filter(
+    (_, index) => publications[index]?.status === "enabled",
+  );
+
+  const keyPublicationOptions = publications
+    .filter((publication) => publication.status === "enabled")
+    .map((publication) => ({
+      label: `${getPublicationTitle(publication)} (${publication.public_id})`,
+      value: publication.id,
+      disabled: getPublicationScopes(publication).length === 0,
+    }));
 
   const appOptions = apps.map((app) => ({
     label: app.name,
@@ -897,7 +906,7 @@ export default function OpenApiPage() {
                       <Select
                         className={styles.publicationFilter}
                         value={selectedPublicationId}
-                        options={publicationOptions}
+                        options={enabledPublicationOptions}
                         showSearch
                         optionFilterProp="label"
                         placeholder="选择发布对象"

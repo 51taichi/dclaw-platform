@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -217,6 +217,52 @@ describe("OpenApiPage", () => {
 
     expect(button).toBeDisabled();
     expect(mockOpenApiApi.createKey).not.toHaveBeenCalled();
+  });
+
+  it("omits disabled publications from application and key selectors", async () => {
+    const user = userEvent.setup();
+    mockOpenApiApi.listPublications.mockResolvedValue([
+      {
+        id: "pub-enabled",
+        public_id: "support_agent",
+        target_type: "agent",
+        target_id: "agent-1",
+        bound_user_id: "7",
+        knowledge_base_id: "openapi-pub-enabled",
+        name: "在线客服接口",
+        status: "enabled",
+        allowed_scopes: ["messages:create"],
+      },
+      {
+        id: "pub-disabled",
+        public_id: "legacy_support",
+        target_type: "agent",
+        target_id: "agent-1",
+        bound_user_id: "7",
+        knowledge_base_id: "openapi-pub-disabled",
+        name: "旧客服接口",
+        status: "disabled",
+        allowed_scopes: ["messages:create"],
+      },
+    ]);
+
+    render(<OpenApiPage />);
+
+    await user.click(await screen.findByRole("tab", { name: "应用与密钥" }));
+    const credentialsPanel = await screen.findByRole("tabpanel", {
+      name: "应用与密钥",
+    });
+    await user.click(within(credentialsPanel).getByRole("combobox"));
+
+    expect((await screen.findAllByText(/在线客服接口/)).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/legacy_support/)).not.toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: /创建 API Key/ }));
+    await user.click(screen.getAllByRole("combobox").at(-3)!);
+
+    expect((await screen.findAllByText(/在线客服接口/)).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/legacy_support/)).not.toBeInTheDocument();
   });
 
   it("hides disabled publications by default and reveals them on request", async () => {
