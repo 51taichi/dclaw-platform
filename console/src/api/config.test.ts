@@ -65,6 +65,12 @@ describe("getApiUrl", () => {
     );
   });
 
+  it("keeps Open API knowledge APIs in the root namespace", () => {
+    expect(getApiUrl("/open-api-knowledge/publications")).toBe(
+      "/api/open-api-knowledge/publications",
+    );
+  });
+
   it("keeps explicit Web Search admin APIs in the admin namespace", () => {
     expect(getApiUrl("/admin/web-search/config")).toBe(
       "/api/admin/web-search/config",

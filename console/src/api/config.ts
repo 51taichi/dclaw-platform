@@ -50,6 +50,14 @@ const ADMIN_PREFIXES = [
   "/open-api",
 ];
 
+function matchesApiPrefix(path: string, prefix: string): boolean {
+  return (
+    path === prefix ||
+    path.startsWith(`${prefix}/`) ||
+    path.startsWith(`${prefix}?`)
+  );
+}
+
 function getApiBaseUrl(): string {
   if (
     typeof window !== "undefined" &&
@@ -71,9 +79,9 @@ export function getApiUrl(path: string): string {
     !normalizedPath.startsWith("/user/") &&
     !normalizedPath.startsWith("/admin/")
   ) {
-    if (ADMIN_PREFIXES.some((p) => normalizedPath.startsWith(p))) {
+    if (ADMIN_PREFIXES.some((p) => matchesApiPrefix(normalizedPath, p))) {
       normalizedPath = `/admin${normalizedPath}`;
-    } else if (USER_PREFIXES.some((p) => normalizedPath.startsWith(p))) {
+    } else if (USER_PREFIXES.some((p) => matchesApiPrefix(normalizedPath, p))) {
       normalizedPath = `/user${normalizedPath}`;
     } else if (normalizedPath.startsWith("/capabilities/user")) {
       normalizedPath = `/user${normalizedPath}`;
