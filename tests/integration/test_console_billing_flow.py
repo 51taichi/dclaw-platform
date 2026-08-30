@@ -65,7 +65,7 @@ def console_billing_engine(tmp_path, monkeypatch):
                     id="console-rule",
                     provider_id="provider",
                     model_key="model",
-                    capability="text",
+                    capability="chat",
                     unit_type="tokens",
                     input_credits_per_1k=1,
                     output_credits_per_1k=1,
