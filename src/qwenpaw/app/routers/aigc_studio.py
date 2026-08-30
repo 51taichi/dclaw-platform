@@ -5245,6 +5245,13 @@ async def list_capabilities(request: Request) -> CapabilityList:
     capabilities: list[AigcCapabilityInfo] = []
     manager = getattr(request.app.state, "provider_manager", None)
     if manager is not None:
+        from ..billing.model_publication import ModelPublicationService
+        from ..storage.engine import get_app_engine
+        from ..storage.repos.price_catalog_repo import PriceCatalogRepository
+
+        published = ModelPublicationService(
+            PriceCatalogRepository(get_app_engine())
+        ).effective_pairs()
         for provider in await manager.list_provider_info():
             if not _provider_configured_for_aigc(provider):
                 continue
@@ -5252,6 +5259,10 @@ async def list_capabilities(request: Request) -> CapabilityList:
                 getattr(provider, "extra_models", []) or [],
             )
             for model in models:
+                if published is not None and (
+                    provider.id, model.id
+                ) not in published:
+                    continue
                 for capability in _capabilities_from_model(model, provider):
                     capabilities.append(
                         AigcCapabilityInfo(

@@ -1,3 +1,4 @@
+import json
 from decimal import Decimal
 
 from qwenpaw.app.billing.official_pricing import OfficialPriceRegistry
@@ -248,3 +249,37 @@ def test_ai_estimate_candidate_appears_with_safe_multiplier_and_nonpublish():
     assert row.multiplier == Decimal("2.0")
     assert row.include_in_publish is False
     assert row.rmb_sale_price == Decimal("6.0")
+
+
+def test_latest_collected_candidate_overrides_bundled_registry_price():
+    builder = PricingDraftBuilder(OfficialPriceRegistry.load_bundled())
+    model = PriceableModel(
+        "dashscope",
+        "百炼",
+        "qwen3-max",
+        "Qwen3 Max",
+        "text",
+        official_model_id="qwen3-max",
+        pricing_region="cn-beijing",
+    )
+    candidate = {
+        "provider_id": "dashscope",
+        "official_model_id": "qwen3-max",
+        "capability": "chat",
+        "unit_key": "input_tokens",
+        "conditions_json": json.dumps(
+            {"region": "cn-beijing", "unit_size": 1_000_000}
+        ),
+        "source_url": "https://help.aliyun.com/new-pricing",
+        "rmb_cost_decimal": "4.0",
+        "evidence_level": "official_verified",
+        "verification_status": "verified",
+        "registry_version": "new",
+        "default_multiplier_decimal": "1.5",
+    }
+
+    result = builder.build((model,), (), (), (), (candidate,), ())
+
+    assert len(result.rows) == 1
+    assert result.rows[0].rmb_cost == Decimal("4.0")
+    assert result.rows[0].registry_version == "new"

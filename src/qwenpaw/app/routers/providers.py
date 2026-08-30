@@ -34,6 +34,9 @@ from ...providers.provider_manager import ProviderManager
 from ...providers.openrouter_provider import OpenRouterProvider
 from ...config.config import ModelSlotConfig
 from ..chat_access import ensure_chat_access
+from ..billing.model_publication import ModelPublicationService
+from ..storage.engine import get_app_engine
+from ..storage.repos.price_catalog_repo import PriceCatalogRepository
 
 logger = logging.getLogger(__name__)
 
@@ -235,9 +238,42 @@ async def _load_agent_model(
     summary="List all providers",
 )
 async def list_all_providers(
+    request: Request,
+    include_unpublished: bool = Query(default=False),
     manager: ProviderManager = Depends(get_provider_manager),
 ) -> List[ProviderInfo]:
-    return await manager.list_provider_info()
+    providers = await manager.list_provider_info()
+    if include_unpublished:
+        if getattr(request.state, "role", None) != "admin":
+            raise HTTPException(status_code=403, detail="Admin required")
+        return providers
+    published = ModelPublicationService(
+        PriceCatalogRepository(get_app_engine())
+    ).effective_pairs()
+    if published is None:
+        return providers
+    filtered: list[ProviderInfo] = []
+    for provider in providers:
+        if provider.id == AUTO_MODEL_PROVIDER_ID:
+            filtered.append(provider)
+            continue
+        models = [
+            model
+            for model in provider.models
+            if (provider.id, model.id) in published
+        ]
+        extra_models = [
+            model
+            for model in provider.extra_models
+            if (provider.id, model.id) in published
+        ]
+        if models or extra_models:
+            filtered.append(
+                provider.model_copy(
+                    update={"models": models, "extra_models": extra_models}
+                )
+            )
+    return filtered
 
 
 @router.put(

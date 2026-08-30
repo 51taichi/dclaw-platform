@@ -152,30 +152,31 @@ class PricingDraftBuilder:
                 if official_provider_id and official_model_id
                 else ()
             )
+            collected_rows = sorted(
+                (
+                    row
+                    for key, row in candidate_index.items()
+                    if key[:2]
+                    == (official_provider_id, official_model_id)
+                    and _region_matches(
+                        json.loads(str(row.get("conditions_json") or "{}")),
+                        model.pricing_region,
+                    )
+                ),
+                key=lambda row: (
+                    str(row["unit_key"]),
+                    str(row.get("conditions_json") or "{}"),
+                ),
+            )
+            if collected_rows:
+                dimensions = ()
             exclusion = exclusion_index.get(model_key)
             decision = decision_index.get(model_key)
             exclusion_reason = str(exclusion["reason"]) if exclusion else None
             if exclusion:
                 excluded.add(model_key)
             if not dimensions:
-                candidate_rows = sorted(
-                    (
-                        row
-                        for key, row in candidate_index.items()
-                        if key[:2]
-                        == (official_provider_id, official_model_id)
-                        and _region_matches(
-                            json.loads(
-                                str(row.get("conditions_json") or "{}")
-                            ),
-                            model.pricing_region,
-                        )
-                    ),
-                    key=lambda row: (
-                        str(row["unit_key"]),
-                        str(row.get("conditions_json") or "{}"),
-                    ),
-                )
+                candidate_rows = collected_rows
                 if candidate_rows:
                     matched.add(model_key)
                     for candidate in candidate_rows:

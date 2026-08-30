@@ -5,6 +5,7 @@ import pytest
 from qwenpaw.app.billing.pricing_collectors import (
     CollectedPriceCandidate,
     CollectionStage,
+    OfficialPageAiCollector,
     OfficialRegistryCollector,
     PricingCollectionPipeline,
     StructuredAiCollector,
@@ -177,3 +178,37 @@ def test_structured_ai_collector_marks_no_evidence_estimate_nonofficial():
     assert rows[0].evidence_level == "ai_no_evidence"
     assert rows[0].source_url is None
     assert rows[0].ai_model == "pricing-helper"
+
+
+def test_official_page_ai_collector_fetches_provider_official_page():
+    seen = []
+
+    def extract(_model, evidence):
+        seen.extend(evidence)
+        return [
+            {
+                "capability": "chat",
+                "unit_key": "input_tokens",
+                "unit_size": 1_000_000,
+                "conditions": {"region": "cn-beijing"},
+                "currency": "CNY",
+                "price_decimal": "3",
+                "fx_rate_decimal": "1",
+                "source_urls": ["https://help.aliyun.com/pricing"],
+                "confidence_decimal": "0.8",
+                "evidence_excerpt": "每百万 Token 3 元",
+            }
+        ]
+
+    collector = OfficialPageAiCollector(
+        page_urls={"dashscope": "https://help.aliyun.com/pricing"},
+        official_hosts={"dashscope": frozenset({"help.aliyun.com"})},
+        fetcher=lambda url: f"source={url}; 每百万 Token 3 元",
+        extractor=extract,
+        ai_model="qwen",
+    )
+
+    rows = collector.collect(_model())
+
+    assert rows[0].evidence_level == "ai_official_extract"
+    assert "https://help.aliyun.com/pricing" in seen[0]

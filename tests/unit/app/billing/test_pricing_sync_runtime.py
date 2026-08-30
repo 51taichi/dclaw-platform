@@ -17,6 +17,7 @@ from qwenpaw.app.billing.pricing_collectors import (
 )
 from qwenpaw.app.billing.pricing_inventory import PriceableModel
 from qwenpaw.app.billing.pricing_sync_runtime import (
+    ActiveModelPricingExtractor,
     AutoProtectionPublisher,
     PricingCollectionRuntime,
     pricing_collection_loop,
@@ -361,3 +362,36 @@ def test_durable_collection_job_isolates_one_model_pipeline_failure(tmp_path):
         item for item in detail["items"] if item["model_key"] == "broken"
     )["status"] == "failed"
     engine.dispose()
+
+
+def test_active_model_pricing_extractor_returns_strict_json_rows():
+    class Response:
+        content = (
+            '```json\n{"prices":[{"capability":"chat",'
+            '"unit_key":"input_tokens","unit_size":1000000,'
+            '"conditions":{"region":"cn-beijing"},'
+            '"currency":"CNY","price_decimal":"3.2",'
+            '"fx_rate_decimal":"1","source_urls":[],'
+            '"confidence_decimal":"0.4",'
+            '"evidence_excerpt":"AI estimate without official evidence"}]}\n```'
+        )
+
+    class Model:
+        async def __call__(self, _messages):
+            return Response()
+
+    rows = ActiveModelPricingExtractor(lambda: Model())(
+        PriceableModel(
+            "dashscope",
+            "百炼",
+            "future-model",
+            "Future Model",
+            "text",
+            official_model_id="future-model",
+            pricing_region="cn-beijing",
+        ),
+        (),
+    )
+
+    assert rows[0]["price_decimal"] == "3.2"
+    assert rows[0]["source_urls"] == []

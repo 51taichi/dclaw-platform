@@ -20,7 +20,9 @@ from .pricing_collectors import (
     CollectionStage,
     EVIDENCE_DEFAULTS,
     OfficialRegistryCollector,
+    OfficialPageAiCollector,
     PricingCollectionPipeline,
+    StructuredAiCollector,
 )
 from .pricing_inventory import PricingModelInventory
 from .pricing_sync import (
@@ -30,6 +32,76 @@ from .pricing_sync import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _response_text(response: Any) -> str:
+    if response is None:
+        return ""
+    if isinstance(response, str):
+        return response
+    for name in ("text", "content"):
+        value = getattr(response, name, None)
+        if isinstance(value, str):
+            return value
+    return ""
+
+
+async def _consume_pricing_model(model: Any, messages: list[dict]) -> str:
+    response = await model(messages)
+    if hasattr(response, "__aiter__"):
+        latest = ""
+        async for chunk in response:
+            text = _response_text(chunk)
+            if text:
+                latest = text
+        return latest
+    return _response_text(response)
+
+
+class ActiveModelPricingExtractor:
+    """Ask the configured active model for a conservative JSON estimate."""
+
+    def __init__(self, model_factory: Any) -> None:
+        self.model_factory = model_factory
+
+    def __call__(self, model: Any, _evidence: Any) -> list[dict[str, Any]]:
+        evidence = "\n\n".join(str(block) for block in _evidence)
+        prompt = (
+            "Estimate the public API cost for the named model. Return only "
+            "strict JSON as {\"prices\":[...]}. Each item must contain "
+            "capability, unit_key, unit_size, conditions, currency (CNY or "
+            "USD), price_decimal, fx_rate_decimal, source_urls, "
+            "confidence_decimal, evidence_excerpt. When no verifiable "
+            "official evidence is provided, source_urls must be [] and "
+            "confidence must be <= 0.5. Never claim official verification.\n"
+            f"provider_id={model.provider_id}\n"
+            f"model_id={model.official_model_id or model.model_key}\n"
+            f"category={model.category}\n"
+            f"pricing_region={model.pricing_region or ''}\n"
+            f"evidence_blocks={evidence or 'NONE'}"
+        )
+        raw = asyncio.run(
+            _consume_pricing_model(
+                self.model_factory(),
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You normalize model prices conservatively for "
+                            "human review. Output JSON only."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+            )
+        ).strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+        payload = json.loads(raw)
+        rows = payload.get("prices") if isinstance(payload, dict) else None
+        if not isinstance(rows, list):
+            raise ValueError("AI pricing response must contain prices list")
+        return [dict(row) for row in rows]
 
 
 class PricingCollectionRuntime:
@@ -253,6 +325,18 @@ async def pricing_collection_loop(
         await asyncio.sleep(poll_seconds)
 
 
+def _fetch_official_pricing_page(url: str) -> str:
+    request = Request(
+        url,
+        headers={
+            "Accept": "text/html,application/xhtml+xml",
+            "User-Agent": "DClaw-Pricing-Collector/1.0",
+        },
+    )
+    with urlopen(request, timeout=20) as response:
+        return response.read(1_000_000).decode("utf-8", errors="replace")
+
+
 def build_pricing_collection_runtime(
     provider_manager: Any,
 ) -> PricingCollectionRuntime:
@@ -263,17 +347,67 @@ def build_pricing_collection_runtime(
         "volcengine": frozenset(
             {"www.volcengine.com", "ark.cn-beijing.volces.com"}
         ),
+        "volcengine-cn": frozenset(
+            {"www.volcengine.com", "ark.cn-beijing.volces.com"}
+        ),
     }
-    pipeline = PricingCollectionPipeline(
-        (
-            CollectionStage(
-                "bundled-official",
-                OfficialRegistryCollector(
-                    OfficialPriceRegistry.load_bundled(), official_hosts
-                ),
+    stages: list[CollectionStage] = []
+    active = provider_manager.get_active_model()
+    if active is not None and active.provider_id and active.model:
+        provider = provider_manager.get_provider(active.provider_id)
+        if provider is not None:
+            extractor = ActiveModelPricingExtractor(
+                lambda: provider.get_chat_model_instance(active.model)
+            )
+            stages.append(
+                CollectionStage(
+                    "official-page-ai",
+                    OfficialPageAiCollector(
+                        page_urls={
+                            "dashscope": (
+                                "https://help.aliyun.com/zh/model-studio/"
+                                "model-pricing"
+                            ),
+                            "volcengine": (
+                                "https://www.volcengine.com/product/ark"
+                            ),
+                            "volcengine-cn": (
+                                "https://www.volcengine.com/product/ark"
+                            ),
+                        },
+                        official_hosts=official_hosts,
+                        fetcher=_fetch_official_pricing_page,
+                        extractor=extractor,
+                        ai_model=active.model,
+                    ),
+                )
+            )
+    stages.append(
+        CollectionStage(
+            "bundled-official",
+            OfficialRegistryCollector(
+                OfficialPriceRegistry.load_bundled(), official_hosts
             ),
         )
     )
+    if active is not None and active.provider_id and active.model:
+        provider = provider_manager.get_provider(active.provider_id)
+        if provider is not None:
+            stages.append(
+                CollectionStage(
+                    "active-model-estimate",
+                    StructuredAiCollector(
+                        extractor=extractor,
+                        evidence_level="ai_no_evidence",
+                        ai_model=active.model,
+                        prompt_version="pricing-estimate-v1",
+                        collector_version="active-model-v1",
+                        official_hosts=frozenset(),
+                        evidence_blocks=(),
+                    ),
+                )
+            )
+    pipeline = PricingCollectionPipeline(tuple(stages))
     return PricingCollectionRuntime(
         PricingAdminRepository(get_app_engine()),
         PricingModelInventory(provider_manager),

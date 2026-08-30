@@ -264,3 +264,49 @@ class StructuredAiCollector:
             candidate.validate(self.official_hosts)
             candidates.append(candidate)
         return tuple(candidates)
+
+
+class OfficialPageAiCollector:
+    """Fetch a bounded official page and ask AI to normalize its evidence."""
+
+    def __init__(
+        self,
+        *,
+        page_urls: Mapping[str, str],
+        official_hosts: Mapping[str, frozenset[str]],
+        fetcher: Callable[[str], str],
+        extractor: Callable[
+            [PriceableModel, Sequence[str]], Sequence[Mapping[str, Any]]
+        ],
+        ai_model: str,
+        max_evidence_chars: int = 30_000,
+    ) -> None:
+        self.page_urls = dict(page_urls)
+        self.official_hosts = dict(official_hosts)
+        self.fetcher = fetcher
+        self.extractor = extractor
+        self.ai_model = ai_model
+        self.max_evidence_chars = max_evidence_chars
+
+    def collect(
+        self, model: PriceableModel
+    ) -> tuple[CollectedPriceCandidate, ...]:
+        url = self.page_urls.get(model.provider_id)
+        if not url:
+            return ()
+        parsed = urlparse(url)
+        hosts = self.official_hosts.get(model.provider_id, frozenset())
+        if parsed.scheme != "https" or parsed.hostname not in hosts:
+            raise ValueError("untrusted official pricing page")
+        content = self.fetcher(url)[: self.max_evidence_chars]
+        if not content.strip():
+            return ()
+        return StructuredAiCollector(
+            extractor=self.extractor,
+            evidence_level="ai_official_extract",
+            ai_model=self.ai_model,
+            prompt_version="official-page-extract-v1",
+            collector_version="official-page-ai-v1",
+            official_hosts=hosts,
+            evidence_blocks=(f"SOURCE_URL={url}\nCONTENT={content}",),
+        ).collect(model)
