@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Callable
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -12,6 +13,8 @@ from zipfile import BadZipFile
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
+
+from .pricing_draft import PricingDraftResult
 
 HEADERS = (
     "供应商",
@@ -23,6 +26,27 @@ HEADERS = (
     "来源状态",
     "验证时间",
 )
+DRAFT_HEADERS = (
+    "平台ID",
+    "平台名称",
+    "模型ID",
+    "模型名称",
+    "官方平台ID",
+    "官方模型ID",
+    "分类",
+    "计价维度",
+    "单位数量",
+    "规格条件",
+    "人民币成本",
+    "默认倍率",
+    "人民币销售价",
+    "积分价格",
+    "来源类型",
+    "官方来源",
+    "验证状态",
+    "是否纳入本次发布",
+    "排除原因",
+)
 MAX_WORKBOOK_BYTES = 5 * 1024 * 1024
 
 
@@ -33,7 +57,8 @@ class ImportRepository(Protocol):
         filename: str,
         actor_id: str,
         preview: dict[str, Any],
-    ) -> dict[str, Any]: ...
+    ) -> dict[str, Any]:
+        ...
 
 
 class PricingExcelService:
@@ -42,9 +67,7 @@ class PricingExcelService:
         repository: ImportRepository,
         *,
         preview_builder: (
-            Callable[
-                [str, list[dict[str, Any]] | None, str], dict[str, Any]
-            ]
+            Callable[[str, list[dict[str, Any]] | None, str], dict[str, Any]]
             | None
         ) = None,
     ) -> None:
@@ -68,7 +91,7 @@ class PricingExcelService:
                     data_only=False,
                 ).active
                 header = tuple(cell.value for cell in next(sheet.iter_rows()))
-                if header != HEADERS:
+                if header not in (HEADERS, DRAFT_HEADERS):
                     problems.append({"row": 1, "code": "invalid_headers"})
                 else:
                     seen: set[tuple[str, str, str]] = set()
@@ -86,7 +109,12 @@ class PricingExcelService:
                                 {"row": number, "code": "formula_not_allowed"}
                             )
                             continue
-                        problem, row = self._parse_row(number, values, seen)
+                        parser = (
+                            self._parse_draft_row
+                            if header == DRAFT_HEADERS
+                            else self._parse_row
+                        )
+                        problem, row = parser(number, values, seen)
                         if problem:
                             problems.append(problem)
                         elif row:
@@ -117,9 +145,16 @@ class PricingExcelService:
     def _parse_row(
         number: int, values: tuple[Any, ...], seen: set[tuple[str, str, str]]
     ):
-        provider, model, category, unit, cost, multiplier, status, verified = (
-            values
-        )
+        (
+            provider,
+            model,
+            category,
+            unit,
+            cost,
+            multiplier,
+            status,
+            verified,
+        ) = values
         key = (str(provider).strip(), str(model).strip(), str(unit).strip())
         if key in seen:
             return {"row": number, "code": "duplicate_key"}, None
@@ -145,6 +180,101 @@ class PricingExcelService:
             "verified_at": str(verified) if verified is not None else None,
         }
 
+    @staticmethod
+    def _parse_draft_row(
+        number: int, values: tuple[Any, ...], seen: set[tuple[str, str, str]]
+    ):
+        (
+            provider_id,
+            _provider_name,
+            model_key,
+            _model_name,
+            official_provider_id,
+            official_model_id,
+            category,
+            unit_key,
+            unit_size,
+            conditions,
+            cost,
+            multiplier,
+            sale_price,
+            credits,
+            source_type,
+            source_url,
+            verification_status,
+            include,
+            exclusion_reason,
+        ) = values
+        key = (
+            str(provider_id).strip(),
+            str(model_key).strip(),
+            str(unit_key or "").strip(),
+        )
+        if key in seen:
+            return {"row": number, "code": "duplicate_key"}, None
+        seen.add(key)
+        included = str(include).strip() == "是"
+        reason = str(exclusion_reason or "").strip() or None
+        if not included and reason is None:
+            return {
+                "row": number,
+                "code": "exclusion_reason_required",
+            }, None
+        if cost in (None, ""):
+            if included:
+                return {"row": number, "code": "trusted_cost_missing"}, None
+            return None, {
+                "provider_id": key[0],
+                "model_key": key[1],
+                "official_provider_id": str(official_provider_id or ""),
+                "official_model_id": str(official_model_id or ""),
+                "category": str(category),
+                "unit_key": key[2],
+                "excluded": True,
+                "exclusion_reason": reason,
+                "verification_status": str(verification_status),
+            }
+        try:
+            cost_value = Decimal(str(cost))
+            multiplier_value = Decimal(str(multiplier))
+            unit_size_value = int(unit_size)
+            expected_sale = cost_value * multiplier_value
+            expected_credits = int(
+                (expected_sale * 100).to_integral_value(
+                    rounding="ROUND_CEILING"
+                )
+            )
+        except (InvalidOperation, TypeError, ValueError):
+            return {"row": number, "code": "invalid_decimal"}, None
+        if multiplier_value < Decimal("1.3"):
+            return {"row": number, "code": "below_safe_floor"}, None
+        if (
+            Decimal(str(sale_price)) != expected_sale
+            or int(credits) != expected_credits
+        ):
+            return {"row": number, "code": "derived_price_mismatch"}, None
+        try:
+            parsed_conditions = json.loads(str(conditions or "{}"))
+        except json.JSONDecodeError:
+            return {"row": number, "code": "invalid_conditions"}, None
+        return None, {
+            "provider_id": key[0],
+            "model_key": key[1],
+            "official_provider_id": str(official_provider_id or ""),
+            "official_model_id": str(official_model_id or ""),
+            "category": str(category),
+            "unit_key": key[2],
+            "unit_size": unit_size_value,
+            "conditions": parsed_conditions,
+            "rmb_cost_decimal": str(cost_value),
+            "multiplier_decimal": str(multiplier_value),
+            "verification_status": str(verification_status),
+            "source_type": str(source_type),
+            "source_url": str(source_url or ""),
+            "excluded": not included,
+            "exclusion_reason": reason,
+        }
+
     def export_workbook(self, rows: list[dict[str, Any]]) -> bytes:
         workbook = Workbook()
         sheet = workbook.active
@@ -166,6 +296,75 @@ class PricingExcelService:
                     verified_at,
                 )
             )
+        output = BytesIO()
+        workbook.save(output)
+        return output.getvalue()
+
+    def export_draft(self, draft: PricingDraftResult) -> bytes:
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "价格草案"
+        sheet.append(DRAFT_HEADERS)
+        for row in draft.rows:
+            sheet.append(
+                (
+                    row.provider_id,
+                    row.provider_name,
+                    row.model_key,
+                    row.model_name,
+                    row.official_provider_id,
+                    row.official_model_id,
+                    row.category,
+                    row.unit_key,
+                    row.unit_size,
+                    json.dumps(
+                        row.conditions,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    str(row.rmb_cost) if row.rmb_cost is not None else None,
+                    str(row.multiplier),
+                    (
+                        str(row.rmb_sale_price)
+                        if row.rmb_sale_price is not None
+                        else None
+                    ),
+                    row.credits,
+                    row.source_type,
+                    row.source_url,
+                    row.verification_status,
+                    "是" if row.include_in_publish else "否",
+                    row.exclusion_reason,
+                )
+            )
+        sheet.freeze_panes = "A2"
+        sheet.auto_filter.ref = sheet.dimensions
+
+        risks = workbook.create_sheet("缺失与风险")
+        risks.append(("风险代码", "平台ID", "模型ID", "计价维度"))
+        for risk in draft.risks:
+            risks.append(
+                (
+                    risk.code,
+                    risk.provider_id,
+                    risk.model_key,
+                    risk.unit_key,
+                )
+            )
+        risks.freeze_panes = "A2"
+
+        instructions = workbook.create_sheet("填写说明")
+        instructions.append(("项目", "说明"))
+        instructions.append(("默认倍率", "人民币可信成本 × 1.5"))
+        instructions.append(("积分换算", "1 元人民币 = 100 积分"))
+        instructions.append(
+            (
+                "发布流程",
+                "上传 → 格式校验 → 差异预检 → 人工确认 → 草稿 → 发布",
+            )
+        )
+        instructions.append(("缺价模型", "必须补齐可信价格，或选择不纳入并填写排除原因"))
         output = BytesIO()
         workbook.save(output)
         return output.getvalue()
