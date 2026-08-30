@@ -1,9 +1,36 @@
-import { useEffect, useState } from "react";
-import { Table, Button, Space, Modal, Form, Input, Tag, Popconfirm, Select } from "antd";
+import { useCallback, useEffect, useState } from "react";
+import {
+  Table,
+  Button,
+  Space,
+  Modal,
+  Form,
+  Input,
+  Tag,
+  Popconfirm,
+  Select,
+  Card,
+} from "antd";
 import { useAppMessage } from "../../../hooks/useAppMessage";
-import { adminUsersApi, AdminUser } from "../../../api/modules/adminUsers";
-import { SparkSearchUserLine, SparkDeleteLine, SparkModifyLine } from "@agentscope-ai/icons";
+import { adminUsersApi, type AdminUser } from "../../../api/modules/adminUsers";
+import { KeyRound, Trash2, UserPlus, Users } from "lucide-react";
+import { PageHeader } from "../../../components/PageHeader";
 import dayjs from "dayjs";
+import styles from "./index.module.less";
+
+interface CreateUserFormValues {
+  username: string;
+  password: string;
+  role?: "admin" | "user";
+}
+
+interface ResetPasswordFormValues {
+  new_password: string;
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
 
 export default function UsersPage() {
   const { message } = useAppMessage();
@@ -16,23 +43,23 @@ export default function UsersPage() {
   const [createForm] = Form.useForm();
   const [resetForm] = Form.useForm();
 
-  const fetchUsers = async () => {
+  const fetchUsers = useCallback(async () => {
     setLoading(true);
     try {
       const data = await adminUsersApi.listUsers();
       setUsers(data);
-    } catch (err: any) {
-      message.error(err.message || "获取用户列表失败");
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, "获取用户列表失败"));
     } finally {
       setLoading(false);
     }
-  };
+  }, [message]);
 
   useEffect(() => {
     fetchUsers();
-  }, []);
+  }, [fetchUsers]);
 
-  const handleCreateUser = async (values: any) => {
+  const handleCreateUser = async (values: CreateUserFormValues) => {
     try {
       await adminUsersApi.createUser({
         username: values.username,
@@ -43,20 +70,20 @@ export default function UsersPage() {
       setCreateModalVisible(false);
       createForm.resetFields();
       fetchUsers();
-    } catch (err: any) {
-      message.error(err.message || "创建用户失败");
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, "创建用户失败"));
     }
   };
 
-  const handleResetPassword = async (values: any) => {
+  const handleResetPassword = async (values: ResetPasswordFormValues) => {
     if (selectedUserId === null) return;
     try {
       await adminUsersApi.resetPassword(selectedUserId, values.new_password);
       message.success("密码重置成功");
       setResetModalVisible(false);
       resetForm.resetFields();
-    } catch (err: any) {
-      message.error(err.message || "密码重置失败");
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, "密码重置失败"));
     }
   };
 
@@ -65,45 +92,51 @@ export default function UsersPage() {
       await adminUsersApi.deleteUser(userId);
       message.success("用户删除成功");
       fetchUsers();
-    } catch (err: any) {
-      message.error(err.message || "删除用户失败");
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, "删除用户失败"));
     }
   };
 
   const columns = [
     {
-      title: 'ID',
-      dataIndex: 'id',
-      key: 'id',
-      width: 80,
+      title: "ID",
+      dataIndex: "id",
+      key: "id",
+      width: 72,
     },
     {
-      title: '用户名',
-      dataIndex: 'username',
-      key: 'username',
+      title: "用户名",
+      dataIndex: "username",
+      key: "username",
+      width: 180,
     },
     {
-      title: '角色',
-      dataIndex: 'role',
-      key: 'role',
+      title: "角色",
+      dataIndex: "role",
+      key: "role",
+      width: 120,
       render: (role: string) => (
-        <Tag color={role === 'admin' ? 'blue' : 'green'}>{role === 'admin' ? '管理员' : '普通用户'}</Tag>
+        <Tag color={role === "admin" ? "blue" : "green"}>
+          {role === "admin" ? "管理员" : "普通用户"}
+        </Tag>
       ),
     },
     {
-      title: '创建时间',
-      dataIndex: 'created_at',
-      key: 'created_at',
-      render: (val: string) => dayjs(val).format('YYYY-MM-DD HH:mm:ss'),
+      title: "创建时间",
+      dataIndex: "created_at",
+      key: "created_at",
+      width: 210,
+      render: (val: string) => dayjs(val).format("YYYY-MM-DD HH:mm:ss"),
     },
     {
-      title: '操作',
-      key: 'actions',
-      render: (_: any, record: AdminUser) => (
-        <Space>
+      title: "操作",
+      key: "actions",
+      width: 220,
+      render: (_: unknown, record: AdminUser) => (
+        <Space className={styles.actions}>
           <Button
             type="text"
-            icon={<SparkModifyLine size={16} />}
+            icon={<KeyRound size={16} />}
             onClick={() => {
               setSelectedUserId(record.id);
               setResetModalVisible(true);
@@ -117,7 +150,7 @@ export default function UsersPage() {
             okText="确定"
             cancelText="取消"
           >
-            <Button type="text" danger icon={<SparkDeleteLine size={16} />}>
+            <Button type="text" danger icon={<Trash2 size={16} />}>
               删除
             </Button>
           </Popconfirm>
@@ -127,28 +160,48 @@ export default function UsersPage() {
   ];
 
   return (
-    <div style={{ padding: 24 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <h2>用户管理</h2>
-        <Button
-          type="primary"
-          icon={<SparkSearchUserLine size={16} />}
-          onClick={() => setCreateModalVisible(true)}
-        >
-          创建用户
-        </Button>
-      </div>
-
-      <Table
-        dataSource={users}
-        columns={columns}
-        rowKey="id"
-        loading={loading}
-        pagination={{ pageSize: 20 }}
+    <div className={styles.page}>
+      <PageHeader
+        parent="设置"
+        current="用户管理"
+        extra={
+          <Button
+            type="primary"
+            icon={<UserPlus size={16} />}
+            onClick={() => setCreateModalVisible(true)}
+          >
+            创建用户
+          </Button>
+        }
       />
+
+      <div className={styles.content}>
+        <Card
+          className={styles.userCard}
+          title={
+            <div className={styles.cardTitle}>
+              <Users size={18} />
+              <span>用户列表</span>
+              <span className={styles.cardCount}>{users.length}</span>
+            </div>
+          }
+        >
+          <Table
+            className={styles.userTable}
+            dataSource={users}
+            columns={columns}
+            rowKey="id"
+            loading={loading}
+            size="middle"
+            scroll={{ x: 800 }}
+            pagination={{ pageSize: 20, showSizeChanger: false }}
+          />
+        </Card>
+      </div>
 
       <Modal
         title="创建用户"
+        width={480}
         open={createModalVisible}
         onCancel={() => {
           setCreateModalVisible(false);
@@ -162,22 +215,18 @@ export default function UsersPage() {
           <Form.Item
             name="username"
             label="用户名"
-            rules={[{ required: true, message: '请输入用户名！' }]}
+            rules={[{ required: true, message: "请输入用户名！" }]}
           >
             <Input />
           </Form.Item>
           <Form.Item
             name="password"
             label="密码"
-            rules={[{ required: true, message: '请输入密码！' }]}
+            rules={[{ required: true, message: "请输入密码！" }]}
           >
             <Input.Password />
           </Form.Item>
-          <Form.Item
-            name="role"
-            label="角色"
-            initialValue="user"
-          >
+          <Form.Item name="role" label="角色" initialValue="user">
             <Select>
               <Select.Option value="admin">管理员 (admin)</Select.Option>
               <Select.Option value="user">普通用户 (user)</Select.Option>
@@ -188,6 +237,7 @@ export default function UsersPage() {
 
       <Modal
         title="重置密码"
+        width={480}
         open={resetModalVisible}
         onCancel={() => {
           setResetModalVisible(false);
@@ -201,7 +251,7 @@ export default function UsersPage() {
           <Form.Item
             name="new_password"
             label="新密码"
-            rules={[{ required: true, message: '请输入新密码！' }]}
+            rules={[{ required: true, message: "请输入新密码！" }]}
           >
             <Input.Password />
           </Form.Item>
