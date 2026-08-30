@@ -2,7 +2,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from qwenpaw.app.billing.pricing import PriceCatalogService
+from qwenpaw.app.billing.official_pricing import OfficialPriceRegistry
+from qwenpaw.app.billing.pricing import PriceCatalogService, QuoteRequest
 from qwenpaw.app.billing.pricing_admin import PricingAdminService
 from qwenpaw.app.billing.pricing_inventory import PriceableModel
 from qwenpaw.app.storage.engine import create_engine_from_settings
@@ -176,3 +177,189 @@ def test_import_draft_cannot_publish_until_import_is_confirmed(service):
     assert pricing.publish_preview(preview["catalog_id"], "1")["status"] == (
         "published"
     )
+
+
+def test_generated_draft_lists_enabled_models_and_allows_reasoned_subset(
+    service,
+):
+    pricing, repo = service
+    pricing.inventory = type(
+        "Inventory",
+        (),
+        {
+            "list_enabled": lambda self: (
+                PriceableModel(
+                    "dashscope",
+                    "百炼",
+                    "qwen3-max",
+                    "Qwen3 Max",
+                    "text",
+                    official_model_id="qwen3-max",
+                ),
+                PriceableModel(
+                    "volcengine-cn",
+                    "火山方舟",
+                    "unpriced-model",
+                    "Unpriced",
+                    "text",
+                    official_model_id="unpriced-model",
+                ),
+            )
+        },
+    )()
+
+    generated = pricing.generate_draft("1")
+
+    assert generated["coverage"] == {
+        "enabled_models": 2,
+        "matched_models": 1,
+        "missing_models": 1,
+        "excluded_models": 0,
+        "blocking_models": 1,
+    }
+    assert {row["model_key"] for row in generated["rows"]} == {
+        "qwen3-max",
+        "unpriced-model",
+    }
+
+    pricing.set_exclusion(
+        generated["draft_key"],
+        "volcengine-cn",
+        "unpriced-model",
+        True,
+        "暂未获得可核验的官方价格",
+        "1",
+    )
+    regenerated = pricing.generate_draft("1")
+
+    assert regenerated["coverage"]["blocking_models"] == 0
+    assert regenerated["coverage"]["excluded_models"] == 1
+    exclusions = repo.list_draft_exclusions(generated["draft_key"])
+    assert exclusions[0]["reason"] == "暂未获得可核验的官方价格"
+
+
+def test_imported_exclusion_publishes_only_eligible_models(service):
+    pricing, _repo = service
+    pricing.inventory = type(
+        "Inventory",
+        (),
+        {
+            "list_enabled": lambda self: (
+                PriceableModel(
+                    "dashscope",
+                    "百炼",
+                    "qwen3-max",
+                    "Qwen3 Max",
+                    "text",
+                    official_model_id="qwen3-max",
+                ),
+                PriceableModel(
+                    "volcengine-cn",
+                    "火山方舟",
+                    "unpriced-model",
+                    "Unpriced",
+                    "text",
+                    official_model_id="unpriced-model",
+                ),
+            )
+        },
+    )()
+    registry = OfficialPriceRegistry.load_bundled()
+    rows = []
+    dimensions = registry.dimensions("dashscope", "qwen3-max")
+    for dimension in (dimensions[2], dimensions[5]):
+        rows.append(
+            {
+                "provider_id": "dashscope",
+                "model_key": "qwen3-max",
+                "category": "text",
+                "unit_key": dimension.unit_key,
+                "unit_size": dimension.unit_size,
+                "conditions": dict(dimension.conditions),
+                "rmb_cost_decimal": str(dimension.rmb_cost),
+                "multiplier_decimal": "1.5",
+                "verification_status": "verified",
+                "excluded": False,
+            }
+        )
+    rows.append(
+        {
+            "provider_id": "volcengine-cn",
+            "model_key": "unpriced-model",
+            "category": "text",
+            "unit_key": "",
+            "verification_status": "missing",
+            "excluded": True,
+            "exclusion_reason": "暂不纳入",
+        }
+    )
+
+    preview = pricing.preview_initial_catalog("1", rows)
+
+    assert preview["publishable"] is True
+    catalog = pricing.catalogs.get_catalog(preview["catalog_id"])
+    assert {rule["model_key"] for rule in catalog["rules"]} == {"qwen3-max"}
+
+
+def test_imported_multidimensional_token_prices_keep_official_tiers(service):
+    pricing, _repo = service
+    pricing.inventory = type(
+        "Inventory",
+        (),
+        {
+            "list_enabled": lambda self: (
+                PriceableModel(
+                    "dashscope",
+                    "百炼",
+                    "qwen3-max",
+                    "Qwen3 Max",
+                    "text",
+                    official_model_id="qwen3-max",
+                ),
+            )
+        },
+    )()
+    rows = []
+    for dimension in OfficialPriceRegistry.load_bundled().dimensions(
+        "dashscope", "qwen3-max"
+    ):
+        rows.append(
+            {
+                "provider_id": "dashscope",
+                "model_key": "qwen3-max",
+                "category": "text",
+                "capability": "chat",
+                "unit_key": dimension.unit_key,
+                "unit_size": dimension.unit_size,
+                "conditions": dict(dimension.conditions),
+                "rmb_cost_decimal": str(dimension.rmb_cost),
+                "multiplier_decimal": "1.5",
+                "verification_status": "verified",
+                "excluded": False,
+            }
+        )
+
+    preview = pricing.preview_initial_catalog("1", rows)
+    pricing.publish_preview(preview["catalog_id"], "1")
+    low = pricing.pricing.quote(
+        QuoteRequest(
+            "dashscope",
+            "qwen3-max",
+            "chat",
+            {},
+            input_tokens=30_000,
+        )
+    )
+    medium = pricing.pricing.quote(
+        QuoteRequest(
+            "dashscope",
+            "qwen3-max",
+            "chat",
+            {},
+            input_tokens=40_000,
+        )
+    )
+
+    assert low.credits == 12
+    assert medium.credits == 24
+    assert low.snapshot["rule"]["metadata"]["token_unit_size"] == 1_000_000

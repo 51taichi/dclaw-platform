@@ -251,6 +251,23 @@ class PricingAdminRepository:
             **values,
         }
 
+    def list_draft_exclusions(self, draft_key: str) -> list[dict[str, Any]]:
+        with self.engine.connect() as conn:
+            return [
+                dict(row)
+                for row in conn.execute(
+                    select(billing_pricing_draft_exclusions)
+                    .where(
+                        billing_pricing_draft_exclusions.c.draft_key
+                        == draft_key
+                    )
+                    .order_by(
+                        billing_pricing_draft_exclusions.c.provider_id,
+                        billing_pricing_draft_exclusions.c.model_key,
+                    )
+                ).mappings()
+            ]
+
     def replace_policy(
         self,
         *,

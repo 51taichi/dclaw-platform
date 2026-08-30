@@ -37,6 +37,8 @@ _ALLOWED_SELECTOR_KEYS = frozenset(
         "workflow_key",
         "operation",
         "size",
+        "input_tokens_min_exclusive",
+        "input_tokens_max",
     },
 )
 
@@ -153,6 +155,15 @@ class AmbiguousPriceRuleError(ValueError):
 
 class PriceRuleNotFoundError(LookupError):
     """No active rule matches a retail quote request."""
+
+
+class ModelNotPricedError(PriceRuleNotFoundError):
+    """A published catalog exists but omits the requested model."""
+
+    def __init__(self, provider_id: str, model_key: str) -> None:
+        self.provider_id = provider_id
+        self.model_key = model_key
+        super().__init__(f"model is not priced: {provider_id}/{model_key}")
 
 
 @dataclass(frozen=True)
@@ -408,9 +419,19 @@ class PriceCatalogService:
             if rule["provider_id"] == request.provider_id
             and rule["model_key"] == request.model_key
             and rule["capability"] == request.capability
-            and _parameters_match(rule["parameter_match"], request.parameters)
+            and _parameters_match(rule["parameter_match"], request)
         ]
         if not candidates:
+            model_exists = any(
+                rule["provider_id"] == request.provider_id
+                and rule["model_key"] == request.model_key
+                for rule in catalog["rules"]
+            )
+            if not model_exists:
+                raise ModelNotPricedError(
+                    request.provider_id,
+                    request.model_key,
+                )
             raise PriceRuleNotFoundError(
                 "no retail price rule for "
                 f"{request.provider_id}/{request.model_key}/"
@@ -588,12 +609,22 @@ def _rules_are_ambiguous(left: PriceRule, right: PriceRule) -> bool:
 
 def _parameters_match(
     expected: Mapping[str, Any],
-    actual: Mapping[str, Any],
+    request: QuoteRequest,
 ) -> bool:
-    return all(
-        key in actual and _json_values_equal(actual[key], value)
-        for key, value in expected.items()
-    )
+    for key, value in expected.items():
+        if key == "input_tokens_min_exclusive":
+            if request.input_tokens <= int(value):
+                return False
+            continue
+        if key == "input_tokens_max":
+            if request.input_tokens > int(value):
+                return False
+            continue
+        if key not in request.parameters or not _json_values_equal(
+            request.parameters[key], value
+        ):
+            return False
+    return True
 
 
 def _calculate_rule(
@@ -602,13 +633,14 @@ def _calculate_rule(
 ) -> tuple[dict[str, int], dict[str, int]]:
     unit_type = rule["unit_type"]
     if unit_type == "tokens":
+        token_unit_size = int(rule["metadata"].get("token_unit_size", 1_000))
         input_credits = _ceil_div(
             request.input_tokens * int(rule["input_credits_per_1k"]),
-            1_000,
+            token_unit_size,
         )
         output_credits = _ceil_div(
             request.output_tokens * int(rule["output_credits_per_1k"]),
-            1_000,
+            token_unit_size,
         )
         return (
             {
@@ -775,6 +807,7 @@ __all__ = [
     "PriceCatalogService",
     "PriceRule",
     "PriceRuleNotFoundError",
+    "ModelNotPricedError",
     "QuoteRequest",
     "RetailQuote",
     "to_jsonable",

@@ -15,6 +15,7 @@ from qwenpaw.app.billing.pricing import (
     CatalogImmutableError,
     PriceCatalogDraft,
     PriceCatalogService,
+    ModelNotPricedError,
     PriceRule,
     PriceRuleNotFoundError,
     QuoteRequest,
@@ -143,6 +144,37 @@ def test_token_rates_round_each_input_and_output_component_up(service, clock):
     assert quote.snapshot["request"]["output_tokens"] == 1
 
 
+def test_published_catalog_distinguishes_an_unpriced_model(service, clock):
+    service.publish(
+        _catalog(
+            "partial-catalog",
+            clock,
+            _rule(
+                "priced-model",
+                "tokens",
+                provider_id="dashscope",
+                model_key="qwen3-max",
+                capability="chat",
+                input_credits_per_1k=1,
+                output_credits_per_1k=2,
+            ),
+        )
+    )
+
+    with pytest.raises(ModelNotPricedError) as exc_info:
+        service.quote(
+            QuoteRequest(
+                "volcengine-cn",
+                "unpriced-model",
+                "chat",
+                {},
+            )
+        )
+
+    assert exc_info.value.provider_id == "volcengine-cn"
+    assert exc_info.value.model_key == "unpriced-model"
+
+
 def test_image_count_multiplies_the_published_retail_rate(service, clock):
     service.publish(
         _catalog(
@@ -171,20 +203,31 @@ def test_image_count_multiplies_the_published_retail_rate(service, clock):
 
 
 def test_new_catalog_version_can_reuse_stable_business_rule_id(service, clock):
-    first_id = service.publish(_catalog(
-        "pricing-v1", clock,
-        _rule("stable-image-price", "image_count", credits_per_unit=50),
-    ))
+    first_id = service.publish(
+        _catalog(
+            "pricing-v1",
+            clock,
+            _rule("stable-image-price", "image_count", credits_per_unit=50),
+        )
+    )
     clock.now += timedelta(minutes=1)
-    second_id = service.publish(_catalog(
-        "pricing-v2", clock,
-        _rule("stable-image-price", "image_count", credits_per_unit=60),
-    ))
+    second_id = service.publish(
+        _catalog(
+            "pricing-v2",
+            clock,
+            _rule("stable-image-price", "image_count", credits_per_unit=60),
+        )
+    )
 
     assert first_id != second_id
-    quote = service.quote(QuoteRequest(
-        "aliyun", "model-1", "generate", {"count": 1},
-    ))
+    quote = service.quote(
+        QuoteRequest(
+            "aliyun",
+            "model-1",
+            "generate",
+            {"count": 1},
+        )
+    )
     assert quote.catalog_version == "pricing-v2"
     assert quote.rule_id == "stable-image-price"
     assert quote.credits == 60
