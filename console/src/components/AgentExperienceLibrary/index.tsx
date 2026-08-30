@@ -62,13 +62,16 @@ export function AgentExperienceLibrary() {
     setLoadingPublications(true);
     try {
       const rows = await agentExperienceLibraryApi.listPublications();
-      setPublications(rows);
-      setSelectedPublicationId((current) =>
-        current && rows.some((row) => row.id === current)
-          ? current
-          : rows[0]?.id,
+      const enabledRows = rows.filter(
+        (publication) => publication.status === "enabled",
       );
-      if (rows.length === 0) setDocuments([]);
+      setPublications(enabledRows);
+      setSelectedPublicationId((current) =>
+        current && enabledRows.some((row) => row.id === current)
+          ? current
+          : enabledRows[0]?.id,
+      );
+      if (enabledRows.length === 0) setDocuments([]);
     } catch (error) {
       message.error(errorMessage(error, "加载 Agent 经验库失败"));
     } finally {

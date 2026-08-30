@@ -69,15 +69,27 @@ describe("AgentExperienceLibrary", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("allows maintaining a disabled publication and labels its state", async () => {
+  it("only lists enabled publications", async () => {
+    const user = userEvent.setup();
     mockApi.listPublications.mockResolvedValue([
-      { ...publication, status: "disabled" },
+      publication,
+      {
+        ...publication,
+        id: "pub-disabled",
+        name: "旧客服入口",
+        public_id: "legacy_support",
+        status: "disabled",
+      },
     ]);
 
     render(<AgentExperienceLibrary />);
 
-    expect(await screen.findByText("接口已禁用")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "上传文档" })).toBeEnabled();
+    expect(
+      (await screen.findAllByText("客服专家 · 客服入口 · support_agent"))
+        .length,
+    ).toBeGreaterThan(0);
+    await user.click(screen.getByRole("combobox"));
+    expect(screen.queryByText(/旧客服入口/)).not.toBeInTheDocument();
   });
 
   it("uploads a selected file and refreshes the current documents", async () => {
