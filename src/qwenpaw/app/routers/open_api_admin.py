@@ -12,12 +12,12 @@ from pydantic import BaseModel, Field
 from ...config.utils import load_config
 from ...mindspace import MindspaceScope
 from ..expert_teams import get_expert_team_template
-from ..open_api.auth import generate_open_api_key, hash_open_api_key
 from ..open_api import knowledge as experience_knowledge
+from ..open_api.auth import generate_open_api_key, hash_open_api_key
 from ..open_api.models import OpenApiScope, OpenApiStatus, OpenApiTargetType
+from ..sealed_agents.registry import get_sealed_agent_registry
 from ..storage.repos.open_api_repo import get_open_api_repository
 from ..storage.repos.user_repo import get_user_repository
-from ..sealed_agents.registry import get_sealed_agent_registry
 from . import open_api_knowledge as experience_routes
 
 router = APIRouter(prefix="/open-api", tags=["admin-open-api"])
@@ -49,6 +49,10 @@ class ApiKeyCreateRequest(BaseModel):
 
 class PublicationStatusUpdateRequest(BaseModel):
     status: OpenApiStatus
+
+
+class PublicationBoundUserUpdateRequest(BaseModel):
+    bound_user_id: int = Field(gt=0)
 
 
 def _require_admin(request: Request) -> str:
@@ -201,6 +205,31 @@ def update_publication_status(
     updated = dict(publication)
     updated["status"] = payload.status
     return repo.upsert_publication(updated)
+
+
+@router.patch("/publications/{publication_id}/bound-user")
+def update_publication_bound_user(
+    publication_id: str,
+    payload: PublicationBoundUserUpdateRequest,
+    request: Request,
+) -> dict[str, Any]:
+    owner_user_id = _require_admin(request)
+    _owned_publication(publication_id, owner_user_id)
+    bound_user_id = _resolve_bound_user_id(
+        payload.bound_user_id,
+        owner_user_id,
+    )
+    updated = get_open_api_repository().update_publication_bound_user(
+        publication_id,
+        owner_user_id,
+        bound_user_id,
+    )
+    if updated is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Open API publication not found",
+        )
+    return updated
 
 
 def _owned_publication(publication_id: str, owner_user_id: str) -> dict[str, Any]:

@@ -14,18 +14,17 @@ from typing import Any, AsyncGenerator
 from fastapi import APIRouter, HTTPException, Request
 from starlette.responses import JSONResponse, StreamingResponse
 
+from ..billing.execution import OpenApiExecutionFence
 from ..billing.open_api import (
     CatalogNotReadyError,
     OpenApiBillingCommand,
     OpenApiPublicationNotFoundError,
 )
 from ..billing.pricing import ModelNotPricedError
-from ..billing.execution import OpenApiExecutionFence
 from ..billing.usage import (
     IdempotencyConflictError,
     InsufficientUsageCreditsError,
 )
-
 from ..expert_teams import (
     ExpertTeamOrchestrator,
     attach_run_to_chat,
@@ -45,7 +44,6 @@ from ..open_api.runtime import (
 from ..sealed_agents.registry import get_sealed_agent_registry
 from ..storage.repos.open_api_repo import get_open_api_repository
 from ..task_limits import get_task_limiter
-
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +145,8 @@ async def post_open_message(
             detail="Open API publication binding changed",
         ) from exc
 
+    bound_user_id = billing_session.bound_user_id
+    request.state.user_id = bound_user_id
     invocation_id = billing_session.invocation_id
     run_key = f"open-api:{invocation_id}"
     execution_owner_token = str(uuid.uuid4())

@@ -96,6 +96,36 @@ def test_open_api_repo_enabled_publication_lookup_ignores_disabled(repo):
     assert repo.list_publications(enabled_only=True) == []
 
 
+def test_update_publication_bound_user_changes_only_the_binding(repo):
+    original = repo.upsert_publication(
+        {
+            **_publication_row(status="disabled"),
+            "name": "Original name",
+        },
+    )
+
+    updated = repo.update_publication_bound_user(
+        "pub-1",
+        "user-1",
+        "user-9",
+    )
+
+    assert updated is not None
+    assert updated["bound_user_id"] == "user-9"
+    assert updated["status"] == "disabled"
+    assert updated["name"] == "Original name"
+    assert updated["public_id"] == original["public_id"]
+    assert (
+        repo.update_publication_bound_user(
+            "pub-1",
+            "other-owner",
+            "user-10",
+        )
+        is None
+    )
+    assert repo.get_publication("pub-1")["bound_user_id"] == "user-9"
+
+
 def test_open_api_repo_creates_external_app_api_key_and_usage(repo):
     repo.upsert_publication(_publication_row())
 

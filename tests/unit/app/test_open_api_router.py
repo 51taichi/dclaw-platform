@@ -10,13 +10,13 @@ from agentscope_runtime.engine.schemas.agent_schemas import ContentType
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
+from qwenpaw.app.billing.execution import OpenApiExecutionFence
 from qwenpaw.app.open_api.runtime import (
     OpenMessageRequest,
     build_open_session_id,
     prepare_open_agent_chat,
     prepare_open_expert_team_chat,
 )
-from qwenpaw.app.billing.execution import OpenApiExecutionFence
 from qwenpaw.app.routers import open_api
 from qwenpaw.app.task_limits import TaskConcurrencyLimiter
 
@@ -408,7 +408,11 @@ class _FakeBillingCoordinator:
             invocation_id=invocation_id,
             usage_order_id=f"order-{invocation_id}",
             wallet_id="wallet",
-            bound_user_id="owner-1",
+            bound_user_id=getattr(
+                self.repo,
+                "billing_bound_user_id",
+                "owner-1",
+            ),
             app_id=command.app_id,
             api_key_id=command.api_key_id,
             publication_id=command.publication_id,
@@ -671,6 +675,32 @@ async def test_post_open_message_agent_publication_creates_invocation_from_reque
     assert '"type":"billing.completed"' in body
     assert repo.invocations[0]["status"] == "succeeded"
     assert repo.invocations[0]["status_code"] == 200
+
+
+@pytest.mark.asyncio
+async def test_post_open_message_uses_billing_locked_bound_user(monkeypatch):
+    workspace = _workspace(agent_id="agent-published")
+    repo = FakeOpenApiRepository(publication=_publication())
+    repo.billing_bound_user_id = "owner-2"
+    monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
+    request = _request(workspace=workspace, user_id="owner-1")
+
+    response = await open_api.post_open_message(
+        "public-agent",
+        OpenMessageRequest(
+            external_user_id="ext-user",
+            external_session_id="ext-session",
+            message="hello",
+        ),
+        request,
+    )
+
+    assert request.state.user_id == "owner-2"
+    assert workspace.chat_manager.calls[0]["owner_user_id"] == "owner-2"
+    assert request.app.state.multi_agent_manager.calls == [
+        ("agent-published", "owner-2"),
+    ]
+    await _consume_streaming_response(response)
 
 
 @pytest.mark.asyncio

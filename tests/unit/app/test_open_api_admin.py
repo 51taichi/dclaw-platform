@@ -28,6 +28,21 @@ class FakeOpenApiRepository:
     def get_publication(self, publication_id: str):
         return self.publications.get(publication_id)
 
+    def update_publication_bound_user(
+        self,
+        publication_id: str,
+        owner_user_id: str,
+        bound_user_id: str,
+    ):
+        publication = self.publications.get(publication_id)
+        if (
+            publication is None
+            or str(publication.get("owner_user_id")) != owner_user_id
+        ):
+            return None
+        publication["bound_user_id"] = bound_user_id
+        return publication
+
     def upsert_publication(self, row: dict[str, object]):
         self.publications[str(row["id"])] = dict(row)
         return self.publications[str(row["id"])]
@@ -135,6 +150,17 @@ def _patch_agent(monkeypatch, agent_id: str = "agent-1") -> None:
             agents=SimpleNamespace(
                 profiles={agent_id: SimpleNamespace(enabled=True)}
             ),
+        ),
+    )
+
+
+def _patch_users(monkeypatch, *user_ids: int) -> None:
+    users = {user_id: {"id": user_id} for user_id in user_ids}
+    monkeypatch.setattr(
+        open_api_admin,
+        "get_user_repository",
+        lambda: SimpleNamespace(
+            get_user_by_id=lambda user_id: users.get(user_id),
         ),
     )
 
@@ -380,7 +406,7 @@ def test_update_publication_status_uses_existing_publication(monkeypatch):
         "owner_user_id": "admin-42",
         "name": "Support Agent",
         "description": "",
-        "status": "enabled",
+        "status": "disabled",
         "allowed_scopes": ["messages:create"],
     }
 
@@ -393,6 +419,75 @@ def test_update_publication_status_uses_existing_publication(monkeypatch):
     assert updated["id"] == "pub-1"
     assert updated["status"] == "disabled"
     assert repo.publications["pub-1"]["status"] == "disabled"
+
+
+def test_update_publication_bound_user_changes_only_future_owner(monkeypatch):
+    repo = _patch_repo(monkeypatch, FakeOpenApiRepository())
+    _patch_users(monkeypatch, 9)
+    repo.publications["pub-1"] = {
+        "id": "pub-1",
+        "public_id": "support_agent",
+        "target_type": "agent",
+        "target_id": "agent-1",
+        "owner_user_id": "admin-42",
+        "bound_user_id": "7",
+        "knowledge_base_id": "openapi-pub-1",
+        "name": "Support Agent",
+        "description": "",
+        "status": "disabled",
+        "allowed_scopes": ["messages:create"],
+    }
+
+    updated = open_api_admin.update_publication_bound_user(
+        "pub-1",
+        open_api_admin.PublicationBoundUserUpdateRequest(bound_user_id=9),
+        _request(user_id="admin-42"),
+    )
+
+    assert updated["bound_user_id"] == "9"
+    assert updated["owner_user_id"] == "admin-42"
+    assert updated["knowledge_base_id"] == "openapi-pub-1"
+    assert updated["status"] == "disabled"
+
+
+def test_update_publication_bound_user_rejects_missing_user(monkeypatch):
+    repo = _patch_repo(monkeypatch, FakeOpenApiRepository())
+    _patch_users(monkeypatch)
+    repo.publications["pub-1"] = {
+        "id": "pub-1",
+        "owner_user_id": "admin-42",
+        "bound_user_id": "7",
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        open_api_admin.update_publication_bound_user(
+            "pub-1",
+            open_api_admin.PublicationBoundUserUpdateRequest(bound_user_id=9),
+            _request(user_id="admin-42"),
+        )
+
+    assert exc_info.value.status_code == 404
+    assert repo.publications["pub-1"]["bound_user_id"] == "7"
+
+
+def test_update_publication_bound_user_rejects_cross_owner(monkeypatch):
+    repo = _patch_repo(monkeypatch, FakeOpenApiRepository())
+    _patch_users(monkeypatch, 9)
+    repo.publications["pub-1"] = {
+        "id": "pub-1",
+        "owner_user_id": "admin-other",
+        "bound_user_id": "7",
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        open_api_admin.update_publication_bound_user(
+            "pub-1",
+            open_api_admin.PublicationBoundUserUpdateRequest(bound_user_id=9),
+            _request(user_id="admin-42"),
+        )
+
+    assert exc_info.value.status_code == 404
+    assert repo.publications["pub-1"]["bound_user_id"] == "7"
 
 
 def test_create_external_app_uses_admin_owner(monkeypatch):
@@ -678,6 +773,7 @@ def test_list_api_keys_only_returns_current_owner_publication_keys(
 
 def test_open_api_admin_router_is_mounted_under_admin_prefix():
     from fastapi import FastAPI
+
     from qwenpaw.app.routers import router
 
     effective_app = FastAPI()
