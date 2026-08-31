@@ -103,10 +103,8 @@ describe("WalletPage", () => {
     await user.click(screen.getByRole("button", { name: "选择 CNY 10" }));
 
     const dialog = screen.getByRole("dialog", { name: "确认人工充值申请" });
-    expect(screen.getByAltText("固定收款二维码")).toHaveAttribute(
-      "src",
-      "https://example.com/pay.png",
-    );
+    expect(screen.queryByAltText("固定收款二维码")).not.toBeInTheDocument();
+    expect(dialog).not.toHaveTextContent("扫码付款后填写付款尾号");
     expect(dialog).toHaveTextContent("CNY 10");
     expect(dialog).toHaveTextContent("¥10.00");
     expect(dialog).toHaveTextContent("1,000 永久积分");

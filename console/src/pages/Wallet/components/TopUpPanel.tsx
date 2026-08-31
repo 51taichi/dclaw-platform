@@ -4,7 +4,6 @@ import {
   Button,
   Card,
   Form,
-  Image,
   Input,
   InputNumber,
   Modal,
@@ -176,14 +175,6 @@ export default function TopUpPanel({ config, products, onSubmit }: Props) {
             </div>
           </div>
         )}
-        <div className={styles.modalPaymentGuide}>
-          <Image
-            width={180}
-            src={config.qr_url ?? undefined}
-            alt="固定收款二维码"
-          />
-          <Typography.Paragraph>{config.instructions}</Typography.Paragraph>
-        </div>
         <Form layout="vertical">
           <Form.Item label="付款方式">
             <Radio.Group
