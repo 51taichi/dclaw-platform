@@ -382,6 +382,10 @@ class AgentRunner(Runner):
             if not isinstance(channel_meta, dict):
                 channel_meta = {}
             user_name = channel_meta.get("user_name")
+            trusted_debug_endpoint_authorized = (
+                str(channel).startswith("open:")
+                and channel_meta.get("_server_debug_endpoint_authorized") is True
+            )
             if sealed_runtime:
                 from ..sealed_agents.runtime import (
                     resolve_pinned_release,
@@ -399,6 +403,18 @@ class AgentRunner(Runner):
                         str(sealed_snapshot["release_id"]),
                         sealed_registry,
                     )
+                    expected_runtime = {
+                        "release_id": pinned_sealed_runtime.release_id,
+                        "version": pinned_sealed_runtime.version,
+                        "content_digest": pinned_sealed_runtime.content_digest,
+                        "adapter": pinned_sealed_runtime.adapter_key[0],
+                        "contract_version": pinned_sealed_runtime.adapter_key[1],
+                    }
+                    if any(
+                        str(sealed_snapshot.get(key) or "").strip() != value
+                        for key, value in expected_runtime.items()
+                    ):
+                        raise ValueError("sealed runtime snapshot mismatch")
                 else:
                     pinned_sealed_runtime = resolve_pinned_runtime(
                         self.agent_id,
@@ -868,10 +884,7 @@ class AgentRunner(Runner):
                             "user_id": user_id,
                             "channel": channel,
                             "debug_endpoint_authorized": (
-                                base_request_context.get(
-                                    "debug_endpoint_authorized",
-                                )
-                                is True
+                                trusted_debug_endpoint_authorized
                             ),
                         },
                         metadata=base_request_context["metadata"],
