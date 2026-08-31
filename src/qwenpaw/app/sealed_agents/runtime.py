@@ -6,6 +6,9 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from .adapters import get_runtime_adapter
+from .registry import SealedAgentRegistry
+
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 _MAX_ARTIFACT_BYTES = 100 * 1024 * 1024
 
@@ -37,6 +40,55 @@ class SealedRuntimeContext:
         if resolved.stat().st_size > _MAX_ARTIFACT_BYTES:
             raise SealedRuntimeError("sealed artifact exceeds size limit")
         return resolved
+
+
+@dataclass(frozen=True)
+class PinnedSealedRuntime:
+    agent_id: str
+    release_id: str
+    version: str
+    content_digest: str
+    release_root: Path
+    entrypoint: str
+    adapter_key: tuple[str, str]
+    failure_policy: str
+
+
+def resolve_pinned_runtime(
+    agent_id: str,
+    registry: SealedAgentRegistry,
+) -> PinnedSealedRuntime | None:
+    record = registry.get_agent(agent_id)
+    if record is None:
+        return None
+    if not record.enabled or record.active_release is None:
+        raise SealedRuntimeError("sealed agent has no enabled active release")
+
+    release = record.active_release
+    adapter_key = (
+        release.runtime_adapter or "standard",
+        release.runtime_contract_version or "1",
+    )
+    get_runtime_adapter(*adapter_key)
+    failure_policy = release.runtime_failure_policy or "fail_closed"
+    entrypoint = release.entrypoint or "agent/agent.json"
+    release_root = (
+        registry.root / "releases" / record.agent_id / release.release_id
+    ).resolve()
+    entrypoint_path = (release_root / entrypoint).resolve()
+    if not entrypoint_path.is_relative_to(release_root):
+        raise SealedRuntimeError("sealed runtime entrypoint escapes release root")
+
+    return PinnedSealedRuntime(
+        agent_id=record.agent_id,
+        release_id=release.release_id,
+        version=release.version,
+        content_digest=release.content_digest,
+        release_root=release_root,
+        entrypoint=entrypoint,
+        adapter_key=adapter_key,
+        failure_policy=failure_policy,
+    )
 
 
 def create_runtime_context(
