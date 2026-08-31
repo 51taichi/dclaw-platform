@@ -115,7 +115,8 @@ export default function UsageOrders({
           },
           {
             title: "专家 / 专家团",
-            render: (_, row) => row.expert_team || row.expert || "—",
+            render: (_, row) =>
+              row.publication?.name || row.expert_team || row.expert || "—",
           },
           { title: "调用次数", dataIndex: "call_count" },
           {

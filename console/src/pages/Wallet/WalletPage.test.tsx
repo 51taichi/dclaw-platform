@@ -238,4 +238,47 @@ describe("WalletPage", () => {
     expect(document.body.textContent).not.toContain("supplier_reference");
     expect(document.body.textContent).not.toContain("item_key");
   });
+
+  it("shows the bound publication name for OpenAPI usage", async () => {
+    const usageOrder: BillingUsageOrder = {
+      id: "order-openapi-1",
+      source: "openapi",
+      expert: null,
+      expert_team: null,
+      publication: { id: "publication-1", name: "国央企就业咨询老师小项" },
+      status: "settled",
+      billing_status: "settled",
+      billing_mode: "enforced",
+      is_estimate: false,
+      catalog_version: "retail-v3",
+      quoted_credits: 11,
+      captured_credits: 11,
+      released_credits: 0,
+      reconciling_credits: 0,
+      credits: {
+        held: 0,
+        captured: 11,
+        released: 0,
+        reconciling: 0,
+      },
+      actual_debited_credits: 11,
+      call_count: 1,
+      tokens: { input: 31_807, output: 106 },
+      created_at: "2026-08-31T16:50:45Z",
+      updated_at: "2026-08-31T16:50:46Z",
+    };
+    vi.mocked(billingApi.listUsage).mockResolvedValue({ items: [usageOrder] });
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <WalletPage />
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole("tab", { name: "模型消费" }));
+    expect(
+      screen.getByText("国央企就业咨询老师小项"),
+    ).toBeInTheDocument();
+  });
 });
