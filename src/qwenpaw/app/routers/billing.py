@@ -644,17 +644,15 @@ def pricing_policies() -> list[dict[str, Any]]:
 
 @admin_router.get("/pricing/export")
 def export_pricing() -> Response:
-    repository = get_pricing_admin_service().repository
-    content = get_pricing_excel_service().export_workbook(
-        repository.latest_trusted_costs(),
-    )
+    generated = get_pricing_admin_service().generate_draft("read-only")
+    content = get_pricing_excel_service().export_draft(generated["result"])
     return Response(
         content=content,
         media_type=(
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         ),
         headers={
-            "Content-Disposition": 'attachment; filename="pricing-rmb.xlsx"',
+            "Content-Disposition": 'attachment; filename="pricing-list.xlsx"',
         },
     )
 

@@ -1204,8 +1204,10 @@ def test_admin_pricing_draft_routes_use_authenticated_actor_and_export_xlsx(
         def __init__(self):
             self.exclusion_actor = None
             self.decision_actor = None
+            self.generated_actors = []
 
         def generate_draft(self, actor_id):
+            self.generated_actors.append(actor_id)
             return {
                 "draft_key": "draft-current",
                 "coverage": {
@@ -1282,6 +1284,10 @@ def test_admin_pricing_draft_routes_use_authenticated_actor_and_export_xlsx(
         "/api/admin/billing/pricing/drafts/draft-current/export",
         headers=headers,
     )
+    exported_current = client.get(
+        "/api/admin/billing/pricing/export",
+        headers=headers,
+    )
     excluded = client.put(
         "/api/admin/billing/pricing/drafts/draft-current/exclusions/"
         "dashscope/qwen3-max",
@@ -1317,6 +1323,8 @@ def test_admin_pricing_draft_routes_use_authenticated_actor_and_export_xlsx(
     assert generated.status_code == 200
     assert "result" not in generated.json()
     assert exported.status_code == 200
+    assert exported_current.status_code == 200
+    assert "read-only" in fake.generated_actors
     assert exported.headers["content-type"].startswith(
         "application/vnd.openxmlformats"
     )
