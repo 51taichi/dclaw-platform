@@ -319,8 +319,15 @@ class AgentRunner(Runner):
         query = _get_last_user_text(msgs)
         session_id = getattr(request, "session_id", "") or ""
         from ..sealed_agents.registry import get_sealed_agent_registry
+        from ..sealed_agents.runtime import resolve_pinned_runtime
 
-        sealed_runtime = get_sealed_agent_registry().is_sealed(self.agent_id)
+        sealed_registry = get_sealed_agent_registry()
+        sealed_runtime = sealed_registry.is_sealed(self.agent_id)
+        pinned_sealed_runtime = (
+            resolve_pinned_runtime(self.agent_id, sealed_registry)
+            if sealed_runtime
+            else None
+        )
 
         # Check if query is a command (including /approval)
         logger.debug(f"Query: {query!r}, is_command: {_is_command(query)}")
@@ -791,20 +798,76 @@ class AgentRunner(Runner):
                     ):
                         yield msg, last
             else:
+                from ..sealed_agents.adapters import get_runtime_adapter
                 from ..sealed_agents.output_guard import (
                     build_release_output_policy,
                     sanitize_message,
                 )
+                from ..sealed_agents.request_context import SealedAdapterRequest
+
                 sealed = sealed_runtime
                 output_policy = (
                     build_release_output_policy(Path(self.workspace_dir))
                     if sealed and self.workspace_dir
                     else None
                 )
-                async for msg, last in _stream_printing_messages_interruptible(
-                    agents=[agent],
-                    coroutine_task=agent(msgs),
+                async def standard_model_executor(
+                    model_messages: tuple[Any, ...],
+                    controlled_context: dict[str, Any],
+                ) -> AsyncGenerator[tuple[Msg, bool], None]:
+                    execution_messages = list(model_messages)
+                    instruction = controlled_context.get("model_instruction")
+                    if isinstance(instruction, str) and instruction.strip():
+                        execution_messages.append(
+                            Msg(
+                                name="sealed_controller",
+                                role="user",
+                                content=instruction.strip(),
+                            ),
+                        )
+                    async for model_msg, model_last in (
+                        _stream_printing_messages_interruptible(
+                            agents=[agent],
+                            coroutine_task=agent(execution_messages),
+                        )
+                    ):
+                        yield model_msg, model_last
+
+                if (
+                    pinned_sealed_runtime is not None
+                    and pinned_sealed_runtime.adapter_key
+                    == ("sealed_harness", "1")
                 ):
+                    adapter = get_runtime_adapter(
+                        *pinned_sealed_runtime.adapter_key,
+                    )
+                    adapter_request = SealedAdapterRequest(
+                        messages=tuple(msgs),
+                        trusted_context={
+                            "agent_id": self.agent_id,
+                            "release_id": pinned_sealed_runtime.release_id,
+                            "content_digest": pinned_sealed_runtime.content_digest,
+                            "session_id": session_id,
+                            "user_id": user_id,
+                            "channel": channel,
+                            "debug_endpoint_authorized": (
+                                base_request_context.get(
+                                    "debug_endpoint_authorized",
+                                )
+                                is True
+                            ),
+                        },
+                        metadata=base_request_context["metadata"],
+                    )
+                    output_stream = adapter.run(
+                        pinned=pinned_sealed_runtime,
+                        request=adapter_request,
+                        model_executor=standard_model_executor,
+                    )
+                else:
+                    output_stream = standard_model_executor(tuple(msgs), {})
+
+                async for msg, last in output_stream:
                     if sealed and not last:
                         continue
                     yield (
