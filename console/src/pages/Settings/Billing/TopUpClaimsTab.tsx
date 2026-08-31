@@ -4,6 +4,13 @@ import { billingApi } from "../../../api/modules/billing";
 import { adminUsersApi } from "../../../api/modules/adminUsers";
 import type { TopUpClaim } from "../../../api/types/billing";
 
+const paymentChannelLabels: Record<TopUpClaim["payment_channel"], string> = {
+  wechat: "微信",
+  alipay: "支付宝",
+  bank: "银行转账",
+  other: "其他",
+};
+
 export default function TopUpClaimsTab() {
   const [claims, setClaims] = useState<TopUpClaim[]>([]);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
@@ -69,6 +76,13 @@ export default function TopUpClaimsTab() {
           },
           { title: "套餐快照", render: (_, row) => row.product_snapshot.name },
           { title: "付款凭证", dataIndex: "payer_reference" },
+          {
+            title: "付款渠道",
+            dataIndex: "payment_channel",
+            render: (channel: TopUpClaim["payment_channel"]) => (
+              <Tag>{paymentChannelLabels[channel]}</Tag>
+            ),
+          },
           { title: "金额(分)", dataIndex: "payment_amount_fen" },
           { title: "状态", render: (_, row) => <Tag>{row.status}</Tag> },
           {

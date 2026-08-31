@@ -83,6 +83,8 @@ describe("BillingSettings", () => {
     expect(await screen.findByText("tail-1234")).toBeInTheDocument();
     expect(screen.getByText("dingmai")).toBeInTheDocument();
     expect(screen.getByText("ID 24")).toBeInTheDocument();
+    expect(screen.getByText("付款渠道")).toBeInTheDocument();
+    expect(screen.getByText("微信")).toBeInTheDocument();
     expect(screen.queryByLabelText(/直接修改余额/)).not.toBeInTheDocument();
     expect(
       screen.queryByRole("spinbutton", { name: /赠送积分/ }),
