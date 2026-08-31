@@ -41,11 +41,13 @@ sync_checkout() {
     test ! -e "$directory" || return 1
     git clone --no-checkout "$repository" "$directory"
   fi
-  git -C "$directory" fetch --force --prune origin main
+  git -C "$directory" remote set-url origin "$repository"
   local revision
-  revision=$(git -C "$directory" rev-parse refs/remotes/origin/main)
+  revision=$(git ls-remote "$repository" refs/heads/main | awk 'NR == 1 { print $1 }')
   [[ $revision =~ $SHA_PATTERN ]] || return 1
+  git -C "$directory" fetch --force --prune origin "$revision"
   git -C "$directory" checkout --detach --force "$revision"
+  test "$(git -C "$directory" rev-parse HEAD)" = "$revision" || return 1
   printf '%s\n' "$revision"
 }
 

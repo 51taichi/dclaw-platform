@@ -25,10 +25,15 @@ else:
 
 
 FAKE_GIT = r"""#!/usr/bin/env python3
+import os
 import sys
 from pathlib import Path
 
 args = sys.argv[1:]
+log_path = os.environ.get("FAKE_GIT_LOG")
+if log_path:
+    with open(log_path, "a", encoding="utf-8") as stream:
+        stream.write(" ".join(args) + "\n")
 if args[:2] == ["clone", "--no-checkout"]:
     repository, directory = args[2:]
     root = Path(directory)
@@ -43,11 +48,14 @@ if args[:2] == ["clone", "--no-checkout"]:
         script.chmod(0o755)
     else:
         (root / "console").mkdir()
+elif args[:1] == ["ls-remote"]:
+    repository = args[1]
+    print(("c" if "dclaw-server" in repository else "d") * 40 + "\trefs/heads/main")
 elif args[:1] == ["-C"]:
     directory = Path(args[1])
     command = args[2]
     if command == "rev-parse":
-        print(("a" if directory.name == "server" else "b") * 40)
+        print(("c" if directory.name == "server" else "d") * 40)
 else:
     raise SystemExit(f"unexpected git call: {args}")
 """
@@ -67,7 +75,7 @@ elif args[:2] == ["image", "inspect"]:
     if ".Id" in format_value:
         print("sha256:" + "2" * 64)
     else:
-        print(("a" if "server-revision" in format_value else "b") * 40)
+        print(("c" if "server-revision" in format_value else "d") * 40)
 else:
     raise SystemExit(f"unexpected docker call: {args}")
 """
@@ -106,10 +114,12 @@ def test_build_release_waits_silently_and_pins_both_main_revisions(
     fake_bin.mkdir()
     _write_fake_commands(fake_bin)
     deploy_root = tmp_path / "deploy"
+    git_log = tmp_path / "git.log"
     environment = {
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "DCLAW_DEPLOY_ROOT": str(deploy_root),
+        "FAKE_GIT_LOG": str(git_log),
     }
 
     result = subprocess.run(
@@ -123,10 +133,10 @@ def test_build_release_waits_silently_and_pins_both_main_revisions(
     assert result.returncode == 0, result.stderr
     assert result.stdout == (
         "BUILD_SUCCESS\n"
-        "server/main：aaaaaaa\n"
-        "client/main：bbbbbbb\n"
-        "image：dclaw-local:server-aaaaaaaaaaaa-"
-        "client-bbbbbbbbbbbb\n"
+        "server/main：ccccccc\n"
+        "client/main：ddddddd\n"
+        "image：dclaw-local:server-cccccccccccc-"
+        "client-dddddddddddd\n"
     )
     pending = dict(
         line.split("=", 1)
@@ -134,11 +144,15 @@ def test_build_release_waits_silently_and_pins_both_main_revisions(
         .read_text()
         .splitlines()
     )
-    assert pending["SERVER_SHA"] == "a" * 40
-    assert pending["CLIENT_SHA"] == "b" * 40
+    assert pending["SERVER_SHA"] == "c" * 40
+    assert pending["CLIENT_SHA"] == "d" * 40
     assert pending["IMAGE_ID"] == "sha256:" + "2" * 64
     detail = Path(pending["BUILD_LOG"])
     assert "local docker build output" in detail.read_text()
+    calls = git_log.read_text()
+    assert "remote set-url origin https://github.com/51taichi/dclaw-server.git" in calls
+    assert "ls-remote https://github.com/51taichi/dclaw-server.git refs/heads/main" in calls
+    assert f"fetch --force --prune origin {'c' * 40}" in calls
 
 
 def test_build_failure_never_writes_a_deployable_release(
