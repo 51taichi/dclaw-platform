@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   Card,
+  Select,
   Space,
   Table,
   Tag,
@@ -26,9 +27,25 @@ import {
 import { useAppMessage } from "../../../hooks/useAppMessage";
 import styles from "./index.module.less";
 
+const versionCollator = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: "base",
+});
+
+function historicalReleases(agent: SealedAgentOperational) {
+  return agent.releases
+    .filter((release) => release.release_id !== agent.active_release_id)
+    .sort((left, right) =>
+      versionCollator.compare(right.version, left.version),
+    );
+}
+
 export default function SealedAgentsPage() {
   const { message } = useAppMessage();
   const [agents, setAgents] = useState<SealedAgentOperational[]>([]);
+  const [selectedReleaseIds, setSelectedReleaseIds] = useState<
+    Record<string, string>
+  >({});
   const [loading, setLoading] = useState(false);
 
   const load = useCallback(async () => {
@@ -181,43 +198,69 @@ export default function SealedAgentsPage() {
               },
               {
                 title: "操作",
-                render: (_, agent) => (
-                  <Space wrap>
-                    {agent.releases
-                      .filter(
-                        (r: SealedRelease) =>
-                          r.release_id !== agent.active_release_id,
-                      )
-                      .map((release) => (
-                        <Button
-                          key={release.release_id}
-                          size="small"
-                          onClick={async () => {
-                            await sealedAgentsApi.activate(
-                              agent.agent_id,
-                              release.release_id,
-                            );
-                            message.success(`已激活 ${release.version}`);
-                            await load();
-                          }}
-                        >
-                          激活 {release.version}
-                        </Button>
-                      ))}
-                    <Button
-                      size="small"
-                      onClick={async () => {
-                        await sealedAgentsApi.setEnabled(
-                          agent.agent_id,
-                          !agent.enabled,
-                        );
-                        await load();
-                      }}
-                    >
-                      {agent.enabled ? "停用" : "启用"}
-                    </Button>
-                  </Space>
-                ),
+                render: (_, agent) => {
+                  const releases = historicalReleases(agent);
+                  const selectedReleaseId = selectedReleaseIds[agent.agent_id];
+                  return (
+                    <Space wrap>
+                      <Select
+                        aria-label={`选择${agent.name}的历史版本`}
+                        size="small"
+                        value={selectedReleaseId}
+                        placeholder="选择历史版本"
+                        style={{ width: 140 }}
+                        virtual={false}
+                        disabled={releases.length === 0}
+                        options={releases.map((release: SealedRelease) => ({
+                          label: release.version,
+                          value: release.release_id,
+                        }))}
+                        onChange={(releaseId) =>
+                          setSelectedReleaseIds((current) => ({
+                            ...current,
+                            [agent.agent_id]: releaseId,
+                          }))
+                        }
+                      />
+                      <Button
+                        aria-label="激活"
+                        size="small"
+                        disabled={!selectedReleaseId}
+                        onClick={async () => {
+                          const release = releases.find(
+                            (item) => item.release_id === selectedReleaseId,
+                          );
+                          if (!release) return;
+                          await sealedAgentsApi.activate(
+                            agent.agent_id,
+                            release.release_id,
+                          );
+                          message.success(`已激活 ${release.version}`);
+                          setSelectedReleaseIds((current) => {
+                            const next = { ...current };
+                            delete next[agent.agent_id];
+                            return next;
+                          });
+                          await load();
+                        }}
+                      >
+                        激活
+                      </Button>
+                      <Button
+                        size="small"
+                        onClick={async () => {
+                          await sealedAgentsApi.setEnabled(
+                            agent.agent_id,
+                            !agent.enabled,
+                          );
+                          await load();
+                        }}
+                      >
+                        {agent.enabled ? "停用" : "启用"}
+                      </Button>
+                    </Space>
+                  );
+                },
               },
             ]}
             expandable={{
