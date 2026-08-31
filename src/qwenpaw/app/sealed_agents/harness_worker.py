@@ -45,6 +45,8 @@ def _load_harness(release_root: Path, entrypoint: str) -> Any:
     target = (root / entrypoint).resolve()
     if not target.is_relative_to(root) or target.is_symlink() or not target.is_file():
         raise RuntimeError("unsafe_entrypoint")
+    sys.path.insert(0, str(target.parent))
+    sys.path.insert(0, str(root))
     spec = importlib.util.spec_from_file_location("sealed_release_entrypoint", target)
     if spec is None or spec.loader is None:
         raise RuntimeError("invalid_entrypoint")

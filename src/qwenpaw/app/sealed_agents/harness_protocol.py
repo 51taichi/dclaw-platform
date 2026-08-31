@@ -122,6 +122,13 @@ class HarnessProcess:
             "--unshare-net",
             "--new-session",
             "--ro-bind", "/usr", "/usr",
+        ]
+        for system_library_root in ("/lib", "/lib64"):
+            if Path(system_library_root).exists():
+                command.extend(
+                    ["--ro-bind", system_library_root, system_library_root],
+                )
+        command.extend([
             "--dir", "/runtime",
             "--ro-bind", str(worker), "/runtime/harness_worker.py",
             "--ro-bind", str(release_root), "/release",
@@ -135,7 +142,7 @@ class HarnessProcess:
             "--release-root", "/release",
             "--session-root", "/session",
             "--entrypoint", self.pinned.entrypoint,
-        ]
+        ])
         try:
             self._process = await asyncio.create_subprocess_exec(
                 *command,
