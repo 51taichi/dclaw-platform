@@ -122,7 +122,7 @@ def test_begin_execution_rejects_same_key_payload_drift(coordinator):
         service.begin_execution(_command({"message": "changed"}))
 
 
-def test_szzz_admin_execution_is_complimentary_but_other_admin_is_enforced(
+def test_all_users_use_enforced_billing_without_username_bypass(
     coordinator,
 ):
     service, engine = coordinator
@@ -165,7 +165,7 @@ def test_szzz_admin_execution_is_complimentary_but_other_admin_is_enforced(
         ),
     )
 
-    assert complimentary.mode == "observe"
+    assert complimentary.mode == "enforced"
     assert enforced.mode == "enforced"
     with engine.connect() as conn:
         modes = {
@@ -177,7 +177,7 @@ def test_szzz_admin_execution_is_complimentary_but_other_admin_is_enforced(
                 ),
             )
         }
-    assert modes[complimentary.usage_order_id] == "observe"
+    assert modes[complimentary.usage_order_id] == "enforced"
     assert modes[enforced.usage_order_id] == "enforced"
     with engine.connect() as conn:
         complimentary_snapshot = json.loads(
@@ -187,7 +187,7 @@ def test_szzz_admin_execution_is_complimentary_but_other_admin_is_enforced(
                 ),
             ),
         )
-    assert complimentary_snapshot["complimentary_reason"] == "szzz_admin"
+    assert "complimentary_reason" not in complimentary_snapshot
 
 
 def test_begin_execution_rolls_back_wallet_order_and_execution(tmp_path):

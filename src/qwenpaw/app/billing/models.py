@@ -30,6 +30,13 @@ class WalletBalance:
     purchased: int
     promotional: int
     package: int
+    debt: int = 0
+    held_overdraft: int = 0
+
+    @property
+    def funded_available(self) -> int:
+        """Return spendable funded credits before debt projections."""
+        return self.available + self.debt + self.held_overdraft
 
 
 @dataclass(frozen=True)

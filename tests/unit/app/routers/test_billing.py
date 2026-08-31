@@ -277,7 +277,10 @@ def test_user_wallet_and_ledger_are_resolved_only_from_auth_context(
     assert wallet.status_code == 200
     assert wallet.json() == {
         "available": 80,
+        "funded_available": 80,
         "held": 0,
+        "debt": 0,
+        "held_overdraft": 0,
         "purchased": 80,
         "promotional": 0,
         "package": 0,

@@ -10,7 +10,17 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import and_, case, func, insert, or_, select, update
+from sqlalchemy import (
+    String,
+    and_,
+    case,
+    cast,
+    func,
+    insert,
+    or_,
+    select,
+    update,
+)
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import IntegrityError
 
@@ -136,6 +146,26 @@ class BillingRepository:
                 .first()
             )
         return dict(row) if row is not None else None
+
+    @staticmethod
+    def overdraft_enabled_in_connection(
+        conn: Connection,
+        wallet_id: str,
+    ) -> bool:
+        value = conn.scalar(
+            select(users.c.billing_overdraft_enabled)
+            .select_from(
+                billing_wallets.join(
+                    users,
+                    and_(
+                        billing_wallets.c.owner_type == "user",
+                        cast(users.c.id, String) == billing_wallets.c.owner_id,
+                    ),
+                ),
+            )
+            .where(billing_wallets.c.id == wallet_id),
+        )
+        return bool(value)
 
     def get_rollout_setting(self) -> dict[str, Any] | None:
         """Return the singleton billing rollout authority, if activated."""
@@ -327,7 +357,7 @@ class BillingRepository:
         """
         if not business_keys:
             return 0
-        total = conn.scalar(
+        funded_total = conn.scalar(
             select(
                 func.coalesce(
                     func.sum(billing_ledger_allocations.c.credits),
@@ -347,7 +377,21 @@ class BillingRepository:
                 billing_ledger_entries.c.business_key.in_(business_keys),
             ),
         )
-        return int(total or 0)
+        hold_rows = conn.execute(
+            select(billing_ledger_entries.c.metadata_json).where(
+                billing_ledger_entries.c.wallet_id == wallet_id,
+                billing_ledger_entries.c.event_type == "usage_hold",
+                billing_ledger_entries.c.business_key.in_(business_keys),
+            ),
+        ).scalars()
+        overdraft_total = sum(
+            int(
+                json.loads(str(metadata_json or "{}"))
+                .get("overdraft_credits", 0)
+            )
+            for metadata_json in hold_rows
+        )
+        return int(funded_total or 0) + overdraft_total
 
     def evaluate_hold_in_connection(
         self,
@@ -367,6 +411,8 @@ class BillingRepository:
             tier=tier,
         )
         if sum(amount for _, amount in allocations) == credits:
+            return True, None
+        if self.overdraft_enabled_in_connection(conn, wallet_id):
             return True, None
         if available < credits:
             return False, "insufficient_credits"
@@ -599,38 +645,57 @@ class BillingRepository:
         now = self._clock()
         if command.expires_at is not None and command.expires_at <= now:
             raise ValueError("grant expiry must be in the future")
+        current_debt = int(
+            conn.scalar(
+                select(billing_wallets.c.debt_credits).where(
+                    billing_wallets.c.id == command.wallet_id,
+                ),
+            )
+            or 0
+        )
+        debt_repaid = min(current_debt, command.credits)
+        funded_grant = command.credits - debt_repaid
         ledger_id = str(uuid4())
         self._insert_ledger(
             conn,
-            command,
+            replace(
+                command,
+                metadata={
+                    **command.metadata,
+                    "debt_repaid_credits": debt_repaid,
+                    "funded_grant_credits": funded_grant,
+                },
+            ),
             ledger_id=ledger_id,
             credit_delta=command.credits,
             now=now,
         )
-        conn.execute(
-            insert(billing_credit_lots).values(
-                id=str(uuid4()),
-                wallet_id=command.wallet_id,
-                source_ledger_entry_id=ledger_id,
-                credit_type=command.credit_type,
-                status="active",
-                granted_credits=command.credits,
-                available_credits=command.credits,
-                held_credits=0,
-                expires_at=command.expires_at,
-                metadata_json=self._json(command.metadata),
-                created_at=now,
-                updated_at=now,
-            ),
-        )
+        if funded_grant:
+            conn.execute(
+                insert(billing_credit_lots).values(
+                    id=str(uuid4()),
+                    wallet_id=command.wallet_id,
+                    source_ledger_entry_id=ledger_id,
+                    credit_type=command.credit_type,
+                    status="active",
+                    granted_credits=funded_grant,
+                    available_credits=funded_grant,
+                    held_credits=0,
+                    expires_at=command.expires_at,
+                    metadata_json=self._json(command.metadata),
+                    created_at=now,
+                    updated_at=now,
+                ),
+            )
         type_column = _TYPE_COLUMNS[command.credit_type]
         changed_wallet = conn.execute(
             update(billing_wallets)
             .where(billing_wallets.c.id == command.wallet_id)
             .values(
                 available_credits=billing_wallets.c.available_credits
-                + command.credits,
-                **{type_column.name: type_column + command.credits},
+                + funded_grant,
+                debt_credits=billing_wallets.c.debt_credits - debt_repaid,
+                **{type_column.name: type_column + funded_grant},
                 updated_at=now,
             ),
         )
@@ -655,12 +720,6 @@ class BillingRepository:
             raise BillingInvariantError(
                 f"hold already exists: {command.business_key}",
             )
-        if wallet_available < command.credits:
-            raise InsufficientCreditsError(
-                "wallet has "
-                f"{wallet_available} available credits; "
-                f"{command.credits} requested",
-            )
         allocations = self._allocate_lots(
             conn,
             command.wallet_id,
@@ -668,16 +727,29 @@ class BillingRepository:
             capability=str(command.metadata.get("capability") or ""),
             tier=str(command.metadata.get("tier") or ""),
         )
-        if sum(amount for _, amount in allocations) != command.credits:
+        funded_credits = sum(amount for _, amount in allocations)
+        overdraft_credits = command.credits - funded_credits
+        if overdraft_credits and not self.overdraft_enabled_in_connection(
+            conn,
+            command.wallet_id,
+        ):
             raise InsufficientCreditsError(
-                "available unexpired credit lots are insufficient",
+                "wallet has "
+                f"{wallet_available} available credits; "
+                f"{command.credits} requested",
             )
-
         now = self._clock()
         ledger_id = str(uuid4())
         self._insert_ledger(
             conn,
-            command,
+            replace(
+                command,
+                metadata={
+                    **command.metadata,
+                    "funded_credits": funded_credits,
+                    "overdraft_credits": overdraft_credits,
+                },
+            ),
             ledger_id=ledger_id,
             credit_delta=0,
             now=now,
@@ -713,12 +785,17 @@ class BillingRepository:
             update(billing_wallets)
             .where(
                 billing_wallets.c.id == command.wallet_id,
-                billing_wallets.c.available_credits >= command.credits,
+                billing_wallets.c.available_credits >= funded_credits,
             )
             .values(
-                available_credits=billing_wallets.c.available_credits
-                - command.credits,
-                held_credits=billing_wallets.c.held_credits + command.credits,
+                available_credits=(
+                    billing_wallets.c.available_credits - funded_credits
+                ),
+                held_credits=billing_wallets.c.held_credits + funded_credits,
+                held_overdraft_credits=(
+                    billing_wallets.c.held_overdraft_credits
+                    + overdraft_credits
+                ),
                 updated_at=now,
             ),
         )
@@ -740,8 +817,11 @@ class BillingRepository:
                 f"hold already settled: {command.business_key}",
             )
 
-        hold_id = conn.execute(
-            select(billing_ledger_entries.c.id)
+        hold_row = conn.execute(
+            select(
+                billing_ledger_entries.c.id,
+                billing_ledger_entries.c.metadata_json,
+            )
             .where(
                 billing_ledger_entries.c.wallet_id == command.wallet_id,
                 billing_ledger_entries.c.event_type == "usage_hold",
@@ -752,11 +832,14 @@ class BillingRepository:
                 billing_ledger_entries.c.id.desc(),
             )
             .limit(1),
-        ).scalar_one_or_none()
-        if hold_id is None:
+        ).mappings().one_or_none()
+        if hold_row is None:
             raise BillingInvariantError(
                 f"hold not found: {command.business_key}",
             )
+        hold_id = str(hold_row["id"])
+        hold_metadata = json.loads(str(hold_row["metadata_json"] or "{}"))
+        held_overdraft = int(hold_metadata.get("overdraft_credits") or 0)
         now = self._clock()
         allocations = conn.execute(
             select(
@@ -873,11 +956,15 @@ class BillingRepository:
             "available_credits": billing_wallets.c.available_credits
             + restored_available,
             "held_credits": billing_wallets.c.held_credits - released_credits,
+            "held_overdraft_credits": (
+                billing_wallets.c.held_overdraft_credits - held_overdraft
+            ),
             "updated_at": now,
         }
         wallet_guards = [
             billing_wallets.c.id == command.wallet_id,
             billing_wallets.c.held_credits >= released_credits,
+            billing_wallets.c.held_overdraft_credits >= held_overdraft,
         ]
         for credit_type, expired_amount in expired_by_type.items():
             if expired_amount:
@@ -910,19 +997,25 @@ class BillingRepository:
                 f"hold already settled: {command.business_key}",
             )
 
-        hold_id = conn.execute(
-            select(billing_ledger_entries.c.id)
+        hold_row = conn.execute(
+            select(
+                billing_ledger_entries.c.id,
+                billing_ledger_entries.c.metadata_json,
+            )
             .where(
                 billing_ledger_entries.c.wallet_id == command.wallet_id,
                 billing_ledger_entries.c.event_type == "usage_hold",
                 billing_ledger_entries.c.business_key == command.business_key,
             )
             .limit(1),
-        ).scalar_one_or_none()
-        if hold_id is None:
+        ).mappings().one_or_none()
+        if hold_row is None:
             raise BillingInvariantError(
                 f"hold not found: {command.business_key}",
             )
+        hold_id = str(hold_row["id"])
+        hold_metadata = json.loads(str(hold_row["metadata_json"] or "{}"))
+        held_overdraft = int(hold_metadata.get("overdraft_credits") or 0)
 
         now = self._clock()
         expiry_is_null = case(
@@ -960,7 +1053,8 @@ class BillingRepository:
             ),
         ).all()
         held_credits = sum(int(row.credits) for row in allocations)
-        if command.credits > held_credits:
+        total_held = held_credits + held_overdraft
+        if command.credits > total_held:
             raise BillingInvariantError(
                 "capture cannot exceed the complete hold",
             )
@@ -979,8 +1073,15 @@ class BillingRepository:
             credit_delta=-command.credits,
             now=now,
         )
-        released_credits = held_credits - command.credits
-        release_ledger_id = str(uuid4()) if released_credits else None
+        captured_funded = min(command.credits, held_credits)
+        captured_overdraft = command.credits - captured_funded
+        released_credits = held_credits - captured_funded
+        released_overdraft = held_overdraft - captured_overdraft
+        release_ledger_id = (
+            str(uuid4())
+            if released_credits or released_overdraft
+            else None
+        )
         if release_ledger_id is not None:
             self._insert_ledger(
                 conn,
@@ -1004,7 +1105,7 @@ class BillingRepository:
         expired_by_type = {credit_type: 0 for credit_type in _CREDIT_TYPES}
         expired_allocations: list[tuple[str, int]] = []
         restored_available = 0
-        remaining_capture = command.credits
+        remaining_capture = captured_funded
         for allocation in allocations:
             amount = int(allocation.credits)
             captured = min(remaining_capture, amount)
@@ -1099,11 +1200,18 @@ class BillingRepository:
             "available_credits": billing_wallets.c.available_credits
             + restored_available,
             "held_credits": billing_wallets.c.held_credits - held_credits,
+            "held_overdraft_credits": (
+                billing_wallets.c.held_overdraft_credits - held_overdraft
+            ),
+            "debt_credits": (
+                billing_wallets.c.debt_credits + captured_overdraft
+            ),
             "updated_at": now,
         }
         wallet_guards = [
             billing_wallets.c.id == command.wallet_id,
             billing_wallets.c.held_credits >= held_credits,
+            billing_wallets.c.held_overdraft_credits >= held_overdraft,
         ]
         for credit_type in _CREDIT_TYPES:
             amount = (
@@ -1283,17 +1391,19 @@ class BillingRepository:
         balance: WalletBalance,
     ) -> None:
         values = (
-            balance.available,
+            balance.funded_available,
             balance.held,
             balance.purchased,
             balance.promotional,
             balance.package,
+            balance.debt,
+            balance.held_overdraft,
         )
         if any(value < 0 for value in values):
             raise BillingInvariantError(
                 "wallet projections cannot be negative",
             )
-        if balance.available + balance.held != (
+        if balance.funded_available + balance.held != (
             balance.purchased + balance.promotional + balance.package
         ):
             raise BillingInvariantError(
@@ -1316,11 +1426,15 @@ class BillingRepository:
             lot_held += held
             lot_types[str(row.credit_type)] += available + held
         expected = WalletBalance(
-            available=lot_available,
+            available=(
+                lot_available - balance.debt - balance.held_overdraft
+            ),
             held=lot_held,
             purchased=lot_types["purchased"],
             promotional=lot_types["promotional"],
             package=lot_types["package"],
+            debt=balance.debt,
+            held_overdraft=balance.held_overdraft,
         )
         if balance != expected:
             raise BillingInvariantError(
@@ -1336,16 +1450,24 @@ class BillingRepository:
                 billing_wallets.c.purchased_credits,
                 billing_wallets.c.promotional_credits,
                 billing_wallets.c.package_credits,
+                billing_wallets.c.debt_credits,
+                billing_wallets.c.held_overdraft_credits,
             ).where(billing_wallets.c.id == wallet_id),
         ).one_or_none()
         if row is None:
             raise BillingInvariantError(f"wallet not found: {wallet_id}")
         return WalletBalance(
-            available=int(row.available_credits),
+            available=(
+                int(row.available_credits)
+                - int(row.debt_credits)
+                - int(row.held_overdraft_credits)
+            ),
             held=int(row.held_credits),
             purchased=int(row.purchased_credits),
             promotional=int(row.promotional_credits),
             package=int(row.package_credits),
+            debt=int(row.debt_credits),
+            held_overdraft=int(row.held_overdraft_credits),
         )
 
     def _idempotency_exists(self, idempotency_key: str) -> bool:

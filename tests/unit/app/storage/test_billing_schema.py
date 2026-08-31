@@ -14,9 +14,12 @@ import qwenpaw.app.storage.schema as schema_module
 from qwenpaw.app.storage.engine import create_engine_from_settings
 from qwenpaw.app.storage.schema import (
     _ensure_billing_bigint_columns,
+    _ensure_user_overdraft_columns,
     billing_official_price_candidates,
     billing_pricing_audits,
+    billing_wallets,
     create_all,
+    users,
 )
 from qwenpaw.app.storage.settings import get_storage_settings
 
@@ -145,6 +148,13 @@ def test_billing_schema_is_idempotent(sqlite_engine):
     } | {tuple(constraint["column_names"]) for constraint in usage_uniques}
     assert ("business_key",) in usage_unique_column_sets
 
+    user_columns = {column["name"] for column in inspector.get_columns("users")}
+    assert "billing_overdraft_enabled" in user_columns
+    wallet_columns = {
+        column["name"] for column in inspector.get_columns("billing_wallets")
+    }
+    assert {"debt_credits", "held_overdraft_credits"} <= wallet_columns
+
     catalog_indexes = inspector.get_indexes("billing_price_catalogs")
     catalog_uniques = inspector.get_unique_constraints(
         "billing_price_catalogs",
@@ -163,6 +173,8 @@ def test_billing_schema_is_idempotent(sqlite_engine):
             "purchased_credits",
             "promotional_credits",
             "package_credits",
+            "debt_credits",
+            "held_overdraft_credits",
         },
         "billing_credit_lots": {
             "granted_credits",
@@ -292,6 +304,59 @@ def test_billing_schema_is_idempotent(sqlite_engine):
             for foreign_key in inspector.get_foreign_keys(table_name)
         }
         assert expected_targets <= targets
+
+
+def test_overdraft_schema_defaults_are_private_and_nonnegative():
+    assert users.c.billing_overdraft_enabled.nullable is False
+    assert str(users.c.billing_overdraft_enabled.server_default.arg) in {
+        "false",
+        "0",
+    }
+    assert billing_wallets.c.debt_credits.nullable is False
+    assert billing_wallets.c.held_overdraft_credits.nullable is False
+    assert {
+        constraint.name for constraint in billing_wallets.constraints
+    } >= {
+        "ck_billing_wallets_debt_nonnegative",
+        "ck_billing_wallets_held_overdraft_nonnegative",
+    }
+
+
+def test_legacy_overdraft_migration_backfills_only_existing_admin(sqlite_engine):
+    with sqlite_engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT "
+                "NOT NULL UNIQUE, password_hash TEXT NOT NULL, "
+                "password_salt TEXT NOT NULL, role TEXT)"
+            ),
+        )
+        conn.execute(
+            text(
+                "CREATE TABLE billing_wallets (id TEXT PRIMARY KEY, "
+                "owner_type TEXT NOT NULL, owner_id TEXT NOT NULL)"
+            ),
+        )
+        conn.execute(
+            text(
+                "INSERT INTO users VALUES "
+                "(1, 'szzz_admin', 'h', 's', 'admin'), "
+                "(2, 'normal', 'h', 's', 'user')"
+            ),
+        )
+
+    _ensure_user_overdraft_columns(sqlite_engine)
+    _ensure_user_overdraft_columns(sqlite_engine)
+
+    with sqlite_engine.connect() as conn:
+        rows = dict(
+            conn.execute(
+                text(
+                    "SELECT username, billing_overdraft_enabled FROM users"
+                ),
+            ).all(),
+        )
+    assert rows == {"szzz_admin": 1, "normal": 0}
 
 
 def test_pricing_audit_is_append_only(sqlite_engine):

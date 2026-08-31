@@ -23,7 +23,6 @@ from ..storage.schema import (
     billing_usage_orders,
     open_api_invocations,
 )
-from .complimentary import COMPLIMENTARY_UNPRICED_CATALOG_VERSION
 from .execution import OpenApiExecutionFence
 from .models import (
     BillingInvariantError,
@@ -594,11 +593,7 @@ class UsageService:
                 insert(billing_usage_items).values(
                     id=str(uuid4()),
                     usage_order_id=normalized.usage_order_id,
-                    price_rule_id=(
-                        None
-                        if _is_complimentary_unpriced(order)
-                        else quote.storage_rule_id or quote.rule_id
-                    ),
+                    price_rule_id=quote.storage_rule_id or quote.rule_id,
                     item_key=normalized.item_key,
                     status="held",
                     provider_id=normalized.provider_id,
@@ -781,22 +776,9 @@ class UsageService:
         order: Mapping[str, Any],
         request: QuoteRequest,
     ) -> RetailQuote:
-        if not _is_complimentary_unpriced(order):
-            return self.pricing.quote_locked_catalog(
-                str(order["catalog_id"]),
-                request,
-            )
-        return RetailQuote(
-            catalog_version=COMPLIMENTARY_UNPRICED_CATALOG_VERSION,
-            rule_id="complimentary-unpriced",
-            credits=0,
-            unit_breakdown={},
-            snapshot={
-                "pricing_status": "unpriced",
-                "complimentary_reason": "szzz_admin",
-                "rule": {"metadata": {"economic_tier": "standard"}},
-            },
-            request=request,
+        return self.pricing.quote_locked_catalog(
+            str(order["catalog_id"]),
+            request,
         )
 
     @staticmethod
@@ -1417,21 +1399,6 @@ def _item_idempotency_namespace(source_type: str) -> str:
     return "open-api" if source_type == "open_api" else "billing"
 
 
-def _is_complimentary_unpriced(order: Mapping[str, Any]) -> bool:
-    if str(order.get("source_type") or "") != "open_api":
-        return False
-    try:
-        snapshot = json.loads(
-            str(order.get("request_snapshot_json") or "{}"),
-        )
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return False
-    return bool(
-        snapshot.get("complimentary_reason") == "szzz_admin"
-        and snapshot.get("complimentary_unpriced") is True
-    )
-
-
 def _economic_tier(snapshot: Mapping[str, Any]) -> str:
     """Read the trusted catalog tier, failing closed for restricted trials."""
     nested = snapshot.get("snapshot")
@@ -1577,7 +1544,10 @@ def wallet_balance_dict(balance: WalletBalance) -> dict[str, int]:
     """Serialize the public wallet projection without exposing an ID."""
     return {
         "available": balance.available,
+        "funded_available": balance.funded_available,
         "held": balance.held,
+        "debt": balance.debt,
+        "held_overdraft": balance.held_overdraft,
         "purchased": balance.purchased,
         "promotional": balance.promotional,
         "package": balance.package,

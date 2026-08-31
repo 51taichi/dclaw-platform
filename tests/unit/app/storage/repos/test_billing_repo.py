@@ -24,6 +24,7 @@ from qwenpaw.app.storage.schema import (
     billing_ledger_entries,
     billing_wallets,
     create_all,
+    users,
 )
 from qwenpaw.app.storage.settings import get_storage_settings
 
@@ -214,6 +215,144 @@ def test_negative_available_balance_is_rejected_atomically(repo):
         row["idempotency_key"]
         for row in repo.list_ledger(wallet["id"], 10, None)
     ] == ["purchase-1"]
+
+
+def test_wallet_balance_reports_funded_credits_minus_overdraft(repo, engine):
+    wallet = repo.ensure_wallet("user", "18")
+    repo.grant(
+        wallet["id"],
+        credits=20,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key="purchase-overdraft-view",
+    )
+    with engine.begin() as conn:
+        conn.execute(
+            update(billing_wallets)
+            .where(billing_wallets.c.id == wallet["id"])
+            .values(debt_credits=25, held_overdraft_credits=3),
+        )
+
+    balance = repo.balance(wallet["id"])
+
+    assert balance.funded_available == 20
+    assert balance.debt == 25
+    assert balance.held_overdraft == 3
+    assert balance.available == -8
+
+
+def test_overdraft_enabled_user_can_hold_and_capture_beyond_funded_balance(
+    repo,
+    engine,
+):
+    with engine.begin() as conn:
+        user_id = conn.execute(
+            insert(users)
+            .values(
+                username="overdraft-user",
+                password_hash="hash",
+                password_salt="salt",
+                role="user",
+                billing_overdraft_enabled=True,
+            )
+            .returning(users.c.id),
+        ).scalar_one()
+    wallet = repo.ensure_wallet("user", str(user_id))
+    repo.grant(
+        wallet["id"],
+        credits=3,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key="overdraft-seed",
+    )
+
+    held = repo.hold(
+        wallet["id"],
+        credits=8,
+        business_key="overdraft-call",
+        idempotency_key="overdraft-hold",
+    )
+    captured = repo.capture(
+        wallet["id"],
+        credits=8,
+        business_key="overdraft-call",
+        idempotency_key="overdraft-capture",
+    )
+
+    assert held == WalletBalance(-5, 3, 3, 0, 0, 0, 5)
+    assert captured == WalletBalance(-5, 0, 0, 0, 0, 5, 0)
+
+
+def test_overdraft_enabled_user_release_removes_provisional_debt(repo, engine):
+    with engine.begin() as conn:
+        user_id = conn.execute(
+            insert(users)
+            .values(
+                username="overdraft-release-user",
+                password_hash="hash",
+                password_salt="salt",
+                role="user",
+                billing_overdraft_enabled=True,
+            )
+            .returning(users.c.id),
+        ).scalar_one()
+    wallet = repo.ensure_wallet("user", str(user_id))
+
+    repo.hold(
+        wallet["id"],
+        credits=8,
+        business_key="released-overdraft-call",
+        idempotency_key="released-overdraft-hold",
+    )
+    released = repo.release(
+        wallet["id"],
+        business_key="released-overdraft-call",
+        idempotency_key="released-overdraft-release",
+    )
+
+    assert released == WalletBalance(0, 0, 0, 0, 0, 0, 0)
+
+
+def test_grant_repays_settled_debt_before_creating_spendable_lot(repo, engine):
+    with engine.begin() as conn:
+        user_id = conn.execute(
+            insert(users)
+            .values(
+                username="overdraft-repayment-user",
+                password_hash="hash",
+                password_salt="salt",
+                role="user",
+                billing_overdraft_enabled=True,
+            )
+            .returning(users.c.id),
+        ).scalar_one()
+    wallet = repo.ensure_wallet("user", str(user_id))
+    repo.hold(
+        wallet["id"],
+        credits=10,
+        business_key="debt-before-grant",
+        idempotency_key="debt-before-grant-hold",
+    )
+    repo.capture(
+        wallet["id"],
+        credits=10,
+        business_key="debt-before-grant",
+        idempotency_key="debt-before-grant-capture",
+    )
+
+    balance = repo.grant(
+        wallet["id"],
+        credits=30,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key="debt-repayment-grant",
+    )
+
+    assert balance == WalletBalance(20, 0, 20, 0, 0, 0, 0)
+    assert [
+        (row["granted_credits"], row["available_credits"])
+        for row in repo.list_lots(wallet["id"])
+    ] == [(20, 20)]
 
 
 def test_append_transaction_returns_typed_balance(repo):

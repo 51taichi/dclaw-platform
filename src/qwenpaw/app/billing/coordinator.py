@@ -14,7 +14,6 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
 
 from .context import BillingMode, BillingSession, BillingSource
-from .complimentary import is_complimentary_user
 from .pricing import PriceCatalogService
 from ..storage.repos.billing_repo import BillingRepository
 from ..storage.schema import billing_executions, billing_usage_orders
@@ -64,19 +63,12 @@ class BillingCoordinator:
                     normalized.payer_user_id,
                 )
                 catalog = self.pricing.lock_effective_catalog(conn)
-                billing_mode: BillingMode = (
-                    "observe"
-                    if is_complimentary_user(conn, normalized.payer_user_id)
-                    else "enforced"
-                )
+                billing_mode: BillingMode = "enforced"
                 execution_id = str(uuid4())
                 usage_order_id = str(uuid4())
                 snapshot = _dump_json(
                     {
                         "billing_mode": billing_mode,
-                        "complimentary_reason": (
-                            "szzz_admin" if billing_mode == "observe" else None
-                        ),
                         "request_sha256": request_hash,
                         "source": _source_snapshot(normalized.source),
                     },

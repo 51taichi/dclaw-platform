@@ -449,7 +449,7 @@ def test_missing_catalog_is_503_before_supplier(billing_flow):
 
 
 @pytest.mark.parametrize("mode", ("enforced", "shadow", "observe"))
-def test_szzz_admin_runs_unpriced_when_no_catalog_exists(
+def test_overdraft_user_still_requires_published_catalog(
     billing_flow,
     mode,
 ):
@@ -463,10 +463,11 @@ def test_szzz_admin_runs_unpriced_when_no_catalog_exists(
         user_id = conn.execute(
             insert(users)
             .values(
-                username="szzz_admin",
+                username="overdraft-no-catalog",
                 password_hash="hash",
                 password_salt="salt",
                 role="admin",
+                billing_overdraft_enabled=True,
             )
             .returning(users.c.id),
         ).scalar_one()
@@ -478,36 +479,11 @@ def test_szzz_admin_runs_unpriced_when_no_catalog_exists(
         conn.execute(delete(billing_price_rules))
         conn.execute(delete(billing_price_catalogs))
 
-    response = _post(billing_flow, key="complimentary-no-catalog")
+    response = _post(billing_flow, key="overdraft-no-catalog")
 
-    assert response.status_code == 200
-    assert billing_flow.console.calls == 1
-    with billing_flow.engine.connect() as conn:
-        invocation = conn.execute(
-            select(open_api_invocations)
-            .order_by(open_api_invocations.c.created_at.desc())
-            .limit(1),
-        ).mappings().one()
-        order = conn.execute(
-            select(billing_usage_orders).where(
-                billing_usage_orders.c.id
-                == invocation["billing_usage_order_id"],
-            ),
-        ).mappings().one()
-        items = conn.execute(
-            select(billing_usage_items).where(
-                billing_usage_items.c.usage_order_id == order["id"],
-            ),
-        ).mappings().all()
-    snapshot = json.loads(order["request_snapshot_json"])
-    assert snapshot["complimentary_reason"] == "szzz_admin"
-    assert snapshot["complimentary_unpriced"] is True
-    assert order["captured_credits"] == 0
-    assert items
-    assert all(item["charged_credits"] == 0 for item in items)
-    assert all(item["price_rule_id"] is None for item in items)
-    price_snapshot = json.loads(items[0]["price_snapshot_json"])
-    assert price_snapshot["snapshot"]["pricing_status"] == "unpriced"
+    assert response.status_code == 503
+    assert response.json() == {"code": "catalog_not_ready"}
+    assert billing_flow.console.calls == 0
 
 
 def test_published_subset_returns_model_not_priced_before_supplier(

@@ -196,7 +196,7 @@ def test_begin_resolves_wallet_only_from_publication_bound_user(
     assert session.bound_user_id != "caller-controlled-user"
 
 
-def test_szzz_admin_open_api_is_free_at_zero_balance_and_keeps_usage_detail(
+def test_overdraft_enabled_open_api_user_is_charged_at_zero_balance(
     coordinator,
     engine,
 ):
@@ -208,6 +208,7 @@ def test_szzz_admin_open_api_is_free_at_zero_balance_and_keeps_usage_detail(
                 password_hash="hash",
                 password_salt="salt",
                 role="admin",
+                billing_overdraft_enabled=True,
             )
             .returning(users.c.id),
         ).scalar_one()
@@ -224,18 +225,19 @@ def test_szzz_admin_open_api_is_free_at_zero_balance_and_keeps_usage_detail(
         _settle(session, "free-call", "billable", output_tokens=0),
     )
 
-    assert session.mode == "observe"
+    assert session.mode == "enforced"
     assert reserved.quoted_credits == 2
     assert settled.status == "captured"
     assert settled.captured_credits == 1
-    assert coordinator.repository.balance(session.wallet_id).available == 0
+    assert coordinator.repository.balance(session.wallet_id).available == -1
+    assert coordinator.repository.balance(session.wallet_id).debt == 1
     assert coordinator.repository.balance(session.wallet_id).held == 0
     with engine.connect() as conn:
         assert (
             conn.scalar(
                 select(func.count()).select_from(billing_ledger_entries)
             )
-            == 0
+            == 3
         )
         item = conn.execute(select(billing_usage_items)).mappings().one()
     assert item["input_tokens"] == 1000

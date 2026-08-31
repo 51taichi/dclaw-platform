@@ -25,10 +25,6 @@ from ..storage.schema import (
     open_api_keys,
     open_api_publications,
 )
-from .complimentary import (
-    ensure_complimentary_unpriced_catalog,
-    is_complimentary_user,
-)
 from .pricing import PriceCatalogService
 from .usage import IdempotencyConflictError
 
@@ -120,25 +116,13 @@ class OpenApiBillingCoordinator:
                     normalized,
                 )
                 bound_user_id = str(publication["bound_user_id"])
-                complimentary = is_complimentary_user(conn, bound_user_id)
                 wallet = self.repository.ensure_wallet_in_connection(
                     conn,
                     "user",
                     bound_user_id,
                 )
-                complimentary_unpriced = False
-                try:
-                    catalog = self._lock_catalog(conn)
-                except CatalogNotReadyError:
-                    if not complimentary:
-                        raise
-                    catalog = ensure_complimentary_unpriced_catalog(conn)
-                    complimentary_unpriced = True
-                billing_mode: BillingMode = (
-                    "observe"
-                    if complimentary
-                    else normalized.mode
-                )
+                catalog = self._lock_catalog(conn)
+                billing_mode: BillingMode = normalized.mode
                 invocation_id = str(uuid4())
                 usage_order_id = str(uuid4())
                 persisted_key = business_key or (
@@ -148,10 +132,6 @@ class OpenApiBillingCoordinator:
                 snapshot = json.dumps(
                     {
                         "billing_mode": billing_mode,
-                        "complimentary_reason": (
-                            "szzz_admin" if complimentary else None
-                        ),
-                        "complimentary_unpriced": complimentary_unpriced,
                         "client_idempotency_key": normalized.idempotency_key,
                         "request_sha256": payload_hash,
                     },

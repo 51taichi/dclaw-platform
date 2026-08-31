@@ -38,6 +38,12 @@ users = Table(
     Column("password_hash", Text, nullable=False),
     Column("password_salt", Text, nullable=False),
     Column("role", String, server_default="user"),
+    Column(
+        "billing_overdraft_enabled",
+        Boolean,
+        nullable=False,
+        server_default=false(),
+    ),
     Column("created_at", DateTime(timezone=True), server_default=func.now()),
 )
 
@@ -472,6 +478,13 @@ billing_wallets = Table(
         server_default="0",
     ),
     Column("package_credits", BigInteger, nullable=False, server_default="0"),
+    Column("debt_credits", BigInteger, nullable=False, server_default="0"),
+    Column(
+        "held_overdraft_credits",
+        BigInteger,
+        nullable=False,
+        server_default="0",
+    ),
     Column("created_at", DateTime(timezone=True), server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), server_default=func.now()),
     CheckConstraint(
@@ -493,6 +506,14 @@ billing_wallets = Table(
     CheckConstraint(
         "package_credits >= 0",
         name="ck_billing_wallets_package_nonnegative",
+    ),
+    CheckConstraint(
+        "debt_credits >= 0",
+        name="ck_billing_wallets_debt_nonnegative",
+    ),
+    CheckConstraint(
+        "held_overdraft_credits >= 0",
+        name="ck_billing_wallets_held_overdraft_nonnegative",
     ),
 )
 
@@ -1531,6 +1552,7 @@ Index(
 def create_all(engine: Engine) -> None:
     """Create all known durable tables and indexes."""
     metadata.create_all(engine)
+    _ensure_user_overdraft_columns(engine)
     _ensure_pricing_catalog_revision(engine)
     _ensure_pricing_audit_immutable(engine)
     _ensure_official_price_candidate_immutable(engine)
@@ -1547,6 +1569,52 @@ def create_all(engine: Engine) -> None:
     _ensure_reconciliation_audit_immutable(engine)
     _ensure_top_up_audit_immutable(engine)
     _backfill_personal_wallets(engine)
+
+
+def _ensure_user_overdraft_columns(engine: Engine) -> None:
+    """Add private overdraft state to legacy databases exactly once."""
+    inspector = inspect(engine)
+    user_columns = {
+        column["name"] for column in inspector.get_columns("users")
+    }
+    wallet_columns = {
+        column["name"] for column in inspector.get_columns("billing_wallets")
+    }
+    created_capability = "billing_overdraft_enabled" not in user_columns
+    boolean_type = (
+        "BOOLEAN" if engine.dialect.name == "postgresql" else "INTEGER"
+    )
+    false_literal = "FALSE" if engine.dialect.name == "postgresql" else "0"
+    with engine.begin() as conn:
+        if created_capability:
+            conn.execute(
+                text(
+                    "ALTER TABLE users ADD COLUMN billing_overdraft_enabled "
+                    f"{boolean_type} NOT NULL DEFAULT {false_literal}"
+                )
+            )
+            conn.execute(
+                text(
+                    "UPDATE users SET billing_overdraft_enabled = "
+                    f"{'TRUE' if engine.dialect.name == 'postgresql' else '1'} "
+                    "WHERE username = 'szzz_admin' AND role = 'admin'"
+                )
+            )
+        if "debt_credits" not in wallet_columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE billing_wallets ADD COLUMN debt_credits "
+                    "BIGINT NOT NULL DEFAULT 0 CHECK (debt_credits >= 0)"
+                )
+            )
+        if "held_overdraft_credits" not in wallet_columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE billing_wallets ADD COLUMN "
+                    "held_overdraft_credits BIGINT NOT NULL DEFAULT 0 "
+                    "CHECK (held_overdraft_credits >= 0)"
+                )
+            )
 
 
 def _ensure_pricing_collection_active_digest_index(engine: Engine) -> None:
@@ -2372,6 +2440,18 @@ def _ensure_open_api_billing_indexes(engine: Engine) -> None:
 def _ensure_postgresql_open_api_billing_constraints(engine: Engine) -> None:
     """Add missing bridge constraints with relation-scoped guards."""
     constraints = (
+        (
+            "billing_wallets",
+            "ck_billing_wallets_debt_nonnegative",
+            "c",
+            "CHECK (debt_credits >= 0)",
+        ),
+        (
+            "billing_wallets",
+            "ck_billing_wallets_held_overdraft_nonnegative",
+            "c",
+            "CHECK (held_overdraft_credits >= 0)",
+        ),
         (
             "open_api_invocations",
             "ck_open_api_invocations_quoted_nonnegative",
