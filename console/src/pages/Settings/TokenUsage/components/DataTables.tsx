@@ -1,4 +1,5 @@
 import { Card, Table } from "@agentscope-ai/design";
+import { Space, Typography } from "antd";
 import { useTranslation } from "react-i18next";
 import { formatCompact } from "../../../../utils/formatNumber";
 import styles from "../index.module.less";
@@ -31,9 +32,15 @@ interface DataTablesProps {
   byModelData: ByModelData[];
   byDateData: ByDateData[];
   byUserData: ByUserData[];
+  userNames: Record<string, string>;
 }
 
-export function DataTables({ byModelData, byDateData, byUserData }: DataTablesProps) {
+export function DataTables({
+  byModelData,
+  byDateData,
+  byUserData,
+  userNames,
+}: DataTablesProps) {
   const { t } = useTranslation();
 
   const byModelColumns = [
@@ -120,9 +127,20 @@ export function DataTables({ byModelData, byDateData, byUserData }: DataTablesPr
 
   const byUserColumns = [
     {
-      title: t("admin.userId", "User ID"),
+      title: t("admin.account", "账号"),
       dataIndex: "user_id",
       key: "user_id",
+      render: (userId: string) =>
+        userId === "System" ? (
+          <Typography.Text strong>System</Typography.Text>
+        ) : (
+          <Space direction="vertical" size={0}>
+            <Typography.Text strong>
+              {userNames[userId] ?? t("admin.unknownAccount", "未知账号")}
+            </Typography.Text>
+            <Typography.Text type="secondary">ID {userId}</Typography.Text>
+          </Space>
+        ),
     },
     {
       title: t("tokenUsage.promptTokens"),
@@ -184,7 +202,10 @@ export function DataTables({ byModelData, byDateData, byUserData }: DataTablesPr
       )}
 
       {byUserData.length > 0 && (
-        <Card className={styles.tableCard} title={t("admin.userRanking", "User Ranking")}>
+        <Card
+          className={styles.tableCard}
+          title={t("admin.userRanking", "User Ranking")}
+        >
           <Table
             columns={byUserColumns}
             dataSource={byUserData}

@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import dayjs, { type Dayjs } from "dayjs";
 import { useTheme } from "../../../contexts/ThemeContext";
 import api from "../../../api";
+import { adminUsersApi } from "../../../api/modules/adminUsers";
 import type { TokenUsageRecord } from "../../../api/types/tokenUsage";
 import { useAppMessage } from "../../../hooks/useAppMessage";
 import { PageHeader } from "@/components/PageHeader";
@@ -27,6 +28,7 @@ function TokenUsagePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [records, setRecords] = useState<TokenUsageRecord[]>([]);
+  const [userNames, setUserNames] = useState<Record<string, string>>({});
   const [startDate, setStartDate] = useState<Dayjs>(
     dayjs().subtract(30, "day"),
   );
@@ -36,11 +38,22 @@ function TokenUsagePage() {
     setLoading(true);
     setError(false);
     try {
-      const detailsData = await api.getTokenUsageDetails({
-        start_date: startDate.format("YYYY-MM-DD"),
-        end_date: endDate.format("YYYY-MM-DD"),
-      });
-      setRecords(detailsData);
+      const [detailsResult, usersResult] = await Promise.allSettled([
+        api.getTokenUsageDetails({
+          start_date: startDate.format("YYYY-MM-DD"),
+          end_date: endDate.format("YYYY-MM-DD"),
+        }),
+        adminUsersApi.listUsers(),
+      ]);
+      if (usersResult.status === "fulfilled") {
+        setUserNames(
+          Object.fromEntries(
+            usersResult.value.map((user) => [String(user.id), user.username]),
+          ),
+        );
+      }
+      if (detailsResult.status === "rejected") throw detailsResult.reason;
+      setRecords(detailsResult.value);
     } catch (err) {
       console.error("Failed to load token usage:", err);
       message.error(t("tokenUsage.loadFailed"));
@@ -111,7 +124,12 @@ function TokenUsagePage() {
         completion_tokens: stats.completion_tokens,
         call_count: stats.call_count,
       }))
-      .sort((a, b) => (b.prompt_tokens + b.completion_tokens) - (a.prompt_tokens + a.completion_tokens));
+      .sort(
+        (a, b) =>
+          b.prompt_tokens +
+          b.completion_tokens -
+          (a.prompt_tokens + a.completion_tokens),
+      );
   }, [aggregatedData?.by_user]);
 
   const pageHeader = (
@@ -172,10 +190,17 @@ function TokenUsagePage() {
           <TokenTypeChart chartConfig={tokenTypeConfig} />
         </div>
 
-        {byModelData.length === 0 && byDateData.length === 0 && byUserData.length === 0 ? (
+        {byModelData.length === 0 &&
+        byDateData.length === 0 &&
+        byUserData.length === 0 ? (
           <EmptyState message={t("tokenUsage.noData")} />
         ) : (
-          <DataTables byModelData={byModelData} byDateData={byDateData} byUserData={byUserData} />
+          <DataTables
+            byModelData={byModelData}
+            byDateData={byDateData}
+            byUserData={byUserData}
+            userNames={userNames}
+          />
         )}
       </div>
     </div>
