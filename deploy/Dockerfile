@@ -53,6 +53,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends --fix-missing \
     python3-pip \
     python3-venv \
     build-essential \
+    bubblewrap \
     libssl-dev \
     git \
     supervisor \
