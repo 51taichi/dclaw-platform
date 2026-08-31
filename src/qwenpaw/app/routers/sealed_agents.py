@@ -55,6 +55,19 @@ def _operational_dto(record: SealedAgentRecord) -> dict[str, Any]:
         "version": active.version if active else None,
         "content_digest": active.content_digest if active else None,
         "signer_id": active.signer_id if active else None,
+        "runtime": (
+            {
+                "adapter": active.runtime_adapter or "standard",
+                "contract_version": active.runtime_contract_version or "1",
+            }
+            if active
+            else None
+        ),
+        "runtime_validation": (
+            active.runtime_validation.model_dump(mode="json")
+            if active and active.runtime_validation
+            else None
+        ),
         "releases": [
             {
                 "release_id": release.release_id,
@@ -63,6 +76,15 @@ def _operational_dto(record: SealedAgentRecord) -> dict[str, Any]:
                 "signer_id": release.signer_id,
                 "state": release.state,
                 "installed_at": release.installed_at,
+                "runtime": {
+                    "adapter": release.runtime_adapter or "standard",
+                    "contract_version": release.runtime_contract_version or "1",
+                },
+                "runtime_validation": (
+                    release.runtime_validation.model_dump(mode="json")
+                    if release.runtime_validation
+                    else None
+                ),
             }
             for release in record.releases
         ],
@@ -114,6 +136,12 @@ async def activate_sealed_agent_release(
 ) -> dict[str, Any]:
     _require_admin(request)
     service = get_sealed_agent_service()
+    validation = await service.validate_release_runtime(agent_id, release_id)
+    if validation.status != "valid":
+        raise HTTPException(
+            status_code=400,
+            detail="sealed agent runtime validation failed",
+        )
     runtime_root = service.release_root(agent_id, release_id) / "agent"
     if not (runtime_root / "agent.json").is_file():
         raise HTTPException(

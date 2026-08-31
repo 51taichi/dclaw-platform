@@ -6,6 +6,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from qwenpaw.app.sealed_agents.package import build_signed_package_bytes
+from qwenpaw.app.sealed_agents.models import RuntimeValidationRecord
 from qwenpaw.app.sealed_agents.registry import SealedAgentRegistry
 from qwenpaw.app.sealed_agents.service import (
     SealedAgentReleaseError,
@@ -43,12 +44,13 @@ def _package(
     return build_signed_package_bytes(manifest, files, private)
 
 
-def _service(tmp_path, public, *, reload_agent=None):
+def _service(tmp_path, public, *, reload_agent=None, runtime_validator=None):
     return SealedAgentService(
         root=tmp_path,
         registry=SealedAgentRegistry(tmp_path),
         trusted_signers={"publisher": public},
         reload_agent=reload_agent,
+        runtime_validator=runtime_validator,
     )
 
 
@@ -108,6 +110,93 @@ def test_activate_switches_atomically_after_reload_succeeds(tmp_path):
     assert active.active_release.state == "active"
     assert reloads[0][0] == "luyu"
     assert reloads[0][1].name == "agent"
+
+
+@pytest.mark.asyncio
+async def test_runtime_validation_is_persisted_before_activation(tmp_path):
+    private = Ed25519PrivateKey.generate()
+
+    async def validate(pinned):
+        assert pinned.adapter_key == ("sealed_harness", "1")
+        return RuntimeValidationRecord(
+            status="valid",
+            adapter="sealed_harness",
+            contract_version="1",
+        )
+
+    service = _service(
+        tmp_path,
+        private.public_key(),
+        runtime_validator=validate,
+    )
+    release = service.install(
+        _package(
+            private,
+            schema_version=2,
+            runtime={
+                "adapter": "sealed_harness",
+                "contract_version": "1",
+                "failure_policy": "fail_closed",
+            },
+        ),
+    )
+
+    result = await service.validate_release_runtime("luyu", release.release_id)
+
+    assert result.status == "valid"
+    stored = service.get_agent("luyu")
+    assert stored is not None
+    assert stored.releases[0].runtime_validation == result
+    assert stored.active_release_id is None
+
+    active = service.activate("luyu", release.release_id)
+    assert active.active_release_id == release.release_id
+
+
+@pytest.mark.asyncio
+async def test_failed_runtime_validation_preserves_previous_active_release(tmp_path):
+    private = Ed25519PrivateKey.generate()
+
+    async def validate(pinned):
+        if pinned.adapter_key == ("sealed_harness", "1"):
+            return RuntimeValidationRecord(
+                status="invalid",
+                adapter="sealed_harness",
+                contract_version="1",
+                error_code="handshake_mismatch",
+            )
+        return RuntimeValidationRecord(
+            status="valid",
+            adapter="standard",
+            contract_version="1",
+        )
+
+    service = _service(
+        tmp_path,
+        private.public_key(),
+        runtime_validator=validate,
+    )
+    previous = service.install(_package(private, version="1.0.0"))
+    service.activate("luyu", previous.release_id)
+    candidate = service.install(
+        _package(
+            private,
+            version="1.1.0",
+            schema_version=2,
+            runtime={
+                "adapter": "sealed_harness",
+                "contract_version": "1",
+                "failure_policy": "fail_closed",
+            },
+        ),
+    )
+
+    result = await service.validate_release_runtime("luyu", candidate.release_id)
+
+    assert result.status == "invalid"
+    assert service.get_agent("luyu").active_release_id == previous.release_id
+    with pytest.raises(SealedAgentReleaseError, match="runtime validation"):
+        service.activate("luyu", candidate.release_id)
 
 
 def test_failed_reload_preserves_previous_active_release(tmp_path):

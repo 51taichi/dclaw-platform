@@ -6,7 +6,11 @@ import pytest
 from fastapi import HTTPException
 
 from qwenpaw.app.routers import sealed_agents as router_module
-from qwenpaw.app.sealed_agents.models import SealedAgentRecord, SealedReleaseRecord
+from qwenpaw.app.sealed_agents.models import (
+    RuntimeValidationRecord,
+    SealedAgentRecord,
+    SealedReleaseRecord,
+)
 from qwenpaw.config.config import Config
 
 
@@ -42,6 +46,10 @@ def test_admin_list_returns_operational_metadata_without_asset_paths(monkeypatch
 
     assert response[0]["agent_id"] == "luyu"
     assert response[0]["version"] == "1.0.0"
+    assert response[0]["runtime"] == {
+        "adapter": "standard",
+        "contract_version": "1",
+    }
     serialized = str(response)
     assert "workspace" not in serialized
     assert "AGENTS.md" not in serialized
@@ -78,6 +86,13 @@ async def test_activation_registers_private_runtime_only_after_preload_succeeds(
     )
 
     class Service:
+        async def validate_release_runtime(self, agent_id, release_id):
+            return RuntimeValidationRecord(
+                status="valid",
+                adapter="standard",
+                contract_version="1",
+            )
+
         def release_root(self, agent_id, release_id):
             return release_root
 

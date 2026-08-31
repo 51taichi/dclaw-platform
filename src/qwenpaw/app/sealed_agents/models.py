@@ -70,6 +70,7 @@ class SealedReleaseRecord(BaseModel):
     runtime_adapter: str | None = None
     runtime_contract_version: str | None = None
     runtime_failure_policy: Literal["fail_closed"] | None = None
+    runtime_validation: "RuntimeValidationRecord | None" = None
     state: Literal[
         "uploaded",
         "validating",
@@ -85,6 +86,18 @@ class SealedReleaseRecord(BaseModel):
     installed_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
     )
+
+
+class RuntimeValidationRecord(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    status: Literal["valid", "invalid"]
+    validated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+    )
+    adapter: str
+    contract_version: str
+    error_code: str | None = None
 
 
 class SealedAgentRecord(BaseModel):
