@@ -2,8 +2,8 @@
 set -euo pipefail
 
 DEPLOY_ROOT=${DCLAW_DEPLOY_ROOT:-/opt/dclaw-deploy}
-SERVER_REPOSITORY=${DCLAW_SERVER_REPOSITORY:-https://github.com/51taichi/dclaw-server.git}
-CLIENT_REPOSITORY=${DCLAW_CLIENT_REPOSITORY:-https://github.com/51taichi/dclaw-client.git}
+SERVER_REPOSITORY=${DCLAW_SERVER_REPOSITORY_SLUG:-51taichi/dclaw-server}
+CLIENT_REPOSITORY=${DCLAW_CLIENT_REPOSITORY_SLUG:-51taichi/dclaw-client}
 LOCAL_IMAGE_REPOSITORY=${DCLAW_LOCAL_IMAGE_REPOSITORY:-dclaw-local}
 SHA_PATTERN='^[0-9a-f]{40}$'
 BUILD_NETWORK_ATTEMPTS=${DCLAW_BUILD_NETWORK_ATTEMPTS:-3}
@@ -15,14 +15,14 @@ fail() {
   exit 1
 }
 
-for command in gh git docker flock; do
+for command in gh docker flock tar; do
   command -v "$command" >/dev/null 2>&1 || fail "$command is not installed"
 done
 gh auth status --hostname github.com >/dev/null 2>&1 ||
   fail "GitHub CLI is not authenticated"
 
-mkdir -p "$DEPLOY_ROOT/logs" "$DEPLOY_ROOT/build-sources"
-chmod 700 "$DEPLOY_ROOT" "$DEPLOY_ROOT/logs" "$DEPLOY_ROOT/build-sources"
+mkdir -p "$DEPLOY_ROOT/logs"
+chmod 700 "$DEPLOY_ROOT" "$DEPLOY_ROOT/logs"
 exec 9>"$DEPLOY_ROOT/build-release.lock"
 flock -n 9 || fail "another local build is already running"
 rm -f "$DEPLOY_ROOT/pending-release.env"
@@ -33,8 +33,8 @@ context_dir=$(mktemp -d "$DEPLOY_ROOT/build-context.XXXXXX")
 trap 'rm -rf "$context_dir"' EXIT
 chmod 700 "$context_dir"
 
-SERVER_DIR="$DEPLOY_ROOT/build-sources/server"
-CLIENT_DIR="$DEPLOY_ROOT/build-sources/client"
+SERVER_DIR="$context_dir/server"
+CLIENT_DIR="$context_dir/client"
 
 retry_network_command() {
   local attempt=1
@@ -52,35 +52,62 @@ retry_network_command() {
   done
 }
 
-sync_checkout() {
+retry_network_download() {
+  local destination=$1
+  shift
+  local attempt=1
+  local temporary="${destination}.tmp"
+  while true; do
+    rm -f "$temporary"
+    if "$@" >"$temporary"; then
+      mv "$temporary" "$destination"
+      return 0
+    fi
+    if ((attempt >= BUILD_NETWORK_ATTEMPTS)); then
+      rm -f "$temporary"
+      return 1
+    fi
+    printf 'network download failed; retrying (%s/%s): %s\n' \
+      "$attempt" "$BUILD_NETWORK_ATTEMPTS" "$*" >&2
+    sleep "$BUILD_RETRY_DELAY_SECONDS"
+    attempt=$((attempt + 1))
+  done
+}
+
+download_repository() {
   local repository=$1
   local directory=$2
-  if test ! -d "$directory/.git"; then
-    test ! -e "$directory" || return 1
-    git clone --no-checkout "$repository" "$directory"
-  fi
-  git -C "$directory" remote set-url origin "$repository"
   local revision
-  revision=$(retry_network_command git ls-remote \
-    "$repository" refs/heads/main | awk 'NR == 1 { print $1 }')
+  revision=$(retry_network_command gh api \
+    "repos/$repository/commits/main" --jq .sha)
   [[ $revision =~ $SHA_PATTERN ]] || return 1
-  retry_network_command git -C "$directory" fetch \
-    --force --prune origin "$revision"
-  git -C "$directory" checkout --detach --force "$revision"
-  test "$(git -C "$directory" rev-parse HEAD)" = "$revision" || return 1
+  local archive="$context_dir/${directory##*/}.tar.gz"
+  retry_network_download "$archive" gh api \
+    "repos/$repository/tarball/$revision"
+  mkdir -p "$directory"
+  tar -xzf "$archive" --strip-components=1 -C "$directory"
   printf '%s\n' "$revision"
 }
 
+assemble_release_context() {
+  local output=$1
+  test -f "$SERVER_DIR/deploy/Dockerfile" || return 1
+  test -f "$CLIENT_DIR/console/package-lock.json" || return 1
+  test -f "$CLIENT_DIR/console/package.json" || return 1
+  test -d "$CLIENT_DIR/website/public/docs" || return 1
+  mkdir -p "$output" "$output/console"
+  tar -C "$SERVER_DIR" -cf - . | tar -C "$output" -xf -
+  tar -C "$CLIENT_DIR/console" -cf - . | tar -C "$output/console" -xf -
+  tar -C "$CLIENT_DIR" -cf - website/public/docs | tar -C "$output" -xf -
+}
+
 build_local_release() {
-  gh auth setup-git --hostname github.com || return 1
-  SERVER_SHA=$(sync_checkout "$SERVER_REPOSITORY" "$SERVER_DIR") || return 1
-  CLIENT_SHA=$(sync_checkout "$CLIENT_REPOSITORY" "$CLIENT_DIR") || return 1
+  SERVER_SHA=$(download_repository "$SERVER_REPOSITORY" "$SERVER_DIR") || return 1
+  CLIENT_SHA=$(download_repository "$CLIENT_REPOSITORY" "$CLIENT_DIR") || return 1
   [[ $SERVER_SHA =~ $SHA_PATTERN ]] || return 1
   [[ $CLIENT_SHA =~ $SHA_PATTERN ]] || return 1
 
-  "$SERVER_DIR/scripts/release/assemble_context.sh" \
-    "$SERVER_DIR" "$CLIENT_DIR" "$context_dir/release" \
-    "$SERVER_SHA" "$CLIENT_SHA" || return 1
+  assemble_release_context "$context_dir/release" || return 1
 
   IMAGE_TAG="$LOCAL_IMAGE_REPOSITORY:server-${SERVER_SHA:0:12}-client-${CLIENT_SHA:0:12}"
   docker build \

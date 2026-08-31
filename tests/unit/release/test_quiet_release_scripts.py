@@ -12,13 +12,46 @@ PRODUCTION = REPO_ROOT / "deploy" / "production"
 
 
 FAKE_GH = r"""#!/usr/bin/env python3
+import io
+import os
 import sys
+import tarfile
 
 args = sys.argv[1:]
+log_path = os.environ.get("FAKE_GH_LOG")
+if log_path:
+    with open(log_path, "a", encoding="utf-8") as stream:
+        stream.write(" ".join(args) + "\n")
 if args[:2] == ["auth", "status"]:
     raise SystemExit(0)
 elif args[:2] == ["auth", "setup-git"]:
     raise SystemExit(0)
+elif args[:1] == ["api"] and "/commits/main" in args[1]:
+    failures = int(os.environ.get("FAKE_GH_API_FAILURES", "0"))
+    counter_path = os.environ.get("FAKE_GH_API_COUNTER")
+    if counter_path:
+        counter = __import__("pathlib").Path(counter_path)
+        attempts = int(counter.read_text() or "0") if counter.exists() else 0
+        counter.write_text(str(attempts + 1))
+        if attempts < failures:
+            raise SystemExit(1)
+    print(("c" if "dclaw-server" in args[1] else "d") * 40)
+elif args[:1] == ["api"] and "/tarball/" in args[1]:
+    server = "dclaw-server" in args[1]
+    files = (
+        {"deploy/Dockerfile": b"FROM scratch\n"}
+        if server
+        else {
+            "console/package.json": b"{}\n",
+            "console/package-lock.json": b"{}\n",
+            "website/public/docs/index.md": b"docs\n",
+        }
+    )
+    with tarfile.open(fileobj=sys.stdout.buffer, mode="w:gz") as archive:
+        for name, content in files.items():
+            info = tarfile.TarInfo("snapshot/" + name)
+            info.size = len(content)
+            archive.addfile(info, io.BytesIO(content))
 else:
     raise SystemExit(f"unexpected gh call: {args}")
 """
@@ -109,7 +142,7 @@ def test_build_release_uses_one_local_build_path_without_actions() -> None:
 
     assert "gh workflow run" not in text
     assert "gh run watch" not in text
-    assert "scripts/release/assemble_context.sh" in text
+    assert '"repos/$repository/tarball/$revision"' in text
     assert "docker build" in text
     assert "DCLAW_LOCAL_IMAGE_REPOSITORY:-dclaw-local" in text
     assert 'IMAGE_TAG="$LOCAL_IMAGE_REPOSITORY:server-' in text
@@ -123,11 +156,13 @@ def test_build_release_waits_silently_and_pins_both_main_revisions(
     _write_fake_commands(fake_bin)
     deploy_root = tmp_path / "deploy"
     git_log = tmp_path / "git.log"
+    gh_log = tmp_path / "gh.log"
     environment = {
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "DCLAW_DEPLOY_ROOT": str(deploy_root),
         "FAKE_GIT_LOG": str(git_log),
+        "FAKE_GH_LOG": str(gh_log),
     }
 
     result = subprocess.run(
@@ -157,10 +192,10 @@ def test_build_release_waits_silently_and_pins_both_main_revisions(
     assert pending["IMAGE_ID"] == "sha256:" + "2" * 64
     detail = Path(pending["BUILD_LOG"])
     assert "local docker build output" in detail.read_text()
-    calls = git_log.read_text()
-    assert "remote set-url origin https://github.com/51taichi/dclaw-server.git" in calls
-    assert "ls-remote https://github.com/51taichi/dclaw-server.git refs/heads/main" in calls
-    assert f"fetch --force --prune origin {'c' * 40}" in calls
+    calls = gh_log.read_text()
+    assert "api repos/51taichi/dclaw-server/commits/main --jq .sha" in calls
+    assert f"api repos/51taichi/dclaw-server/tarball/{'c' * 40}" in calls
+    assert not git_log.exists() or "ls-remote" not in git_log.read_text()
 
 
 def test_build_failure_never_writes_a_deployable_release(
@@ -191,19 +226,19 @@ def test_build_failure_never_writes_a_deployable_release(
     assert not (deploy_root / "pending-release.env").exists()
 
 
-def test_build_release_retries_transient_remote_lookup_failures(
+def test_build_release_retries_transient_github_api_failures(
     tmp_path: Path,
 ) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     _write_fake_commands(fake_bin)
-    counter = tmp_path / "ls-remote-attempts"
+    counter = tmp_path / "github-api-attempts"
     environment = {
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "DCLAW_DEPLOY_ROOT": str(tmp_path / "deploy"),
-        "FAKE_GIT_LS_REMOTE_FAILURES": "2",
-        "FAKE_GIT_LS_REMOTE_COUNTER": str(counter),
+        "FAKE_GH_API_FAILURES": "2",
+        "FAKE_GH_API_COUNTER": str(counter),
         "DCLAW_BUILD_RETRY_DELAY_SECONDS": "0",
     }
 
