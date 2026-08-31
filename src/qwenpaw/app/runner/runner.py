@@ -419,8 +419,16 @@ class AgentRunner(Runner):
                 "channel": channel,
                 "agent_id": self.agent_id,
                 "root_agent_id": self.agent_id,
+                "metadata": {},
             }
             if str(channel).startswith("open:"):
+                from ..sealed_agents.request_context import (
+                    normalize_untrusted_metadata,
+                )
+
+                base_request_context["metadata"] = normalize_untrusted_metadata(
+                    channel_meta.get("metadata"),
+                )
                 knowledge_base_id = str(
                     channel_meta.get("knowledge_base_id") or "",
                 ).strip()
@@ -430,6 +438,17 @@ class AgentRunner(Runner):
             payload_context = getattr(request, "request_context", None)
             if isinstance(payload_context, dict):
                 base_request_context.update(payload_context)
+            # Caller-controlled context may add namespaced values but cannot
+            # replace the server-resolved execution and billing identity.
+            base_request_context.update(
+                {
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "channel": channel,
+                    "agent_id": self.agent_id,
+                    "root_agent_id": self.agent_id,
+                },
+            )
 
             # Extract root_session_id from request payload (agent chat)
             payload_root_session = getattr(request, "root_session_id", "")
