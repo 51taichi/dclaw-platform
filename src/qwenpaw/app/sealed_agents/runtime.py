@@ -6,7 +6,6 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .adapters import get_runtime_adapter
 from .registry import SealedAgentRegistry
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
@@ -58,6 +57,8 @@ def resolve_pinned_runtime(
     agent_id: str,
     registry: SealedAgentRegistry,
 ) -> PinnedSealedRuntime | None:
+    from .adapters import get_runtime_adapter
+
     record = registry.get_agent(agent_id)
     if record is None:
         return None
@@ -89,6 +90,31 @@ def resolve_pinned_runtime(
         adapter_key=adapter_key,
         failure_policy=failure_policy,
     )
+
+
+def resolve_pinned_release(
+    agent_id: str,
+    release_id: str,
+    registry: SealedAgentRegistry,
+) -> PinnedSealedRuntime:
+    record = registry.get_agent(agent_id)
+    if record is None:
+        raise SealedRuntimeError("sealed agent is unavailable")
+    if release_id not in {item.release_id for item in record.releases}:
+        raise SealedRuntimeError("sealed runtime release is unavailable")
+    pinned_record = record.model_copy(update={"active_release_id": release_id})
+
+    class _PinnedRegistry:
+        root = registry.root
+
+        @staticmethod
+        def get_agent(candidate: str):
+            return pinned_record if candidate == agent_id else None
+
+    pinned = resolve_pinned_runtime(agent_id, _PinnedRegistry())  # type: ignore[arg-type]
+    if pinned is None:
+        raise SealedRuntimeError("sealed runtime release is unavailable")
+    return pinned
 
 
 def create_runtime_context(

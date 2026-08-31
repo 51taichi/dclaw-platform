@@ -8,6 +8,7 @@ from qwenpaw.app.sealed_agents.runtime import (
     SealedRuntimeError,
     create_runtime_context,
     resolve_pinned_runtime,
+    resolve_pinned_release,
 )
 from qwenpaw.app.sealed_agents.models import SealedAgentRecord, SealedReleaseRecord
 from qwenpaw.app.sealed_agents.registry import SealedAgentRegistry
@@ -70,6 +71,24 @@ def test_harness_release_identity_is_copied_not_live(tmp_path):
     assert pinned is not None
     assert pinned.release_id == "old-release"
     assert pinned.content_digest == f"sha256:{'a' * 64}"
+
+
+def test_explicit_release_pin_survives_active_release_switch(tmp_path):
+    registry = SealedAgentRegistry(tmp_path)
+    old = _release("old-release", adapter="sealed_harness")
+    new = _release("new-release", adapter="sealed_harness")
+    registry.upsert_agent(
+        SealedAgentRecord(
+            agent_id="sealed",
+            name="Sealed",
+            active_release_id=new.release_id,
+            releases=[old, new],
+        ),
+    )
+
+    pinned = resolve_pinned_release("sealed", old.release_id, registry)
+
+    assert pinned.release_id == "old-release"
 
 
 def test_entrypoint_escape_is_rejected_when_pinning(tmp_path):

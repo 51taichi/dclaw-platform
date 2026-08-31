@@ -156,6 +156,7 @@ def _command(
     mode: str = "shadow",
     budget_credits: int = 0,
     payload: dict | None = None,
+    sealed_runtime: dict[str, str] | None = None,
 ) -> OpenApiBillingCommand:
     return OpenApiBillingCommand(
         app_id=app_id,
@@ -169,6 +170,7 @@ def _command(
         idempotency_key=key,
         mode=mode,
         budget_credits=budget_credits,
+        sealed_runtime=sealed_runtime,
     )
 
 
@@ -268,6 +270,31 @@ def test_same_key_and_canonical_payload_replays_existing_pair(
         )
     assert "first message" not in snapshot
     assert json.loads(snapshot)["request_sha256"]
+
+
+def test_sealed_runtime_identity_is_audited_but_not_priced(coordinator, engine):
+    identity = {
+        "release_id": "release-1",
+        "version": "3.7.1",
+        "content_digest": f"sha256:{'a' * 64}",
+        "adapter": "sealed_harness",
+        "contract_version": "1",
+    }
+
+    session = coordinator.begin_invocation(
+        _command(key="sealed-audit", sealed_runtime=identity),
+    )
+
+    with engine.connect() as conn:
+        snapshot = json.loads(
+            conn.scalar(
+                select(billing_usage_orders.c.request_snapshot_json).where(
+                    billing_usage_orders.c.id == session.usage_order_id,
+                ),
+            ),
+        )
+    assert snapshot["sealed_runtime"] == identity
+    assert "credits" not in snapshot["sealed_runtime"]
 
 
 def test_request_without_client_key_creates_distinct_invocation_pairs(

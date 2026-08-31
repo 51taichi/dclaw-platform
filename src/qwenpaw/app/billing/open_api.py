@@ -64,6 +64,7 @@ class OpenApiBillingCommand:
     chat_id: str | None = None
     mode: BillingMode = "shadow"
     budget_credits: int = 0
+    sealed_runtime: Mapping[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -134,6 +135,7 @@ class OpenApiBillingCoordinator:
                         "billing_mode": billing_mode,
                         "client_idempotency_key": normalized.idempotency_key,
                         "request_sha256": payload_hash,
+                        "sealed_runtime": normalized.sealed_runtime,
                     },
                     ensure_ascii=False,
                     sort_keys=True,
@@ -379,7 +381,26 @@ def _normalize_command(
         chat_id=_optional_text(command.chat_id),
         mode=mode,  # type: ignore[arg-type]
         budget_credits=command.budget_credits,
+        sealed_runtime=_normalize_sealed_runtime(command.sealed_runtime),
     )
+
+
+def _normalize_sealed_runtime(
+    value: Mapping[str, str] | None,
+) -> dict[str, str] | None:
+    if value is None:
+        return None
+    required = (
+        "release_id",
+        "version",
+        "content_digest",
+        "adapter",
+        "contract_version",
+    )
+    normalized = {key: str(value.get(key) or "").strip() for key in required}
+    if not all(normalized.values()):
+        raise ValueError("sealed runtime audit identity is incomplete")
+    return normalized
 
 
 def _business_key(command: OpenApiBillingCommand) -> str | None:

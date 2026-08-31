@@ -42,6 +42,7 @@ from ..open_api.runtime import (
     prepare_open_expert_team_chat,
 )
 from ..sealed_agents.registry import get_sealed_agent_registry
+from ..sealed_agents.runtime import resolve_pinned_runtime
 from ..storage.repos.open_api_repo import get_open_api_repository
 from ..task_limits import get_task_limiter
 
@@ -95,6 +96,25 @@ async def post_open_message(
                 status_code=503,
                 detail="Sealed agent target is unavailable",
             )
+    pinned_runtime = (
+        resolve_pinned_runtime(
+            str(publication["target_id"]),
+            get_sealed_agent_registry(),
+        )
+        if sealed_target
+        else None
+    )
+    sealed_runtime_audit = (
+        {
+            "release_id": pinned_runtime.release_id,
+            "version": pinned_runtime.version,
+            "content_digest": pinned_runtime.content_digest,
+            "adapter": pinned_runtime.adapter_key[0],
+            "contract_version": pinned_runtime.adapter_key[1],
+        }
+        if pinned_runtime is not None
+        else None
+    )
 
     if payload.stream is False:
         raise HTTPException(
@@ -127,6 +147,7 @@ async def post_open_message(
                 idempotency_key=request.headers.get("Idempotency-Key"),
                 mode=billing.mode,  # type: ignore[arg-type]
                 budget_credits=billing.budget_credits,
+                sealed_runtime=sealed_runtime_audit,
             ),
         )
     except IdempotencyConflictError:
@@ -204,6 +225,7 @@ async def post_open_message(
                 request,
                 publication,
                 payload,
+                sealed_runtime=sealed_runtime_audit,
             )
             stream_fn = prepared.console_channel.stream_one
             stream_payload = prepared.payload
