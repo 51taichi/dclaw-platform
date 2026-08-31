@@ -66,6 +66,10 @@ class SealedReleaseRecord(BaseModel):
     version: str
     content_digest: str
     signer_id: str
+    entrypoint: str | None = None
+    runtime_adapter: str | None = None
+    runtime_contract_version: str | None = None
+    runtime_failure_policy: Literal["fail_closed"] | None = None
     state: Literal[
         "uploaded",
         "validating",

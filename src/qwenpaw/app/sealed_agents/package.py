@@ -14,14 +14,14 @@ import tempfile
 import unicodedata
 import zipfile
 from pathlib import Path, PurePosixPath
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 MAX_PACKAGE_BYTES = 200 * 1024 * 1024
 MAX_EXPANDED_BYTES = 400 * 1024 * 1024
@@ -42,6 +42,19 @@ class PublicMetadata(BaseModel):
     tags: list[str] = Field(default_factory=list, max_length=50)
 
 
+class SealedRuntimeDeclaration(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    adapter: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    contract_version: str = Field(pattern=r"^[1-9][0-9]{0,7}$")
+    failure_policy: Literal["fail_closed"] = "fail_closed"
+
+    @field_validator("adapter", "contract_version", mode="before")
+    @classmethod
+    def normalize_identifier(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
 class SealedPackageManifest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -53,12 +66,15 @@ class SealedPackageManifest(BaseModel):
     scope: str
     entrypoint: str
     public_metadata: PublicMetadata = Field(default_factory=PublicMetadata)
+    runtime: SealedRuntimeDeclaration | None = None
     signer_id: str = Field(pattern=r"^[A-Za-z0-9_.-]{1,128}$")
     content_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
 
     def validate_supported_contract(self) -> None:
-        if self.schema_version != 1:
+        if self.schema_version not in {1, 2}:
             raise ValueError("unsupported schema version")
+        if self.schema_version == 1 and self.runtime is not None:
+            raise ValueError("schema version 1 cannot declare runtime")
         if self.agent_type != "sealed" or self.scope != "global":
             raise ValueError("only sealed global agents are supported")
         entrypoint = _normalize_member_path(self.entrypoint)

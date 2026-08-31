@@ -13,9 +13,16 @@ from qwenpaw.app.sealed_agents.service import (
 )
 
 
-def _package(private, *, version="1.0.0", agent_id="luyu"):
+def _package(
+    private,
+    *,
+    version="1.0.0",
+    agent_id="luyu",
+    schema_version=1,
+    runtime=None,
+):
     manifest = {
-        "schema_version": 1,
+        "schema_version": schema_version,
         "agent_id": agent_id,
         "name": "陆羽",
         "version": version,
@@ -25,6 +32,8 @@ def _package(private, *, version="1.0.0", agent_id="luyu"):
         "public_metadata": {"description": "茶文化专家"},
         "signer_id": "publisher",
     }
+    if runtime is not None:
+        manifest["runtime"] = runtime
     files = {
         "agent/agent.json": json.dumps(
             {"id": agent_id, "name": "陆羽", "description": "internal"},
@@ -55,6 +64,32 @@ def test_install_creates_ready_immutable_release_without_activating(tmp_path):
     assert len(agent.releases) == 1
     release_root = service.release_root("luyu", release.release_id)
     assert (release_root / "agent/AGENTS.md").read_bytes() == b"private"
+    assert release.entrypoint == "agent/agent.json"
+    assert release.runtime_adapter is None
+    assert release.runtime_contract_version is None
+    assert release.runtime_failure_policy is None
+
+
+def test_install_persists_signed_runtime_contract(tmp_path):
+    private = Ed25519PrivateKey.generate()
+    service = _service(tmp_path, private.public_key())
+
+    release = service.install(
+        _package(
+            private,
+            schema_version=2,
+            runtime={
+                "adapter": "sealed_harness",
+                "contract_version": "1",
+                "failure_policy": "fail_closed",
+            },
+        ),
+    )
+
+    assert release.entrypoint == "agent/agent.json"
+    assert release.runtime_adapter == "sealed_harness"
+    assert release.runtime_contract_version == "1"
+    assert release.runtime_failure_policy == "fail_closed"
 
 
 def test_activate_switches_atomically_after_reload_succeeds(tmp_path):

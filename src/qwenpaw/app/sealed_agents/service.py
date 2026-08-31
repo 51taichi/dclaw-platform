@@ -81,6 +81,14 @@ class SealedAgentService:
             version=manifest.version,
             content_digest=manifest.content_digest,
             signer_id=manifest.signer_id,
+            entrypoint=manifest.entrypoint,
+            runtime_adapter=(manifest.runtime.adapter if manifest.runtime else None),
+            runtime_contract_version=(
+                manifest.runtime.contract_version if manifest.runtime else None
+            ),
+            runtime_failure_policy=(
+                manifest.runtime.failure_policy if manifest.runtime else None
+            ),
             state="ready",
         )
         destination = self.release_root(manifest.agent_id, release.release_id)
