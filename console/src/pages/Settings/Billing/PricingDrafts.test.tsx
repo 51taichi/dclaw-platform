@@ -89,7 +89,11 @@ describe("PricingDrafts", () => {
       />,
     );
 
-    await user.click(screen.getByText("本次不发布"));
+    const publicationSwitch = screen.getByRole("switch", {
+      name: "Qwen Plus 本次发布",
+    });
+    expect(publicationSwitch).toBeChecked();
+    await user.click(publicationSwitch);
     await user.type(screen.getByLabelText("发布决策原因"), "本次暂缓");
     await user.click(screen.getByText("保存发布状态"));
 

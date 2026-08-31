@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Button, Input, Modal, Space, Table, Tag } from "antd";
+import { Button, Input, Modal, Space, Switch, Table, Tag } from "antd";
 import type {
   PricingCatalogSummary,
   PricingDraft,
@@ -196,90 +196,79 @@ export default function PricingDrafts({
                       candidate.model_key === row.model_key,
                   ) === index;
                 if (!firstModelRow) return null;
-                if (row.include_in_publish)
-                  return (
-                    <Space direction="vertical" size={0}>
-                      <Tag color="green">本次发布</Tag>
-                      <Button
-                        type="link"
-                        disabled={!canMutate}
-                        onClick={() => {
-                          setDecision({
-                            providerId: row.provider_id,
-                            modelKey: row.model_key,
-                            includeInPublish: false,
-                            requiresReason: false,
-                          });
-                          setDecisionReason("");
-                        }}
-                      >
-                        本次不发布
-                      </Button>
-                    </Space>
-                  );
                 if (row.exclusion_reason)
                   return (
-                    <Button
-                      type="link"
-                      disabled={!canMutate}
-                      onClick={() =>
-                        void onExclusion?.(
-                          row.provider_id,
-                          row.model_key,
-                          false,
-                          null,
-                        )
-                      }
-                    >
-                      已排除：{row.exclusion_reason}（恢复）
-                    </Button>
+                    <Space direction="vertical" size={4}>
+                      <Switch
+                        aria-label={`${row.model_name} 本次发布`}
+                        checked={false}
+                        checkedChildren="本次发布"
+                        unCheckedChildren="本次不发布"
+                        disabled={!canMutate}
+                        onChange={() =>
+                          void onExclusion?.(
+                            row.provider_id,
+                            row.model_key,
+                            false,
+                            null,
+                          )
+                        }
+                      />
+                      <Tag>已排除：{row.exclusion_reason}</Tag>
+                    </Space>
                   );
                 return (
-                  <Space direction="vertical" size={0}>
-                    <Tag>本次不发布</Tag>
-                    <Button
-                      type="link"
+                  <Space direction="vertical" size={4}>
+                    <Switch
+                      aria-label={`${row.model_name} 本次发布`}
+                      checked={row.include_in_publish}
+                      checkedChildren="本次发布"
+                      unCheckedChildren="本次不发布"
                       disabled={!canMutate}
-                      onClick={() => {
+                      onChange={(includeInPublish) => {
                         setDecision({
                           providerId: row.provider_id,
                           modelKey: row.model_key,
-                          includeInPublish: true,
+                          includeInPublish,
                           requiresReason:
+                            includeInPublish &&
                             row.evidence_level !== "official_verified",
                         });
                         setDecisionReason("");
                       }}
-                    >
-                      本次发布
-                    </Button>
-                    <Button
-                      type="link"
-                      disabled={!canMutate}
-                      onClick={() => {
-                        setMapping({
-                          providerId: row.provider_id,
-                          modelKey: row.model_key,
-                          officialProviderId: row.official_provider_id ?? "",
-                          officialModelId: row.official_model_id ?? "",
-                        });
-                      }}
-                    >
-                      配置官方精确映射
-                    </Button>
-                    <Button
-                      type="link"
-                      disabled={!canMutate}
-                      onClick={() => {
-                        setPending({
-                          providerId: row.provider_id,
-                          modelKey: row.model_key,
-                        });
-                        setReason("");
-                      }}
-                    >
-                      填写原因并排除
-                    </Button>
+                    />
+                    {!row.include_in_publish ? (
+                      <>
+                        <Button
+                          type="link"
+                          disabled={!canMutate}
+                          onClick={() => {
+                            setMapping({
+                              providerId: row.provider_id,
+                              modelKey: row.model_key,
+                              officialProviderId:
+                                row.official_provider_id ?? "",
+                              officialModelId: row.official_model_id ?? "",
+                            });
+                          }}
+                        >
+                          配置官方精确映射
+                        </Button>
+                        <Button
+                          type="link"
+                          disabled={!canMutate}
+                          onClick={() => {
+                            setPending({
+                              providerId: row.provider_id,
+                              modelKey: row.model_key,
+                            });
+                            setReason("");
+                          }}
+                        >
+                          填写原因并排除
+                        </Button>
+                      </>
+                    ) : null}
                   </Space>
                 );
               },
