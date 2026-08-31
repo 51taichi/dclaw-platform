@@ -319,15 +319,10 @@ class AgentRunner(Runner):
         query = _get_last_user_text(msgs)
         session_id = getattr(request, "session_id", "") or ""
         from ..sealed_agents.registry import get_sealed_agent_registry
-        from ..sealed_agents.runtime import resolve_pinned_runtime
 
         sealed_registry = get_sealed_agent_registry()
         sealed_runtime = sealed_registry.is_sealed(self.agent_id)
-        pinned_sealed_runtime = (
-            resolve_pinned_runtime(self.agent_id, sealed_registry)
-            if sealed_runtime
-            else None
-        )
+        pinned_sealed_runtime = None
 
         # Check if query is a command (including /approval)
         logger.debug(f"Query: {query!r}, is_command: {_is_command(query)}")
@@ -387,6 +382,28 @@ class AgentRunner(Runner):
             if not isinstance(channel_meta, dict):
                 channel_meta = {}
             user_name = channel_meta.get("user_name")
+            if sealed_runtime:
+                from ..sealed_agents.runtime import (
+                    resolve_pinned_release,
+                    resolve_pinned_runtime,
+                )
+
+                sealed_snapshot = channel_meta.get("sealed_runtime")
+                if (
+                    str(channel).startswith("open:")
+                    and isinstance(sealed_snapshot, dict)
+                    and str(sealed_snapshot.get("release_id") or "").strip()
+                ):
+                    pinned_sealed_runtime = resolve_pinned_release(
+                        self.agent_id,
+                        str(sealed_snapshot["release_id"]),
+                        sealed_registry,
+                    )
+                else:
+                    pinned_sealed_runtime = resolve_pinned_runtime(
+                        self.agent_id,
+                        sealed_registry,
+                    )
 
             # Load agent-specific configuration
             agent_config = load_agent_config(self.agent_id)
