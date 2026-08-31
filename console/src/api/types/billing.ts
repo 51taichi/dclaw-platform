@@ -95,6 +95,7 @@ export interface BillingUsageItem {
 
 export interface BillingUsageOrder {
   id: string;
+  owner_user_id?: string;
   source: BillingUsageSource;
   expert: string | null;
   expert_team: string | null;
@@ -118,6 +119,10 @@ export interface BillingUsageOrder {
   tokens: { input: number; output: number };
   created_at: string;
   updated_at: string;
+  publication?: { id: string; name: string };
+  application?: { id: string; name: string };
+  invocation_id?: string | null;
+  api_key_id?: string | null;
   items?: BillingUsageItem[];
 }
 

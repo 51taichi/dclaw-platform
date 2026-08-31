@@ -248,7 +248,7 @@ export const billingApi = {
       headers: pricingHeaders(token),
     }),
   listAdminUsage: (params: Record<string, string | number | undefined> = {}) =>
-    request<Page<Record<string, unknown>>>(
+    request<Page<BillingUsageOrder>>(
       `/admin/billing/usage-orders${query(params)}`,
     ),
   listReconciliation: () =>
