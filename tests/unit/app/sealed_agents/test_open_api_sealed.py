@@ -57,3 +57,12 @@ def test_sealed_stream_serializer_allows_text_and_hides_internal_events():
         "error": "sealed_agent_failed",
     }
     assert "/private" not in sanitized_error
+
+
+def test_sealed_stream_serializer_allows_null_error_on_success_event():
+    completed = (
+        'data: {"type":"response.completed","error":null,'
+        '"response":{"status":"completed"}}\n\n'
+    )
+
+    assert open_api._sanitize_sealed_stream_event(completed) == completed

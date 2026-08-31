@@ -1052,7 +1052,7 @@ def _sanitize_sealed_stream_event(event_data: str) -> str | None:
             return None
         if not isinstance(payload, dict):
             return None
-        if "error" in payload:
+        if payload.get("error") is not None:
             return _sealed_failure_event()
         if payload.get("type") not in _SEALED_PUBLIC_EVENT_TYPES:
             return None
