@@ -1054,10 +1054,42 @@ def _sanitize_sealed_stream_event(event_data: str) -> str | None:
             return None
         if payload.get("error") is not None:
             return _sealed_failure_event()
+        native_text = _sealed_native_assistant_text(payload)
+        if native_text is not None:
+            return _sse(
+                {
+                    "type": "response.output_text.delta",
+                    "delta": native_text,
+                },
+            )
         if payload.get("type") not in _SEALED_PUBLIC_EVENT_TYPES:
             return None
         return f"data: {raw}\n\n"
     return None
+
+
+def _sealed_native_assistant_text(payload: dict[str, Any]) -> str | None:
+    """Extract only public text from a completed native assistant message."""
+    if not (
+        payload.get("object") == "message"
+        and payload.get("type") == "message"
+        and payload.get("status") == "completed"
+        and payload.get("role") == "assistant"
+    ):
+        return None
+    content = payload.get("content")
+    if not isinstance(content, list):
+        return None
+    texts = [
+        part.get("text")
+        for part in content
+        if isinstance(part, dict)
+        and part.get("type") == "text"
+        and isinstance(part.get("text"), str)
+        and part.get("text")
+    ]
+    text = "".join(texts)
+    return text if text.strip() else None
 
 
 def _is_insufficient_terminal_event(event: Any) -> bool:

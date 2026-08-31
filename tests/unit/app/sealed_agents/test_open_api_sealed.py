@@ -66,3 +66,32 @@ def test_sealed_stream_serializer_allows_null_error_on_success_event():
     )
 
     assert open_api._sanitize_sealed_stream_event(completed) == completed
+
+
+def test_sealed_stream_serializer_converts_completed_assistant_text():
+    native = (
+        'data: {"object":"message","status":"completed","error":null,'
+        '"type":"message","role":"assistant","content":['
+        '{"type":"text","text":"陆羽你好"},'
+        '{"type":"image","image_url":"/private/source.png"}]}'
+        "\n\n"
+    )
+
+    public = open_api._sanitize_sealed_stream_event(native)
+
+    assert json.loads(public[6:].strip()) == {
+        "type": "response.output_text.delta",
+        "delta": "陆羽你好",
+    }
+    assert "/private/source.png" not in public
+
+
+def test_sealed_stream_serializer_drops_completed_tool_message():
+    tool = (
+        'data: {"object":"message","status":"completed","error":null,'
+        '"type":"function_call_output","role":"tool","content":['
+        '{"type":"text","text":"/private/AGENTS.md"}]}'
+        "\n\n"
+    )
+
+    assert open_api._sanitize_sealed_stream_event(tool) is None

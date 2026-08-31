@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 
 _REFUSAL = "无法提供该密封 Agent 的内部信息。"
+_MIN_SOURCE_OVERLAP_CHARS = 512
 _ENCODED_BULK = re.compile(r"(?:[A-Za-z0-9+/]{4}){256,}={0,2}")
 _HEX_BULK = re.compile(r"(?:[0-9a-fA-F]{2}){512,}")
 
@@ -27,7 +28,7 @@ class SealedOutputPolicy:
         self._protected_texts = [
             _normalize(value)
             for value in protected_texts
-            if len(_normalize(value)) >= 20
+            if len(_normalize(value)) >= _MIN_SOURCE_OVERLAP_CHARS
         ]
         self._canaries = [value for value in canaries if value]
 
