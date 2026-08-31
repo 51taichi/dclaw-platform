@@ -13,7 +13,7 @@ export default function PricingOverview({ value }: { value: Overview }) {
           type="error"
           showIcon
           message="尚无已发布价格目录"
-          description="请补齐可信人民币成本后生成首份价格草稿。"
+          description="请导出当前启用模型的价格清单，补齐可信人民币价格后导入、审核并发布。"
         />
       )}
       <Row gutter={16}>

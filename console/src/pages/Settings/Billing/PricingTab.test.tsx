@@ -12,11 +12,8 @@ vi.mock("../../../api/modules/billing", () => ({
     listPricingPolicies: vi.fn(),
     listPricingModelMappings: vi.fn(),
     generatePricingDraft: vi.fn(),
-    exportPricingDraft: vi.fn(),
+    exportPricing: vi.fn(),
     setPricingExclusion: vi.fn(),
-    refreshOfficialPricingCandidates: vi.fn(),
-    startPricingCollection: vi.fn(),
-    getPricingCollectionJob: vi.fn(),
     listPricingCollectionJobs: vi.fn(),
     savePricingModelMapping: vi.fn(),
   },
@@ -114,25 +111,54 @@ describe("PricingTab", () => {
     render(<PricingTab />);
 
     expect(await screen.findByText("尚未发布价格目录")).toBeInTheDocument();
-    expect(screen.getByText(/默认按官方成本的 1.5 倍/)).toBeInTheDocument();
-    expect(screen.getByText(/1 元人民币 = 100 积分/)).toBeInTheDocument();
+    expect(screen.getByText(/先导出价格清单/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/请导出当前启用模型的价格清单/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/先生成当前启用模型的价格草案/),
+    ).not.toBeInTheDocument();
   });
 
-  it("shows durable official price collection progress without unlock", async () => {
-    vi.mocked(billingApi.startPricingCollection).mockResolvedValue({
-      id: "job-1",
-      status: "pending",
-      progress: {},
-      items: [],
-    });
-    const user = userEvent.setup();
+  it("shows only the export-import-publish workflow", async () => {
     render(<PricingTab />);
 
-    await user.click(await screen.findByText("同步官网价格"));
+    expect(await screen.findByText("导出价格清单")).toBeInTheDocument();
+    expect(screen.getByText("导入Excel")).toBeInTheDocument();
+    expect(screen.queryByText("同步官网价格")).not.toBeInTheDocument();
+    expect(screen.queryByText("刷新官方候选")).not.toBeInTheDocument();
+    expect(screen.queryByText("生成价格草案")).not.toBeInTheDocument();
+    expect(screen.queryByText(/官网价格同步：/)).not.toBeInTheDocument();
+    expect(billingApi.listPricingCollectionJobs).not.toHaveBeenCalled();
+  });
 
-    expect(
-      await screen.findByText(/官网价格同步任务已提交/),
-    ).toBeInTheDocument();
-    expect(billingApi.startPricingCollection).toHaveBeenCalledOnce();
+  it("counts durable draft catalogs in the draft tab", async () => {
+    const overview = await vi.mocked(billingApi.getPricingOverview)();
+    vi.mocked(billingApi.getPricingOverview).mockResolvedValue({
+      ...overview,
+      catalogs: [
+        ...overview.catalogs,
+        {
+          id: "d1",
+          version: "draft-1",
+          status: "draft",
+          effective_at: "2026-08-31",
+          metadata: {},
+          rules: [],
+        },
+        {
+          id: "d2",
+          version: "draft-2",
+          status: "draft",
+          effective_at: "2026-08-31",
+          metadata: {},
+          rules: [],
+        },
+      ],
+    });
+
+    render(<PricingTab />);
+
+    expect(await screen.findByText("价格草稿 (2)")).toBeInTheDocument();
   });
 });
