@@ -49,6 +49,14 @@ if args[:2] == ["clone", "--no-checkout"]:
     else:
         (root / "console").mkdir()
 elif args[:1] == ["ls-remote"]:
+    failures = int(os.environ.get("FAKE_GIT_LS_REMOTE_FAILURES", "0"))
+    counter_path = os.environ.get("FAKE_GIT_LS_REMOTE_COUNTER")
+    if counter_path:
+        counter = Path(counter_path)
+        attempts = int(counter.read_text() or "0") if counter.exists() else 0
+        counter.write_text(str(attempts + 1))
+        if attempts < failures:
+            raise SystemExit(1)
     repository = args[1]
     print(("c" if "dclaw-server" in repository else "d") * 40 + "\trefs/heads/main")
 elif args[:1] == ["-C"]:
@@ -181,6 +189,35 @@ def test_build_failure_never_writes_a_deployable_release(
     assert result.stdout.startswith("BUILD_FAILED\n")
     assert "BUILD_SUCCESS" not in result.stdout
     assert not (deploy_root / "pending-release.env").exists()
+
+
+def test_build_release_retries_transient_remote_lookup_failures(
+    tmp_path: Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_commands(fake_bin)
+    counter = tmp_path / "ls-remote-attempts"
+    environment = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "DCLAW_DEPLOY_ROOT": str(tmp_path / "deploy"),
+        "FAKE_GIT_LS_REMOTE_FAILURES": "2",
+        "FAKE_GIT_LS_REMOTE_COUNTER": str(counter),
+        "DCLAW_BUILD_RETRY_DELAY_SECONDS": "0",
+    }
+
+    result = subprocess.run(
+        ["bash", str(PRODUCTION / "build-release.sh")],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.startswith("BUILD_SUCCESS\n")
+    assert int(counter.read_text()) >= 3
 
 
 def test_deploy_result_reports_only_the_saved_summary(tmp_path: Path) -> None:

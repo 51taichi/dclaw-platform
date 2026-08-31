@@ -6,6 +6,8 @@ SERVER_REPOSITORY=${DCLAW_SERVER_REPOSITORY:-https://github.com/51taichi/dclaw-s
 CLIENT_REPOSITORY=${DCLAW_CLIENT_REPOSITORY:-https://github.com/51taichi/dclaw-client.git}
 LOCAL_IMAGE_REPOSITORY=${DCLAW_LOCAL_IMAGE_REPOSITORY:-dclaw-local}
 SHA_PATTERN='^[0-9a-f]{40}$'
+BUILD_NETWORK_ATTEMPTS=${DCLAW_BUILD_NETWORK_ATTEMPTS:-3}
+BUILD_RETRY_DELAY_SECONDS=${DCLAW_BUILD_RETRY_DELAY_SECONDS:-5}
 
 fail() {
   echo "BUILD_FAILED"
@@ -34,6 +36,22 @@ chmod 700 "$context_dir"
 SERVER_DIR="$DEPLOY_ROOT/build-sources/server"
 CLIENT_DIR="$DEPLOY_ROOT/build-sources/client"
 
+retry_network_command() {
+  local attempt=1
+  while true; do
+    if "$@"; then
+      return 0
+    fi
+    if ((attempt >= BUILD_NETWORK_ATTEMPTS)); then
+      return 1
+    fi
+    printf 'network command failed; retrying (%s/%s): %s\n' \
+      "$attempt" "$BUILD_NETWORK_ATTEMPTS" "$*" >&2
+    sleep "$BUILD_RETRY_DELAY_SECONDS"
+    attempt=$((attempt + 1))
+  done
+}
+
 sync_checkout() {
   local repository=$1
   local directory=$2
@@ -43,9 +61,11 @@ sync_checkout() {
   fi
   git -C "$directory" remote set-url origin "$repository"
   local revision
-  revision=$(git ls-remote "$repository" refs/heads/main | awk 'NR == 1 { print $1 }')
+  revision=$(retry_network_command git ls-remote \
+    "$repository" refs/heads/main | awk 'NR == 1 { print $1 }')
   [[ $revision =~ $SHA_PATTERN ]] || return 1
-  git -C "$directory" fetch --force --prune origin "$revision"
+  retry_network_command git -C "$directory" fetch \
+    --force --prune origin "$revision"
   git -C "$directory" checkout --detach --force "$revision"
   test "$(git -C "$directory" rev-parse HEAD)" = "$revision" || return 1
   printf '%s\n' "$revision"
