@@ -40,14 +40,16 @@ Existing funded credit lots remain non-negative and retain their expiry,
 promotion, package, release, and allocation semantics. Debt is not represented
 as a fabricated credit lot and cannot expire.
 
-The public net balance is:
+The public net available balance is:
 
 ```
-net_available = available_credits - debt_credits
+net_available = available_credits - debt_credits - held_overdraft_credits
 ```
 
 The wallet response adds explicit `debt` and `held_overdraft` values while its
-customer-facing available value is the signed `net_available`. Internal code
+customer-facing available value is the signed `net_available`. This makes an
+in-flight overdraft reservation visible immediately and keeps capture
+balance-neutral until the final charged amount is known. Internal code
 that allocates funded lots continues to use the stored non-negative funded
 `available_credits` projection.
 
