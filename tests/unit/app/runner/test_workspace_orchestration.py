@@ -606,6 +606,46 @@ async def test_runner_adapter_executes_internal_candidate_without_streaming(tmp_
 
 
 @pytest.mark.asyncio
+async def test_server_owned_platform_events_reach_the_workspace_runtime(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _write_runtime(
+        workspace,
+        """
+        class Runtime:
+            async def handle(self, request, host):
+                events = request.safe_metadata.get("platformEvents", [])
+                await host.call("runtime.complete", {
+                    "invocation_id": request.invocation_id,
+                    "message": {"reply": events[0]["event_id"]},
+                })
+        def create_runtime(): return Runtime()
+        """,
+    )
+    authorization = AuthorizedWorkspaceRelease(
+        installation_id="installation-1",
+        release_id="release-1",
+        release_digest=f"sha256:{'a' * 64}",
+        granted_capabilities={capability: "1" for capability in HOST_CAPABILITIES_V1},
+        signed_workspace_files=frozenset({"runtime.py"}),
+    )
+
+    result = await run_workspace_orchestration_turn(
+        agent=lambda _messages: None,
+        original_messages=[Msg(name="user", role="user", content="continue")],
+        request=SimpleNamespace(session_id="session-1", user_id="user-1", channel="console"),
+        agent_id="generic-agent",
+        workspace_root=workspace,
+        state_storage_root=tmp_path / "state-store",
+        config=OrchestrationConfig.model_validate(_orchestration()),
+        authorization=authorization,
+        safe_metadata={"platformEvents": [{"event_id": "event-1"}]},
+    )
+
+    assert result.message == {"reply": "event-1"}
+
+
+@pytest.mark.asyncio
 async def test_official_signed_non_luyu_fixture_uses_the_generic_protocol(tmp_path):
     fixture = (
         Path(__file__).parents[3]

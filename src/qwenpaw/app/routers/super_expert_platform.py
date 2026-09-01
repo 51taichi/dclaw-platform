@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
+from agentscope.message import Msg
 from pydantic import BaseModel, ConfigDict, Field
 
 from qwenpaw.constant import WORKING_DIR
@@ -73,6 +75,17 @@ class SuperExpertPlatformService:
     def get_task(self, material_task_id: str):
         return self.task_repository.get(material_task_id)
 
+    def list_session_events(
+        self,
+        *,
+        installation_id: str,
+        conversation_id: str,
+    ):
+        return self.event_repository.list_for_session(
+            installation_id=installation_id,
+            conversation_id=conversation_id,
+        )
+
     async def execute(
         self,
         *,
@@ -115,6 +128,10 @@ class SuperExpertPlatformService:
             raise SuperExpertPlatformError(str(exc)) from exc
         task = result.get("task")
         asset_id = task.asset_id if task is not None else arguments.get("asset_id")
+        event_payload = dict(result.get("payload", {}))
+        if task is not None:
+            event_payload["task_status"] = task.status.value
+            event_payload["task_version"] = task.version
         envelope = SuperExpertEventEnvelope(
             event_id=event_id,
             installation_id=binding.installation_id,
@@ -126,7 +143,7 @@ class SuperExpertPlatformService:
             node_id=binding.node_id,
             asset_id=asset_id,
             event_type=_EVENT_TYPES[capability],
-            payload=result.get("payload", {}),
+            payload=event_payload,
         )
         if self.event_repository.append(envelope):
             await self.event_bus.publish(
@@ -276,8 +293,9 @@ async def execute_super_expert_command(
     if not conversation_id:
         raise HTTPException(status_code=400, detail="command binding is invalid")
     ensure_chat_access(request, conversation_id, allow_admin=True)
+    service = get_super_expert_platform_service()
     try:
-        return await get_super_expert_platform_service().execute(
+        result = await service.execute(
             tenant_id=tenant_id,
             installation_id=command.installation_id,
             capability=capability,
@@ -285,5 +303,93 @@ async def execute_super_expert_command(
             arguments=command.arguments,
             idempotency_key=command.idempotency_key,
         )
+        if capability == "aigc.asset.submit":
+            result["agent_review"] = await _dispatch_agent_asset_review(
+                request,
+                service=service,
+                installation_id=command.installation_id,
+                binding=AigcTaskBinding.model_validate(binding),
+                asset_id=str(command.arguments.get("asset_id") or ""),
+            )
+            reviewed_task = service.get_task(
+                AigcTaskBinding.model_validate(binding).material_task_id,
+            )
+            if reviewed_task is not None:
+                result["task"] = reviewed_task
+        return result
     except SuperExpertPlatformError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+async def _dispatch_agent_asset_review(
+    request: Request,
+    *,
+    service: SuperExpertPlatformService,
+    installation_id: str,
+    binding: AigcTaskBinding,
+    asset_id: str,
+) -> dict[str, Any]:
+    """Run a generic platform-originated Agent turn while the customer stays in AIGC."""
+    grant = service.grant_repository.get(installation_id)
+    if grant is None:
+        raise SuperExpertPlatformError("installation grant is unavailable")
+    if not asset_id:
+        raise SuperExpertPlatformError("submitted asset is unavailable")
+    try:
+        from .aigc_studio import resolve_owned_asset_for_agent_review
+
+        media_block = await resolve_owned_asset_for_agent_review(
+            request,
+            asset_id,
+            canvas_id=binding.canvas_id,
+            node_id=binding.node_id,
+        )
+        manager = request.app.state.multi_agent_manager
+        workspace = await manager.get_agent(grant.agent_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise SuperExpertPlatformError("agent review dispatch is unavailable") from exc
+
+    user_id = str(getattr(request.state, "user_id", "platform-user") or "platform-user")
+    turn_request = SimpleNamespace(
+        session_id=binding.conversation_id,
+        user_id=user_id,
+        channel="platform:aigc-review",
+        tenant_id=grant.tenant_id,
+        channel_meta={},
+        request_context={"platform_event": "aigc.asset.submitted"},
+        root_session_id=binding.conversation_id,
+    )
+    messages = [
+        Msg(
+            name="user",
+            role="user",
+            content=[
+                {
+                    "type": "text",
+                    "text": (
+                        "当前绑定的 DClaw AIGC 素材已由客户明确提交。"
+                        "请在当前审核阶段读取附件并完成审核；只输出一个当前结论和一个下一步动作。"
+                    ),
+                },
+                media_block,
+            ],
+        )
+    ]
+    final_message: Msg | None = None
+    try:
+        async for message, is_last in workspace.runner.query_handler(
+            messages,
+            turn_request,
+        ):
+            if is_last:
+                final_message = message
+    except Exception as exc:
+        raise SuperExpertPlatformError("agent review dispatch failed") from exc
+    if final_message is None:
+        raise SuperExpertPlatformError("agent review did not complete")
+    reply = final_message.get_text_content()
+    if not isinstance(reply, str) or not reply.strip():
+        raise SuperExpertPlatformError("agent review result is invalid")
+    return {"status": "completed", "reply": reply}

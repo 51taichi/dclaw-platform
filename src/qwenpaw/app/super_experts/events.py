@@ -63,6 +63,23 @@ class SuperExpertEventRepository:
         with self._lock:
             return self._read().events.get(event_id)
 
+    def list_for_session(
+        self,
+        *,
+        installation_id: str,
+        conversation_id: str,
+    ) -> tuple[SuperExpertEventEnvelope, ...]:
+        """Return the append-ordered event stream for one trusted binding scope."""
+        if not installation_id or not conversation_id:
+            return ()
+        with self._lock:
+            return tuple(
+                event
+                for event in self._read().events.values()
+                if event.installation_id == installation_id
+                and event.conversation_id == conversation_id
+            )
+
     def _read(self) -> _EventDocument:
         if not self.path.exists():
             return _EventDocument()

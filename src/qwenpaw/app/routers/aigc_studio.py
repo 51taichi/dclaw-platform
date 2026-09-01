@@ -5818,6 +5818,34 @@ async def get_asset_file(request: Request, asset_id: str) -> Response:
     return await _asset_file_response(request, asset_id, require_owner=True)
 
 
+async def resolve_owned_asset_for_agent_review(
+    request: Request,
+    asset_id: str,
+    *,
+    canvas_id: str,
+    node_id: str,
+) -> dict[str, Any]:
+    """Resolve one owner-authorized generated asset into a model content block."""
+    asset = _load_asset_for_request(request, asset_id)
+    if (
+        str(asset.meta.get("canvas_id") or "") != canvas_id
+        or str(asset.meta.get("node_id") or "") != node_id
+    ):
+        raise HTTPException(status_code=403, detail="Asset binding mismatch.")
+    source_url = _signed_cloud_asset_url(asset)
+    if source_url is None:
+        target = await _asset_file_path_for_request(request, asset)
+        if not target.is_file():
+            raise HTTPException(status_code=404, detail="Asset file not found.")
+        source_url = target.as_uri()
+    if asset.kind not in {"image", "video", "audio"}:
+        raise HTTPException(status_code=409, detail="Asset type cannot be reviewed.")
+    return {
+        "type": asset.kind,
+        "source": {"type": "url", "url": source_url},
+    }
+
+
 @public_router.get("/public-assets/{asset_id}/file", name="get_public_asset_file")
 async def get_public_asset_file(
     request: Request,

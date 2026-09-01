@@ -107,6 +107,18 @@ async def test_authorized_command_validates_full_binding_and_publishes_once(tmp_
     envelope = bus.events[0].payload["envelope"]
     assert envelope["installation_id"] == grant.installation_id
     assert envelope["content_revision"] == 3
+    assert envelope["payload"]["task_status"] == "WAITING_TO_START"
+    assert envelope["payload"]["task_version"] == 1
+
+    session_events = service.list_session_events(
+        installation_id=grant.installation_id,
+        conversation_id="conversation-1",
+    )
+    assert [event.event_id for event in session_events] == ["event-1"]
+    assert service.list_session_events(
+        installation_id=grant.installation_id,
+        conversation_id="another-conversation",
+    ) == ()
 
 
 @pytest.mark.asyncio
@@ -246,6 +258,112 @@ async def test_route_uses_trusted_tenant_and_has_no_ordinary_agent_bypass(
     assert captured["tenant_id"] == "tenant-a"
     assert "administrator_id" not in captured
     assert access_checks == [("conversation-1", True)]
+
+
+@pytest.mark.asyncio
+async def test_asset_submit_dispatches_bound_agent_review_in_the_same_page(
+    monkeypatch,
+):
+    captured = {}
+
+    class Service:
+        async def execute(self, **kwargs):
+            return {"task": {"status": "SUBMITTED"}, "event": {}}
+
+        def get_task(self, _material_task_id):
+            return SimpleNamespace(
+                model_dump=lambda **_kwargs: {"status": "REVISION_REQUIRED"},
+            )
+
+    service = Service()
+    monkeypatch.setattr(
+        router_module,
+        "get_super_expert_platform_service",
+        lambda: service,
+    )
+    monkeypatch.setattr(router_module, "ensure_chat_access", lambda *_args, **_kwargs: None)
+
+    async def dispatch(_request, **kwargs):
+        captured.update(kwargs)
+        return {"status": "completed", "reply": "需要调整第一个镜头。"}
+
+    monkeypatch.setattr(router_module, "_dispatch_agent_asset_review", dispatch)
+    request = SimpleNamespace(
+        state=SimpleNamespace(tenant_id="tenant-a", user_id="user-1"),
+    )
+    binding = _binding()
+    binding["installation_id"] = "installation-1"
+    command = PlatformCommandRequest(
+        installation_id="installation-1",
+        contract_version="1",
+        idempotency_key="submit-1",
+        arguments={
+            "binding": binding,
+            "event_id": "submit-1",
+            "asset_id": "asset-1",
+        },
+    )
+
+    result = await router_module.execute_super_expert_command(
+        "aigc.asset.submit",
+        command,
+        request,
+    )
+
+    assert result["agent_review"]["reply"] == "需要调整第一个镜头。"
+    assert captured["asset_id"] == "asset-1"
+    assert captured["binding"].material_task_id == "material-1"
+
+
+@pytest.mark.asyncio
+async def test_asset_review_dispatch_uses_bound_session_and_media(monkeypatch):
+    captured = {}
+
+    class GrantRepository:
+        def get(self, _installation_id):
+            return SimpleNamespace(agent_id="agent-1", tenant_id="tenant-a")
+
+    class Runner:
+        async def query_handler(self, messages, request):
+            captured["messages"] = messages
+            captured["request"] = request
+            yield SimpleNamespace(get_text_content=lambda: "审核通过。"), True
+
+    class Manager:
+        async def get_agent(self, agent_id):
+            assert agent_id == "agent-1"
+            return SimpleNamespace(runner=Runner())
+
+    async def resolve(*_args, **_kwargs):
+        return {
+            "type": "video",
+            "source": {"type": "url", "url": "file:///tmp/result.mp4"},
+        }
+
+    monkeypatch.setattr(
+        "qwenpaw.app.routers.aigc_studio.resolve_owned_asset_for_agent_review",
+        resolve,
+    )
+    request = SimpleNamespace(
+        state=SimpleNamespace(user_id="user-1"),
+        app=SimpleNamespace(
+            state=SimpleNamespace(multi_agent_manager=Manager()),
+        ),
+    )
+    service = SimpleNamespace(grant_repository=GrantRepository())
+
+    result = await router_module._dispatch_agent_asset_review(
+        request,
+        service=service,
+        installation_id="installation-1",
+        binding=router_module.AigcTaskBinding.model_validate(_binding()),
+        asset_id="asset-1",
+    )
+
+    assert result == {"status": "completed", "reply": "审核通过。"}
+    assert captured["request"].session_id == "conversation-1"
+    assert captured["request"].channel == "platform:aigc-review"
+    assert captured["messages"][0].content[1]["type"] == "video"
 
 
 def test_platform_command_router_is_mounted_only_on_authenticated_user_api():

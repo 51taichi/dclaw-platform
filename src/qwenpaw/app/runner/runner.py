@@ -147,15 +147,19 @@ async def _run_standard_or_orchestrated_turn(
             config=orchestration,
         )
         tenant_id = str(getattr(request, "tenant_id", "local") or "local")
+        from ..routers.super_expert_platform import (
+            get_super_expert_platform_service,
+        )
+        platform_service = get_super_expert_platform_service()
+        platform_events = platform_service.list_session_events(
+            installation_id=authorization.installation_id,
+            conversation_id=str(request.session_id),
+        )
 
         async def business_call(
             capability: str,
             arguments: dict[str, Any],
         ) -> dict[str, Any]:
-            from ..routers.super_expert_platform import (
-                get_super_expert_platform_service,
-            )
-
             payload = dict(arguments)
             idempotency_key = str(payload.pop("idempotency_key", ""))
             if not idempotency_key:
@@ -163,7 +167,7 @@ async def _run_standard_or_orchestrated_turn(
             contract_version = authorization.granted_capabilities.get(capability)
             if contract_version is None:
                 raise WorkspaceOrchestrationError("unauthorized_capability")
-            return await get_super_expert_platform_service().execute(
+            return await platform_service.execute(
                 tenant_id=tenant_id,
                 installation_id=authorization.installation_id,
                 capability=capability,
@@ -182,6 +186,11 @@ async def _run_standard_or_orchestrated_turn(
             config=orchestration,
             authorization=authorization,
             business_call=business_call,
+            safe_metadata={
+                "platformEvents": [
+                    event.model_dump(mode="json") for event in platform_events
+                ],
+            },
         )
     except WorkspaceOrchestrationError:
         logger.exception(

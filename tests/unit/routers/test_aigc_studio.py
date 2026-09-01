@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -20,6 +20,67 @@ from qwenpaw.app.routers import aigc_studio
 from qwenpaw.app.routers.aigc_studio import public_router, router
 from qwenpaw.app.runtime.event_bus import MemoryRuntimeEventBus
 from qwenpaw.app.billing.model_publication import ModelPublicationService
+
+
+@pytest.mark.asyncio
+async def test_resolve_owned_asset_for_agent_review_returns_bound_local_media(
+    tmp_path,
+    monkeypatch,
+):
+    media_path = tmp_path / "result.mp4"
+    media_path.write_bytes(b"video")
+    asset = aigc_studio.AigcAsset(
+        id="asset-review",
+        kind="video",
+        name="result.mp4",
+        path=str(media_path),
+        url="/api/aigc-studio/assets/asset-review/file",
+        mime_type="video/mp4",
+        created_at="2026-09-02T00:00:00Z",
+        meta={"canvas_id": "canvas-1", "node_id": "node-1"},
+    )
+    monkeypatch.setattr(aigc_studio, "_load_asset_for_request", lambda *_args: asset)
+    monkeypatch.setattr(aigc_studio, "_signed_cloud_asset_url", lambda _asset: None)
+
+    async def local_path(*_args):
+        return media_path
+
+    monkeypatch.setattr(aigc_studio, "_asset_file_path_for_request", local_path)
+    block = await aigc_studio.resolve_owned_asset_for_agent_review(
+        SimpleNamespace(),
+        "asset-review",
+        canvas_id="canvas-1",
+        node_id="node-1",
+    )
+    assert block == {
+        "type": "video",
+        "source": {"type": "url", "url": media_path.as_uri()},
+    }
+
+
+@pytest.mark.asyncio
+async def test_resolve_owned_asset_for_agent_review_rejects_binding_mismatch(
+    monkeypatch,
+):
+    asset = aigc_studio.AigcAsset(
+        id="asset-review",
+        kind="image",
+        name="result.png",
+        path="result.png",
+        url="/api/aigc-studio/assets/asset-review/file",
+        mime_type="image/png",
+        created_at="2026-09-02T00:00:00Z",
+        meta={"canvas_id": "canvas-other", "node_id": "node-1"},
+    )
+    monkeypatch.setattr(aigc_studio, "_load_asset_for_request", lambda *_args: asset)
+    with pytest.raises(HTTPException) as exc_info:
+        await aigc_studio.resolve_owned_asset_for_agent_review(
+            SimpleNamespace(),
+            "asset-review",
+            canvas_id="canvas-1",
+            node_id="node-1",
+        )
+    assert exc_info.value.status_code == 403
 
 
 class _AllPublished(set):

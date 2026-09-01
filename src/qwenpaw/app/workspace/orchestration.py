@@ -268,6 +268,7 @@ async def run_workspace_orchestration_turn(
     config: OrchestrationConfig,
     authorization: AuthorizedWorkspaceRelease,
     business_call: Callable[[str, dict[str, Any]], Any] | None = None,
+    safe_metadata: dict[str, Any] | None = None,
     timeout_seconds: float = 30.0,
 ) -> WorkspaceTurnResult:
     invocation_id = uuid.uuid4().hex
@@ -297,7 +298,7 @@ async def run_workspace_orchestration_turn(
         channel=trusted_context["channel"],
         normalized_input={"messages": serialized_messages},
         history=serialized_messages,
-        safe_metadata={},
+        safe_metadata=dict(safe_metadata or {}),
         diagnostics_authorized=False,
         granted_capabilities=dict(authorization.granted_capabilities),
         state_root=transaction.state_root,
