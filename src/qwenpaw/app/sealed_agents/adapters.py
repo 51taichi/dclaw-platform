@@ -159,6 +159,10 @@ class SealedHarnessAdapterV1:
 _ADAPTERS: dict[tuple[str, str], SealedRuntimeAdapter] = {
     ("standard", "1"): _ReservedRuntimeAdapter("standard", "1"),
     ("sealed_harness", "1"): SealedHarnessAdapterV1(),
+    ("sealed_entrypoint", "1"): _ReservedRuntimeAdapter(
+        "sealed_entrypoint",
+        "1",
+    ),
 }
 
 

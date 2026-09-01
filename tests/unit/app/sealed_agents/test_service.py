@@ -94,6 +94,26 @@ def test_install_persists_signed_runtime_contract(tmp_path):
     assert release.runtime_failure_policy == "fail_closed"
 
 
+def test_install_accepts_generic_entrypoint_runtime_contract(tmp_path):
+    private = Ed25519PrivateKey.generate()
+    service = _service(tmp_path, private.public_key())
+
+    release = service.install(
+        _package(
+            private,
+            schema_version=2,
+            runtime={
+                "adapter": "sealed_entrypoint",
+                "contract_version": "1",
+                "failure_policy": "fail_closed",
+            },
+        ),
+    )
+
+    assert release.runtime_adapter == "sealed_entrypoint"
+    assert release.runtime_contract_version == "1"
+
+
 def test_activate_switches_atomically_after_reload_succeeds(tmp_path):
     private = Ed25519PrivateKey.generate()
     reloads = []
