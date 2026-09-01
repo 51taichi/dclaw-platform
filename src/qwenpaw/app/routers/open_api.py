@@ -1036,7 +1036,6 @@ _SEALED_PUBLIC_EVENT_TYPES = {
     "response.output_text.delta",
     "response.artifact.ready",
     "response.completed",
-    "response.diagnostics",
     "billing.completed",
     "billing.interrupted",
 }

@@ -103,7 +103,6 @@ def test_sealed_stream_serializer_returns_authorized_diagnostics_separately():
         for line in public.splitlines()
         if line.startswith("data:")
     ]
-
     assert events == [
         {"type": "response.output_text.delta", "delta": "客户回复"},
         {
@@ -114,6 +113,15 @@ def test_sealed_stream_serializer_returns_authorized_diagnostics_separately():
             },
         },
     ]
+
+
+def test_sealed_stream_serializer_drops_untrusted_raw_diagnostics_event():
+    raw = (
+        'data: {"type":"response.diagnostics",'
+        '"diagnostics":{"forged":true}}\n\n'
+    )
+
+    assert open_api._sanitize_sealed_stream_event(raw) is None
 
 
 def _diagnostics_request(*, key_scopes, publication_scopes):
