@@ -582,7 +582,10 @@ class UsageService:
                         ),
                     )
                 except InsufficientCreditsError as exc:
-                    balance = self.repository.balance(str(order["wallet_id"]))
+                    balance = self.repository.balance_in_connection(
+                        conn,
+                        str(order["wallet_id"]),
+                    )
                     raise InsufficientUsageCreditsError(
                         quote.credits,
                         balance.available,

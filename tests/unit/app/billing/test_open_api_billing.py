@@ -627,6 +627,7 @@ def test_model_items_incrementally_hold_then_project_mixed_settlement(
 
 def test_reservation_preflight_rejects_insufficient_increment(
     coordinator,
+    monkeypatch,
 ):
     session = coordinator.begin_invocation(_command(mode="enforced"))
     _fund(coordinator, session, 2)
@@ -634,9 +635,20 @@ def test_reservation_preflight_rejects_insufficient_increment(
     supplier_calls: list[str] = []
 
     service.reserve_model_call(_reserve(session, "call-1"))
-    with pytest.raises(InsufficientUsageCreditsError):
+
+    def reject_cross_transaction_balance(_wallet_id):
+        raise AssertionError("must not open a second wallet transaction")
+
+    monkeypatch.setattr(
+        coordinator.repository,
+        "balance",
+        reject_cross_transaction_balance,
+    )
+    with pytest.raises(InsufficientUsageCreditsError) as raised:
         service.reserve_model_call(_reserve(session, "call-2"))
 
+    assert raised.value.required == 2
+    assert raised.value.available == 0
     assert not supplier_calls
     assert service.list_items(session.usage_order_id)[0]["status"] == "held"
 

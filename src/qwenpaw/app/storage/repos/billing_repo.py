@@ -430,6 +430,16 @@ class BillingRepository:
             self._assert_projection(conn, wallet_id, balance)
             return balance
 
+    def balance_in_connection(
+        self,
+        conn: Connection,
+        wallet_id: str,
+    ) -> WalletBalance:
+        """Read a wallet balance inside the caller-owned transaction."""
+        balance = self._balance_for_update(conn, wallet_id)
+        self._assert_projection(conn, wallet_id, balance)
+        return balance
+
     def list_lots(self, wallet_id: str) -> list[dict[str, Any]]:
         """Return durable lots for trusted billing services and diagnostics."""
         with self.engine.connect() as conn:
