@@ -7,3 +7,7 @@ export function getRouteChatId(pathname: string): string | undefined {
     return match[1];
   }
 }
+
+export function buildAigcTaskRoute(taskId: string): string {
+  return `/aigc-studio?task=${encodeURIComponent(taskId)}`;
+}

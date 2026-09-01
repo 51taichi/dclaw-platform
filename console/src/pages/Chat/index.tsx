@@ -54,6 +54,12 @@ import { scheduleArtifactCardScans } from "./utils/artifactCardScanScheduler";
 import RunningSessionNotice from "./components/RunningSessionNotice";
 import RuntimeProgressCard from "./components/RuntimeProgressCard";
 import { getRouteChatId } from "./routeSession";
+import { buildAigcTaskRoute } from "./routeSession";
+import {
+  projectSuperExpertAigcCards,
+  SuperExpertAigcTaskCard,
+} from "./components/SuperExpertAigcTaskCard";
+import { superExpertPlatformApi } from "../../api/modules/superExpertPlatform";
 
 interface ApprovalMessageData {
   requestId: string;
@@ -550,7 +556,11 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
   const runtimeLoadingBridgeRef = useRef<RuntimeLoadingBridgeApi | null>(null);
   const { message } = useAppMessage();
   const { approvals, setApprovals } = useApprovalContext();
-  const { setActiveSessionId } = useRuntimeEvents();
+  const { setActiveSessionId, events: runtimeEvents } = useRuntimeEvents();
+  const superExpertCards = useMemo(
+    () => projectSuperExpertAigcCards(runtimeEvents),
+    [runtimeEvents],
+  );
   const [approvalRequests, setApprovalRequests] = useState<
     Map<string, ApprovalMessageData>
   >(new Map());
@@ -2040,6 +2050,32 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
             ref={chatRef}
             options={options}
           />
+          {superExpertCards.length > 0 ? (
+            <div className={styles.superExpertCards}>
+              {superExpertCards.map((projection) => (
+                <SuperExpertAigcTaskCard
+                  key={projection.materialTaskId}
+                  projection={projection}
+                  onCommand={async (_, materialTaskId) => {
+                    if (!projection.installationId || !projection.binding) {
+                      throw new Error("AIGC task binding is unavailable");
+                    }
+                    const eventId = crypto.randomUUID();
+                    await superExpertPlatformApi.command("aigc.task.resume", {
+                      installation_id: projection.installationId,
+                      contract_version: "1",
+                      idempotency_key: eventId,
+                      arguments: {
+                        event_id: eventId,
+                        binding: projection.binding,
+                      },
+                    });
+                    navigate(buildAigcTaskRoute(materialTaskId));
+                  }}
+                />
+              ))}
+            </div>
+          ) : null}
           {billingFailure && (
             <BillingFailureAlert
               failure={billingFailure}

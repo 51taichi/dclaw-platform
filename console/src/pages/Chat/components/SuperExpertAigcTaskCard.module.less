@@ -1,0 +1,68 @@
+.card {
+  display: grid;
+  gap: 12px;
+  width: min(520px, calc(100vw - 48px));
+  padding: 16px;
+  border: 1px solid var(--ant-color-border-secondary, rgba(5, 5, 5, 0.08));
+  border-radius: 12px;
+  background: var(--ant-color-bg-container, #fff);
+  box-shadow: 0 8px 28px rgba(15, 23, 42, 0.1);
+}
+
+.heading,
+.titleBlock,
+.action {
+  display: flex;
+  align-items: center;
+}
+
+.heading {
+  gap: 10px;
+}
+
+.icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  color: #315efb;
+  background: rgba(49, 94, 251, 0.1);
+}
+
+.titleBlock {
+  flex: 1;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.status {
+  flex: none;
+  padding: 3px 8px;
+  border-radius: 999px;
+  color: var(--ant-color-text-secondary, #64748b);
+  background: var(--ant-color-fill-tertiary, #f1f5f9);
+  font-size: 12px;
+}
+
+.instruction {
+  margin: 0;
+  color: var(--ant-color-text-secondary, #64748b);
+  line-height: 1.6;
+}
+
+.action {
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  border: 0;
+  border-radius: 8px;
+  color: #fff;
+  background: #315efb;
+  cursor: pointer;
+}
+
+.action:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getRouteChatId } from "./routeSession";
+import { buildAigcTaskRoute, getRouteChatId } from "./routeSession";
 
 describe("getRouteChatId", () => {
   it("treats /claw as a draft root route, not a backend chat id", () => {
@@ -17,5 +17,11 @@ describe("getRouteChatId", () => {
 
   it("decodes URL-encoded route chat ids", () => {
     expect(getRouteChatId("/claw/chat%20id")).toBe("chat id");
+  });
+});
+
+describe("buildAigcTaskRoute", () => {
+  it("encodes the bound material task id", () => {
+    expect(buildAigcTaskRoute("task/1")).toBe("/aigc-studio?task=task%2F1");
   });
 });
