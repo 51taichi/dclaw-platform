@@ -53,6 +53,22 @@ class PinnedSealedRuntime:
     failure_policy: str
 
 
+def resolve_adapter_session_root(
+    pinned: PinnedSealedRuntime | None,
+    *,
+    session_id: str,
+    sessions_root: Path,
+) -> Path | None:
+    if pinned is None or pinned.adapter_key != ("sealed_entrypoint", "1"):
+        return None
+    return create_runtime_context(
+        agent_id=pinned.agent_id,
+        session_id=session_id,
+        source_root=pinned.release_root,
+        sessions_root=sessions_root,
+    ).session_root
+
+
 def resolve_pinned_runtime(
     agent_id: str,
     registry: SealedAgentRegistry,

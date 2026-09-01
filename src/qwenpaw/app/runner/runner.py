@@ -837,6 +837,7 @@ class AgentRunner(Runner):
                     sanitize_message,
                 )
                 from ..sealed_agents.request_context import SealedAdapterRequest
+                from ..sealed_agents.runtime import resolve_adapter_session_root
 
                 sealed = sealed_runtime
                 output_policy = (
@@ -868,26 +869,35 @@ class AgentRunner(Runner):
 
                 if (
                     pinned_sealed_runtime is not None
-                    and pinned_sealed_runtime.adapter_key
-                    == ("sealed_harness", "1")
+                    and pinned_sealed_runtime.adapter_key != ("standard", "1")
                 ):
                     adapter = get_runtime_adapter(
                         *pinned_sealed_runtime.adapter_key,
+                    )
+                    adapter_session_root = resolve_adapter_session_root(
+                        pinned_sealed_runtime,
+                        session_id=session_id,
+                        sessions_root=Path(WORKING_DIR) / "sealed_sessions",
                     )
                     adapter_request = SealedAdapterRequest(
                         messages=tuple(msgs),
                         trusted_context={
                             "agent_id": self.agent_id,
                             "release_id": pinned_sealed_runtime.release_id,
+                            "version": pinned_sealed_runtime.version,
                             "content_digest": pinned_sealed_runtime.content_digest,
                             "session_id": session_id,
                             "user_id": user_id,
                             "channel": channel,
-                            "debug_endpoint_authorized": (
-                                trusted_debug_endpoint_authorized
+                            "invocation_id": str(
+                                channel_meta.get("open_invocation_id") or "",
                             ),
                         },
                         metadata=base_request_context["metadata"],
+                        session_root=adapter_session_root,
+                        diagnostics_authorized=(
+                            trusted_debug_endpoint_authorized
+                        ),
                     )
                     output_stream = adapter.run(
                         pinned=pinned_sealed_runtime,
