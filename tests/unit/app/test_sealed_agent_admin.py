@@ -12,6 +12,10 @@ from qwenpaw.app.sealed_agents.models import (
     SealedReleaseRecord,
 )
 from qwenpaw.config.config import Config
+from qwenpaw.app.super_experts.grants import (
+    SuperExpertGrant,
+    SuperExpertGrantPreview,
+)
 
 
 def _request(role="admin"):
@@ -105,6 +109,64 @@ def test_router_has_no_package_or_content_download_route():
     )
 
 
+def test_grant_routes_expose_complete_preview_and_accept_all_only(monkeypatch):
+    capabilities = (("workspace.turn.orchestrate/1", "1"), ("agent.execute", "1"))
+    preview = SuperExpertGrantPreview(
+        preview_id="preview-1",
+        tenant_id="local",
+        agent_id="luyu",
+        release_id="rel-1",
+        package_digest="sha256:" + "a" * 64,
+        package_version="1.0.0",
+        capability_digest="sha256:" + "b" * 64,
+        capabilities=capabilities,
+    )
+
+    class Service:
+        def preview_grant(self, agent_id, release_id, *, tenant_id):
+            assert (agent_id, release_id, tenant_id) == ("luyu", "rel-1", "local")
+            return preview
+
+        def grant_installation(
+            self,
+            agent_id,
+            release_id,
+            *,
+            tenant_id,
+            administrator_id,
+        ):
+            return SuperExpertGrant(
+                installation_id="installation-1",
+                tenant_id=tenant_id,
+                agent_id=agent_id,
+                release_id=release_id,
+                package_digest=preview.package_digest,
+                package_version=preview.package_version,
+                capability_digest=preview.capability_digest,
+                capabilities=preview.capabilities,
+                administrator_id=administrator_id,
+            )
+
+    monkeypatch.setattr(router_module, "get_sealed_agent_service", lambda: Service())
+
+    preview_response = router_module.preview_super_expert_grant(
+        "luyu",
+        "rel-1",
+        _request(),
+    )
+    grant_response = router_module.accept_super_expert_grant(
+        "luyu",
+        "rel-1",
+        _request(),
+    )
+
+    assert preview_response["capabilities"] == [list(item) for item in capabilities]
+    assert grant_response["capabilities"] == [list(item) for item in capabilities]
+    route_paths = {route.path for route in router_module.router.routes}
+    assert "/sealed-agents/{agent_id}/releases/{release_id}/grant" in route_paths
+    assert all("capability" not in path for path in route_paths)
+
+
 @pytest.mark.asyncio
 async def test_activation_registers_private_runtime_only_after_preload_succeeds(
     monkeypatch,
@@ -128,7 +190,8 @@ async def test_activation_registers_private_runtime_only_after_preload_succeeds(
         def release_root(self, agent_id, release_id):
             return release_root
 
-        def activate(self, agent_id, release_id):
+        def activate(self, agent_id, release_id, *, tenant_id="local"):
+            assert tenant_id == "local"
             return record
 
     class Manager:
@@ -183,7 +246,8 @@ async def test_activation_failure_restores_previous_profile_and_runtime(
         def release_root(self, agent_id, release_id):
             return release_root
 
-        def activate(self, agent_id, release_id):
+        def activate(self, agent_id, release_id, *, tenant_id="local"):
+            assert tenant_id == "local"
             activated.append((agent_id, release_id))
             return _record()
 

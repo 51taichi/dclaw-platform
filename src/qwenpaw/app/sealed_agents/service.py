@@ -17,6 +17,16 @@ from .standard_workspace import (
     StandardWorkspaceError,
     validate_standard_workspace,
 )
+from .signing import SuperExpertTrustStore
+from ..super_experts.capabilities import (
+    CapabilityManifestError,
+    validate_super_expert_manifest,
+)
+from ..super_experts.grants import (
+    SuperExpertGrant,
+    SuperExpertGrantPreview,
+    SuperExpertGrantRepository,
+)
 
 class SealedAgentReleaseError(ValueError):
     """Sanitized release lifecycle failure."""
@@ -29,10 +39,18 @@ class SealedAgentService:
         root: Path,
         registry: SealedAgentRegistry,
         trusted_signers: Mapping[str, Ed25519PublicKey],
+        official_super_expert_signer_ids: frozenset[str] = frozenset(),
+        grant_repository: SuperExpertGrantRepository | None = None,
     ) -> None:
         self.root = Path(root)
         self.registry = registry
         self.trusted_signers = dict(trusted_signers)
+        self.super_expert_trust_store = SuperExpertTrustStore(
+            official_signer_ids=official_super_expert_signer_ids,
+        )
+        self.grant_repository = grant_repository or SuperExpertGrantRepository(
+            self.root,
+        )
 
     def list_agents(self) -> list[SealedAgentRecord]:
         return self.registry.list_agents()
@@ -54,6 +72,15 @@ class SealedAgentService:
             raise SealedAgentReleaseError(str(exc)) from exc
 
         manifest = validated.manifest
+        if manifest.package_type == "super_expert":
+            try:
+                validate_super_expert_manifest(
+                    manifest,
+                    self.super_expert_trust_store,
+                )
+            except CapabilityManifestError as exc:
+                shutil.rmtree(validated.extracted_root, ignore_errors=True)
+                raise SealedAgentReleaseError(str(exc)) from exc
         current = self.registry.get_agent(manifest.agent_id)
         try:
             incoming_version = Version(manifest.version)
@@ -76,6 +103,22 @@ class SealedAgentService:
             version=manifest.version,
             content_digest=manifest.content_digest,
             signer_id=manifest.signer_id,
+            package_type=manifest.package_type,
+            capability_digest=manifest.capability_digest,
+            declared_capabilities=tuple(
+                (item.capability_id, item.contract_version)
+                for item in manifest.capabilities
+            ),
+            orchestration_capability_id=(
+                manifest.orchestration.capability_id
+                if manifest.orchestration
+                else None
+            ),
+            orchestration_contract_version=(
+                manifest.orchestration.contract_version
+                if manifest.orchestration
+                else None
+            ),
             entrypoint=manifest.entrypoint,
             runtime_adapter=(manifest.runtime.adapter if manifest.runtime else None),
             runtime_contract_version=(
@@ -105,7 +148,56 @@ class SealedAgentService:
             raise SealedAgentReleaseError("sealed agent installation failed") from exc
         return release
 
-    def activate(self, agent_id: str, release_id: str) -> SealedAgentRecord:
+    def preview_grant(
+        self,
+        agent_id: str,
+        release_id: str,
+        *,
+        tenant_id: str,
+    ) -> SuperExpertGrantPreview:
+        release = self._required_release(agent_id, release_id)
+        return self.grant_repository.preview(
+            agent_id,
+            release,
+            tenant_id=tenant_id,
+        )
+
+    def grant_installation(
+        self,
+        agent_id: str,
+        release_id: str,
+        *,
+        tenant_id: str,
+        administrator_id: str,
+    ) -> SuperExpertGrant:
+        preview = self.preview_grant(
+            agent_id,
+            release_id,
+            tenant_id=tenant_id,
+        )
+        return self.grant_repository.grant_installation(
+            preview,
+            administrator_id=administrator_id,
+        )
+
+    def cancel_grant_preview(
+        self,
+        agent_id: str,
+        release_id: str,
+        *,
+        tenant_id: str,
+    ) -> None:
+        self.grant_repository.cancel(
+            self.preview_grant(agent_id, release_id, tenant_id=tenant_id),
+        )
+
+    def activate(
+        self,
+        agent_id: str,
+        release_id: str,
+        *,
+        tenant_id: str = "local",
+    ) -> SealedAgentRecord:
         current = self._required_agent(agent_id)
         target = next(
             (item for item in current.releases if item.release_id == release_id),
@@ -113,6 +205,16 @@ class SealedAgentService:
         )
         if target is None:
             raise SealedAgentReleaseError("sealed agent release not found")
+        if target.package_type == "super_expert" and not (
+            self.grant_repository.is_release_granted(
+                agent_id,
+                target,
+                tenant_id=tenant_id,
+            )
+        ):
+            raise SealedAgentReleaseError(
+                "super expert installation authorization is required",
+            )
         if (
             target.runtime_validation is None
             or target.runtime_validation.status != "valid"
@@ -208,3 +310,17 @@ class SealedAgentService:
         if current is None:
             raise SealedAgentReleaseError("sealed agent not found")
         return current
+
+    def _required_release(
+        self,
+        agent_id: str,
+        release_id: str,
+    ) -> SealedReleaseRecord:
+        current = self._required_agent(agent_id)
+        release = next(
+            (item for item in current.releases if item.release_id == release_id),
+            None,
+        )
+        if release is None:
+            raise SealedAgentReleaseError("sealed agent release not found")
+        return release

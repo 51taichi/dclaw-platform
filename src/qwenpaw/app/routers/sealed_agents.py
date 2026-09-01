@@ -30,10 +30,12 @@ def get_sealed_agent_service() -> SealedAgentService:
     global _service
     if _service is None:
         root = Path(WORKING_DIR) / "sealed_agents"
+        trusted_signers = load_trusted_signers(root / "trusted_signers.json")
         _service = SealedAgentService(
             root=root,
             registry=get_sealed_agent_registry(),
-            trusted_signers=load_trusted_signers(root / "trusted_signers.json"),
+            trusted_signers=trusted_signers,
+            official_super_expert_signer_ids=frozenset(trusted_signers),
         )
     return _service
 
@@ -107,6 +109,14 @@ def _operational_dto(record: SealedAgentRecord) -> dict[str, Any]:
     }
 
 
+def _trusted_actor(request: Request) -> tuple[str, str]:
+    tenant_id = str(getattr(request.state, "tenant_id", "local") or "local")
+    administrator_id = str(
+        getattr(request.state, "user_id", "local-admin") or "local-admin",
+    )
+    return tenant_id, administrator_id
+
+
 @router.get("")
 def list_sealed_agents(request: Request) -> list[dict[str, Any]]:
     _require_admin(request)
@@ -133,6 +143,64 @@ async def upload_sealed_agent_release(
         "signer_id": release.signer_id,
         "state": release.state,
     }
+
+
+@router.get("/{agent_id}/releases/{release_id}/grant-preview")
+def preview_super_expert_grant(
+    agent_id: str,
+    release_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    _require_admin(request)
+    tenant_id, _ = _trusted_actor(request)
+    try:
+        preview = get_sealed_agent_service().preview_grant(
+            agent_id,
+            release_id,
+            tenant_id=tenant_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return preview.model_dump(mode="json")
+
+
+@router.post("/{agent_id}/releases/{release_id}/grant")
+def accept_super_expert_grant(
+    agent_id: str,
+    release_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    _require_admin(request)
+    tenant_id, administrator_id = _trusted_actor(request)
+    try:
+        grant = get_sealed_agent_service().grant_installation(
+            agent_id,
+            release_id,
+            tenant_id=tenant_id,
+            administrator_id=administrator_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return grant.model_dump(mode="json")
+
+
+@router.post("/{agent_id}/releases/{release_id}/grant-cancel")
+def cancel_super_expert_grant(
+    agent_id: str,
+    release_id: str,
+    request: Request,
+) -> dict[str, bool]:
+    _require_admin(request)
+    tenant_id, _ = _trusted_actor(request)
+    try:
+        get_sealed_agent_service().cancel_grant_preview(
+            agent_id,
+            release_id,
+            tenant_id=tenant_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"cancelled": True}
 
 
 @router.post("/{agent_id}/releases/{release_id}/activate")
@@ -173,7 +241,10 @@ async def activate_sealed_agent_release(
             loaded = await manager.preload_agent(agent_id)
         if not loaded:
             raise SealedAgentReleaseError("sealed agent runtime validation failed")
-        return _operational_dto(service.activate(agent_id, release_id))
+        tenant_id, _ = _trusted_actor(request)
+        return _operational_dto(
+            service.activate(agent_id, release_id, tenant_id=tenant_id),
+        )
     except Exception as exc:
         if previous is None:
             config.agents.profiles.pop(agent_id, None)
