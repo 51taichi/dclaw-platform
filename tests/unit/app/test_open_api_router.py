@@ -564,6 +564,36 @@ async def test_prepare_open_agent_chat_ignores_metadata_agent_id_and_binds_open_
 
 
 @pytest.mark.asyncio
+async def test_prepare_sealed_open_agent_chat_sets_private_diagnostics_context():
+    workspace = _workspace(agent_id="agent-published")
+    request = _request(workspace=workspace)
+    payload = OpenMessageRequest(
+        external_user_id="ext-user",
+        message="hello sealed runtime",
+        metadata={"diagnostics_requested": True},
+    )
+
+    prepared = await prepare_open_agent_chat(
+        request,
+        _publication(),
+        payload,
+        sealed_runtime={"release_id": "release-1", "version": "1.2.0"},
+        diagnostics_authorized=True,
+        invocation_id="invocation-1",
+    )
+
+    assert prepared.payload["meta"]["sealed_runtime"] == {
+        "release_id": "release-1",
+        "version": "1.2.0",
+    }
+    assert (
+        prepared.payload["meta"]["_server_debug_endpoint_authorized"]
+        is True
+    )
+    assert prepared.payload["meta"]["open_invocation_id"] == "invocation-1"
+
+
+@pytest.mark.asyncio
 async def test_prepare_open_expert_team_chat_uses_leader_workspace_and_sets_team_meta():
     workspace = _workspace(agent_id="leader-agent")
     request = _request(workspace=workspace)

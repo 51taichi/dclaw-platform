@@ -32,6 +32,7 @@ from ..expert_teams import (
     get_expert_team_template,
     get_latest_expert_team_run_by_chat,
 )
+from ..open_api.models import SCOPE_DIAGNOSTICS_READ
 from ..open_api.runtime import (
     ExecutionLeaseLostError,
     OpenMessageRequest,
@@ -114,6 +115,11 @@ async def post_open_message(
         }
         if pinned_runtime is not None
         else None
+    )
+    diagnostics_authorized = _sealed_diagnostics_authorized(
+        request,
+        payload,
+        sealed_target=sealed_target,
     )
 
     if payload.stream is False:
@@ -226,6 +232,8 @@ async def post_open_message(
                 publication,
                 payload,
                 sealed_runtime=sealed_runtime_audit,
+                diagnostics_authorized=diagnostics_authorized,
+                invocation_id=invocation_id,
             )
             stream_fn = prepared.console_channel.stream_one
             stream_payload = prepared.payload
@@ -1028,6 +1036,7 @@ _SEALED_PUBLIC_EVENT_TYPES = {
     "response.output_text.delta",
     "response.artifact.ready",
     "response.completed",
+    "response.diagnostics",
     "billing.completed",
     "billing.interrupted",
 }
@@ -1078,12 +1087,21 @@ def _sanitize_sealed_stream_event(event_data: str) -> str | None:
             return _sealed_failure_event()
         native_text = _sealed_native_assistant_text(payload)
         if native_text is not None:
-            return _sse(
+            public_event = _sse(
                 {
                     "type": "response.output_text.delta",
                     "delta": native_text,
                 },
             )
+            diagnostics = _sealed_native_diagnostics(payload)
+            if diagnostics is not None:
+                public_event += _sse(
+                    {
+                        "type": "response.diagnostics",
+                        "diagnostics": diagnostics,
+                    },
+                )
+            return public_event
         if payload.get("type") not in _SEALED_PUBLIC_EVENT_TYPES:
             return None
         return f"data: {raw}\n\n"
@@ -1112,6 +1130,43 @@ def _sealed_native_assistant_text(payload: dict[str, Any]) -> str | None:
     ]
     text = "".join(texts)
     return text if text.strip() else None
+
+
+def _sealed_native_diagnostics(
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Extract diagnostics attached by an authorized sealed adapter only."""
+    message_metadata = payload.get("metadata")
+    if not isinstance(message_metadata, dict):
+        return None
+    agent_metadata = message_metadata.get("metadata")
+    if not isinstance(agent_metadata, dict):
+        return None
+    diagnostics = agent_metadata.get("sealed_runtime_diagnostics")
+    return diagnostics if isinstance(diagnostics, dict) else None
+
+
+def _sealed_diagnostics_authorized(
+    request: Request,
+    payload: OpenMessageRequest,
+    *,
+    sealed_target: bool,
+) -> bool:
+    """Authorize diagnostics only for opted-in sealed OpenAPI calls."""
+    if not sealed_target:
+        return False
+    if (payload.metadata or {}).get("diagnostics_requested") is not True:
+        return False
+    context = getattr(request.state, "open_auth_context", None)
+    api_key = getattr(context, "api_key", None)
+    publication = getattr(context, "publication", None)
+    if not isinstance(api_key, dict) or not isinstance(publication, dict):
+        return False
+    return (
+        SCOPE_DIAGNOSTICS_READ in set(api_key.get("scopes") or [])
+        and SCOPE_DIAGNOSTICS_READ
+        in set(publication.get("allowed_scopes") or [])
+    )
 
 
 def _is_insufficient_terminal_event(event: Any) -> bool:

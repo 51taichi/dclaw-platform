@@ -784,3 +784,13 @@ def test_open_api_admin_router_is_mounted_under_admin_prefix():
 
     assert "/api/admin/open-api/publications" in api_paths
     assert not any(path.startswith("/api/user/open-api") for path in api_paths)
+
+
+def test_api_key_request_accepts_generic_diagnostics_scope():
+    request = open_api_admin.ApiKeyCreateRequest(
+        app_id="app-1",
+        publication_id="publication-1",
+        scopes=["messages:create", "diagnostics:read"],
+    )
+
+    assert request.scopes == ["messages:create", "diagnostics:read"]

@@ -585,6 +585,8 @@ async def prepare_open_agent_chat(
     payload: OpenMessageRequest,
     *,
     sealed_runtime: dict[str, str] | None = None,
+    diagnostics_authorized: bool = False,
+    invocation_id: str | None = None,
 ) -> PreparedOpenRun:
     return await _prepare_open_chat(
         request,
@@ -593,6 +595,8 @@ async def prepare_open_agent_chat(
         agent_id=str(publication["target_id"]),
         expert_team_id=None,
         sealed_runtime=sealed_runtime,
+        diagnostics_authorized=diagnostics_authorized,
+        invocation_id=invocation_id,
     )
 
 
@@ -620,6 +624,8 @@ async def _prepare_open_chat(
     agent_id: str,
     expert_team_id: str | None,
     sealed_runtime: dict[str, str] | None = None,
+    diagnostics_authorized: bool = False,
+    invocation_id: str | None = None,
 ) -> PreparedOpenRun:
     user_id = str(request.state.user_id)
     app_id = str(request.state.open_app_id)
@@ -664,6 +670,11 @@ async def _prepare_open_chat(
         native_meta["expert_team_id"] = expert_team_id
     if sealed_runtime is not None:
         native_meta["sealed_runtime"] = dict(sealed_runtime)
+        native_meta["_server_debug_endpoint_authorized"] = bool(
+            diagnostics_authorized
+        )
+        if invocation_id:
+            native_meta["open_invocation_id"] = invocation_id
     native_payload = {
         "channel_id": channel,
         "sender_id": user_id,

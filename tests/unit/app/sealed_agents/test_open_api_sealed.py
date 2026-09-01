@@ -7,6 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from qwenpaw.app.routers import open_api, open_api_admin
+from qwenpaw.app.open_api.runtime import OpenMessageRequest
 
 
 def test_sealed_publication_policy_is_forced_server_side(monkeypatch):
@@ -84,6 +85,102 @@ def test_sealed_stream_serializer_converts_completed_assistant_text():
         "delta": "陆羽你好",
     }
     assert "/private/source.png" not in public
+
+
+def test_sealed_stream_serializer_returns_authorized_diagnostics_separately():
+    native = (
+        'data: {"object":"message","status":"completed","error":null,'
+        '"type":"message","role":"assistant","content":['
+        '{"type":"text","text":"客户回复"}],"metadata":{'
+        '"metadata":{"sealed_runtime_diagnostics":{'
+        '"runtime":{"version":"1.2.0"},"agent":{"stage":"S1"}}}}}'
+        "\n\n"
+    )
+
+    public = open_api._sanitize_sealed_stream_event(native)
+    events = [
+        json.loads(line[5:].strip())
+        for line in public.splitlines()
+        if line.startswith("data:")
+    ]
+
+    assert events == [
+        {"type": "response.output_text.delta", "delta": "客户回复"},
+        {
+            "type": "response.diagnostics",
+            "diagnostics": {
+                "runtime": {"version": "1.2.0"},
+                "agent": {"stage": "S1"},
+            },
+        },
+    ]
+
+
+def _diagnostics_request(*, key_scopes, publication_scopes):
+    return SimpleNamespace(
+        state=SimpleNamespace(
+            open_auth_context=SimpleNamespace(
+                api_key={"scopes": key_scopes},
+                publication={"allowed_scopes": publication_scopes},
+            ),
+        ),
+    )
+
+
+def test_sealed_diagnostics_requires_request_and_both_scopes():
+    authorized = _diagnostics_request(
+        key_scopes=["messages:create", "diagnostics:read"],
+        publication_scopes=["messages:create", "diagnostics:read"],
+    )
+    requested = OpenMessageRequest(
+        external_user_id="user-1",
+        message="hello",
+        metadata={"diagnostics_requested": True},
+    )
+
+    assert open_api._sealed_diagnostics_authorized(
+        authorized,
+        requested,
+        sealed_target=True,
+    ) is True
+    assert open_api._sealed_diagnostics_authorized(
+        authorized,
+        requested.model_copy(update={"metadata": {}}),
+        sealed_target=True,
+    ) is False
+    assert open_api._sealed_diagnostics_authorized(
+        authorized,
+        requested.model_copy(
+            update={"metadata": {"diagnostics_requested": "true"}}
+        ),
+        sealed_target=True,
+    ) is False
+    assert open_api._sealed_diagnostics_authorized(
+        _diagnostics_request(
+            key_scopes=["messages:create"],
+            publication_scopes=["messages:create", "diagnostics:read"],
+        ),
+        requested,
+        sealed_target=True,
+    ) is False
+
+
+def test_non_sealed_target_never_authorizes_runtime_diagnostics():
+    request = _diagnostics_request(
+        key_scopes=["messages:create", "diagnostics:read"],
+        publication_scopes=["messages:create", "diagnostics:read"],
+    )
+    payload = OpenMessageRequest(
+        external_user_id="user-1",
+        message="hello",
+        metadata={"diagnostics_requested": True},
+    )
+
+    assert open_api._sealed_diagnostics_authorized(
+        request,
+        payload,
+        sealed_target=False,
+    ) is False
 
 
 def test_sealed_stream_serializer_drops_completed_tool_message():

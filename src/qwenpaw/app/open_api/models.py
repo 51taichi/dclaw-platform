@@ -18,15 +18,22 @@ OpenApiInvocationStatus = Literal[
     "failed",
     "cancelled",
 ]
-OpenApiScope = Literal["messages:create", "messages:read", "runs:stop"]
+OpenApiScope = Literal[
+    "messages:create",
+    "messages:read",
+    "runs:stop",
+    "diagnostics:read",
+]
 
 SCOPE_MESSAGES_CREATE = "messages:create"
 SCOPE_MESSAGES_READ = "messages:read"
 SCOPE_RUNS_STOP = "runs:stop"
+SCOPE_DIAGNOSTICS_READ = "diagnostics:read"
 OPEN_API_SCOPES: tuple[OpenApiScope, ...] = (
     SCOPE_MESSAGES_CREATE,
     SCOPE_MESSAGES_READ,
     SCOPE_RUNS_STOP,
+    SCOPE_DIAGNOSTICS_READ,
 )
 
 
