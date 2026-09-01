@@ -162,7 +162,7 @@ WORKDIR ${WORKSPACE_DIR}
 RUN python3 -m venv venv
 ENV PATH="/app/venv/bin:$PATH"
 
-COPY pyproject.toml setup.py README.md ./
+COPY pyproject.toml uv.lock setup.py README.md ./
 COPY scripts/db ./scripts/db
 COPY scripts/perf ./scripts/perf
 COPY src ./src
@@ -173,7 +173,14 @@ RUN rm -rf ./src/qwenpaw/console
 COPY --from=console-builder /app/console/dist/ ./src/qwenpaw/console/
 # Speed up Python package installation with uv.
 COPY --from=agentscope-registry.ap-southeast-1.cr.aliyuncs.com/agentscope/uv:latest /uv /bin/uv
-RUN uv pip install --no-cache-dir --index-url https://mirrors.aliyun.com/pypi/simple/ . && rm -rf ./build
+RUN uv export --frozen --no-dev --no-emit-project --no-hashes \
+      --output-file /tmp/requirements.txt \
+  && uv pip install --no-cache-dir \
+      --index-url https://mirrors.aliyun.com/pypi/simple/ \
+      --requirement /tmp/requirements.txt \
+  && uv pip install --no-cache-dir --no-deps . \
+  && rm -f /tmp/requirements.txt \
+  && rm -rf ./build
 
 
 # QwenPaw app port (default 8088). Override at runtime with -e QWENPAW_PORT=3000.
