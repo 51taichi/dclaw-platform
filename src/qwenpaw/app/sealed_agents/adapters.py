@@ -221,17 +221,22 @@ class SealedEntrypointAdapterV1:
                 if isinstance(instruction, str) and instruction.strip()
                 else {}
             )
-            draft: list[dict[str, Any]] = []
+            final_messages: list[dict[str, Any]] = []
+            last_message: dict[str, Any] | None = None
             last_text = ""
-            async for message, _last in model_executor(
+            async for message, is_last in model_executor(
                 controlled_messages,
                 controlled_context,
             ):
-                draft.append(_message_payload(message))
+                last_message = _message_payload(message)
+                if is_last:
+                    final_messages.append(last_message)
                 text = _message_text(message)
                 if text.strip():
                     last_text = text
-            return {"messages": draft, "reply": last_text}
+            if not final_messages and last_message is not None:
+                final_messages.append(last_message)
+            return {"messages": final_messages, "reply": last_text}
 
         try:
             async with self._process_factory(

@@ -198,6 +198,40 @@ async def test_entrypoint_adapter_runs_host_agent_and_yields_one_final_message(
 
 
 @pytest.mark.asyncio
+async def test_entrypoint_host_result_excludes_large_intermediate_model_trace(
+    tmp_path,
+):
+    events = []
+    adapter = _entrypoint_adapter(_final(), events)
+
+    async def model_executor(_messages, _context):
+        yield Msg(
+            name="assistant",
+            role="assistant",
+            content="x" * 1_048_577,
+        ), False
+        yield Msg(
+            name="assistant",
+            role="assistant",
+            content="compact final",
+        ), True
+
+    _ = [
+        item
+        async for item in adapter.run(
+            pinned=_entrypoint_pinned(tmp_path),
+            request=_entrypoint_request(tmp_path),
+            model_executor=model_executor,
+        )
+    ]
+
+    host_result = events[-1][1]
+    assert len(host_result["messages"]) == 1
+    assert host_result["messages"][0]["content"] == "compact final"
+    assert host_result["reply"] == "compact final"
+
+
+@pytest.mark.asyncio
 async def test_entrypoint_adapter_exposes_diagnostics_only_with_trusted_authorization(
     tmp_path,
 ):
