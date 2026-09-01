@@ -3555,6 +3555,11 @@ export default function AigcStudioPage() {
           task={guide.task}
           operation={guide.operation}
           activeCanvasId={activeCanvas?.id}
+          onReturnToChat={() => {
+            const path = `/claw/${encodeURIComponent(guide.task!.binding.conversation_id)}`;
+            window.history.pushState({}, "", path);
+            window.dispatchEvent(new PopStateEvent("popstate"));
+          }}
           onSubmit={async () => {
             const currentTask = guide.task;
             if (!currentTask) {

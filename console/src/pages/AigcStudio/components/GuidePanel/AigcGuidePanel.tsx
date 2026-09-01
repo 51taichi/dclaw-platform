@@ -13,12 +13,14 @@ export function AigcGuidePanel({
   operation,
   activeCanvasId,
   onSubmit,
+  onReturnToChat,
 }: {
   taskId: string;
   task: BoundAigcTask;
   operation: AigcOperationContract;
   activeCanvasId?: string | null;
   onSubmit?: () => Promise<string | void>;
+  onReturnToChat?: () => void;
 }) {
   const storageKey = `dclaw:aigc-guide:${taskId}:step`;
   const [stepIndex, setStepIndex] = useState(() =>
@@ -103,39 +105,47 @@ export function AigcGuidePanel({
         </section>
       ) : null}
       <footer>
-        <button type="button" onClick={() => setPaused((value) => !value)}>
-          {paused ? <Play size={14} /> : <Pause size={14} />}
-          {paused ? "继续向导" : "暂停向导"}
-        </button>
-        <button
-          type="button"
-          disabled={paused || reviewing || !controlAvailable || wrongCanvas}
-          onClick={() => {
-            if (finalStep) {
-              setReviewing(true);
-              setReviewReply("");
-              void (async () => {
-                try {
-                  const reply = await onSubmit?.();
-                  if (reply) setReviewReply(reply);
-                } catch {
-                  setReviewReply(
-                    "本次审核未能安全完成，任务进度已保留，请稍后再次提交。",
-                  );
-                } finally {
-                  setReviewing(false);
-                }
-              })();
-            } else setStepIndex((value) => value + 1);
-          }}
-        >
-          <Check size={14} />
-          {finalStep
-            ? reviewing
-              ? "专家审核中…"
-              : "提交给专家审核"
-            : "本步已完成"}
-        </button>
+        {task.status === "ACCEPTED" ? (
+          <button type="button" onClick={onReturnToChat}>
+            返回原会话
+          </button>
+        ) : (
+          <>
+            <button type="button" onClick={() => setPaused((value) => !value)}>
+              {paused ? <Play size={14} /> : <Pause size={14} />}
+              {paused ? "继续向导" : "暂停向导"}
+            </button>
+            <button
+              type="button"
+              disabled={paused || reviewing || !controlAvailable || wrongCanvas}
+              onClick={() => {
+                if (finalStep) {
+                  setReviewing(true);
+                  setReviewReply("");
+                  void (async () => {
+                    try {
+                      const reply = await onSubmit?.();
+                      if (reply) setReviewReply(reply);
+                    } catch {
+                      setReviewReply(
+                        "本次审核未能安全完成，任务进度已保留，请稍后再次提交。",
+                      );
+                    } finally {
+                      setReviewing(false);
+                    }
+                  })();
+                } else setStepIndex((value) => value + 1);
+              }}
+            >
+              <Check size={14} />
+              {finalStep
+                ? reviewing
+                  ? "专家审核中…"
+                  : "提交给专家审核"
+                : "本步已完成"}
+            </button>
+          </>
+        )}
       </footer>
     </aside>
   );

@@ -179,4 +179,30 @@ describe("AigcGuidePanel", () => {
     expect(localStorage.getItem("dclaw:aigc-guide:task-1:step")).toBe("1");
     control.remove();
   });
+
+  it("offers one deterministic return to the bound chat after acceptance", async () => {
+    localStorage.setItem("dclaw:aigc-guide:task-1:step", "1");
+    const control = document.createElement("button");
+    control.dataset.platformControlId = "aigc.canvas.create";
+    document.body.append(control);
+    const onReturnToChat = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <AigcGuidePanel
+        taskId="task-1"
+        task={{ ...task, status: "ACCEPTED" }}
+        operation={operation}
+        activeCanvasId="canvas-1"
+        onReturnToChat={onReturnToChat}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "返回原会话" }));
+    expect(onReturnToChat).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByRole("button", { name: "提交给专家审核" }),
+    ).not.toBeInTheDocument();
+    control.remove();
+  });
 });
