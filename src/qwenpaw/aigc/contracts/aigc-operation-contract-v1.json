@@ -49,7 +49,7 @@
         {
           "step_id": "add-video-node",
           "title": "添加视频生成节点",
-          "instruction": "点击左侧工具栏中的“视频生成”，再点击画布中央空白位置放置节点。",
+          "instruction": "点击画布左侧圆形“+”按钮，在展开的节点菜单中点击“视频生成”，节点会放到当前画布。",
           "control_id": "aigc.toolbar.video-generate",
           "action": "click",
           "success_signal": "画布中出现一个视频生成节点，节点右侧参数面板自动展开。",

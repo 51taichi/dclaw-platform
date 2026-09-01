@@ -160,6 +160,49 @@ async def test_cross_binding_command_is_rejected(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_bound_task_and_operation_contract_can_be_resumed_after_refresh(
+    tmp_path,
+    monkeypatch,
+):
+    service, grant, _bus = _service(tmp_path)
+    binding = _binding()
+    binding["installation_id"] = grant.installation_id
+    await service.execute(
+        tenant_id="tenant-a",
+        installation_id=grant.installation_id,
+        capability="aigc.task.create",
+        contract_version="1",
+        arguments={"binding": binding, "event_id": "event-1"},
+        idempotency_key="key-1",
+    )
+    monkeypatch.setattr(
+        router_module,
+        "get_super_expert_platform_service",
+        lambda: service,
+    )
+    access_checks = []
+    monkeypatch.setattr(
+        router_module,
+        "ensure_chat_access",
+        lambda _request, conversation_id, allow_admin: access_checks.append(
+            (conversation_id, allow_admin),
+        ),
+    )
+    request = SimpleNamespace(state=SimpleNamespace(tenant_id="tenant-a"))
+
+    task = router_module.get_super_expert_task("material-1", request)
+    operation = router_module.get_aigc_operation_contract(
+        "aigc.text_to_video.create",
+        request,
+    )
+
+    assert task["binding"]["canvas_id"] == "canvas-1"
+    assert task["status"] == "WAITING_TO_START"
+    assert operation["human_guide"][0]["control_id"] == "nav.aigc-studio"
+    assert access_checks == [("conversation-1", True)]
+
+
+@pytest.mark.asyncio
 async def test_route_uses_trusted_tenant_and_has_no_ordinary_agent_bypass(
     monkeypatch,
 ):

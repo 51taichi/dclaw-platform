@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from qwenpaw.constant import WORKING_DIR
+from qwenpaw.aigc.operation_contract import load_operation_catalog
 
 from ..chat_access import ensure_chat_access
 from ..runtime.event_bus import RuntimeEvent, get_runtime_event_bus
@@ -68,6 +69,9 @@ class SuperExpertPlatformService:
         self.task_repository = task_repository
         self.event_repository = event_repository
         self.event_bus = event_bus
+
+    def get_task(self, material_task_id: str):
+        return self.task_repository.get(material_task_id)
 
     async def execute(
         self,
@@ -213,6 +217,40 @@ def get_super_expert_platform_service() -> SuperExpertPlatformService:
             event_bus=get_runtime_event_bus(),
         )
     return _service
+
+
+@router.get("/tasks/{material_task_id}")
+def get_super_expert_task(
+    material_task_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    task = get_super_expert_platform_service().get_task(material_task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="AIGC task not found")
+    ensure_chat_access(
+        request,
+        task.binding.conversation_id,
+        allow_admin=True,
+    )
+    return task.model_dump(mode="json")
+
+
+@router.get("/operations/{operation_id}")
+def get_aigc_operation_contract(
+    operation_id: str,
+    _request: Request,
+) -> dict[str, Any]:
+    catalog_path = (
+        Path(__file__).resolve().parents[2]
+        / "aigc"
+        / "contracts"
+        / "aigc-operation-contract-v1.json"
+    )
+    try:
+        operation = load_operation_catalog(catalog_path).operation(operation_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="AIGC operation not found") from exc
+    return operation.model_dump(mode="json")
 
 
 @router.post("/commands/{capability}")
