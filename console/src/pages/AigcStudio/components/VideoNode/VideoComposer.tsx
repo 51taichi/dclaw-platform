@@ -778,6 +778,7 @@ export function VideoComposer({
         )}
       </div>
       <textarea
+        data-platform-control-id="aigc.video.prompt-input"
         ref={composerInputRef}
         className={`${styles.promptPlaceholder} ${styles.textComposerInput}`}
         value={composerDraftText}
@@ -866,6 +867,7 @@ export function VideoComposer({
         <button
           type="button"
           className={styles.textModelButton}
+          data-platform-control-id="aigc.video.model-select"
           onClick={() => onToggleMenu(node.id, "model")}
         >
           {modelLabel}
@@ -938,6 +940,7 @@ export function VideoComposer({
         <button
           type="button"
           className={styles.runCircle}
+          data-platform-control-id="aigc.video.generate-submit"
           aria-label={t(
             "aigcStudio.videoNode.submitComposer",
             "提交视频节点输入",
@@ -1079,7 +1082,10 @@ export function VideoComposer({
             <div className={styles.imageMenuTitle}>
               {t("aigcStudio.imageNode.aspectRatio", "比例")}
             </div>
-            <div className={styles.videoRatioGrid}>
+            <div
+              className={styles.videoRatioGrid}
+              data-platform-control-id="aigc.video.aspect-ratio-select"
+            >
               {videoAspectRatioOptions.map((ratio) => (
                 <button
                   type="button"
@@ -1127,7 +1133,10 @@ export function VideoComposer({
                 </button>
               ))}
             </div>
-            <label className={styles.videoDuration}>
+            <label
+              className={styles.videoDuration}
+              data-platform-control-id="aigc.video.duration-select"
+            >
               {t("aigcStudio.videoNode.duration", "视频时长")}
               <input
                 type="range"

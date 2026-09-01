@@ -200,6 +200,9 @@ import {
 } from "./nodeModelSelection";
 import { useGenerationProgressSimulation } from "./useGenerationProgressSimulation";
 import styles from "./index.module.less";
+import { AigcGuidePanel } from "./components/GuidePanel/AigcGuidePanel";
+import { useAigcGuideTask } from "./components/GuidePanel/useAigcGuideTask";
+import { superExpertPlatformApi } from "../../api/modules/superExpertPlatform";
 
 function connectCanvasNodes(source: string, target: string): AigcCanvasEdge {
   return {
@@ -467,6 +470,7 @@ function AigcAssetOutput({ asset }: { asset: AigcAsset }) {
 
 export default function AigcStudioPage() {
   const { t } = useTranslation();
+  const guide = useAigcGuideTask(window.location.search);
   const canvasSurfaceRef = useRef<HTMLDivElement | null>(null);
   const canvasImageInputRef = useRef<HTMLInputElement | null>(null);
   const canvasVideoInputRef = useRef<HTMLInputElement | null>(null);
@@ -2459,7 +2463,7 @@ export default function AigcStudioPage() {
   }
 
   return (
-    <div className={styles.studio}>
+    <div className={styles.studio} data-platform-control-id="nav.aigc-studio">
       <aside className={styles.sidebar}>
         <div className={styles.title}>
           {t("aigcStudio.title", "AIGC 创意工作室")}
@@ -2529,6 +2533,7 @@ export default function AigcStudioPage() {
               <button
                 type="button"
                 className={styles.projectMenuButton}
+                data-platform-control-id="aigc.canvas.create"
                 aria-label={t("aigcStudio.projects.open", "打开项目列表")}
                 onClick={(event) => {
                   event.stopPropagation();
@@ -3544,6 +3549,42 @@ export default function AigcStudioPage() {
           ))}
         </div>
       </aside>
+      {guide.taskId && guide.task && guide.operation ? (
+        <AigcGuidePanel
+          taskId={guide.taskId}
+          task={guide.task}
+          operation={guide.operation}
+          activeCanvasId={activeCanvas?.id}
+          onSubmit={async () => {
+            const boundNode = activeCanvas?.nodes.find(
+              (node) => node.id === guide.task?.binding.node_id,
+            );
+            const outputs = Array.isArray(boundNode?.data.outputs)
+              ? boundNode.data.outputs
+              : [];
+            const firstOutput = outputs.find(
+              (item) => item && typeof item === "object" && "id" in item,
+            ) as { id?: unknown } | undefined;
+            const assetId = String(firstOutput?.id || "");
+            if (!assetId) {
+              antdMessage.error("当前绑定节点还没有可提交的视频成品");
+              return;
+            }
+            const eventId = crypto.randomUUID();
+            await superExpertPlatformApi.command("aigc.asset.submit", {
+              installation_id: guide.task.binding.installation_id,
+              contract_version: "1",
+              idempotency_key: eventId,
+              arguments: {
+                event_id: eventId,
+                binding: guide.task.binding,
+                asset_id: assetId,
+              },
+            });
+            antdMessage.success("素材已提交，专家将按当前业务阶段审核");
+          }}
+        />
+      ) : null}
     </div>
   );
 }

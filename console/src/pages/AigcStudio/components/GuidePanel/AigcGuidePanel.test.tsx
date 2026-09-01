@@ -1,0 +1,99 @@
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AigcGuidePanel } from "./AigcGuidePanel";
+
+const task = {
+  binding: {
+    installation_id: "installation-1",
+    conversation_id: "conversation-1",
+    material_task_id: "task-1",
+    canvas_id: "canvas-1",
+    node_id: "node-1",
+  },
+  status: "IN_PROGRESS",
+};
+
+const operation = {
+  operation_id: "aigc.text_to_video.create",
+  version: "1" as const,
+  title: "从文字提示词创建视频素材",
+  human_guide: [
+    {
+      step_id: "open-studio",
+      title: "确认进入工作室",
+      instruction: "确认工作室已打开。",
+      control_id: "nav.aigc-studio",
+      action: "click" as const,
+      success_signal: "画布出现",
+      recovery: "返回任务卡片重新进入",
+    },
+    {
+      step_id: "create-project",
+      title: "创建项目",
+      instruction: "点击新建项目。",
+      control_id: "aigc.canvas.create",
+      action: "click" as const,
+      success_signal: "项目出现",
+      recovery: "刷新后重试",
+    },
+  ],
+};
+
+describe("AigcGuidePanel", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  it("resolves the exact platform control and persists the next step", async () => {
+    const user = userEvent.setup();
+    const control = document.createElement("button");
+    control.dataset.platformControlId = "nav.aigc-studio";
+    document.body.append(control);
+    render(
+      <AigcGuidePanel
+        taskId="task-1"
+        task={task}
+        operation={operation}
+        activeCanvasId="canvas-1"
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "定位当前控件" }));
+    expect(control.dataset.platformGuideHighlight).toBe("true");
+    await user.click(screen.getByRole("button", { name: "本步已完成" }));
+    expect(screen.getByText("创建项目")).toBeInTheDocument();
+    expect(localStorage.getItem("dclaw:aigc-guide:task-1:step")).toBe("1");
+    control.remove();
+  });
+
+  it("fails closed when the exact control is missing", () => {
+    render(
+      <AigcGuidePanel
+        taskId="task-1"
+        task={task}
+        operation={operation}
+        activeCanvasId="canvas-1"
+      />,
+    );
+    expect(screen.getByText(/控件不可用/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "本步已完成" })).toBeDisabled();
+  });
+
+  it("does not advance an unrelated canvas", () => {
+    const control = document.createElement("button");
+    control.dataset.platformControlId = "nav.aigc-studio";
+    document.body.append(control);
+    render(
+      <AigcGuidePanel
+        taskId="task-1"
+        task={task}
+        operation={operation}
+        activeCanvasId="canvas-other"
+      />,
+    );
+    expect(screen.getByText(/不属于此任务/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "本步已完成" })).toBeDisabled();
+    control.remove();
+  });
+});

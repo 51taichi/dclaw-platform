@@ -351,7 +351,10 @@ export function VideoNode({ node, selected, t, workflow }: VideoNodeProps) {
             </button>
           </div>
         ) : videoState === "generated" ? (
-          <div className={styles.generatedVideoFrame}>
+          <div
+            className={styles.generatedVideoFrame}
+            data-platform-control-id="aigc.video.result-preview"
+          >
             <span className={styles.generatedVideoSize}>
               {generatedSizeLabel}
             </span>

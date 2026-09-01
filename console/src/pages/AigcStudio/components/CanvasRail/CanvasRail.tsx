@@ -63,6 +63,7 @@ export function CanvasRail({
     <div className={styles.canvasRail}>
       <button
         type="button"
+        data-platform-control-id="aigc.toolbar.video-generate"
         aria-label={t("aigcStudio.addNode", "添加节点")}
         className={styles.railPrimary}
         onClick={(event) => {

@@ -15,7 +15,11 @@ export function CanvasEmptyProjectLauncher({
   return (
     <div className={styles.emptyProjectLauncher}>
       <div>{t("aigcStudio.projects.empty", "暂无项目")}</div>
-      <button type="button" onClick={onCreateCanvas}>
+      <button
+        type="button"
+        onClick={onCreateCanvas}
+        data-platform-control-id="aigc.canvas.create"
+      >
         <Plus size={14} />
         {t("aigcStudio.projects.new", "新建项目")}
       </button>

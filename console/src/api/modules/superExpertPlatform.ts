@@ -7,7 +7,45 @@ export interface SuperExpertPlatformCommand {
   arguments: Record<string, unknown>;
 }
 
+export interface AigcGuideStep {
+  step_id: string;
+  title: string;
+  instruction: string;
+  control_id: string;
+  action: "click" | "input" | "select" | "wait" | "verify";
+  success_signal: string;
+  recovery: string;
+}
+
+export interface AigcOperationContract {
+  operation_id: string;
+  version: "1";
+  title: string;
+  human_guide: AigcGuideStep[];
+}
+
+export interface BoundAigcTask {
+  binding: {
+    installation_id: string;
+    conversation_id: string;
+    material_task_id: string;
+    canvas_id: string;
+    node_id: string;
+    [key: string]: unknown;
+  };
+  status: string;
+  asset_id?: string | null;
+}
+
 export const superExpertPlatformApi = {
+  getTask: (materialTaskId: string) =>
+    request<BoundAigcTask>(
+      `/super-expert-platform/tasks/${encodeURIComponent(materialTaskId)}`,
+    ),
+  getOperation: (operationId: string) =>
+    request<AigcOperationContract>(
+      `/super-expert-platform/operations/${encodeURIComponent(operationId)}`,
+    ),
   command: (capability: string, command: SuperExpertPlatformCommand) =>
     request(
       `/super-expert-platform/commands/${encodeURIComponent(capability)}`,
