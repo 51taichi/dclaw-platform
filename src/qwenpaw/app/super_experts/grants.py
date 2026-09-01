@@ -176,16 +176,30 @@ class SuperExpertGrantRepository:
         *,
         tenant_id: str,
     ) -> bool:
-        return any(
-            grant.tenant_id == tenant_id
+        return self.find_release_grant(
+            agent_id,
+            release,
+            tenant_id=tenant_id,
+        ) is not None
+
+    def find_release_grant(
+        self,
+        agent_id: str,
+        release: SealedReleaseRecord,
+        *,
+        tenant_id: str,
+    ) -> SuperExpertGrant | None:
+        return next((
+            grant
+            for grant in self.list_grants()
+            if grant.tenant_id == tenant_id
             and grant.agent_id == agent_id
             and grant.release_id == release.release_id
             and grant.package_digest == release.content_digest
             and grant.package_version == release.version
             and grant.capability_digest == release.capability_digest
             and grant.capabilities == release.declared_capabilities
-            for grant in self.list_grants()
-        )
+        ), None)
 
     def _read(self) -> _GrantDocument:
         if not self.path.exists():

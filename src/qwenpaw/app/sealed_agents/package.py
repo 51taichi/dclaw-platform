@@ -171,6 +171,25 @@ def _payload_digest(files: Mapping[str, bytes]) -> str:
     return f"sha256:{digest.hexdigest()}"
 
 
+def inspect_extracted_payload(root: Path) -> tuple[str, frozenset[str]]:
+    """Recompute the signed payload digest and enumerate covered regular files."""
+    resolved_root = Path(root).resolve(strict=True)
+    if not resolved_root.is_dir():
+        raise SealedPackageError("sealed package payload is unavailable")
+    payload: dict[str, bytes] = {}
+    for candidate in resolved_root.rglob("*"):
+        if candidate.is_symlink():
+            raise SealedPackageError("sealed package payload contains a symlink")
+        if not candidate.is_file():
+            continue
+        resolved = candidate.resolve(strict=True)
+        if not resolved.is_relative_to(resolved_root):
+            raise SealedPackageError("unsafe package path")
+        relative = resolved.relative_to(resolved_root).as_posix()
+        payload[relative] = resolved.read_bytes()
+    return _payload_digest(payload), frozenset(payload)
+
+
 def _canonical_manifest(payload: Mapping[str, Any]) -> bytes:
     return json.dumps(
         payload,

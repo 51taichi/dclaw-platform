@@ -39,6 +39,10 @@ def _release(**overrides):
         "declared_capabilities": CAPABILITIES,
         "orchestration_capability_id": "workspace.turn.orchestrate/1",
         "orchestration_contract_version": "1",
+        "orchestration_entrypoint": "runtime.py:create_runtime",
+        "orchestration_required_host_capabilities": tuple(
+            capability for capability, _version in CAPABILITIES[1:]
+        ),
     }
     values.update(overrides)
     return SealedReleaseRecord(**values)

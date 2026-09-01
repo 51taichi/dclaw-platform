@@ -42,6 +42,14 @@ from ...agents.utils.file_handling import (
 )
 from ...config.config import load_agent_config
 from ...constant import WORKING_DIR
+from ..workspace.orchestration import (
+    WorkspaceOrchestrationError,
+    WorkspaceTurnResult,
+    is_workspace_business_turn,
+    resolve_active_workspace_authorization,
+    run_workspace_orchestration_turn,
+    workspace_result_to_message,
+)
 
 if TYPE_CHECKING:
     from ...agents.memory import BaseMemoryManager
@@ -106,6 +114,59 @@ async def _stream_printing_messages_interruptible(
         raise
     finally:
         await _cancel_streaming_agent_task(task)
+
+
+async def _run_standard_or_orchestrated_turn(
+    *,
+    agent: Any,
+    messages: list[Any],
+    request: Any,
+    query: str | None,
+    mission_info: dict[str, Any] | None,
+    agent_id: str,
+    agent_name: str,
+    workspace_root: Path,
+    orchestration: Any,
+) -> AsyncGenerator[tuple[Msg, bool, bool], None]:
+    """Yield messages plus whether session state may be persisted."""
+    if not orchestration.enabled or not is_workspace_business_turn(
+        query,
+        mission_info=mission_info,
+    ):
+        async for msg, last in _stream_printing_messages_interruptible(
+            agents=[agent],
+            coroutine_task=agent(messages),
+        ):
+            yield msg, last, True
+        return
+    try:
+        authorization = resolve_active_workspace_authorization(
+            agent_id=agent_id,
+            workspace_root=workspace_root,
+            tenant_id=str(getattr(request, "tenant_id", "local") or "local"),
+            config=orchestration,
+        )
+        result = await run_workspace_orchestration_turn(
+            agent=agent,
+            original_messages=messages,
+            request=request,
+            agent_id=agent_id,
+            workspace_root=workspace_root,
+            state_storage_root=Path(WORKING_DIR) / "workspace_runtime_state",
+            config=orchestration,
+            authorization=authorization,
+        )
+    except WorkspaceOrchestrationError:
+        logger.exception(
+            "Workspace orchestration failed closed for agent %s",
+            agent_id,
+        )
+        result = WorkspaceTurnResult(error_code="orchestration_error")
+    yield (
+        workspace_result_to_message(result, agent_name=agent_name),
+        True,
+        result.error_code is None,
+    )
 
 
 class AgentRunner(Runner):
@@ -788,10 +849,24 @@ class AgentRunner(Runner):
                     ):
                         yield msg, last
             else:
-                async for msg, last in _stream_printing_messages_interruptible(
-                    agents=[agent],
-                    coroutine_task=agent(msgs),
+                workspace_root = Path(
+                    self.workspace_dir or WORKING_DIR,
+                ).resolve(strict=True)
+                async for msg, last, should_save_session in (
+                    _run_standard_or_orchestrated_turn(
+                        agent=agent,
+                        messages=msgs,
+                        request=request,
+                        query=query,
+                        mission_info=mission_info,
+                        agent_id=self.agent_id,
+                        agent_name=self.agent_name,
+                        workspace_root=workspace_root,
+                        orchestration=agent_config.orchestration,
+                    )
                 ):
+                    if not should_save_session:
+                        session_state_loaded = False
                     yield msg, last
 
         except asyncio.CancelledError as exc:

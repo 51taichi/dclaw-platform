@@ -14,6 +14,7 @@ from qwenpaw.app.sealed_agents.package import (
     SealedPackageError,
     SealedPackageManifest,
     build_signed_package_bytes,
+    inspect_extracted_payload,
     validate_sealed_package,
 )
 
@@ -67,6 +68,9 @@ def test_valid_signed_package_is_verified_and_extracted(tmp_path):
         "internal rules\nCANARY-LUYU-9F21"
     )
     assert "agent/AGENTS.md" not in result.public_metadata.model_dump_json()
+    digest, signed_files = inspect_extracted_payload(result.extracted_root)
+    assert digest == result.manifest.content_digest
+    assert "agent/AGENTS.md" in signed_files
 
 
 def test_v1_manifest_without_runtime_keeps_standard_execution():

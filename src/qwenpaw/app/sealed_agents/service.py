@@ -119,6 +119,16 @@ class SealedAgentService:
                 if manifest.orchestration
                 else None
             ),
+            orchestration_entrypoint=(
+                manifest.orchestration.entrypoint
+                if manifest.orchestration
+                else None
+            ),
+            orchestration_required_host_capabilities=(
+                manifest.orchestration.required_host_capabilities
+                if manifest.orchestration
+                else ()
+            ),
             entrypoint=manifest.entrypoint,
             runtime_adapter=(manifest.runtime.adapter if manifest.runtime else None),
             runtime_contract_version=(

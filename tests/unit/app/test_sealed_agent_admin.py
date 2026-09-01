@@ -99,6 +99,32 @@ def test_non_admin_cannot_use_release_routes():
     assert exc_info.value.status_code == 403
 
 
+def test_official_super_expert_root_is_separate_from_other_trusted_signers(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(router_module, "WORKING_DIR", tmp_path)
+    monkeypatch.setattr(router_module, "_service", None)
+
+    def load(path):
+        if path.name == "official_super_expert_signers.json":
+            return {"official": object()}
+        return {"ordinary": object()}
+
+    monkeypatch.setattr(router_module, "load_trusted_signers", load)
+    monkeypatch.setattr(
+        router_module,
+        "get_sealed_agent_registry",
+        lambda: object(),
+    )
+
+    service = router_module.get_sealed_agent_service()
+
+    assert set(service.trusted_signers) == {"ordinary", "official"}
+    assert service.super_expert_trust_store.official_signer_ids == {"official"}
+    router_module._service = None
+
+
 def test_router_has_no_package_or_content_download_route():
     routes = [(route.path, frozenset(route.methods or set())) for route in router_module.router.routes]
 

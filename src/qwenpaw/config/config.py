@@ -1058,6 +1058,43 @@ class PlanConfig(BaseModel):
     )
 
 
+WORKSPACE_RUNTIME_HOST_CAPABILITIES_V1 = (
+    "agent.execute",
+    "session.context",
+    "runtime.trace",
+    "runtime.complete",
+    "runtime.fail",
+)
+
+
+class OrchestrationConfig(BaseModel):
+    """Strict opt-in declaration for deterministic workspace turns."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    contract_version: Literal["1"] = "1"
+    entrypoint: str = ""
+    required_host_capabilities: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_declaration(self) -> "OrchestrationConfig":
+        capabilities = self.required_host_capabilities
+        if len(set(capabilities)) != len(capabilities):
+            raise ValueError("duplicate orchestration host capability")
+        if self.enabled:
+            if not re.fullmatch(
+                r"[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*\.py:[A-Za-z_][A-Za-z0-9_]*",
+                self.entrypoint,
+            ):
+                raise ValueError("unsafe orchestration entrypoint")
+            if set(capabilities) != set(WORKSPACE_RUNTIME_HOST_CAPABILITIES_V1):
+                raise ValueError("unsupported orchestration host capability")
+        elif self.entrypoint or capabilities:
+            raise ValueError("disabled orchestration cannot declare an entrypoint")
+        return self
+
+
 class AgentProfileConfig(BaseModel):
     """Complete Agent Profile configuration (stored in workspace/agent.json).
 
@@ -1138,6 +1175,10 @@ class AgentProfileConfig(BaseModel):
     plan: PlanConfig = Field(
         default_factory=PlanConfig,
         description="Plan mode configuration for this agent",
+    )
+    orchestration: OrchestrationConfig = Field(
+        default_factory=OrchestrationConfig,
+        description="Optional deterministic workspace-turn orchestration",
     )
 
 

@@ -31,11 +31,17 @@ def get_sealed_agent_service() -> SealedAgentService:
     if _service is None:
         root = Path(WORKING_DIR) / "sealed_agents"
         trusted_signers = load_trusted_signers(root / "trusted_signers.json")
+        official_super_expert_signers = load_trusted_signers(
+            root / "official_super_expert_signers.json",
+        )
+        trusted_signers.update(official_super_expert_signers)
         _service = SealedAgentService(
             root=root,
             registry=get_sealed_agent_registry(),
             trusted_signers=trusted_signers,
-            official_super_expert_signer_ids=frozenset(trusted_signers),
+            official_super_expert_signer_ids=frozenset(
+                official_super_expert_signers,
+            ),
         )
     return _service
 

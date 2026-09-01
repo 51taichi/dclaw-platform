@@ -71,6 +71,8 @@ class SealedReleaseRecord(BaseModel):
     declared_capabilities: tuple[tuple[str, str], ...] = ()
     orchestration_capability_id: str | None = None
     orchestration_contract_version: str | None = None
+    orchestration_entrypoint: str | None = None
+    orchestration_required_host_capabilities: tuple[str, ...] = ()
     entrypoint: str | None = None
     runtime_adapter: str | None = None
     runtime_contract_version: str | None = None
