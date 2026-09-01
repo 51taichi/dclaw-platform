@@ -1,7 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
-import { Button, Drawer, Input, Modal, Space, Switch, Table, Tag, message } from "antd";
+import {
+  Button,
+  Drawer,
+  Input,
+  Modal,
+  Space,
+  Switch,
+  Table,
+  Tag,
+  message,
+} from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { Plus, Users } from "lucide-react";
+import { Plus } from "lucide-react";
 import { PageHeader } from "../../../components/PageHeader";
 import { expertTeamsApi } from "../../../api/modules/expertTeams";
 import type { ExpertTeamTemplate } from "../../../api/types/expertTeams";
@@ -162,33 +172,28 @@ export default function ExpertTeamsAdminPage() {
 
   return (
     <div style={{ padding: 24 }}>
-      <PageHeader parent="设置" current="专家团" />
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          marginBottom: 16,
-        }}
-      >
-        <Space>
-          <Users size={20} />
-          <span style={{ color: "#6b7280" }}>
-            维护公开专家团模板，用户在专家中心召唤。
-          </span>
-        </Space>
-        <Button type="primary" icon={<Plus size={14} />} onClick={() => openEditor()}>
-          创建专家团
-        </Button>
-      </div>
-
-      <Table
-        rowKey="id"
-        loading={loading}
-        columns={columns}
-        dataSource={teams}
-        pagination={false}
+      <PageHeader
+        parent="设置"
+        current="专家团"
+        extra={
+          <Button
+            type="primary"
+            icon={<Plus size={14} />}
+            onClick={() => openEditor()}
+          >
+            创建专家团
+          </Button>
+        }
       />
+      <section aria-label="专家团列表" style={{ marginTop: 16 }}>
+        <Table
+          rowKey="id"
+          loading={loading}
+          columns={columns}
+          dataSource={teams}
+          pagination={false}
+        />
+      </section>
 
       <Drawer
         title={editing ? `编辑 ${editing.name}` : "创建专家团"}
