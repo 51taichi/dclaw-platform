@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from agentscope.message import Msg
 
 from qwenpaw.app.sealed_agents.request_context import (
     SealedAdapterRequest,
@@ -27,6 +28,19 @@ def test_metadata_cannot_override_trusted_identity():
 
     assert request.trusted_context["agent_id"] == "trusted"
     assert request.metadata["agent_id"] == "attacker"
+
+
+def test_adapter_request_keeps_trusted_diagnostics_outside_caller_metadata(tmp_path):
+    request = SealedAdapterRequest(
+        messages=(Msg(name="user", role="user", content="hello"),),
+        trusted_context={"agent_id": "sealed"},
+        metadata={"diagnostics_authorized": True},
+        session_root=tmp_path / "session",
+        diagnostics_authorized=False,
+    )
+
+    assert request.metadata["diagnostics_authorized"] is True
+    assert request.diagnostics_authorized is False
 
 
 @pytest.mark.parametrize("value", ["not-an-object", ["not-an-object"]])

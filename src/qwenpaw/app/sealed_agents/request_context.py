@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 MAX_METADATA_BYTES = 64 * 1024
@@ -60,3 +61,5 @@ class SealedAdapterRequest:
     messages: tuple[Any, ...]
     trusted_context: dict[str, Any]
     metadata: dict[str, Any]
+    session_root: Path | None = None
+    diagnostics_authorized: bool = False
