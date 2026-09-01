@@ -11,6 +11,10 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
 from qwenpaw.app.billing.execution import OpenApiExecutionFence
+from qwenpaw.app.sealed_agents.models import (
+    SealedAgentRecord,
+    SealedReleaseRecord,
+)
 from qwenpaw.app.open_api.runtime import (
     OpenMessageRequest,
     build_open_session_id,
@@ -367,12 +371,14 @@ def _publication(
     public_id: str = "public-agent",
     target_type: str = "agent",
     target_id: str = "agent-published",
+    response_policy: str = "standard",
 ) -> dict[str, Any]:
     return {
         "id": publication_id,
         "public_id": public_id,
         "target_type": target_type,
         "target_id": target_id,
+        "response_policy": response_policy,
         "owner_user_id": "owner-1",
         "bound_user_id": "owner-1",
         "status": "enabled",
@@ -402,6 +408,7 @@ class _FakeBillingCoordinator:
                 "status_code": 202,
                 "billing_status": "quoted",
                 "billing_error_code": None,
+                "sealed_runtime": command.sealed_runtime,
             },
         )
         return SimpleNamespace(
@@ -564,7 +571,7 @@ async def test_prepare_open_agent_chat_ignores_metadata_agent_id_and_binds_open_
 
 
 @pytest.mark.asyncio
-async def test_prepare_sealed_open_agent_chat_sets_private_diagnostics_context():
+async def test_prepare_open_agent_chat_keeps_diagnostics_as_user_metadata():
     workspace = _workspace(agent_id="agent-published")
     request = _request(workspace=workspace)
     payload = OpenMessageRequest(
@@ -577,20 +584,37 @@ async def test_prepare_sealed_open_agent_chat_sets_private_diagnostics_context()
         request,
         _publication(),
         payload,
-        sealed_runtime={"release_id": "release-1", "version": "1.2.0"},
-        diagnostics_authorized=True,
-        invocation_id="invocation-1",
     )
 
-    assert prepared.payload["meta"]["sealed_runtime"] == {
-        "release_id": "release-1",
-        "version": "1.2.0",
+    assert prepared.payload["meta"]["metadata"] == {
+        "diagnostics_requested": True,
     }
-    assert (
-        prepared.payload["meta"]["_server_debug_endpoint_authorized"]
-        is True
+    assert "sealed_runtime" not in prepared.payload["meta"]
+    assert "_server_debug_endpoint_authorized" not in prepared.payload["meta"]
+    assert "open_invocation_id" not in prepared.payload["meta"]
+
+
+@pytest.mark.asyncio
+async def test_standard_and_sealed_publications_prepare_same_native_shape():
+    payload = OpenMessageRequest(
+        external_user_id="ext-user",
+        external_session_id="ext-session",
+        message="hello",
+        metadata={"topic": "same"},
     )
-    assert prepared.payload["meta"]["open_invocation_id"] == "invocation-1"
+    standard = await prepare_open_agent_chat(
+        _request(workspace=_workspace(agent_id="agent-published")),
+        _publication(response_policy="standard"),
+        payload,
+    )
+    sealed = await prepare_open_agent_chat(
+        _request(workspace=_workspace(agent_id="agent-published")),
+        _publication(response_policy="sealed"),
+        payload,
+    )
+    assert sealed.agent_id == standard.agent_id
+    assert sealed.session_id == standard.session_id
+    assert sealed.payload == standard.payload
 
 
 @pytest.mark.asyncio
@@ -705,6 +729,92 @@ async def test_post_open_message_agent_publication_creates_invocation_from_reque
     assert '"type":"billing.completed"' in body
     assert repo.invocations[0]["status"] == "succeeded"
     assert repo.invocations[0]["status_code"] == 200
+
+
+@pytest.mark.asyncio
+async def test_standard_post_open_message_does_not_read_sealed_registry(
+    monkeypatch,
+):
+    workspace = _workspace(agent_id="agent-published")
+    repo = FakeOpenApiRepository(publication=_publication())
+    monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
+    monkeypatch.setattr(
+        open_api,
+        "get_sealed_agent_registry",
+        lambda: pytest.fail("standard OpenAPI read sealed Registry"),
+    )
+
+    response = await open_api.post_open_message(
+        "public-agent",
+        OpenMessageRequest(
+            external_user_id="ext-user",
+            external_session_id="ext-session",
+            message="hello",
+        ),
+        _request(workspace=workspace),
+    )
+
+    body = await _consume_streaming_response(response)
+    assert "data: done" in body
+
+
+@pytest.mark.asyncio
+async def test_sealed_post_open_message_preserves_native_stream_events(
+    monkeypatch,
+):
+    events = [
+        'data: {"type":"tool.call","name":"read_file"}\n\n',
+        'data: {"type":"response.failed","error":"native_error"}\n\n',
+        'data: {"type":"response.completed"}\n\n',
+    ]
+    workspace = _workspace(agent_id="agent-published")
+    workspace.task_tracker = FakeTaskTracker(
+        is_new_run=False,
+        existing_events=events,
+    )
+    publication = _publication(response_policy="sealed")
+    repo = FakeOpenApiRepository(publication=publication)
+    release = SealedReleaseRecord(
+        release_id="release-1",
+        version="2.1.0",
+        content_digest="sha256:" + "a" * 64,
+        signer_id="publisher",
+        state="active",
+    )
+    record = SealedAgentRecord(
+        agent_id="agent-published",
+        name="陆羽",
+        active_release_id=release.release_id,
+        releases=[release],
+    )
+    registry = SimpleNamespace(
+        is_sealed=lambda _agent_id: True,
+        get_agent=lambda _agent_id: record,
+    )
+    monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
+    monkeypatch.setattr(
+        open_api,
+        "get_sealed_agent_registry",
+        lambda: registry,
+    )
+
+    response = await open_api.post_open_message(
+        "public-agent",
+        OpenMessageRequest(
+            external_user_id="ext-user",
+            external_session_id="ext-session",
+            message="hello",
+        ),
+        _request(workspace=workspace),
+    )
+
+    body = await _consume_streaming_response(response)
+    assert body == "".join(events)
+    assert repo.invocations[0]["sealed_runtime"] == {
+        "release_id": "release-1",
+        "version": "2.1.0",
+        "content_digest": "sha256:" + "a" * 64,
+    }
 
 
 @pytest.mark.asyncio

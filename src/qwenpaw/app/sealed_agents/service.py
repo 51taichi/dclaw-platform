@@ -2,35 +2,24 @@
 
 from __future__ import annotations
 
-import logging
 import shutil
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Mapping
 from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from packaging.version import InvalidVersion, Version
 
-from .adapters import UnsupportedSealedRuntime, get_runtime_adapter
-from .entrypoint_protocol import (
-    EntrypointProtocolError,
-    SealedEntrypointProcess,
-)
-from .harness_protocol import HarnessProcess, HarnessProtocolError
 from .models import RuntimeValidationRecord, SealedAgentRecord, SealedReleaseRecord
 from .package import SealedPackageError, validate_sealed_package
 from .registry import SealedAgentRegistry
-from .runtime import PinnedSealedRuntime
-
-logger = logging.getLogger(__name__)
-
+from .standard_workspace import (
+    StandardWorkspaceError,
+    validate_standard_workspace,
+)
 
 class SealedAgentReleaseError(ValueError):
     """Sanitized release lifecycle failure."""
-
-
-ReloadAgent = Callable[[str, Path], None]
-RuntimeValidator = Callable[[PinnedSealedRuntime], Awaitable[RuntimeValidationRecord]]
 
 
 class SealedAgentService:
@@ -40,14 +29,10 @@ class SealedAgentService:
         root: Path,
         registry: SealedAgentRegistry,
         trusted_signers: Mapping[str, Ed25519PublicKey],
-        reload_agent: ReloadAgent | None = None,
-        runtime_validator: RuntimeValidator | None = None,
     ) -> None:
         self.root = Path(root)
         self.registry = registry
         self.trusted_signers = dict(trusted_signers)
-        self._reload_agent = reload_agent or (lambda _agent_id, _path: None)
-        self._runtime_validator = runtime_validator or self._validate_pinned_runtime
 
     def list_agents(self) -> list[SealedAgentRecord]:
         return self.registry.list_agents()
@@ -129,21 +114,16 @@ class SealedAgentService:
         if target is None:
             raise SealedAgentReleaseError("sealed agent release not found")
         if (
-            target.runtime_adapter is not None
-            and (
-                target.runtime_validation is None
-                or target.runtime_validation.status != "valid"
-            )
+            target.runtime_validation is None
+            or target.runtime_validation.status != "valid"
+            or target.runtime_validation.adapter != "standard"
         ):
             raise SealedAgentReleaseError("sealed agent runtime validation failed")
         agent_root = self.release_root(agent_id, release_id) / "agent"
-        if not agent_root.is_dir():
-            raise SealedAgentReleaseError("sealed agent release is unavailable")
         try:
-            self._reload_agent(agent_id, agent_root)
-        except Exception as exc:
-            logger.error("Sealed agent activation failed for %s", agent_id)
-            raise SealedAgentReleaseError("sealed agent activation failed") from exc
+            validate_standard_workspace(agent_id, agent_root)
+        except StandardWorkspaceError as exc:
+            raise SealedAgentReleaseError("sealed agent release is unavailable")
 
         releases: list[SealedReleaseRecord] = []
         for item in current.releases:
@@ -174,89 +154,25 @@ class SealedAgentService:
         )
         if target is None:
             raise SealedAgentReleaseError("sealed agent release not found")
-        adapter = target.runtime_adapter or "standard"
-        contract_version = target.runtime_contract_version or "1"
-        release_root = self.release_root(agent_id, release_id).resolve()
-        entrypoint = target.entrypoint or "agent/agent.json"
-        entrypoint_path = (release_root / entrypoint).resolve()
-        if not entrypoint_path.is_relative_to(release_root):
-            return self._persist_runtime_validation(
-                current,
-                release_id,
-                RuntimeValidationRecord(
-                    status="invalid",
-                    adapter=adapter,
-                    contract_version=contract_version,
-                    error_code="unsafe_entrypoint",
-                ),
-            )
-        pinned = PinnedSealedRuntime(
-            agent_id=agent_id,
-            release_id=release_id,
-            version=target.version,
-            content_digest=target.content_digest,
-            release_root=release_root,
-            entrypoint=entrypoint,
-            adapter_key=(adapter, contract_version),
-            failure_policy=target.runtime_failure_policy or "fail_closed",
-        )
         try:
-            validation = await self._runtime_validator(pinned)
-        except (
-            EntrypointProtocolError,
-            HarnessProtocolError,
-            UnsupportedSealedRuntime,
-        ):
+            validate_standard_workspace(
+                agent_id,
+                self.release_root(agent_id, release_id) / "agent",
+            )
+        except StandardWorkspaceError as exc:
             validation = RuntimeValidationRecord(
                 status="invalid",
-                adapter=adapter,
-                contract_version=contract_version,
-                error_code="runtime_validation_failed",
+                adapter="standard",
+                contract_version="1",
+                error_code=exc.error_code,
             )
-        return self._persist_runtime_validation(current, release_id, validation)
-
-    async def _validate_pinned_runtime(
-        self,
-        pinned: PinnedSealedRuntime,
-    ) -> RuntimeValidationRecord:
-        get_runtime_adapter(*pinned.adapter_key)
-        if pinned.adapter_key == ("standard", "1"):
-            return RuntimeValidationRecord(
+        else:
+            validation = RuntimeValidationRecord(
                 status="valid",
                 adapter="standard",
                 contract_version="1",
             )
-        if pinned.adapter_key == ("sealed_entrypoint", "1"):
-            session_root = (
-                self.root
-                / "runtime_validation"
-                / pinned.agent_id
-                / pinned.release_id
-                / "runtime-validation"
-            )
-            async with SealedEntrypointProcess(
-                pinned,
-                session_root=session_root,
-            ) as process:
-                ready = await process.handshake()
-            return RuntimeValidationRecord(
-                status="valid",
-                adapter=ready.adapter,
-                contract_version=ready.contract_version,
-            )
-        async with HarnessProcess(pinned) as process:
-            response = await process.invoke("handshake", {})
-        payload = response.payload
-        if (
-            payload.get("adapter") != pinned.adapter_key[0]
-            or payload.get("contract_version") != pinned.adapter_key[1]
-        ):
-            raise HarnessProtocolError("sealed harness handshake mismatch")
-        return RuntimeValidationRecord(
-            status="valid",
-            adapter=pinned.adapter_key[0],
-            contract_version=pinned.adapter_key[1],
-        )
+        return self._persist_runtime_validation(current, release_id, validation)
 
     def _persist_runtime_validation(
         self,

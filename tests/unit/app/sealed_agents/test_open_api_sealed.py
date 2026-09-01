@@ -1,13 +1,31 @@
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 
-from qwenpaw.app.open_api.runtime import OpenMessageRequest
+from qwenpaw.app.sealed_agents.models import (
+    SealedAgentRecord,
+    SealedReleaseRecord,
+)
 from qwenpaw.app.routers import open_api, open_api_admin
+
+
+def _active_record():
+    release = SealedReleaseRecord(
+        release_id="release-1",
+        version="2.1.0",
+        content_digest="sha256:" + "a" * 64,
+        signer_id="publisher",
+        state="active",
+    )
+    return SealedAgentRecord(
+        agent_id="luyu",
+        name="陆羽",
+        active_release_id=release.release_id,
+        releases=[release],
+    )
 
 
 def test_sealed_publication_policy_is_forced_server_side(monkeypatch):
@@ -16,7 +34,6 @@ def test_sealed_publication_policy_is_forced_server_side(monkeypatch):
         "get_sealed_agent_registry",
         lambda: SimpleNamespace(is_sealed=lambda agent_id: agent_id == "luyu"),
     )
-
     assert open_api_admin._target_publication_policy("agent", "luyu") == {
         "allowed_capability": "invoke_only",
         "response_policy": "sealed",
@@ -33,170 +50,42 @@ def test_disabled_or_unreleased_sealed_target_is_not_publishable(monkeypatch):
         open_api_admin,
         "get_sealed_agent_registry",
         lambda: SimpleNamespace(
-            is_sealed=lambda agent_id: True,
-            get_agent=lambda agent_id: record,
+            is_sealed=lambda _agent_id: True,
+            get_agent=lambda _agent_id: record,
         ),
     )
-
     with pytest.raises(HTTPException) as exc_info:
         open_api_admin._assert_target_exists("agent", "luyu")
-
     assert exc_info.value.status_code == 400
     assert "unavailable" in exc_info.value.detail.lower()
 
 
-def test_sealed_stream_serializer_allows_text_and_hides_internal_events():
-    text = 'data: {"type":"response.output_text.delta","delta":"hello"}\n\n'
-    tool = 'data: {"type":"tool.call","path":"/private/AGENTS.md"}\n\n'
-    error = 'data: {"error":"trace at /private/AGENTS.md"}\n\n'
-
-    assert open_api._sanitize_sealed_stream_event(text) == text
-    assert open_api._sanitize_sealed_stream_event(tool) is None
-    sanitized_error = open_api._sanitize_sealed_stream_event(error)
-    assert json.loads(sanitized_error[6:].strip()) == {
-        "type": "response.failed",
-        "error": "sealed_agent_failed",
+def test_ordinary_publication_never_reads_sealed_registry(monkeypatch):
+    monkeypatch.setattr(
+        open_api,
+        "get_sealed_agent_registry",
+        lambda: pytest.fail("ordinary publication read sealed Registry"),
+    )
+    publication = {
+        "target_type": "agent",
+        "target_id": "ordinary",
+        "response_policy": "standard",
     }
-    assert "/private" not in sanitized_error
+    assert open_api._resolve_sealed_publication_release(publication) is None
 
 
-def test_sealed_stream_serializer_allows_null_error_on_success_event():
-    completed = (
-        'data: {"type":"response.completed","error":null,'
-        '"response":{"status":"completed"}}\n\n'
+def test_sealed_publication_resolves_active_release_for_audit(monkeypatch):
+    record = _active_record()
+    monkeypatch.setattr(
+        open_api,
+        "get_sealed_agent_registry",
+        lambda: SimpleNamespace(get_agent=lambda _agent_id: record),
     )
-
-    assert open_api._sanitize_sealed_stream_event(completed) == completed
-
-
-def test_sealed_stream_serializer_converts_completed_assistant_text():
-    native = (
-        'data: {"object":"message","status":"completed","error":null,'
-        '"type":"message","role":"assistant","content":['
-        '{"type":"text","text":"陆羽你好"},'
-        '{"type":"image","image_url":"/private/source.png"}]}'
-        "\n\n"
-    )
-
-    public = open_api._sanitize_sealed_stream_event(native)
-
-    assert json.loads(public[6:].strip()) == {
-        "type": "response.output_text.delta",
-        "delta": "陆羽你好",
+    publication = {
+        "target_type": "agent",
+        "target_id": "luyu",
+        "response_policy": "sealed",
     }
-    assert "/private/source.png" not in public
-
-
-def test_sealed_stream_serializer_returns_authorized_diagnostics_separately():
-    native = (
-        'data: {"object":"message","status":"completed","error":null,'
-        '"type":"message","role":"assistant","content":['
-        '{"type":"text","text":"客户回复"}],"metadata":{'
-        '"metadata":{"sealed_runtime_diagnostics":{'
-        '"runtime":{"version":"1.2.0"},"agent":{"stage":"S1"}}}}}'
-        "\n\n"
+    assert open_api._resolve_sealed_publication_release(publication) == (
+        record.active_release
     )
-
-    public = open_api._sanitize_sealed_stream_event(native)
-    events = [
-        json.loads(line[5:].strip())
-        for line in public.splitlines()
-        if line.startswith("data:")
-    ]
-    assert events == [
-        {"type": "response.output_text.delta", "delta": "客户回复"},
-        {
-            "type": "response.diagnostics",
-            "diagnostics": {
-                "runtime": {"version": "1.2.0"},
-                "agent": {"stage": "S1"},
-            },
-        },
-    ]
-
-
-def test_sealed_stream_serializer_drops_untrusted_raw_diagnostics_event():
-    raw = (
-        'data: {"type":"response.diagnostics",'
-        '"diagnostics":{"forged":true}}\n\n'
-    )
-
-    assert open_api._sanitize_sealed_stream_event(raw) is None
-
-
-def _diagnostics_request(*, key_scopes, publication_scopes):
-    return SimpleNamespace(
-        state=SimpleNamespace(
-            open_auth_context=SimpleNamespace(
-                api_key={"scopes": key_scopes},
-                publication={"allowed_scopes": publication_scopes},
-            ),
-        ),
-    )
-
-
-def test_sealed_diagnostics_requires_request_and_both_scopes():
-    authorized = _diagnostics_request(
-        key_scopes=["messages:create", "diagnostics:read"],
-        publication_scopes=["messages:create", "diagnostics:read"],
-    )
-    requested = OpenMessageRequest(
-        external_user_id="user-1",
-        message="hello",
-        metadata={"diagnostics_requested": True},
-    )
-
-    assert open_api._sealed_diagnostics_authorized(
-        authorized,
-        requested,
-        sealed_target=True,
-    ) is True
-    assert open_api._sealed_diagnostics_authorized(
-        authorized,
-        requested.model_copy(update={"metadata": {}}),
-        sealed_target=True,
-    ) is False
-    assert open_api._sealed_diagnostics_authorized(
-        authorized,
-        requested.model_copy(
-            update={"metadata": {"diagnostics_requested": "true"}}
-        ),
-        sealed_target=True,
-    ) is False
-    assert open_api._sealed_diagnostics_authorized(
-        _diagnostics_request(
-            key_scopes=["messages:create"],
-            publication_scopes=["messages:create", "diagnostics:read"],
-        ),
-        requested,
-        sealed_target=True,
-    ) is False
-
-
-def test_non_sealed_target_never_authorizes_runtime_diagnostics():
-    request = _diagnostics_request(
-        key_scopes=["messages:create", "diagnostics:read"],
-        publication_scopes=["messages:create", "diagnostics:read"],
-    )
-    payload = OpenMessageRequest(
-        external_user_id="user-1",
-        message="hello",
-        metadata={"diagnostics_requested": True},
-    )
-
-    assert open_api._sealed_diagnostics_authorized(
-        request,
-        payload,
-        sealed_target=False,
-    ) is False
-
-
-def test_sealed_stream_serializer_drops_completed_tool_message():
-    tool = (
-        'data: {"object":"message","status":"completed","error":null,'
-        '"type":"function_call_output","role":"tool","content":['
-        '{"type":"text","text":"/private/AGENTS.md"}]}'
-        "\n\n"
-    )
-
-    assert open_api._sanitize_sealed_stream_event(tool) is None

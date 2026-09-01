@@ -32,7 +32,6 @@ from ..expert_teams import (
     get_expert_team_template,
     get_latest_expert_team_run_by_chat,
 )
-from ..open_api.models import SCOPE_DIAGNOSTICS_READ
 from ..open_api.runtime import (
     ExecutionLeaseLostError,
     OpenMessageRequest,
@@ -43,13 +42,34 @@ from ..open_api.runtime import (
     prepare_open_expert_team_chat,
 )
 from ..sealed_agents.registry import get_sealed_agent_registry
-from ..sealed_agents.runtime import resolve_pinned_runtime
+from ..sealed_agents.models import SealedReleaseRecord
 from ..storage.repos.open_api_repo import get_open_api_repository
 from ..task_limits import get_task_limiter
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/open/v1", tags=["open-api"])
+
+
+def _resolve_sealed_publication_release(
+    publication: dict[str, Any],
+) -> SealedReleaseRecord | None:
+    """Resolve control-plane availability without changing execution."""
+
+    if not (
+        str(publication.get("target_type")) == "agent"
+        and str(publication.get("response_policy")) == "sealed"
+    ):
+        return None
+    record = get_sealed_agent_registry().get_agent(
+        str(publication.get("target_id")),
+    )
+    if record is None or not record.enabled or record.active_release is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Sealed agent target is unavailable",
+        )
+    return record.active_release
 
 
 @router.post(
@@ -79,47 +99,15 @@ async def post_open_message(
             detail="Open API key is not allowed for this publication",
         )
 
-    sealed_target = str(
-        publication.get("target_type")
-    ) == "agent" and get_sealed_agent_registry().is_sealed(
-        str(publication.get("target_id")),
-    )
-    if sealed_target:
-        sealed_record = get_sealed_agent_registry().get_agent(
-            str(publication["target_id"]),
-        )
-        if (
-            sealed_record is None
-            or not sealed_record.enabled
-            or sealed_record.active_release_id is None
-        ):
-            raise HTTPException(
-                status_code=503,
-                detail="Sealed agent target is unavailable",
-            )
-    pinned_runtime = (
-        resolve_pinned_runtime(
-            str(publication["target_id"]),
-            get_sealed_agent_registry(),
-        )
-        if sealed_target
-        else None
-    )
+    active_sealed_release = _resolve_sealed_publication_release(publication)
     sealed_runtime_audit = (
         {
-            "release_id": pinned_runtime.release_id,
-            "version": pinned_runtime.version,
-            "content_digest": pinned_runtime.content_digest,
-            "adapter": pinned_runtime.adapter_key[0],
-            "contract_version": pinned_runtime.adapter_key[1],
+            "release_id": active_sealed_release.release_id,
+            "version": active_sealed_release.version,
+            "content_digest": active_sealed_release.content_digest,
         }
-        if pinned_runtime is not None
+        if active_sealed_release is not None
         else None
-    )
-    diagnostics_authorized = _sealed_diagnostics_authorized(
-        request,
-        payload,
-        sealed_target=sealed_target,
     )
 
     if payload.stream is False:
@@ -231,9 +219,6 @@ async def post_open_message(
                 request,
                 publication,
                 payload,
-                sealed_runtime=sealed_runtime_audit,
-                diagnostics_authorized=diagnostics_authorized,
-                invocation_id=invocation_id,
             )
             stream_fn = prepared.console_channel.stream_one
             stream_payload = prepared.payload
@@ -346,7 +331,6 @@ async def post_open_message(
                     expert_team_run_id,
                     billing.open_api_repository.get_invocation(invocation_id)
                     or {},
-                    sealed_target=sealed_target,
                     initial_event=first_event,
                 )
             await _wait_for_durable_terminal(
@@ -531,7 +515,6 @@ async def post_open_message(
         invocation_id,
         expert_team_run_id,
         current,
-        sealed_target=sealed_target,
     )
 
 
@@ -990,26 +973,15 @@ def _streaming_response(
     expert_team_run_id: str,
     invocation: dict[str, Any],
     *,
-    sealed_target: bool = False,
     initial_event: Any | None = None,
 ) -> StreamingResponse:
     async def event_generator() -> AsyncGenerator[str, None]:
         stream_it = tracker.stream_from_queue(queue, run_key)
         try:
             if initial_event is not None:
-                public_event = _public_stream_event(
-                    initial_event,
-                    sealed_target=sealed_target,
-                )
-                if public_event is not None:
-                    yield public_event
+                yield initial_event
             async for event in stream_it:
-                public_event = _public_stream_event(
-                    event,
-                    sealed_target=sealed_target,
-                )
-                if public_event is not None:
-                    yield public_event
+                yield event
         finally:
             await stream_it.aclose()
 
@@ -1028,143 +1000,6 @@ def _streaming_response(
                 invocation.get("billing_status") or "reconciling",
             ),
         },
-    )
-
-
-_SEALED_PUBLIC_EVENT_TYPES = {
-    "response.started",
-    "response.output_text.delta",
-    "response.artifact.ready",
-    "response.completed",
-    "billing.completed",
-    "billing.interrupted",
-}
-
-
-def _sealed_failure_event() -> str:
-    return (
-        "data: "
-        + json.dumps(
-            {"type": "response.failed", "error": "sealed_agent_failed"},
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-        + "\n\n"
-    )
-
-
-def _public_stream_event(
-    event: Any,
-    *,
-    sealed_target: bool,
-) -> Any | None:
-    if not sealed_target:
-        return event
-    if isinstance(event, bytes):
-        event = event.decode("utf-8", errors="replace")
-    if not isinstance(event, str):
-        return None
-    return _sanitize_sealed_stream_event(event)
-
-
-def _sanitize_sealed_stream_event(event_data: str) -> str | None:
-    """Serialize sealed streams from an allowlist, never a denylist."""
-    for raw_line in event_data.splitlines():
-        line = raw_line.strip()
-        if not line.startswith("data:"):
-            continue
-        raw = line[5:].strip()
-        if not raw or raw == "[DONE]":
-            continue
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
-            return None
-        if not isinstance(payload, dict):
-            return None
-        if payload.get("error") is not None:
-            return _sealed_failure_event()
-        native_text = _sealed_native_assistant_text(payload)
-        if native_text is not None:
-            public_event = _sse(
-                {
-                    "type": "response.output_text.delta",
-                    "delta": native_text,
-                },
-            )
-            diagnostics = _sealed_native_diagnostics(payload)
-            if diagnostics is not None:
-                public_event += _sse(
-                    {
-                        "type": "response.diagnostics",
-                        "diagnostics": diagnostics,
-                    },
-                )
-            return public_event
-        if payload.get("type") not in _SEALED_PUBLIC_EVENT_TYPES:
-            return None
-        return f"data: {raw}\n\n"
-    return None
-
-
-def _sealed_native_assistant_text(payload: dict[str, Any]) -> str | None:
-    """Extract only public text from a completed native assistant message."""
-    if not (
-        payload.get("object") == "message"
-        and payload.get("type") == "message"
-        and payload.get("status") == "completed"
-        and payload.get("role") == "assistant"
-    ):
-        return None
-    content = payload.get("content")
-    if not isinstance(content, list):
-        return None
-    texts = [
-        part.get("text")
-        for part in content
-        if isinstance(part, dict)
-        and part.get("type") == "text"
-        and isinstance(part.get("text"), str)
-        and part.get("text")
-    ]
-    text = "".join(texts)
-    return text if text.strip() else None
-
-
-def _sealed_native_diagnostics(
-    payload: dict[str, Any],
-) -> dict[str, Any] | None:
-    """Extract diagnostics attached by an authorized sealed adapter only."""
-    message_metadata = payload.get("metadata")
-    if not isinstance(message_metadata, dict):
-        return None
-    agent_metadata = message_metadata.get("metadata")
-    if not isinstance(agent_metadata, dict):
-        return None
-    diagnostics = agent_metadata.get("sealed_runtime_diagnostics")
-    return diagnostics if isinstance(diagnostics, dict) else None
-
-
-def _sealed_diagnostics_authorized(
-    request: Request,
-    payload: OpenMessageRequest,
-    *,
-    sealed_target: bool,
-) -> bool:
-    """Authorize diagnostics only for opted-in sealed OpenAPI calls."""
-    if not sealed_target:
-        return False
-    if (payload.metadata or {}).get("diagnostics_requested") is not True:
-        return False
-    context = getattr(request.state, "open_auth_context", None)
-    api_key = getattr(context, "api_key", None)
-    publication = getattr(context, "publication", None)
-    if not isinstance(api_key, dict) or not isinstance(publication, dict):
-        return False
-    return (
-        SCOPE_DIAGNOSTICS_READ in set(api_key.get("scopes") or [])
-        and SCOPE_DIAGNOSTICS_READ
-        in set(publication.get("allowed_scopes") or [])
     )
 
 

@@ -39,12 +39,13 @@ def test_application_uses_exact_existing_mounts_and_network() -> None:
     assert app["networks"] == ["dclaw-net"]
 
 
-def test_production_explicitly_enables_trusted_direct_sealed_entrypoints() -> None:
+def test_production_compose_has_no_sealed_runtime_override() -> None:
     app = _compose()["services"]["dclaw"]
 
-    assert app["environment"] == {
-        "QWENPAW_SEALED_ENTRYPOINT_EXECUTION_MODE": "trusted_direct",
-    }
+    assert "environment" not in app or (
+        "QWENPAW_SEALED_ENTRYPOINT_EXECUTION_MODE"
+        not in app["environment"]
+    )
 
 
 def test_all_runtime_resources_are_external() -> None:

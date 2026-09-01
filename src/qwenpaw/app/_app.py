@@ -28,7 +28,7 @@ from agentscope_runtime.engine.schemas.exception import (
 )
 
 from ..config import load_config  # pylint: disable=no-name-in-module
-from ..config.utils import get_config_path
+from ..config.utils import get_config_path, save_config
 from ..constant import (
     CORS_ORIGIN_REGEX,
     DOCS_ENABLED,
@@ -71,6 +71,11 @@ from .migration import (
 from .storage.bootstrap import bootstrap_top_up_products, ensure_durable_schema
 from .expert_teams import bootstrap_expert_teams
 from .channels.registry import register_custom_channel_routes
+from .sealed_agents.registry import get_sealed_agent_registry
+from .sealed_agents.workspace_reconciliation import (
+    WorkspaceReconciliationResult,
+    reconcile_active_sealed_profiles,
+)
 
 # Apply log level on load so reload child process gets same level as CLI.
 logger = setup_logger(os.environ.get(LOG_LEVEL_ENV, "info"))
@@ -86,6 +91,33 @@ mimetypes.add_type("application/wasm", ".wasm")
 # Load persisted env vars into os.environ at module import time
 # so they are available before the lifespan starts.
 load_envs_into_environ()
+
+
+def _reconcile_sealed_agent_profiles(
+) -> WorkspaceReconciliationResult | None:
+    """Best-effort startup alignment isolated from ordinary Agent startup."""
+
+    try:
+        config_path = get_config_path()
+        config = load_config(config_path)
+        result = reconcile_active_sealed_profiles(
+            config,
+            get_sealed_agent_registry(),
+            Path(WORKING_DIR) / "sealed_agents",
+        )
+        if result.config_changed:
+            save_config(config, config_path)
+        if result.unavailable:
+            logger.error(
+                "Unavailable sealed workspaces: %s",
+                result.unavailable,
+            )
+        return result
+    except Exception:
+        logger.exception(
+            "Sealed workspace reconciliation failed; continuing startup",
+        )
+        return None
 
 
 # Dynamic runner that selects the correct workspace runner based on request
@@ -414,6 +446,8 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
 
     async def _background_startup():  # pylint: disable=too-many-statements
         try:
+            _reconcile_sealed_agent_profiles()
+
             # Start all configured agents (truly parallel now)
             await multi_agent_manager.start_all_configured_agents()
 

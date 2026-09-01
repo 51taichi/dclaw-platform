@@ -25,6 +25,13 @@ def _record():
         content_digest="sha256:" + "a" * 64,
         signer_id="publisher",
         state="active",
+        runtime_adapter="standard",
+        runtime_contract_version="1",
+        runtime_validation=RuntimeValidationRecord(
+            status="valid",
+            adapter="standard",
+            contract_version="1",
+        ),
     )
     return SealedAgentRecord(
         agent_id="luyu",
@@ -54,6 +61,31 @@ def test_admin_list_returns_operational_metadata_without_asset_paths(monkeypatch
     assert "workspace" not in serialized
     assert "AGENTS.md" not in serialized
     assert "path" not in serialized
+
+
+def test_invalid_active_release_is_reported_unavailable_without_internal_path():
+    record = _record()
+    invalid = record.active_release.model_copy(
+        update={
+            "runtime_validation": RuntimeValidationRecord(
+                status="invalid",
+                adapter="standard",
+                contract_version="1",
+                error_code="invalid_agent_profile",
+            ),
+        },
+    )
+    record = record.model_copy(update={"releases": [invalid]})
+
+    response = router_module._operational_dto(record)
+
+    assert response["availability"] == "unavailable"
+    assert response["runtime_validation"]["error_code"] == (
+        "invalid_agent_profile"
+    )
+    serialized = str(response)
+    assert "/private" not in serialized
+    assert "agent.json" not in serialized
 
 
 def test_non_admin_cannot_use_release_routes():
@@ -126,6 +158,133 @@ async def test_activation_registers_private_runtime_only_after_preload_succeeds(
     assert response["agent_id"] == "luyu"
     assert config.agents.profiles["luyu"].workspace_dir == str(release_root / "agent")
     assert saved
+
+
+@pytest.mark.asyncio
+async def test_activation_failure_restores_previous_profile_and_runtime(
+    monkeypatch,
+    tmp_path,
+):
+    release_root = tmp_path / "releases/luyu/rel-1"
+    (release_root / "agent").mkdir(parents=True)
+    (release_root / "agent/agent.json").write_text(
+        '{"id":"luyu","name":"陆羽"}',
+    )
+    activated = []
+
+    class Service:
+        async def validate_release_runtime(self, agent_id, release_id):
+            return RuntimeValidationRecord(
+                status="valid",
+                adapter="standard",
+                contract_version="1",
+            )
+
+        def release_root(self, agent_id, release_id):
+            return release_root
+
+        def activate(self, agent_id, release_id):
+            activated.append((agent_id, release_id))
+            return _record()
+
+    class Manager:
+        def __init__(self):
+            self.reload_calls = []
+
+        def is_agent_loaded(self, agent_id):
+            return True
+
+        async def reload_agent(self, agent_id):
+            self.reload_calls.append(agent_id)
+            return len(self.reload_calls) > 1
+
+    from qwenpaw.config.config import AgentProfileRef
+
+    previous = AgentProfileRef(
+        id="luyu",
+        workspace_dir="/existing/luyu",
+        enabled=True,
+    )
+    config = Config()
+    config.agents.profiles["luyu"] = previous
+    manager = Manager()
+    monkeypatch.setattr(router_module, "get_sealed_agent_service", lambda: Service())
+    monkeypatch.setattr(router_module, "load_config", lambda: config)
+    monkeypatch.setattr(router_module, "save_config", lambda _value: None)
+    request = _request()
+    request.app = SimpleNamespace(
+        state=SimpleNamespace(multi_agent_manager=manager),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await router_module.activate_sealed_agent_release(
+            "luyu",
+            "rel-1",
+            request,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert config.agents.profiles["luyu"] == previous
+    assert manager.reload_calls == ["luyu", "luyu"]
+    assert activated == []
+
+
+@pytest.mark.asyncio
+async def test_first_activation_failure_stops_partially_loaded_runtime(
+    monkeypatch,
+    tmp_path,
+):
+    release_root = tmp_path / "releases/luyu/rel-1"
+    (release_root / "agent").mkdir(parents=True)
+    (release_root / "agent/agent.json").write_text(
+        '{"id":"luyu","name":"陆羽"}',
+    )
+
+    class Service:
+        async def validate_release_runtime(self, agent_id, release_id):
+            return RuntimeValidationRecord(
+                status="valid",
+                adapter="standard",
+                contract_version="1",
+            )
+
+        def release_root(self, agent_id, release_id):
+            return release_root
+
+    class Manager:
+        def __init__(self):
+            self.loaded_checks = 0
+            self.stopped = []
+
+        def is_agent_loaded(self, agent_id):
+            self.loaded_checks += 1
+            return self.loaded_checks > 1
+
+        async def preload_agent(self, agent_id):
+            return False
+
+        async def stop_agent(self, agent_id):
+            self.stopped.append(agent_id)
+
+    config = Config()
+    manager = Manager()
+    monkeypatch.setattr(router_module, "get_sealed_agent_service", lambda: Service())
+    monkeypatch.setattr(router_module, "load_config", lambda: config)
+    monkeypatch.setattr(router_module, "save_config", lambda _value: None)
+    request = _request()
+    request.app = SimpleNamespace(
+        state=SimpleNamespace(multi_agent_manager=manager),
+    )
+
+    with pytest.raises(HTTPException):
+        await router_module.activate_sealed_agent_release(
+            "luyu",
+            "rel-1",
+            request,
+        )
+
+    assert "luyu" not in config.agents.profiles
+    assert manager.stopped == ["luyu"]
 
 
 @pytest.mark.asyncio

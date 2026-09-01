@@ -40,6 +40,15 @@ def get_sealed_agent_service() -> SealedAgentService:
 
 def _operational_dto(record: SealedAgentRecord) -> dict[str, Any]:
     active = record.active_release
+    active_validation = active.runtime_validation if active else None
+    active_available = bool(
+        record.enabled
+        and active is not None
+        and active_validation is not None
+        and active_validation.status == "valid"
+        and active_validation.adapter == "standard"
+        and active_validation.contract_version == "1"
+    )
     return {
         "agent_id": record.agent_id,
         "name": record.name,
@@ -48,9 +57,7 @@ def _operational_dto(record: SealedAgentRecord) -> dict[str, Any]:
         "agent_type": "sealed",
         "scope": "global",
         "enabled": record.enabled,
-        "availability": (
-            "available" if record.enabled and active is not None else "unavailable"
-        ),
+        "availability": "available" if active_available else "unavailable",
         "active_release_id": record.active_release_id,
         "version": active.version if active else None,
         "content_digest": active.content_digest if active else None,
@@ -174,9 +181,12 @@ async def activate_sealed_agent_release(
             config.agents.profiles[agent_id] = previous
         save_config(config)
         manager = getattr(request.app.state, "multi_agent_manager", None)
-        if previous is not None and manager is not None:
+        if manager is not None:
             try:
-                await manager.reload_agent(agent_id)
+                if previous is None and manager.is_agent_loaded(agent_id):
+                    await manager.stop_agent(agent_id)
+                elif previous is not None:
+                    await manager.reload_agent(agent_id)
             except Exception:
                 pass
         detail = (

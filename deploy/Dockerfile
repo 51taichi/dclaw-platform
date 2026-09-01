@@ -34,7 +34,6 @@ ENV WORKSPACE_DIR=/app
 ENV QWENPAW_WORKING_DIR=/app/working
 ENV QWENPAW_SECRET_DIR=/app/working.secret
 ENV QWENPAW_BACKUP_DIR=/app/working.backups
-ENV QWENPAW_SEALED_ENTRYPOINT_EXECUTION_MODE=trusted_direct
 ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 ENV UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 
@@ -54,7 +53,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends --fix-missing \
     python3-pip \
     python3-venv \
     build-essential \
-    bubblewrap \
     libssl-dev \
     git \
     supervisor \
