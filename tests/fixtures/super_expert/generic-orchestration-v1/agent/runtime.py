@@ -3,6 +3,11 @@ from pathlib import Path
 
 class GenericRuntime:
     async def handle(self, request, host):
+        context = await host.call("session.context", {})
+        await host.call(
+            "runtime.trace",
+            {"event": "generic.prepared", "session_id": context["session_id"]},
+        )
         candidate = await host.call(
             "agent.execute",
             {"messages": request.normalized_input["messages"]},
@@ -20,6 +25,7 @@ class GenericRuntime:
                     "role": "assistant",
                     "content": f"generic:{candidate['text']}",
                 },
+                "diagnostics": {"fixture": "generic-orchestration-v1"},
             },
         )
 

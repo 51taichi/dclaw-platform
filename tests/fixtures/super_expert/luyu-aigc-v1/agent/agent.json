@@ -1,0 +1,17 @@
+{
+  "id": "luyu-aigc-fixture",
+  "name": "Luyu AIGC Protocol Fixture",
+  "description": "A protocol fixture for the bound chat-card and AIGC lifecycle.",
+  "orchestration": {
+    "enabled": true,
+    "contract_version": "1",
+    "entrypoint": "runtime.py:create_runtime",
+    "required_host_capabilities": [
+      "agent.execute",
+      "session.context",
+      "runtime.trace",
+      "runtime.complete",
+      "runtime.fail"
+    ]
+  }
+}

@@ -170,10 +170,21 @@ class AigcTaskRepository:
                 raise AigcTaskError("illegal task transition")
 
         asset_id = current.asset_id
-        if command.action == "submit":
+        if (
+            command.action == "resume"
+            and current.status == AigcTaskStatus.REVISION_REQUIRED
+        ):
+            # A revision cycle deliberately opens a fresh asset slot while the
+            # immutable event history retains the previously reviewed asset.
+            asset_id = None
+        elif command.action == "submit":
             if not command.asset_id:
                 raise AigcTaskError("submitted task requires an asset")
-            if asset_id is not None and asset_id != command.asset_id:
+            if (
+                current.status != AigcTaskStatus.REVISION_REQUIRED
+                and asset_id is not None
+                and asset_id != command.asset_id
+            ):
                 raise AigcTaskError("asset binding mismatch")
             asset_id = command.asset_id
         elif command.asset_id is not None:

@@ -178,6 +178,9 @@ class SuperExpertPlatformService:
         elif capability == "aigc.review.complete":
             if current is None or current.binding != binding:
                 raise SuperExpertPlatformError("task binding mismatch")
+            supplied_asset = arguments.get("asset_id")
+            if supplied_asset is not None and supplied_asset != current.asset_id:
+                raise SuperExpertPlatformError("asset binding mismatch")
             if current.status == AigcTaskStatus.SUBMITTED:
                 current = self.task_repository.apply(
                     AigcTaskCommand(
@@ -196,7 +199,11 @@ class SuperExpertPlatformService:
                 action=action,
                 event_id=event_id,
                 binding=binding,
-                asset_id=arguments.get("asset_id"),
+                asset_id=(
+                    arguments.get("asset_id")
+                    if capability == "aigc.asset.submit"
+                    else None
+                ),
             ),
             idempotency_key=idempotency_key,
         )
