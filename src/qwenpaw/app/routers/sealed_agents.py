@@ -139,15 +139,30 @@ async def upload_sealed_agent_release(
     if len(data) > _MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=400, detail="Sealed package exceeds size limit")
     try:
-        release = get_sealed_agent_service().install(data)
+        service = get_sealed_agent_service()
+        release = service.install(data)
     except SealedAgentReleaseError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    owner = next(
+        (
+            agent
+            for agent in service.list_agents()
+            if any(item.release_id == release.release_id for item in agent.releases)
+        ),
+        None,
+    )
+    if owner is None:
+        raise HTTPException(status_code=500, detail="Installed release owner is unavailable")
     return {
+        "agent_id": owner.agent_id,
         "release_id": release.release_id,
         "version": release.version,
         "content_digest": release.content_digest,
         "signer_id": release.signer_id,
         "state": release.state,
+        "package_type": release.package_type,
+        "capability_digest": release.capability_digest,
+        "declared_capabilities": [list(item) for item in release.declared_capabilities],
     }
 
 

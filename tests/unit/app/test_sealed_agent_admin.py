@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from io import BytesIO
 
 import pytest
 from fastapi import HTTPException
+from starlette.datastructures import UploadFile
 
 from qwenpaw.app.routers import sealed_agents as router_module
 from qwenpaw.app.sealed_agents.models import (
@@ -133,6 +135,42 @@ def test_router_has_no_package_or_content_download_route():
         not ("GET" in methods and any(word in path for word in ("download", "content", "files", "package")))
         for path, methods in routes
     )
+
+
+@pytest.mark.asyncio
+async def test_upload_returns_identity_and_complete_package_declaration(monkeypatch):
+    release = _record().active_release.model_copy(
+        update={
+            "package_type": "super_expert",
+            "capability_digest": "sha256:" + "b" * 64,
+            "declared_capabilities": (("workspace.turn.orchestrate/1", "1"),),
+        },
+    )
+
+    class Service:
+        def install(self, data):
+            assert data == b"signed-package"
+            return release
+
+        def list_agents(self):
+            return [
+                _record().model_copy(
+                    update={"agent_id": "generic-super-expert", "releases": [release]},
+                ),
+            ]
+
+    monkeypatch.setattr(router_module, "get_sealed_agent_service", lambda: Service())
+    response = await router_module.upload_sealed_agent_release(
+        _request(),
+        UploadFile(filename="expert.zip", file=BytesIO(b"signed-package")),
+    )
+
+    assert response["agent_id"] == "generic-super-expert"
+    assert response["package_type"] == "super_expert"
+    assert response["capability_digest"] == "sha256:" + "b" * 64
+    assert response["declared_capabilities"] == [
+        ["workspace.turn.orchestrate/1", "1"],
+    ]
 
 
 def test_grant_routes_expose_complete_preview_and_accept_all_only(monkeypatch):
