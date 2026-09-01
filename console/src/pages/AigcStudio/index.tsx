@@ -3556,8 +3556,13 @@ export default function AigcStudioPage() {
           operation={guide.operation}
           activeCanvasId={activeCanvas?.id}
           onSubmit={async () => {
+            const currentTask = guide.task;
+            if (!currentTask) {
+              antdMessage.error("当前素材任务已失效，请从会话卡片重新进入");
+              return;
+            }
             const boundNode = activeCanvas?.nodes.find(
-              (node) => node.id === guide.task?.binding.node_id,
+              (node) => node.id === currentTask.binding.node_id,
             );
             const outputs = Array.isArray(boundNode?.data.outputs)
               ? boundNode.data.outputs
@@ -3572,12 +3577,12 @@ export default function AigcStudioPage() {
             }
             const eventId = crypto.randomUUID();
             await superExpertPlatformApi.command("aigc.asset.submit", {
-              installation_id: guide.task.binding.installation_id,
+              installation_id: currentTask.binding.installation_id,
               contract_version: "1",
               idempotency_key: eventId,
               arguments: {
                 event_id: eventId,
-                binding: guide.task.binding,
+                binding: currentTask.binding,
                 asset_id: assetId,
               },
             });
