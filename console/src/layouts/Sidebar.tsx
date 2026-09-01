@@ -533,7 +533,9 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
       key: "settings-group",
       label: collapsed ? null : t("nav.settings"),
       children: [
-        ...getAgentManagementMenuItems(collapsed, t).map((item) => ({
+        ...getAgentManagementMenuItems(collapsed, (key, fallback) =>
+          t(key, { defaultValue: fallback ?? key }),
+        ).map((item) => ({
           ...item,
           icon:
             item.key === "sealed-agents" ? (

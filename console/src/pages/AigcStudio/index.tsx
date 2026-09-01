@@ -3575,18 +3575,26 @@ export default function AigcStudioPage() {
               antdMessage.error("当前绑定节点还没有可提交的视频成品");
               return;
             }
-            const eventId = crypto.randomUUID();
-            await superExpertPlatformApi.command("aigc.asset.submit", {
-              installation_id: currentTask.binding.installation_id,
-              contract_version: "1",
-              idempotency_key: eventId,
-              arguments: {
-                event_id: eventId,
-                binding: currentTask.binding,
-                asset_id: assetId,
+            const eventStorageKey = `dclaw:aigc-submit:${guide.taskId}:${assetId}`;
+            const eventId =
+              localStorage.getItem(eventStorageKey) || crypto.randomUUID();
+            localStorage.setItem(eventStorageKey, eventId);
+            const result = await superExpertPlatformApi.command(
+              "aigc.asset.submit",
+              {
+                installation_id: currentTask.binding.installation_id,
+                contract_version: "1",
+                idempotency_key: eventId,
+                arguments: {
+                  event_id: eventId,
+                  binding: currentTask.binding,
+                  asset_id: assetId,
+                },
               },
-            });
+            );
+            await guide.refreshTask();
             antdMessage.success("素材已提交，专家将按当前业务阶段审核");
+            return result.agent_review?.reply;
           }}
         />
       ) : null}

@@ -268,7 +268,8 @@ describe("OpenApiPage", () => {
 
     await user.keyboard("{Escape}");
     await user.click(screen.getByRole("button", { name: /创建 API Key/ }));
-    await user.click(screen.getAllByRole("combobox").at(-3)!);
+    const comboboxes = screen.getAllByRole("combobox");
+    await user.click(comboboxes[comboboxes.length - 3]);
 
     expect((await screen.findAllByText(/在线客服接口/)).length).toBeGreaterThan(
       0,

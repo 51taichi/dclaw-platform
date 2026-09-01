@@ -121,7 +121,7 @@ function CaptureBridge({
           captureCamera.position.set(...camera.position);
           captureCamera.lookAt(...camera.target);
           captureCamera.updateProjectionMatrix();
-          gl.render(scene, captureCamera);
+          gl.render(scene as never, captureCamera as never);
         }
         return gl.domElement.toDataURL("image/png");
       } catch {
@@ -148,7 +148,7 @@ const MANNEQUIN_ROOT_POSES: Record<
 
 function Mannequin() {
   const gltf = useGLTF(DIRECTOR_STAGE_MANNEQUIN_MODEL_URL);
-  const scene = useMemo(() => cloneSkeleton(gltf.scene), [gltf.scene]);
+  const scene = useMemo(() => cloneSkeleton(gltf.scene as never), [gltf.scene]);
   return (
     <group scale={0.01}>
       <primitive object={scene} />
@@ -260,18 +260,16 @@ function UploadedModelPrimitive({
 }) {
   const gltf = useGLTF(url);
   const normalized = useMemo(() => {
-    const scene = cloneSkeleton(gltf.scene);
+    const scene = cloneSkeleton(gltf.scene as never);
     scene.updateMatrixWorld(true);
-    const bounds = new Box3().setFromObject(scene);
+    const bounds = new Box3().setFromObject(scene as never);
     if (bounds.isEmpty()) {
       return { scene, position: [0, 0, 0] as const, scale: 1 };
     }
     const size = bounds.getSize(new Vector3());
     const center = bounds.getCenter(new Vector3());
     const sourceSize =
-      kind === "character"
-        ? size.y
-        : Math.max(size.x, size.y, size.z);
+      kind === "character" ? size.y : Math.max(size.x, size.y, size.z);
     const targetSize = kind === "character" ? 1.8 : 1.2;
     const scale = sourceSize > 0 ? targetSize / sourceSize : 1;
     scene.traverse((item) => {
@@ -315,10 +313,7 @@ function UploadedModelAsset({
   if (!ready || loadState === "failed") return fallback;
 
   return (
-    <DirectorStageModelErrorBoundary
-      fallback={fallback}
-      modelUrl={resolvedSrc}
-    >
+    <DirectorStageModelErrorBoundary fallback={fallback} modelUrl={resolvedSrc}>
       <Suspense fallback={fallback}>
         <UploadedModelPrimitive kind={asset.kind} url={resolvedSrc} />
       </Suspense>
@@ -843,7 +838,9 @@ function DirectorStageEditor({
               aria-label="模型类型"
               value={modelKind}
               onChange={(event) =>
-                setModelKind(event.currentTarget.value as DirectorStageObjectKind)
+                setModelKind(
+                  event.currentTarget.value as DirectorStageObjectKind,
+                )
               }
             >
               <option value="character">角色</option>

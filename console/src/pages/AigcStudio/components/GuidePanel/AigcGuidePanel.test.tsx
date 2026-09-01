@@ -112,9 +112,71 @@ describe("AigcGuidePanel", () => {
       />,
     );
 
-    await waitFor(() => expect(screen.getByText("创建项目")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("创建项目")).toBeInTheDocument(),
+    );
     expect(screen.queryByText("确认进入工作室")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "提交给专家审核" })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "提交给专家审核" }),
+    ).toBeEnabled();
+    control.remove();
+  });
+
+  it("shows the in-page expert review and prevents duplicate submits while pending", async () => {
+    localStorage.setItem("dclaw:aigc-guide:task-1:step", "1");
+    const control = document.createElement("button");
+    control.dataset.platformControlId = "aigc.canvas.create";
+    document.body.append(control);
+    let resolveReview!: (value: string) => void;
+    const onSubmit = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveReview = resolve;
+        }),
+    );
+    const user = userEvent.setup();
+
+    render(
+      <AigcGuidePanel
+        taskId="task-1"
+        task={task}
+        operation={operation}
+        activeCanvasId="canvas-1"
+        onSubmit={onSubmit}
+      />,
+    );
+
+    const submit = screen.getByRole("button", { name: "提交给专家审核" });
+    await user.click(submit);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "专家审核中…" })).toBeDisabled();
+    resolveReview("审核通过，可以返回会话继续。");
+    expect(
+      await screen.findByText("审核通过，可以返回会话继续。"),
+    ).toBeInTheDocument();
+    control.remove();
+  });
+
+  it("keeps progress and offers a safe retry message when review fails", async () => {
+    localStorage.setItem("dclaw:aigc-guide:task-1:step", "1");
+    const control = document.createElement("button");
+    control.dataset.platformControlId = "aigc.canvas.create";
+    document.body.append(control);
+    const user = userEvent.setup();
+
+    render(
+      <AigcGuidePanel
+        taskId="task-1"
+        task={task}
+        operation={operation}
+        activeCanvasId="canvas-1"
+        onSubmit={vi.fn().mockRejectedValue(new Error("network"))}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "提交给专家审核" }));
+    expect(await screen.findByText(/任务进度已保留/)).toBeInTheDocument();
+    expect(localStorage.getItem("dclaw:aigc-guide:task-1:step")).toBe("1");
     control.remove();
   });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   superExpertPlatformApi,
   type AigcOperationContract,
@@ -18,6 +18,13 @@ export function useAigcGuideTask(search: string) {
   );
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(Boolean(taskId));
+
+  const refreshTask = useCallback(async () => {
+    if (!taskId) return null;
+    const nextTask = await superExpertPlatformApi.getTask(taskId);
+    setTask(nextTask);
+    return nextTask;
+  }, [taskId]);
 
   useEffect(() => {
     if (!taskId) {
@@ -50,5 +57,5 @@ export function useAigcGuideTask(search: string) {
     };
   }, [taskId]);
 
-  return { taskId, task, operation, error, loading };
+  return { taskId, task, operation, error, loading, refreshTask };
 }

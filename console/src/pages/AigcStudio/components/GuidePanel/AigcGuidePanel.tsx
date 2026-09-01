@@ -18,13 +18,15 @@ export function AigcGuidePanel({
   task: BoundAigcTask;
   operation: AigcOperationContract;
   activeCanvasId?: string | null;
-  onSubmit?: () => Promise<void>;
+  onSubmit?: () => Promise<string | void>;
 }) {
   const storageKey = `dclaw:aigc-guide:${taskId}:step`;
   const [stepIndex, setStepIndex] = useState(() =>
     Math.max(0, Number(localStorage.getItem(storageKey) || 0)),
   );
   const [paused, setPaused] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
+  const [reviewReply, setReviewReply] = useState("");
   const step =
     operation.human_guide[
       Math.min(stepIndex, operation.human_guide.length - 1)
@@ -94,6 +96,12 @@ export function AigcGuidePanel({
         <dt>遇到问题</dt>
         <dd>{step.recovery}</dd>
       </dl>
+      {reviewReply ? (
+        <section aria-label="专家审核结果">
+          <h3>专家审核结果</h3>
+          <p>{reviewReply}</p>
+        </section>
+      ) : null}
       <footer>
         <button type="button" onClick={() => setPaused((value) => !value)}>
           {paused ? <Play size={14} /> : <Pause size={14} />}
@@ -101,14 +109,32 @@ export function AigcGuidePanel({
         </button>
         <button
           type="button"
-          disabled={paused || !controlAvailable || wrongCanvas}
+          disabled={paused || reviewing || !controlAvailable || wrongCanvas}
           onClick={() => {
-            if (finalStep) void onSubmit?.();
-            else setStepIndex((value) => value + 1);
+            if (finalStep) {
+              setReviewing(true);
+              setReviewReply("");
+              void (async () => {
+                try {
+                  const reply = await onSubmit?.();
+                  if (reply) setReviewReply(reply);
+                } catch {
+                  setReviewReply(
+                    "本次审核未能安全完成，任务进度已保留，请稍后再次提交。",
+                  );
+                } finally {
+                  setReviewing(false);
+                }
+              })();
+            } else setStepIndex((value) => value + 1);
           }}
         >
           <Check size={14} />
-          {finalStep ? "提交给专家审核" : "本步已完成"}
+          {finalStep
+            ? reviewing
+              ? "专家审核中…"
+              : "提交给专家审核"
+            : "本步已完成"}
         </button>
       </footer>
     </aside>

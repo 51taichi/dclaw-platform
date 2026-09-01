@@ -56,13 +56,15 @@ export default function PricingRules({
               render: (_, policy: PricingPolicy) => (
                 <Button
                   disabled={disabled}
-                  onClick={() => form.setFieldsValue({
-                    scope_type: policy.scope_type,
-                    scope_key: policy.scope_key,
-                    multiplier_decimal: policy.multiplier_decimal,
-                    settings: policy.settings ?? {},
-                    expected_revision: policy.revision,
-                  })}
+                  onClick={() =>
+                    form.setFieldsValue({
+                      scope_type: policy.scope_type,
+                      scope_key: policy.scope_key,
+                      multiplier_decimal: policy.multiplier_decimal,
+                      settings: policy.settings ?? {},
+                      expected_revision: policy.revision,
+                    } as never)
+                  }
                 >
                   编辑
                 </Button>

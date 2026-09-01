@@ -2060,16 +2060,18 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
                     if (!projection.installationId || !projection.binding) {
                       throw new Error("AIGC task binding is unavailable");
                     }
-                    const eventId = crypto.randomUUID();
-                    await superExpertPlatformApi.command("aigc.task.resume", {
-                      installation_id: projection.installationId,
-                      contract_version: "1",
-                      idempotency_key: eventId,
-                      arguments: {
-                        event_id: eventId,
-                        binding: projection.binding,
-                      },
-                    });
+                    if (projection.status !== "IN_PROGRESS") {
+                      const eventId = crypto.randomUUID();
+                      await superExpertPlatformApi.command("aigc.task.resume", {
+                        installation_id: projection.installationId,
+                        contract_version: "1",
+                        idempotency_key: eventId,
+                        arguments: {
+                          event_id: eventId,
+                          binding: projection.binding,
+                        },
+                      });
+                    }
                     navigate(buildAigcTaskRoute(materialTaskId));
                   }}
                 />

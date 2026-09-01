@@ -37,6 +37,16 @@ export interface BoundAigcTask {
   asset_id?: string | null;
 }
 
+export interface SuperExpertPlatformCommandResult {
+  event?: Record<string, unknown>;
+  task?: BoundAigcTask;
+  card?: Record<string, unknown>;
+  agent_review?: {
+    status: "completed";
+    reply: string;
+  };
+}
+
 export const superExpertPlatformApi = {
   getTask: (materialTaskId: string) =>
     request<BoundAigcTask>(
@@ -47,7 +57,7 @@ export const superExpertPlatformApi = {
       `/super-expert-platform/operations/${encodeURIComponent(operationId)}`,
     ),
   command: (capability: string, command: SuperExpertPlatformCommand) =>
-    request(
+    request<SuperExpertPlatformCommandResult>(
       `/super-expert-platform/commands/${encodeURIComponent(capability)}`,
       {
         method: "POST",
