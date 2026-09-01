@@ -26,3 +26,14 @@ def test_dependency_lock_is_included_in_docker_context() -> None:
 
     assert "uv.lock" not in docker_ignores
     assert "uv.lock" not in git_ignores
+
+
+def test_runtime_image_enables_trusted_direct_sealed_entrypoints() -> None:
+    dockerfile = (ROOT / "deploy" / "Dockerfile").read_text(
+        encoding="utf-8",
+    )
+
+    assert (
+        "ENV QWENPAW_SEALED_ENTRYPOINT_EXECUTION_MODE=trusted_direct"
+        in dockerfile.splitlines()
+    )

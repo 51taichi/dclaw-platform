@@ -200,6 +200,29 @@ async def test_entrypoint_handshake_reports_generic_contract(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_explicit_trusted_direct_mode_runs_without_bubblewrap(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "QWENPAW_SEALED_ENTRYPOINT_EXECUTION_MODE",
+        "trusted_direct",
+    )
+    pinned = _pinned(tmp_path)
+    process = SealedEntrypointProcess(
+        pinned,
+        session_root=tmp_path / "sessions" / "trusted-direct",
+        bwrap_path="/missing/bwrap",
+    )
+
+    async with process:
+        ready = await process.handshake()
+
+    assert ready.adapter == "sealed_entrypoint"
+    assert ready.contract_version == "1"
+
+
+@pytest.mark.asyncio
 async def test_entrypoint_refuses_more_than_one_invoke_per_process(tmp_path):
     pinned = _pinned(tmp_path)
     process = SealedEntrypointProcess(

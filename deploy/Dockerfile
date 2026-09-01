@@ -34,6 +34,7 @@ ENV WORKSPACE_DIR=/app
 ENV QWENPAW_WORKING_DIR=/app/working
 ENV QWENPAW_SECRET_DIR=/app/working.secret
 ENV QWENPAW_BACKUP_DIR=/app/working.backups
+ENV QWENPAW_SEALED_ENTRYPOINT_EXECUTION_MODE=trusted_direct
 ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 ENV UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +24,7 @@ HostCapability = Literal["agent.execute"]
 MAX_HOST_CALLS = 64
 DEFAULT_CALL_TIMEOUT_SECONDS = 120.0
 DEFAULT_TOTAL_TIMEOUT_SECONDS = 300.0
+EXECUTION_MODE_ENV = "QWENPAW_SEALED_ENTRYPOINT_EXECUTION_MODE"
 
 
 class EntrypointProtocolError(RuntimeError):
@@ -171,9 +173,7 @@ class SealedEntrypointProcess:
     async def __aexit__(self, *_exc: object) -> None:
         await self.close()
 
-    def _default_command(self) -> list[str]:
-        if not Path(self.bwrap_path).is_file():
-            raise EntrypointProtocolError("sealed runtime isolation is unavailable")
+    def _runtime_paths(self) -> tuple[Path, Path]:
         release_root = self.pinned.release_root.resolve()
         entrypoint = (release_root / self.pinned.entrypoint).resolve()
         if (
@@ -183,6 +183,26 @@ class SealedEntrypointProcess:
         ):
             raise EntrypointProtocolError("sealed runtime entrypoint is unsafe")
         worker = Path(__file__).with_name("entrypoint_worker.py").resolve()
+        return release_root, worker
+
+    def _trusted_direct_command(self) -> list[str]:
+        release_root, worker = self._runtime_paths()
+        return [
+            sys.executable,
+            "-I",
+            str(worker),
+            "--release-root",
+            str(release_root),
+            "--session-root",
+            str(self.session_root.resolve()),
+            "--entrypoint",
+            self.pinned.entrypoint,
+        ]
+
+    def _bubblewrap_command(self) -> list[str]:
+        if not Path(self.bwrap_path).is_file():
+            raise EntrypointProtocolError("sealed runtime isolation is unavailable")
+        release_root, worker = self._runtime_paths()
         command = [
             self.bwrap_path,
             "--die-with-parent",
@@ -227,6 +247,14 @@ class SealedEntrypointProcess:
             ],
         )
         return command
+
+    def _default_command(self) -> list[str]:
+        mode = os.environ.get(EXECUTION_MODE_ENV, "bubblewrap").strip()
+        if mode == "trusted_direct":
+            return self._trusted_direct_command()
+        if mode == "bubblewrap":
+            return self._bubblewrap_command()
+        raise EntrypointProtocolError("sealed entrypoint execution mode is invalid")
 
     async def start(self) -> None:
         if self._process is not None:
