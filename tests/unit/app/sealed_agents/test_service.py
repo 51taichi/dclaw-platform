@@ -6,8 +6,10 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from qwenpaw.app.sealed_agents.package import build_signed_package_bytes
+from qwenpaw.app.sealed_agents.entrypoint_protocol import RuntimeReady
 from qwenpaw.app.sealed_agents.models import RuntimeValidationRecord
 from qwenpaw.app.sealed_agents.registry import SealedAgentRegistry
+from qwenpaw.app.sealed_agents.runtime import PinnedSealedRuntime
 from qwenpaw.app.sealed_agents.service import (
     SealedAgentReleaseError,
     SealedAgentService,
@@ -112,6 +114,59 @@ def test_install_accepts_generic_entrypoint_runtime_contract(tmp_path):
 
     assert release.runtime_adapter == "sealed_entrypoint"
     assert release.runtime_contract_version == "1"
+
+
+@pytest.mark.asyncio
+async def test_default_runtime_validation_uses_generic_entrypoint_protocol(
+    tmp_path,
+    monkeypatch,
+):
+    private = Ed25519PrivateKey.generate()
+    service = _service(tmp_path, private.public_key())
+    release_root = tmp_path / "release"
+    (release_root / "agent").mkdir(parents=True)
+    (release_root / "agent/runtime.py").write_text("# fixture")
+    pinned = PinnedSealedRuntime(
+        agent_id="sealed",
+        release_id="release-1",
+        version="1.0.0",
+        content_digest=f"sha256:{'a' * 64}",
+        release_root=release_root,
+        entrypoint="agent/runtime.py",
+        adapter_key=("sealed_entrypoint", "1"),
+        failure_policy="fail_closed",
+    )
+
+    class FakeProcess:
+        def __init__(self, received, session_root):
+            assert received == pinned
+            assert session_root.name == "runtime-validation"
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return None
+
+        async def handshake(self):
+            return RuntimeReady(
+                type="runtime.ready",
+                protocol_version="1",
+                invocation_id="runtime-validation",
+                message_id="handshake",
+                adapter="sealed_entrypoint",
+                contract_version="1",
+            )
+
+    monkeypatch.setattr(
+        "qwenpaw.app.sealed_agents.service.SealedEntrypointProcess",
+        FakeProcess,
+    )
+
+    result = await service._validate_pinned_runtime(pinned)
+
+    assert result.status == "valid"
+    assert result.adapter == "sealed_entrypoint"
 
 
 def test_activate_switches_atomically_after_reload_succeeds(tmp_path):

@@ -12,6 +12,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from packaging.version import InvalidVersion, Version
 
 from .adapters import UnsupportedSealedRuntime, get_runtime_adapter
+from .entrypoint_protocol import (
+    EntrypointProtocolError,
+    SealedEntrypointProcess,
+)
 from .harness_protocol import HarnessProcess, HarnessProtocolError
 from .models import RuntimeValidationRecord, SealedAgentRecord, SealedReleaseRecord
 from .package import SealedPackageError, validate_sealed_package
@@ -198,7 +202,11 @@ class SealedAgentService:
         )
         try:
             validation = await self._runtime_validator(pinned)
-        except (HarnessProtocolError, UnsupportedSealedRuntime):
+        except (
+            EntrypointProtocolError,
+            HarnessProtocolError,
+            UnsupportedSealedRuntime,
+        ):
             validation = RuntimeValidationRecord(
                 status="invalid",
                 adapter=adapter,
@@ -217,6 +225,24 @@ class SealedAgentService:
                 status="valid",
                 adapter="standard",
                 contract_version="1",
+            )
+        if pinned.adapter_key == ("sealed_entrypoint", "1"):
+            session_root = (
+                self.root
+                / "runtime_validation"
+                / pinned.agent_id
+                / pinned.release_id
+                / "runtime-validation"
+            )
+            async with SealedEntrypointProcess(
+                pinned,
+                session_root=session_root,
+            ) as process:
+                ready = await process.handshake()
+            return RuntimeValidationRecord(
+                status="valid",
+                adapter=ready.adapter,
+                contract_version=ready.contract_version,
             )
         async with HarnessProcess(pinned) as process:
             response = await process.invoke("handshake", {})
