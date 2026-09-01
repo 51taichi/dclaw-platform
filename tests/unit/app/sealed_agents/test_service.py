@@ -5,9 +5,9 @@ import json
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from qwenpaw.app.sealed_agents.package import build_signed_package_bytes
 from qwenpaw.app.sealed_agents.entrypoint_protocol import RuntimeReady
 from qwenpaw.app.sealed_agents.models import RuntimeValidationRecord
+from qwenpaw.app.sealed_agents.package import build_signed_package_bytes
 from qwenpaw.app.sealed_agents.registry import SealedAgentRegistry
 from qwenpaw.app.sealed_agents.runtime import PinnedSealedRuntime
 from qwenpaw.app.sealed_agents.service import (

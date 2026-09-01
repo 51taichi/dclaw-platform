@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
-import uuid
 
 from agentscope.message import Msg
 

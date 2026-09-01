@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+from typing_extensions import Self
 
 from .harness_protocol import minimal_worker_environment
 from .runtime import PinnedSealedRuntime
@@ -142,7 +143,7 @@ def validate_protocol_message(encoded: bytes) -> dict[str, Any]:
         raise ValueError("sealed entrypoint message is too large")
     value = json.loads(encoded)
     if not isinstance(value, dict):
-        raise ValueError("sealed entrypoint message must be an object")
+        raise TypeError("sealed entrypoint message must be an object")
     if _json_depth(value) > MAX_JSON_DEPTH:
         raise ValueError("sealed entrypoint message is too deeply nested")
     return value
@@ -163,7 +164,7 @@ class SealedEntrypointProcess:
         self._stderr_task: asyncio.Task[bytes] | None = None
         self._completed = False
 
-    async def __aenter__(self) -> "SealedEntrypointProcess":
+    async def __aenter__(self) -> Self:
         await self.start()
         return self
 
@@ -308,7 +309,7 @@ class SealedEntrypointProcess:
                         ok=True,
                         result=result,
                     )
-                except Exception:
+                except Exception:  # noqa: BLE001 - host failures fail closed
                     response = HostResult(
                         type="host.result",
                         protocol_version="1",

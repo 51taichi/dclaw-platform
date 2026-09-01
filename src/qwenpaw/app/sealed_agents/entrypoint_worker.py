@@ -9,6 +9,7 @@ import os
 import resource
 import sys
 import uuid
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -45,7 +46,7 @@ def _load_runtime(release_root: Path, entrypoint: str) -> Any:
     spec.loader.exec_module(module)
     factory = getattr(module, "create_runtime", None)
     if not callable(factory):
-        raise RuntimeError("missing_runtime_factory")
+        raise TypeError("missing_runtime_factory")
     return factory()
 
 
@@ -55,7 +56,7 @@ def _read() -> dict[str, Any]:
         raise RuntimeError("invalid_message")
     value = json.loads(line)
     if not isinstance(value, dict):
-        raise RuntimeError("invalid_message")
+        raise TypeError("invalid_message")
     return value
 
 
@@ -103,7 +104,7 @@ class HostBridge:
             raise RuntimeError("host_call_failed")
         payload = result.get("result")
         if not isinstance(payload, dict):
-            raise RuntimeError("host_result_invalid")
+            raise TypeError("host_result_invalid")
         return payload
 
 
@@ -131,7 +132,7 @@ def _run(runtime: Any, request: dict[str, Any]) -> None:
         raise RuntimeError("invalid_request_type")
     result = runtime.handle(request, HostBridge(invocation_id))
     if not isinstance(result, dict):
-        raise RuntimeError("invalid_runtime_result")
+        raise TypeError("invalid_runtime_result")
     _write(
         {
             "type": "runtime.final",
@@ -160,8 +161,8 @@ def main() -> int:
         invocation_id = str(request.get("invocation_id") or invocation_id)
         _run(runtime, request)
         return 0
-    except Exception:
-        try:
+    except Exception:  # noqa: BLE001 - worker errors are deliberately opaque
+        with suppress(Exception):
             _write(
                 {
                     "type": "runtime.error",
@@ -170,11 +171,8 @@ def main() -> int:
                     "error_code": "sealed_entrypoint_failed",
                 },
             )
-        except Exception:
-            pass
         return 2
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

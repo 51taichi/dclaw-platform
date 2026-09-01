@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from agentscope.message import Msg
 
 from qwenpaw.app.sealed_agents.adapters import (
     SealedEntrypointAdapterV1,
@@ -13,7 +14,6 @@ from qwenpaw.app.sealed_agents.entrypoint_protocol import RuntimeFinal
 from qwenpaw.app.sealed_agents.harness_protocol import HarnessStageResponse
 from qwenpaw.app.sealed_agents.request_context import SealedAdapterRequest
 from qwenpaw.app.sealed_agents.runtime import PinnedSealedRuntime
-from agentscope.message import Msg
 
 
 def test_only_allowlisted_runtime_adapters_can_be_resolved():

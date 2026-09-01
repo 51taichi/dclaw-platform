@@ -6,8 +6,8 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from qwenpaw.app.routers import open_api, open_api_admin
 from qwenpaw.app.open_api.runtime import OpenMessageRequest
+from qwenpaw.app.routers import open_api, open_api_admin
 
 
 def test_sealed_publication_policy_is_forced_server_side(monkeypatch):
