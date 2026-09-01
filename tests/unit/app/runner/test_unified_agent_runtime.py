@@ -170,6 +170,7 @@ async def test_declared_turn_never_falls_back_to_direct_model_on_failure(
     )
 
     async def fail_closed(**_kwargs):
+        assert callable(_kwargs["business_call"])
         return WorkspaceTurnResult(error_code="orchestration_timeout")
 
     monkeypatch.setattr(

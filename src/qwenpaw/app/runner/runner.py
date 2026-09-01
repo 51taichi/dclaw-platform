@@ -146,6 +146,32 @@ async def _run_standard_or_orchestrated_turn(
             tenant_id=str(getattr(request, "tenant_id", "local") or "local"),
             config=orchestration,
         )
+        tenant_id = str(getattr(request, "tenant_id", "local") or "local")
+
+        async def business_call(
+            capability: str,
+            arguments: dict[str, Any],
+        ) -> dict[str, Any]:
+            from ..routers.super_expert_platform import (
+                get_super_expert_platform_service,
+            )
+
+            payload = dict(arguments)
+            idempotency_key = str(payload.pop("idempotency_key", ""))
+            if not idempotency_key:
+                raise WorkspaceOrchestrationError("orchestration_error")
+            contract_version = authorization.granted_capabilities.get(capability)
+            if contract_version is None:
+                raise WorkspaceOrchestrationError("unauthorized_capability")
+            return await get_super_expert_platform_service().execute(
+                tenant_id=tenant_id,
+                installation_id=authorization.installation_id,
+                capability=capability,
+                contract_version=contract_version,
+                arguments=payload,
+                idempotency_key=idempotency_key,
+            )
+
         result = await run_workspace_orchestration_turn(
             agent=agent,
             original_messages=messages,
@@ -155,6 +181,7 @@ async def _run_standard_or_orchestrated_turn(
             state_storage_root=Path(WORKING_DIR) / "workspace_runtime_state",
             config=orchestration,
             authorization=authorization,
+            business_call=business_call,
         )
     except WorkspaceOrchestrationError:
         logger.exception(

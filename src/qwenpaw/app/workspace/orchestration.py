@@ -267,6 +267,7 @@ async def run_workspace_orchestration_turn(
     state_storage_root: Path,
     config: OrchestrationConfig,
     authorization: AuthorizedWorkspaceRelease,
+    business_call: Callable[[str, dict[str, Any]], Any] | None = None,
     timeout_seconds: float = 30.0,
 ) -> WorkspaceTurnResult:
     invocation_id = uuid.uuid4().hex
@@ -336,6 +337,7 @@ async def run_workspace_orchestration_turn(
         signed_files=authorization.signed_workspace_files,
         execute_agent=execute_agent,
         session_context=lambda: trusted_context,
+        business_call=business_call,
         trace_sink=lambda trace: _append_runtime_trace(
             state_storage_root,
             installation_id=authorization.installation_id,
