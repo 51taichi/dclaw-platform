@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AigcGuidePanel } from "./AigcGuidePanel";
@@ -94,6 +94,27 @@ describe("AigcGuidePanel", () => {
     );
     expect(screen.getByText(/不属于此任务/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "本步已完成" })).toBeDisabled();
+    control.remove();
+  });
+
+  it("restores the exact persisted guide step after leaving the studio", async () => {
+    localStorage.setItem("dclaw:aigc-guide:task-1:step", "1");
+    const control = document.createElement("button");
+    control.dataset.platformControlId = "aigc.canvas.create";
+    document.body.append(control);
+
+    render(
+      <AigcGuidePanel
+        taskId="task-1"
+        task={task}
+        operation={operation}
+        activeCanvasId="canvas-1"
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText("创建项目")).toBeInTheDocument());
+    expect(screen.queryByText("确认进入工作室")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "提交给专家审核" })).toBeEnabled();
     control.remove();
   });
 });
