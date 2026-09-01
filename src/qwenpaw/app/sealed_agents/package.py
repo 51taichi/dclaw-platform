@@ -21,7 +21,14 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 MAX_PACKAGE_BYTES = 200 * 1024 * 1024
 MAX_EXPANDED_BYTES = 400 * 1024 * 1024
@@ -55,6 +62,30 @@ class SealedRuntimeDeclaration(BaseModel):
         return value.strip() if isinstance(value, str) else value
 
 
+class CapabilityDeclaration(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    capability_id: str = Field(pattern=r"^[a-z][a-z0-9_.-]*(?:/[1-9][0-9]*)?$")
+    contract_version: str = Field(pattern=r"^[1-9][0-9]{0,7}$")
+
+
+class WorkspaceOrchestrationDeclaration(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    capability_id: Literal["workspace.turn.orchestrate/1"]
+    contract_version: Literal["1"]
+    entrypoint: str = Field(pattern=r"^[A-Za-z0-9_./-]+\.py:[A-Za-z_][A-Za-z0-9_]*$")
+    required_host_capabilities: tuple[str, ...]
+
+    @model_validator(mode="after")
+    def host_capabilities_are_unique(self) -> "WorkspaceOrchestrationDeclaration":
+        if len(set(self.required_host_capabilities)) != len(
+            self.required_host_capabilities,
+        ):
+            raise ValueError("duplicate required host capability")
+        return self
+
+
 class SealedPackageManifest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -67,16 +98,33 @@ class SealedPackageManifest(BaseModel):
     entrypoint: str
     public_metadata: PublicMetadata = Field(default_factory=PublicMetadata)
     runtime: SealedRuntimeDeclaration | None = None
+    package_type: Literal["sealed_agent", "super_expert"] = "sealed_agent"
+    orchestration: WorkspaceOrchestrationDeclaration | None = None
+    platform_contract_versions: dict[str, str] = Field(default_factory=dict)
+    capabilities: tuple[CapabilityDeclaration, ...] = ()
+    capability_digest: str | None = Field(
+        default=None,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
     signer_id: str = Field(pattern=r"^[A-Za-z0-9_.-]{1,128}$")
     content_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
 
     def validate_supported_contract(self) -> None:
-        if self.schema_version not in {1, 2}:
+        if self.schema_version not in {1, 2, 3}:
             raise ValueError("unsupported schema version")
         if self.schema_version == 1 and self.runtime is not None:
             raise ValueError("schema version 1 cannot declare runtime")
         if self.agent_type != "sealed" or self.scope != "global":
             raise ValueError("only sealed global agents are supported")
+        if self.package_type == "super_expert":
+            if self.schema_version != 3:
+                raise ValueError("super expert packages require schema version 3")
+            if self.orchestration is None or not self.capabilities:
+                raise ValueError("super expert package declaration is incomplete")
+            if self.capability_digest is None:
+                raise ValueError("super expert capability digest is missing")
+        elif self.orchestration is not None or self.capabilities or self.capability_digest:
+            raise ValueError("sealed agent package cannot declare platform capabilities")
         entrypoint = _normalize_member_path(self.entrypoint)
         if not entrypoint.startswith("agent/"):
             raise ValueError("entrypoint must be inside agent/")

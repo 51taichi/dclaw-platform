@@ -66,6 +66,11 @@ class SealedReleaseRecord(BaseModel):
     version: str
     content_digest: str
     signer_id: str
+    package_type: Literal["sealed_agent", "super_expert"] = "sealed_agent"
+    capability_digest: str | None = None
+    declared_capabilities: tuple[tuple[str, str], ...] = ()
+    orchestration_capability_id: str | None = None
+    orchestration_contract_version: str | None = None
     entrypoint: str | None = None
     runtime_adapter: str | None = None
     runtime_contract_version: str | None = None

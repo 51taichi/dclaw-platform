@@ -5,11 +5,22 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class SuperExpertTrustStore:
+    """Signer identities allowed to publish platform-level super experts."""
+
+    official_signer_ids: frozenset[str]
+
+    def is_official(self, signer_id: str) -> bool:
+        return signer_id in self.official_signer_ids
 
 
 def load_trusted_signers(path: Path) -> dict[str, Ed25519PublicKey]:
