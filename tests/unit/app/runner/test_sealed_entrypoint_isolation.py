@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from agentscope.message import Msg
+
+from qwenpaw.app.runner.runner import _sealed_model_execution_messages
 from qwenpaw.app.sealed_agents.runtime import (
     PinnedSealedRuntime,
     resolve_adapter_session_root,
@@ -69,3 +72,17 @@ def test_entrypoint_session_root_is_stable_and_isolated(tmp_path):
     assert other == sessions_root / "sealed-agent" / "session-2"
     assert first.is_dir()
     assert other.is_dir()
+
+
+def test_entrypoint_promotes_trusted_controller_instruction_to_system_role():
+    customer = Msg(name="user", role="user", content="hello")
+
+    messages = _sealed_model_execution_messages(
+        (customer,),
+        {"model_instruction": "return the controller contract"},
+    )
+
+    assert messages[0] is customer
+    assert messages[-1].name == "sealed_controller"
+    assert messages[-1].role == "system"
+    assert messages[-1].get_text_content() == "return the controller contract"

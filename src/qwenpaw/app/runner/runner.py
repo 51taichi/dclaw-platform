@@ -53,6 +53,23 @@ logger = logging.getLogger(__name__)
 _PRINT_END_SIGNAL = "[END]"
 
 
+def _sealed_model_execution_messages(
+    model_messages: tuple[Any, ...],
+    controlled_context: dict[str, Any],
+) -> list[Any]:
+    execution_messages = list(model_messages)
+    instruction = controlled_context.get("model_instruction")
+    if isinstance(instruction, str) and instruction.strip():
+        execution_messages.append(
+            Msg(
+                name="sealed_controller",
+                role="system",
+                content=instruction.strip(),
+            ),
+        )
+    return execution_messages
+
+
 async def _cancel_streaming_agent_task(task: asyncio.Task) -> None:
     if task.done():
         return
@@ -849,16 +866,10 @@ class AgentRunner(Runner):
                     model_messages: tuple[Any, ...],
                     controlled_context: dict[str, Any],
                 ) -> AsyncGenerator[tuple[Msg, bool], None]:
-                    execution_messages = list(model_messages)
-                    instruction = controlled_context.get("model_instruction")
-                    if isinstance(instruction, str) and instruction.strip():
-                        execution_messages.append(
-                            Msg(
-                                name="sealed_controller",
-                                role="user",
-                                content=instruction.strip(),
-                            ),
-                        )
+                    execution_messages = _sealed_model_execution_messages(
+                        model_messages,
+                        controlled_context,
+                    )
                     async for model_msg, model_last in (
                         _stream_printing_messages_interruptible(
                             agents=[agent],
