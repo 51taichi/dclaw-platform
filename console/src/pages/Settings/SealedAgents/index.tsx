@@ -40,6 +40,21 @@ function historicalReleases(agent: SealedAgentOperational) {
     );
 }
 
+function activationErrorMessage(error: unknown) {
+  if (!(error instanceof Error)) return "激活失败";
+
+  const separator = " - ";
+  const separatorIndex = error.message.lastIndexOf(separator);
+  if (separatorIndex < 0) return error.message;
+
+  try {
+    JSON.parse(error.message.slice(separatorIndex + separator.length));
+    return error.message.slice(0, separatorIndex);
+  } catch {
+    return error.message;
+  }
+}
+
 export default function SealedAgentsPage() {
   const { message } = useAppMessage();
   const [agents, setAgents] = useState<SealedAgentOperational[]>([]);
@@ -231,17 +246,21 @@ export default function SealedAgentsPage() {
                             (item) => item.release_id === selectedReleaseId,
                           );
                           if (!release) return;
-                          await sealedAgentsApi.activate(
-                            agent.agent_id,
-                            release.release_id,
-                          );
-                          message.success(`已激活 ${release.version}`);
-                          setSelectedReleaseIds((current) => {
-                            const next = { ...current };
-                            delete next[agent.agent_id];
-                            return next;
-                          });
-                          await load();
+                          try {
+                            await sealedAgentsApi.activate(
+                              agent.agent_id,
+                              release.release_id,
+                            );
+                            message.success(`已激活 ${release.version}`);
+                            setSelectedReleaseIds((current) => {
+                              const next = { ...current };
+                              delete next[agent.agent_id];
+                              return next;
+                            });
+                            await load();
+                          } catch (error) {
+                            message.error(activationErrorMessage(error));
+                          }
                         }}
                       >
                         激活
