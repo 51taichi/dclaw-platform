@@ -12,6 +12,24 @@ export interface SealedRelease {
   installed_at: string;
 }
 
+export interface SealedReleaseUploadResult {
+  agent_id: string;
+  release_id: string;
+  package_type: "sealed_agent" | "super_expert";
+  signer_id: string;
+}
+
+export interface SuperExpertGrantPreview {
+  preview_id: string;
+  tenant_id: string;
+  agent_id: string;
+  release_id: string;
+  package_digest: string;
+  package_version: string;
+  capability_digest: string;
+  capabilities: [string, string][];
+}
+
 export interface SealedAgentOperational {
   agent_id: string;
   name: string;
@@ -28,7 +46,7 @@ export interface SealedAgentOperational {
 
 export const sealedAgentsApi = {
   list: () => request<SealedAgentOperational[]>("/admin/sealed-agents"),
-  uploadRelease: async (file: File) => {
+  uploadRelease: async (file: File): Promise<SealedReleaseUploadResult> => {
     const body = new FormData();
     body.append("file", file);
     const response = await fetch(getApiUrl("/admin/sealed-agents/releases"), {
@@ -39,6 +57,26 @@ export const sealedAgentsApi = {
     if (!response.ok) throw new Error(await response.text());
     return response.json();
   },
+  previewGrant: (agentId: string, releaseId: string) =>
+    request<SuperExpertGrantPreview>(
+      `/admin/sealed-agents/${encodeURIComponent(
+        agentId,
+      )}/releases/${encodeURIComponent(releaseId)}/grant-preview`,
+    ),
+  acceptGrant: (agentId: string, releaseId: string) =>
+    request(
+      `/admin/sealed-agents/${encodeURIComponent(
+        agentId,
+      )}/releases/${encodeURIComponent(releaseId)}/grant`,
+      { method: "POST" },
+    ),
+  cancelGrant: (agentId: string, releaseId: string) =>
+    request(
+      `/admin/sealed-agents/${encodeURIComponent(
+        agentId,
+      )}/releases/${encodeURIComponent(releaseId)}/grant-cancel`,
+      { method: "POST" },
+    ),
   activate: (agentId: string, releaseId: string) =>
     request<SealedAgentOperational>(
       `/admin/sealed-agents/${encodeURIComponent(

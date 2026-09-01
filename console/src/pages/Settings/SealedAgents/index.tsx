@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   Card,
+  Modal,
   Select,
   Space,
   Table,
@@ -23,6 +24,7 @@ import {
   sealedAgentsApi,
   type SealedAgentOperational,
   type SealedRelease,
+  type SuperExpertGrantPreview,
 } from "../../../api/modules/sealedAgents";
 import { useAppMessage } from "../../../hooks/useAppMessage";
 import styles from "./index.module.less";
@@ -62,6 +64,9 @@ export default function SealedAgentsPage() {
     Record<string, string>
   >({});
   const [loading, setLoading] = useState(false);
+  const [grantPreview, setGrantPreview] =
+    useState<SuperExpertGrantPreview | null>(null);
+  const [grantSubmitting, setGrantSubmitting] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -91,9 +96,17 @@ export default function SealedAgentsPage() {
     onError,
   }) => {
     try {
-      await sealedAgentsApi.uploadRelease(file as File);
+      const uploaded = await sealedAgentsApi.uploadRelease(file as File);
       message.success("密封发布包已验证并暂存");
       onSuccess?.({});
+      if (uploaded.package_type === "super_expert") {
+        const preview = await sealedAgentsApi.previewGrant(
+          uploaded.agent_id,
+          uploaded.release_id,
+        );
+        setGrantPreview(preview);
+        return;
+      }
       await load();
     } catch (error) {
       onError?.(error as Error);
@@ -103,6 +116,78 @@ export default function SealedAgentsPage() {
 
   return (
     <div className={styles.page}>
+      <Modal
+        open={grantPreview !== null}
+        title="超级专家能力授权"
+        closable={false}
+        maskClosable={false}
+        keyboard={false}
+        cancelText="取消"
+        okText="全部授权并安装"
+        confirmLoading={grantSubmitting}
+        onCancel={async () => {
+          if (!grantPreview || grantSubmitting) return;
+          setGrantSubmitting(true);
+          try {
+            await sealedAgentsApi.cancelGrant(
+              grantPreview.agent_id,
+              grantPreview.release_id,
+            );
+            setGrantPreview(null);
+            await load();
+          } catch (error) {
+            message.error(error instanceof Error ? error.message : "取消失败");
+          } finally {
+            setGrantSubmitting(false);
+          }
+        }}
+        onOk={async () => {
+          if (!grantPreview) return;
+          setGrantSubmitting(true);
+          try {
+            await sealedAgentsApi.acceptGrant(
+              grantPreview.agent_id,
+              grantPreview.release_id,
+            );
+            await sealedAgentsApi.activate(
+              grantPreview.agent_id,
+              grantPreview.release_id,
+            );
+            message.success("超级专家已完成整包授权并安装");
+            setGrantPreview(null);
+            await load();
+          } catch (error) {
+            message.error(activationErrorMessage(error));
+          } finally {
+            setGrantSubmitting(false);
+          }
+        }}
+      >
+        {grantPreview ? (
+          <div className={styles.grantPreview}>
+            <Alert
+              type="success"
+              showIcon
+              message="官方超级专家签名"
+              description="以下是该签名包声明的完整能力集合。授权按整个签名包生效，不能拆分或临时增减。"
+            />
+            <div className={styles.capabilityList}>
+              {grantPreview.capabilities.map(([capability, version]) => (
+                <div
+                  className={styles.capabilityItem}
+                  key={`${capability}:${version}`}
+                >
+                  <Typography.Text code>{capability}</Typography.Text>
+                  <Tag>v{version}</Tag>
+                </div>
+              ))}
+            </div>
+            <Typography.Text type="secondary">
+              能力摘要：{grantPreview.capability_digest}
+            </Typography.Text>
+          </div>
+        ) : null}
+      </Modal>
       <PageHeader
         parent="设置"
         current="超级专家"

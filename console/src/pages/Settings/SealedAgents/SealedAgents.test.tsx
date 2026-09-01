@@ -9,6 +9,9 @@ vi.mock("../../../api/modules/sealedAgents", () => ({
   sealedAgentsApi: {
     list: vi.fn(),
     uploadRelease: vi.fn(),
+    previewGrant: vi.fn(),
+    acceptGrant: vi.fn(),
+    cancelGrant: vi.fn(),
     activate: vi.fn(),
     setEnabled: vi.fn(),
   },
@@ -145,6 +148,52 @@ describe("SealedAgentsPage", () => {
       ),
     );
     expect(messageSuccess).not.toHaveBeenCalled();
+  });
+
+  it("shows the complete official capability set and only accept-all or cancel", async () => {
+    const user = userEvent.setup();
+    vi.mocked(sealedAgentsApi.uploadRelease).mockResolvedValue({
+      agent_id: "generic-super-expert",
+      release_id: "release-1",
+      package_type: "super_expert",
+      signer_id: "official-release-root",
+    } as never);
+    vi.mocked(sealedAgentsApi.previewGrant).mockResolvedValue({
+      preview_id: "preview-1",
+      tenant_id: "local",
+      agent_id: "generic-super-expert",
+      release_id: "release-1",
+      package_digest: "sha256:abc",
+      package_version: "1.0.0",
+      capability_digest: "sha256:def",
+      capabilities: [
+        ["workspace.turn.orchestrate/1", "1"],
+        ["card.create", "1"],
+        ["aigc.task.create", "1"],
+      ],
+    });
+    vi.mocked(sealedAgentsApi.acceptGrant).mockResolvedValue({} as never);
+    vi.mocked(sealedAgentsApi.activate).mockResolvedValue({} as never);
+
+    render(<SealedAgentsPage />);
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    await user.upload(input, new File(["signed"], "expert.zip"));
+
+    expect(await screen.findByText("官方超级专家签名")).toBeInTheDocument();
+    expect(screen.getByText("workspace.turn.orchestrate/1")).toBeInTheDocument();
+    expect(screen.getByText("card.create")).toBeInTheDocument();
+    expect(screen.getByText("aigc.task.create")).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "全部授权并安装" }));
+    expect(sealedAgentsApi.acceptGrant).toHaveBeenCalledWith(
+      "generic-super-expert",
+      "release-1",
+    );
+    expect(sealedAgentsApi.activate).toHaveBeenCalledWith(
+      "generic-super-expert",
+      "release-1",
+    );
   });
 });
 
