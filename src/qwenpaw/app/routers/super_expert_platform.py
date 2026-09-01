@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -13,6 +14,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from qwenpaw.constant import WORKING_DIR
 from qwenpaw.aigc.operation_contract import load_operation_catalog
 
+from ..billing.context import BillingSource
+from ..billing.entrypoint import prepare_user_billing_execution
+from ..billing.usage import InsufficientUsageCreditsError
 from ..chat_access import ensure_chat_access
 from ..runtime.event_bus import RuntimeEvent, get_runtime_event_bus
 from ..super_experts.aigc_tasks import (
@@ -71,6 +75,7 @@ class SuperExpertPlatformService:
         self.task_repository = task_repository
         self.event_repository = event_repository
         self.event_bus = event_bus
+        self._review_locks: dict[str, asyncio.Lock] = {}
 
     def get_task(self, material_task_id: str):
         return self.task_repository.get(material_task_id)
@@ -85,6 +90,19 @@ class SuperExpertPlatformService:
             installation_id=installation_id,
             conversation_id=conversation_id,
         )
+
+    def review_lock(self, event_id: str) -> asyncio.Lock:
+        return self._review_locks.setdefault(event_id, asyncio.Lock())
+
+    def get_review_receipt(self, event_id: str) -> dict[str, Any] | None:
+        return self.event_repository.get_review_receipt(event_id)
+
+    def save_review_receipt(
+        self,
+        event_id: str,
+        receipt: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self.event_repository.save_review_receipt(event_id, receipt)
 
     async def execute(
         self,
@@ -304,19 +322,47 @@ async def execute_super_expert_command(
             idempotency_key=command.idempotency_key,
         )
         if capability == "aigc.asset.submit":
-            result["agent_review"] = await _dispatch_agent_asset_review(
-                request,
-                service=service,
-                installation_id=command.installation_id,
-                binding=AigcTaskBinding.model_validate(binding),
-                asset_id=str(command.arguments.get("asset_id") or ""),
-            )
+            submit_event_id = str(command.arguments.get("event_id") or "")
+            async with service.review_lock(submit_event_id):
+                review = service.get_review_receipt(submit_event_id)
+                if review is None:
+                    current_task = service.get_task(
+                        AigcTaskBinding.model_validate(binding).material_task_id,
+                    )
+                    if current_task is not None and current_task.status in {
+                        AigcTaskStatus.ACCEPTED,
+                        AigcTaskStatus.REVISION_REQUIRED,
+                    }:
+                        review = {
+                            "status": "completed",
+                            "reply": (
+                                "审核已完成，素材已通过，可以返回会话继续。"
+                                if current_task.status == AigcTaskStatus.ACCEPTED
+                                else "审核已完成，素材需要修改，请按当前任务继续调整。"
+                            ),
+                        }
+                    else:
+                        review = await _dispatch_agent_asset_review(
+                            request,
+                            service=service,
+                            installation_id=command.installation_id,
+                            binding=AigcTaskBinding.model_validate(binding),
+                            asset_id=str(command.arguments.get("asset_id") or ""),
+                            request_key=f"{command.idempotency_key}:agent-review",
+                        )
+                    review = service.save_review_receipt(submit_event_id, review)
+                result["agent_review"] = review
             reviewed_task = service.get_task(
                 AigcTaskBinding.model_validate(binding).material_task_id,
             )
             if reviewed_task is not None:
                 result["task"] = reviewed_task
         return result
+    except InsufficientUsageCreditsError as exc:
+        raise HTTPException(
+            status_code=402,
+            detail="insufficient usage credits",
+        ) from exc
     except SuperExpertPlatformError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
@@ -328,6 +374,7 @@ async def _dispatch_agent_asset_review(
     installation_id: str,
     binding: AigcTaskBinding,
     asset_id: str,
+    request_key: str,
 ) -> dict[str, Any]:
     """Run a generic platform-originated Agent turn while the customer stays in AIGC."""
     grant = service.grant_repository.get(installation_id)
@@ -378,18 +425,44 @@ async def _dispatch_agent_asset_review(
         )
     ]
     final_message: Msg | None = None
+    prepared = prepare_user_billing_execution(
+        user_id,
+        BillingSource(
+            type="client",
+            id=binding.conversation_id,
+            expert_id=grant.agent_id,
+        ),
+        request_key,
+        {
+            "installation_id": installation_id,
+            "conversation_id": binding.conversation_id,
+            "material_task_id": binding.material_task_id,
+            "asset_id": asset_id,
+        },
+    )
     try:
-        async for message, is_last in workspace.runner.query_handler(
-            messages,
-            turn_request,
-        ):
-            if is_last:
-                final_message = message
+        with prepared.activate():
+            async for message, is_last in workspace.runner.query_handler(
+                messages,
+                turn_request,
+            ):
+                if is_last:
+                    final_message = message
+    except InsufficientUsageCreditsError:
+        prepared.finalize("failed", error_code="INSUFFICIENT_CREDITS")
+        raise
+    except asyncio.CancelledError:
+        prepared.finalize("cancelled", error_code="CANCELLED")
+        raise
     except Exception as exc:
+        prepared.finalize("failed", error_code="MODEL_ERROR")
         raise SuperExpertPlatformError("agent review dispatch failed") from exc
     if final_message is None:
+        prepared.finalize("failed", error_code="MISSING_COMPLETION")
         raise SuperExpertPlatformError("agent review did not complete")
     reply = final_message.get_text_content()
     if not isinstance(reply, str) or not reply.strip():
+        prepared.finalize("failed", error_code="INVALID_COMPLETION")
         raise SuperExpertPlatformError("agent review result is invalid")
+    prepared.finalize_completed()
     return {"status": "completed", "reply": reply}

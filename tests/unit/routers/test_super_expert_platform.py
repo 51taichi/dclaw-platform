@@ -267,11 +267,25 @@ async def test_asset_submit_dispatches_bound_agent_review_in_the_same_page(
     captured = {}
 
     class Service:
+        def __init__(self):
+            self.receipts = {}
+
         async def execute(self, **kwargs):
             return {"task": {"status": "SUBMITTED"}, "event": {}}
 
+        def review_lock(self, _event_id):
+            return __import__("asyncio").Lock()
+
+        def get_review_receipt(self, event_id):
+            return self.receipts.get(event_id)
+
+        def save_review_receipt(self, event_id, receipt):
+            self.receipts[event_id] = receipt
+            return receipt
+
         def get_task(self, _material_task_id):
             return SimpleNamespace(
+                status=router_module.AigcTaskStatus.SUBMITTED,
                 model_dump=lambda **_kwargs: {"status": "REVISION_REQUIRED"},
             )
 
@@ -344,6 +358,16 @@ async def test_asset_review_dispatch_uses_bound_session_and_media(monkeypatch):
         "qwenpaw.app.routers.aigc_studio.resolve_owned_asset_for_agent_review",
         resolve,
     )
+    billing = SimpleNamespace(
+        activate=lambda: __import__("contextlib").nullcontext(),
+        finalize_completed=lambda: True,
+        finalize=lambda *_a, **_k: True,
+    )
+    monkeypatch.setattr(
+        router_module,
+        "prepare_user_billing_execution",
+        lambda *_a, **_k: billing,
+    )
     request = SimpleNamespace(
         state=SimpleNamespace(user_id="user-1"),
         app=SimpleNamespace(
@@ -358,12 +382,263 @@ async def test_asset_review_dispatch_uses_bound_session_and_media(monkeypatch):
         installation_id="installation-1",
         binding=router_module.AigcTaskBinding.model_validate(_binding()),
         asset_id="asset-1",
+        request_key="submit-1:agent-review",
     )
 
     assert result == {"status": "completed", "reply": "审核通过。"}
     assert captured["request"].session_id == "conversation-1"
     assert captured["request"].channel == "platform:aigc-review"
     assert captured["messages"][0].content[1]["type"] == "video"
+
+
+@pytest.mark.asyncio
+async def test_duplicate_asset_submit_replays_the_durable_agent_review(
+    tmp_path,
+    monkeypatch,
+):
+    grants = SuperExpertGrantRepository(tmp_path / "grants")
+    grant = grants.grant_installation(
+        grants.preview("agent", _release(), tenant_id="tenant-a"),
+        administrator_id="admin",
+    )
+    service = SuperExpertPlatformService(
+        grant_repository=grants,
+        task_repository=AigcTaskRepository(tmp_path / "tasks"),
+        event_repository=SuperExpertEventRepository(tmp_path / "events"),
+        event_bus=Bus(),
+    )
+    binding = _binding()
+    binding["installation_id"] = grant.installation_id
+    for capability, event_id in (
+        ("aigc.task.create", "create"),
+        ("aigc.task.resume", "resume"),
+    ):
+        await service.execute(
+            tenant_id="tenant-a",
+            installation_id=grant.installation_id,
+            capability=capability,
+            contract_version="1",
+            arguments={"binding": binding, "event_id": event_id},
+            idempotency_key=event_id,
+        )
+    monkeypatch.setattr(
+        router_module,
+        "get_super_expert_platform_service",
+        lambda: service,
+    )
+    monkeypatch.setattr(router_module, "ensure_chat_access", lambda *_a, **_k: None)
+    dispatches = 0
+
+    async def dispatch(*_args, **_kwargs):
+        nonlocal dispatches
+        dispatches += 1
+        return {"status": "completed", "reply": "同一份审核结论。"}
+
+    monkeypatch.setattr(router_module, "_dispatch_agent_asset_review", dispatch)
+    request = SimpleNamespace(state=SimpleNamespace(tenant_id="tenant-a"))
+    command = PlatformCommandRequest(
+        installation_id=grant.installation_id,
+        contract_version="1",
+        idempotency_key="submit",
+        arguments={
+            "binding": binding,
+            "event_id": "submit",
+            "asset_id": "asset-1",
+        },
+    )
+
+    first = await router_module.execute_super_expert_command(
+        "aigc.asset.submit", command, request,
+    )
+    replay = await router_module.execute_super_expert_command(
+        "aigc.asset.submit", command, request,
+    )
+
+    assert dispatches == 1
+    assert replay["agent_review"] == first["agent_review"]
+
+
+@pytest.mark.asyncio
+async def test_submit_retry_recovers_terminal_review_without_running_agent_again(
+    tmp_path,
+    monkeypatch,
+):
+    service, grant, _bus = _service(tmp_path)
+    binding = _binding()
+    binding["installation_id"] = grant.installation_id
+    for capability, event_id, extra in (
+        ("aigc.task.create", "create", {}),
+        ("aigc.task.resume", "resume", {}),
+        ("aigc.asset.submit", "submit", {"asset_id": "asset-1"}),
+        (
+            "aigc.review.complete",
+            "accept",
+            {"asset_id": "asset-1", "decision": "ACCEPTED"},
+        ),
+    ):
+        await service.execute(
+            tenant_id="tenant-a",
+            installation_id=grant.installation_id,
+            capability=capability,
+            contract_version="1",
+            arguments={"binding": binding, "event_id": event_id, **extra},
+            idempotency_key=event_id,
+        )
+    monkeypatch.setattr(
+        router_module,
+        "get_super_expert_platform_service",
+        lambda: service,
+    )
+    monkeypatch.setattr(router_module, "ensure_chat_access", lambda *_a, **_k: None)
+
+    async def must_not_dispatch(*_args, **_kwargs):
+        pytest.fail("a terminal review retry must not invoke the Agent again")
+
+    monkeypatch.setattr(
+        router_module,
+        "_dispatch_agent_asset_review",
+        must_not_dispatch,
+    )
+    command = PlatformCommandRequest(
+        installation_id=grant.installation_id,
+        contract_version="1",
+        idempotency_key="submit",
+        arguments={
+            "binding": binding,
+            "event_id": "submit",
+            "asset_id": "asset-1",
+        },
+    )
+
+    result = await router_module.execute_super_expert_command(
+        "aigc.asset.submit",
+        command,
+        SimpleNamespace(state=SimpleNamespace(tenant_id="tenant-a")),
+    )
+
+    assert result["task"].status.value == "ACCEPTED"
+    assert "审核已完成" in result["agent_review"]["reply"]
+
+
+@pytest.mark.asyncio
+async def test_asset_review_dispatch_runs_inside_user_billing(monkeypatch):
+    lifecycle = []
+
+    class Billing:
+        class Activation:
+            def __enter__(self):
+                lifecycle.append("activated")
+
+            def __exit__(self, *_args):
+                lifecycle.append("deactivated")
+
+        def activate(self):
+            return self.Activation()
+
+        def finalize_completed(self):
+            lifecycle.append("completed")
+            return True
+
+        def finalize(self, state, error_code=None):
+            lifecycle.append((state, error_code))
+            return True
+
+    def prepare(user_id, source, request_key, fingerprint):
+        lifecycle.append((user_id, source.id, request_key, fingerprint["asset_id"]))
+        return Billing()
+
+    monkeypatch.setattr(router_module, "prepare_user_billing_execution", prepare)
+    monkeypatch.setattr(
+        "qwenpaw.app.routers.aigc_studio.resolve_owned_asset_for_agent_review",
+        lambda *_a, **_k: None,
+    )
+
+    async def resolve(*_args, **_kwargs):
+        return {"type": "image", "source": {"type": "url", "url": "file:///tmp/a"}}
+
+    monkeypatch.setattr(
+        "qwenpaw.app.routers.aigc_studio.resolve_owned_asset_for_agent_review",
+        resolve,
+    )
+
+    class Runner:
+        async def query_handler(self, _messages, _request):
+            yield SimpleNamespace(get_text_content=lambda: "完成"), True
+
+    class Manager:
+        async def get_agent(self, _agent_id):
+            return SimpleNamespace(runner=Runner())
+
+    service = SimpleNamespace(
+        grant_repository=SimpleNamespace(
+            get=lambda _id: SimpleNamespace(agent_id="agent-1", tenant_id="tenant-a"),
+        ),
+    )
+    request = SimpleNamespace(
+        state=SimpleNamespace(user_id="user-1"),
+        app=SimpleNamespace(state=SimpleNamespace(multi_agent_manager=Manager())),
+    )
+
+    await router_module._dispatch_agent_asset_review(
+        request,
+        service=service,
+        installation_id="installation-1",
+        binding=router_module.AigcTaskBinding.model_validate(_binding()),
+        asset_id="asset-1",
+        request_key="submit:agent-review",
+    )
+
+    assert lifecycle == [
+        ("user-1", "conversation-1", "submit:agent-review", "asset-1"),
+        "activated",
+        "deactivated",
+        "completed",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_asset_submit_returns_safe_payment_required_error(monkeypatch):
+    class Service:
+        async def execute(self, **_kwargs):
+            return {"task": {"status": "SUBMITTED"}, "event": {}}
+
+        def review_lock(self, _event_id):
+            return __import__("asyncio").Lock()
+
+        def get_review_receipt(self, _event_id):
+            return None
+
+        def get_task(self, _material_task_id):
+            return SimpleNamespace(status=router_module.AigcTaskStatus.SUBMITTED)
+
+    async def insufficient(*_args, **_kwargs):
+        raise router_module.InsufficientUsageCreditsError(3, 0)
+
+    monkeypatch.setattr(
+        router_module,
+        "get_super_expert_platform_service",
+        lambda: Service(),
+    )
+    monkeypatch.setattr(router_module, "ensure_chat_access", lambda *_a, **_k: None)
+    monkeypatch.setattr(router_module, "_dispatch_agent_asset_review", insufficient)
+    binding = _binding()
+    binding["installation_id"] = "installation-1"
+    command = PlatformCommandRequest(
+        installation_id="installation-1",
+        contract_version="1",
+        idempotency_key="submit",
+        arguments={"binding": binding, "event_id": "submit", "asset_id": "asset"},
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await router_module.execute_super_expert_command(
+            "aigc.asset.submit",
+            command,
+            SimpleNamespace(state=SimpleNamespace(tenant_id="tenant-a")),
+        )
+
+    assert exc_info.value.status_code == 402
+    assert exc_info.value.detail == "insufficient usage credits"
 
 
 def test_platform_command_router_is_mounted_only_on_authenticated_user_api():

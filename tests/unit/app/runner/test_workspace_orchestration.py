@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 import textwrap
 from types import SimpleNamespace
@@ -400,6 +401,106 @@ async def test_every_orchestration_failure_discards_state(
 
 
 @pytest.mark.asyncio
+async def test_cancellation_discards_staged_state_and_propagates_cancel(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _write_runtime(
+        workspace,
+        """
+        import asyncio
+        from pathlib import Path
+        class Runtime:
+            async def handle(self, request, host):
+                Path(request.transaction_root, "state.txt").write_text("staged")
+                await asyncio.sleep(60)
+        def create_runtime(): return Runtime()
+        """,
+    )
+    transaction = WorkspaceStateTransaction.begin(
+        tmp_path / "state-store",
+        installation_id="installation-1",
+        session_id="session-1",
+        invocation_id="inv-cancel",
+    )
+    orchestrator = WorkspaceTurnOrchestrator(
+        workspace_root=workspace,
+        config=OrchestrationConfig.model_validate(_orchestration()),
+        signed_files=frozenset({"runtime.py"}),
+        execute_agent=lambda _arguments: {"text": "draft"},
+        session_context=lambda: {},
+    )
+    task = asyncio.create_task(
+        orchestrator.invoke(_request_for(transaction), transaction),
+    )
+    for _ in range(100):
+        if (transaction.transaction_root / "state.txt").exists():
+            break
+        await asyncio.sleep(0)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not transaction.transaction_root.exists()
+    assert not transaction.state_root.exists()
+
+
+@pytest.mark.asyncio
+async def test_runner_level_cancellation_records_a_terminal_trace(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _write_runtime(
+        workspace,
+        """
+        import asyncio
+        class Runtime:
+            async def handle(self, request, host):
+                await asyncio.sleep(60)
+        def create_runtime(): return Runtime()
+        """,
+    )
+    authorization = AuthorizedWorkspaceRelease(
+        installation_id="installation-1",
+        release_id="release-1",
+        release_digest=f"sha256:{'a' * 64}",
+        granted_capabilities={capability: "1" for capability in HOST_CAPABILITIES_V1},
+        signed_workspace_files=frozenset({"runtime.py"}),
+    )
+    storage = tmp_path / "runtime-state"
+    task = asyncio.create_task(
+        run_workspace_orchestration_turn(
+            agent=lambda _messages: None,
+            original_messages=[Msg(name="user", role="user", content="hello")],
+            request=SimpleNamespace(
+                session_id="session-1", user_id="user-1", channel="console",
+            ),
+            agent_id="generic-agent",
+            workspace_root=workspace,
+            state_storage_root=storage,
+            config=OrchestrationConfig.model_validate(_orchestration()),
+            authorization=authorization,
+        ),
+    )
+    trace_path = runtime_trace_path(
+        storage,
+        installation_id="installation-1",
+        session_id="session-1",
+    )
+    for _ in range(100):
+        if trace_path.exists():
+            break
+        await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    events = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    assert [event["event_type"] for event in events] == [
+        "orchestration.started",
+        "orchestration.cancelled",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_entrypoint_must_be_a_signed_regular_file_inside_workspace(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -424,6 +525,47 @@ async def test_entrypoint_must_be_a_signed_regular_file_inside_workspace(tmp_pat
 
     assert result.error_code == "orchestration_error"
     assert not transaction.transaction_root.exists()
+
+
+@pytest.mark.asyncio
+async def test_signed_runtime_can_import_its_own_signed_modules(tmp_path):
+    workspace = tmp_path / "workspace"
+    (workspace / "scripts").mkdir(parents=True)
+    (workspace / "scripts" / "helper.py").write_text(
+        "def render(): return 'package-local'\n",
+        encoding="utf-8",
+    )
+    _write_runtime(
+        workspace,
+        """
+        from .scripts.helper import render
+        class Runtime:
+            async def handle(self, request, host):
+                await host.call("runtime.complete", {
+                    "invocation_id": request.invocation_id,
+                    "message": {"reply": render()},
+                })
+        def create_runtime(): return Runtime()
+        """,
+    )
+    transaction = WorkspaceStateTransaction.begin(
+        tmp_path / "state-store",
+        installation_id="installation-1",
+        session_id="session-1",
+        invocation_id="inv-package-import",
+    )
+    orchestrator = WorkspaceTurnOrchestrator(
+        workspace_root=workspace,
+        config=OrchestrationConfig.model_validate(_orchestration()),
+        signed_files=frozenset({"runtime.py", "scripts/helper.py"}),
+        execute_agent=lambda _arguments: {"text": "unused"},
+        session_context=lambda: {},
+    )
+
+    result = await orchestrator.invoke(_request_for(transaction), transaction)
+
+    assert result.error_code is None
+    assert result.message == {"reply": "package-local"}
 
 
 def test_authorization_binds_active_release_grant_digest_and_workspace(tmp_path):

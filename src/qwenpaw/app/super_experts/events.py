@@ -39,6 +39,7 @@ class _EventDocument(BaseModel):
 
     schema_version: int = 1
     events: dict[str, SuperExpertEventEnvelope] = Field(default_factory=dict)
+    review_receipts: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class SuperExpertEventRepository:
@@ -79,6 +80,29 @@ class SuperExpertEventRepository:
                 if event.installation_id == installation_id
                 and event.conversation_id == conversation_id
             )
+
+    def get_review_receipt(self, event_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            receipt = self._read().review_receipts.get(event_id)
+            return dict(receipt) if receipt is not None else None
+
+    def save_review_receipt(
+        self,
+        event_id: str,
+        receipt: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not event_id or not isinstance(receipt.get("reply"), str):
+            raise ValueError("agent review receipt is invalid")
+        with self._lock:
+            document = self._read()
+            existing = document.review_receipts.get(event_id)
+            if existing is not None:
+                if existing != receipt:
+                    raise ValueError("agent review receipt is immutable")
+                return dict(existing)
+            document.review_receipts[event_id] = dict(receipt)
+            self._write(document)
+            return dict(receipt)
 
     def _read(self) -> _EventDocument:
         if not self.path.exists():

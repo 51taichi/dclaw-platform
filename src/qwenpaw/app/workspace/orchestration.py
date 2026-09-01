@@ -10,6 +10,8 @@ import json
 import logging
 import os
 import shutil
+import sys
+import types
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -349,7 +351,18 @@ async def run_workspace_orchestration_turn(
         ),
         timeout_seconds=timeout_seconds,
     )
-    result = await orchestrator.invoke(turn_request, transaction)
+    try:
+        result = await orchestrator.invoke(turn_request, transaction)
+    except asyncio.CancelledError:
+        _append_runtime_trace(
+            state_storage_root,
+            installation_id=authorization.installation_id,
+            session_id=turn_request.session_id,
+            invocation_id=invocation_id,
+            event_type="orchestration.cancelled",
+            payload={"error_code": "cancelled"},
+        )
+        raise
     _append_runtime_trace(
         state_storage_root,
         installation_id=authorization.installation_id,
@@ -585,6 +598,7 @@ class WorkspaceTurnOrchestrator:
         self.business_call = business_call
         self.trace_sink = trace_sink
         self.timeout_seconds = timeout_seconds
+        self._runtime_module_prefix: str | None = None
 
     async def invoke(
         self,
@@ -615,6 +629,9 @@ class WorkspaceTurnOrchestrator:
                 message=host.completion.message,
                 diagnostics=host.completion.diagnostics,
             )
+        except asyncio.CancelledError:
+            transaction.discard()
+            raise
         except asyncio.TimeoutError:
             transaction.discard()
             return WorkspaceTurnResult(error_code="orchestration_timeout")
@@ -624,6 +641,8 @@ class WorkspaceTurnOrchestrator:
         except Exception:
             transaction.discard()
             return WorkspaceTurnResult(error_code="orchestration_error")
+        finally:
+            self._cleanup_runtime_modules()
 
     def _load_runtime(self) -> Any:
         module_name, factory_name = self.config.entrypoint.split(":", 1)
@@ -637,14 +656,24 @@ class WorkspaceTurnOrchestrator:
         resolved = candidate.resolve(strict=True)
         if not resolved.is_relative_to(root) or not resolved.is_file():
             raise WorkspaceOrchestrationError("orchestration_error")
-        spec = importlib.util.spec_from_file_location(
-            f"dclaw_workspace_runtime_{uuid.uuid4().hex}",
-            resolved,
-        )
+        prefix = f"dclaw_workspace_{uuid.uuid4().hex}"
+        package = types.ModuleType(prefix)
+        package.__path__ = [str(root)]
+        package.__package__ = prefix
+        sys.modules[prefix] = package
+        module_name = f"{prefix}.runtime"
+        spec = importlib.util.spec_from_file_location(module_name, resolved)
         if spec is None or spec.loader is None:
+            sys.modules.pop(prefix, None)
             raise WorkspaceOrchestrationError("orchestration_error")
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        sys.modules[module_name] = module
+        self._runtime_module_prefix = prefix
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            self._cleanup_runtime_modules()
+            raise
         factory = getattr(module, factory_name, None)
         if not callable(factory):
             raise WorkspaceOrchestrationError("orchestration_error")
@@ -652,3 +681,12 @@ class WorkspaceTurnOrchestrator:
         if runtime is None or not callable(getattr(runtime, "handle", None)):
             raise WorkspaceOrchestrationError("orchestration_error")
         return runtime
+
+    def _cleanup_runtime_modules(self) -> None:
+        prefix = self._runtime_module_prefix
+        if prefix is None:
+            return
+        for name in tuple(sys.modules):
+            if name == prefix or name.startswith(f"{prefix}."):
+                sys.modules.pop(name, None)
+        self._runtime_module_prefix = None
