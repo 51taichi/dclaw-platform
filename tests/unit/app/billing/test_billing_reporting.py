@@ -43,6 +43,7 @@ from qwenpaw.app.storage.schema import (
     open_api_invocations,
     open_api_keys,
     open_api_publications,
+    users,
 )
 from qwenpaw.app.storage.settings import get_storage_settings
 
@@ -363,10 +364,15 @@ def test_fresh_and_upgrade_create_reporting_state_tables(tmp_path):
             index["name"]
             for index in inspect(engine).get_indexes("open_api_invocations")
         }
+        ledger_indexes = {
+            index["name"]
+            for index in inspect(engine).get_indexes("billing_ledger_entries")
+        }
         assert (
             "idx_open_api_invocations_billing_usage_order"
             in invocation_indexes
         )
+        assert "idx_billing_ledger_entries_usage_ranking" in ledger_indexes
     finally:
         engine.dispose()
 
@@ -682,6 +688,165 @@ def test_cursor_is_stable_scoped_and_rejects_timezone_naive_filters(reporting):
         )
     with pytest.raises(ValueError, match="timezone"):
         BillingReportFilters(started_at=datetime(2026, 8, 29, 8, 0))
+
+
+def test_credit_consumption_ranking_uses_committed_debits_and_paginates(
+    reporting,
+):
+    service, repository, engine = reporting
+    with engine.begin() as conn:
+        conn.execute(
+            insert(users),
+            [
+                {
+                    "id": 1,
+                    "username": "alpha",
+                    "password_hash": "hash",
+                    "password_salt": "salt",
+                },
+                {
+                    "id": 2,
+                    "username": "beta",
+                    "password_hash": "hash",
+                    "password_salt": "salt",
+                },
+                {
+                    "id": 3,
+                    "username": "zero",
+                    "password_hash": "hash",
+                    "password_salt": "salt",
+                },
+            ],
+        )
+    wallets = {
+        owner_id: repository.ensure_wallet("user", owner_id)
+        for owner_id in ("1", "2", "3")
+    }
+    with engine.begin() as conn:
+        conn.execute(
+            insert(billing_ledger_entries),
+            [
+                {
+                    "id": "rank-alpha-1",
+                    "wallet_id": wallets["1"]["id"],
+                    "event_type": "usage_capture",
+                    "status": "committed",
+                    "credit_delta": -25,
+                    "business_type": "usage_item",
+                    "business_key": "rank-alpha-call-1",
+                    "idempotency_key": "rank-alpha-call-1",
+                    "created_at": NOW - timedelta(hours=1),
+                },
+                {
+                    "id": "rank-alpha-2",
+                    "wallet_id": wallets["1"]["id"],
+                    "event_type": "usage_capture",
+                    "status": "committed",
+                    "credit_delta": -15,
+                    "business_type": "usage_item",
+                    "business_key": "rank-alpha-call-2",
+                    "idempotency_key": "rank-alpha-call-2",
+                    "created_at": NOW - timedelta(hours=2),
+                },
+                {
+                    "id": "rank-beta-1",
+                    "wallet_id": wallets["2"]["id"],
+                    "event_type": "usage_capture",
+                    "status": "committed",
+                    "credit_delta": -80,
+                    "business_type": "usage_item",
+                    "business_key": "rank-beta-call-1",
+                    "idempotency_key": "rank-beta-call-1",
+                    "created_at": NOW - timedelta(hours=3),
+                },
+                {
+                    "id": "rank-beta-pending",
+                    "wallet_id": wallets["2"]["id"],
+                    "event_type": "usage_capture",
+                    "status": "pending",
+                    "credit_delta": -900,
+                    "business_type": "usage_item",
+                    "business_key": "rank-beta-pending",
+                    "idempotency_key": "rank-beta-pending",
+                    "created_at": NOW - timedelta(hours=4),
+                },
+                {
+                    "id": "rank-alpha-old",
+                    "wallet_id": wallets["1"]["id"],
+                    "event_type": "usage_capture",
+                    "status": "committed",
+                    "credit_delta": -999,
+                    "business_type": "usage_item",
+                    "business_key": "rank-alpha-old",
+                    "idempotency_key": "rank-alpha-old",
+                    "created_at": NOW - timedelta(days=40),
+                },
+            ],
+        )
+
+    first = service.credit_consumption_ranking(
+        started_at=NOW - timedelta(days=1),
+        ended_at=NOW + timedelta(days=1),
+        page=1,
+        page_size=2,
+    )
+    second = service.credit_consumption_ranking(
+        started_at=NOW - timedelta(days=1),
+        ended_at=NOW + timedelta(days=1),
+        page=2,
+        page_size=2,
+    )
+
+    assert first == {
+        "items": [
+            {
+                "rank": 1,
+                "user_id": "2",
+                "username": "beta",
+                "consumed_credits": 80,
+                "call_count": 1,
+            },
+            {
+                "rank": 2,
+                "user_id": "1",
+                "username": "alpha",
+                "consumed_credits": 40,
+                "call_count": 2,
+            },
+        ],
+        "page": 1,
+        "page_size": 2,
+        "total": 3,
+    }
+    assert second["items"] == [
+        {
+            "rank": 3,
+            "user_id": "3",
+            "username": "zero",
+            "consumed_credits": 0,
+            "call_count": 0,
+        },
+    ]
+
+
+def test_credit_consumption_ranking_rejects_invalid_window_and_pagination(
+    reporting,
+):
+    service, _repository, _engine = reporting
+    with pytest.raises(ValueError, match="started_at"):
+        service.credit_consumption_ranking(
+            started_at=NOW,
+            ended_at=NOW,
+            page=1,
+            page_size=20,
+        )
+    with pytest.raises(ValueError, match="page"):
+        service.credit_consumption_ranking(
+            started_at=NOW - timedelta(days=1),
+            ended_at=NOW,
+            page=0,
+            page_size=20,
+        )
 
 
 def test_summary_uses_durable_items_and_ledger_and_excludes_history(reporting):
@@ -1148,6 +1313,73 @@ def _reporting_client(monkeypatch, service, repository) -> TestClient:
 
 def _headers(user_id: str, role: str = "user") -> dict[str, str]:
     return {"x-test-user": user_id, "x-test-role": role}
+
+
+@pytest.mark.parametrize(
+    ("period", "anchor", "expected_start", "expected_end"),
+    [
+        (
+            "day",
+            date(2026, 9, 2),
+            datetime(2026, 9, 1, 16, 0, tzinfo=timezone.utc),
+            datetime(2026, 9, 2, 16, 0, tzinfo=timezone.utc),
+        ),
+        (
+            "week",
+            date(2026, 9, 2),
+            datetime(2026, 8, 30, 16, 0, tzinfo=timezone.utc),
+            datetime(2026, 9, 6, 16, 0, tzinfo=timezone.utc),
+        ),
+        (
+            "month",
+            date(2026, 9, 2),
+            datetime(2026, 8, 31, 16, 0, tzinfo=timezone.utc),
+            datetime(2026, 9, 30, 16, 0, tzinfo=timezone.utc),
+        ),
+        (
+            "year",
+            date(2026, 9, 2),
+            datetime(2025, 12, 31, 16, 0, tzinfo=timezone.utc),
+            datetime(2026, 12, 31, 16, 0, tzinfo=timezone.utc),
+        ),
+    ],
+)
+def test_credit_ranking_periods_use_beijing_natural_boundaries(
+    period,
+    anchor,
+    expected_start,
+    expected_end,
+):
+    assert billing._credit_ranking_period_bounds(period, anchor) == (
+        expected_start,
+        expected_end,
+    )
+
+
+def test_admin_credit_ranking_route_is_paginated_and_reports_period(
+    monkeypatch,
+    reporting,
+):
+    service, repository, _engine = reporting
+    client = _reporting_client(monkeypatch, service, repository)
+
+    response = client.get(
+        "/api/admin/billing/credit-consumption-ranking"
+        "?period=month&anchor_date=2026-09-02&page=2&page_size=7",
+        headers=_headers("admin-real", "admin"),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["page"] == 2
+    assert payload["page_size"] == 7
+    assert payload["period"] == {
+        "type": "month",
+        "anchor_date": "2026-09-02",
+        "started_at": "2026-08-31T16:00:00+00:00",
+        "ended_at": "2026-09-30T16:00:00+00:00",
+        "timezone": "Asia/Shanghai",
+    }
 
 
 def test_user_reporting_routes_return_404_for_another_wallet_and_redact(

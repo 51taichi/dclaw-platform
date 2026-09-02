@@ -238,7 +238,13 @@ async def activate_sealed_agent_release(
             status_code=400,
             detail="sealed agent runtime validation failed",
         )
-    runtime_root = service.release_root(agent_id, release_id) / "agent"
+    try:
+        runtime_root = service.prepare_runtime_workspace(agent_id, release_id)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Sealed agent runtime workspace is unavailable",
+        ) from exc
     if not (runtime_root / "agent.json").is_file():
         raise HTTPException(
             status_code=400,

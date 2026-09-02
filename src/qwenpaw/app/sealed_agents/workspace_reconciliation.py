@@ -16,6 +16,7 @@ from .standard_workspace import (
     StandardWorkspaceError,
     validate_standard_workspace,
 )
+from .runtime_workspace import ensure_runtime_workspace, runtime_workspace_root
 
 
 @dataclass(frozen=True)
@@ -109,7 +110,7 @@ def reconcile_active_sealed_profiles(
                 changed = True
             continue
 
-        workspace_root = (
+        release_workspace_root = (
             Path(sealed_root)
             / "releases"
             / record.agent_id
@@ -117,9 +118,15 @@ def reconcile_active_sealed_profiles(
             / "agent"
         )
         try:
-            validate_standard_workspace(record.agent_id, workspace_root)
-        except StandardWorkspaceError as exc:
+            validate_standard_workspace(record.agent_id, release_workspace_root)
+            workspace_root = ensure_runtime_workspace(
+                sealed_root, record.agent_id, active.release_id
+            )
+        except (StandardWorkspaceError, OSError) as exc:
             unavailable.append(record.agent_id)
+            workspace_root = runtime_workspace_root(
+                sealed_root, record.agent_id, active.release_id
+            )
             desired = _profile_for_workspace(
                 previous,
                 agent_id=record.agent_id,
@@ -133,7 +140,7 @@ def reconcile_active_sealed_profiles(
                 registry,
                 record,
                 active,
-                exc.error_code,
+                getattr(exc, "error_code", "runtime_workspace_unavailable"),
             )
             continue
 

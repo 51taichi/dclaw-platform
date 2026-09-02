@@ -1442,6 +1442,13 @@ Index(
     billing_ledger_entries.c.business_key,
 )
 Index(
+    "idx_billing_ledger_entries_usage_ranking",
+    billing_ledger_entries.c.event_type,
+    billing_ledger_entries.c.status,
+    billing_ledger_entries.c.created_at.desc(),
+    billing_ledger_entries.c.wallet_id,
+)
+Index(
     "uq_billing_ledger_allocations_entry_lot",
     billing_ledger_allocations.c.ledger_entry_id,
     billing_ledger_allocations.c.credit_lot_id,
@@ -2418,6 +2425,9 @@ def _ensure_open_api_billing_indexes(engine: Engine) -> None:
         "ON open_api_invocations (billing_usage_order_id)",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_usage_orders_business "
         "ON billing_usage_orders (business_key)",
+        "CREATE INDEX IF NOT EXISTS idx_billing_ledger_entries_usage_ranking "
+        "ON billing_ledger_entries "
+        "(event_type, status, created_at DESC, wallet_id)",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_usage_orders_source "
         "ON billing_usage_orders (source_type, source_id)",
         "CREATE INDEX IF NOT EXISTS idx_billing_usage_orders_wallet_status "

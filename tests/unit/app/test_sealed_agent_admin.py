@@ -254,6 +254,9 @@ async def test_activation_registers_private_runtime_only_after_preload_succeeds(
         def release_root(self, agent_id, release_id):
             return release_root
 
+        def prepare_runtime_workspace(self, agent_id, release_id):
+            return release_root / "agent"
+
         def activate(self, agent_id, release_id, *, tenant_id="local"):
             assert tenant_id == "local"
             return record
@@ -309,6 +312,9 @@ async def test_activation_failure_restores_previous_profile_and_runtime(
 
         def release_root(self, agent_id, release_id):
             return release_root
+
+        def prepare_runtime_workspace(self, agent_id, release_id):
+            return release_root / "agent"
 
         def activate(self, agent_id, release_id, *, tenant_id="local"):
             assert tenant_id == "local"
@@ -378,6 +384,9 @@ async def test_first_activation_failure_stops_partially_loaded_runtime(
 
         def release_root(self, agent_id, release_id):
             return release_root
+
+        def prepare_runtime_workspace(self, agent_id, release_id):
+            return release_root / "agent"
 
     class Manager:
         def __init__(self):

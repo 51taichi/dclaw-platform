@@ -984,6 +984,78 @@ def _load_canvas_for_request(request: Request, canvas_id: str) -> Canvas:
     return canvas
 
 
+def provision_super_expert_aigc_workspace(
+    *,
+    owner_user_id: str,
+    material_task_id: str,
+    operation_id: str,
+    arguments: dict[str, Any],
+) -> dict[str, str]:
+    """Create the real user-owned canvas and node for one guided task."""
+    if not str(owner_user_id).strip() or not str(material_task_id).strip():
+        raise ValueError("AIGC workspace ownership is incomplete")
+    if operation_id != "aigc.text_to_video.create":
+        raise ValueError("AIGC operation cannot be provisioned")
+    canvas_id = str(uuid.uuid4())
+    node_id = str(uuid.uuid4())
+    now = _now()
+    node = CanvasNode(
+        id=node_id,
+        type="video_generate",
+        position={"x": 120.0, "y": 120.0},
+        data={
+            "title": "视频节点",
+            "text": str(arguments["prompt"]),
+            "videoMode": "blank",
+            "showTryOptions": False,
+            "aspectRatio": str(arguments["aspect_ratio"]),
+            "videoResolution": "720P",
+            "videoDuration": int(arguments["duration_seconds"]),
+            "videoAudio": True,
+            "videoCount": 1,
+            "activeVideoTab": "text_to_video",
+            "modelId": str(arguments["model_id"]),
+        },
+    )
+    canvas = Canvas(
+        id=canvas_id,
+        name=str(arguments["project_name"]),
+        nodes=[node],
+        edges=[],
+        viewport=CanvasViewport(),
+        thumbnail=None,
+        meta={
+            "version": 1,
+            "owner_user_id": str(owner_user_id),
+            "super_expert_material_task_id": str(material_task_id),
+            "super_expert_operation_id": operation_id,
+        },
+        created_at=now,
+        updated_at=now,
+    )
+    _write_json(_json_path("canvases", canvas_id), canvas)
+    return {"canvas_id": canvas_id, "node_id": node_id}
+
+
+def discard_super_expert_aigc_workspace(
+    *,
+    owner_user_id: str,
+    material_task_id: str,
+    canvas_id: str,
+) -> None:
+    """Remove only a just-provisioned, still-unpublished task canvas."""
+    try:
+        canvas = _load_canvas(canvas_id)
+    except HTTPException:
+        return
+    if (
+        _canvas_owner_user_id(canvas) != str(owner_user_id)
+        or canvas.meta.get("super_expert_material_task_id") != material_task_id
+    ):
+        raise ValueError("AIGC workspace cleanup binding mismatch")
+    _delete_json(_json_path("canvases", canvas_id))
+
+
 def _request_can_access_asset(request: Request, asset: AigcAsset) -> bool:
     owner = asset.meta.get("owner_user_id") or asset.meta.get("user_id")
     if owner is not None:

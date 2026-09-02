@@ -7,7 +7,7 @@ import json
 import os
 import threading
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -41,6 +41,9 @@ class AigcTaskCommand(BaseModel):
     event_id: str = Field(min_length=1)
     binding: AigcTaskBinding
     asset_id: str | None = Field(default=None, min_length=1)
+    operation_id: str | None = Field(default=None, min_length=1)
+    operation_version: str | None = Field(default=None, min_length=1)
+    operation_arguments: dict[str, Any] = Field(default_factory=dict)
 
 
 class _IdempotencyRecord(BaseModel):
@@ -150,6 +153,9 @@ class AigcTaskRepository:
                 status=AigcTaskStatus.WAITING_TO_START,
                 version=1,
                 events=(event,),
+                operation_id=command.operation_id,
+                operation_version=command.operation_version,
+                operation_arguments=command.operation_arguments,
             )
         if current is None:
             raise AigcTaskError("task transition requires an existing task")

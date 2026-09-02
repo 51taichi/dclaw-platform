@@ -1,0 +1,87 @@
+name: dclaw-production
+
+services:
+  dclaw:
+    image: ${DCLAW_IMAGE:?DCLAW_IMAGE is required}
+    container_name: dclaw
+    restart: unless-stopped
+    ports:
+      - "${DCLAW_BIND_HOST:-0.0.0.0}:${DCLAW_HOST_PORT:-18088}:8088"
+    environment:
+      QWENPAW_AUTH_ENABLED: ${QWENPAW_AUTH_ENABLED:-true}
+      QWENPAW_AUTH_USERNAME: ${DCLAW_ADMIN_USERNAME:-admin}
+      QWENPAW_AUTH_PASSWORD: ${DCLAW_ADMIN_PASSWORD:?DCLAW_ADMIN_PASSWORD is required}
+      QWENPAW_DATABASE_BACKEND: postgres
+      QWENPAW_DATABASE_URL: postgresql+psycopg://qwenpaw:${DCLAW_POSTGRES_PASSWORD:?DCLAW_POSTGRES_PASSWORD is required}@dclaw-postgres:5432/qwenpaw
+      QWENPAW_RUNTIME_BACKEND: redis
+      QWENPAW_REDIS_URL: redis://dclaw-redis:6379/0
+      QWENPAW_KNOWLEDGE_WORKERS: ${QWENPAW_KNOWLEDGE_WORKERS:-2}
+      QWENPAW_PUBLIC_BASE_URL: ${DCLAW_PUBLIC_BASE_URL:-}
+      PUBLIC_BASE_URL: ${DCLAW_PUBLIC_BASE_URL:-}
+      VOLCANO_API_KEY: ${VOLCANO_API_KEY:-}
+      MXAPI_API_KEY: ${MXAPI_API_KEY:-}
+    volumes:
+      - dclaw-data:/app/working
+      - dclaw-secrets:/app/working.secret
+      - dclaw-backups:/app/working.backups
+    networks:
+      - dclaw-net
+    depends_on:
+      dclaw-postgres:
+        condition: service_healthy
+      dclaw-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8088/api/version"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+
+  dclaw-postgres:
+    image: postgres:16-alpine
+    container_name: dclaw-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: qwenpaw
+      POSTGRES_USER: qwenpaw
+      POSTGRES_PASSWORD: ${DCLAW_POSTGRES_PASSWORD:?DCLAW_POSTGRES_PASSWORD is required}
+    volumes:
+      - dclaw-postgres:/var/lib/postgresql/data
+    networks:
+      - dclaw-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qwenpaw -d qwenpaw"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  dclaw-redis:
+    image: redis:7-alpine
+    container_name: dclaw-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - dclaw-redis:/data
+    networks:
+      - dclaw-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+networks:
+  dclaw-net:
+    name: dclaw-net
+
+volumes:
+  dclaw-data:
+    name: dclaw-data
+  dclaw-secrets:
+    name: dclaw-secrets
+  dclaw-backups:
+    name: dclaw-backups
+  dclaw-postgres:
+    name: dclaw-postgres
+  dclaw-redis:
+    name: dclaw-redis

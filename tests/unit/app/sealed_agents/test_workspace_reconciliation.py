@@ -99,14 +99,53 @@ def test_active_release_registers_exact_standard_workspace(tmp_path):
     assert result.reconciled == ("luyu",)
     assert result.unavailable == ()
     assert result.config_changed is True
+    runtime_root = (
+        sealed_root / "runtime_workspaces" / "luyu" / "luyu-release" / "agent"
+    )
     assert config.agents.profiles["luyu"] == AgentProfileRef(
         id="luyu",
-        workspace_dir=str(release_root / "agent"),
+        workspace_dir=str(runtime_root),
         enabled=True,
     )
+    assert (runtime_root / "agent.json").is_file()
+    (runtime_root / "runtime-generated.lock").write_text("state")
+    api.reconcile_active_sealed_profiles(config, registry, sealed_root)
+    assert (runtime_root / "runtime-generated.lock").read_text() == "state"
+    assert not (release_root / "agent/runtime-generated.lock").exists()
     validation = registry.get_agent("luyu").active_release.runtime_validation
     assert validation.status == "valid"
     assert validation.adapter == "standard"
+
+
+def test_reconciliation_restores_signed_config_in_existing_runtime(tmp_path):
+    api = _api()
+    config, registry, sealed_root, release_root = _active_release(tmp_path)
+    api.reconcile_active_sealed_profiles(config, registry, sealed_root)
+    runtime_root = (
+        sealed_root / "runtime_workspaces" / "luyu" / "luyu-release" / "agent"
+    )
+    runtime_config = runtime_root / "agent.json"
+    runtime_config.write_text(
+        json.dumps({"id": "luyu", "name": "fallback"}),
+        encoding="utf-8",
+    )
+    signed_script = release_root / "agent/runtime.py"
+    signed_script.write_text("SIGNED_RUNTIME = True\n", encoding="utf-8")
+    runtime_script = runtime_root / "runtime.py"
+    runtime_script.unlink(missing_ok=True)
+    runtime_state = runtime_root / "runtime-generated.lock"
+    runtime_state.write_text("state", encoding="utf-8")
+
+    api.reconcile_active_sealed_profiles(config, registry, sealed_root)
+
+    restored = json.loads(runtime_config.read_text(encoding="utf-8"))
+    assert restored["name"] == "luyu"
+    assert restored["workspace_dir"] == str(runtime_root)
+    assert runtime_script.read_text(encoding="utf-8") == "SIGNED_RUNTIME = True\n"
+    assert runtime_state.read_text(encoding="utf-8") == "state"
+    assert "workspace_dir" not in json.loads(
+        (release_root / "agent/agent.json").read_text(encoding="utf-8")
+    )
 
 
 def test_reconciliation_is_idempotent(tmp_path):
@@ -141,7 +180,9 @@ def test_one_invalid_agent_does_not_change_ordinary_or_valid_agent(tmp_path):
     assert config.agents.profiles["ordinary"] == ordinary_before
     assert config.agents.profiles["broken"] == AgentProfileRef(
         id="broken",
-        workspace_dir=str(broken_root / "agent"),
+        workspace_dir=str(
+            sealed_root / "runtime_workspaces" / "broken" / "broken-release" / "agent"
+        ),
         enabled=False,
     )
     validation = registry.get_agent("broken").active_release.runtime_validation

@@ -149,6 +149,10 @@ def test_builtin_mxapi_provider_registers_gpt_image_model(isolated_secret_dir) -
         "seedance2",
         "seedance2-fast",
         "seedance2-mini",
+        "grok-imagine-video-1.5-fast",
+        "grok-imagine-video-1.5",
+        "doubao-seedance-1-0-pro-fast-251015",
+        "doubao-seedance-1-5-pro-251215",
     ]
     assert provider.models[0].aigc_capabilities == [
         "text_to_image",

@@ -3,9 +3,10 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta, timezone
 import os
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
@@ -72,6 +73,32 @@ user_router = APIRouter(prefix="/billing", tags=["billing"])
 admin_router = APIRouter(prefix="/billing", tags=["admin-billing"])
 _MAX_USAGE_TOKENS = 100_000_000
 _MAX_USAGE_QUANTITY = 1_000_000
+_BEIJING_TZ = ZoneInfo("Asia/Shanghai")
+
+
+def _credit_ranking_period_bounds(
+    period: Literal["year", "month", "week", "day"],
+    anchor_date: date,
+) -> tuple[datetime, datetime]:
+    """Return Beijing natural-period bounds converted to UTC."""
+    if period == "year":
+        start_date = date(anchor_date.year, 1, 1)
+        end_date = date(anchor_date.year + 1, 1, 1)
+    elif period == "month":
+        start_date = anchor_date.replace(day=1)
+        if anchor_date.month == 12:
+            end_date = date(anchor_date.year + 1, 1, 1)
+        else:
+            end_date = date(anchor_date.year, anchor_date.month + 1, 1)
+    elif period == "week":
+        start_date = anchor_date - timedelta(days=anchor_date.weekday())
+        end_date = start_date + timedelta(days=7)
+    else:
+        start_date = anchor_date
+        end_date = start_date + timedelta(days=1)
+    local_start = datetime.combine(start_date, time.min, tzinfo=_BEIJING_TZ)
+    local_end = datetime.combine(end_date, time.min, tzinfo=_BEIJING_TZ)
+    return local_start.astimezone(timezone.utc), local_end.astimezone(timezone.utc)
 
 
 class QuoteRequestBody(BaseModel):
@@ -937,6 +964,34 @@ def get_admin_wallet_ledger(
         cursor,
         include_internal=True,
     )
+
+
+@admin_router.get("/credit-consumption-ranking")
+def get_admin_credit_consumption_ranking(
+    period: Literal["year", "month", "week", "day"] = "month",
+    anchor_date: date | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+) -> dict[str, Any]:
+    anchor = anchor_date or datetime.now(_BEIJING_TZ).date()
+    started_at, ended_at = _credit_ranking_period_bounds(period, anchor)
+    try:
+        result = get_billing_reporting_service().credit_consumption_ranking(
+            started_at=started_at,
+            ended_at=ended_at,
+            page=page,
+            page_size=page_size,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    result["period"] = {
+        "type": period,
+        "anchor_date": anchor.isoformat(),
+        "started_at": started_at.isoformat(),
+        "ended_at": ended_at.isoformat(),
+        "timezone": "Asia/Shanghai",
+    }
+    return result
 
 
 @admin_router.get("/usage-orders")

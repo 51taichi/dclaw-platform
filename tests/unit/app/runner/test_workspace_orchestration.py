@@ -21,9 +21,13 @@ from qwenpaw.app.workspace.orchestration_contract import (
 from qwenpaw.app.workspace.orchestration import (
     AuthorizedWorkspaceRelease,
     authorize_workspace_release,
+    _candidate_execution_messages,
+    _execute_internal_candidate,
     is_workspace_business_turn,
+    resolve_active_workspace_authorization,
     run_workspace_orchestration_turn,
     runtime_trace_path,
+    workspace_orchestration_timeout_seconds,
     WorkspaceStateTransaction,
     WorkspaceOrchestrationError,
     WorkspaceTurnOrchestrator,
@@ -63,6 +67,20 @@ def test_agent_profile_defaults_to_disabled_orchestration():
     assert profile.orchestration.enabled is False
 
 
+def test_workspace_orchestration_timeout_allows_multi_step_agent_turns(monkeypatch):
+    monkeypatch.delenv("DCLAW_WORKSPACE_ORCHESTRATION_TIMEOUT_SECONDS", raising=False)
+    assert workspace_orchestration_timeout_seconds() == 180.0
+
+
+def test_workspace_orchestration_timeout_is_bounded_and_invalid_values_are_safe(monkeypatch):
+    monkeypatch.setenv("DCLAW_WORKSPACE_ORCHESTRATION_TIMEOUT_SECONDS", "10")
+    assert workspace_orchestration_timeout_seconds() == 30.0
+    monkeypatch.setenv("DCLAW_WORKSPACE_ORCHESTRATION_TIMEOUT_SECONDS", "1200")
+    assert workspace_orchestration_timeout_seconds() == 900.0
+    monkeypatch.setenv("DCLAW_WORKSPACE_ORCHESTRATION_TIMEOUT_SECONDS", "invalid")
+    assert workspace_orchestration_timeout_seconds() == 180.0
+
+
 def test_agent_profile_accepts_the_strict_v1_declaration():
     profile = AgentProfileConfig(
         id="agent-1",
@@ -72,6 +90,127 @@ def test_agent_profile_accepts_the_strict_v1_declaration():
 
     assert profile.orchestration.entrypoint == "runtime.py:create_runtime"
     assert profile.orchestration.required_host_capabilities == HOST_CAPABILITIES_V1
+
+
+def test_resolve_active_authorization_forwards_runtime_workspace(monkeypatch, tmp_path):
+    workspace = tmp_path / "runtime" / "agent"
+    workspace.mkdir(parents=True)
+    record = SimpleNamespace(active_release_id="release-1")
+    captured = {}
+
+    monkeypatch.setattr(
+        "qwenpaw.app.workspace.orchestration.get_sealed_agent_registry",
+        lambda: SimpleNamespace(get_agent=lambda agent_id: record),
+    )
+
+    def fake_authorize_workspace_release(**kwargs):
+        captured.update(kwargs)
+        return "authorized"
+
+    monkeypatch.setattr(
+        "qwenpaw.app.workspace.orchestration.authorize_workspace_release",
+        fake_authorize_workspace_release,
+    )
+    monkeypatch.setattr(
+        "qwenpaw.app.workspace.orchestration.WORKING_DIR",
+        str(tmp_path),
+    )
+
+    result = resolve_active_workspace_authorization(
+        agent_id="agent-1",
+        workspace_root=workspace,
+        tenant_id="local",
+        config=OrchestrationConfig(**_orchestration()),
+    )
+
+    assert result == "authorized"
+    assert captured["workspace_root"] == workspace
+
+
+def test_candidate_execution_projects_runtime_system_instruction_as_last_user_turn():
+    messages = [
+        Msg(name="runtime", role="system", content="ONLY JSON"),
+        Msg(name="user", role="user", content="customer input"),
+    ]
+
+    projected = _candidate_execution_messages(messages)
+
+    assert [message.role for message in projected] == ["user", "user"]
+    assert "ONLY JSON" in projected[-1].get_text_content()
+    assert projected[-1].get_text_content().endswith(
+        "禁止用普通字符串或字符串 \"null\" 代替。"
+    )
+
+
+@pytest.mark.asyncio
+async def test_internal_candidate_temporarily_raises_runtime_instruction_authority():
+    system = Msg(name="agent", role="system", content="ORIGINAL")
+
+    class Agent:
+        _sys_prompt = "ORIGINAL"
+        memory = SimpleNamespace(content=[(system, None)])
+
+        def _build_sys_prompt(self):
+            return "ORIGINAL"
+
+        async def __call__(self, messages):
+            self._sys_prompt = self._build_sys_prompt()
+            assert "ONLY JSON" in self._sys_prompt
+            assert "ONLY JSON" in system.get_text_content()
+            return Msg(name="assistant", role="assistant", content="{}")
+
+    result = await _execute_internal_candidate(
+        Agent(),
+        [Msg(name="runtime", role="system", content="ONLY JSON")],
+    )
+
+    assert result.get_text_content() == "{}"
+    assert system.get_text_content() == "ORIGINAL"
+
+
+@pytest.mark.asyncio
+async def test_internal_candidate_keeps_latest_nonempty_stream_chunk():
+    class Formatter:
+        async def format(self, *, msgs):
+            return msgs
+
+    class Model:
+        stream = True
+        model_key = "volcengine-cn:deepseek-v4-flash"
+
+        def __init__(self):
+            self.max_tokens = None
+            self.extra_body = None
+
+        async def __call__(
+            self, prompt, *, tools, tool_choice, max_tokens, extra_body
+        ):
+            self.max_tokens = max_tokens
+            self.extra_body = extra_body
+            async def chunks():
+                yield SimpleNamespace(
+                    id="chunk-1",
+                    content=[{"type": "text", "text": '{"response":{}}'}],
+                )
+                yield SimpleNamespace(
+                    id="chunk-2",
+                    content=[{"type": "text", "text": ""}],
+                )
+
+            return chunks()
+
+    model = Model()
+    agent = SimpleNamespace(name="agent", formatter=Formatter(), model=model)
+
+    result = await _execute_internal_candidate(
+        agent,
+        [Msg(name="runtime", role="system", content="ONLY JSON")],
+    )
+
+    assert result.get_text_content() == '{"response":{}}'
+    assert result.invocation_id == "chunk-1"
+    assert model.max_tokens == 4096
+    assert model.extra_body == {"thinking": {"type": "disabled"}}
 
 
 @pytest.mark.parametrize(
@@ -304,6 +443,44 @@ async def test_generic_runtime_candidate_is_internal_and_complete_is_visible(tmp
     assert result.error_code is None
     assert candidate_calls == [{"prompt": "normalized"}]
     assert (transaction.state_root / "state.txt").read_text() == "committed"
+
+
+@pytest.mark.asyncio
+async def test_runtime_failure_preserves_safe_diagnostic_ref(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _write_runtime(
+        workspace,
+        """
+        class Runtime:
+            async def handle(self, request, host):
+                await host.call("runtime.fail", {
+                    "invocation_id": request.invocation_id,
+                    "error_code": "runtime_failed",
+                    "diagnostic_ref": "WorkspaceRuntimeError:CALIBRATION_EVENT_INVALID",
+                })
+        def create_runtime(): return Runtime()
+        """,
+    )
+    transaction = WorkspaceStateTransaction.begin(
+        tmp_path / "state-store",
+        installation_id="installation-1",
+        session_id="session-1",
+        invocation_id="inv-1",
+    )
+    orchestrator = WorkspaceTurnOrchestrator(
+        workspace_root=workspace,
+        config=OrchestrationConfig.model_validate(_orchestration()),
+        signed_files=frozenset({"runtime.py"}),
+        execute_agent=lambda _arguments: {"text": "draft"},
+        session_context=lambda: {},
+        timeout_seconds=1,
+    )
+
+    result = await orchestrator.invoke(_request_for(transaction), transaction)
+
+    assert result.error_code == "runtime_failed"
+    assert result.diagnostic_ref == "WorkspaceRuntimeError:CALIBRATION_EVENT_INVALID"
 
 
 @pytest.mark.asyncio
@@ -569,7 +746,7 @@ async def test_signed_runtime_can_import_its_own_signed_modules(tmp_path):
 
 
 def test_authorization_binds_active_release_grant_digest_and_workspace(tmp_path):
-    release_root = tmp_path / "release"
+    release_root = tmp_path / "sealed" / "releases" / "generic-agent" / "release-1"
     workspace = release_root / "agent"
     workspace.mkdir(parents=True)
     (workspace / "agent.json").write_text("{}")
@@ -605,9 +782,13 @@ def test_authorization_binds_active_release_grant_digest_and_workspace(tmp_path)
         administrator_id="admin-1",
     )
 
+    runtime_workspace = (
+        tmp_path / "sealed" / "runtime_workspaces" / "generic-agent" / "release-1" / "agent"
+    )
+    runtime_workspace.mkdir(parents=True)
     authorization = authorize_workspace_release(
         record=record,
-        workspace_root=workspace,
+        workspace_root=runtime_workspace,
         release_root=release_root,
         grant_repository=grants,
         tenant_id="tenant-a",
@@ -616,13 +797,14 @@ def test_authorization_binds_active_release_grant_digest_and_workspace(tmp_path)
 
     assert authorization.installation_id
     assert authorization.release_id == "release-1"
+    assert authorization.signed_workspace_root == workspace
     assert authorization.signed_workspace_files == frozenset(
         {"agent.json", "runtime.py"},
     )
 
 
 def test_self_declared_or_tampered_workspace_is_not_authorized(tmp_path):
-    release_root = tmp_path / "release"
+    release_root = tmp_path / "sealed" / "releases" / "generic-agent" / "release-1"
     workspace = release_root / "agent"
     workspace.mkdir(parents=True)
     (workspace / "agent.json").write_text("{}")
@@ -658,11 +840,15 @@ def test_self_declared_or_tampered_workspace_is_not_authorized(tmp_path):
         administrator_id="admin-1",
     )
     (workspace / "runtime.py").write_text("tampered = True")
+    runtime_workspace = (
+        tmp_path / "sealed" / "runtime_workspaces" / "generic-agent" / "release-1" / "agent"
+    )
+    runtime_workspace.mkdir(parents=True)
 
     with pytest.raises(WorkspaceOrchestrationError):
         authorize_workspace_release(
             record=record,
-            workspace_root=workspace,
+            workspace_root=runtime_workspace,
             release_root=release_root,
             grant_repository=grants,
             tenant_id="tenant-a",
@@ -835,18 +1021,23 @@ async def test_official_signed_non_luyu_fixture_uses_the_generic_protocol(tmp_pa
         release.release_id,
         tenant_id="tenant-a",
     )
-    workspace = service.release_root(
+    signed_workspace = service.release_root(
         "generic-orchestration",
         release.release_id,
     ) / "agent"
+    workspace = service.prepare_runtime_workspace(
+        "generic-orchestration", release.release_id
+    )
     authorization = authorize_workspace_release(
         record=record,
         workspace_root=workspace,
-        release_root=workspace.parent,
+        release_root=service.release_root(
+            "generic-orchestration", release.release_id
+        ),
         grant_repository=service.grant_repository,
         tenant_id="tenant-a",
         config=AgentProfileConfig.model_validate_json(
-            (workspace / "agent.json").read_text(),
+            (signed_workspace / "agent.json").read_text(),
         ).orchestration,
     )
 
@@ -870,7 +1061,7 @@ async def test_official_signed_non_luyu_fixture_uses_the_generic_protocol(tmp_pa
         workspace_root=workspace,
         state_storage_root=tmp_path / "runtime-state",
         config=AgentProfileConfig.model_validate_json(
-            (workspace / "agent.json").read_text(),
+            (signed_workspace / "agent.json").read_text(),
         ).orchestration,
         authorization=authorization,
     )

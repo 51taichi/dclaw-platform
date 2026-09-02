@@ -2680,7 +2680,7 @@ async def test_cloud_asset_signed_url_uses_oss_without_proxying_bytes(
     class FakeObjectStorageClient:
         config = SimpleNamespace(signed_url_ttl_seconds=600)
 
-        def signed_get_url(self, object_key: str) -> str:
+        def signed_get_url(self, object_key: str, **_kwargs) -> str:
             signed_urls.append(object_key)
             return f"https://static.example.test/{object_key}?signature=1"
 
@@ -4169,7 +4169,7 @@ async def test_run_mxapi_gpt_image_rewrites_local_asset_to_signed_public_url(
     assert "/assets/source-asset/file" not in reference_images[0]
 
 
-async def test_run_mxapi_gpt_image_uses_public_proxy_for_cloud_asset_references(
+async def test_run_mxapi_gpt_image_uses_signed_url_for_cloud_asset_references(
     tmp_path,
     monkeypatch,
 ):
@@ -4180,7 +4180,7 @@ async def test_run_mxapi_gpt_image_uses_public_proxy_for_cloud_asset_references(
     signed_gets: list[str] = []
 
     class FakeObjectStorageClient:
-        def signed_get_url(self, object_key: str) -> str:
+        def signed_get_url(self, object_key: str, **_kwargs) -> str:
             signed_gets.append(object_key)
             return f"https://oss.example.test/{object_key}?Expires=1&Signature=old"
 
@@ -4328,11 +4328,9 @@ async def test_run_mxapi_gpt_image_uses_public_proxy_for_cloud_asset_references(
     reference_images = post_call["kwargs"]["json"]["reference_images"]
     assert len(reference_images) == 1
     assert reference_images[0].startswith(
-        "https://aigc.example.com/api/aigc-studio/public-assets/"
-        "source-asset/file?token="
+        "https://oss.example.test/aigc/generated/source.png?"
     )
-    assert "oss.example.test" not in reference_images[0]
-    assert signed_gets == []
+    assert signed_gets == ["aigc/generated/source.png"]
 
 
 async def test_public_asset_file_requires_signed_token(tmp_path, monkeypatch):
@@ -5186,7 +5184,7 @@ async def test_run_seedream_group_job_uses_streaming_sequential_request(
     """Seedream group image generation should match Volcengine's streaming example."""
     app = make_seedream_app(tmp_path)
     transport = ASGITransport(app=app)
-    calls = {}
+    calls = []
 
     class FakeSeedreamStream:
         def __aiter__(self):
@@ -5216,7 +5214,7 @@ async def test_run_seedream_group_job_uses_streaming_sequential_request(
 
     class FakeImages:
         async def generate(self, **kwargs):
-            calls.update(kwargs)
+            calls.append(kwargs)
             return FakeSeedreamStream()
 
     class FakeOpenAIClient:
@@ -5258,7 +5256,7 @@ async def test_run_seedream_group_job_uses_streaming_sequential_request(
     assert ran.status_code == 200
     job = ran.json()
     assert job["status"] == "succeeded"
-    assert calls == {
+    assert calls[0] == {
         "model": "doubao-seedream-4-5-251128",
         "prompt": (
             "生成一组共4张连贯插画\n\n" "务必一次生成 4 张图片结果（不是 1 张）。"
@@ -5272,6 +5270,11 @@ async def test_run_seedream_group_job_uses_streaming_sequential_request(
             "sequential_image_generation_options": {"max_images": 4},
         },
     }
+    assert len(calls) == 3
+    assert all(
+        call["extra_body"]["sequential_image_generation"] == "disabled"
+        for call in calls[1:]
+    )
     assert [asset["name"] for asset in job["outputs"]] == [
         f"image-1-{job['id']}.1.png",
         f"image-1-{job['id']}.2.png",

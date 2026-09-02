@@ -271,13 +271,40 @@ def test_draft_round_trip_recomputes_prices_and_requires_exclusion_reason():
     sheet = workbook["价格草案"]
     headers = {cell.value: cell.column for cell in sheet[1]}
     sheet.cell(2, headers["是否纳入本次发布"], "否")
-    sheet.cell(2, headers["排除原因"], None)
+    sheet.cell(2, headers["排除原因"]).value = None
     output = BytesIO()
     workbook.save(output)
 
     blocked = service.preview_import(output.getvalue(), "draft.xlsx", "1")
     assert blocked["status"] == "blocked"
     assert blocked["rows"][0]["code"] == "exclusion_reason_required"
+
+
+def test_exported_missing_price_rows_have_a_round_trip_safe_exclusion_reason():
+    model = PriceableModel(
+        "volcengine-cn",
+        "火山方舟",
+        "missing-model",
+        "Missing",
+        "text",
+        official_model_id="missing-model",
+    )
+    draft = PricingDraftBuilder(OfficialPriceRegistry.load_bundled()).build(
+        [model], [], [], []
+    )
+    service = PricingExcelService(Repo())
+    content = service.export_draft(draft)
+
+    workbook = load_workbook(BytesIO(content), read_only=True)
+    sheet = workbook["价格草案"]
+    headers = {cell.value: cell.column for cell in sheet[1]}
+    assert sheet.cell(2, headers["是否纳入本次发布"]).value == "否"
+    assert sheet.cell(2, headers["排除原因"]).value == "暂无可信价格"
+
+    preview = service.preview_import(content, "draft.xlsx", "1")
+    assert preview["status"] == "ready"
+    assert preview["valid_rows"][0]["excluded"] is True
+    assert preview["valid_rows"][0]["exclusion_reason"] == "暂无可信价格"
 
 
 def test_multitier_official_draft_round_trips_without_false_duplicates():

@@ -1,14 +1,26 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
+
 from qwenpaw.app.routers.providers import (
     EmbeddingSlotRequest,
+    ModelSlotRequest,
     TestModelRequest as ModelTestRequest,
     _embedding_model_for_test,
+    clear_active_model,
     set_active_embedding_model,
+    set_active_model,
     test_model as run_model_test,
 )
-from qwenpaw.config.config import ModelSlotConfig
+from qwenpaw.config.config import (
+    AgentProfileRef,
+    AgentsConfig,
+    Config,
+    ModelSlotConfig,
+)
+from qwenpaw.config.utils import load_config, save_config
 from qwenpaw.providers.provider import ModelInfo
 
 
@@ -50,6 +62,9 @@ class FakeProviderManager:
 
     def get_active_embedding_model(self):
         return self.active_embedding
+
+    def maybe_probe_multimodal(self, _provider_id: str, _model_id: str) -> None:
+        return None
 
     async def update_model_config(self, provider_id, model_id, config):
         self.updated_configs.append((provider_id, model_id, config))
@@ -185,6 +200,125 @@ async def test_active_embedding_endpoint_tests_then_activates(
         provider_id="volcengine-cn",
         model="text-embedding-v4",
     )
+
+
+async def test_agent_model_endpoint_stores_external_runtime_override(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workspace_dir = tmp_path / "sealed" / "luyu"
+    workspace_dir.mkdir(parents=True)
+    package_config_path = workspace_dir / "agent.json"
+    package_config_path.write_text(
+        json.dumps({"id": "luyu", "name": "Luyu"}),
+        encoding="utf-8",
+    )
+    original_package_config = package_config_path.read_bytes()
+
+    monkeypatch.setattr("qwenpaw.config.utils.WORKING_DIR", tmp_path)
+    save_config(
+        Config(
+            agents=AgentsConfig(
+                active_agent="luyu",
+                profiles={
+                    "luyu": AgentProfileRef(
+                        id="luyu",
+                        workspace_dir=str(workspace_dir),
+                    ),
+                },
+            ),
+        ),
+    )
+
+    async def fake_get_agent_for_request(_request, agent_id=None):
+        assert agent_id == "luyu"
+        return SimpleNamespace(agent_id="luyu")
+
+    monkeypatch.setattr(
+        "qwenpaw.app.routers.providers.get_agent_for_request",
+        fake_get_agent_for_request,
+    )
+    monkeypatch.setattr(
+        "qwenpaw.app.routers.providers._validate_model_slot",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        "qwenpaw.app.routers.providers.schedule_agent_reload",
+        lambda *_args: None,
+    )
+
+    manager = FakeProviderManager(FakeProvider())
+    response = await set_active_model(
+        request=object(),
+        manager=manager,
+        body=ModelSlotRequest(
+            provider_id="volcengine-cn",
+            model="deepseek-v4",
+            scope="agent",
+            agent_id="luyu",
+        ),
+    )
+
+    profile = load_config().agents.profiles["luyu"]
+    assert response.active_llm == ModelSlotConfig(
+        provider_id="volcengine-cn",
+        model="deepseek-v4",
+    )
+    assert profile.active_model_override is True
+    assert profile.active_model == response.active_llm
+    assert package_config_path.read_bytes() == original_package_config
+
+
+async def test_clear_agent_model_keeps_explicit_global_default_override(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workspace_dir = tmp_path / "sealed" / "luyu"
+    workspace_dir.mkdir(parents=True)
+    monkeypatch.setattr("qwenpaw.config.utils.WORKING_DIR", tmp_path)
+    save_config(
+        Config(
+            agents=AgentsConfig(
+                active_agent="luyu",
+                profiles={
+                    "luyu": AgentProfileRef(
+                        id="luyu",
+                        workspace_dir=str(workspace_dir),
+                        active_model_override=True,
+                        active_model=ModelSlotConfig(
+                            provider_id="volcengine-cn",
+                            model="deepseek-v4",
+                        ),
+                    ),
+                },
+            ),
+        ),
+    )
+
+    async def fake_get_agent_for_request(_request, agent_id=None):
+        assert agent_id == "luyu"
+        return SimpleNamespace(agent_id="luyu")
+
+    monkeypatch.setattr(
+        "qwenpaw.app.routers.providers.get_agent_for_request",
+        fake_get_agent_for_request,
+    )
+    monkeypatch.setattr(
+        "qwenpaw.app.routers.providers.schedule_agent_reload",
+        lambda *_args: None,
+    )
+
+    response = await clear_active_model(
+        request=object(),
+        manager=FakeProviderManager(FakeProvider()),
+        scope="agent",
+        agent_id="luyu",
+    )
+
+    profile = load_config().agents.profiles["luyu"]
+    assert response == {"status": "success"}
+    assert profile.active_model_override is True
+    assert profile.active_model is None
 
 
 def test_dashscope_flash_embedding_uses_supported_dimension() -> None:

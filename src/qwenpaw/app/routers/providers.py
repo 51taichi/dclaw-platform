@@ -24,7 +24,8 @@ from agentscope_runtime.engine.schemas.exception import (
 
 from ..agent_context import get_agent_for_request
 from ..utils import schedule_agent_reload
-from ...config.config import load_agent_config, save_agent_config
+from ...config.config import load_agent_config
+from ...config.utils import load_config, save_config
 from ...providers.provider import (
     ModelInfo,
     ProviderInfo,
@@ -1103,12 +1104,14 @@ async def set_active_model(
             request,
             agent_id=body.agent_id,
         )
-        agent_config = load_agent_config(workspace.agent_id)
-        agent_config.active_model = ModelSlotConfig(
+        config = load_config()
+        profile = config.agents.profiles[workspace.agent_id]
+        profile.active_model_override = True
+        profile.active_model = ModelSlotConfig(
             provider_id=body.provider_id,
             model=body.model,
         )
-        save_agent_config(workspace.agent_id, agent_config)
+        save_config(config)
         # Hot reload agent (async, non-blocking)
         schedule_agent_reload(request, workspace.agent_id)
 
@@ -1181,9 +1184,11 @@ async def clear_active_model(
 
     try:
         workspace = await get_agent_for_request(request, agent_id=agent_id)
-        agent_config = load_agent_config(workspace.agent_id)
-        agent_config.active_model = None
-        save_agent_config(workspace.agent_id, agent_config)
+        config = load_config()
+        profile = config.agents.profiles[workspace.agent_id]
+        profile.active_model_override = True
+        profile.active_model = None
+        save_config(config)
         schedule_agent_reload(request, workspace.agent_id)
     except Exception as exc:
         logger.warning(

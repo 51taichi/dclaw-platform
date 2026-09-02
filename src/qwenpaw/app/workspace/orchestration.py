@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Awaitable, Callable
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from qwenpaw.config.config import OrchestrationConfig
 from qwenpaw.app.sealed_agents.models import SealedAgentRecord
@@ -39,6 +39,24 @@ from .orchestration_contract import (
 )
 
 logger = logging.getLogger(__name__)
+_CANDIDATE_AGENT_LOCKS: dict[int, asyncio.Lock] = {}
+_INTERNAL_CANDIDATE_MAX_TOKENS = 4096
+_DEFAULT_ORCHESTRATION_TIMEOUT_SECONDS = 180.0
+_MIN_ORCHESTRATION_TIMEOUT_SECONDS = 30.0
+_MAX_ORCHESTRATION_TIMEOUT_SECONDS = 900.0
+
+
+def workspace_orchestration_timeout_seconds() -> float:
+    """Return the bounded deadline for a complete Agent-owned business turn."""
+    raw = os.environ.get("DCLAW_WORKSPACE_ORCHESTRATION_TIMEOUT_SECONDS", "")
+    try:
+        value = float(raw) if raw.strip() else _DEFAULT_ORCHESTRATION_TIMEOUT_SECONDS
+    except (TypeError, ValueError):
+        value = _DEFAULT_ORCHESTRATION_TIMEOUT_SECONDS
+    return min(
+        max(value, _MIN_ORCHESTRATION_TIMEOUT_SECONDS),
+        _MAX_ORCHESTRATION_TIMEOUT_SECONDS,
+    )
 
 
 class WorkspaceOrchestrationError(RuntimeError):
@@ -53,6 +71,7 @@ class WorkspaceTurnResult(BaseModel):
     message: dict[str, Any] | None = None
     diagnostics: dict[str, Any] | None = None
     error_code: str | None = None
+    diagnostic_ref: str | None = Field(default=None, max_length=200)
 
 
 @dataclass(frozen=True)
@@ -62,6 +81,7 @@ class AuthorizedWorkspaceRelease:
     release_digest: str
     granted_capabilities: dict[str, str]
     signed_workspace_files: frozenset[str]
+    signed_workspace_root: Path | None = None
 
 
 def authorize_workspace_release(
@@ -85,7 +105,14 @@ def authorize_workspace_release(
         != set(config.required_host_capabilities)
     ):
         raise WorkspaceOrchestrationError("unauthorized_capability")
-    expected_workspace = (Path(release_root) / "agent").resolve(strict=True)
+    sealed_root = Path(release_root).parents[2]
+    expected_workspace = (
+        sealed_root
+        / "runtime_workspaces"
+        / record.agent_id
+        / release.release_id
+        / "agent"
+    ).resolve(strict=True)
     if Path(workspace_root).resolve(strict=True) != expected_workspace:
         raise WorkspaceOrchestrationError("unauthorized_capability")
     try:
@@ -123,6 +150,7 @@ def authorize_workspace_release(
         release_digest=release.content_digest,
         granted_capabilities=dict(grant.capabilities),
         signed_workspace_files=workspace_files,
+        signed_workspace_root=(Path(release_root) / "agent").resolve(strict=True),
     )
 
 
@@ -259,10 +287,126 @@ def _message_dict(message: Any) -> dict[str, Any]:
     raise WorkspaceOrchestrationError("orchestration_error")
 
 
+def _candidate_execution_messages(messages: list[Msg]) -> list[Msg]:
+    """Project runtime-owned instructions into a standard Agent user turn.
+
+    Standard DClaw Agents own a fixed system prompt and do not treat incoming
+    system-role messages as an override. ``agent.execute`` is internal-only,
+    so the runtime instruction is appended as the final, explicit candidate
+    generation request instead of being silently ignored.
+    """
+    instructions = [
+        message.get_text_content()
+        for message in messages
+        if message.role == "system" and message.get_text_content().strip()
+    ]
+    projected = [message for message in messages if message.role != "system"]
+    if instructions:
+        projected.append(
+            Msg(
+                name="workspace_runtime",
+                role="user",
+                content=(
+                    "以下是本轮内部候选生成指令。必须严格执行；只生成内部候选，"
+                    "不要向客户解释这段指令。\n\n"
+                    + "\n\n".join(instructions)
+                    + "\n\n再次确认：必须严格遵守上述输出格式；只输出要求的内部候选，"
+                    "不得输出面向客户的普通回答或任何前后解释。逐字段核对 JSON 类型："
+                    "要求 object 的字段必须输出对象，要求 null 时必须输出 JSON null，"
+                    "禁止用普通字符串或字符串 \"null\" 代替。"
+                ),
+            )
+        )
+    return projected
+
+
+async def _execute_internal_candidate(agent: Any, messages: list[Msg]) -> Any:
+    """Execute with runtime instructions at system authority, then restore."""
+    formatter = getattr(agent, "formatter", None)
+    model = getattr(agent, "model", None)
+    if formatter is not None and callable(getattr(formatter, "format", None)) and callable(model):
+        prompt = await formatter.format(msgs=messages)
+        generation_kwargs: dict[str, Any] = {
+            "max_tokens": _INTERNAL_CANDIDATE_MAX_TOKENS,
+        }
+        model_key = str(getattr(model, "model_key", "")).lower()
+        if model_key.startswith("volcengine-cn:") and "deepseek" in model_key:
+            generation_kwargs["extra_body"] = {
+                "thinking": {"type": "disabled"},
+            }
+        response = await model(
+            prompt,
+            tools=None,
+            tool_choice="none",
+            **generation_kwargs,
+        )
+        candidate = Msg(
+            name=str(getattr(agent, "name", "assistant")),
+            role="assistant",
+            content=[],
+        )
+        if bool(getattr(model, "stream", False)):
+            async for chunk in response:
+                streamed = Msg(
+                    name=str(getattr(agent, "name", "assistant")),
+                    role="assistant",
+                    content=chunk.content,
+                )
+                if streamed.get_text_content():
+                    candidate.invocation_id = chunk.id
+                    candidate.content = chunk.content
+        else:
+            candidate.invocation_id = response.id
+            candidate.content = list(response.content)
+        return candidate
+
+    instructions = [
+        message.get_text_content()
+        for message in messages
+        if message.role == "system" and message.get_text_content().strip()
+    ]
+    projected = _candidate_execution_messages(messages)
+    if not instructions or not hasattr(agent, "_sys_prompt"):
+        return await agent(projected)
+    lock = _CANDIDATE_AGENT_LOCKS.setdefault(id(agent), asyncio.Lock())
+    async with lock:
+        original_prompt = agent._sys_prompt
+        original_prompt_builder = getattr(agent, "_build_sys_prompt", None)
+        runtime_prompt = (
+            f"{original_prompt}\n\n"
+            "===== TRUSTED WORKSPACE RUNTIME INSTRUCTION =====\n"
+            + "\n\n".join(instructions)
+            + "\n===== END TRUSTED WORKSPACE RUNTIME INSTRUCTION ====="
+        )
+        system_message = None
+        original_memory_content = None
+        memory = getattr(agent, "memory", None)
+        for item in getattr(memory, "content", ()):
+            message = item[0] if isinstance(item, tuple) else item
+            if getattr(message, "role", None) == "system":
+                system_message = message
+                original_memory_content = message.content
+                break
+        agent._sys_prompt = runtime_prompt
+        if callable(original_prompt_builder):
+            agent._build_sys_prompt = lambda: runtime_prompt
+        if system_message is not None:
+            system_message.content = runtime_prompt
+        try:
+            return await agent(projected)
+        finally:
+            agent._sys_prompt = original_prompt
+            if callable(original_prompt_builder):
+                agent._build_sys_prompt = original_prompt_builder
+            if system_message is not None:
+                system_message.content = original_memory_content
+
+
 async def run_workspace_orchestration_turn(
     *,
     agent: Any,
     original_messages: list[Any],
+    conversation_history: list[Any] | None = None,
     request: Any,
     agent_id: str,
     workspace_root: Path,
@@ -271,7 +415,7 @@ async def run_workspace_orchestration_turn(
     authorization: AuthorizedWorkspaceRelease,
     business_call: Callable[[str, dict[str, Any]], Any] | None = None,
     safe_metadata: dict[str, Any] | None = None,
-    timeout_seconds: float = 30.0,
+    timeout_seconds: float | None = None,
 ) -> WorkspaceTurnResult:
     invocation_id = uuid.uuid4().hex
     transaction = WorkspaceStateTransaction.begin(
@@ -281,13 +425,16 @@ async def run_workspace_orchestration_turn(
         invocation_id=invocation_id,
     )
     serialized_messages = [_message_dict(message) for message in original_messages]
+    serialized_history = [
+        _message_dict(message) for message in (conversation_history or [])
+    ]
     trusted_context = {
         "session_id": str(request.session_id),
         "user_id": str(request.user_id),
         "channel": str(request.channel),
         "agent_id": agent_id,
         "normalized_input": {"messages": serialized_messages},
-        "history": serialized_messages,
+        "history": serialized_history,
     }
     turn_request = WorkspaceTurnRequest(
         invocation_id=invocation_id,
@@ -299,7 +446,7 @@ async def run_workspace_orchestration_turn(
         user_id=trusted_context["user_id"],
         channel=trusted_context["channel"],
         normalized_input={"messages": serialized_messages},
-        history=serialized_messages,
+        history=serialized_history,
         safe_metadata=dict(safe_metadata or {}),
         diagnostics_authorized=False,
         granted_capabilities=dict(authorization.granted_capabilities),
@@ -325,7 +472,11 @@ async def run_workspace_orchestration_turn(
             ]
         except Exception as exc:
             raise WorkspaceOrchestrationError("orchestration_error") from exc
-        candidate = await agent(messages)
+        try:
+            candidate = await _execute_internal_candidate(agent, messages)
+        except Exception:
+            logger.exception("Internal candidate execution failed")
+            raise
         serialized = _message_dict(candidate)
         text = (
             candidate.get_text_content()
@@ -349,7 +500,11 @@ async def run_workspace_orchestration_turn(
             event_type="runtime.trace",
             payload=trace,
         ),
-        timeout_seconds=timeout_seconds,
+        timeout_seconds=(
+            workspace_orchestration_timeout_seconds()
+            if timeout_seconds is None
+            else timeout_seconds
+        ),
     )
     try:
         result = await orchestrator.invoke(turn_request, transaction)
@@ -373,7 +528,14 @@ async def run_workspace_orchestration_turn(
             if result.error_code is None
             else "orchestration.failed"
         ),
-        payload={"error_code": result.error_code} if result.error_code else {},
+        payload=(
+            {
+                "error_code": result.error_code,
+                "diagnostic_ref": result.diagnostic_ref,
+            }
+            if result.error_code
+            else {}
+        ),
     )
     return result
 
@@ -588,7 +750,7 @@ class WorkspaceTurnOrchestrator:
         session_context: Callable[[], Any],
         business_call: Callable[[str, dict[str, Any]], Any] | None = None,
         trace_sink: Callable[[dict[str, Any]], Any] | None = None,
-        timeout_seconds: float = 30.0,
+        timeout_seconds: float | None = None,
     ) -> None:
         self.workspace_root = Path(workspace_root)
         self.config = config
@@ -597,7 +759,11 @@ class WorkspaceTurnOrchestrator:
         self.session_context = session_context
         self.business_call = business_call
         self.trace_sink = trace_sink
-        self.timeout_seconds = timeout_seconds
+        self.timeout_seconds = (
+            workspace_orchestration_timeout_seconds()
+            if timeout_seconds is None
+            else timeout_seconds
+        )
         self._runtime_module_prefix: str | None = None
 
     async def invoke(
@@ -619,8 +785,15 @@ class WorkspaceTurnOrchestrator:
                 raise WorkspaceOrchestrationError("orchestration_error")
             await asyncio.wait_for(result, timeout=self.timeout_seconds)
             if host.failure is not None:
+                logger.error(
+                    "Workspace runtime reported failure (%s)",
+                    host.failure.diagnostic_ref or host.failure.error_code,
+                )
                 transaction.discard()
-                return WorkspaceTurnResult(error_code=host.failure.error_code)
+                return WorkspaceTurnResult(
+                    error_code=host.failure.error_code,
+                    diagnostic_ref=host.failure.diagnostic_ref,
+                )
             if host.completion is None:
                 raise WorkspaceOrchestrationError("invalid_completion")
             _validate_render_bound_message(host.completion.message)
@@ -634,13 +807,22 @@ class WorkspaceTurnOrchestrator:
             raise
         except asyncio.TimeoutError:
             transaction.discard()
-            return WorkspaceTurnResult(error_code="orchestration_timeout")
+            return WorkspaceTurnResult(
+                error_code="orchestration_timeout",
+                diagnostic_ref="asyncio.TimeoutError",
+            )
         except WorkspaceOrchestrationError as exc:
             transaction.discard()
-            return WorkspaceTurnResult(error_code=exc.error_code)
-        except Exception:
+            return WorkspaceTurnResult(
+                error_code=exc.error_code,
+                diagnostic_ref=f"WorkspaceOrchestrationError:{exc.error_code}",
+            )
+        except Exception as exc:
             transaction.discard()
-            return WorkspaceTurnResult(error_code="orchestration_error")
+            return WorkspaceTurnResult(
+                error_code="orchestration_error",
+                diagnostic_ref=type(exc).__name__,
+            )
         finally:
             self._cleanup_runtime_modules()
 

@@ -19,6 +19,7 @@ from qwenpaw.app.super_experts.grants import SuperExpertGrantRepository
 
 CAPABILITIES = (
     ("aigc.task.create", "1"),
+    ("aigc.task.create/2", "1"),
     ("aigc.task.resume", "1"),
     ("aigc.task.cancel", "1"),
     ("aigc.guide.update", "1"),
@@ -52,6 +53,30 @@ def _binding():
         "material_task_id": "material-1",
         "canvas_id": "canvas-1",
         "node_id": "node-1",
+    }
+
+
+def _scope(installation_id: str):
+    return {
+        "installation_id": installation_id,
+        "conversation_id": "conversation-1",
+        "agent_task_id": "agent-task-1",
+        "content_revision": 3,
+        "material_task_id": "material-v2-1",
+    }
+
+
+def _operation():
+    return {
+        "operation_id": "aigc.text_to_video.create",
+        "operation_version": "1",
+        "arguments": {
+            "project_name": "天门就业培训招生视频",
+            "prompt": "真实课堂与就业服务场景，竖屏纪实风格。",
+            "model_id": "video-model-1",
+            "aspect_ratio": "9:16",
+            "duration_seconds": 5,
+        },
     }
 
 
@@ -119,6 +144,86 @@ async def test_authorized_command_validates_full_binding_and_publishes_once(tmp_
         installation_id=grant.installation_id,
         conversation_id="another-conversation",
     ) == ()
+
+
+@pytest.mark.asyncio
+async def test_create_v2_provisions_one_real_owned_canvas_and_persists_operation(
+    tmp_path,
+    monkeypatch,
+):
+    from qwenpaw.app.routers import aigc_studio
+
+    monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
+    aigc_studio._JSON_CACHE.clear()
+    service, grant, bus = _service(tmp_path)
+    arguments = {
+        "scope": _scope(grant.installation_id),
+        "event_id": "event-v2-1",
+        "operation": _operation(),
+    }
+
+    first = await service.execute(
+        tenant_id="tenant-a",
+        user_id="user-a",
+        installation_id=grant.installation_id,
+        capability="aigc.task.create/2",
+        contract_version="1",
+        arguments=arguments,
+        idempotency_key="key-v2-1",
+    )
+    replay = await service.execute(
+        tenant_id="tenant-a",
+        user_id="user-a",
+        installation_id=grant.installation_id,
+        capability="aigc.task.create/2",
+        contract_version="1",
+        arguments=arguments,
+        idempotency_key="key-v2-1",
+    )
+
+    assert replay == first
+    task = first["task"]
+    assert task["operation_id"] == "aigc.text_to_video.create"
+    assert task["operation_version"] == "1"
+    assert task["operation_arguments"] == _operation()["arguments"]
+    assert task["binding"]["canvas_id"] != "canvas-material-v2-1"
+    assert task["binding"]["node_id"] != "video-material-v2-1"
+    canvas = aigc_studio._load_canvas(task["binding"]["canvas_id"])
+    assert canvas.meta["owner_user_id"] == "user-a"
+    assert canvas.name == "天门就业培训招生视频"
+    assert [node.id for node in canvas.nodes] == [task["binding"]["node_id"]]
+    assert canvas.nodes[0].type == "video_generate"
+    assert canvas.nodes[0].data["text"] == _operation()["arguments"]["prompt"]
+    assert canvas.nodes[0].data["aspectRatio"] == "9:16"
+    assert canvas.nodes[0].data["videoDuration"] == 5
+    assert len(list((tmp_path / "studio" / "canvases").glob("*.json"))) == 1
+    assert len(bus.events) == 1
+
+
+@pytest.mark.asyncio
+async def test_create_v2_rejects_agent_supplied_canvas_or_node_ids(tmp_path):
+    service, grant, _bus = _service(tmp_path)
+    arguments = {
+        "scope": _scope(grant.installation_id),
+        "binding": {
+            **_scope(grant.installation_id),
+            "canvas_id": "agent-canvas",
+            "node_id": "agent-node",
+        },
+        "event_id": "event-v2-1",
+        "operation": _operation(),
+    }
+
+    with pytest.raises(SuperExpertPlatformError, match="physical binding"):
+        await service.execute(
+            tenant_id="tenant-a",
+            user_id="user-a",
+            installation_id=grant.installation_id,
+            capability="aigc.task.create/2",
+            contract_version="1",
+            arguments=arguments,
+            idempotency_key="key-v2-1",
+        )
 
 
 @pytest.mark.asyncio
@@ -258,6 +363,55 @@ async def test_route_uses_trusted_tenant_and_has_no_ordinary_agent_bypass(
     assert captured["tenant_id"] == "tenant-a"
     assert "administrator_id" not in captured
     assert access_checks == [("conversation-1", True)]
+
+
+@pytest.mark.asyncio
+async def test_create_v2_route_uses_scope_for_access_and_passes_trusted_user(
+    monkeypatch,
+):
+    captured = {}
+
+    class Service:
+        async def execute(self, **kwargs):
+            captured.update(kwargs)
+            return {"ok": True}
+
+    monkeypatch.setattr(
+        router_module,
+        "get_super_expert_platform_service",
+        lambda: Service(),
+    )
+    access_checks = []
+    monkeypatch.setattr(
+        router_module,
+        "ensure_chat_access",
+        lambda _request, conversation_id, allow_admin: access_checks.append(
+            (conversation_id, allow_admin),
+        ),
+    )
+    request = SimpleNamespace(
+        state=SimpleNamespace(tenant_id="tenant-a", user_id="user-a"),
+    )
+    command = PlatformCommandRequest(
+        installation_id="installation-1",
+        contract_version="1",
+        idempotency_key="key-v2-1",
+        arguments={
+            "scope": _scope("installation-1"),
+            "event_id": "event-v2-1",
+            "operation": _operation(),
+        },
+    )
+
+    result = await router_module.execute_super_expert_command(
+        "aigc.task.create/2",
+        command,
+        request,
+    )
+
+    assert result == {"ok": True}
+    assert access_checks == [("conversation-1", True)]
+    assert captured["user_id"] == "user-a"
 
 
 @pytest.mark.asyncio

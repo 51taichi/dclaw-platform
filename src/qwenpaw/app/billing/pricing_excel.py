@@ -405,7 +405,10 @@ class PricingExcelService:
                     row.verification_status,
                     row.registry_version,
                     "是" if row.include_in_publish else "否",
-                    row.exclusion_reason,
+                    (
+                        row.exclusion_reason
+                        or ("暂无可信价格" if not row.include_in_publish else None)
+                    ),
                     row.evidence_level,
                     row.candidate_digest,
                     row.approval_reason,

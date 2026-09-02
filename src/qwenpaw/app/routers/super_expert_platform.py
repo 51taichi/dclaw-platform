@@ -9,6 +9,8 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from agentscope.message import Msg
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from pydantic import BaseModel, ConfigDict, Field
 
 from qwenpaw.constant import WORKING_DIR
@@ -29,7 +31,7 @@ from ..super_experts.events import (
     SuperExpertEventRepository,
 )
 from ..super_experts.grants import SuperExpertGrantRepository
-from ..super_experts.models import AigcTaskBinding, AigcTaskStatus
+from ..super_experts.models import AigcTaskBinding, AigcTaskScope, AigcTaskStatus
 
 router = APIRouter(
     prefix="/super-expert-platform",
@@ -50,10 +52,19 @@ class PlatformCommandRequest(BaseModel):
     arguments: dict[str, Any]
 
 
+class AigcCreateOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    operation_id: str = Field(min_length=1)
+    operation_version: str = Field(min_length=1)
+    arguments: dict[str, Any]
+
+
 _EVENT_TYPES = {
     "card.create": "card.created",
     "card.update": "card.updated",
     "aigc.task.create": "aigc.task.created",
+    "aigc.task.create/2": "aigc.task.created",
     "aigc.task.resume": "aigc.task.resumed",
     "aigc.task.cancel": "aigc.task.cancelled",
     "aigc.guide.update": "aigc.guide.updated",
@@ -108,6 +119,7 @@ class SuperExpertPlatformService:
         self,
         *,
         tenant_id: str,
+        user_id: str | None = None,
         installation_id: str,
         capability: str,
         contract_version: str,
@@ -124,24 +136,33 @@ class SuperExpertPlatformService:
             raise SuperExpertPlatformError("capability is not authorized")
         if capability not in _EVENT_TYPES:
             raise SuperExpertPlatformError("capability is not supported")
-        try:
-            binding = AigcTaskBinding.model_validate(arguments.get("binding"))
-        except Exception as exc:
-            raise SuperExpertPlatformError("command binding is invalid") from exc
-        if binding.installation_id != installation_id:
-            raise SuperExpertPlatformError("command binding mismatch")
         event_id = str(arguments.get("event_id") or "")
         if not event_id:
             raise SuperExpertPlatformError("event id is required")
 
         try:
-            result = self._apply_capability(
-                capability=capability,
-                binding=binding,
-                event_id=event_id,
-                arguments=arguments,
-                idempotency_key=idempotency_key,
-            )
+            if capability == "aigc.task.create/2":
+                result, binding = self._create_bound_aigc_task(
+                    installation_id=installation_id,
+                    user_id=user_id,
+                    event_id=event_id,
+                    arguments=arguments,
+                    idempotency_key=idempotency_key,
+                )
+            else:
+                try:
+                    binding = AigcTaskBinding.model_validate(arguments.get("binding"))
+                except Exception as exc:
+                    raise SuperExpertPlatformError("command binding is invalid") from exc
+                if binding.installation_id != installation_id:
+                    raise SuperExpertPlatformError("command binding mismatch")
+                result = self._apply_capability(
+                    capability=capability,
+                    binding=binding,
+                    event_id=event_id,
+                    arguments=arguments,
+                    idempotency_key=idempotency_key,
+                )
         except (AigcTaskError, ValueError) as exc:
             raise SuperExpertPlatformError(str(exc)) from exc
         task = result.get("task")
@@ -181,6 +202,102 @@ class SuperExpertPlatformService:
         else:
             response["card"] = result["payload"]
         return response
+
+    def _create_bound_aigc_task(
+        self,
+        *,
+        installation_id: str,
+        user_id: str | None,
+        event_id: str,
+        arguments: dict[str, Any],
+        idempotency_key: str,
+    ) -> tuple[dict[str, Any], AigcTaskBinding]:
+        if set(arguments) != {"scope", "event_id", "operation"}:
+            if "binding" in arguments:
+                raise SuperExpertPlatformError(
+                    "physical binding must be created by DClaw",
+                )
+            raise SuperExpertPlatformError("create v2 arguments are invalid")
+        if not isinstance(user_id, str) or not user_id.strip():
+            raise SuperExpertPlatformError("task owner is unavailable")
+        try:
+            scope = AigcTaskScope.model_validate(arguments.get("scope"))
+            operation = AigcCreateOperation.model_validate(arguments.get("operation"))
+        except Exception as exc:
+            raise SuperExpertPlatformError("create v2 arguments are invalid") from exc
+        if scope.installation_id != installation_id:
+            raise SuperExpertPlatformError("command binding mismatch")
+        catalog_path = _operation_catalog_path()
+        try:
+            definition = load_operation_catalog(catalog_path).operation(
+                operation.operation_id,
+            )
+        except KeyError as exc:
+            raise SuperExpertPlatformError("AIGC operation is unavailable") from exc
+        if definition.version != operation.operation_version:
+            raise SuperExpertPlatformError("AIGC operation version is unavailable")
+        try:
+            Draft202012Validator(definition.arguments_schema).validate(
+                operation.arguments,
+            )
+        except JsonSchemaValidationError as exc:
+            raise SuperExpertPlatformError("AIGC operation arguments are invalid") from exc
+
+        current = self.task_repository.get(scope.material_task_id)
+        provisioned_canvas_id: str | None = None
+        if current is not None:
+            current_scope = AigcTaskScope.model_validate(
+                current.binding.model_dump(
+                    exclude={"canvas_id", "node_id"},
+                    mode="json",
+                ),
+            )
+            if current_scope != scope:
+                raise SuperExpertPlatformError("task binding mismatch")
+            binding = current.binding
+        else:
+            from .aigc_studio import provision_super_expert_aigc_workspace
+
+            provisioned = provision_super_expert_aigc_workspace(
+                owner_user_id=user_id,
+                material_task_id=scope.material_task_id,
+                operation_id=operation.operation_id,
+                arguments=operation.arguments,
+            )
+            provisioned_canvas_id = provisioned["canvas_id"]
+            binding = AigcTaskBinding(
+                **scope.model_dump(mode="json"),
+                **provisioned,
+            )
+        try:
+            task = self.task_repository.apply(
+                AigcTaskCommand(
+                    action="create",
+                    event_id=event_id,
+                    binding=binding,
+                    operation_id=operation.operation_id,
+                    operation_version=operation.operation_version,
+                    operation_arguments=operation.arguments,
+                ),
+                idempotency_key=idempotency_key,
+            )
+        except Exception:
+            if provisioned_canvas_id is not None:
+                from .aigc_studio import discard_super_expert_aigc_workspace
+
+                discard_super_expert_aigc_workspace(
+                    owner_user_id=user_id,
+                    material_task_id=scope.material_task_id,
+                    canvas_id=provisioned_canvas_id,
+                )
+            raise
+        return {
+            "task": task,
+            "payload": {
+                "operation_id": operation.operation_id,
+                "operation_version": operation.operation_version,
+            },
+        }, binding
 
     def _apply_capability(
         self,
@@ -248,6 +365,15 @@ class SuperExpertPlatformService:
 _service: SuperExpertPlatformService | None = None
 
 
+def _operation_catalog_path() -> Path:
+    return (
+        Path(__file__).resolve().parents[2]
+        / "aigc"
+        / "contracts"
+        / "aigc-operation-contract-v1.json"
+    )
+
+
 def get_super_expert_platform_service() -> SuperExpertPlatformService:
     global _service
     if _service is None:
@@ -282,14 +408,10 @@ def get_aigc_operation_contract(
     operation_id: str,
     _request: Request,
 ) -> dict[str, Any]:
-    catalog_path = (
-        Path(__file__).resolve().parents[2]
-        / "aigc"
-        / "contracts"
-        / "aigc-operation-contract-v1.json"
-    )
     try:
-        operation = load_operation_catalog(catalog_path).operation(operation_id)
+        operation = load_operation_catalog(_operation_catalog_path()).operation(
+            operation_id,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="AIGC operation not found") from exc
     return operation.model_dump(mode="json")
@@ -302,7 +424,11 @@ async def execute_super_expert_command(
     request: Request,
 ) -> dict[str, Any]:
     tenant_id = str(getattr(request.state, "tenant_id", "local") or "local")
-    binding = command.arguments.get("binding")
+    binding = (
+        command.arguments.get("scope")
+        if capability == "aigc.task.create/2"
+        else command.arguments.get("binding")
+    )
     conversation_id = (
         str(binding.get("conversation_id") or "")
         if isinstance(binding, dict)
@@ -315,6 +441,7 @@ async def execute_super_expert_command(
     try:
         result = await service.execute(
             tenant_id=tenant_id,
+            user_id=str(getattr(request.state, "user_id", "") or ""),
             installation_id=command.installation_id,
             capability=capability,
             contract_version=command.contract_version,

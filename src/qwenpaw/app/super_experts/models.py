@@ -20,6 +20,16 @@ class AigcTaskStatus(str, Enum):
     INVALIDATED = "INVALIDATED"
 
 
+class AigcTaskScope(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    installation_id: str = Field(min_length=1)
+    conversation_id: str = Field(min_length=1)
+    agent_task_id: str = Field(min_length=1)
+    content_revision: int = Field(ge=0)
+    material_task_id: str = Field(min_length=1)
+
+
 class AigcTaskBinding(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -50,4 +60,7 @@ class AigcMaterialTask(BaseModel):
     asset_id: str | None = None
     version: int = Field(ge=1)
     events: tuple[AigcTaskEvent, ...]
+    operation_id: str | None = Field(default=None, min_length=1)
+    operation_version: str | None = Field(default=None, min_length=1)
+    operation_arguments: dict = Field(default_factory=dict)
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

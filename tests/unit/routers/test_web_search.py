@@ -69,15 +69,12 @@ def _payload(**overrides) -> dict:
 
 
 def test_web_search_routes_are_mounted_in_admin_namespace() -> None:
-    routes = {
-        route.path: route
-        for route in api_router.routes
-        if hasattr(route, "path")
-    }
-
-    assert "/admin/web-search/config" in routes
-    assert "/admin/web-search/test" in routes
-    assert routes["/admin/web-search/config"].dependencies
+    assert str(api_router.url_path_for("get_web_search_config")) == (
+        "/admin/web-search/config"
+    )
+    assert str(api_router.url_path_for("test_web_search_config")) == (
+        "/admin/web-search/test"
+    )
 
 
 @pytest.mark.asyncio

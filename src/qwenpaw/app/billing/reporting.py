@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from sqlalchemy import (
     Date,
+    String,
     and_,
     case,
     cast,
@@ -41,6 +42,7 @@ from ..storage.schema import (
     open_api_external_apps,
     open_api_invocations,
     open_api_publications,
+    users,
 )
 
 
@@ -234,6 +236,100 @@ class BillingReportingService:
                 detail=True,
                 include_internal=owner_user_id is None,
             )[0]
+
+    def credit_consumption_ranking(
+        self,
+        *,
+        started_at: datetime,
+        ended_at: datetime,
+        page: int,
+        page_size: int,
+    ) -> dict[str, Any]:
+        """Rank every user by committed usage debits in a closed-open window."""
+        for value in (started_at, ended_at):
+            if value.tzinfo is None or value.utcoffset() is None:
+                raise ValueError("ranking window must include a timezone")
+        if started_at >= ended_at:
+            raise ValueError("started_at must be before ended_at")
+        if page < 1:
+            raise ValueError("page must be at least 1")
+        if not 1 <= page_size <= 100:
+            raise ValueError("page_size must be between 1 and 100")
+
+        captured = (
+            select(
+                billing_ledger_entries.c.wallet_id,
+                func.sum(-billing_ledger_entries.c.credit_delta).label(
+                    "consumed_credits",
+                ),
+                func.count(billing_ledger_entries.c.id).label("call_count"),
+            )
+            .where(
+                billing_ledger_entries.c.event_type == "usage_capture",
+                billing_ledger_entries.c.status == "committed",
+                billing_ledger_entries.c.credit_delta < 0,
+                billing_ledger_entries.c.created_at >= started_at,
+                billing_ledger_entries.c.created_at < ended_at,
+            )
+            .group_by(billing_ledger_entries.c.wallet_id)
+            .subquery("captured_credit_ranking")
+        )
+        consumed_credits = func.coalesce(
+            captured.c.consumed_credits,
+            0,
+        ).label("consumed_credits")
+        call_count = func.coalesce(
+            captured.c.call_count,
+            0,
+        ).label("call_count")
+        statement = (
+            select(
+                users.c.id.label("user_id"),
+                users.c.username,
+                consumed_credits,
+                call_count,
+            )
+            .select_from(
+                users.outerjoin(
+                    billing_wallets,
+                    and_(
+                        billing_wallets.c.owner_type == "user",
+                        billing_wallets.c.owner_id
+                        == cast(users.c.id, String),
+                    ),
+                ).outerjoin(
+                    captured,
+                    captured.c.wallet_id == billing_wallets.c.id,
+                ),
+            )
+            .order_by(
+                consumed_credits.desc(),
+                call_count.desc(),
+                users.c.username.asc(),
+                users.c.id.asc(),
+            )
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        with self.repository.engine.connect() as conn:
+            total = int(conn.scalar(select(func.count()).select_from(users)) or 0)
+            rows = conn.execute(statement).mappings().all()
+        offset = (page - 1) * page_size
+        return {
+            "items": [
+                {
+                    "rank": offset + index,
+                    "user_id": str(row["user_id"]),
+                    "username": str(row["username"]),
+                    "consumed_credits": int(row["consumed_credits"]),
+                    "call_count": int(row["call_count"]),
+                }
+                for index, row in enumerate(rows, start=1)
+            ],
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+        }
 
     def open_api_summary(
         self,

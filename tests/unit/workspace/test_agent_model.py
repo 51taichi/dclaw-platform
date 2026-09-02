@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Tests for per-agent model configuration."""
+import json
 from pathlib import Path
 
 import pytest
@@ -133,6 +134,59 @@ def test_agent_model_config_can_be_cleared(
     # Verify it's cleared
     reloaded = load_agent_config("test_agent")
     assert reloaded.active_model is None
+
+
+def test_root_runtime_model_override_supersedes_workspace_without_mutating_it(
+    mock_agent_workspace,
+):  # pylint: disable=redefined-outer-name
+    from qwenpaw.config.utils import load_config, save_config
+
+    agent_config = load_agent_config("test_agent")
+    agent_config.active_model = ModelSlotConfig(
+        provider_id="workspace-provider",
+        model="workspace-model",
+    )
+    save_agent_config("test_agent", agent_config)
+
+    root_config = load_config()
+    profile = root_config.agents.profiles["test_agent"]
+    profile.active_model_override = True
+    profile.active_model = ModelSlotConfig(
+        provider_id="runtime-provider",
+        model="runtime-model",
+    )
+    save_config(root_config)
+
+    effective = load_agent_config("test_agent")
+    raw = json.loads((mock_agent_workspace / "agent.json").read_text())
+
+    assert effective.active_model.provider_id == "runtime-provider"
+    assert effective.active_model.model == "runtime-model"
+    assert raw["active_model"] == {
+        "provider_id": "workspace-provider",
+        "model": "workspace-model",
+    }
+
+
+def test_root_runtime_model_override_can_explicitly_use_global_default(
+    mock_agent_workspace,
+):  # pylint: disable=redefined-outer-name,unused-argument
+    from qwenpaw.config.utils import load_config, save_config
+
+    agent_config = load_agent_config("test_agent")
+    agent_config.active_model = ModelSlotConfig(
+        provider_id="workspace-provider",
+        model="workspace-model",
+    )
+    save_agent_config("test_agent", agent_config)
+
+    root_config = load_config()
+    profile = root_config.agents.profiles["test_agent"]
+    profile.active_model_override = True
+    profile.active_model = None
+    save_config(root_config)
+
+    assert load_agent_config("test_agent").active_model is None
 
 
 def test_different_agents_have_independent_models(tmp_path, monkeypatch):

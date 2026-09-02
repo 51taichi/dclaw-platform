@@ -1047,6 +1047,14 @@ class AgentProfileRef(BaseModel):
         default=True,
         description="Whether agent is enabled (controls instance loading)",
     )
+    active_model_override: bool = Field(
+        default=False,
+        description="Whether the root runtime model override is authoritative",
+    )
+    active_model: Optional[ModelSlotConfig] = Field(
+        default=None,
+        description="Package-independent runtime model override",
+    )
 
 
 class PlanConfig(BaseModel):
@@ -1980,6 +1988,16 @@ def load_agent_config(agent_id: str) -> AgentProfileConfig:
         )
 
     agent_ref = config.agents.profiles[agent_id]
+
+    def apply_runtime_override(
+        agent_config: AgentProfileConfig,
+    ) -> AgentProfileConfig:
+        if not agent_ref.active_model_override:
+            return agent_config
+        return agent_config.model_copy(
+            update={"active_model": agent_ref.active_model},
+        )
+
     workspace_dir = Path(agent_ref.workspace_dir).expanduser()
     agent_config_path = workspace_dir / "agent.json"
 
@@ -1987,7 +2005,7 @@ def load_agent_config(agent_id: str) -> AgentProfileConfig:
         fallback_config = build_fallback_agent_profile_config(agent_id, config)
         # Save for future use
         save_agent_config(agent_id, fallback_config)
-        return fallback_config
+        return apply_runtime_override(fallback_config)
 
     # Check mtime to see if we can use cached config
     try:
@@ -1995,14 +2013,14 @@ def load_agent_config(agent_id: str) -> AgentProfileConfig:
     except OSError:
         fallback_config = build_fallback_agent_profile_config(agent_id, config)
         save_agent_config(agent_id, fallback_config)
-        return fallback_config
+        return apply_runtime_override(fallback_config)
 
     with _agent_config_lock:
         # Return cached config if mtime hasn't changed
         if agent_id in _agent_config_cache:
             cached_config, cached_mtime = _agent_config_cache[agent_id]
             if cached_mtime == current_mtime:
-                return cached_config
+                return apply_runtime_override(cached_config)
 
         # Need to reload config from disk
         with open(agent_config_path, "r", encoding="utf-8") as f:
@@ -2058,7 +2076,7 @@ def load_agent_config(agent_id: str) -> AgentProfileConfig:
         # Cache the config with its mtime
         _agent_config_cache[agent_id] = (agent_config, current_mtime)
 
-        return agent_config
+        return apply_runtime_override(agent_config)
 
 
 def save_agent_config(

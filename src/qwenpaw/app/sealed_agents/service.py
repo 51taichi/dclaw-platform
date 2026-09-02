@@ -18,6 +18,7 @@ from .standard_workspace import (
     validate_standard_workspace,
 )
 from .signing import SuperExpertTrustStore
+from .runtime_workspace import ensure_runtime_workspace, runtime_workspace_root
 from ..super_experts.capabilities import (
     CapabilityManifestError,
     validate_super_expert_manifest,
@@ -60,6 +61,12 @@ class SealedAgentService:
 
     def release_root(self, agent_id: str, release_id: str) -> Path:
         return self.root / "releases" / agent_id / release_id
+
+    def runtime_workspace_root(self, agent_id: str, release_id: str) -> Path:
+        return runtime_workspace_root(self.root, agent_id, release_id)
+
+    def prepare_runtime_workspace(self, agent_id: str, release_id: str) -> Path:
+        return ensure_runtime_workspace(self.root, agent_id, release_id)
 
     def install(self, data: bytes) -> SealedReleaseRecord:
         try:

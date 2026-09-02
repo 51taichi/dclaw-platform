@@ -171,6 +171,13 @@ async def _run_standard_or_orchestrated_turn(
             installation_id=authorization.installation_id,
             conversation_id=str(request.session_id),
         )
+        conversation_history: list[Any] = []
+        memory = getattr(agent, "memory", None)
+        get_memory = getattr(memory, "get_memory", None)
+        if callable(get_memory):
+            conversation_history = list(
+                await get_memory(prepend_summary=True),
+            )
 
         async def business_call(
             capability: str,
@@ -185,6 +192,7 @@ async def _run_standard_or_orchestrated_turn(
                 raise WorkspaceOrchestrationError("unauthorized_capability")
             return await platform_service.execute(
                 tenant_id=tenant_id,
+                user_id=str(getattr(request, "user_id", "") or ""),
                 installation_id=authorization.installation_id,
                 capability=capability,
                 contract_version=contract_version,
@@ -195,6 +203,7 @@ async def _run_standard_or_orchestrated_turn(
         result = await run_workspace_orchestration_turn(
             agent=agent,
             original_messages=messages,
+            conversation_history=conversation_history,
             request=request,
             agent_id=agent_id,
             workspace_root=workspace_root,
@@ -214,8 +223,16 @@ async def _run_standard_or_orchestrated_turn(
             agent_id,
         )
         result = WorkspaceTurnResult(error_code="orchestration_error")
+    response_message = workspace_result_to_message(result, agent_name=agent_name)
+    if result.error_code is None:
+        memory = getattr(agent, "memory", None)
+        add_to_memory = getattr(memory, "add", None)
+        if callable(add_to_memory):
+            for message in messages:
+                await add_to_memory(message)
+            await add_to_memory(response_message)
     yield (
-        workspace_result_to_message(result, agent_name=agent_name),
+        response_message,
         True,
         result.error_code is None,
     )

@@ -876,8 +876,9 @@ async def test_setup_server_falls_back_on_windows_not_implemented(
     await asyncio.sleep(0)
 
     assert setup_result.port == downloader.get_server_status()["port"]
-    assert setup_result.model_info.model_dump() == {
+    assert setup_result.model_info.model_dump(exclude_none=True) == {
         "id": "demo-model",
+        "model_type": "llm",
         "is_free": False,
         "name": "demo-model",
         "supports_multimodal": False,
@@ -1025,8 +1026,9 @@ async def test_setup_server_passes_mmproj_argument(
     setup_result = await downloader.setup_server(model_dir, "vision-model")
     await asyncio.sleep(0)
 
-    assert setup_result.model_info.model_dump() == {
+    assert setup_result.model_info.model_dump(exclude_none=True) == {
         "id": "vision-model",
+        "model_type": "llm",
         "is_free": False,
         "name": "vision-model",
         "supports_multimodal": True,

@@ -287,6 +287,10 @@ async def list_agents() -> AgentListResponse:
             )
             continue
         active_release = sealed.active_release
+        try:
+            active_model = load_agent_config(sealed.agent_id).active_model
+        except Exception:
+            active_model = None
         agents.append(
             AgentSummary(
                 id=sealed.agent_id,
@@ -294,6 +298,7 @@ async def list_agents() -> AgentListResponse:
                 description=sealed.description,
                 workspace_dir=None,
                 enabled=sealed.enabled,
+                active_model=active_model,
                 agent_type="sealed",
                 scope="global",
                 version=active_release.version if active_release else None,

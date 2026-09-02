@@ -59,6 +59,7 @@ PLATFORM_CAPABILITY_CATALOG_V1 = {
         _definition("card.create", "card"),
         _definition("card.update", "card", dependencies=("card.create",)),
         _definition("aigc.task.create", "aigc"),
+        _definition("aigc.task.create/2", "aigc"),
         _definition("aigc.task.resume", "aigc", dependencies=("aigc.task.create",)),
         _definition("aigc.task.cancel", "aigc", dependencies=("aigc.task.create",)),
         _definition("aigc.guide.update", "aigc", dependencies=("aigc.task.create",)),
@@ -167,4 +168,3 @@ def validate_super_expert_manifest(
                 f"unsupported platform contract version: {group}",
             )
     return package
-

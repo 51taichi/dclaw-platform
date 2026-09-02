@@ -162,11 +162,26 @@ async def test_declared_turn_never_falls_back_to_direct_model_on_failure(
         async def __call__(self, _messages):
             pytest.fail("Runner must not directly invoke the model as fallback")
 
+    authorization = SimpleNamespace(
+        installation_id="installation-1",
+        granted_capabilities={},
+    )
     monkeypatch.setattr(
         runner_module,
         "resolve_active_workspace_authorization",
-        lambda **_kwargs: object(),
+        lambda **_kwargs: authorization,
         raising=False,
+    )
+    from qwenpaw.app.routers import super_expert_platform as platform_module
+
+    class PlatformService:
+        def list_session_events(self, **_kwargs):
+            return []
+
+    monkeypatch.setattr(
+        platform_module,
+        "get_super_expert_platform_service",
+        lambda: PlatformService(),
     )
 
     async def fail_closed(**_kwargs):
@@ -209,3 +224,103 @@ async def test_declared_turn_never_falls_back_to_direct_model_on_failure(
 
     assert actual[0][0].content == "本轮处理未能安全完成，请稍后重试。"
     assert actual[0][1:] == (True, False)
+
+
+@pytest.mark.asyncio
+async def test_declared_turn_passes_loaded_conversation_history_to_runtime(
+    monkeypatch,
+    tmp_path,
+):
+    prior_history = [
+        Msg(name="user", role="user", content="我是做就业培训的"),
+        Msg(name="assistant", role="assistant", content="培训面向哪些人？"),
+    ]
+    current_messages = [
+        Msg(name="user", role="user", content="失业人员，天门市，线下报名"),
+    ]
+
+    class Memory:
+        def __init__(self):
+            self.added = []
+
+        async def get_memory(self, *, prepend_summary=True):
+            assert prepend_summary is True
+            return prior_history
+
+        async def add(self, message):
+            self.added.append(message)
+
+    class Agent:
+        def __init__(self):
+            self.memory = Memory()
+
+    agent = Agent()
+
+    authorization = SimpleNamespace(
+        installation_id="installation-1",
+        granted_capabilities={},
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "resolve_active_workspace_authorization",
+        lambda **_kwargs: authorization,
+        raising=False,
+    )
+    from qwenpaw.app.routers import super_expert_platform as platform_module
+
+    class PlatformService:
+        def list_session_events(self, **_kwargs):
+            return []
+
+    monkeypatch.setattr(
+        platform_module,
+        "get_super_expert_platform_service",
+        lambda: PlatformService(),
+    )
+
+    async def capture_history(**kwargs):
+        assert kwargs["original_messages"] == current_messages
+        assert kwargs["conversation_history"] == prior_history
+        return WorkspaceTurnResult(
+            message={"name": "assistant", "role": "assistant", "content": "继续"},
+        )
+
+    monkeypatch.setattr(
+        runner_module,
+        "run_workspace_orchestration_turn",
+        capture_history,
+        raising=False,
+    )
+    config = OrchestrationConfig(
+        enabled=True,
+        contract_version="1",
+        entrypoint="runtime.py:create_runtime",
+        required_host_capabilities=(
+            "agent.execute",
+            "session.context",
+            "runtime.trace",
+            "runtime.complete",
+            "runtime.fail",
+        ),
+    )
+
+    actual = [
+        item
+        async for item in runner_module._run_standard_or_orchestrated_turn(
+            agent=agent,
+            messages=current_messages,
+            request=_request(),
+            query="失业人员，天门市，线下报名",
+            mission_info=None,
+            agent_id="generic-agent",
+            agent_name="Generic",
+            workspace_root=tmp_path,
+            orchestration=config,
+        )
+    ]
+
+    assert actual[0][0].content == "继续"
+    assert actual[0][1:] == (True, True)
+    assert agent.memory.added[:1] == current_messages
+    assert agent.memory.added[1].role == "assistant"
+    assert agent.memory.added[1].content == "继续"
