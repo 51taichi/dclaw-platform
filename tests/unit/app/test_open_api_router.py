@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
@@ -9,6 +10,7 @@ import pytest
 from agentscope_runtime.engine.schemas.agent_schemas import ContentType
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from qwenpaw.app.billing.execution import OpenApiExecutionFence
 from qwenpaw.app.sealed_agents.models import (
@@ -409,6 +411,7 @@ class _FakeBillingCoordinator:
                 "billing_status": "quoted",
                 "billing_error_code": None,
                 "sealed_runtime": command.sealed_runtime,
+                "request_payload": dict(command.payload),
             },
         )
         return SimpleNamespace(
@@ -516,6 +519,37 @@ def test_build_open_session_id_is_stable_and_namespaced():
         build_open_session_id("app-1", "public-agent", "ext-user", "session-1")
         == "open:app-1:public-agent:ext-user:session-1"
     )
+
+
+def test_open_message_request_defaults_to_persistent_execution():
+    request = OpenMessageRequest(external_user_id="user", message="hello")
+
+    assert request.execution_mode == "persistent"
+
+
+def test_open_message_request_accepts_explicit_execution_modes():
+    persistent = OpenMessageRequest(
+        external_user_id="user",
+        message="hello",
+        execution_mode="persistent",
+    )
+    isolated = OpenMessageRequest(
+        external_user_id="user",
+        message="hello",
+        execution_mode="isolated_attempt",
+    )
+
+    assert persistent.execution_mode == "persistent"
+    assert isolated.execution_mode == "isolated_attempt"
+
+
+def test_open_message_request_rejects_unknown_execution_mode():
+    with pytest.raises(ValidationError):
+        OpenMessageRequest(
+            external_user_id="user",
+            message="hello",
+            execution_mode="isolated",
+        )
     assert (
         build_open_session_id(
             "app-1", "public-agent", "ext user", "bad header\r\n"
@@ -592,6 +626,72 @@ async def test_prepare_open_agent_chat_keeps_diagnostics_as_user_metadata():
     assert "sealed_runtime" not in prepared.payload["meta"]
     assert "_server_debug_endpoint_authorized" not in prepared.payload["meta"]
     assert "open_invocation_id" not in prepared.payload["meta"]
+
+
+@pytest.mark.asyncio
+async def test_prepare_isolated_agent_attempts_are_unique_without_durable_chats():
+    workspace = _workspace(agent_id="agent-published")
+    request = _request(workspace=workspace)
+    payload = OpenMessageRequest(
+        external_user_id="ext-user",
+        external_session_id="customer-request-1",
+        message="frozen business input",
+        execution_mode="isolated_attempt",
+        metadata={
+            "execution_mode": "persistent",
+            "open_invocation_id": "caller-forged",
+        },
+    )
+
+    prepared = [
+        await prepare_open_agent_chat(
+            request,
+            _publication(),
+            payload,
+            invocation_id=f"invocation-{index}",
+        )
+        for index in range(1, 4)
+    ]
+
+    assert len({item.session_id for item in prepared}) == 3
+    assert workspace.chat_manager.calls == []
+    for index, item in enumerate(prepared, start=1):
+        assert item.chat_id == f"open-api:invocation-{index}"
+        assert item.session_id.startswith(
+            "open:app-1:public-agent:ext-user:customer-request-1:attempt:"
+        )
+        assert item.payload["content_parts"][0].text == "frozen business input"
+        assert item.payload["meta"]["external_session_id"] == "customer-request-1"
+        assert item.payload["meta"]["execution_mode"] == "isolated_attempt"
+        assert item.payload["meta"]["open_invocation_id"] == f"invocation-{index}"
+        assert item.payload["meta"]["metadata"] == {
+            "execution_mode": "persistent",
+            "open_invocation_id": "caller-forged",
+        }
+
+
+@pytest.mark.asyncio
+async def test_explicit_persistent_agent_preparation_keeps_existing_shape():
+    workspace = _workspace(agent_id="agent-published")
+    payload = OpenMessageRequest(
+        external_user_id="ext-user",
+        external_session_id="ext-session",
+        message="hello",
+        execution_mode="persistent",
+    )
+
+    prepared = await prepare_open_agent_chat(
+        _request(workspace=workspace),
+        _publication(),
+        payload,
+        invocation_id="ignored-for-persistent",
+    )
+
+    assert prepared.session_id == "open:app-1:public-agent:ext-user:ext-session"
+    assert prepared.chat_id == "chat-open-1"
+    assert "execution_mode" not in prepared.payload["meta"]
+    assert "open_invocation_id" not in prepared.payload["meta"]
+    assert len(workspace.chat_manager.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -683,6 +783,31 @@ async def test_post_open_message_rejects_api_key_publication_mismatch(
 
 
 @pytest.mark.asyncio
+async def test_post_open_message_rejects_isolated_expert_team_before_invocation(
+    monkeypatch,
+):
+    repo = FakeOpenApiRepository(
+        publication=_publication(target_type="expert_team", target_id="team-1")
+    )
+    monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await open_api.post_open_message(
+            "public-agent",
+            OpenMessageRequest(
+                external_user_id="u",
+                external_session_id="s",
+                message="hi",
+                execution_mode="isolated_attempt",
+            ),
+            _request(),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert repo.invocations == []
+
+
+@pytest.mark.asyncio
 async def test_post_open_message_agent_publication_creates_invocation_from_request_state(
     monkeypatch,
 ):
@@ -729,6 +854,121 @@ async def test_post_open_message_agent_publication_creates_invocation_from_reque
     assert '"type":"billing.completed"' in body
     assert repo.invocations[0]["status"] == "succeeded"
     assert repo.invocations[0]["status_code"] == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit", [False, True])
+async def test_persistent_mode_keeps_legacy_billing_payload_shape(
+    monkeypatch,
+    explicit,
+):
+    workspace = _workspace(agent_id="agent-published")
+    repo = FakeOpenApiRepository(publication=_publication())
+    monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
+    values = {
+        "external_user_id": "ext-user",
+        "external_session_id": "ext-session",
+        "message": "hello",
+    }
+    if explicit:
+        values["execution_mode"] = "persistent"
+
+    response = await open_api.post_open_message(
+        "public-agent",
+        OpenMessageRequest(**values),
+        _request(workspace=workspace),
+    )
+    await _consume_streaming_response(response)
+
+    assert repo.invocations[0]["request_payload"] == {
+        "external_user_id": "ext-user",
+        "external_session_id": "ext-session",
+        "message": "hello",
+        "stream": True,
+        "metadata": {},
+    }
+
+
+@pytest.mark.asyncio
+async def test_isolated_agent_route_uses_ephemeral_chat_and_preserves_audit_ids(
+    monkeypatch,
+):
+    workspace = _workspace(agent_id="agent-published")
+    repo = FakeOpenApiRepository(publication=_publication())
+    monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
+
+    response = await open_api.post_open_message(
+        "public-agent",
+        OpenMessageRequest(
+            external_user_id="ext-user",
+            external_session_id="customer-request-1",
+            message="frozen input",
+            execution_mode="isolated_attempt",
+        ),
+        _request(workspace=workspace),
+    )
+
+    assert workspace.chat_manager.calls == []
+    assert response.headers["x-qwenpaw-chat-id"].startswith("open-api:")
+    assert ":attempt:" in response.headers["x-qwenpaw-session-id"]
+    assert repo.invocations[0]["external_session_id"] == "customer-request-1"
+    assert repo.invocations[0]["request_payload"]["execution_mode"] == (
+        "isolated_attempt"
+    )
+    stream_meta = workspace.task_tracker.attach_calls[0]["stream_payload"]["meta"]
+    assert stream_meta["execution_mode"] == "isolated_attempt"
+    assert stream_meta["external_session_id"] == "customer-request-1"
+
+    assert "data: done" in await _consume_streaming_response(response)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_isolated_and_persistent_routes_keep_separate_state(
+    monkeypatch,
+):
+    isolated_workspace = _workspace(agent_id="agent-published")
+    persistent_workspace = _workspace(agent_id="agent-published")
+    repo = FakeOpenApiRepository(publication=_publication())
+    monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
+
+    isolated_response, persistent_response = await asyncio.gather(
+        open_api.post_open_message(
+            "public-agent",
+            OpenMessageRequest(
+                external_user_id="ext-user",
+                external_session_id="same-correlation",
+                message="same frozen input",
+                execution_mode="isolated_attempt",
+            ),
+            _request(workspace=isolated_workspace),
+        ),
+        open_api.post_open_message(
+            "public-agent",
+            OpenMessageRequest(
+                external_user_id="ext-user",
+                external_session_id="persistent-session",
+                message="ordinary input",
+            ),
+            _request(workspace=persistent_workspace),
+        ),
+    )
+
+    assert isolated_workspace.chat_manager.calls == []
+    assert len(persistent_workspace.chat_manager.calls) == 1
+    assert ":attempt:" in isolated_response.headers["x-qwenpaw-session-id"]
+    assert persistent_response.headers["x-qwenpaw-session-id"] == (
+        "open:app-1:public-agent:ext-user:persistent-session"
+    )
+    assert "execution_mode" not in (
+        persistent_workspace.task_tracker.attach_calls[0]["stream_payload"][
+            "meta"
+        ]
+    )
+
+    await asyncio.gather(
+        _consume_streaming_response(isolated_response),
+        _consume_streaming_response(persistent_response),
+    )
 
 
 @pytest.mark.asyncio

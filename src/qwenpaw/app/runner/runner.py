@@ -61,6 +61,22 @@ logger = logging.getLogger(__name__)
 _PRINT_END_SIGNAL = "[END]"
 
 
+def _is_isolated_agent_open_api_request(request: Any) -> bool:
+    """Accept isolation only from the trusted Agent OpenAPI payload shape."""
+    from ..open_api.execution_mode import is_isolated_agent_open_api
+
+    channel = str(getattr(request, "channel", "") or "")
+    meta = getattr(request, "channel_meta", None)
+    return bool(
+        channel.startswith("open:")
+        and isinstance(meta, dict)
+        and is_isolated_agent_open_api(meta)
+        and meta.get("target_type") == "agent"
+        and meta.get("execution_mode") == "isolated_attempt"
+        and str(meta.get("open_invocation_id") or "").strip()
+    )
+
+
 async def _cancel_streaming_agent_task(task: asyncio.Task) -> None:
     if task.done():
         return
@@ -415,10 +431,11 @@ class AgentRunner(Runner):
         )
         query = _get_last_user_text(msgs)
         session_id = getattr(request, "session_id", "") or ""
+        isolated_agent_open_api = _is_isolated_agent_open_api_request(request)
 
         # Check if query is a command (including /approval)
         logger.debug(f"Query: {query!r}, is_command: {_is_command(query)}")
-        if query and _is_command(query):
+        if query and _is_command(query) and not isolated_agent_open_api:
             logger.info("Command path: %s", query.strip()[:50])
             async for msg, last in run_command_path(request, msgs, self):
                 yield msg, last
@@ -541,6 +558,7 @@ class AgentRunner(Runner):
                     "channel": channel,
                     "agent_id": self.agent_id,
                     "root_agent_id": self.agent_id,
+                    "_persist_context_dialog": not isolated_agent_open_api,
                 },
             )
 
@@ -574,15 +592,17 @@ class AgentRunner(Runner):
             _ws = self.workspace_dir or WORKING_DIR
             mission_info: dict | None = None
 
-            mission_result = await maybe_handle_mission_command(
-                query=query,
-                msgs=msgs,
-                workspace_dir=_ws,
-                agent_id=self.agent_id,
-                rewrite_fn=self._rewrite_last_message_text,
-                session_id=session_id,
-                agent_name=self.agent_name,
-            )
+            mission_result = None
+            if not isolated_agent_open_api:
+                mission_result = await maybe_handle_mission_command(
+                    query=query,
+                    msgs=msgs,
+                    workspace_dir=_ws,
+                    agent_id=self.agent_id,
+                    rewrite_fn=self._rewrite_last_message_text,
+                    session_id=session_id,
+                    agent_name=self.agent_name,
+                )
             if isinstance(mission_result, Msg):
                 yield mission_result, True
                 return
@@ -591,7 +611,7 @@ class AgentRunner(Runner):
 
             # Active mission: auto-detect follow-up messages
             # (e.g., user confirms PRD without typing /mission again)
-            if mission_info is None:
+            if mission_info is None and not isolated_agent_open_api:
                 mission_info = detect_active_mission_phase(
                     _ws,
                     session_id=session_id,
@@ -725,7 +745,11 @@ class AgentRunner(Runner):
                 agent_config=agent_config,
                 env_context=env_context,
                 mcp_clients=mcp_clients,
-                memory_manager=self.memory_manager,
+                memory_manager=(
+                    None
+                    if isolated_agent_open_api
+                    else self.memory_manager
+                ),
                 context_manager=self.context_manager,
                 request_context=base_request_context,
                 workspace_dir=self.workspace_dir,
@@ -754,7 +778,7 @@ class AgentRunner(Runner):
                 f"agent_id={self.agent_id}",
             )
 
-            if self._chat_manager is not None:
+            if self._chat_manager is not None and not isolated_agent_open_api:
                 logger.debug(
                     f"Runner: Calling get_or_create_chat for "
                     f"session_id={session_id}, user_id={user_id}, "
@@ -767,7 +791,7 @@ class AgentRunner(Runner):
                     name=name,
                 )
                 logger.debug(f"Runner: Got chat: {chat.id}")
-            else:
+            elif self._chat_manager is None:
                 logger.warning(
                     f"ChatManager is None! Cannot auto-register chat for "
                     f"session_id={session_id}",
@@ -786,7 +810,7 @@ class AgentRunner(Runner):
 
             # Ensure session file has a valid plan_notebook dict
             # to prevent TypeError/KeyError during load_state_dict
-            if plan_notebook is not None:
+            if plan_notebook is not None and not isolated_agent_open_api:
                 try:
                     _states = await self.session.get_session_state_dict(
                         session_id=session_id,
@@ -814,33 +838,34 @@ class AgentRunner(Runner):
                         exc_info=True,
                     )
 
-            if plan_notebook is not None:
+            if plan_notebook is not None and not isolated_agent_open_api:
                 setattr(
                     plan_notebook,
                     "_loading_from_state",
                     True,  # pylint: disable=protected-access
                 )
-            try:
-                await self.session.load_session_state(
-                    session_id=session_id,
-                    user_id=user_id,
-                    channel=channel,
-                    agent=agent,
-                )
-            except KeyError as e:
-                logger.warning(
-                    "load_session_state skipped (state schema mismatch): %s; "
-                    "will save fresh state on completion to recover file",
-                    e,
-                )
-            finally:
-                if plan_notebook is not None:
-                    setattr(
-                        plan_notebook,
-                        "_loading_from_state",
-                        False,  # pylint: disable=protected-access
+            if not isolated_agent_open_api:
+                try:
+                    await self.session.load_session_state(
+                        session_id=session_id,
+                        user_id=user_id,
+                        channel=channel,
+                        agent=agent,
                     )
-            session_state_loaded = True
+                except KeyError as e:
+                    logger.warning(
+                        "load_session_state skipped (state schema mismatch): %s; "
+                        "will save fresh state on completion to recover file",
+                        e,
+                    )
+                finally:
+                    if plan_notebook is not None:
+                        setattr(
+                            plan_notebook,
+                            "_loading_from_state",
+                            False,  # pylint: disable=protected-access
+                        )
+                session_state_loaded = True
 
             if plan_notebook is not None:
                 from ...plan.hints import clear_plan_awaiting_user_confirm
@@ -982,7 +1007,11 @@ class AgentRunner(Runner):
                     agent=agent,
                 )
 
-            if self._chat_manager is not None and chat is not None:
+            if (
+                self._chat_manager is not None
+                and chat is not None
+                and not isolated_agent_open_api
+            ):
                 await self._chat_manager.touch_chat(chat.id)
 
     async def init_handler(self, *args, **kwargs):

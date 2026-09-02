@@ -344,7 +344,14 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
         # Configure context manager memory if available
         if self.context_manager is not None:
             self.memory: "AgentContext" = (
-                self.context_manager.get_agent_context()
+                self.context_manager.get_agent_context(
+                    persist_dialog=bool(
+                        self._request_context.get(
+                            "_persist_context_dialog",
+                            True,
+                        ),
+                    ),
+                )
             )
             logger.debug("Context manager configured")
 

@@ -259,6 +259,33 @@ Content-Type: application/json
 }
 ```
 
+Agent 发布对象还可以显式请求一次性隔离执行：
+
+```json
+{
+  "external_user_id": "customer-001",
+  "external_session_id": "ticket-10001",
+  "message": "你好，我想查询订单状态",
+  "stream": true,
+  "execution_mode": "isolated_attempt",
+  "metadata": {
+    "source": "crm",
+    "ticket_id": "ticket-10001"
+  }
+}
+```
+
+`execution_mode` 的规则：
+
+- 不传或传 `persistent`：行为与原有接口完全一致，会继续使用稳定会话、会话状态和 Agent 长期记忆。
+- 传 `isolated_attempt`：仅适用于 Agent 发布对象。该次调用不读取或写入会话状态，不检索或写入 Agent 长期记忆，并使用独立的临时工作目录。
+- 隔离调用仍使用相同的 Agent 配置、身份 Prompt、技能、专属知识库、MCP、业务工具和文件交付能力。
+- 专家团队发布对象不支持 `isolated_attempt`，请求会返回 HTTP 400。
+
+如果外部系统针对同一个客户请求生成多个候选结果，则第一次及后续每一次候选调用都必须传 `isolated_attempt`，并保持业务输入完全一致。DClaw 不判断这是第几次尝试，只为每次调用生成不同的内部执行会话；调用方传入的 `external_session_id` 会原样保留用于审计关联。
+
+隔离仅覆盖 DClaw 会话状态和长期记忆，不会回滚 MCP 或业务工具已经对外部系统产生的操作。成功调用产生的附件和制品通过当前 SSE 响应交付，不会在流结束时立即删除。
+
 字段说明：
 
 | 字段 | 必填 | 说明 |
@@ -267,11 +294,12 @@ Content-Type: application/json
 | `external_session_id` | 否 | 外部系统里的会话 ID、工单 ID 或咨询 ID |
 | `message` | 是 | 要发送给专家或专家团的用户消息 |
 | `stream` | 否 | 当前消息接口要求流式返回。建议传 `true`，不传时默认也是 `true` |
+| `execution_mode` | 否 | `persistent`（默认）或仅 Agent 发布对象可用的 `isolated_attempt` |
 | `metadata` | 否 | 业务自定义信息，例如来源、订单号、工单号 |
 
 会话规则：
 
-- 同一个外部应用、同一个发布对象、同一个 `external_user_id`、同一个 `external_session_id` 会进入同一条会话上下文。
+- 在默认 `persistent` 模式下，同一个外部应用、同一个发布对象、同一个 `external_user_id`、同一个 `external_session_id` 会进入同一条会话上下文。
 - 如果想开启新会话，请更换 `external_session_id`。
 - 如果没有传 `external_session_id`，系统会使用默认会话标识。
 

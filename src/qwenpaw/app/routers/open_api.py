@@ -115,6 +115,14 @@ async def post_open_message(
             status_code=400,
             detail="Open API messages currently require stream=true",
         )
+    if (
+        payload.execution_mode == "isolated_attempt"
+        and str(publication["target_type"]) != "agent"
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="isolated_attempt is supported only for agent targets",
+        )
     bound_user_id = str(publication.get("bound_user_id") or "").strip()
     if not bound_user_id:
         raise HTTPException(
@@ -127,6 +135,9 @@ async def post_open_message(
     request.state.user_id = bound_user_id
 
     billing = create_open_api_billing_runtime()
+    billing_payload = payload.model_dump(mode="json")
+    if payload.execution_mode == "persistent":
+        billing_payload.pop("execution_mode", None)
     try:
         billing_session = billing.coordinator.begin_invocation(
             OpenApiBillingCommand(
@@ -137,7 +148,7 @@ async def post_open_message(
                 target_id=str(publication["target_id"]),
                 external_user_id=payload.external_user_id,
                 external_session_id=payload.external_session_id or "default",
-                payload=payload.model_dump(mode="json"),
+                payload=billing_payload,
                 idempotency_key=request.headers.get("Idempotency-Key"),
                 mode=billing.mode,  # type: ignore[arg-type]
                 budget_credits=billing.budget_credits,
@@ -219,6 +230,7 @@ async def post_open_message(
                 request,
                 publication,
                 payload,
+                invocation_id=invocation_id,
             )
             stream_fn = prepared.console_channel.stream_one
             stream_payload = prepared.payload

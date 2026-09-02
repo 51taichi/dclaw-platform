@@ -15,6 +15,17 @@ class DummyToolkit:
         return None
 
 
+class RecordingContextManager:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def get_agent_context(self, **kwargs: Any):
+        from agentscope.memory import InMemoryMemory
+
+        self.calls.append(kwargs)
+        return InMemoryMemory()
+
+
 def test_session_isolation_keeps_system_prompt_on_agent_root_workspace(
     tmp_path,
     monkeypatch,
@@ -90,3 +101,66 @@ def test_knowledge_policy_respects_disabled_search_tools() -> None:
     agent._agent_config = SimpleNamespace(tools=tools)
 
     assert agent._knowledge_retrieval_policy_enabled() is False
+
+
+def test_isolated_open_api_disables_context_dialog_persistence(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    agent_root = tmp_path / "support_agent"
+    agent_root.mkdir()
+    context_manager = RecordingContextManager()
+
+    monkeypatch.setattr(
+        react_agent,
+        "build_system_prompt_from_working_dir",
+        lambda **_kwargs: "prompt",
+    )
+    monkeypatch.setattr(react_agent, "build_multimodal_hint", lambda: "")
+    monkeypatch.setattr(
+        react_agent,
+        "create_model_and_formatter",
+        lambda agent_id=None: (object(), object()),
+    )
+    monkeypatch.setattr(
+        QwenPawAgent,
+        "_create_toolkit",
+        lambda self, namesake_strategy="skip": DummyToolkit(),
+    )
+    monkeypatch.setattr(QwenPawAgent, "_register_skills", lambda self, toolkit: None)
+    monkeypatch.setattr(QwenPawAgent, "_register_hooks", lambda self: None)
+    monkeypatch.setattr(
+        react_agent.ReActAgent,
+        "__init__",
+        lambda self, **kwargs: (
+            object.__setattr__(self, "_module_dict", {}),
+            object.__setattr__(self, "name", kwargs["name"]),
+            object.__setattr__(self, "toolkit", kwargs["toolkit"]),
+            object.__setattr__(self, "memory", kwargs["memory"]),
+        )[-1],
+    )
+    monkeypatch.setattr(
+        react_agent,
+        "CommandHandler",
+        lambda **_kwargs: SimpleNamespace(),
+    )
+
+    QwenPawAgent(
+        agent_config=AgentProfileConfig(
+            id="support_agent",
+            name="Support Agent",
+            workspace_dir=str(agent_root),
+        ),
+        context_manager=context_manager,
+        request_context={
+            "session_id": "isolated-session",
+            "agent_id": "support_agent",
+            "channel": "open:app-1",
+            "execution_mode": "isolated_attempt",
+            "target_type": "agent",
+            "_persist_context_dialog": False,
+        },
+        workspace_dir=agent_root,
+    )
+
+    assert context_manager.calls == [{"persist_dialog": False}]

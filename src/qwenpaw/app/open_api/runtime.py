@@ -6,9 +6,10 @@ import asyncio
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from hashlib import sha256
 import os
 import re
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from agentscope_runtime.engine.schemas.agent_schemas import (
@@ -51,6 +52,7 @@ from ..storage.schema import (
     billing_usage_orders,
     open_api_invocations,
 )
+from .execution_mode import bind_isolated_agent_open_api
 
 _SAFE_ID_PATTERN = re.compile(r"[^A-Za-z0-9_.:-]+")
 _MAX_EXTERNAL_ID_LENGTH = 128
@@ -61,6 +63,7 @@ class OpenMessageRequest(BaseModel):
     external_session_id: str | None = None
     message: str
     stream: bool = True
+    execution_mode: Literal["persistent", "isolated_attempt"] = "persistent"
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("external_user_id")
@@ -583,6 +586,8 @@ async def prepare_open_agent_chat(
     request: Request,
     publication: dict[str, Any],
     payload: OpenMessageRequest,
+    *,
+    invocation_id: str | None = None,
 ) -> PreparedOpenRun:
     return await _prepare_open_chat(
         request,
@@ -590,6 +595,7 @@ async def prepare_open_agent_chat(
         payload,
         agent_id=str(publication["target_id"]),
         expert_team_id=None,
+        invocation_id=invocation_id,
     )
 
 
@@ -606,6 +612,7 @@ async def prepare_open_expert_team_chat(
         payload,
         agent_id=leader_agent_id,
         expert_team_id=str(publication["target_id"]),
+        invocation_id=None,
     )
 
 
@@ -616,16 +623,31 @@ async def _prepare_open_chat(
     *,
     agent_id: str,
     expert_team_id: str | None,
+    invocation_id: str | None,
 ) -> PreparedOpenRun:
     user_id = str(request.state.user_id)
     app_id = str(request.state.open_app_id)
     public_id = str(publication["public_id"])
-    session_id = build_open_session_id(
+    persistent_session_id = build_open_session_id(
         app_id,
         public_id,
         payload.external_user_id,
         payload.external_session_id,
     )
+    isolated_attempt = (
+        expert_team_id is None
+        and payload.execution_mode == "isolated_attempt"
+    )
+    if isolated_attempt and not invocation_id:
+        raise HTTPException(
+            status_code=500,
+            detail="Open API isolated execution identity is unavailable",
+        )
+    if isolated_attempt:
+        attempt_suffix = sha256(str(invocation_id).encode("utf-8")).hexdigest()[:24]
+        session_id = f"{persistent_session_id}:attempt:{attempt_suffix}"
+    else:
+        session_id = persistent_session_id
     channel = f"open:{app_id}"
     workspace = await get_open_workspace(request, agent_id)
     console_channel = await workspace.channel_manager.get_channel("console")
@@ -635,12 +657,16 @@ async def _prepare_open_chat(
             detail="Channel Console not found",
         )
 
-    chat = await workspace.chat_manager.get_or_create_chat(
-        session_id,
-        user_id,
-        channel,
-        name=payload.message[:10] or "Open API",
-    )
+    if isolated_attempt:
+        chat_id = f"open-api:{invocation_id}"
+    else:
+        chat = await workspace.chat_manager.get_or_create_chat(
+            session_id,
+            user_id,
+            channel,
+            name=payload.message[:10] or "Open API",
+        )
+        chat_id = str(chat.id)
     native_meta: dict[str, Any] = {
         "session_id": session_id,
         "user_id": user_id,
@@ -658,6 +684,10 @@ async def _prepare_open_chat(
     }
     if expert_team_id:
         native_meta["expert_team_id"] = expert_team_id
+    if isolated_attempt:
+        native_meta["execution_mode"] = "isolated_attempt"
+        native_meta["open_invocation_id"] = str(invocation_id)
+        bind_isolated_agent_open_api(native_meta)
     native_payload = {
         "channel_id": channel,
         "sender_id": user_id,
@@ -668,7 +698,7 @@ async def _prepare_open_chat(
     }
 
     return PreparedOpenRun(
-        chat_id=str(chat.id),
+        chat_id=chat_id,
         session_id=session_id,
         channel=channel,
         agent_id=agent_id,

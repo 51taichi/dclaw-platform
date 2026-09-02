@@ -996,12 +996,16 @@ class LightContextManager(BaseContextManager):
 
         return None
 
-    def get_agent_context(self, **_kwargs) -> AgentContext:
+    def get_agent_context(self, **kwargs) -> AgentContext:
         """Retrieve the agent context object with token counting support."""
         agent_config = load_agent_config(self.agent_id)
-        dialog_path = os.path.join(
-            self.working_dir,
-            agent_config.running.light_context_config.dialog_path,
+        dialog_path = (
+            os.path.join(
+                self.working_dir,
+                agent_config.running.light_context_config.dialog_path,
+            )
+            if kwargs.get("persist_dialog", True)
+            else None
         )
         return AgentContext(
             token_counter=get_token_counter(agent_config),
