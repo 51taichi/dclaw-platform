@@ -1,11 +1,23 @@
 import { request } from "../request";
-import type { TokenUsageSummary, TokenUsageRecord } from "../types/tokenUsage";
+import type {
+  CreditConsumptionRankingResponse,
+  CreditRankingPeriodType,
+  TokenUsageSummary,
+  TokenUsageRecord,
+} from "../types/tokenUsage";
 
 export interface GetTokenUsageParams {
   start_date: string;
   end_date: string;
   model?: string;
   provider?: string;
+}
+
+export interface GetCreditConsumptionRankingParams {
+  period: CreditRankingPeriodType;
+  anchor_date: string;
+  page: number;
+  page_size: number;
 }
 
 function buildQuery(params: GetTokenUsageParams): string {
@@ -19,11 +31,25 @@ function buildQuery(params: GetTokenUsageParams): string {
 }
 
 export const tokenUsageApi = {
+  getCreditConsumptionRanking: (params: GetCreditConsumptionRankingParams) => {
+    const search = new URLSearchParams({
+      period: params.period,
+      anchor_date: params.anchor_date,
+      page: String(params.page),
+      page_size: String(params.page_size),
+    });
+    return request<CreditConsumptionRankingResponse>(
+      `/admin/billing/credit-consumption-ranking?${search.toString()}`,
+    );
+  },
+
   // Original summary endpoint (backend aggregation)
   getTokenUsage: (params: GetTokenUsageParams) =>
     request<TokenUsageSummary>(`/admin/token-usage${buildQuery(params)}`),
 
   // New details endpoint (raw records for frontend aggregation)
   getTokenUsageDetails: (params: GetTokenUsageParams) =>
-    request<TokenUsageRecord[]>(`/admin/token-usage/details${buildQuery(params)}`),
+    request<TokenUsageRecord[]>(
+      `/admin/token-usage/details${buildQuery(params)}`,
+    ),
 };

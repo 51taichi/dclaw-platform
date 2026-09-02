@@ -58,7 +58,7 @@
     "models": "Modelos",
     "environments": "Environments",
     "security": "Seguranca",
-    "tokenUsage": "Uso de Tokens",
+    "tokenUsage": "Créditos / Uso de Tokens",
     "agentStats": "Estatisticas dos Agentes",
     "voiceTranscription": "Transcricao de Voz",
     "debug": "Depuracao",
@@ -382,7 +382,11 @@
     "modelHelp": "Assign a specific LLM model to this agent. Leave empty to use the global default.",
     "modelPlaceholder": "Use global Padrao",
     "noConfiguredModels": "Nao configured Modelos",
-    "modelColumn": "Modelo"
+    "modelColumn": "Modelo padrão",
+    "modelLoadFailed": "Falha ao carregar os modelos disponíveis",
+    "modelUpdateSuccess": "Modelo padrão atualizado",
+    "modelClearSuccess": "Usando o modelo padrão global",
+    "modelUpdateFailed": "Falha ao atualizar o modelo padrão"
   },
   "skills": {
     "title": "Skills",
@@ -1079,7 +1083,18 @@
     "switchFailed": "Falhou to switch Modelo"
   },
   "tokenUsage": {
-    "title": "Uso de Tokens",
+    "title": "Créditos / Uso de Tokens",
+    "creditTab": "Uso de Créditos",
+    "tokenTab": "Uso de Tokens",
+    "creditRanking": "Ranking de Uso de Créditos por Cliente",
+    "creditRankingLoadFailed": "Falha ao carregar o ranking de créditos",
+    "rank": "Posição",
+    "customerAccount": "Conta do Cliente",
+    "actualConsumedCredits": "Créditos Consumidos",
+    "byYear": "Por Ano",
+    "byMonth": "Por Mês",
+    "byWeek": "Por Semana",
+    "byDay": "Por Dia",
     "description": "View LLM token consumption over time, by date and model.",
     "totalTokens": "Total Tokens",
     "totalCalls": "Total Calls",

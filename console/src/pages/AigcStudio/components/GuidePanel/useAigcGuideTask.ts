@@ -5,8 +5,6 @@ import {
   type BoundAigcTask,
 } from "../../../../api/modules/superExpertPlatform";
 
-const OPERATION_ID = "aigc.text_to_video.create";
-
 export function useAigcGuideTask(search: string) {
   const taskId = useMemo(
     () => new URLSearchParams(search).get("task")?.trim() || null,
@@ -36,10 +34,17 @@ export function useAigcGuideTask(search: string) {
     let active = true;
     setLoading(true);
     setError(null);
-    Promise.all([
-      superExpertPlatformApi.getTask(taskId),
-      superExpertPlatformApi.getOperation(OPERATION_ID),
-    ])
+    superExpertPlatformApi
+      .getTask(taskId)
+      .then(async (nextTask) => {
+        const operationId = nextTask.operation_id?.trim();
+        if (!operationId) {
+          throw new Error("当前素材任务没有绑定 AIGC 操作，请从会话重新创建");
+        }
+        const nextOperation =
+          await superExpertPlatformApi.getOperation(operationId);
+        return [nextTask, nextOperation] as const;
+      })
       .then(([nextTask, nextOperation]) => {
         if (!active) return;
         setTask(nextTask);

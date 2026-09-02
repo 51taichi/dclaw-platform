@@ -14,33 +14,32 @@ vi.mock("react-i18next", () => ({
 }));
 
 describe("DataTables", () => {
-  it("shows account names with user IDs and preserves system usage", () => {
+  it("keeps model and date reports without the legacy token user ranking", () => {
     render(
       <DataTables
-        byModelData={[]}
-        byDateData={[]}
-        byUserData={[
+        byModelData={[
           {
-            key: "24",
-            user_id: "24",
+            key: "provider:model",
+            model: "model-a",
             prompt_tokens: 100,
             completion_tokens: 20,
             call_count: 2,
           },
+        ]}
+        byDateData={[
           {
-            key: "System",
-            user_id: "System",
+            key: "2026-09-02",
+            date: "2026-09-02",
             prompt_tokens: 10,
             completion_tokens: 5,
             call_count: 1,
           },
         ]}
-        userNames={{ "24": "dingmai" }}
       />,
     );
 
-    expect(screen.getByText("dingmai")).toBeInTheDocument();
-    expect(screen.getByText("ID 24")).toBeInTheDocument();
-    expect(screen.getByText("System")).toBeInTheDocument();
+    expect(screen.getByText("model-a")).toBeInTheDocument();
+    expect(screen.getByText("2026-09-02")).toBeInTheDocument();
+    expect(screen.queryByText("User Ranking")).not.toBeInTheDocument();
   });
 });

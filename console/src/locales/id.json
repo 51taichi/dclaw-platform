@@ -58,7 +58,7 @@
     "models": "Model",
     "environments": "Environment",
     "security": "Keamanan",
-    "tokenUsage": "Penggunaan Token",
+    "tokenUsage": "Kredit / Penggunaan Token",
     "agentStats": "Statistik Agen",
     "voiceTranscription": "Transkripsi Suara",
     "debug": "Debug",
@@ -249,7 +249,11 @@
     "modelHelp": "Tetapkan model LLM khusus untuk agen ini. Kosongkan untuk memakai default global.",
     "modelPlaceholder": "Gunakan default global",
     "noConfiguredModels": "Tidak ada model yang dikonfigurasi",
-    "modelColumn": "Model"
+    "modelColumn": "Model default",
+    "modelLoadFailed": "Gagal memuat model yang tersedia",
+    "modelUpdateSuccess": "Model default diperbarui",
+    "modelClearSuccess": "Sekarang menggunakan model default global",
+    "modelUpdateFailed": "Gagal memperbarui model default"
   },
   "skills": {
     "title": "Skill",
@@ -582,6 +586,32 @@
       "tokenEndpoint": "Token Endpoint (timpa)",
       "endpointHint": "Kosongkan untuk deteksi otomatis dari server MCP."
     }
+  },
+  "tokenUsage": {
+    "title": "Kredit / Penggunaan Token",
+    "creditTab": "Penggunaan Kredit",
+    "tokenTab": "Penggunaan Token",
+    "creditRanking": "Peringkat Penggunaan Kredit Pelanggan",
+    "creditRankingLoadFailed": "Gagal memuat peringkat penggunaan kredit",
+    "rank": "Peringkat",
+    "customerAccount": "Akun Pelanggan",
+    "actualConsumedCredits": "Kredit yang Digunakan",
+    "byYear": "Per Tahun",
+    "byMonth": "Per Bulan",
+    "byWeek": "Per Minggu",
+    "byDay": "Per Hari",
+    "totalTokens": "Total Token",
+    "totalCalls": "Total Panggilan",
+    "promptTokens": "Token Input",
+    "completionTokens": "Token Output",
+    "byModel": "Per Model",
+    "byDate": "Per Tanggal",
+    "model": "Model",
+    "date": "Tanggal",
+    "loadFailed": "Gagal memuat penggunaan token",
+    "noData": "Tidak ada data penggunaan token pada periode terpilih",
+    "modelTrend": "Tren Penggunaan Model",
+    "tokenTypeChart": "Tren Jenis Token"
   },
   "debug": {
     "title": "Debug",

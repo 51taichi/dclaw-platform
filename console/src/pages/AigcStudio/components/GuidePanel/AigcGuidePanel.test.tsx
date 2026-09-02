@@ -12,6 +12,15 @@ const task = {
     node_id: "node-1",
   },
   status: "IN_PROGRESS",
+  operation_id: "aigc.text_to_video.create",
+  operation_version: "1",
+  operation_arguments: {
+    project_name: "天门就业培训",
+    prompt: "失业人群免费参加抖音运营培训。",
+    model_id: "auto",
+    aspect_ratio: "9:16",
+    duration_seconds: 5,
+  },
 };
 
 const operation = {
@@ -43,6 +52,9 @@ const operation = {
 describe("AigcGuidePanel", () => {
   beforeEach(() => {
     localStorage.clear();
+    document
+      .querySelectorAll("[data-platform-control-id]")
+      .forEach((element) => element.remove());
     Element.prototype.scrollIntoView = vi.fn();
   });
 
@@ -57,6 +69,7 @@ describe("AigcGuidePanel", () => {
         task={task}
         operation={operation}
         activeCanvasId="canvas-1"
+        stepCompletion={{ "open-studio": true }}
       />,
     );
     await user.click(screen.getByRole("button", { name: "定位当前控件" }));
@@ -74,6 +87,7 @@ describe("AigcGuidePanel", () => {
         task={task}
         operation={operation}
         activeCanvasId="canvas-1"
+        stepCompletion={{ "create-project": true }}
       />,
     );
     expect(screen.getByText(/控件不可用/)).toBeInTheDocument();
@@ -90,6 +104,7 @@ describe("AigcGuidePanel", () => {
         task={task}
         operation={operation}
         activeCanvasId="canvas-other"
+        stepCompletion={{ "open-studio": true }}
       />,
     );
     expect(screen.getByText(/不属于此任务/)).toBeInTheDocument();
@@ -109,6 +124,7 @@ describe("AigcGuidePanel", () => {
         task={task}
         operation={operation}
         activeCanvasId="canvas-1"
+        stepCompletion={{ "create-project": true }}
       />,
     );
 
@@ -142,6 +158,7 @@ describe("AigcGuidePanel", () => {
         task={task}
         operation={operation}
         activeCanvasId="canvas-1"
+        stepCompletion={{ "create-project": true }}
         onSubmit={onSubmit}
       />,
     );
@@ -170,6 +187,7 @@ describe("AigcGuidePanel", () => {
         task={task}
         operation={operation}
         activeCanvasId="canvas-1"
+        stepCompletion={{ "create-project": true }}
         onSubmit={vi.fn().mockRejectedValue(new Error("network"))}
       />,
     );
@@ -194,6 +212,7 @@ describe("AigcGuidePanel", () => {
         task={{ ...task, status: "ACCEPTED" }}
         operation={operation}
         activeCanvasId="canvas-1"
+        stepCompletion={{ "create-project": true }}
         onReturnToChat={onReturnToChat}
       />,
     );
@@ -203,6 +222,109 @@ describe("AigcGuidePanel", () => {
     expect(
       screen.queryByRole("button", { name: "提交给专家审核" }),
     ).not.toBeInTheDocument();
+    control.remove();
+  });
+
+  it("does not advance until the current step has machine-verifiable evidence", async () => {
+    const user = userEvent.setup();
+    const control = document.createElement("button");
+    control.dataset.platformControlId = "nav.aigc-studio";
+    document.body.append(control);
+
+    const { rerender } = render(
+      <AigcGuidePanel
+        taskId="task-1"
+        task={task}
+        operation={operation}
+        activeCanvasId="canvas-1"
+        stepCompletion={{ "open-studio": false }}
+      />,
+    );
+
+    expect(screen.getByText(/尚未检测到完成标志/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "本步已完成" })).toBeDisabled();
+
+    rerender(
+      <AigcGuidePanel
+        taskId="task-1"
+        task={task}
+        operation={operation}
+        activeCanvasId="canvas-1"
+        stepCompletion={{ "open-studio": true }}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "本步已完成" }));
+    expect(screen.getByText("创建项目")).toBeInTheDocument();
+    control.remove();
+  });
+
+  it("recovers from an invalid persisted step instead of rendering NaN", () => {
+    localStorage.setItem("dclaw:aigc-guide:task-1:step", "not-a-number");
+    const control = document.createElement("button");
+    control.dataset.platformControlId = "nav.aigc-studio";
+    document.body.append(control);
+
+    render(
+      <AigcGuidePanel
+        taskId="task-1"
+        task={task}
+        operation={operation}
+        activeCanvasId="canvas-1"
+        stepCompletion={{ "open-studio": true }}
+      />,
+    );
+
+    expect(screen.getByText("确认进入工作室")).toBeInTheDocument();
+    expect(screen.getByText("1 / 2")).toBeInTheDocument();
+    control.remove();
+  });
+
+  it("ignores hidden duplicate controls and automatically highlights the actionable one", async () => {
+    const hidden = document.createElement("button");
+    hidden.dataset.platformControlId = "nav.aigc-studio";
+    hidden.hidden = true;
+    const visible = document.createElement("button");
+    visible.dataset.platformControlId = "nav.aigc-studio";
+    document.body.append(hidden, visible);
+
+    render(
+      <AigcGuidePanel
+        taskId="task-1"
+        task={task}
+        operation={operation}
+        activeCanvasId="canvas-1"
+        stepCompletion={{ "open-studio": true }}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(visible.dataset.platformGuideHighlight).toBe("true"),
+    );
+    expect(hidden.dataset.platformGuideHighlight).toBeUndefined();
+    hidden.remove();
+    visible.remove();
+  });
+
+  it("shows the exact task parameters produced by the expert", () => {
+    const control = document.createElement("button");
+    control.dataset.platformControlId = "nav.aigc-studio";
+    document.body.append(control);
+
+    render(
+      <AigcGuidePanel
+        taskId="task-1"
+        task={task}
+        operation={operation}
+        activeCanvasId="canvas-1"
+        stepCompletion={{ "open-studio": true }}
+      />,
+    );
+
+    expect(screen.getByText("天门就业培训")).toBeInTheDocument();
+    expect(
+      screen.getByText("失业人群免费参加抖音运营培训。"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("9:16 · 5 秒")).toBeInTheDocument();
     control.remove();
   });
 });

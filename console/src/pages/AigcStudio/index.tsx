@@ -202,6 +202,7 @@ import { useGenerationProgressSimulation } from "./useGenerationProgressSimulati
 import styles from "./index.module.less";
 import { AigcGuidePanel } from "./components/GuidePanel/AigcGuidePanel";
 import { useAigcGuideTask } from "./components/GuidePanel/useAigcGuideTask";
+import { getAigcGuideStepCompletion } from "./components/GuidePanel/guideStepCompletion";
 import { superExpertPlatformApi } from "../../api/modules/superExpertPlatform";
 
 function connectCanvasNodes(source: string, target: string): AigcCanvasEdge {
@@ -492,6 +493,7 @@ export default function AigcStudioPage() {
     loading,
     saving,
     persistCanvas,
+    activateCanvasById,
   } = useCanvasPersistence({
     t,
     onViewportScaleChange: setViewportScale,
@@ -573,6 +575,37 @@ export default function AigcStudioPage() {
   }, [activeCanvas]);
 
   useEffect(() => {
+    const binding = guide.task?.binding;
+    if (!binding) return;
+    if (activeCanvas?.id === binding.canvas_id) {
+      if (selectedNodeId !== binding.node_id) {
+        setSelectedNodeId(binding.node_id);
+      }
+      return;
+    }
+    let active = true;
+    void activateCanvasById(binding.canvas_id)
+      .then(() => {
+        if (active) setSelectedNodeId(binding.node_id);
+      })
+      .catch(() => {
+        if (active) {
+          antdMessage.error(
+            "无法打开当前任务绑定的画布，请从原会话重新进入任务",
+          );
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [
+    activeCanvas?.id,
+    activateCanvasById,
+    guide.task?.binding,
+    selectedNodeId,
+  ]);
+
+  useEffect(() => {
     const updateSurfaceSize = () => {
       const surfaceRect = canvasSurfaceRef.current?.getBoundingClientRect();
       if (!surfaceRect) return;
@@ -606,6 +639,17 @@ export default function AigcStudioPage() {
 
   const selectedNode = activeCanvas?.nodes.find(
     (node) => node.id === selectedNodeId,
+  );
+  const guideStepCompletion = useMemo(
+    () =>
+      guide.task
+        ? getAigcGuideStepCompletion({
+            task: guide.task,
+            activeCanvas,
+            jobs,
+          })
+        : {},
+    [activeCanvas, guide.task, jobs],
   );
   const annotationEditorNode = annotationEditorNodeId
     ? activeCanvas?.nodes.find((node) => node.id === annotationEditorNodeId)
@@ -3549,12 +3593,18 @@ export default function AigcStudioPage() {
           ))}
         </div>
       </aside>
+      {guide.taskId && guide.error ? (
+        <aside className={styles.guideLoadError} role="alert">
+          AIGC 任务向导加载失败：{guide.error}
+        </aside>
+      ) : null}
       {guide.taskId && guide.task && guide.operation ? (
         <AigcGuidePanel
           taskId={guide.taskId}
           task={guide.task}
           operation={guide.operation}
           activeCanvasId={activeCanvas?.id}
+          stepCompletion={guideStepCompletion}
           onReturnToChat={() => {
             const path = `/claw/${encodeURIComponent(guide.task!.binding.conversation_id)}`;
             window.history.pushState({}, "", path);

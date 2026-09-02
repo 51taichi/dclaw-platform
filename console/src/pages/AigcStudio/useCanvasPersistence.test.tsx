@@ -109,6 +109,32 @@ describe("useCanvasPersistence", () => {
     expect(setViewportScale).not.toHaveBeenCalled();
   });
 
+  it("activates the exact bound canvas and loads only its jobs", async () => {
+    const setViewportScale = vi.fn();
+    const first = canvasFixture();
+    const second = { ...canvasFixture(), id: "canvas-2", name: "Bound canvas" };
+    mockAigcStudioApi.listCapabilities.mockResolvedValue({ capabilities: [] });
+    mockAigcStudioApi.listCanvases.mockResolvedValue({
+      canvases: [first, second],
+    });
+    mockAigcStudioApi.listJobs
+      .mockResolvedValueOnce({ jobs: [] })
+      .mockResolvedValueOnce({ jobs: [{ id: "job-for-canvas-2" }] });
+
+    const { result } = renderHook(() =>
+      useCanvasPersistence({ t, onViewportScaleChange: setViewportScale }),
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await act(async () => {
+      await result.current.activateCanvasById("canvas-2");
+    });
+
+    expect(result.current.activeCanvas?.id).toBe("canvas-2");
+    expect(mockAigcStudioApi.listJobs).toHaveBeenLastCalledWith("canvas-2");
+    expect(result.current.jobs).toEqual([{ id: "job-for-canvas-2" }]);
+  });
+
   it("coalesces auto-save requests while a canvas save is still in flight", async () => {
     vi.useFakeTimers();
     const firstSave = deferred<AigcCanvas>();

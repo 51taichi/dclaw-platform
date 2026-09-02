@@ -62,7 +62,7 @@
     "enterpriseKnowledge": "企业智库",
     "mindspaceCloud": "云文档应用",
     "security": "安全",
-    "tokenUsage": "Token 消耗",
+    "tokenUsage": "积分 / Token 消耗",
     "agentStats": "智能体统计",
     "voiceTranscription": "语音转写",
     "debug": "调试",
@@ -606,7 +606,11 @@
     "modelHelp": "为此智能体指定特定的 LLM 模型。留空则使用全局默认模型。",
     "modelPlaceholder": "使用全局默认",
     "noConfiguredModels": "暂无已配置的模型",
-    "modelColumn": "模型"
+    "modelColumn": "默认大模型",
+    "modelLoadFailed": "加载可用模型失败",
+    "modelUpdateSuccess": "默认大模型已更新",
+    "modelClearSuccess": "已改为使用全局默认模型",
+    "modelUpdateFailed": "更新默认大模型失败"
   },
   "acp": {
     "title": "ACP",
@@ -1384,7 +1388,18 @@
     "hideValue": "隐藏值"
   },
   "tokenUsage": {
-    "title": "Token 消耗",
+    "title": "积分 / Token 消耗",
+    "creditTab": "积分消耗",
+    "tokenTab": "Token 消耗",
+    "creditRanking": "客户积分消耗排行",
+    "creditRankingLoadFailed": "加载积分消耗排行失败",
+    "rank": "排名",
+    "customerAccount": "客户账号",
+    "actualConsumedCredits": "实际消耗积分",
+    "byYear": "按年",
+    "byMonth": "按月",
+    "byWeek": "按周",
+    "byDay": "按日",
     "totalTokens": "总 Token",
     "totalCalls": "总调用次数",
     "promptTokens": "输入 Token",

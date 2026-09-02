@@ -122,6 +122,33 @@ export function useCanvasPersistence({
     }
   }, [onViewportScaleChange, t]);
 
+  const activateCanvasById = useCallback(
+    async (canvasId: string) => {
+      const requestedId = canvasId.trim();
+      if (!requestedId) throw new Error("AIGC canvas id is required");
+      let canvas = canvases.find((item) => item.id === requestedId) ?? null;
+      if (!canvas) {
+        const loaded = await aigcStudioApi.getCanvas(requestedId);
+        canvas = reconcileCanvasConnectionData({
+          canvas: localizeLegacyCanvas(t, loaded),
+          t,
+        }).canvas;
+        setCanvases((current) => [
+          ...current.filter((item) => item.id !== requestedId),
+          canvas as AigcCanvas,
+        ]);
+      }
+      savedCanvasSignatureRef.current = canvasSignature(canvas);
+      setActiveCanvas(canvas);
+      onViewportScaleChange(canvas.viewport.zoom || 1);
+      setAutoSaveStatus("saved");
+      const jobRes = await aigcStudioApi.listJobs(canvas.id);
+      setJobs(jobRes.jobs);
+      return canvas;
+    },
+    [canvases, onViewportScaleChange, t],
+  );
+
   useEffect(() => {
     if (!autoLoad) return;
     void load();
@@ -170,6 +197,7 @@ export function useCanvasPersistence({
     saving,
     setSaving,
     persistCanvas,
+    activateCanvasById,
     load,
   };
 }

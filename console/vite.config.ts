@@ -85,6 +85,8 @@ export default defineConfig(({ mode }) => {
       exclude: [
         "**/node_modules/**",
         "**/dist/**",
+        // Desktop release scripts use Node's built-in test runner.
+        "scripts/**/*.test.mjs",
         // 旧测试用 node:test，与 vitest 不兼容，待迁移
         "**/testConnectionMessage.test.ts",
         // ChatPage test causes worker crash - pre-existing issue, needs more mock setup

@@ -35,6 +35,9 @@ export interface BoundAigcTask {
   };
   status: string;
   asset_id?: string | null;
+  operation_id?: string | null;
+  operation_version?: string | null;
+  operation_arguments?: Record<string, unknown>;
 }
 
 export interface SuperExpertPlatformCommandResult {

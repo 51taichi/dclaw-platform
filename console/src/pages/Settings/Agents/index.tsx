@@ -1,4 +1,11 @@
-import { useState, useRef, useCallback, type ChangeEvent } from "react";
+import {
+  useState,
+  useRef,
+  useCallback,
+  useEffect,
+  useMemo,
+  type ChangeEvent,
+} from "react";
 import { Alert, Card, Button, Form, Modal } from "antd";
 import { useAppMessage } from "../../../hooks/useAppMessage";
 import { PlusOutlined, TeamOutlined, UploadOutlined } from "@ant-design/icons";
@@ -7,11 +14,14 @@ import { useNavigate } from "react-router-dom";
 import { agentsApi } from "../../../api/modules/agents";
 import { invalidateSkillCache, skillApi } from "../../../api/modules/skill";
 import type { AgentSummary } from "../../../api/types/agents";
+import type { ProviderInfo } from "../../../api/types/provider";
+import { providerApi } from "../../../api/modules/provider";
 import { useAgentStore } from "../../../stores/agentStore";
 import { useAgents } from "./useAgents";
 import { AgentTable, AgentModal } from "./components";
 import { PageHeader } from "@/components/PageHeader";
 import { reorderAgents } from "./reorder";
+import { isChatSelectableModel } from "../../Chat/utils/chatModelEligibility";
 import styles from "./index.module.less";
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -28,11 +38,45 @@ export default function AgentsPage() {
   const [editingAgent, setEditingAgent] = useState<AgentSummary | null>(null);
   const [reordering, setReordering] = useState(false);
   const [importingPackage, setImportingPackage] = useState(false);
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [savingModelAgentId, setSavingModelAgentId] = useState<string | null>(
+    null,
+  );
   const [form] = Form.useForm();
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const installedSkillsRef = useRef<string[]>([]);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const { message } = useAppMessage();
+
+  useEffect(() => {
+    providerApi
+      .listProviders()
+      .then((data) => setProviders(Array.isArray(data) ? data : []))
+      .catch((error) => {
+        console.error("Failed to load model options:", error);
+        message.error(t("agent.modelLoadFailed"));
+      });
+  }, [message, t]);
+
+  const modelOptions = useMemo(
+    () =>
+      providers.flatMap((provider) => {
+        const configured =
+          provider.require_api_key === false
+            ? !!provider.base_url
+            : provider.is_custom
+            ? !!provider.base_url
+            : !!provider.api_key;
+        if (!configured) return [];
+        return [...(provider.models ?? []), ...(provider.extra_models ?? [])]
+          .filter(isChatSelectableModel)
+          .map((model) => ({
+            label: `${provider.name} / ${model.name || model.id}`,
+            value: `${provider.id}\u0000${model.id}`,
+          }));
+      }),
+    [providers],
+  );
 
   const handleCreate = () => {
     setEditingAgent(null);
@@ -90,6 +134,40 @@ export default function AgentsPage() {
       }
     } catch {
       // Error already handled in hook
+    }
+  };
+
+  const handleModelChange = async (
+    agentId: string,
+    model: { provider_id: string; model: string } | null,
+  ) => {
+    setSavingModelAgentId(agentId);
+    try {
+      if (model) {
+        await providerApi.setActiveLlm({
+          ...model,
+          scope: "agent",
+          agent_id: agentId,
+        });
+      } else {
+        await providerApi.deleteActiveLlm({
+          scope: "agent",
+          agent_id: agentId,
+        });
+      }
+      setAgents(
+        agents.map((agent) =>
+          agent.id === agentId ? { ...agent, active_model: model } : agent,
+        ),
+      );
+      message.success(
+        model ? t("agent.modelUpdateSuccess") : t("agent.modelClearSuccess"),
+      );
+    } catch (error) {
+      console.error("Failed to update agent model:", error);
+      message.error(t("agent.modelUpdateFailed"));
+    } finally {
+      setSavingModelAgentId(null);
     }
   };
 
@@ -328,6 +406,9 @@ export default function AgentsPage() {
           onDelete={handleDelete}
           onToggle={handleToggle}
           onReorder={handleReorder}
+          modelOptions={modelOptions}
+          savingModelAgentId={savingModelAgentId}
+          onModelChange={handleModelChange}
         />
       </Card>
 

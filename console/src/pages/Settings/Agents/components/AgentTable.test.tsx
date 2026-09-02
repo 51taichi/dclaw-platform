@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { AgentTable } from "./AgentTable";
 
@@ -21,7 +22,9 @@ vi.mock("react-i18next", () => ({
 }));
 
 describe("AgentTable", () => {
-  it("renders a sealed agent as locked instead of exposing management actions", () => {
+  it("lets a sealed agent change its package-independent default model", async () => {
+    const user = userEvent.setup();
+    const onModelChange = vi.fn();
     const { container } = render(
       <AgentTable
         agents={[
@@ -30,8 +33,12 @@ describe("AgentTable", () => {
             name: "陆羽",
             description: "AI 流量操盘手",
             workspace_dir: "/private/sealed/luyu",
-            enabled: true,
+            enabled: false,
             agent_type: "sealed",
+            active_model: {
+              provider_id: "volcengine-cn",
+              model: "deepseek-v4-flash",
+            },
             capabilities: {
               invoke: true,
               public_metadata: true,
@@ -50,6 +57,14 @@ describe("AgentTable", () => {
         onDelete={vi.fn()}
         onToggle={vi.fn()}
         onReorder={vi.fn()}
+        modelOptions={[
+          {
+            label: "Volcengine / DeepSeek V4",
+            value: "volcengine-cn\u0000deepseek-v4",
+          },
+        ]}
+        savingModelAgentId={null}
+        onModelChange={onModelChange}
       />,
     );
 
@@ -63,6 +78,13 @@ describe("AgentTable", () => {
     expect(container.querySelector(".anticon-delete")).not.toBeInTheDocument();
     expect(container.querySelector(".lucide-eye-off")).not.toBeInTheDocument();
     expect(container.querySelector(".lucide-eye")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("combobox"));
+    await user.click(screen.getByText("Volcengine / DeepSeek V4"));
+    expect(onModelChange).toHaveBeenCalledWith("luyu_traffic_operator", {
+      provider_id: "volcengine-cn",
+      model: "deepseek-v4",
+    });
   });
 
   it("keeps standard agent management actions available", () => {
@@ -74,7 +96,7 @@ describe("AgentTable", () => {
             name: "Writer",
             description: "Writing assistant",
             workspace_dir: "/workspaces/writer",
-            enabled: true,
+            enabled: false,
             agent_type: "standard",
           },
         ]}
@@ -84,12 +106,16 @@ describe("AgentTable", () => {
         onDelete={vi.fn()}
         onToggle={vi.fn()}
         onReorder={vi.fn()}
+        modelOptions={[]}
+        savingModelAgentId={null}
+        onModelChange={vi.fn()}
       />,
     );
 
     expect(screen.getByText("/workspaces/writer")).toBeInTheDocument();
     expect(container.querySelector(".anticon-edit")).toBeInTheDocument();
     expect(container.querySelector(".anticon-delete")).toBeInTheDocument();
-    expect(container.querySelector(".lucide-eye-off")).toBeInTheDocument();
+    expect(container.querySelector(".lucide-eye")).toBeInTheDocument();
+    expect(screen.getByRole("combobox")).not.toBeDisabled();
   });
 });

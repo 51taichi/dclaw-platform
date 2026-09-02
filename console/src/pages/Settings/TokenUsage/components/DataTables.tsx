@@ -1,5 +1,4 @@
 import { Card, Table } from "@agentscope-ai/design";
-import { Space, Typography } from "antd";
 import { useTranslation } from "react-i18next";
 import { formatCompact } from "../../../../utils/formatNumber";
 import styles from "../index.module.less";
@@ -20,27 +19,12 @@ interface ByDateData {
   call_count: number;
 }
 
-interface ByUserData {
-  key: string;
-  user_id: string;
-  prompt_tokens: number;
-  completion_tokens: number;
-  call_count: number;
-}
-
 interface DataTablesProps {
   byModelData: ByModelData[];
   byDateData: ByDateData[];
-  byUserData: ByUserData[];
-  userNames: Record<string, string>;
 }
 
-export function DataTables({
-  byModelData,
-  byDateData,
-  byUserData,
-  userNames,
-}: DataTablesProps) {
+export function DataTables({ byModelData, byDateData }: DataTablesProps) {
   const { t } = useTranslation();
 
   const byModelColumns = [
@@ -125,58 +109,6 @@ export function DataTables({
     },
   ];
 
-  const byUserColumns = [
-    {
-      title: t("admin.account", "账号"),
-      dataIndex: "user_id",
-      key: "user_id",
-      render: (userId: string) =>
-        userId === "System" ? (
-          <Typography.Text strong>System</Typography.Text>
-        ) : (
-          <Space direction="vertical" size={0}>
-            <Typography.Text strong>
-              {userNames[userId] ?? t("admin.unknownAccount", "未知账号")}
-            </Typography.Text>
-            <Typography.Text type="secondary">ID {userId}</Typography.Text>
-          </Space>
-        ),
-    },
-    {
-      title: t("tokenUsage.promptTokens"),
-      dataIndex: "prompt_tokens",
-      key: "prompt_tokens",
-      render: (v: number) => formatCompact(v),
-      sorter: (a: ByUserData, b: ByUserData) =>
-        a.prompt_tokens - b.prompt_tokens,
-    },
-    {
-      title: t("tokenUsage.completionTokens"),
-      dataIndex: "completion_tokens",
-      key: "completion_tokens",
-      render: (v: number) => formatCompact(v),
-      sorter: (a: ByUserData, b: ByUserData) =>
-        a.completion_tokens - b.completion_tokens,
-    },
-    {
-      title: t("tokenUsage.totalTokens"),
-      key: "total_tokens",
-      render: (_: unknown, record: ByUserData) =>
-        formatCompact(record.prompt_tokens + record.completion_tokens),
-      sorter: (a: ByUserData, b: ByUserData) =>
-        a.prompt_tokens +
-        a.completion_tokens -
-        (b.prompt_tokens + b.completion_tokens),
-    },
-    {
-      title: t("tokenUsage.totalCalls"),
-      dataIndex: "call_count",
-      key: "call_count",
-      render: (v: number) => formatCompact(v),
-      sorter: (a: ByUserData, b: ByUserData) => a.call_count - b.call_count,
-    },
-  ];
-
   return (
     <>
       {byModelData.length > 0 && (
@@ -195,20 +127,6 @@ export function DataTables({
           <Table
             columns={byDateColumns}
             dataSource={byDateData}
-            pagination={{ pageSize: 10 }}
-            size="small"
-          />
-        </Card>
-      )}
-
-      {byUserData.length > 0 && (
-        <Card
-          className={styles.tableCard}
-          title={t("admin.userRanking", "User Ranking")}
-        >
-          <Table
-            columns={byUserColumns}
-            dataSource={byUserData}
             pagination={{ pageSize: 10 }}
             size="small"
           />

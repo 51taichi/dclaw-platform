@@ -62,7 +62,7 @@
     "enterpriseKnowledge": "Enterprise Knowledge",
     "mindspaceCloud": "Cloud Docs Apps",
     "security": "Security",
-    "tokenUsage": "Token Usage",
+    "tokenUsage": "Credits / Token Usage",
     "agentStats": "Agent Statistics",
     "voiceTranscription": "Voice Transcription",
     "debug": "Debug",
@@ -801,7 +801,11 @@
     "modelHelp": "Assign a specific LLM model to this agent. Leave empty to use the global default.",
     "modelPlaceholder": "Use global default",
     "noConfiguredModels": "No configured models",
-    "modelColumn": "Model"
+    "modelColumn": "Default model",
+    "modelLoadFailed": "Failed to load available models",
+    "modelUpdateSuccess": "Default model updated",
+    "modelClearSuccess": "Now using the global default model",
+    "modelUpdateFailed": "Failed to update the default model"
   },
   "skills": {
     "title": "Skills",
@@ -1544,7 +1548,18 @@
     "vision": "Vision"
   },
   "tokenUsage": {
-    "title": "Token Usage",
+    "title": "Credits / Token Usage",
+    "creditTab": "Credit Usage",
+    "tokenTab": "Token Usage",
+    "creditRanking": "Customer Credit Usage Ranking",
+    "creditRankingLoadFailed": "Failed to load credit usage ranking",
+    "rank": "Rank",
+    "customerAccount": "Customer Account",
+    "actualConsumedCredits": "Credits Consumed",
+    "byYear": "By Year",
+    "byMonth": "By Month",
+    "byWeek": "By Week",
+    "byDay": "By Day",
     "totalTokens": "Total Tokens",
     "totalCalls": "Total Calls",
     "promptTokens": "Prompt Tokens",

@@ -23,15 +23,6 @@ interface AggregatedData {
       call_count: number;
     }
   >;
-  by_user: Record<
-    string,
-    {
-      user_id: string;
-      prompt_tokens: number;
-      completion_tokens: number;
-      call_count: number;
-    }
-  >;
   by_date_model: Record<
     string,
     Record<
@@ -54,7 +45,6 @@ export function useDataAggregation(records: TokenUsageRecord[]) {
     const byModel: AggregatedData["by_model"] = {};
     const byDate: AggregatedData["by_date"] = {};
     const byDateModel: AggregatedData["by_date_model"] = {};
-    const byUser: AggregatedData["by_user"] = {};
 
     let totalPrompt = 0;
     let totalCompletion = 0;
@@ -68,19 +58,6 @@ export function useDataAggregation(records: TokenUsageRecord[]) {
       totalPrompt += pt;
       totalCompletion += ct;
       totalCalls += calls;
-
-      const userId = r.user_id || "System";
-      if (!byUser[userId]) {
-        byUser[userId] = {
-          user_id: userId,
-          prompt_tokens: 0,
-          completion_tokens: 0,
-          call_count: 0,
-        };
-      }
-      byUser[userId].prompt_tokens += pt;
-      byUser[userId].completion_tokens += ct;
-      byUser[userId].call_count += calls;
 
       const modelKey = `${providerId}:${r.model}`;
       if (!byModel[modelKey]) {
@@ -131,7 +108,6 @@ export function useDataAggregation(records: TokenUsageRecord[]) {
       by_model: byModel,
       by_date: byDate,
       by_date_model: byDateModel,
-      by_user: byUser,
     };
   }, [records]);
 }

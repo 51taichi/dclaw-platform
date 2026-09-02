@@ -1,4 +1,4 @@
-import { Table, Button, Space, Popconfirm, Tag, Tooltip } from "antd";
+import { Table, Button, Space, Popconfirm, Select, Tag, Tooltip } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useTranslation } from "react-i18next";
 import {
@@ -35,6 +35,12 @@ interface AgentTableProps {
   onDelete: (agentId: string) => void;
   onToggle: (agentId: string, currentEnabled: boolean) => void;
   onReorder: (activeId: string, overId: string) => void;
+  modelOptions: Array<{ label: string; value: string }>;
+  savingModelAgentId: string | null;
+  onModelChange: (
+    agentId: string,
+    model: { provider_id: string; model: string } | null,
+  ) => void;
 }
 
 export function AgentTable({
@@ -45,6 +51,9 @@ export function AgentTable({
   onDelete,
   onToggle,
   onReorder,
+  modelOptions,
+  savingModelAgentId,
+  onModelChange,
 }: AgentTableProps) {
   const { t } = useTranslation();
   const { isDark } = useTheme();
@@ -140,24 +149,45 @@ export function AgentTable({
       title: t("agent.modelColumn"),
       key: "active_model",
       width: 260,
-      ellipsis: true,
       render: (_: unknown, record: AgentSummary) => {
-        if (!record.active_model) {
-          return (
-            <span style={{ opacity: 0.45 }}>{t("agent.modelPlaceholder")}</span>
-          );
-        }
+        const value = record.active_model
+          ? `${record.active_model.provider_id}\u0000${record.active_model.model}`
+          : undefined;
         return (
-          <Space size={6}>
-            <img
-              src={providerIcon(record.active_model.provider_id)}
-              alt=""
-              style={{ width: 16, height: 16 }}
-            />
-            <Tooltip title={record.active_model.model}>
-              <span>{record.active_model.model}</span>
-            </Tooltip>
-          </Space>
+          <Select
+            value={value}
+            options={modelOptions}
+            placeholder={t("agent.modelPlaceholder")}
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            loading={savingModelAgentId === record.id}
+            disabled={savingModelAgentId !== null}
+            style={{ width: "100%" }}
+            onChange={(nextValue?: string) => {
+              if (!nextValue) {
+                onModelChange(record.id, null);
+                return;
+              }
+              const [provider_id, model] = nextValue.split("\u0000", 2);
+              if (provider_id && model) {
+                onModelChange(record.id, { provider_id, model });
+              }
+            }}
+            labelRender={({ value: selectedValue, label }) => {
+              const [providerId] = String(selectedValue).split("\u0000", 1);
+              return (
+                <Space size={6}>
+                  <img
+                    src={providerIcon(providerId)}
+                    alt=""
+                    style={{ width: 16, height: 16 }}
+                  />
+                  <span>{label ?? record.active_model?.model}</span>
+                </Space>
+              );
+            }}
+          />
         );
       },
     },

@@ -12,6 +12,7 @@ export function AigcGuidePanel({
   task,
   operation,
   activeCanvasId,
+  stepCompletion,
   onSubmit,
   onReturnToChat,
 }: {
@@ -19,20 +20,25 @@ export function AigcGuidePanel({
   task: BoundAigcTask;
   operation: AigcOperationContract;
   activeCanvasId?: string | null;
+  stepCompletion: Record<string, boolean>;
   onSubmit?: () => Promise<string | void>;
   onReturnToChat?: () => void;
 }) {
   const storageKey = `dclaw:aigc-guide:${taskId}:step`;
-  const [stepIndex, setStepIndex] = useState(() =>
-    Math.max(0, Number(localStorage.getItem(storageKey) || 0)),
-  );
+  const [stepIndex, setStepIndex] = useState(() => {
+    const persisted = Number(localStorage.getItem(storageKey) || 0);
+    return Number.isFinite(persisted) && persisted >= 0
+      ? Math.floor(persisted)
+      : 0;
+  });
   const [paused, setPaused] = useState(false);
   const [reviewing, setReviewing] = useState(false);
   const [reviewReply, setReviewReply] = useState("");
-  const step =
-    operation.human_guide[
-      Math.min(stepIndex, operation.human_guide.length - 1)
-    ];
+  const safeStepIndex = Math.min(
+    stepIndex,
+    Math.max(0, operation.human_guide.length - 1),
+  );
+  const step = operation.human_guide[safeStepIndex];
   const [controlAvailable, setControlAvailable] = useState(false);
   const wrongCanvas = Boolean(
     activeCanvasId && task.binding.canvas_id !== activeCanvasId,
@@ -43,16 +49,29 @@ export function AigcGuidePanel({
   }, [stepIndex, storageKey]);
 
   useEffect(() => {
+    if (!step) return;
     const refresh = () =>
       setControlAvailable(Boolean(resolveControl(step.control_id)));
     refresh();
     const observer = new MutationObserver(refresh);
     observer.observe(document.body, { childList: true, subtree: true });
     return () => observer.disconnect();
-  }, [step.control_id, activeCanvasId]);
+  }, [step, activeCanvasId]);
+
+  useEffect(() => {
+    if (!step || wrongCanvas || paused || !controlAvailable) return;
+    focusPlatformControl(step.control_id);
+  }, [controlAvailable, paused, step, wrongCanvas]);
 
   if (!step) return null;
-  const finalStep = stepIndex >= operation.human_guide.length - 1;
+  const finalStep = safeStepIndex >= operation.human_guide.length - 1;
+  const currentStepComplete = stepCompletion[step.step_id] === true;
+  const taskArguments = task.operation_arguments ?? {};
+  const projectName = String(taskArguments.project_name ?? "").trim();
+  const prompt = String(taskArguments.prompt ?? "").trim();
+  const modelId = String(taskArguments.model_id ?? "").trim();
+  const aspectRatio = String(taskArguments.aspect_ratio ?? "").trim();
+  const durationSeconds = Number(taskArguments.duration_seconds);
 
   return (
     <aside className={styles.panel} aria-label="AIGC 任务操作助手">
@@ -68,6 +87,26 @@ export function AigcGuidePanel({
           当前画布不属于此任务。请返回绑定画布，其他画布的操作不会推进任务。
         </div>
       ) : null}
+      <section aria-label="本任务制作参数">
+        <h3>本任务制作参数</h3>
+        {projectName ? <p>{projectName}</p> : null}
+        {prompt ? <p>{prompt}</p> : null}
+        {modelId ? (
+          <p>{modelId === "auto" ? "模型：请选择一个可用模型" : `模型：${modelId}`}</p>
+        ) : null}
+        {aspectRatio && Number.isFinite(durationSeconds) ? (
+          <p>{aspectRatio} · {durationSeconds} 秒</p>
+        ) : null}
+        {prompt ? (
+          <button
+            type="button"
+            onClick={() => void navigator.clipboard.writeText(prompt)}
+          >
+            <Copy size={14} />
+            复制提示词
+          </button>
+        ) : null}
+      </section>
       {!controlAvailable ? (
         <div className={styles.blocked}>
           当前步骤所需控件不可用，向导已停止推进。请按下方恢复说明处理。
@@ -98,6 +137,11 @@ export function AigcGuidePanel({
         <dt>遇到问题</dt>
         <dd>{step.recovery}</dd>
       </dl>
+      {!currentStepComplete ? (
+        <div className={styles.blocked}>
+          尚未检测到完成标志，完成当前页面操作后才能进入下一步。
+        </div>
+      ) : null}
       {reviewReply ? (
         <section aria-label="专家审核结果">
           <h3>专家审核结果</h3>
@@ -117,7 +161,13 @@ export function AigcGuidePanel({
             </button>
             <button
               type="button"
-              disabled={paused || reviewing || !controlAvailable || wrongCanvas}
+              disabled={
+                paused ||
+                reviewing ||
+                !controlAvailable ||
+                wrongCanvas ||
+                !currentStepComplete
+              }
               onClick={() => {
                 if (finalStep) {
                   setReviewing(true);

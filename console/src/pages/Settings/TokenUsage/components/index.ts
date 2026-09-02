@@ -4,3 +4,4 @@ export * from "./SummaryCards";
 export * from "./ModelTrendChart";
 export * from "./TokenTypeChart";
 export * from "./DataTables";
+export * from "./CreditRankingTable";

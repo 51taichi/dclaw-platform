@@ -1,10 +1,25 @@
 export const AIGC_PLATFORM_CONTROL_ATTRIBUTE = "data-platform-control-id";
 
+function isActionableControl(control: HTMLElement): boolean {
+  if (control.hidden || control.getAttribute("aria-hidden") === "true") {
+    return false;
+  }
+  if (
+    control.matches(":disabled") ||
+    control.getAttribute("aria-disabled") === "true"
+  ) {
+    return false;
+  }
+  const style = window.getComputedStyle(control);
+  return style.display !== "none" && style.visibility !== "hidden";
+}
+
 export function resolveControl(controlId: string): HTMLElement | null {
   if (!/^[a-z0-9][a-z0-9_.-]+$/.test(controlId)) return null;
-  return document.querySelector<HTMLElement>(
+  const controls = document.querySelectorAll<HTMLElement>(
     `[${AIGC_PLATFORM_CONTROL_ATTRIBUTE}="${controlId}"]`,
   );
+  return Array.from(controls).find(isActionableControl) ?? null;
 }
 
 export function focusPlatformControl(controlId: string): HTMLElement | null {

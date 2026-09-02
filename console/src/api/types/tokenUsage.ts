@@ -25,3 +25,27 @@ export interface TokenUsageSummary {
   by_model: Record<string, TokenUsageStats>;
   by_date: Record<string, TokenUsageStats>;
 }
+
+export type CreditRankingPeriodType = "year" | "month" | "week" | "day";
+
+export interface CreditConsumptionRankingItem {
+  rank: number;
+  user_id: string;
+  username: string;
+  consumed_credits: number;
+  call_count: number;
+}
+
+export interface CreditConsumptionRankingResponse {
+  items: CreditConsumptionRankingItem[];
+  page: number;
+  page_size: number;
+  total: number;
+  period: {
+    type: CreditRankingPeriodType;
+    anchor_date: string;
+    started_at: string;
+    ended_at: string;
+    timezone: "Asia/Shanghai";
+  };
+}
