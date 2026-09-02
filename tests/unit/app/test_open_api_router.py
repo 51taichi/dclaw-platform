@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from qwenpaw.app.billing.execution import OpenApiExecutionFence
+from qwenpaw.agents.react_agent import resolve_agent_runtime_boundary
 from qwenpaw.app.sealed_agents.models import (
     SealedAgentRecord,
     SealedReleaseRecord,
@@ -658,8 +659,9 @@ async def test_prepare_isolated_agent_attempts_are_unique_without_durable_chats(
     for index, item in enumerate(prepared, start=1):
         assert item.chat_id == f"open-api:invocation-{index}"
         assert item.session_id.startswith(
-            "open:app-1:public-agent:ext-user:customer-request-1:attempt:"
+            "open:attempt:e5f47b6539291f6539e20dfe:"
         )
+        assert len(item.session_id) == 62
         assert item.payload["content_parts"][0].text == "frozen business input"
         assert item.payload["meta"]["external_session_id"] == "customer-request-1"
         assert item.payload["meta"]["execution_mode"] == "isolated_attempt"
@@ -668,6 +670,44 @@ async def test_prepare_isolated_agent_attempts_are_unique_without_durable_chats(
             "execution_mode": "persistent",
             "open_invocation_id": "caller-forged",
         }
+
+
+@pytest.mark.asyncio
+async def test_prepare_isolated_agent_chat_is_valid_for_sealed_runtime(tmp_path):
+    workspace = _workspace(agent_id="luyu_agent")
+    request = _request(
+        workspace=workspace,
+        app_id="a3101a92-5421-4a94-b6a1-cdecb02bdf04",
+    )
+    publication = _publication()
+    publication["target_id"] = "luyu_agent"
+    payload = OpenMessageRequest(
+        external_user_id="codex-local-isolation-user",
+        external_session_id="codex-frozen-request-20260902-002",
+        message="frozen business input",
+        execution_mode="isolated_attempt",
+    )
+
+    prepared = await prepare_open_agent_chat(
+        request,
+        publication,
+        payload,
+        invocation_id="675ae687-eb2c-4e7a-adc7-dc6b14a81566",
+    )
+    boundary = resolve_agent_runtime_boundary(
+        agent_id=prepared.agent_id,
+        session_id=prepared.session_id,
+        configured_workspace=tmp_path / "sealed-release" / "agent",
+        sealed=True,
+        working_dir=tmp_path,
+    )
+
+    assert len(prepared.session_id) <= 128
+    assert ":attempt:" in prepared.session_id
+    assert boundary.session_root == (
+        tmp_path / "sealed_sessions" / "luyu_agent" / prepared.session_id
+    ).resolve()
+    assert workspace.chat_manager.calls == []
 
 
 @pytest.mark.asyncio

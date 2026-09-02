@@ -43,7 +43,7 @@ Allowed values are `persistent` and `isolated_attempt`; the field defaults to `p
 
 For an omitted mode or explicit `persistent`, session ID construction, native payload shape, runner decisions, workspace selection, memory behavior, tools, chat persistence, and all downstream behavior remain compatible with the current implementation. The preparation layer must not add isolation metadata to persistent payloads.
 
-For `isolated_attempt`, the server derives a unique execution session ID by adding a fixed-length SHA-256 digest of the server-generated billing invocation ID to the existing namespaced OpenAPI session ID. Different invocations therefore receive different attempt workspaces, while an idempotent replay of the same invocation resolves to the same active execution. The external session ID remains unchanged in invocation records and trusted metadata, preserving billing, auditing, and caller correlation.
+For `isolated_attempt`, the server derives a fixed 62-character execution session ID in the form `open:attempt:<scope-hash>:<invocation-hash>`. The scope hash is a truncated SHA-256 digest of the existing namespaced OpenAPI session ID, and the invocation hash is a truncated SHA-256 digest of the server-generated billing invocation ID. This stays within the sealed-runtime identity limit while preserving a stable mapping for one persistent scope, unique attempt workspaces for different invocations, and deterministic replay for the same invocation. The external session ID remains unchanged in invocation records and trusted metadata, preserving billing, auditing, and caller correlation.
 
 ### Cross-service attempt contract
 
@@ -55,7 +55,7 @@ Using `persistent` for the first candidate and `isolated_attempt` only for later
 
 For an Agent OpenAPI request explicitly using `isolated_attempt`, the OpenAPI preparation layer places a trusted execution policy in the native payload metadata. The runner accepts the policy only when all of the following are true: the channel has the server-generated `open:` prefix, the trusted target type is `agent`, and the server-created top-level policy is exactly `isolated_attempt`. Untrusted `payload.metadata` remains nested and cannot enable it.
 
-No generic runner flag is exposed to other callers. Non-OpenAPI Agent requests cannot opt in through `request_context`, channel metadata, or user metadata. In addition to the typed fields, the trusted policy carries a process-local object-identity capability that cannot be constructed by a JSON request. The capability is produced only by the Agent OpenAPI preparation function; the expert-team preparation function never produces it.
+No generic runner flag is exposed to other callers. Non-OpenAPI Agent requests cannot opt in through `request_context`, channel metadata, or user metadata. In addition to the typed fields, the trusted policy carries a JSON-safe HMAC-SHA256 capability signed with a process-local random secret and bound to the internal session, publication, target, execution mode, and invocation identifiers. A caller cannot construct or alter this capability through JSON metadata. The capability is produced only by the Agent OpenAPI preparation function; the expert-team preparation function never produces it.
 
 When the policy is `isolated_attempt`, the runner:
 

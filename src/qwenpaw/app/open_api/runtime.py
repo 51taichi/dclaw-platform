@@ -644,8 +644,11 @@ async def _prepare_open_chat(
             detail="Open API isolated execution identity is unavailable",
         )
     if isolated_attempt:
+        scope_suffix = sha256(
+            persistent_session_id.encode("utf-8"),
+        ).hexdigest()[:24]
         attempt_suffix = sha256(str(invocation_id).encode("utf-8")).hexdigest()[:24]
-        session_id = f"{persistent_session_id}:attempt:{attempt_suffix}"
+        session_id = f"open:attempt:{scope_suffix}:{attempt_suffix}"
     else:
         session_id = persistent_session_id
     channel = f"open:{app_id}"

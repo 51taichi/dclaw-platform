@@ -6,7 +6,10 @@ from typing import ClassVar
 
 import pytest
 from agentscope.message import Msg
+from agentscope_runtime.engine.tracing.wrapper import trace
+from agentscope_runtime.engine.schemas.agent_schemas import ContentType, TextContent
 
+from qwenpaw.app.channels.console.channel import ConsoleChannel
 from qwenpaw.app.runner import runner as runner_module
 from qwenpaw.app.runner.runner import AgentRunner
 from qwenpaw.app.open_api.execution_mode import bind_isolated_agent_open_api
@@ -134,6 +137,48 @@ async def _async_none(**_kwargs):
 
 
 @pytest.mark.asyncio
+async def test_isolated_capability_survives_console_and_tracing_serialization(
+    tmp_path,
+):
+    """Catch non-JSON capability values before AgentScope invokes the runner."""
+
+    async def unused_process(_request):
+        if False:
+            yield None
+
+    channel = ConsoleChannel(
+        process=unused_process,
+        enabled=True,
+        bot_prefix="",
+        workspace_dir=tmp_path,
+    )
+    meta = {
+        "session_id": "open:app:target:user:session:attempt:abc",
+        "target_type": "agent",
+        "execution_mode": "isolated_attempt",
+        "open_invocation_id": "invocation-1",
+    }
+    bind_isolated_agent_open_api(meta)
+    request = channel.build_agent_request_from_native(
+        {
+            "channel_id": "open:app-1",
+            "sender_id": "owner",
+            "content_parts": [
+                TextContent(type=ContentType.TEXT, text="hello"),
+            ],
+            "meta": meta,
+        },
+    )
+
+    @trace()
+    async def traced_process(actual_request):
+        assert actual_request is request
+        return "ok"
+
+    assert await traced_process(request) == "ok"
+
+
+@pytest.mark.asyncio
 async def test_persistent_open_api_keeps_session_memory_and_chat_behavior(
     monkeypatch,
     tmp_path,
@@ -209,6 +254,7 @@ async def test_isolated_agent_open_api_skips_session_memory_and_chat_persistence
                 "target_type": "agent",
                 "execution_mode": "isolated_attempt",
                 "open_invocation_id": "forged-complete-shape",
+                "_isolated_agent_open_api_capability": "0" * 64,
             },
         ),
     ],
