@@ -6,6 +6,10 @@ from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+from openai import NOT_GIVEN
+from pydantic import BaseModel
+
 from qwenpaw.providers.openai_chat_model_compat import (
     OpenAIChatModelCompat,
     _sanitize_tool_call,
@@ -48,6 +52,23 @@ class FakeAsyncStream:
             return next(self._iter)
         except StopIteration as exc:
             raise StopAsyncIteration from exc
+
+
+class _StopAfterCapture(RuntimeError):
+    pass
+
+
+class _CapturingCompletions:
+    def __init__(self) -> None:
+        self.kwargs: dict[str, Any] | None = None
+
+    async def create(self, **kwargs):
+        self.kwargs = kwargs
+        raise _StopAfterCapture
+
+
+class _InternalResult(BaseModel):
+    query: str
 
 
 def _make_chunk(tool_calls: list[Any]) -> Any:
@@ -169,3 +190,52 @@ def test_sanitize_tool_call_normalizes_non_string_arguments() -> None:
     assert sanitized_missing_name_and_arguments is not None
     assert sanitized_missing_name_and_arguments.function.name == ""
     assert sanitized_missing_name_and_arguments.function.arguments == ""
+
+
+@pytest.mark.asyncio
+async def test_not_given_overrides_persistent_json_format_for_tool_planning():
+    model = CompatHarnessOpenAIChatModel(
+        "dummy",
+        api_key="sk-test",
+        stream=False,
+        generate_kwargs={"response_format": {"type": "json_object"}},
+    )
+    completions = _CapturingCompletions()
+    model.client = SimpleNamespace(
+        chat=SimpleNamespace(completions=completions),
+    )
+
+    with pytest.raises(_StopAfterCapture):
+        await model(
+            [{"role": "user", "content": "plan"}],
+            tools=[{"type": "function", "function": {"name": "search"}}],
+            response_format=NOT_GIVEN,
+        )
+
+    assert completions.kwargs is not None
+    assert completions.kwargs["response_format"] is NOT_GIVEN
+
+
+@pytest.mark.asyncio
+async def test_structured_tool_fallback_removes_persistent_response_format():
+    model = CompatHarnessOpenAIChatModel(
+        "dummy",
+        api_key="sk-test",
+        stream=False,
+        generate_kwargs={"response_format": {"type": "json_object"}},
+    )
+    model._structured_output_fallback = True
+    completions = _CapturingCompletions()
+    model.client = SimpleNamespace(
+        chat=SimpleNamespace(completions=completions),
+    )
+
+    with pytest.raises(_StopAfterCapture):
+        await model(
+            [{"role": "user", "content": "rewrite"}],
+            structured_model=_InternalResult,
+        )
+
+    assert completions.kwargs is not None
+    assert "response_format" not in completions.kwargs
+    assert completions.kwargs["tools"][0]["function"]["name"]
