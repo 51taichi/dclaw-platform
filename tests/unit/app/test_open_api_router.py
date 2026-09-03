@@ -204,6 +204,29 @@ class FakeConsoleChannel:
         yield "data: done\n\n"
 
 
+class TypedFailureConsoleChannel:
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        self.message = message
+        self.calls = 0
+
+    async def stream_one(self, payload: dict[str, Any]):
+        _ = payload
+        self.calls += 1
+        yield (
+            "data: "
+            + open_api.json.dumps(
+                {
+                    "object": "response",
+                    "status": "failed",
+                    "error": {"code": self.code, "message": self.message},
+                },
+            )
+            + "\n\n"
+        )
+        raise RuntimeError("wrapped console failure must not replace code")
+
+
 class FakeChannelManager:
     def __init__(
         self, console_channel: FakeConsoleChannel | None = None
@@ -1296,6 +1319,65 @@ async def test_post_open_message_updates_invocation_failed_when_stream_fails(
     assert repo.invocations[0]["status"] == "failed"
     assert repo.invocations[0]["status_code"] == 500
     assert "stream failed" in repo.invocations[0]["error_summary"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        ("model_execution_failed", "Model execution failed"),
+        ("tool_execution_failed", "Tool execution failed"),
+        ("empty_final_response", "Model returned an empty final response"),
+        ("invalid_final_response", "Model returned an invalid JSON response"),
+    ],
+)
+async def test_direct_agent_typed_failure_is_sealed_in_terminal_and_invocation(
+    monkeypatch,
+    code,
+    message,
+):
+    channel = TypedFailureConsoleChannel(code, message)
+    workspace = _workspace(agent_id="agent-published")
+    workspace.channel_manager = FakeChannelManager(channel)
+    repo = FakeOpenApiRepository(publication=_publication())
+    monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
+
+    response = await open_api.post_open_message(
+        "public-agent",
+        OpenMessageRequest(
+            external_user_id="ext-user",
+            external_session_id="ext-session",
+            message="hello",
+        ),
+        _request(workspace=workspace),
+    )
+    body = await _consume_streaming_response(response)
+
+    invocation = repo.invocations[0]
+    terminal = invocation["terminal_event_json"]
+    assert channel.calls == 1
+    assert invocation["status"] == "failed"
+    assert invocation["status_code"] == 502
+    assert terminal["status"] == "failed"
+    assert terminal["code"] == code
+    assert terminal["message"] == message
+    assert terminal["http_status"] == 502
+    assert open_api.json.dumps(terminal, separators=(",", ":")) in body
+    assert "wrapped console failure" not in body
+
+
+def test_extract_stream_failure_preserves_typed_error_fields():
+    failure = open_api._extract_stream_failure(
+        'data: {"object":"response","status":"failed",'
+        '"error":{"code":"model_execution_failed",'
+        '"message":"Model execution failed"}}\n\n',
+    )
+
+    assert failure is not None
+    assert failure.status == "failed"
+    assert failure.code == "model_execution_failed"
+    assert failure.message == "Model execution failed"
+    assert failure.http_status == 502
 
 
 @pytest.mark.asyncio

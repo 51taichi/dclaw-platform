@@ -9,6 +9,7 @@ import logging
 import os
 import time
 import uuid
+from dataclasses import dataclass
 from typing import Any, AsyncGenerator
 
 from fastapi import APIRouter, HTTPException, Request
@@ -49,6 +50,23 @@ from ..task_limits import get_task_limiter
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/open/v1", tags=["open-api"])
+
+
+@dataclass(frozen=True)
+class _OpenApiStreamFailure:
+    status: str
+    code: str
+    message: str
+    http_status: int
+    error_summary: str
+
+
+_DIRECT_AGENT_FAILURES: dict[str, tuple[int, str]] = {
+    "model_execution_failed": (502, "Model execution failed"),
+    "tool_execution_failed": (502, "Tool execution failed"),
+    "empty_final_response": (502, "Model returned an empty final response"),
+    "invalid_final_response": (502, "Model returned an invalid JSON response"),
+}
 
 
 def _resolve_sealed_publication_release(
@@ -376,7 +394,7 @@ async def post_open_message(
 
         async def limited_stream_fn(stream_payload):
             stream_started_at = time.monotonic()
-            stream_failure: tuple[str, str] | None = None
+            stream_failure: _OpenApiStreamFailure | None = None
             stream_exception: Exception | None = None
             cancelled = False
             terminal: dict[str, Any] | None = None
@@ -400,7 +418,8 @@ async def post_open_message(
                 cancelled = True
             except Exception as exc:  # supplier details stay private
                 stream_exception = exc
-                yield _sse({"error": "internal server error"})
+                if stream_failure is None:
+                    yield _sse({"error": "internal server error"})
             finally:
                 execution.note_stream_ready()
                 try:
@@ -620,7 +639,7 @@ async def _shielded_finalize(
     execution: Any,
     *,
     stream_started_at: float,
-    stream_failure: tuple[str, str] | None,
+    stream_failure: _OpenApiStreamFailure | None,
     stream_exception: Exception | None,
     cancelled: bool,
     expert_team_run_id: str,
@@ -678,6 +697,14 @@ async def _shielded_finalize(
             public_code = "model_not_priced"
             public_message = "Selected model is not priced"
             required_credits = None
+        elif stream_failure is not None:
+            status = stream_failure.status
+            status_code = stream_failure.http_status
+            error_summary = stream_failure.error_summary
+            billing_error_code = None
+            public_code = stream_failure.code
+            public_message = stream_failure.message
+            required_credits = None
         elif stream_exception is not None:
             status = "failed"
             status_code = 500
@@ -685,13 +712,6 @@ async def _shielded_finalize(
             billing_error_code = None
             public_code = "request_failed"
             public_message = "Internal server error"
-            required_credits = None
-        elif stream_failure is not None:
-            status, error_summary = stream_failure
-            status_code = _stream_failure_status_code(status)
-            billing_error_code = None
-            public_code = "request_failed"
-            public_message = "Request failed"
             required_credits = None
         else:
             status = "succeeded"
@@ -1123,7 +1143,7 @@ def _update_invocation_status(
         logger.exception("Failed to update Open API invocation status")
 
 
-def _extract_stream_failure(event_data: str) -> tuple[str, str] | None:
+def _extract_stream_failure(event_data: str) -> _OpenApiStreamFailure | None:
     for raw_line in event_data.splitlines():
         line = raw_line.strip()
         if not line.startswith("data:"):
@@ -1139,18 +1159,55 @@ def _extract_stream_failure(event_data: str) -> tuple[str, str] | None:
             continue
         error = payload.get("error")
         if isinstance(error, str):
-            return "failed", error
+            return _OpenApiStreamFailure(
+                status="failed",
+                code="request_failed",
+                message="Request failed",
+                http_status=500,
+                error_summary=error,
+            )
         if isinstance(error, dict):
-            return "failed", json.dumps(error, ensure_ascii=False)
+            error_code = str(error.get("code") or "")
+            known = _DIRECT_AGENT_FAILURES.get(error_code)
+            if known is not None:
+                http_status, safe_message = known
+                return _OpenApiStreamFailure(
+                    status="failed",
+                    code=error_code,
+                    message=safe_message,
+                    http_status=http_status,
+                    error_summary=f"{error_code}: {safe_message}",
+                )
+            return _OpenApiStreamFailure(
+                status="failed",
+                code="request_failed",
+                message="Request failed",
+                http_status=500,
+                error_summary=json.dumps(error, ensure_ascii=False),
+            )
         run = payload.get("run")
         if isinstance(run, dict):
             state = run.get("state")
             if state == "failed":
                 summary = run.get("error")
-                return "failed", str(summary or "Expert team run failed")
+                rendered = str(summary or "Expert team run failed")
+                return _OpenApiStreamFailure(
+                    status="failed",
+                    code="request_failed",
+                    message="Request failed",
+                    http_status=500,
+                    error_summary=rendered,
+                )
             if state == "cancelled":
                 summary = run.get("error")
-                return "cancelled", str(summary or "Expert team run cancelled")
+                rendered = str(summary or "Expert team run cancelled")
+                return _OpenApiStreamFailure(
+                    status="cancelled",
+                    code="request_cancelled",
+                    message="Request cancelled",
+                    http_status=499,
+                    error_summary=rendered,
+                )
     return None
 
 
