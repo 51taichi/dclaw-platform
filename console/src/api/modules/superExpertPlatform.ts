@@ -25,19 +25,75 @@ export interface AigcOperationContract {
 }
 
 export interface BoundAigcTask {
-  binding: {
-    installation_id: string;
-    conversation_id: string;
-    material_task_id: string;
-    canvas_id: string;
-    node_id: string;
-    [key: string]: unknown;
-  };
+  binding: AigcWorkflowBinding;
   status: string;
   asset_id?: string | null;
+  version?: number;
+  events?: Record<string, unknown>[];
+  workflow?: Record<string, unknown> | null;
+  guide_events?: Record<string, unknown>[];
   operation_id?: string | null;
   operation_version?: string | null;
   operation_arguments?: Record<string, unknown>;
+}
+
+export interface AigcWorkflowBinding {
+  installation_id: string;
+  conversation_id: string;
+  agent_task_id?: string;
+  content_revision?: number;
+  material_task_id: string;
+  canvas_id: string;
+  node_id: string;
+  workflow_id?: string | null;
+  execution_mode?: "LEGACY" | "PREBUILT_WORKFLOW" | "MANUAL_BUILD";
+  node_bindings?: Record<string, string>;
+  output_node_id?: string | null;
+  workflow_revision?: number | null;
+  guide_revision?: number | null;
+}
+
+export type GuideStepStatus =
+  | "LOCKED"
+  | "READY"
+  | "RUNNING"
+  | "FAILED"
+  | "COMPLETED"
+  | "SKIPPED"
+  | "BLOCKED";
+
+export interface AigcGuideRecovery {
+  action: "RETRY_NODE" | "RESTORE_BOUND_CANVAS" | "RELOAD_TASK";
+  code: string;
+}
+
+export interface AigcGuideStepProjection {
+  step_id: string;
+  kind: "INSPECT" | "GENERATE" | "SUBMIT" | "MANUAL_BUILD";
+  title: string;
+  instruction: string;
+  logical_node_id: string | null;
+  node_id: string | null;
+  control_id: string | null;
+  optional: boolean;
+  status: GuideStepStatus;
+  recovery: AigcGuideRecovery | null;
+}
+
+export interface AigcGuideProjection {
+  workflow_id: string;
+  workflow_revision: number;
+  guide_revision: number;
+  execution_mode: "PREBUILT_WORKFLOW" | "MANUAL_BUILD";
+  current_step_id: string | null;
+  current_step: AigcGuideStepProjection | null;
+  steps: AigcGuideStepProjection[];
+  task_summary: {
+    material_task_id: string;
+    status: string;
+    asset_id: string | null;
+    task_version: number;
+  };
 }
 
 export interface SuperExpertPlatformCommandResult {
@@ -58,6 +114,10 @@ export const superExpertPlatformApi = {
   getOperation: (operationId: string) =>
     request<AigcOperationContract>(
       `/super-expert-platform/operations/${encodeURIComponent(operationId)}`,
+    ),
+  getGuide: (materialTaskId: string) =>
+    request<AigcGuideProjection>(
+      `/super-expert-platform/tasks/${encodeURIComponent(materialTaskId)}/guide`,
     ),
   command: (capability: string, command: SuperExpertPlatformCommand) =>
     request<SuperExpertPlatformCommandResult>(
