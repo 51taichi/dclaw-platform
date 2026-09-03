@@ -62,6 +62,10 @@ class _OpenApiStreamFailure:
 
 
 _DIRECT_AGENT_FAILURES: dict[str, tuple[int, str]] = {
+    "response_format_adapter_unavailable": (
+        500,
+        "Configured response format is unavailable",
+    ),
     "model_execution_failed": (502, "Model execution failed"),
     "tool_execution_failed": (502, "Tool execution failed"),
     "empty_final_response": (502, "Model returned an empty final response"),

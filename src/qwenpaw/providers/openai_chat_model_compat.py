@@ -16,6 +16,11 @@ from qwenpaw.local_models.tag_parser import (
     parse_tool_calls_from_text,
     text_contains_tool_call_tag,
 )
+from qwenpaw.providers.openai_response_diagnostics import (
+    OpenAIResponseDiagnostics,
+    is_openai_response_diagnostics_capture_enabled,
+    stash_openai_response_diagnostics,
+)
 
 
 def _clone_with_overrides(obj: Any, **overrides: Any) -> Any:
@@ -159,6 +164,58 @@ def attach_openai_supplier_billing_reference(
     return parsed
 
 
+def _safe_token_usage(raw_usage: Any) -> dict[str, int]:
+    if raw_usage is None:
+        return {}
+    result: dict[str, int] = {}
+    for name in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        value = getattr(raw_usage, name, None)
+        if (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and value >= 0
+        ):
+            result[name] = value
+    return result
+
+
+def _reasoning_fragment(message: Any) -> str:
+    for name in ("reasoning_content", "reasoning"):
+        value = getattr(message, name, None)
+        if isinstance(value, str):
+            return value
+    model_extra = getattr(message, "model_extra", None)
+    if isinstance(model_extra, dict):
+        for name in ("reasoning_content", "reasoning"):
+            value = model_extra.get(name)
+            if isinstance(value, str):
+                return value
+    return ""
+
+
+def _completion_diagnostics(response: Any) -> OpenAIResponseDiagnostics:
+    finish_reason: str | None = None
+    content_length = 0
+    reasoning_length = 0
+    for choice in getattr(response, "choices", None) or []:
+        raw_finish = getattr(choice, "finish_reason", None)
+        if isinstance(raw_finish, str) and raw_finish:
+            finish_reason = raw_finish
+        message = getattr(choice, "message", None)
+        if message is None:
+            continue
+        content = getattr(message, "content", None)
+        if isinstance(content, str):
+            content_length += len(content)
+        reasoning_length += len(_reasoning_fragment(message))
+    return OpenAIResponseDiagnostics(
+        finish_reason=finish_reason,
+        content_length=content_length,
+        reasoning_length=reasoning_length,
+        usage=_safe_token_usage(getattr(response, "usage", None)),
+    )
+
+
 class _SanitizedStream:
     """Proxy OpenAI async stream that sanitizes each emitted item and
     captures ``extra_content`` from tool-call chunks (used by Gemini
@@ -169,6 +226,13 @@ class _SanitizedStream:
         self._ctx_stream: Any | None = None
         self.extra_contents: dict[str, Any] = {}
         self.supplier_response_id: str | None = None
+        self.finish_reason: str | None = None
+        self.content_length = 0
+        self.reasoning_length = 0
+        self.usage: dict[str, int] = {}
+        self.capture_diagnostics = (
+            is_openai_response_diagnostics_capture_enabled()
+        )
 
     async def __aenter__(self) -> "_SanitizedStream":
         self._ctx_stream = await self._stream.__aenter__()
@@ -189,11 +253,14 @@ class _SanitizedStream:
         if self._ctx_stream is None:
             raise StopAsyncIteration
         item = await self._ctx_stream.__anext__()
-        self._capture_extra_content(item)
+        self._capture_response_metadata(item)
         return _sanitize_stream_item(item)
 
-    def _capture_extra_content(self, item: Any) -> None:
-        """Store ``extra_content`` keyed by tool-call id."""
+    def _capture_response_metadata(  # pylint: disable=too-many-branches
+        self,
+        item: Any,
+    ) -> None:
+        """Capture tool metadata and content-free supplier diagnostics."""
         chunk = getattr(item, "chunk", item)
         if self.supplier_response_id is None:
             try:
@@ -204,9 +271,21 @@ class _SanitizedStream:
                 self.supplier_response_id = raw_id.strip()
         choices = getattr(chunk, "choices", None) or []
         for choice in choices:
+            raw_finish = getattr(choice, "finish_reason", None)
+            if (
+                self.capture_diagnostics
+                and isinstance(raw_finish, str)
+                and raw_finish
+            ):
+                self.finish_reason = raw_finish
             delta = getattr(choice, "delta", None)
             if not delta:
                 continue
+            content = getattr(delta, "content", None)
+            if self.capture_diagnostics and isinstance(content, str):
+                self.content_length += len(content)
+            if self.capture_diagnostics:
+                self.reasoning_length += len(_reasoning_fragment(delta))
             for tc in getattr(delta, "tool_calls", None) or []:
                 tc_id = getattr(tc, "id", None)
                 if not tc_id:
@@ -218,6 +297,18 @@ class _SanitizedStream:
                         extra = model_extra.get("extra_content")
                 if extra:
                     self.extra_contents[tc_id] = extra
+        if self.capture_diagnostics:
+            usage = _safe_token_usage(getattr(chunk, "usage", None))
+            if usage:
+                self.usage = usage
+
+    def diagnostics(self) -> OpenAIResponseDiagnostics:
+        return OpenAIResponseDiagnostics(
+            finish_reason=self.finish_reason,
+            content_length=self.content_length,
+            reasoning_length=self.reasoning_length,
+            usage=dict(self.usage),
+        )
 
 
 def _sanitize_boolean_schemas(schema: Any) -> Any:
@@ -335,6 +426,11 @@ class OpenAIChatModelCompat(OpenAIChatModel):
             response,
             structured_model,
         )
+        if is_openai_response_diagnostics_capture_enabled():
+            stash_openai_response_diagnostics(
+                parsed,
+                _completion_diagnostics(response),
+            )
         return attach_openai_supplier_billing_reference(parsed, response)
 
     # pylint: disable=too-many-branches, too-many-statements
@@ -471,5 +567,10 @@ class OpenAIChatModelCompat(OpenAIChatModel):
                 SimpleNamespace(id=sanitized_response.supplier_response_id),
                 source="openai.chat.chunk.id",
             )
+            if sanitized_response.capture_diagnostics:
+                stash_openai_response_diagnostics(
+                    parsed,
+                    sanitized_response.diagnostics(),
+                )
 
             yield parsed

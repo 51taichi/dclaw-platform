@@ -3,10 +3,11 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Sequence
 from copy import deepcopy
 import json
-from typing import Any, Type
+import logging
+from typing import Any, NoReturn, Type
 
 from agentscope.model import ChatModelBase
 from agentscope.model._model_response import ChatResponse
@@ -15,12 +16,22 @@ from pydantic import BaseModel
 from agentscope_runtime.engine.schemas.exception import AppBaseException
 
 from ...providers.openai_chat_model_compat import OpenAIChatModelCompat
+from ...providers.openai_response_diagnostics import (
+    OpenAIResponseDiagnostics,
+    capture_openai_response_diagnostics,
+    pop_openai_response_diagnostics,
+    stash_openai_response_diagnostics,
+)
 
 
+logger = logging.getLogger(__name__)
+
+_JSON_OBJECT_RESPONSE_FORMAT = {"type": "json_object"}
 _FINALIZATION_INSTRUCTION = (
     "<system-hint>Produce the final customer response now. Do not call tools. "
     "Return exactly one JSON object that follows the configured response "
-    "format. Use the planning draft and tool results only as evidence.</system-hint>"
+    "format. Use the planning draft and tool results only as evidence."
+    "</system-hint>"
 )
 
 
@@ -52,7 +63,7 @@ def is_trusted_direct_agent_open_api(
     return bool(
         channel_meta.get("target_type") == "agent"
         and str(channel_meta.get("publication_id") or "").strip()
-        and str(channel_meta.get("open_invocation_id") or "").strip()
+        and str(channel_meta.get("open_invocation_id") or "").strip(),
     )
 
 
@@ -61,22 +72,27 @@ def install_open_api_agent_response_format(agent: Any) -> bool:
     model = getattr(agent, "model", None)
     raw_model = _find_openai_compat_model(model)
     if raw_model is None:
+        if _model_chain_has_json_object_format(model):
+            _raise_adapter_unavailable(model, "compatible model not found")
         return False
     configured = getattr(raw_model, "generate_kwargs", {}).get(
         "response_format",
     )
-    if configured != {"type": "json_object"}:
+    if configured != _JSON_OBJECT_RESPONSE_FORMAT:
         return False
 
     # This model instance belongs to the current QwenPawAgent request. Force
     # AgentScope's internal Pydantic structured calls through its tool-call
     # implementation; that implementation removes response_format before the
     # supplier request. Provider configuration remains untouched.
-    raw_model._structured_output_fallback = True  # pylint: disable=protected-access
-    agent.model = OpenApiAgentResponseFormatModel(
-        model,
-        response_format=deepcopy(configured),
-    )
+    try:
+        setattr(raw_model, "_structured_output_fallback", True)
+        agent.model = OpenApiAgentResponseFormatModel(
+            model,
+            response_format=deepcopy(configured),
+        )
+    except Exception as exc:
+        _raise_adapter_unavailable(model, type(exc).__name__)
     return True
 
 
@@ -96,6 +112,50 @@ def _find_openai_compat_model(model: Any) -> OpenAIChatModelCompat | None:
             continue
         return None
     return None
+
+
+def _walk_model_chain(model: Any) -> Iterator[Any]:
+    """Yield known wrappers without inspecting arbitrary model state."""
+    seen: set[int] = set()
+    current = model
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        if hasattr(current, "_inner"):
+            current = getattr(current, "_inner")
+        elif hasattr(current, "_model"):
+            current = getattr(current, "_model")
+        else:
+            current = None
+
+
+def _model_chain_has_json_object_format(model: Any) -> bool:
+    for current in _walk_model_chain(model):
+        generate_kwargs = getattr(current, "generate_kwargs", None)
+        if (
+            isinstance(generate_kwargs, dict)
+            and generate_kwargs.get("response_format")
+            == _JSON_OBJECT_RESPONSE_FORMAT
+        ):
+            return True
+    return False
+
+
+def _raise_adapter_unavailable(model: Any, reason: str) -> NoReturn:
+    model_type = type(model).__name__ if model is not None else "None"
+    logger.error(
+        "open_api_response_format_adapter_unavailable model_type=%s reason=%s",
+        model_type,
+        reason,
+    )
+    raise OpenApiAgentExecutionError(
+        "response_format_adapter_unavailable",
+        "Configured response format is unavailable",
+        http_status=500,
+        error_summary=(
+            "response format adapter unavailable " f"({model_type}: {reason})"
+        ),
+    )
 
 
 class OpenApiAgentResponseFormatModel(ChatModelBase):
@@ -145,9 +205,10 @@ class OpenApiAgentResponseFormatModel(ChatModelBase):
                 structured_model=None,
                 response_format=NOT_GIVEN,
                 extra_kwargs=kwargs,
+                phase="planning",
             )
             if _has_tool_use(planning):
-                _suppress_planning_text(planning)
+                _retain_tool_calls(planning)
                 return self._as_model_result(planning)
 
             final_messages = _finalization_messages(messages, planning)
@@ -158,9 +219,10 @@ class OpenApiAgentResponseFormatModel(ChatModelBase):
                 structured_model=None,
                 response_format=deepcopy(self.response_format),
                 extra_kwargs=kwargs,
+                phase="final",
             )
             _validate_final_response(final, messages)
-            return self._as_model_result(final)
+            return self._as_model_result(_final_text_response(final))
 
         final = await self._invoke(
             messages,
@@ -169,9 +231,10 @@ class OpenApiAgentResponseFormatModel(ChatModelBase):
             structured_model=None,
             response_format=deepcopy(self.response_format),
             extra_kwargs=kwargs,
+            phase="final",
         )
         _validate_final_response(final, messages)
-        return self._as_model_result(final)
+        return self._as_model_result(_final_text_response(final))
 
     async def _invoke_passthrough(
         self,
@@ -199,13 +262,13 @@ class OpenApiAgentResponseFormatModel(ChatModelBase):
                 try:
                     async for item in result:
                         yield item
-                except OpenApiAgentExecutionError:
+                except OpenApiAgentExecutionError:  # pylint: disable=W0706
                     raise
                 except Exception as exc:
                     raise _model_execution_error(exc) from exc
 
             return guarded()
-        except OpenApiAgentExecutionError:
+        except OpenApiAgentExecutionError:  # pylint: disable=W0706
             raise
         except Exception as exc:
             raise _model_execution_error(exc) from exc
@@ -219,18 +282,26 @@ class OpenApiAgentResponseFormatModel(ChatModelBase):
         structured_model: Type[BaseModel] | None,
         response_format: Any,
         extra_kwargs: dict[str, Any],
+        phase: str,
     ) -> ChatResponse:
         try:
-            result = await self._inner(
-                messages=messages,
-                tools=tools,
-                tool_choice=tool_choice,
-                structured_model=structured_model,
+            with capture_openai_response_diagnostics():
+                result = await self._inner(
+                    messages=messages,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    structured_model=structured_model,
+                    response_format=response_format,
+                    **extra_kwargs,
+                )
+                response = await self._collect(result)
+            self._record_supplier_diagnostics(
+                response,
+                phase=phase,
                 response_format=response_format,
-                **extra_kwargs,
             )
-            return await self._collect(result)
-        except OpenApiAgentExecutionError:
+            return response
+        except OpenApiAgentExecutionError:  # pylint: disable=W0706
             raise
         except Exception as exc:
             raise _model_execution_error(exc) from exc
@@ -242,11 +313,90 @@ class OpenApiAgentResponseFormatModel(ChatModelBase):
         if isinstance(result, ChatResponse):
             return result
         last: ChatResponse | None = None
+        last_diagnostics = OpenAIResponseDiagnostics()
+        text = _FragmentAccumulator()
+        thinking = _FragmentAccumulator()
+        tool_blocks: list[dict[str, Any]] = []
+        other_blocks: list[Any] = []
         async for item in result:
             last = item
+            diagnostics = pop_openai_response_diagnostics(item)
+            if diagnostics != OpenAIResponseDiagnostics():
+                last_diagnostics = diagnostics
+            item_text = "".join(
+                str(block.get("text") or "")
+                for block in item.content
+                if isinstance(block, dict) and block.get("type") == "text"
+            )
+            item_thinking = "".join(
+                str(block.get("thinking") or "")
+                for block in item.content
+                if (
+                    isinstance(block, dict) and block.get("type") == "thinking"
+                )
+            )
+            text.add(item_text)
+            thinking.add(item_thinking)
+            current_tools = [
+                deepcopy(block)
+                for block in item.content
+                if isinstance(block, dict) and block.get("type") == "tool_use"
+            ]
+            if current_tools:
+                tool_blocks = current_tools
+            current_other = [
+                deepcopy(block)
+                for block in item.content
+                if not (
+                    isinstance(block, dict)
+                    and block.get("type") in {"text", "thinking", "tool_use"}
+                )
+            ]
+            if current_other:
+                other_blocks = current_other
         if last is None:
             return ChatResponse(content=[])
+        merged_content: list[Any] = []
+        if thinking.value:
+            merged_content.append(
+                {"type": "thinking", "thinking": thinking.value},
+            )
+        if text.value:
+            merged_content.append({"type": "text", "text": text.value})
+        merged_content.extend(tool_blocks)
+        merged_content.extend(other_blocks)
+        last.content = merged_content
+        if last_diagnostics != OpenAIResponseDiagnostics():
+            stash_openai_response_diagnostics(last, last_diagnostics)
         return last
+
+    def _record_supplier_diagnostics(
+        self,
+        response: ChatResponse,
+        *,
+        phase: str,
+        response_format: Any,
+    ) -> None:
+        diagnostics = pop_openai_response_diagnostics(response)
+        # Imported lazily to avoid the AgentRunner -> adapter import cycle.
+        from ..agent_context import get_current_billing_context
+
+        context = get_current_billing_context()
+        session = getattr(context, "session", None)
+        invocation_id = str(getattr(session, "invocation_id", "") or "")
+        logger.info(
+            "open_api_supplier_response invocation_id=%s phase=%s "
+            "model_key=%s response_format_json_object=%s "
+            "finish_reason=%s content_length=%d reasoning_length=%d usage=%s",
+            invocation_id,
+            phase,
+            self.model_key or "",
+            response_format == _JSON_OBJECT_RESPONSE_FORMAT,
+            diagnostics.finish_reason or "",
+            diagnostics.content_length,
+            diagnostics.reasoning_length,
+            diagnostics.usage,
+        )
 
     def _as_model_result(
         self,
@@ -268,13 +418,45 @@ def _has_tool_use(response: ChatResponse) -> bool:
     )
 
 
-def _suppress_planning_text(response: ChatResponse) -> None:
-    """Keep executable tool blocks while hiding non-final planning text."""
+class _FragmentAccumulator:
+    """Merge either cumulative snapshots or true deltas without duplication."""
+
+    def __init__(self) -> None:
+        self.value = ""
+        self._mode: str | None = None
+
+    def add(self, fragment: str) -> None:
+        if not fragment:
+            return
+        if not self.value:
+            self.value = fragment
+            return
+        if self._mode is None:
+            self._mode = (
+                "cumulative" if fragment.startswith(self.value) else "delta"
+            )
+        if self._mode == "cumulative":
+            if len(fragment) >= len(self.value):
+                self.value = fragment
+            return
+        self.value += fragment
+
+
+def _retain_tool_calls(response: ChatResponse) -> None:
+    """Keep executable tool blocks while hiding all model reasoning/drafts."""
     response.content = [
         block
         for block in response.content
-        if not (isinstance(block, dict) and block.get("type") == "text")
+        if isinstance(block, dict) and block.get("type") == "tool_use"
     ]
+
+
+def _final_text_response(response: ChatResponse) -> ChatResponse:
+    """Expose only validated final text across the OpenAPI model boundary."""
+    response.content = [
+        {"type": "text", "text": _response_text(response).strip()},
+    ]
+    return response
 
 
 def _response_text(response: ChatResponse) -> str:

@@ -1,6 +1,8 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+import logging
 from types import SimpleNamespace
 from typing import Any
 
@@ -16,6 +18,10 @@ from qwenpaw.app.open_api.agent_response_format import (
     install_open_api_agent_response_format,
 )
 from qwenpaw.providers.openai_chat_model_compat import OpenAIChatModelCompat
+from qwenpaw.providers.openai_response_diagnostics import (
+    OpenAIResponseDiagnostics,
+    stash_openai_response_diagnostics,
+)
 
 
 def _text(value: str) -> ChatResponse:
@@ -77,6 +83,37 @@ class RecordingModel(ChatModelBase):
 
         async def stream() -> AsyncIterator[ChatResponse]:
             yield response
+
+        return stream()
+
+
+class StreamingRecordingModel(RecordingModel):
+    def __init__(self, responses: list[list[ChatResponse]]) -> None:
+        super().__init__([])
+        self.stream_responses = list(responses)
+
+    async def __call__(
+        self,
+        messages,
+        tools=None,
+        tool_choice=None,
+        structured_model=None,
+        **kwargs,
+    ):
+        self.calls.append(
+            {
+                "messages": messages,
+                "tools": tools,
+                "tool_choice": tool_choice,
+                "structured_model": structured_model,
+                **kwargs,
+            },
+        )
+        chunks = self.stream_responses.pop(0)
+
+        async def stream() -> AsyncIterator[ChatResponse]:
+            for chunk in chunks:
+                yield chunk
 
         return stream()
 
@@ -260,7 +297,9 @@ class RecordingOpenAICompat(OpenAIChatModelCompat):
         }
         self._structured_output_fallback = False
 
-    async def __call__(self, *args, **kwargs):  # pragma: no cover - installer only
+    async def __call__(
+        self, *args, **kwargs,
+    ):  # pragma: no cover - installer only
         raise AssertionError("not called")
 
 
@@ -307,6 +346,169 @@ def test_installer_leaves_non_exact_or_missing_format_unchanged(configured):
 
     assert install_open_api_agent_response_format(agent) is False
     assert agent.model is raw
+
+
+class UnsupportedConfiguredModel(ChatModelBase):
+    def __init__(self) -> None:
+        super().__init__(model_name="wrapped-deepseek", stream=True)
+        self.generate_kwargs = {
+            "response_format": {"type": "json_object"},
+        }
+
+    async def __call__(self, *args, **kwargs):  # pragma: no cover - installer
+        raise AssertionError("not called")
+
+
+def test_configured_json_format_fails_closed_when_adapter_is_unavailable():
+    raw = UnsupportedConfiguredModel()
+    wrapped = SimpleNamespace(
+        _inner=raw,
+        model_name=raw.model_name,
+        stream=raw.stream,
+    )
+    agent = SimpleNamespace(model=wrapped)
+
+    with pytest.raises(OpenApiAgentExecutionError) as exc_info:
+        install_open_api_agent_response_format(agent)
+
+    assert exc_info.value.code == "response_format_adapter_unavailable"
+    assert "deepseek" not in exc_info.value.message.lower()
+    assert agent.model is wrapped
+
+
+@pytest.mark.asyncio
+async def test_delta_stream_aggregates_all_text_and_drops_reasoning():
+    inner = StreamingRecordingModel(
+        [
+            [
+                ChatResponse(
+                    content=[
+                        {"type": "thinking", "thinking": "private "},
+                        {"type": "text", "text": '{"answer":'},
+                    ],
+                ),
+                ChatResponse(
+                    content=[
+                        {"type": "thinking", "thinking": "reasoning"},
+                        {"type": "text", "text": '"ok"}'},
+                    ],
+                ),
+                ChatResponse(content=[]),
+            ],
+        ],
+    )
+    model = OpenApiAgentResponseFormatModel(
+        inner,
+        response_format={"type": "json_object"},
+    )
+
+    output = await _consume(
+        await model([{"role": "user", "content": "hello"}]),
+    )
+
+    assert output[-1].content == [
+        {"type": "text", "text": '{"answer":"ok"}'},
+    ]
+    assert "private" not in str(output[-1].content)
+    assert "reasoning" not in str(output[-1].content)
+
+
+@pytest.mark.asyncio
+async def test_cumulative_stream_is_not_duplicated_and_ignores_empty_tail():
+    inner = StreamingRecordingModel(
+        [
+            [
+                ChatResponse(
+                    content=[
+                        {"type": "thinking", "thinking": "secret"},
+                        {"type": "text", "text": '{"answer":'},
+                    ],
+                ),
+                ChatResponse(
+                    content=[
+                        {"type": "thinking", "thinking": "secret plan"},
+                        {"type": "text", "text": '{"answer":"ok"}'},
+                    ],
+                ),
+                ChatResponse(content=[]),
+            ],
+        ],
+    )
+    model = OpenApiAgentResponseFormatModel(
+        inner,
+        response_format={"type": "json_object"},
+    )
+
+    output = await _consume(
+        await model([{"role": "user", "content": "hello"}]),
+    )
+
+    assert output[-1].content == [
+        {"type": "text", "text": '{"answer":"ok"}'},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reasoning_only_stream_fails_instead_of_leaking_reasoning():
+    inner = StreamingRecordingModel(
+        [
+            [
+                ChatResponse(
+                    content=[
+                        {"type": "thinking", "thinking": "private answer"},
+                    ],
+                ),
+                ChatResponse(content=[]),
+            ],
+        ],
+    )
+    model = OpenApiAgentResponseFormatModel(
+        inner,
+        response_format={"type": "json_object"},
+    )
+
+    with pytest.raises(OpenApiAgentExecutionError) as exc_info:
+        await model([{"role": "user", "content": "hello"}])
+
+    assert exc_info.value.code == "empty_final_response"
+    assert "private answer" not in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_final_supplier_diagnostics_are_logged_without_response_content(
+    caplog,
+):
+    response = _text('{"private":"customer content"}')
+    stash_openai_response_diagnostics(
+        response,
+        OpenAIResponseDiagnostics(
+            finish_reason="stop",
+            content_length=30,
+            reasoning_length=14,
+            usage={"prompt_tokens": 10, "completion_tokens": 4},
+        ),
+    )
+    inner = RecordingModel([response])
+    model = OpenApiAgentResponseFormatModel(
+        inner,
+        response_format={"type": "json_object"},
+    )
+
+    with caplog.at_level(
+        logging.INFO,
+        logger="qwenpaw.app.open_api.agent_response_format",
+    ):
+        await _consume(
+            await model([{"role": "user", "content": "hello"}]),
+        )
+
+    rendered = "\n".join(record.message for record in caplog.records)
+    assert "phase=final" in rendered
+    assert "response_format_json_object=True" in rendered
+    assert "finish_reason=stop" in rendered
+    assert "content_length=30" in rendered
+    assert "reasoning_length=14" in rendered
+    assert "customer content" not in rendered
 
 
 @pytest.mark.asyncio
@@ -383,7 +585,7 @@ async def test_supplier_failure_before_first_chunk_is_model_failure():
 
 
 @pytest.mark.asyncio
-async def test_supplier_failure_after_partial_chunk_exposes_no_partial_answer():
+async def test_partial_supplier_failure_exposes_no_partial_answer():
     inner = PartialFailureModel([])
     model = OpenApiAgentResponseFormatModel(
         inner,

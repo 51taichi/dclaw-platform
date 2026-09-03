@@ -14,6 +14,10 @@ from qwenpaw.providers.openai_chat_model_compat import (
     OpenAIChatModelCompat,
     _sanitize_tool_call,
 )
+from qwenpaw.providers.openai_response_diagnostics import (
+    capture_openai_response_diagnostics,
+    pop_openai_response_diagnostics,
+)
 
 
 class CompatHarnessOpenAIChatModel(OpenAIChatModelCompat):
@@ -79,6 +83,87 @@ def _make_chunk(tool_calls: list[Any]) -> Any:
     )
     choice = SimpleNamespace(delta=delta)
     return SimpleNamespace(usage=None, choices=[choice])
+
+
+def _make_content_chunk(
+    *,
+    content: str | None = None,
+    reasoning: str | None = None,
+    finish_reason: str | None = None,
+    usage: Any = None,
+) -> Any:
+    delta = SimpleNamespace(
+        reasoning_content=reasoning,
+        content=content,
+        tool_calls=None,
+    )
+    choice = SimpleNamespace(delta=delta, finish_reason=finish_reason)
+    return SimpleNamespace(
+        id="supplier-response-safe-id",
+        usage=usage,
+        choices=[choice],
+    )
+
+
+@pytest.mark.asyncio
+async def test_stream_records_only_safe_raw_response_diagnostics() -> None:
+    model = CompatHarnessOpenAIChatModel(
+        "dummy",
+        api_key="sk-private-never-record",
+        stream=True,
+    )
+    stream = FakeAsyncStream(
+        [
+            _make_content_chunk(reasoning="secret reasoning "),
+            _make_content_chunk(content='{"answer":'),
+            _make_content_chunk(content='"ok"}'),
+            _make_content_chunk(
+                finish_reason="stop",
+                usage=SimpleNamespace(
+                    prompt_tokens=11,
+                    completion_tokens=7,
+                    total_tokens=18,
+                ),
+            ),
+        ],
+    )
+
+    with capture_openai_response_diagnostics():
+        responses = await model.parse_stream_for_test(datetime.now(), stream)
+    diagnostics = pop_openai_response_diagnostics(responses[-1])
+
+    assert diagnostics.finish_reason == "stop"
+    assert diagnostics.content_length == len('{"answer":"ok"}')
+    assert diagnostics.reasoning_length == len("secret reasoning ")
+    assert diagnostics.usage == {
+        "prompt_tokens": 11,
+        "completion_tokens": 7,
+        "total_tokens": 18,
+    }
+    rendered = repr(diagnostics)
+    assert "secret reasoning" not in rendered
+    assert "sk-private-never-record" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_response_diagnostics_disabled_outside_openapi_adapter() -> None:
+    model = CompatHarnessOpenAIChatModel(
+        "dummy",
+        api_key="sk-test",
+        stream=True,
+    )
+    stream = FakeAsyncStream(
+        [_make_content_chunk(content='{"answer":"ok"}')],
+    )
+
+    responses = await model.parse_stream_for_test(datetime.now(), stream)
+
+    assert (
+        pop_openai_response_diagnostics(
+            responses[-1],
+        ).content_length
+        == 0
+    )
 
 
 async def test_stream_parser_skips_tool_call_without_function() -> None:

@@ -1323,18 +1323,32 @@ async def test_post_open_message_updates_invocation_failed_when_stream_fails(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("code", "message"),
+    ("code", "message", "http_status"),
     [
-        ("model_execution_failed", "Model execution failed"),
-        ("tool_execution_failed", "Tool execution failed"),
-        ("empty_final_response", "Model returned an empty final response"),
-        ("invalid_final_response", "Model returned an invalid JSON response"),
+        (
+            "response_format_adapter_unavailable",
+            "Configured response format is unavailable",
+            500,
+        ),
+        ("model_execution_failed", "Model execution failed", 502),
+        ("tool_execution_failed", "Tool execution failed", 502),
+        (
+            "empty_final_response",
+            "Model returned an empty final response",
+            502,
+        ),
+        (
+            "invalid_final_response",
+            "Model returned an invalid JSON response",
+            502,
+        ),
     ],
 )
 async def test_direct_agent_typed_failure_is_sealed_in_terminal_and_invocation(
     monkeypatch,
     code,
     message,
+    http_status,
 ):
     channel = TypedFailureConsoleChannel(code, message)
     workspace = _workspace(agent_id="agent-published")
@@ -1357,11 +1371,11 @@ async def test_direct_agent_typed_failure_is_sealed_in_terminal_and_invocation(
     terminal = invocation["terminal_event_json"]
     assert channel.calls == 1
     assert invocation["status"] == "failed"
-    assert invocation["status_code"] == 502
+    assert invocation["status_code"] == http_status
     assert terminal["status"] == "failed"
     assert terminal["code"] == code
     assert terminal["message"] == message
-    assert terminal["http_status"] == 502
+    assert terminal["http_status"] == http_status
     assert open_api.json.dumps(terminal, separators=(",", ":")) in body
     assert "wrapped console failure" not in body
 
