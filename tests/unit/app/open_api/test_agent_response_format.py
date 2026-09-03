@@ -35,11 +35,24 @@ def _tool(name: str, call_id: str = "call-1") -> ChatResponse:
     )
 
 
+def _text_and_tool(name: str) -> ChatResponse:
+    response = _tool(name)
+    response.content = [
+        {"type": "text", "text": "private planning draft"},
+        *response.content,
+    ]
+    return response
+
+
 class RecordingModel(ChatModelBase):
     def __init__(self, responses: list[ChatResponse | Exception]) -> None:
         super().__init__(model_name="deepseek-v4-flash", stream=True)
         self.responses = list(responses)
         self.calls: list[dict[str, Any]] = []
+
+    @property
+    def model_key(self) -> str:
+        return "deepseek:deepseek-v4-flash"
 
     async def __call__(
         self,
@@ -162,6 +175,25 @@ async def test_each_tool_planning_turn_omits_response_format(tool_name):
     assert inner.calls[2]["response_format"] == {"type": "json_object"}
 
 
+@pytest.mark.asyncio
+async def test_text_beside_tool_call_is_not_replayed_to_customer():
+    inner = RecordingModel([_text_and_tool("search")])
+    model = OpenApiAgentResponseFormatModel(
+        inner,
+        response_format={"type": "json_object"},
+    )
+
+    output = await _consume(
+        await model(
+            [{"role": "user", "content": "search"}],
+            tools=[{"type": "function", "function": {"name": "search"}}],
+        ),
+    )
+
+    assert [block["type"] for block in output[-1].content] == ["tool_use"]
+    assert "private planning draft" not in str(output[-1].content)
+
+
 class RewriteResult(BaseModel):
     query: str
 
@@ -185,6 +217,34 @@ async def test_internal_structured_call_uses_tool_fallback_without_format():
     assert len(inner.calls) == 1
     assert inner.calls[0]["structured_model"] is RewriteResult
     assert inner.calls[0]["response_format"] is NOT_GIVEN
+
+
+@pytest.mark.asyncio
+async def test_internal_structured_stream_failure_is_model_failure():
+    inner = PartialFailureModel([])
+    model = OpenApiAgentResponseFormatModel(
+        inner,
+        response_format={"type": "json_object"},
+    )
+
+    result = await model(
+        [{"role": "user", "content": "rewrite"}],
+        structured_model=RewriteResult,
+    )
+    with pytest.raises(OpenApiAgentExecutionError) as exc_info:
+        await _consume(result)
+
+    assert exc_info.value.code == "model_execution_failed"
+
+
+def test_adapter_preserves_underlying_model_key():
+    inner = RecordingModel([])
+    model = OpenApiAgentResponseFormatModel(
+        inner,
+        response_format={"type": "json_object"},
+    )
+
+    assert model.model_key == "deepseek:deepseek-v4-flash"
 
 
 class RecordingOpenAICompat(OpenAIChatModelCompat):
@@ -216,6 +276,21 @@ def test_installer_wraps_only_exact_json_object_openai_models():
         "response_format": {"type": "json_object"},
     }
     assert raw._structured_output_fallback is True
+
+
+def test_installer_finds_model_through_retry_and_meter_wrapper_shape():
+    raw = RecordingOpenAICompat()
+    metered = SimpleNamespace(_model=raw)
+    retry = SimpleNamespace(
+        _inner=metered,
+        model_name=raw.model_name,
+        stream=raw.stream,
+    )
+    agent = SimpleNamespace(model=retry)
+
+    assert install_open_api_agent_response_format(agent) is True
+    assert isinstance(agent.model, OpenApiAgentResponseFormatModel)
+    assert agent.model._inner is retry
 
 
 @pytest.mark.parametrize(

@@ -114,6 +114,11 @@ class OpenApiAgentResponseFormatModel(ChatModelBase):
         self._inner = inner
         self.response_format = deepcopy(response_format)
 
+    @property
+    def model_key(self) -> str | None:
+        """Preserve capability-cache and provider-specific model identity."""
+        return getattr(self._inner, "model_key", None)
+
     async def __call__(
         self,
         messages: list[dict],
@@ -142,6 +147,7 @@ class OpenApiAgentResponseFormatModel(ChatModelBase):
                 extra_kwargs=kwargs,
             )
             if _has_tool_use(planning):
+                _suppress_planning_text(planning)
                 return self._as_model_result(planning)
 
             final_messages = _finalization_messages(messages, planning)
@@ -178,7 +184,7 @@ class OpenApiAgentResponseFormatModel(ChatModelBase):
         extra_kwargs: dict[str, Any],
     ) -> ChatResponse | AsyncIterator[ChatResponse]:
         try:
-            return await self._inner(
+            result = await self._inner(
                 messages=messages,
                 tools=tools,
                 tool_choice=tool_choice,
@@ -186,6 +192,19 @@ class OpenApiAgentResponseFormatModel(ChatModelBase):
                 response_format=response_format,
                 **extra_kwargs,
             )
+            if isinstance(result, ChatResponse):
+                return result
+
+            async def guarded() -> AsyncIterator[ChatResponse]:
+                try:
+                    async for item in result:
+                        yield item
+                except OpenApiAgentExecutionError:
+                    raise
+                except Exception as exc:
+                    raise _model_execution_error(exc) from exc
+
+            return guarded()
         except OpenApiAgentExecutionError:
             raise
         except Exception as exc:
@@ -247,6 +266,15 @@ def _has_tool_use(response: ChatResponse) -> bool:
         isinstance(block, dict) and block.get("type") == "tool_use"
         for block in response.content
     )
+
+
+def _suppress_planning_text(response: ChatResponse) -> None:
+    """Keep executable tool blocks while hiding non-final planning text."""
+    response.content = [
+        block
+        for block in response.content
+        if not (isinstance(block, dict) and block.get("type") == "text")
+    ]
 
 
 def _response_text(response: ChatResponse) -> str:
