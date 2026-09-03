@@ -802,7 +802,7 @@ git commit -m "test: cover super expert AIGC workflow loop"
 - Consumes: all passing source and test changes.
 - Produces: one new immutable Luyu version, one DClaw image containing the new console/server, activated local installation, and runtime smoke evidence.
 
-- [ ] **Step 1: Run pre-release static and focused test gates**
+- [x] **Step 1: Run pre-release static and focused test gates**
 
 Run in `dclaw-server`: `git diff --check`
 
@@ -812,7 +812,7 @@ Run in Luyu: `python3 -m unittest tests.test_luyu_aigc_workflow tests.test_super
 
 Expected: all commands exit 0.
 
-- [ ] **Step 2: Upgrade Luyu minor version once and rebuild the manifest**
+- [x] **Step 2: Upgrade Luyu minor version once and rebuild the manifest**
 
 Use the existing versioning policy: this is a new platform capability, so increment the minor version from the currently deployed `VERSION.json`, generate a new `build_id` and build time, then run:
 
@@ -823,19 +823,19 @@ python3 scripts/validate_harness_deployment.py --workspace .
 
 Expected: release version, build ID, and manifest digest agree.
 
-- [ ] **Step 3: Build the sealed Luyu package and upload through the existing local DClaw path**
+- [x] **Step 3: Build the sealed Luyu package and upload through the existing local DClaw path**
 
 Use the repository's current `scripts/build_sealed_release.py` arguments and local official signing key. Verify the upload returns a new release ID and install/activate it without overwriting the prior release.
 
-- [ ] **Step 4: Build and deploy DClaw server plus the current console bundle**
+- [x] **Step 4: Build and deploy DClaw server plus the current console bundle**
 
 Use the existing local deployment script so the image includes both `/Users/moxi/Desktop/codex space/dclaw-server` and `/Users/moxi/Desktop/codex space/dclaw-client/console`. Do not manually copy build outputs into tracked source directories.
 
-- [ ] **Step 5: Verify runtime health and signed capabilities**
+- [x] **Step 5: Verify runtime health and signed capabilities**
 
 Check the running container health, confirm the active Luyu installation declares both new capabilities, and call the authenticated workflow capability endpoint. The response must include all eleven node registrations and no unavailable/unpriced model in an executable entry.
 
-- [ ] **Step 6: Run local one-node, three-node, refresh, failure, and submission smoke tests**
+- [x] **Step 6: Run local one-node, three-node, refresh, failure, and submission smoke tests**
 
 Use stub generation for the complete multi-node flow. Verify:
 
@@ -846,10 +846,10 @@ task card -> correct canvas -> first READY node -> job RUNNING -> job COMPLETED
 
 Refresh between two nodes and confirm the same server-projected current step returns. Verify a manual-only blueprint creates an empty canvas only when fallback is allowed. Perform at most one explicitly authorized real-provider node generation.
 
-- [ ] **Step 7: Audit every design requirement against evidence**
+- [x] **Step 7: Audit every design requirement against evidence**
 
 Record the exact test command and result for each of: capability discovery, graph validation, atomic rollback, idempotency, multi-node binding, guide recovery, UI hierarchy, control focus, centered toolbar, Luyu S9-only routing, S0-S15 regression, v1 compatibility, installed release identity, and local container health. Any missing evidence keeps the release incomplete.
 
-- [ ] **Step 8: Commit DClaw source changes without unrelated files**
+- [x] **Step 8: Commit DClaw source changes without unrelated files**
 
 Review `git status --short` in both DClaw repositories, stage only files named in Tasks 1-10, and commit with repository-appropriate release messages. Do not stage the pre-existing billing/Tauri changes in `dclaw-client` or unrelated server output files.
