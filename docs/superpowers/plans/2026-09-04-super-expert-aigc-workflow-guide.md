@@ -403,7 +403,7 @@ git commit -m "feat: expose super expert workflow capabilities"
 - Consumes: persisted task/workflow, current canvas, all jobs for bound nodes, output assets.
 - Produces: `project_aigc_guide(task, canvas, jobs) -> AigcGuideProjection` and `GET /super-expert-platform/tasks/{material_task_id}/guide`.
 
-- [ ] **Step 1: Write failing step-state projection tests**
+- [x] **Step 1: Write failing step-state projection tests**
 
 ```python
 def test_downstream_generate_stays_locked_until_upstream_succeeds():
@@ -422,13 +422,13 @@ def test_regenerated_upstream_invalidates_old_downstream_result():
     assert status(guide, "clip.verify") != "COMPLETED"
 ```
 
-- [ ] **Step 2: Run guide tests and confirm missing projector failure**
+- [x] **Step 2: Run guide tests and confirm missing projector failure**
 
 Run: `uv run pytest tests/unit/app/super_experts/test_aigc_guide.py -q`
 
 Expected: FAIL because the guide projector is unavailable.
 
-- [ ] **Step 3: Implement deterministic projection**
+- [x] **Step 3: Implement deterministic projection**
 
 ```python
 class AigcGuideProjection(BaseModel):
@@ -449,17 +449,17 @@ For each bound node, compare job `created_at`/`updated_at` and output IDs. A dow
 
 Required successful nodes auto-complete without an extra confirmation click. For an optional node, validate and persist only `SKIP_OPTIONAL` through the existing `aigc.guide.update` capability. Store an immutable guide event on the task and reject stale `workflow_id`, `guide_revision`, `step_id`, or physical node bindings; the projector is the only component that turns that event into `SKIPPED`.
 
-- [ ] **Step 4: Add authenticated guide endpoint and ownership checks**
+- [x] **Step 4: Add authenticated guide endpoint and ownership checks**
 
 The route loads the bound task, calls `ensure_chat_access`, loads only the task's canvas and jobs, and returns the projection. Missing/deleted bound resources return a blocked guide with a stable recovery code rather than selecting another canvas.
 
-- [ ] **Step 5: Run guide and platform suites**
+- [x] **Step 5: Run guide and platform suites**
 
 Run: `uv run pytest tests/unit/app/super_experts/test_aigc_guide.py tests/unit/routers/test_super_expert_platform.py -q`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit the guide service**
+- [x] **Step 6: Commit the guide service**
 
 ```bash
 git add src/qwenpaw/app/super_experts/aigc_guide.py tests/unit/app/super_experts/test_aigc_guide.py src/qwenpaw/app/routers/super_expert_platform.py tests/unit/routers/test_super_expert_platform.py

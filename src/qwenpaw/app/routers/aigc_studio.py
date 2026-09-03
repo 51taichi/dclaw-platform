@@ -1198,6 +1198,30 @@ def resolve_owned_asset_for_workflow(
     return asset.model_dump(mode="json")
 
 
+def load_super_expert_aigc_workflow_context(
+    *,
+    canvas_id: str,
+    material_task_id: str,
+) -> tuple[Canvas | None, list[AigcJob]]:
+    """Load only the canvas and jobs bound to one authoritative material task."""
+    try:
+        canvas = _load_canvas(canvas_id)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            return None, []
+        raise
+    if (
+        str(canvas.meta.get("super_expert_material_task_id") or "")
+        != str(material_task_id)
+    ):
+        return None, []
+    jobs = [
+        AigcJob(**_read_json(path))
+        for path in sorted(_dir("jobs").glob("*.json"))
+    ]
+    return canvas, [job for job in jobs if job.canvas_id == canvas_id]
+
+
 def _request_can_access_asset(request: Request, asset: AigcAsset) -> bool:
     owner = asset.meta.get("owner_user_id") or asset.meta.get("user_id")
     if owner is not None:

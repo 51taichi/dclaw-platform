@@ -582,6 +582,117 @@ async def test_manual_only_workflow_fails_closed_or_creates_truly_blank_canvas(
 
 
 @pytest.mark.asyncio
+async def test_workflow_guide_endpoint_projects_real_canvas_and_blocks_if_deleted(
+    tmp_path,
+    monkeypatch,
+):
+    from qwenpaw.app.routers import aigc_studio
+
+    monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
+    aigc_studio._JSON_CACHE.clear()
+    service, grant, _bus = _service(tmp_path)
+
+    async def catalog():
+        return _workflow_catalog()
+
+    monkeypatch.setattr(router_module, "_load_workflow_capability_catalog", catalog)
+    created = await service.execute(
+        tenant_id="tenant-a",
+        user_id="user-a",
+        installation_id=grant.installation_id,
+        capability="aigc.workflow.create/1",
+        contract_version="1",
+        arguments=_workflow_arguments(grant.installation_id),
+        idempotency_key="workflow-key-1",
+    )
+    monkeypatch.setattr(
+        router_module,
+        "get_super_expert_platform_service",
+        lambda: service,
+    )
+    access_checks = []
+    monkeypatch.setattr(
+        router_module,
+        "ensure_chat_access",
+        lambda _request, conversation_id, allow_admin: access_checks.append(
+            (conversation_id, allow_admin)
+        ),
+    )
+    request = SimpleNamespace(state=SimpleNamespace(user_id="user-a"))
+
+    guide = router_module.get_super_expert_task_guide("material-v2-1", request)
+
+    assert guide["current_step_id"] == "copy.generate"
+    assert guide["current_step"]["node_id"] == created["task"]["binding"][
+        "node_bindings"
+    ]["copy"]
+    assert access_checks == [("conversation-1", True)]
+
+    canvas_id = created["task"]["binding"]["canvas_id"]
+    aigc_studio._json_path("canvases", canvas_id).unlink()
+    aigc_studio._JSON_CACHE.clear()
+    blocked = router_module.get_super_expert_task_guide("material-v2-1", request)
+    assert blocked["current_step"]["status"] == "BLOCKED"
+    assert blocked["current_step"]["recovery"]["code"] == "BOUND_CANVAS_MISSING"
+
+
+@pytest.mark.asyncio
+async def test_workflow_guide_update_persists_only_optional_bound_skip(
+    tmp_path,
+    monkeypatch,
+):
+    from qwenpaw.app.routers import aigc_studio
+
+    monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
+    aigc_studio._JSON_CACHE.clear()
+    service, grant, _bus = _service(tmp_path)
+
+    async def catalog():
+        return _workflow_catalog()
+
+    monkeypatch.setattr(router_module, "_load_workflow_capability_catalog", catalog)
+    blueprint = _workflow_blueprint()
+    blueprint["nodes"][0]["optional"] = True
+    created = await service.execute(
+        tenant_id="tenant-a",
+        user_id="user-a",
+        installation_id=grant.installation_id,
+        capability="aigc.workflow.create/1",
+        contract_version="1",
+        arguments={
+            "scope": _scope(grant.installation_id),
+            "event_id": "workflow-create",
+            "workflow": blueprint,
+        },
+        idempotency_key="workflow-create",
+    )
+    binding = created["task"]["binding"]
+    skipped = await service.execute(
+        tenant_id="tenant-a",
+        user_id="user-a",
+        installation_id=grant.installation_id,
+        capability="aigc.guide.update",
+        contract_version="1",
+        arguments={
+            "binding": binding,
+            "event_id": "skip-copy",
+            "guide": {
+                "action": "SKIP_OPTIONAL",
+                "workflow_id": binding["workflow_id"],
+                "guide_revision": binding["guide_revision"],
+                "step_id": "copy.generate",
+                "logical_node_id": "copy",
+                "node_id": binding["node_bindings"]["copy"],
+            },
+        },
+        idempotency_key="skip-copy",
+    )
+
+    assert skipped["task"]["guide_events"][0]["step_id"] == "copy.generate"
+    assert skipped["task"]["status"] == "WAITING_TO_START"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("tenant_id", "installation_id", "version"),
     [

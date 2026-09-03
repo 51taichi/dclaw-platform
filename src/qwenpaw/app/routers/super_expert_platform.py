@@ -43,6 +43,7 @@ from ..super_experts.models import (
     AigcTaskScope,
     AigcTaskStatus,
     AigcWorkflowDefinition,
+    AigcWorkflowGuideEvent,
 )
 
 router = APIRouter(
@@ -527,7 +528,32 @@ class SuperExpertPlatformService:
         elif capability == "aigc.guide.update":
             if current is None or current.binding != binding:
                 raise SuperExpertPlatformError("task binding mismatch")
-            return {"task": current, "payload": dict(arguments.get("guide") or {})}
+            if current.workflow is None:
+                return {
+                    "task": current,
+                    "payload": dict(arguments.get("guide") or {}),
+                }
+            guide = arguments.get("guide")
+            if not isinstance(guide, dict):
+                raise SuperExpertPlatformError("workflow guide event is invalid")
+            try:
+                guide_event = AigcWorkflowGuideEvent.model_validate(
+                    {"event_id": event_id, **guide}
+                )
+            except Exception as exc:
+                raise SuperExpertPlatformError(
+                    "workflow guide event is invalid"
+                ) from exc
+            task = self.task_repository.apply(
+                AigcTaskCommand(
+                    action="guide_update",
+                    event_id=event_id,
+                    binding=binding,
+                    guide_event=guide_event,
+                ),
+                idempotency_key=idempotency_key,
+            )
+            return {"task": task, "payload": guide_event.model_dump(mode="json")}
         elif capability == "aigc.review.complete":
             if current is None or current.binding != binding:
                 raise SuperExpertPlatformError("task binding mismatch")
@@ -610,6 +636,36 @@ def get_super_expert_task(
         allow_admin=True,
     )
     return task.model_dump(mode="json")
+
+
+@frontend_read_router.get("/tasks/{material_task_id}/guide")
+@router.get("/tasks/{material_task_id}/guide")
+def get_super_expert_task_guide(
+    material_task_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    task = get_super_expert_platform_service().get_task(material_task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="AIGC task not found")
+    ensure_chat_access(
+        request,
+        task.binding.conversation_id,
+        allow_admin=True,
+    )
+    if task.workflow is None:
+        raise HTTPException(status_code=409, detail="LEGACY_TASK_GUIDE_REQUIRED")
+    from ..super_experts.aigc_guide import project_aigc_guide
+    from .aigc_studio import load_super_expert_aigc_workflow_context
+
+    canvas, jobs = load_super_expert_aigc_workflow_context(
+        canvas_id=task.binding.canvas_id,
+        material_task_id=task.binding.material_task_id,
+    )
+    return project_aigc_guide(
+        task=task,
+        canvas=canvas,
+        jobs=jobs,
+    ).model_dump(mode="json")
 
 
 @frontend_read_router.get("/operations/{operation_id}")
