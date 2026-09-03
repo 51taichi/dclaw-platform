@@ -11,6 +11,7 @@ from openai import NOT_GIVEN
 from pydantic import BaseModel
 
 from qwenpaw.app.open_api.agent_response_format import (
+    OpenApiAgentExecutionError,
     OpenApiAgentResponseFormatModel,
     install_open_api_agent_response_format,
 )
@@ -63,6 +64,17 @@ class RecordingModel(ChatModelBase):
 
         async def stream() -> AsyncIterator[ChatResponse]:
             yield response
+
+        return stream()
+
+
+class PartialFailureModel(RecordingModel):
+    async def __call__(self, *args, **kwargs):
+        self.calls.append({"args": args, **kwargs})
+
+        async def stream() -> AsyncIterator[ChatResponse]:
+            yield _text("partial supplier output")
+            raise RuntimeError("private upstream response body")
 
         return stream()
 
@@ -220,3 +232,152 @@ def test_installer_leaves_non_exact_or_missing_format_unchanged(configured):
 
     assert install_open_api_agent_response_format(agent) is False
     assert agent.model is raw
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", ["", "   "])
+async def test_empty_final_response_is_an_explicit_failure(value):
+    inner = RecordingModel([_text("draft"), _text(value)])
+    model = OpenApiAgentResponseFormatModel(
+        inner,
+        response_format={"type": "json_object"},
+    )
+
+    with pytest.raises(OpenApiAgentExecutionError) as exc_info:
+        await model(
+            [{"role": "user", "content": "hello"}],
+            tools=[{"type": "function", "function": {"name": "search"}}],
+        )
+
+    assert exc_info.value.code == "empty_final_response"
+    assert "private" not in exc_info.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", ["not json", "[]", "42", '"scalar"'])
+async def test_non_object_final_response_is_an_explicit_failure(value):
+    inner = RecordingModel([_text("draft"), _text(value)])
+    model = OpenApiAgentResponseFormatModel(
+        inner,
+        response_format={"type": "json_object"},
+    )
+
+    with pytest.raises(OpenApiAgentExecutionError) as exc_info:
+        await model(
+            [{"role": "user", "content": "hello"}],
+            tools=[{"type": "function", "function": {"name": "search"}}],
+        )
+
+    assert exc_info.value.code == "invalid_final_response"
+
+
+@pytest.mark.asyncio
+async def test_empty_json_object_is_valid():
+    inner = RecordingModel([_text("draft"), _text("{}")])
+    model = OpenApiAgentResponseFormatModel(
+        inner,
+        response_format={"type": "json_object"},
+    )
+
+    output = await _consume(
+        await model(
+            [{"role": "user", "content": "hello"}],
+            tools=[{"type": "function", "function": {"name": "search"}}],
+        ),
+    )
+
+    assert output[-1].content[0]["text"] == "{}"
+
+
+@pytest.mark.asyncio
+async def test_supplier_failure_before_first_chunk_is_model_failure():
+    inner = RecordingModel([RuntimeError("private supplier response")])
+    model = OpenApiAgentResponseFormatModel(
+        inner,
+        response_format={"type": "json_object"},
+    )
+
+    with pytest.raises(OpenApiAgentExecutionError) as exc_info:
+        await model(
+            [{"role": "user", "content": "hello"}],
+            tools=[{"type": "function", "function": {"name": "search"}}],
+        )
+
+    assert exc_info.value.code == "model_execution_failed"
+    assert "private supplier response" not in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_supplier_failure_after_partial_chunk_exposes_no_partial_answer():
+    inner = PartialFailureModel([])
+    model = OpenApiAgentResponseFormatModel(
+        inner,
+        response_format={"type": "json_object"},
+    )
+
+    with pytest.raises(OpenApiAgentExecutionError) as exc_info:
+        await model(
+            [{"role": "user", "content": "hello"}],
+            tools=[{"type": "function", "function": {"name": "search"}}],
+        )
+
+    assert exc_info.value.code == "model_execution_failed"
+
+
+@pytest.mark.asyncio
+async def test_tool_error_can_recover_with_a_valid_final_response():
+    inner = RecordingModel(
+        [_tool("search"), _text("recovery draft"), _text('{"ok":true}')],
+    )
+    model = OpenApiAgentResponseFormatModel(
+        inner,
+        response_format={"type": "json_object"},
+    )
+    tools = [{"type": "function", "function": {"name": "search"}}]
+    await _consume(
+        await model(
+            [{"role": "user", "content": "search"}],
+            tools=tools,
+        ),
+    )
+
+    output = await _consume(
+        await model(
+            [
+                {"role": "user", "content": "search"},
+                {"role": "tool", "content": "Error: backend unavailable"},
+            ],
+            tools=tools,
+        ),
+    )
+
+    assert output[-1].content[0]["text"] == '{"ok":true}'
+
+
+@pytest.mark.asyncio
+async def test_tool_error_without_valid_final_is_tool_execution_failure():
+    inner = RecordingModel(
+        [_tool("search"), _text("failed draft"), _text("")],
+    )
+    model = OpenApiAgentResponseFormatModel(
+        inner,
+        response_format={"type": "json_object"},
+    )
+    tools = [{"type": "function", "function": {"name": "search"}}]
+    await _consume(
+        await model(
+            [{"role": "user", "content": "search"}],
+            tools=tools,
+        ),
+    )
+
+    with pytest.raises(OpenApiAgentExecutionError) as exc_info:
+        await model(
+            [
+                {"role": "user", "content": "search"},
+                {"role": "tool", "content": "Error: backend unavailable"},
+            ],
+            tools=tools,
+        )
+
+    assert exc_info.value.code == "tool_execution_failed"

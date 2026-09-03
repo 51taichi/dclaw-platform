@@ -5,12 +5,14 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
 from copy import deepcopy
+import json
 from typing import Any, Type
 
 from agentscope.model import ChatModelBase
 from agentscope.model._model_response import ChatResponse
 from openai import NOT_GIVEN
 from pydantic import BaseModel
+from agentscope_runtime.engine.schemas.exception import AppBaseException
 
 from ...providers.openai_chat_model_compat import OpenAIChatModelCompat
 
@@ -20,6 +22,22 @@ _FINALIZATION_INSTRUCTION = (
     "Return exactly one JSON object that follows the configured response "
     "format. Use the planning draft and tool results only as evidence.</system-hint>"
 )
+
+
+class OpenApiAgentExecutionError(AppBaseException):
+    """Safe typed failure for a streamed direct-Agent OpenAPI invocation."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        http_status: int = 502,
+        error_summary: str | None = None,
+    ) -> None:
+        super().__init__(http_status, code, message)
+        self.http_status = http_status
+        self.error_summary = error_summary or message
 
 
 def is_trusted_direct_agent_open_api(
@@ -105,52 +123,98 @@ class OpenApiAgentResponseFormatModel(ChatModelBase):
         **kwargs: Any,
     ) -> ChatResponse | AsyncIterator[ChatResponse]:
         if structured_model is not None:
-            return await self._inner(
-                messages=messages,
+            return await self._invoke_passthrough(
+                messages,
                 tools=tools,
                 tool_choice=tool_choice,
                 structured_model=structured_model,
                 response_format=NOT_GIVEN,
-                **kwargs,
+                extra_kwargs=kwargs,
             )
 
         if tools:
-            planning = await self._collect(
-                await self._inner(
-                    messages=messages,
-                    tools=tools,
-                    tool_choice=tool_choice,
-                    response_format=NOT_GIVEN,
-                    **kwargs,
-                ),
+            planning = await self._invoke(
+                messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                structured_model=None,
+                response_format=NOT_GIVEN,
+                extra_kwargs=kwargs,
             )
             if _has_tool_use(planning):
                 return self._as_model_result(planning)
 
             final_messages = _finalization_messages(messages, planning)
-            final = await self._collect(
-                await self._inner(
-                    messages=final_messages,
-                    tools=None,
-                    tool_choice=None,
-                    structured_model=None,
-                    response_format=deepcopy(self.response_format),
-                    **kwargs,
-                ),
-            )
-            return self._as_model_result(final)
-
-        final = await self._collect(
-            await self._inner(
-                messages=messages,
+            final = await self._invoke(
+                final_messages,
                 tools=None,
-                tool_choice=tool_choice,
+                tool_choice=None,
                 structured_model=None,
                 response_format=deepcopy(self.response_format),
-                **kwargs,
-            ),
+                extra_kwargs=kwargs,
+            )
+            _validate_final_response(final, messages)
+            return self._as_model_result(final)
+
+        final = await self._invoke(
+            messages,
+            tools=None,
+            tool_choice=tool_choice,
+            structured_model=None,
+            response_format=deepcopy(self.response_format),
+            extra_kwargs=kwargs,
         )
+        _validate_final_response(final, messages)
         return self._as_model_result(final)
+
+    async def _invoke_passthrough(
+        self,
+        messages: list[dict],
+        *,
+        tools: list[dict] | None,
+        tool_choice: str | None,
+        structured_model: Type[BaseModel] | None,
+        response_format: Any,
+        extra_kwargs: dict[str, Any],
+    ) -> ChatResponse | AsyncIterator[ChatResponse]:
+        try:
+            return await self._inner(
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                structured_model=structured_model,
+                response_format=response_format,
+                **extra_kwargs,
+            )
+        except OpenApiAgentExecutionError:
+            raise
+        except Exception as exc:
+            raise _model_execution_error(exc) from exc
+
+    async def _invoke(
+        self,
+        messages: list[dict],
+        *,
+        tools: list[dict] | None,
+        tool_choice: str | None,
+        structured_model: Type[BaseModel] | None,
+        response_format: Any,
+        extra_kwargs: dict[str, Any],
+    ) -> ChatResponse:
+        try:
+            result = await self._inner(
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                structured_model=structured_model,
+                response_format=response_format,
+                **extra_kwargs,
+            )
+            return await self._collect(result)
+        except OpenApiAgentExecutionError:
+            raise
+        except Exception as exc:
+            raise _model_execution_error(exc) from exc
 
     async def _collect(
         self,
@@ -191,6 +255,79 @@ def _response_text(response: ChatResponse) -> str:
         for block in response.content
         if isinstance(block, dict) and block.get("type") == "text"
     )
+
+
+def _model_execution_error(exc: Exception) -> OpenApiAgentExecutionError:
+    return OpenApiAgentExecutionError(
+        "model_execution_failed",
+        "Model execution failed",
+        error_summary=f"model execution failed ({type(exc).__name__})",
+    )
+
+
+def _validate_final_response(
+    response: ChatResponse,
+    source_messages: Sequence[dict],
+) -> None:
+    text = _response_text(response).strip()
+    tool_failed = _contains_tool_failure(source_messages)
+    if not text:
+        if tool_failed:
+            raise OpenApiAgentExecutionError(
+                "tool_execution_failed",
+                "Tool execution failed",
+            )
+        raise OpenApiAgentExecutionError(
+            "empty_final_response",
+            "Model returned an empty final response",
+        )
+    try:
+        value = json.loads(text)
+    except (TypeError, ValueError) as exc:
+        if tool_failed:
+            raise OpenApiAgentExecutionError(
+                "tool_execution_failed",
+                "Tool execution failed",
+            ) from exc
+        raise OpenApiAgentExecutionError(
+            "invalid_final_response",
+            "Model returned an invalid JSON response",
+        ) from exc
+    if not isinstance(value, dict):
+        if tool_failed:
+            raise OpenApiAgentExecutionError(
+                "tool_execution_failed",
+                "Tool execution failed",
+            )
+        raise OpenApiAgentExecutionError(
+            "invalid_final_response",
+            "Model returned an invalid JSON response",
+        )
+
+
+def _contains_tool_failure(messages: Sequence[dict]) -> bool:
+    markers = (
+        "error:",
+        "error occurred when calling",
+        "error during async execution",
+        "tool execution failed",
+    )
+    for message in messages:
+        if str(message.get("role") or "").lower() not in {"tool", "system"}:
+            continue
+        content = message.get("content")
+        try:
+            rendered = (
+                content
+                if isinstance(content, str)
+                else json.dumps(content, ensure_ascii=False)
+            )
+        except (TypeError, ValueError):
+            rendered = str(content)
+        lowered = rendered.lower()
+        if any(marker in lowered for marker in markers):
+            return True
+    return False
 
 
 def _finalization_messages(
