@@ -192,6 +192,27 @@ class _Model:
         return self.result
 
 
+class _ReasoningThenJsonModel(_Model):
+    """Simulate DeepSeek needing reasoning budget before final JSON."""
+
+    def __init__(self):
+        super().__init__(generate_kwargs={"max_tokens": 8192})
+
+    async def __call__(self, **kwargs):
+        self.calls += 1
+        self.received_kwargs.append(kwargs)
+        response = _Response(
+            usage=SimpleNamespace(input_tokens=3, output_tokens=1502),
+        )
+        response.reasoning_content = "r" * 1500
+        response.content = (
+            [{"type": "text", "text": '{"answer":"ok"}'}]
+            if kwargs["max_tokens"] > 1024
+            else []
+        )
+        return response
+
+
 class _SequenceModel(_Model):
     """Return one provider result for each retry attempt."""
 
@@ -386,6 +407,30 @@ def _stored_item(usage_service, usage_order_id):
             .mappings()
             .one(),
         )
+
+
+def _open_api_request_meter(usage_service, *, platform_cap=8192):
+    from qwenpaw.app.open_api.runtime import (
+        OpenApiBillingRuntime,
+        _RequestBillingMeter,
+    )
+
+    runtime = OpenApiBillingRuntime(
+        repository=usage_service.repository,
+        pricing=usage_service.pricing,
+        coordinator=SimpleNamespace(),
+        usage_service=usage_service,
+        open_api_repository=SimpleNamespace(),
+        mode="enforced",
+        budget_credits=100_000,
+        platform_max_output_tokens=platform_cap,
+    )
+    execution = SimpleNamespace(
+        renew_lease=lambda: None,
+        note_first_reservation=lambda: None,
+        note_insufficient=lambda _exc: None,
+    )
+    return _RequestBillingMeter(runtime, execution)
 
 
 @pytest.mark.asyncio
@@ -1577,6 +1622,83 @@ async def test_known_provider_adapter_freezes_and_passes_its_native_limit(
     assert reservation["max_output_tokens"] == expected_cap
     for key, value in expected_kwargs.items():
         assert model.received_kwargs[0][key] == value
+
+
+@pytest.mark.asyncio
+async def test_open_api_8192_cap_reaches_provider_and_billing_reservation(
+    usage_service,
+):
+    service, session = usage_service
+    model = _ReasoningThenJsonModel()
+    wrapper = TokenRecordingModelWrapper(
+        "provider",
+        model,
+        meter=_open_api_request_meter(service),
+    )
+    token = _scope(session)
+    try:
+        response = await wrapper(messages=[], max_tokens=8192)
+    finally:
+        reset_current_billing_context(token)
+
+    reservation = json.loads(
+        _stored_item(service, session.usage_order_id)["usage_snapshot_json"],
+    )["reservation"]
+    assert reservation["max_output_tokens"] == 8192
+    assert model.received_kwargs[0]["max_tokens"] == 8192
+    assert len(response.reasoning_content) > 1024
+    assert response.content == [
+        {"type": "text", "text": '{"answer":"ok"}'},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_open_api_8192_cap_still_fails_closed_before_supplier(
+    usage_service,
+):
+    service, session = usage_service
+    with service.repository.engine.begin() as conn:
+        conn.execute(
+            update(billing_usage_orders)
+            .where(billing_usage_orders.c.id == session.usage_order_id)
+            .values(budget_credits=1),
+        )
+    model = _ReasoningThenJsonModel()
+    wrapper = TokenRecordingModelWrapper(
+        "provider",
+        model,
+        meter=_open_api_request_meter(service),
+    )
+    token = _scope(session)
+    try:
+        with pytest.raises(InsufficientUsageCreditsError):
+            await wrapper(messages=[], max_tokens=8192)
+    finally:
+        reset_current_billing_context(token)
+
+    assert model.calls == 0
+    assert service.list_items(session.usage_order_id) == []
+
+
+def test_open_api_output_cap_is_configurable_and_clamps_fallback(
+    usage_service,
+    monkeypatch,
+):
+    from qwenpaw.app.open_api import runtime as runtime_module
+
+    service, _session = usage_service
+    monkeypatch.setenv("DCLAW_OPEN_API_DEFAULT_OUTPUT_TOKENS", "8192")
+    monkeypatch.setenv("DCLAW_OPEN_API_MAX_OUTPUT_TOKENS", "4096")
+    monkeypatch.setattr(
+        runtime_module,
+        "get_app_engine",
+        lambda: service.repository.engine,
+    )
+
+    runtime = runtime_module.create_open_api_billing_runtime()
+
+    assert runtime.platform_max_output_tokens == 4096
+    assert runtime.default_max_output_tokens == 4096
 
 
 @pytest.mark.asyncio

@@ -119,6 +119,7 @@ class OpenApiBillingRuntime:
     mode: str
     budget_credits: int
     default_max_output_tokens: int = 1024
+    platform_max_output_tokens: int = 8192
 
     def execution(
         self,
@@ -147,6 +148,7 @@ class _RequestBillingMeter(BillingModelMeter):
         super().__init__(
             runtime.usage_service,
             default_max_output_tokens=runtime.default_max_output_tokens,
+            platform_max_output_tokens=runtime.platform_max_output_tokens,
         )
         self._execution = execution
 
@@ -245,6 +247,17 @@ def create_open_api_billing_runtime() -> OpenApiBillingRuntime:
     repository = BillingRepository(engine)
     pricing = PriceCatalogService(PriceCatalogRepository(engine))
     mode = persisted_billing_mode(repository, fallback=_billing_mode())
+    platform_max_output_tokens = _non_negative_env(
+        "DCLAW_OPEN_API_MAX_OUTPUT_TOKENS",
+        8192,
+    )
+    default_max_output_tokens = min(
+        _non_negative_env(
+            "DCLAW_OPEN_API_DEFAULT_OUTPUT_TOKENS",
+            1024,
+        ),
+        platform_max_output_tokens,
+    )
     return OpenApiBillingRuntime(
         repository=repository,
         pricing=pricing,
@@ -256,10 +269,8 @@ def create_open_api_billing_runtime() -> OpenApiBillingRuntime:
             "DCLAW_OPEN_API_MAX_CREDITS",
             100_000,
         ),
-        default_max_output_tokens=_non_negative_env(
-            "DCLAW_OPEN_API_DEFAULT_OUTPUT_TOKENS",
-            1024,
-        ),
+        default_max_output_tokens=default_max_output_tokens,
+        platform_max_output_tokens=platform_max_output_tokens,
     )
 
 
