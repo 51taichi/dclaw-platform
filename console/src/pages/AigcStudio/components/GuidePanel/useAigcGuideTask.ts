@@ -85,12 +85,25 @@ export function useAigcGuideTask(search: string) {
 
   useEffect(() => {
     if (guide?.current_step?.status !== "RUNNING") return;
-    const timer = window.setTimeout(() => {
-      void refresh().catch((reason) => {
-        setError(reason instanceof Error ? reason.message : "向导刷新失败");
-      });
-    }, 1200);
-    return () => window.clearTimeout(timer);
+    let active = true;
+    let timer: number | undefined;
+    const poll = async () => {
+      try {
+        const next = await refresh();
+        if (active && next?.guide?.current_step?.status === "RUNNING") {
+          timer = window.setTimeout(poll, 1200);
+        }
+      } catch (reason) {
+        if (active) {
+          setError(reason instanceof Error ? reason.message : "向导刷新失败");
+        }
+      }
+    };
+    timer = window.setTimeout(poll, 1200);
+    return () => {
+      active = false;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [guide?.current_step?.status, guide?.current_step_id, refresh]);
 
   return {

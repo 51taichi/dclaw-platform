@@ -147,6 +147,16 @@ export function modelOptionsForNode(
 ) {
   const options = modelOptionsForCapability(capabilities, capability);
   const snapshot = modelSnapshotFromNode(node, capability);
+  const workflowBound = Boolean(textValue(node.data.workflowLogicalNodeId));
+  if (workflowBound) {
+    if (!snapshot) return [];
+    return options.filter(
+      (model) =>
+        model.provider_id === snapshot.provider_id &&
+        model.model_id === snapshot.model_id &&
+        model.capability === snapshot.capability,
+    );
+  }
   if (
     !snapshot ||
     !canUseNodeSnapshot(snapshot, options) ||

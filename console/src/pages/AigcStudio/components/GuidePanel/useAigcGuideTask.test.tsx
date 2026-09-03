@@ -133,6 +133,13 @@ describe("useAigcGuideTask", () => {
         },
       })
       .mockResolvedValueOnce({
+        ...guide("clip.generate"),
+        current_step: {
+          ...guide("clip.generate").current_step,
+          status: "RUNNING",
+        },
+      })
+      .mockResolvedValueOnce({
         ...guide("workflow.submit"),
         current_step: {
           ...guide("workflow.submit").current_step,
@@ -145,8 +152,8 @@ describe("useAigcGuideTask", () => {
 
     await waitFor(
       () => expect(result.current.guide?.current_step_id).toBe("workflow.submit"),
-      { timeout: 3000 },
+      { timeout: 4500 },
     );
-    expect(api.getGuide).toHaveBeenCalledTimes(2);
+    expect(api.getGuide).toHaveBeenCalledTimes(3);
   });
 });

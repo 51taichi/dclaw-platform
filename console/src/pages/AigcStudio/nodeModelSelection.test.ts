@@ -87,6 +87,36 @@ describe("nodeModelSelection", () => {
       ),
     ).toBeNull();
   });
+
+  it("locks a workflow-bound reference-video node to its exact model triple", () => {
+    const exact = model("reference_video", "kimi-k2.5", "Kimi K2.5");
+    const node: AigcCanvasNode = {
+      id: "video-1",
+      type: "video_generate",
+      position: { x: 0, y: 0 },
+      data: {
+        workflowLogicalNodeId: "reference-review",
+        providerId: "mxapi",
+        modelId: "kimi-k2.5",
+        modelCapability: "reference_video",
+      },
+    };
+
+    expect(
+      modelForNode(
+        [exact, model("reference_video", "qwen3.5-122b-a10b")],
+        node,
+        "reference_video",
+      ),
+    ).toEqual(exact);
+    expect(
+      modelOptionsForNode(
+        [exact, model("reference_video", "qwen3.5-122b-a10b")],
+        node,
+        "reference_video",
+      ),
+    ).toEqual([exact]);
+  });
 });
 
 const model = (

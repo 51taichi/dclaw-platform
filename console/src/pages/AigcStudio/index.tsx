@@ -645,6 +645,10 @@ export default function AigcStudioPage() {
   const selectedNode = activeCanvas?.nodes.find(
     (node) => node.id === selectedNodeId,
   );
+  const capabilityForCanvasNode = (node: AigcCanvasNode) => {
+    const boundCapability = String(node.data.modelCapability ?? "").trim();
+    return boundCapability || capabilityForNode(node.type);
+  };
   const annotationEditorNode = annotationEditorNodeId
     ? activeCanvas?.nodes.find((node) => node.id === annotationEditorNodeId)
     : undefined;
@@ -652,7 +656,7 @@ export default function AigcStudioPage() {
     ? imageAnnotationSourcePreviewUrl(annotationEditorNode)
     : "";
   const selectedCapability = selectedNode
-    ? capabilityForNode(selectedNode.type)
+    ? capabilityForCanvasNode(selectedNode)
     : "text_to_image";
   const selectedNodeUsesModel = selectedNode
     ? !isWorkflowOnlyNodeType(selectedNode.type)
@@ -940,12 +944,12 @@ export default function AigcStudioPage() {
   const modelOptionsForCanvasNode = (node: AigcCanvasNode) =>
     isWorkflowOnlyNodeType(node.type)
       ? []
-      : modelOptionsForNode(capabilities, node, capabilityForNode(node.type));
+      : modelOptionsForNode(capabilities, node, capabilityForCanvasNode(node));
 
   const currentModelForCanvasNode = (node: AigcCanvasNode) =>
     isWorkflowOnlyNodeType(node.type)
       ? null
-      : modelForNode(capabilities, node, capabilityForNode(node.type));
+      : modelForNode(capabilities, node, capabilityForCanvasNode(node));
 
   const currentModelKeyForCanvasNode = (node: AigcCanvasNode) =>
     modelKey(currentModelForCanvasNode(node));
@@ -1033,7 +1037,7 @@ export default function AigcStudioPage() {
       if (nodeToRun.type === "prompt") {
         return { ...base, textState: "failed" };
       }
-      if (nodeToRun.type === "video_generate") {
+      if (["video_generate", "video_compose"].includes(nodeToRun.type)) {
         return { ...base, videoState: "failed", videoProgress: null };
       }
       if (nodeToRun.type === "audio_generate") {
@@ -1050,7 +1054,7 @@ export default function AigcStudioPage() {
       }
       return base;
     };
-    const nodeCapability = capabilityForNode(nodeToRun.type);
+    const nodeCapability = capabilityForCanvasNode(nodeToRun);
     const runModel = modelForNode(capabilities, nodeToRun, nodeCapability);
     if (!runModel) {
       const missingModelMessage =
@@ -1064,7 +1068,7 @@ export default function AigcStudioPage() {
               "aigcStudio.textNode.missingModel",
               "当前文本节点没有可用模型，请先选择模型后再生成。",
             )
-          : nodeToRun.type === "video_generate"
+          : ["video_generate", "video_compose"].includes(nodeToRun.type)
           ? t(
               "aigcStudio.videoNode.missingModel",
               "当前视频节点没有可用模型，请先选择模型后再生成。",
@@ -1121,7 +1125,7 @@ export default function AigcStudioPage() {
             outputs: [],
             showTryOptions: false,
           }
-        : nodeToRun.type === "video_generate"
+        : ["video_generate", "video_compose"].includes(nodeToRun.type)
         ? {
             videoState: "generating",
             videoProgress: 1,
@@ -1183,7 +1187,7 @@ export default function AigcStudioPage() {
           model: runModel,
           parameters: jobRequest.request.parameters,
         });
-      } else if (nodeToRun.type === "video_generate") {
+      } else if (["video_generate", "video_compose"].includes(nodeToRun.type)) {
         videoProgressSimulation.startProgressSimulation({
           nodeId: nodeToRun.id,
           model: runModel,
@@ -1195,7 +1199,7 @@ export default function AigcStudioPage() {
       const finished = await aigcStudioApi.runJob(job.id);
       if (nodeToRun.type === "image_generate") {
         imageProgressSimulation.clearProgressSimulation(nodeToRun.id);
-      } else if (nodeToRun.type === "video_generate") {
+      } else if (["video_generate", "video_compose"].includes(nodeToRun.type)) {
         videoProgressSimulation.clearProgressSimulation(nodeToRun.id);
       }
       setJobs((prev) => replaceCanvasJob(prev, finished));
@@ -1229,7 +1233,7 @@ export default function AigcStudioPage() {
     } finally {
       if (nodeToRun.type === "image_generate") {
         imageProgressSimulation.clearProgressSimulation(nodeToRun.id);
-      } else if (nodeToRun.type === "video_generate") {
+      } else if (["video_generate", "video_compose"].includes(nodeToRun.type)) {
         videoProgressSimulation.clearProgressSimulation(nodeToRun.id);
       }
       setNodeRunning(canvasForRunSource.id, nodeToRun.id, false);
@@ -3033,7 +3037,7 @@ export default function AigcStudioPage() {
                         node.data.imageMode !== "upscale" &&
                         (!node.data.previewKind ||
                           node.data.previewKind === "uploaded")) ||
-                      node.type === "video_generate"
+                      ["video_generate", "video_compose"].includes(node.type)
                     ? nodeVisualHeight(
                         isExpandedImageResultsNode(node)
                           ? compactImageResultsNode(node)
@@ -3317,7 +3321,7 @@ export default function AigcStudioPage() {
                     node={node}
                     imageComposerMenu={imageComposerMenu}
                     currentModel={currentModelForCanvasNode(node)}
-                    modelOptions={capabilities}
+                    modelOptions={modelOptionsForCanvasNode(node)}
                     currentModelKey={currentModelKeyForCanvasNode(node)}
                     referenceAssets={
                       activeCanvas
@@ -3337,13 +3341,13 @@ export default function AigcStudioPage() {
                   />
                 )}
               {selectedNodeId === node.id &&
-                node.type === "video_generate" &&
+                ["video_generate", "video_compose"].includes(node.type) &&
                 node.data.previewKind !== "storyboard_video_batch" && (
                   <VideoComposer
                     node={node}
                     videoComposerMenu={videoComposerMenu}
                     currentModel={currentModelForCanvasNode(node)}
-                    modelOptions={capabilities}
+                    modelOptions={modelOptionsForCanvasNode(node)}
                     currentModelKey={currentModelKeyForCanvasNode(node)}
                     connectedInputs={
                       activeCanvas
@@ -3372,7 +3376,7 @@ export default function AigcStudioPage() {
                 <AudioComposer
                   node={node}
                   currentModel={currentModelForCanvasNode(node)}
-                  modelOptions={capabilities}
+                  modelOptions={modelOptionsForCanvasNode(node)}
                   t={t}
                   workflow={audioWorkflow}
                   disabled={
@@ -3387,7 +3391,7 @@ export default function AigcStudioPage() {
               {selectedNodeId === node.id &&
                 isGenerationNode &&
                 !isWorkflowOnlyNodeType(node.type) &&
-                node.type !== "video_generate" &&
+                !["video_generate", "video_compose"].includes(node.type) &&
                 node.type !== "script_generate" &&
                 node.type !== "audio_generate" &&
                 !(
@@ -3428,7 +3432,7 @@ export default function AigcStudioPage() {
                             modelLabelForNode(
                               capabilities,
                               node,
-                              capabilityForNode(node.type),
+                              capabilityForCanvasNode(node),
                               "",
                             ),
                         )}
