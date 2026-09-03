@@ -302,6 +302,51 @@ async def test_authorized_command_validates_full_binding_and_publishes_once(tmp_
 
 
 @pytest.mark.asyncio
+async def test_asset_validation_happens_before_submit_state_transition(tmp_path):
+    service, grant, _bus = _service(tmp_path)
+    binding = _binding()
+    binding["installation_id"] = grant.installation_id
+    await service.execute(
+        tenant_id="tenant-a",
+        installation_id=grant.installation_id,
+        capability="aigc.task.create",
+        contract_version="1",
+        arguments={"binding": binding, "event_id": "create"},
+        idempotency_key="create",
+    )
+    await service.execute(
+        tenant_id="tenant-a",
+        installation_id=grant.installation_id,
+        capability="aigc.task.resume",
+        contract_version="1",
+        arguments={"binding": binding, "event_id": "resume"},
+        idempotency_key="resume",
+    )
+
+    async def reject_asset(_binding, _asset_id, _task):
+        raise SuperExpertPlatformError("asset binding mismatch")
+
+    with pytest.raises(SuperExpertPlatformError, match="asset binding mismatch"):
+        await service.execute(
+            tenant_id="tenant-a",
+            installation_id=grant.installation_id,
+            capability="aigc.asset.submit",
+            contract_version="1",
+            arguments={
+                "binding": binding,
+                "event_id": "submit",
+                "asset_id": "wrong-asset",
+            },
+            idempotency_key="submit",
+            asset_validator=reject_asset,
+        )
+
+    task = service.get_task("material-1")
+    assert task is not None
+    assert task.status == router_module.AigcTaskStatus.IN_PROGRESS
+
+
+@pytest.mark.asyncio
 async def test_create_v2_provisions_one_real_owned_canvas_and_persists_operation(
     tmp_path,
     monkeypatch,
@@ -457,6 +502,54 @@ async def test_authorized_workflow_create_provisions_all_nodes_and_bindings(
     assert len(bus.events) == 1
     event = bus.events[0].payload["envelope"]
     assert event["payload"]["workflow_binding"] == binding
+
+
+@pytest.mark.asyncio
+async def test_output_wrapper_review_uses_nearest_producing_node(tmp_path, monkeypatch):
+    from qwenpaw.app.routers import aigc_studio
+
+    monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
+    aigc_studio._JSON_CACHE.clear()
+    service, grant, _bus = _service(tmp_path)
+
+    async def catalog():
+        return _workflow_catalog()
+
+    monkeypatch.setattr(router_module, "_load_workflow_capability_catalog", catalog)
+    base = _workflow_blueprint()
+    output_node = {
+        "node_id": "final",
+        "kind": "output",
+        "title": "最终视频",
+        "inputs": {"label": "成片"},
+        "parameters": {},
+        "customer_action": "INSPECT",
+        "optional": False,
+    }
+    arguments = _workflow_arguments(
+        grant.installation_id,
+        nodes=[*base["nodes"], output_node],
+        edges=[
+            *base["edges"],
+            {"source": "clip", "target": "final", "target_slot": "asset"},
+        ],
+        output_node_id="final",
+    )
+    result = await service.execute(
+        tenant_id="tenant-a",
+        user_id="user-a",
+        installation_id=grant.installation_id,
+        capability="aigc.workflow.create/1",
+        contract_version="1",
+        arguments=arguments,
+        idempotency_key="workflow-output-wrapper",
+    )
+    task = service.get_task(result["task"]["binding"]["material_task_id"])
+    assert task is not None
+
+    assert router_module._workflow_review_node_ids(task) == {
+        result["task"]["binding"]["node_bindings"]["clip"]
+    }
 
 
 @pytest.mark.asyncio
@@ -1075,6 +1168,16 @@ async def test_duplicate_asset_submit_replays_the_durable_agent_review(
         return {"status": "completed", "reply": "同一份审核结论。"}
 
     monkeypatch.setattr(router_module, "_dispatch_agent_asset_review", dispatch)
+    async def resolve(*_args, **_kwargs):
+        return {
+            "type": "video",
+            "source": {"type": "url", "url": "file:///tmp/result.mp4"},
+        }
+
+    monkeypatch.setattr(
+        "qwenpaw.app.routers.aigc_studio.resolve_owned_asset_for_agent_review",
+        resolve,
+    )
     request = SimpleNamespace(state=SimpleNamespace(tenant_id="tenant-a"))
     command = PlatformCommandRequest(
         installation_id=grant.installation_id,

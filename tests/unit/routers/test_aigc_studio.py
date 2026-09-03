@@ -50,7 +50,7 @@ async def test_resolve_owned_asset_for_agent_review_returns_bound_local_media(
         SimpleNamespace(),
         "asset-review",
         canvas_id="canvas-1",
-        node_id="node-1",
+        node_ids={"node-1", "node-2"},
     )
     assert block == {
         "type": "video",
@@ -78,9 +78,57 @@ async def test_resolve_owned_asset_for_agent_review_rejects_binding_mismatch(
             SimpleNamespace(),
             "asset-review",
             canvas_id="canvas-1",
-            node_id="node-1",
+            node_ids={"node-1"},
         )
     assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_validate_job_submission_rejects_workflow_model_mismatch(monkeypatch):
+    canvas = aigc_studio.Canvas(
+        id="canvas-1",
+        name="Workflow",
+        nodes=[
+            aigc_studio.CanvasNode(
+                id="video-1",
+                type="video_generate",
+                position={"x": 0, "y": 0},
+                data={
+                    "workflowLogicalNodeId": "clip",
+                    "providerId": "provider-1",
+                    "modelId": "video-1",
+                    "modelCapability": "image_to_video",
+                },
+            )
+        ],
+        edges=[],
+        created_at="2026-09-04T00:00:00Z",
+        updated_at="2026-09-04T00:00:00Z",
+    )
+    monkeypatch.setattr(aigc_studio, "_load_canvas_for_request", lambda *_a: canvas)
+
+    async def available(*_args):
+        return object()
+
+    monkeypatch.setattr(aigc_studio, "_find_capability", available)
+    body = aigc_studio.AigcJobCreate(
+        canvas_id="canvas-1",
+        node_id="video-1",
+        capability="text_to_video",
+        provider_id="provider-1",
+        model_id="video-1",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await aigc_studio._validate_job_submission(SimpleNamespace(), body)
+
+    assert exc_info.value.status_code == 409
+    assert "workflow-bound" in str(exc_info.value.detail).lower()
+
+    await aigc_studio._validate_job_submission(
+        SimpleNamespace(),
+        body.model_copy(update={"capability": "image_to_video"}),
+    )
 
 
 class _AllPublished(set):

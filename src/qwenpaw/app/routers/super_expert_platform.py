@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Awaitable, Callable
 import uuid
 
 from fastapi import APIRouter, HTTPException, Request
@@ -22,7 +22,7 @@ from qwenpaw.aigc.workflow_compiler import (
     compile_workflow,
     plan_manual_workflow,
 )
-from qwenpaw.aigc.workflow_contract import WorkflowBlueprint
+from qwenpaw.aigc.workflow_contract import WorkflowBlueprint, workflow_node_registry
 
 from ..billing.context import BillingSource
 from ..billing.entrypoint import prepare_user_billing_execution
@@ -152,6 +152,8 @@ class SuperExpertPlatformService:
         contract_version: str,
         arguments: dict[str, Any],
         idempotency_key: str,
+        asset_validator: Callable[[AigcTaskBinding, str, Any], Awaitable[None]]
+        | None = None,
     ) -> dict[str, Any]:
         decision = self.grant_repository.authorize_capability(
             installation_id,
@@ -191,6 +193,13 @@ class SuperExpertPlatformService:
                     raise SuperExpertPlatformError("command binding is invalid") from exc
                 if binding.installation_id != installation_id:
                     raise SuperExpertPlatformError("command binding mismatch")
+                if capability == "aigc.asset.submit" and asset_validator is not None:
+                    asset_id = str(arguments.get("asset_id") or "")
+                    current_task = self.task_repository.get(binding.material_task_id)
+                    if not asset_id or current_task is None:
+                        raise SuperExpertPlatformError("submitted asset is unavailable")
+                    if current_task.status == AigcTaskStatus.IN_PROGRESS:
+                        await asset_validator(binding, asset_id, current_task)
                 result = self._apply_capability(
                     capability=capability,
                     binding=binding,
@@ -623,6 +632,62 @@ async def _load_workflow_capability_catalog():
     return await build_workflow_capability_catalog(ProviderManager.get_instance())
 
 
+def _workflow_review_binding(task: Any) -> tuple[set[str], set[str]]:
+    """Return the exact physical producers and media kinds allowed for review."""
+    binding = task.binding
+    workflow = task.workflow
+    if workflow is None:
+        return {binding.node_id}, {"image", "video", "audio"}
+
+    blueprint = workflow.blueprint
+    by_id = {node.node_id: node for node in blueprint.nodes}
+    incoming: dict[str, list[str]] = {}
+    for edge in blueprint.edges:
+        incoming.setdefault(edge.target, []).append(edge.source)
+
+    producer_ids: set[str] = set()
+
+    def collect(logical_node_id: str, visited: set[str]) -> None:
+        if logical_node_id in visited:
+            return
+        visited.add(logical_node_id)
+        node = by_id.get(logical_node_id)
+        if node is None:
+            return
+        if node.kind == "output":
+            for source in incoming.get(logical_node_id, []):
+                collect(source, visited)
+            return
+        producer_ids.add(logical_node_id)
+
+    collect(blueprint.output_node_id, set())
+    physical_ids = {
+        binding.node_bindings[logical_id]
+        for logical_id in producer_ids
+        if logical_id in binding.node_bindings
+    }
+    if not physical_ids:
+        physical_ids = {binding.output_node_id or binding.node_id}
+
+    registry = workflow_node_registry()
+    output_types = {
+        registry[logical.kind].output_type
+        for logical_id in producer_ids
+        if (logical := by_id.get(logical_id)) is not None
+        and logical.kind in registry
+    }
+    if not output_types or "asset" in output_types:
+        asset_kinds = {"image", "video", "audio"}
+    else:
+        asset_kinds = output_types & {"image", "video", "audio"}
+    return physical_ids, asset_kinds
+
+
+def _workflow_review_node_ids(task: Any) -> set[str]:
+    """Compatibility helper used by tests and review dispatch diagnostics."""
+    return _workflow_review_binding(task)[0]
+
+
 def get_super_expert_platform_service() -> SuperExpertPlatformService:
     global _service
     if _service is None:
@@ -727,6 +792,25 @@ async def execute_super_expert_command(
     ensure_chat_access(request, conversation_id, allow_admin=True)
     service = get_super_expert_platform_service()
     try:
+        asset_validator = None
+        if capability == "aigc.asset.submit":
+            from .aigc_studio import resolve_owned_asset_for_agent_review
+
+            async def validate_asset(
+                candidate_binding: AigcTaskBinding,
+                asset_id: str,
+                current_task: Any,
+            ) -> None:
+                node_ids, asset_kinds = _workflow_review_binding(current_task)
+                await resolve_owned_asset_for_agent_review(
+                    request,
+                    asset_id,
+                    canvas_id=candidate_binding.canvas_id,
+                    node_ids=node_ids,
+                    asset_kinds=asset_kinds,
+                )
+
+            asset_validator = validate_asset
         result = await service.execute(
             tenant_id=tenant_id,
             user_id=str(getattr(request.state, "user_id", "") or ""),
@@ -735,6 +819,7 @@ async def execute_super_expert_command(
             contract_version=command.contract_version,
             arguments=command.arguments,
             idempotency_key=command.idempotency_key,
+            asset_validator=asset_validator,
         )
         if capability == "aigc.asset.submit":
             submit_event_id = str(command.arguments.get("event_id") or "")
@@ -800,11 +885,21 @@ async def _dispatch_agent_asset_review(
     try:
         from .aigc_studio import resolve_owned_asset_for_agent_review
 
+        task_getter = getattr(service, "get_task", None)
+        current_task = (
+            task_getter(binding.material_task_id) if callable(task_getter) else None
+        )
+        node_ids, asset_kinds = (
+            _workflow_review_binding(current_task)
+            if current_task is not None
+            else ({binding.node_id}, {"image", "video", "audio"})
+        )
         media_block = await resolve_owned_asset_for_agent_review(
             request,
             asset_id,
             canvas_id=binding.canvas_id,
-            node_id=binding.node_id,
+            node_ids=node_ids,
+            asset_kinds=asset_kinds,
         )
         manager = request.app.state.multi_agent_manager
         workspace = await manager.get_agent(grant.agent_id)

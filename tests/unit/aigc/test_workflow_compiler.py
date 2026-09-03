@@ -243,6 +243,8 @@ def test_compiler_reports_manual_only_node_without_partially_compiling():
             "compose",
             "video_compose",
             capability="image_to_video",
+            provider_id="provider-1",
+            model_id="video-1",
         )
     ]
     payload["edges"] = []

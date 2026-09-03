@@ -259,6 +259,7 @@ _NODE_REGISTRY: dict[str, NodeRegistration] = {
         output_type="video",
         control_id="aigc.video.generate-submit",
         customer_actions=("CLICK_GENERATE",),
+        requires_model=True,
         provisioning_reason="stable_server_executor_unavailable",
     ),
     "director_stage": _registration(

@@ -1311,11 +1311,24 @@ async def _find_provider_model(
 
 async def _validate_job_submission(request: Request, body: AigcJobCreate) -> None:
     canvas = _load_canvas_for_request(request, body.canvas_id)
-    if not any(node.id == body.node_id for node in canvas.nodes):
+    target_node = next((node for node in canvas.nodes if node.id == body.node_id), None)
+    if target_node is None:
         raise HTTPException(
             status_code=400,
             detail=f"Node '{body.node_id}' not found in canvas '{body.canvas_id}'.",
         )
+    if str(target_node.data.get("workflowLogicalNodeId") or "").strip():
+        expected = (
+            str(target_node.data.get("providerId") or "").strip(),
+            str(target_node.data.get("modelId") or "").strip(),
+            str(target_node.data.get("modelCapability") or "").strip(),
+        )
+        actual = (body.provider_id, body.model_id, body.capability)
+        if not all(expected) or actual != expected:
+            raise HTTPException(
+                status_code=409,
+                detail="Workflow-bound node execution mismatch.",
+            )
     capability = await _find_capability(
         request,
         body.provider_id,
@@ -6126,13 +6139,14 @@ async def resolve_owned_asset_for_agent_review(
     asset_id: str,
     *,
     canvas_id: str,
-    node_id: str,
+    node_ids: set[str],
+    asset_kinds: set[str] | None = None,
 ) -> dict[str, Any]:
     """Resolve one owner-authorized generated asset into a model content block."""
     asset = _load_asset_for_request(request, asset_id)
     if (
         str(asset.meta.get("canvas_id") or "") != canvas_id
-        or str(asset.meta.get("node_id") or "") != node_id
+        or str(asset.meta.get("node_id") or "") not in node_ids
     ):
         raise HTTPException(status_code=403, detail="Asset binding mismatch.")
     source_url = _signed_cloud_asset_url(asset)
@@ -6143,6 +6157,8 @@ async def resolve_owned_asset_for_agent_review(
         source_url = target.as_uri()
     if asset.kind not in {"image", "video", "audio"}:
         raise HTTPException(status_code=409, detail="Asset type cannot be reviewed.")
+    if asset_kinds is not None and asset.kind not in asset_kinds:
+        raise HTTPException(status_code=409, detail="Asset type does not match workflow output.")
     return {
         "type": asset.kind,
         "source": {"type": "url", "url": source_url},
