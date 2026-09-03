@@ -58,6 +58,13 @@ PLATFORM_CAPABILITY_CATALOG_V1 = {
         *(_definition(capability, "runtime_host") for capability in _HOST),
         _definition("card.create", "card"),
         _definition("card.update", "card", dependencies=("card.create",)),
+        _definition("aigc.capabilities.list/1", "aigc"),
+        _definition("aigc.workflow.capabilities.list/1", "aigc"),
+        _definition(
+            "aigc.workflow.create/1",
+            "aigc",
+            dependencies=("aigc.workflow.capabilities.list/1",),
+        ),
         _definition("aigc.task.create", "aigc"),
         _definition("aigc.task.create/2", "aigc"),
         _definition("aigc.task.resume", "aigc", dependencies=("aigc.task.create",)),

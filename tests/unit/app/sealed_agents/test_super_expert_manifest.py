@@ -10,9 +10,32 @@ from qwenpaw.app.sealed_agents.models import SealedReleaseRecord
 from qwenpaw.app.sealed_agents.signing import SuperExpertTrustStore
 from qwenpaw.app.super_experts.capabilities import (
     CapabilityManifestError,
+    PLATFORM_CAPABILITY_CATALOG_V1,
     compute_capability_set_digest,
     validate_super_expert_manifest,
 )
+
+
+def test_aigc_capability_inventory_is_an_authorized_read_only_capability():
+    definition = PLATFORM_CAPABILITY_CATALOG_V1["aigc.capabilities.list/1"]
+
+    assert definition.contract_version == "1"
+    assert definition.group == "aigc"
+    assert definition.dependencies == ()
+
+
+def test_workflow_capabilities_require_discovery_before_creation():
+    discovery = PLATFORM_CAPABILITY_CATALOG_V1[
+        "aigc.workflow.capabilities.list/1"
+    ]
+    creation = PLATFORM_CAPABILITY_CATALOG_V1["aigc.workflow.create/1"]
+
+    assert discovery.contract_version == "1"
+    assert discovery.group == "aigc"
+    assert discovery.dependencies == ()
+    assert creation.contract_version == "1"
+    assert creation.group == "aigc"
+    assert creation.dependencies == ("aigc.workflow.capabilities.list/1",)
 
 
 HOST_CAPABILITIES = (
