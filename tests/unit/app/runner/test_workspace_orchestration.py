@@ -32,6 +32,10 @@ from qwenpaw.app.workspace.orchestration import (
     WorkspaceOrchestrationError,
     WorkspaceTurnOrchestrator,
 )
+from qwenpaw.app.runner.runner import (
+    _list_aigc_capabilities_for_workspace,
+    _list_aigc_workflow_capabilities_for_workspace,
+)
 from qwenpaw.app.sealed_agents.models import SealedAgentRecord, SealedReleaseRecord
 from qwenpaw.app.sealed_agents.package import inspect_extracted_payload
 from qwenpaw.app.sealed_agents.package import (
@@ -65,6 +69,69 @@ def test_agent_profile_defaults_to_disabled_orchestration():
 
     assert profile.orchestration == OrchestrationConfig()
     assert profile.orchestration.enabled is False
+
+
+@pytest.mark.asyncio
+async def test_workspace_catalog_bridge_reuses_safe_aigc_inventory(monkeypatch):
+    expected = {
+        "capabilities": [{
+            "provider_id": "provider-1",
+            "provider_name": "Provider",
+            "model_id": "image-1",
+            "model_name": "Image",
+            "capability": "text_to_image",
+            "source": "model_registry",
+            "parameter_schema": {"type": "object"},
+        }],
+    }
+
+    provider_manager = object()
+
+    async def fake_list(actual_manager):
+        assert actual_manager is provider_manager
+        return SimpleNamespace(model_dump=lambda **_kwargs: expected)
+
+    monkeypatch.setattr(
+        "qwenpaw.providers.provider_manager.ProviderManager.get_instance",
+        lambda: provider_manager,
+    )
+    monkeypatch.setattr(
+        "qwenpaw.app.routers.aigc_studio.build_capability_list",
+        fake_list,
+    )
+
+    # Workspace turns carry an AgentRequest-like object, not Starlette Request.
+    # The bridge must therefore resolve the provider manager directly instead
+    # of dereferencing request.app.state.
+    assert await _list_aigc_capabilities_for_workspace(object()) == expected
+
+
+@pytest.mark.asyncio
+async def test_workspace_workflow_catalog_bridge_uses_server_projection(monkeypatch):
+    expected = {
+        "schema_version": 1,
+        "nodes": [{"kind": "video_generate"}],
+        "available_models": [{"model_id": "video-1"}],
+    }
+    provider_manager = object()
+
+    async def fake_list(actual_manager):
+        assert actual_manager is provider_manager
+        return SimpleNamespace(model_dump=lambda **_kwargs: expected)
+
+    monkeypatch.setattr(
+        "qwenpaw.providers.provider_manager.ProviderManager.get_instance",
+        lambda: provider_manager,
+    )
+    monkeypatch.setattr(
+        "qwenpaw.app.routers.aigc_studio.build_workflow_capability_catalog",
+        fake_list,
+    )
+
+    assert (
+        await _list_aigc_workflow_capabilities_for_workspace(object())
+        == expected
+    )
 
 
 def test_workspace_orchestration_timeout_allows_multi_step_agent_turns(monkeypatch):

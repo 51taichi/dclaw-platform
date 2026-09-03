@@ -291,7 +291,7 @@ git commit -m "feat: persist AIGC workflow task bindings"
 - Consumes: registry, compiler, versioned task model, authorization grant, user/tenant scope.
 - Produces: `GET /super-expert-platform/workflow-capabilities`, command `aigc.workflow.capabilities.list/1`, command `aigc.workflow.create/1`, and stable public error codes.
 
-- [ ] **Step 1: Write failing authorization, discovery, creation, rollback, and fallback route tests**
+- [x] **Step 1: Write failing authorization, discovery, creation, rollback, and fallback route tests**
 
 ```python
 @pytest.mark.asyncio
@@ -316,13 +316,13 @@ async def test_task_write_failure_removes_provisioned_canvas(service, monkeypatc
 
 Also assert cross-tenant, ungranted, unpriced model, bad graph, idempotency conflict, manual-only with `FAIL_CLOSED`, and manual-only with blank-canvas fallback behavior.
 
-- [ ] **Step 2: Run the focused router tests and confirm missing capability failures**
+- [x] **Step 2: Run the focused router tests and confirm missing capability failures**
 
 Run: `uv run pytest tests/unit/routers/test_super_expert_platform.py -q`
 
 Expected: FAIL for unsupported workflow capabilities.
 
-- [ ] **Step 3: Implement discovery and create command**
+- [x] **Step 3: Implement discovery and create command**
 
 ```python
 _EVENT_TYPES.update({"aigc.workflow.create/1": "aigc.task.created"})
@@ -374,17 +374,17 @@ Capability discovery must use the same publication and price checks as AIGC job 
 
 Add a `business_call` branch in `runner.py` parallel to the existing `aigc.capabilities.list/1` branch. It must first require the signed grant entry, reject non-empty caller arguments, and return the server-built workflow catalog; it must not route the read through the state-changing platform command service.
 
-- [ ] **Step 4: Document request, response, fallback, and compatibility examples**
+- [x] **Step 4: Document request, response, fallback, and compatibility examples**
 
 Add complete one-node and prompt-image-video examples to `docs/super-expert-platform-v1.md`, including the rule that these are machine API payloads assembled by adapters, not raw model output.
 
-- [ ] **Step 5: Run platform, manifest, operation, and AIGC tests**
+- [x] **Step 5: Run platform, manifest, operation, and AIGC tests**
 
 Run: `uv run pytest tests/unit/routers/test_super_expert_platform.py tests/unit/app/runner/test_workspace_orchestration.py tests/unit/app/sealed_agents/test_super_expert_manifest.py tests/unit/aigc/test_workflow_contract.py tests/unit/aigc/test_workflow_compiler.py tests/unit/aigc/test_operation_contract.py -q`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit the command unit**
+- [x] **Step 6: Commit the command unit**
 
 ```bash
 git add src/qwenpaw/app/routers/super_expert_platform.py src/qwenpaw/app/routers/aigc_studio.py src/qwenpaw/app/runner/runner.py tests/unit/routers/test_super_expert_platform.py tests/unit/app/runner/test_workspace_orchestration.py docs/super-expert-platform-v1.md

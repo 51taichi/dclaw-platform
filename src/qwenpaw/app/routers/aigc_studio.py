@@ -36,9 +36,10 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ...aigc.workflow_compiler import CompiledWorkflow
+from ...aigc.workflow_contract import workflow_node_registry
 from ...aigc.visual_dna import (
     CompiledVisualDna,
     VisualDnaCompileRequest,
@@ -203,6 +204,42 @@ class AigcCapabilityInfo(BaseModel):
 
 class CapabilityList(BaseModel):
     capabilities: list[AigcCapabilityInfo]
+
+
+class WorkflowAvailableModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider_id: str
+    provider_name: str
+    model_id: str
+    model_name: str
+    capability: str
+    source: Literal["model_registry", "plugin_tool"]
+    parameter_schema: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkflowNodeCapability(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: str
+    title: str
+    provisioning: Literal["AUTO_PROVISIONABLE", "MANUAL_ONLY", "UNAVAILABLE"]
+    provisioning_reason: str | None = None
+    capabilities: tuple[str, ...]
+    input_keys: tuple[str, ...]
+    parameter_keys: tuple[str, ...]
+    input_slots: dict[str, tuple[str, ...]]
+    output_type: str
+    control_id: str | None
+    customer_actions: tuple[str, ...]
+
+
+class WorkflowCapabilityCatalog(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    nodes: tuple[WorkflowNodeCapability, ...]
+    available_models: tuple[WorkflowAvailableModel, ...]
 
 
 class AigcJobCreate(BaseModel):
@@ -1142,6 +1179,23 @@ def discard_super_expert_aigc_workspace(
     ):
         raise ValueError("AIGC workspace cleanup binding mismatch")
     _delete_json(_json_path("canvases", canvas_id))
+
+
+def resolve_owned_asset_for_workflow(
+    owner_user_id: str,
+    asset_id: str,
+) -> dict[str, Any] | None:
+    """Resolve only an existing asset explicitly owned by the target user."""
+    if not str(owner_user_id).strip() or not str(asset_id).strip():
+        return None
+    try:
+        asset = AigcAsset(**_read_json(_json_path("assets", asset_id)))
+    except HTTPException:
+        return None
+    owner = asset.meta.get("owner_user_id") or asset.meta.get("user_id")
+    if str(owner or "").strip() != str(owner_user_id).strip():
+        return None
+    return asset.model_dump(mode="json")
 
 
 def _request_can_access_asset(request: Request, asset: AigcAsset) -> bool:
@@ -5522,10 +5576,63 @@ async def build_capability_list(manager: Any | None) -> CapabilityList:
     return CapabilityList(capabilities=list(deduped.values()))
 
 
+def project_workflow_capability_catalog(
+    inventory: CapabilityList,
+) -> WorkflowCapabilityCatalog:
+    """Project the live priced model inventory onto the closed node registry."""
+    registry = workflow_node_registry()
+    models = tuple(
+        WorkflowAvailableModel(**item.model_dump(mode="python"))
+        for item in sorted(
+            inventory.capabilities,
+            key=lambda value: (
+                value.provider_id,
+                value.model_id,
+                value.capability,
+                value.source,
+            ),
+        )
+    )
+    nodes = tuple(
+        WorkflowNodeCapability(
+            kind=registration.kind,
+            title=registration.title,
+            provisioning=registration.provisioning,
+            provisioning_reason=registration.provisioning_reason,
+            capabilities=registration.capabilities,
+            input_keys=tuple(sorted(registration.input_keys)),
+            parameter_keys=tuple(sorted(registration.parameter_keys)),
+            input_slots={
+                key: tuple(values)
+                for key, values in sorted(registration.input_slots.items())
+            },
+            output_type=registration.output_type,
+            control_id=registration.control_id,
+            customer_actions=registration.customer_actions,
+        )
+        for registration in registry.values()
+    )
+    return WorkflowCapabilityCatalog(nodes=nodes, available_models=models)
+
+
+async def build_workflow_capability_catalog(
+    manager: Any | None,
+) -> WorkflowCapabilityCatalog:
+    """Return workflow nodes plus only currently published/priced models."""
+    return project_workflow_capability_catalog(await build_capability_list(manager))
+
+
 @router.get("/capabilities", response_model=CapabilityList)
 async def list_capabilities(request: Request) -> CapabilityList:
     """List AIGC-capable provider/model/tool entries."""
     return await build_capability_list(
+        getattr(request.app.state, "provider_manager", None),
+    )
+
+
+@router.get("/workflow-capabilities", response_model=WorkflowCapabilityCatalog)
+async def list_workflow_capabilities(request: Request) -> WorkflowCapabilityCatalog:
+    return await build_workflow_capability_catalog(
         getattr(request.app.state, "provider_manager", None),
     )
 

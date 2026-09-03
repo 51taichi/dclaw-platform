@@ -6,6 +6,7 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+import uuid
 
 from fastapi import APIRouter, HTTPException, Request
 from agentscope.message import Msg
@@ -15,6 +16,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from qwenpaw.constant import WORKING_DIR
 from qwenpaw.aigc.operation_contract import load_operation_catalog
+from qwenpaw.aigc.workflow_compiler import (
+    AvailableWorkflowModel,
+    WorkflowCompileError,
+    compile_workflow,
+)
+from qwenpaw.aigc.workflow_contract import WorkflowBlueprint
 
 from ..billing.context import BillingSource
 from ..billing.entrypoint import prepare_user_billing_execution
@@ -31,7 +38,12 @@ from ..super_experts.events import (
     SuperExpertEventRepository,
 )
 from ..super_experts.grants import SuperExpertGrantRepository
-from ..super_experts.models import AigcTaskBinding, AigcTaskScope, AigcTaskStatus
+from ..super_experts.models import (
+    AigcTaskBinding,
+    AigcTaskScope,
+    AigcTaskStatus,
+    AigcWorkflowDefinition,
+)
 
 router = APIRouter(
     prefix="/super-expert-platform",
@@ -64,11 +76,20 @@ class AigcCreateOperation(BaseModel):
     arguments: dict[str, Any]
 
 
+class AigcWorkflowCreateArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    scope: AigcTaskScope
+    event_id: str = Field(min_length=1)
+    workflow: WorkflowBlueprint
+
+
 _EVENT_TYPES = {
     "card.create": "card.created",
     "card.update": "card.updated",
     "aigc.task.create": "aigc.task.created",
     "aigc.task.create/2": "aigc.task.created",
+    "aigc.workflow.create/1": "aigc.task.created",
     "aigc.task.resume": "aigc.task.resumed",
     "aigc.task.cancel": "aigc.task.cancelled",
     "aigc.guide.update": "aigc.guide.updated",
@@ -147,6 +168,14 @@ class SuperExpertPlatformService:
         try:
             if capability == "aigc.task.create/2":
                 result, binding = self._create_bound_aigc_task(
+                    installation_id=installation_id,
+                    user_id=user_id,
+                    event_id=event_id,
+                    arguments=arguments,
+                    idempotency_key=idempotency_key,
+                )
+            elif capability == "aigc.workflow.create/1":
+                result, binding = await self._create_bound_aigc_workflow(
                     installation_id=installation_id,
                     user_id=user_id,
                     event_id=event_id,
@@ -303,6 +332,174 @@ class SuperExpertPlatformService:
             },
         }, binding
 
+    async def _create_bound_aigc_workflow(
+        self,
+        *,
+        installation_id: str,
+        user_id: str | None,
+        event_id: str,
+        arguments: dict[str, Any],
+        idempotency_key: str,
+    ) -> tuple[dict[str, Any], AigcTaskBinding]:
+        if not isinstance(user_id, str) or not user_id.strip():
+            raise SuperExpertPlatformError("TASK_OWNER_UNAVAILABLE")
+        try:
+            request = AigcWorkflowCreateArguments.model_validate(arguments)
+        except Exception as exc:
+            raise SuperExpertPlatformError("WORKFLOW_SCHEMA_INVALID") from exc
+        if request.event_id != event_id:
+            raise SuperExpertPlatformError("WORKFLOW_SCHEMA_INVALID")
+        if request.scope.installation_id != installation_id:
+            raise SuperExpertPlatformError("BINDING_MISMATCH")
+
+        current = self.task_repository.get(request.scope.material_task_id)
+        if current is not None:
+            current_scope = AigcTaskScope.model_validate(
+                current.binding.model_dump(
+                    include=set(AigcTaskScope.model_fields),
+                    mode="json",
+                )
+            )
+            if current_scope != request.scope:
+                raise SuperExpertPlatformError("BINDING_MISMATCH")
+            if current.workflow is None or current.workflow.blueprint != request.workflow:
+                raise SuperExpertPlatformError("IDEMPOTENCY_CONFLICT")
+            task = self.task_repository.apply(
+                AigcTaskCommand(
+                    action="create",
+                    event_id=event_id,
+                    binding=current.binding,
+                    workflow=current.workflow,
+                ),
+                idempotency_key=idempotency_key,
+            )
+            return {
+                "task": task,
+                "payload": {"workflow_id": current.workflow.workflow_id},
+            }, current.binding
+
+        catalog = await _load_workflow_capability_catalog()
+        model_capabilities: dict[tuple[str, str], set[str]] = {}
+        for model in catalog.available_models:
+            model_capabilities.setdefault(
+                (model.provider_id, model.model_id),
+                set(),
+            ).add(model.capability)
+        available_models = tuple(
+            AvailableWorkflowModel(
+                provider_id=provider_id,
+                model_id=model_id,
+                capabilities=frozenset(capabilities),
+            )
+            for (provider_id, model_id), capabilities in model_capabilities.items()
+        )
+
+        from .aigc_studio import (
+            discard_super_expert_aigc_workspace,
+            provision_blank_super_expert_aigc_workspace,
+            provision_super_expert_aigc_workflow,
+            resolve_owned_asset_for_workflow,
+        )
+
+        id_factory = lambda prefix: f"{prefix}-{uuid.uuid4()}"
+        provisioned_canvas_id: str | None = None
+        try:
+            compiled = compile_workflow(
+                request.workflow,
+                available_models=available_models,
+                id_factory=id_factory,
+                asset_resolver=lambda asset_id: resolve_owned_asset_for_workflow(
+                    user_id,
+                    asset_id,
+                ),
+            )
+        except WorkflowCompileError as exc:
+            if not (
+                exc.manual_fallback_allowed
+                and request.workflow.fallback_policy
+                == "MANUAL_BUILD_IF_UNSUPPORTED"
+            ):
+                raise SuperExpertPlatformError(exc.code) from exc
+            workflow_id = id_factory("workflow")
+            canvas = provision_blank_super_expert_aigc_workspace(
+                owner_user_id=user_id,
+                material_task_id=request.scope.material_task_id,
+                workflow_id=workflow_id,
+                title=request.workflow.title,
+            )
+            provisioned_canvas_id = canvas.id
+            pending_output = id_factory("pending-output")
+            binding = AigcTaskBinding(
+                **request.scope.model_dump(mode="json"),
+                canvas_id=canvas.id,
+                node_id=pending_output,
+                workflow_id=workflow_id,
+                execution_mode="MANUAL_BUILD",
+                node_bindings={},
+                output_node_id=pending_output,
+                workflow_revision=1,
+                guide_revision=1,
+            )
+            workflow = AigcWorkflowDefinition(
+                workflow_id=workflow_id,
+                schema_version=1,
+                execution_mode="MANUAL_BUILD",
+                workflow_revision=1,
+                guide_revision=1,
+                blueprint=request.workflow,
+                guide_steps=(),
+                manual_reason=exc.code,
+            )
+        else:
+            canvas = provision_super_expert_aigc_workflow(
+                owner_user_id=user_id,
+                material_task_id=request.scope.material_task_id,
+                compiled=compiled,
+            )
+            provisioned_canvas_id = canvas.id
+            binding = AigcTaskBinding(
+                **request.scope.model_dump(mode="json"),
+                canvas_id=canvas.id,
+                node_id=compiled.output_node_id,
+                workflow_id=compiled.workflow_id,
+                execution_mode="PREBUILT_WORKFLOW",
+                node_bindings=compiled.bindings,
+                output_node_id=compiled.output_node_id,
+                workflow_revision=1,
+                guide_revision=1,
+            )
+            workflow = AigcWorkflowDefinition(
+                workflow_id=compiled.workflow_id,
+                schema_version=1,
+                execution_mode="PREBUILT_WORKFLOW",
+                workflow_revision=1,
+                guide_revision=1,
+                blueprint=request.workflow,
+                guide_steps=compiled.guide_steps,
+            )
+        try:
+            task = self.task_repository.apply(
+                AigcTaskCommand(
+                    action="create",
+                    event_id=event_id,
+                    binding=binding,
+                    workflow=workflow,
+                ),
+                idempotency_key=idempotency_key,
+            )
+        except Exception:
+            if provisioned_canvas_id is not None:
+                discard_super_expert_aigc_workspace(
+                    owner_user_id=user_id,
+                    material_task_id=request.scope.material_task_id,
+                    canvas_id=provisioned_canvas_id,
+                )
+            raise
+        return {
+            "task": task,
+            "payload": {"workflow_id": workflow.workflow_id},
+        }, binding
+
     def _apply_capability(
         self,
         *,
@@ -378,6 +575,13 @@ def _operation_catalog_path() -> Path:
     )
 
 
+async def _load_workflow_capability_catalog():
+    from ...providers.provider_manager import ProviderManager
+    from .aigc_studio import build_workflow_capability_catalog
+
+    return await build_workflow_capability_catalog(ProviderManager.get_instance())
+
+
 def get_super_expert_platform_service() -> SuperExpertPlatformService:
     global _service
     if _service is None:
@@ -423,6 +627,13 @@ def get_aigc_operation_contract(
     return operation.model_dump(mode="json")
 
 
+@frontend_read_router.get("/workflow-capabilities")
+@router.get("/workflow-capabilities")
+async def get_workflow_capability_catalog(_request: Request) -> dict[str, Any]:
+    catalog = await _load_workflow_capability_catalog()
+    return catalog.model_dump(mode="json")
+
+
 @router.post("/commands/{capability}")
 async def execute_super_expert_command(
     capability: str,
@@ -432,7 +643,7 @@ async def execute_super_expert_command(
     tenant_id = str(getattr(request.state, "tenant_id", "local") or "local")
     binding = (
         command.arguments.get("scope")
-        if capability == "aigc.task.create/2"
+        if capability in {"aigc.task.create/2", "aigc.workflow.create/1"}
         else command.arguments.get("binding")
     )
     conversation_id = (

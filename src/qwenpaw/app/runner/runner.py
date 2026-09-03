@@ -58,6 +58,31 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+async def _list_aigc_capabilities_for_workspace(request: Any) -> dict[str, Any]:
+    """Project the existing user-scoped AIGC inventory into the Host boundary."""
+    from ...providers.provider_manager import ProviderManager
+    from ..routers.aigc_studio import build_capability_list
+
+    # ``request`` is an AgentScope AgentRequest here, not a Starlette Request.
+    # Resolve the application singleton directly so workspace runtimes can use
+    # the same catalog builder without depending on ``request.app.state``.
+    _ = request
+    result = await build_capability_list(ProviderManager.get_instance())
+    return result.model_dump(mode="json")
+
+
+async def _list_aigc_workflow_capabilities_for_workspace(
+    request: Any,
+) -> dict[str, Any]:
+    """Project the closed workflow registry and live priced models to Host."""
+    from ...providers.provider_manager import ProviderManager
+    from ..routers.aigc_studio import build_workflow_capability_catalog
+
+    _ = request
+    result = await build_workflow_capability_catalog(ProviderManager.get_instance())
+    return result.model_dump(mode="json")
+
+
 _PRINT_END_SIGNAL = "[END]"
 
 
@@ -184,12 +209,20 @@ async def _run_standard_or_orchestrated_turn(
             arguments: dict[str, Any],
         ) -> dict[str, Any]:
             payload = dict(arguments)
-            idempotency_key = str(payload.pop("idempotency_key", ""))
-            if not idempotency_key:
-                raise WorkspaceOrchestrationError("orchestration_error")
             contract_version = authorization.granted_capabilities.get(capability)
             if contract_version is None:
                 raise WorkspaceOrchestrationError("unauthorized_capability")
+            if capability == "aigc.capabilities.list/1":
+                if payload:
+                    raise WorkspaceOrchestrationError("orchestration_error")
+                return await _list_aigc_capabilities_for_workspace(request)
+            if capability == "aigc.workflow.capabilities.list/1":
+                if payload:
+                    raise WorkspaceOrchestrationError("orchestration_error")
+                return await _list_aigc_workflow_capabilities_for_workspace(request)
+            idempotency_key = str(payload.pop("idempotency_key", ""))
+            if not idempotency_key:
+                raise WorkspaceOrchestrationError("orchestration_error")
             return await platform_service.execute(
                 tenant_id=tenant_id,
                 user_id=str(getattr(request, "user_id", "") or ""),
