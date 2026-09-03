@@ -455,6 +455,8 @@ async def test_authorized_workflow_create_provisions_all_nodes_and_bindings(
     assert canvas.edges[0].source == binding["node_bindings"]["copy"]
     assert canvas.edges[0].target == binding["node_bindings"]["clip"]
     assert len(bus.events) == 1
+    event = bus.events[0].payload["envelope"]
+    assert event["payload"]["workflow_binding"] == binding
 
 
 @pytest.mark.asyncio
@@ -588,6 +590,12 @@ async def test_manual_only_workflow_fails_closed_or_creates_truly_blank_canvas(
 
     binding = result["task"]["binding"]
     assert binding["execution_mode"] == "MANUAL_BUILD"
+    assert binding["node_bindings"]["compose"] == binding["output_node_id"]
+    steps = result["task"]["workflow"]["guide_steps"]
+    assert steps[0]["manual_action"] == "ADD_NODE"
+    assert steps[0]["node_kind"] == "video_compose"
+    assert steps[0]["node_id"] == binding["node_bindings"]["compose"]
+    assert steps[1]["kind"] == "GENERATE"
     canvas = aigc_studio._load_canvas(binding["canvas_id"])
     assert canvas.nodes == []
     assert canvas.edges == []

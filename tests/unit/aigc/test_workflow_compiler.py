@@ -170,6 +170,8 @@ def test_compiler_builds_prompt_image_video_dag_and_output_binding():
     assert compiled.nodes[2].position == {"x": 1160.0, "y": 120.0}
     assert compiled.nodes[2].data["videoDuration"] == 5
     assert compiled.nodes[2].data["modelId"] == "video-1"
+    assert compiled.nodes[2].data["providerId"] == "provider-1"
+    assert compiled.nodes[2].data["modelCapability"] == "image_to_video"
     assert [step.kind for step in compiled.guide_steps] == [
         "INSPECT",
         "GENERATE",
@@ -177,6 +179,10 @@ def test_compiler_builds_prompt_image_video_dag_and_output_binding():
         "SUBMIT",
     ]
     assert compiled.guide_steps[2].control_id == "aigc.video.generate-submit"
+    assert compiled.guide_steps[2].expected_provider_id == "provider-1"
+    assert compiled.guide_steps[2].expected_model_id == "video-1"
+    assert compiled.guide_steps[2].expected_capability == "image_to_video"
+    assert compiled.guide_steps[2].expected_output_type == "video"
 
 
 def test_compiler_rejects_cycle_before_creating_physical_ids():

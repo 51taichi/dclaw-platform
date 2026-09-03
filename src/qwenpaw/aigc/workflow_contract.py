@@ -257,7 +257,7 @@ _NODE_REGISTRY: dict[str, NodeRegistration] = {
         capabilities=("image_to_video",),
         input_slots={"video": ("video",), "audio": ("audio",)},
         output_type="video",
-        control_id=None,
+        control_id="aigc.video.generate-submit",
         customer_actions=("CLICK_GENERATE",),
         provisioning_reason="stable_server_executor_unavailable",
     ),

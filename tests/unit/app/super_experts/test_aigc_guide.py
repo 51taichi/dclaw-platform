@@ -52,6 +52,7 @@ def _blueprint() -> WorkflowBlueprint:
 
 
 def _step(logical_id: str, node_id: str) -> WorkflowGuideStepDefinition:
+    is_video = logical_id == "clip"
     return WorkflowGuideStepDefinition(
         step_id=f"{logical_id}.generate",
         kind="GENERATE",
@@ -62,6 +63,10 @@ def _step(logical_id: str, node_id: str) -> WorkflowGuideStepDefinition:
         control_id=f"aigc.{logical_id}.generate-submit",
         optional=False,
         completion_rule="JOB_SUCCEEDED_WITH_OUTPUT",
+        expected_output_type="video" if is_video else "file",
+        expected_capability="text_to_video" if is_video else "storyboard",
+        expected_provider_id="provider-1",
+        expected_model_id="video-1" if is_video else "text-1",
     )
 
 
@@ -122,7 +127,17 @@ def _canvas():
     )
 
 
-def _job(node_id: str, status: str, minute: int, *, outputs: bool = True):
+def _job(
+    node_id: str,
+    status: str,
+    minute: int,
+    *,
+    outputs: bool = True,
+    kind: str = "file",
+    capability: str | None = None,
+    provider_id: str = "provider-1",
+    model_id: str | None = None,
+):
     stamp = NOW + timedelta(minutes=minute)
     return SimpleNamespace(
         id=f"job-{node_id}-{minute}",
@@ -131,7 +146,14 @@ def _job(node_id: str, status: str, minute: int, *, outputs: bool = True):
         status=status,
         created_at=stamp.isoformat(),
         updated_at=stamp.isoformat(),
-        outputs=([SimpleNamespace(id=f"asset-{node_id}-{minute}")] if outputs else []),
+        outputs=(
+            [SimpleNamespace(id=f"asset-{node_id}-{minute}", kind=kind)]
+            if outputs
+            else []
+        ),
+        capability=capability or ("text_to_video" if node_id == "video-1" else "storyboard"),
+        provider_id=provider_id,
+        model_id=model_id or ("video-1" if node_id == "video-1" else "text-1"),
     )
 
 
@@ -164,7 +186,7 @@ def test_failed_job_exposes_retry_and_refresh_reconstructs_same_step():
 def test_regenerated_upstream_invalidates_older_downstream_result():
     jobs = [
         _job("prompt-1", "succeeded", 1),
-        _job("video-1", "succeeded", 2),
+        _job("video-1", "succeeded", 2, kind="video"),
         _job("prompt-1", "succeeded", 3),
     ]
 
@@ -173,6 +195,26 @@ def test_regenerated_upstream_invalidates_older_downstream_result():
     assert _status(guide, "copy.generate") == "COMPLETED"
     assert _status(guide, "clip.generate") == "READY"
     assert guide.current_step_id == "clip.generate"
+
+
+def test_wrong_model_capability_or_output_kind_does_not_unlock_step():
+    jobs = [
+        _job(
+            "prompt-1",
+            "succeeded",
+            1,
+            capability="text_to_image",
+            model_id="wrong-model",
+            kind="image",
+        )
+    ]
+
+    guide = project_aigc_guide(task=_task(), canvas=_canvas(), jobs=jobs)
+
+    assert _status(guide, "copy.generate") == "FAILED"
+    assert guide.current_step is not None
+    assert guide.current_step.recovery is not None
+    assert guide.current_step.recovery.code == "NODE_JOB_SEMANTICS_MISMATCH"
 
 
 def test_optional_skip_is_projected_only_from_durable_bound_event():
@@ -207,3 +249,62 @@ def test_missing_bound_canvas_returns_blocked_recovery_not_another_canvas():
     assert guide.current_step.recovery is not None
     assert guide.current_step.recovery.code == "BOUND_CANVAS_MISSING"
 
+
+def test_manual_fallback_projects_real_node_actions_from_blank_canvas():
+    base = _task()
+    manual_steps = (
+        WorkflowGuideStepDefinition(
+            step_id="copy.manual-add",
+            kind="MANUAL_BUILD",
+            title="添加文案节点",
+            instruction="添加",
+            logical_node_id="copy",
+            node_id="prompt-1",
+            control_id="aigc.canvas.add-node.prompt",
+            optional=False,
+            completion_rule="PRESENT",
+            manual_action="ADD_NODE",
+            node_kind="prompt",
+            manual_node_data={"text": "开场"},
+        ),
+        WorkflowGuideStepDefinition(
+            step_id="clip.manual-add",
+            kind="MANUAL_BUILD",
+            title="添加视频节点",
+            instruction="添加",
+            logical_node_id="clip",
+            node_id="video-1",
+            control_id="aigc.canvas.add-node.video_generate",
+            optional=False,
+            completion_rule="PRESENT",
+            manual_action="ADD_NODE",
+            node_kind="video_generate",
+            manual_node_data={"text": "课堂"},
+        ),
+    )
+    task = base.model_copy(
+        update={
+            "binding": base.binding.model_copy(
+                update={"execution_mode": "MANUAL_BUILD"}
+            ),
+            "workflow": base.workflow.model_copy(
+                update={"execution_mode": "MANUAL_BUILD", "guide_steps": manual_steps}
+            ),
+        }
+    )
+    blank = SimpleNamespace(id="canvas-1", nodes=[], edges=[])
+
+    first = project_aigc_guide(task=task, canvas=blank, jobs=[])
+    assert first.current_step_id == "copy.manual-add"
+    assert first.current_step.manual_action == "ADD_NODE"
+    assert _status(first, "clip.manual-add") == "LOCKED"
+
+    one_node = SimpleNamespace(
+        id="canvas-1",
+        nodes=[SimpleNamespace(id="prompt-1", type="prompt")],
+        edges=[],
+    )
+    second = project_aigc_guide(task=task, canvas=one_node, jobs=[])
+    assert _status(second, "copy.manual-add") == "COMPLETED"
+    assert second.current_step_id == "clip.manual-add"
+    assert second.current_step.status == "READY"

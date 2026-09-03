@@ -62,7 +62,7 @@ class WorkflowGuideStepDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     step_id: str
-    kind: Literal["INSPECT", "GENERATE", "SUBMIT"]
+    kind: Literal["INSPECT", "GENERATE", "SUBMIT", "MANUAL_BUILD"]
     title: str
     instruction: str
     logical_node_id: str
@@ -74,6 +74,18 @@ class WorkflowGuideStepDefinition(BaseModel):
         "JOB_SUCCEEDED_WITH_OUTPUT",
         "OUTPUT_AVAILABLE",
     ]
+    # Optional defaults keep persisted v1 workflow documents readable while
+    # new compilations bind guide completion to the exact executable contract.
+    expected_output_type: str | None = None
+    expected_capability: str | None = None
+    expected_provider_id: str | None = None
+    expected_model_id: str | None = None
+    manual_action: Literal["ADD_NODE", "CONNECT_EDGE"] | None = None
+    node_kind: str | None = None
+    source_node_id: str | None = None
+    target_node_id: str | None = None
+    target_slot: str | None = None
+    manual_node_data: dict[str, Any] | None = None
 
 
 class CompiledWorkflow(BaseModel):
@@ -244,13 +256,22 @@ def _node_data(
     inputs = node.inputs
     parameters = node.parameters
     prompt = str(inputs.get("prompt") or inputs.get("text") or "")
-    common: dict[str, Any] = {"title": node.title, "showTryOptions": False}
+    common: dict[str, Any] = {
+        "title": node.title,
+        "showTryOptions": False,
+        "workflowLogicalNodeId": node.node_id,
+    }
+    if node.provider_id:
+        common["providerId"] = node.provider_id
+    if node.model_id:
+        common["modelId"] = node.model_id
+    if node.capability:
+        common["modelCapability"] = node.capability
     if node.kind == "prompt":
         return {
             **common,
             "text": prompt,
             "composerText": prompt,
-            "modelId": node.model_id,
         }
     if node.kind == "image_generate":
         return {
@@ -261,9 +282,8 @@ def _node_data(
             "aspectRatio": parameters.get("aspect_ratio", "1:1"),
             "imageResolution": parameters.get("resolution", "1K"),
             "imageCount": parameters.get("count", 1),
-            "modelId": node.model_id,
         }
-    if node.kind == "video_generate":
+    if node.kind in {"video_generate", "video_compose"}:
         return {
             **common,
             "text": prompt,
@@ -275,7 +295,6 @@ def _node_data(
             "videoDuration": parameters.get("duration_seconds", 5),
             "videoAudio": parameters.get("generate_audio", False),
             "videoCount": 1,
-            "modelId": node.model_id,
         }
     if node.kind == "audio_generate":
         return {
@@ -285,7 +304,6 @@ def _node_data(
             "audioDuration": parameters.get("duration_seconds"),
             "voice": parameters.get("voice"),
             "language": parameters.get("language"),
-            "modelId": node.model_id,
         }
     if node.kind == "script_generate":
         return {
@@ -294,7 +312,6 @@ def _node_data(
             "composerText": prompt,
             "scriptMode": parameters.get("script_mode", "draft"),
             "shotCount": parameters.get("shot_count"),
-            "modelId": node.model_id,
         }
     if node.kind == "long_image_export":
         return {
@@ -325,6 +342,105 @@ def _node_data(
     _raise("NODE_KIND_UNSUPPORTED")
 
 
+def plan_manual_workflow(
+    blueprint: WorkflowBlueprint,
+    *,
+    available_models: Collection[AvailableWorkflowModel],
+    id_factory: Callable[[str], str],
+    asset_resolver: Callable[[str], Mapping[str, Any] | None],
+) -> CompiledWorkflow:
+    """Build an empty-canvas, user-clicked construction plan with stable IDs."""
+    try:
+        validate_workflow_blueprint(blueprint)
+    except ValueError as exc:
+        raise WorkflowCompileError("WORKFLOW_SCHEMA_INVALID") from exc
+    registry = workflow_node_registry()
+    by_id = {node.node_id: node for node in blueprint.nodes}
+    for node in blueprint.nodes:
+        registration = registry[node.kind]
+        if registration.provisioning == "UNAVAILABLE":
+            _raise("NODE_KIND_UNSUPPORTED")
+        _validate_inputs(node)
+        _validate_scalar_parameters(node)
+        _validate_model(node, registration, available_models)
+    ordered_ids, _depth = _topological_order(blueprint, registry)
+    workflow_id = id_factory("workflow")
+    bindings = {
+        logical_id: id_factory(
+            _PHYSICAL_PREFIX.get(by_id[logical_id].kind, by_id[logical_id].kind)
+        )
+        for logical_id in ordered_ids
+    }
+    steps: list[WorkflowGuideStepDefinition] = []
+    for logical_id in ordered_ids:
+        node = by_id[logical_id]
+        steps.append(
+            WorkflowGuideStepDefinition(
+                step_id=f"{logical_id}.manual-add",
+                kind="MANUAL_BUILD",
+                title=f"添加{node.title}",
+                instruction="点击下方按钮，把这个节点加入空白画布。",
+                logical_node_id=logical_id,
+                node_id=bindings[logical_id],
+                control_id=f"aigc.canvas.add-node.{node.kind}",
+                optional=node.optional,
+                completion_rule="PRESENT",
+                manual_action="ADD_NODE",
+                node_kind=node.kind,
+                manual_node_data=_node_data(node, asset_resolver=asset_resolver),
+            )
+        )
+    for index, edge in enumerate(blueprint.edges, start=1):
+        steps.append(
+            WorkflowGuideStepDefinition(
+                step_id=f"workflow.manual-edge-{index}",
+                kind="MANUAL_BUILD",
+                title="连接工作流节点",
+                instruction="点击下方按钮，按蓝图连接这两个节点。",
+                logical_node_id=edge.target,
+                node_id=bindings[edge.target],
+                control_id="aigc.canvas.connect",
+                optional=False,
+                completion_rule="PRESENT",
+                manual_action="CONNECT_EDGE",
+                source_node_id=bindings[edge.source],
+                target_node_id=bindings[edge.target],
+                target_slot=edge.target_slot,
+            )
+        )
+    for logical_id in ordered_ids:
+        node = by_id[logical_id]
+        if node.customer_action == "CLICK_GENERATE":
+            steps.append(_guide_step(node, registry[node.kind], bindings[logical_id]))
+    output_id = bindings[blueprint.output_node_id]
+    steps.append(
+        WorkflowGuideStepDefinition(
+            step_id="workflow.submit",
+            kind="SUBMIT",
+            title="提交最终素材",
+            instruction="最终节点生成完成后，提交给陆羽审核。",
+            logical_node_id=blueprint.output_node_id,
+            node_id=output_id,
+            control_id="aigc.workflow.submit",
+            optional=False,
+            completion_rule="OUTPUT_AVAILABLE",
+            expected_output_type=(
+                registry[by_id[blueprint.output_node_id].kind].output_type
+            ),
+        )
+    )
+    return CompiledWorkflow(
+        workflow_id=workflow_id,
+        title=blueprint.title,
+        nodes=(),
+        edges=(),
+        bindings=bindings,
+        output_node_id=output_id,
+        guide_steps=tuple(steps),
+        viewport={"x": 0.0, "y": 0.0, "zoom": 1.0},
+    )
+
+
 def _guide_step(
     node: WorkflowNode,
     registration: NodeRegistration,
@@ -341,6 +457,10 @@ def _guide_step(
             control_id=registration.control_id,
             optional=node.optional,
             completion_rule="JOB_SUCCEEDED_WITH_OUTPUT",
+            expected_output_type=registration.output_type,
+            expected_capability=node.capability,
+            expected_provider_id=node.provider_id,
+            expected_model_id=node.model_id,
         )
     return WorkflowGuideStepDefinition(
         step_id=f"{node.node_id}.inspect",
@@ -352,6 +472,7 @@ def _guide_step(
         control_id=registration.control_id,
         optional=node.optional,
         completion_rule="PRESENT",
+        expected_output_type=registration.output_type,
     )
 
 
@@ -433,6 +554,9 @@ def compile_workflow(
             control_id="aigc.workflow.submit",
             optional=False,
             completion_rule="OUTPUT_AVAILABLE",
+            expected_output_type=(
+                registry[by_id[blueprint.output_node_id].kind].output_type
+            ),
         ),
     )
     return CompiledWorkflow(

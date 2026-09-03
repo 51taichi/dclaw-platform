@@ -41,6 +41,12 @@ class AigcGuideStepProjection(BaseModel):
     optional: bool
     status: GuideStepStatus
     recovery: AigcGuideRecovery | None = None
+    manual_action: Literal["ADD_NODE", "CONNECT_EDGE"] | None = None
+    node_kind: str | None = None
+    source_node_id: str | None = None
+    target_node_id: str | None = None
+    target_slot: str | None = None
+    manual_node_data: dict[str, Any] | None = None
 
 
 class AigcTaskSummary(BaseModel):
@@ -85,10 +91,36 @@ def _latest_jobs(jobs: list[Any]) -> dict[str, Any]:
     return latest
 
 
-def _job_success_time(job: Any | None) -> datetime | None:
+def _output_matches(job: Any, expected_output_type: str | None) -> bool:
+    outputs = list(getattr(job, "outputs", []) or [])
+    if not outputs:
+        return False
+    if not expected_output_type or expected_output_type == "asset":
+        return True
+    accepted = {"file"} if expected_output_type == "text" else {expected_output_type}
+    return any(
+        str(getattr(output, "kind", "") or "") in accepted for output in outputs
+    )
+
+
+def _job_matches_definition(job: Any, definition: Any) -> bool:
+    expected_pairs = (
+        ("capability", definition.expected_capability),
+        ("provider_id", definition.expected_provider_id),
+        ("model_id", definition.expected_model_id),
+    )
+    if any(
+        expected is not None and str(getattr(job, field, "") or "") != expected
+        for field, expected in expected_pairs
+    ):
+        return False
+    return _output_matches(job, definition.expected_output_type)
+
+
+def _job_success_time(job: Any | None, definition: Any) -> datetime | None:
     if job is None or str(getattr(job, "status", "")) != "succeeded":
         return None
-    if not list(getattr(job, "outputs", []) or []):
+    if not _job_matches_definition(job, definition):
         return None
     return _timestamp(getattr(job, "updated_at"))
 
@@ -151,34 +183,14 @@ def project_aigc_guide(
     if canvas is None or str(getattr(canvas, "id", "")) != task.binding.canvas_id:
         return _blocked_projection(task, code="BOUND_CANVAS_MISSING")
 
-    if workflow.execution_mode == "MANUAL_BUILD":
-        step = AigcGuideStepProjection(
-            step_id="workflow.manual-build",
-            kind="MANUAL_BUILD",
-            title="手动搭建工作流",
-            instruction="从空白画布开始，按向导逐步添加并连接所需节点。",
-            logical_node_id=None,
-            node_id=None,
-            control_id="aigc.canvas.add-node",
-            optional=False,
-            status="READY",
-        )
-        return AigcGuideProjection(
-            workflow_id=workflow.workflow_id,
-            workflow_revision=workflow.workflow_revision,
-            guide_revision=workflow.guide_revision,
-            execution_mode=workflow.execution_mode,
-            current_step_id=step.step_id,
-            current_step=step,
-            steps=(step,),
-            task_summary=_summary(task),
-        )
-
     canvas_node_ids = {
         str(getattr(node, "id", "") or "")
         for node in list(getattr(canvas, "nodes", []) or [])
     }
-    if not set(task.binding.node_bindings.values()).issubset(canvas_node_ids):
+    if (
+        workflow.execution_mode == "PREBUILT_WORKFLOW"
+        and not set(task.binding.node_bindings.values()).issubset(canvas_node_ids)
+    ):
         return _blocked_projection(task, code="BOUND_NODE_MISSING")
 
     latest_jobs = _latest_jobs(
@@ -208,7 +220,40 @@ def project_aigc_guide(
 
     for definition in workflow.guide_steps:
         recovery = None
-        if definition.kind == "SUBMIT":
+        if definition.kind == "MANUAL_BUILD":
+            prior_complete = all(
+                step.status in {"COMPLETED", "SKIPPED"} for step in projected
+            )
+            if definition.manual_action == "ADD_NODE":
+                node = next(
+                    (
+                        item for item in list(getattr(canvas, "nodes", []) or [])
+                        if str(getattr(item, "id", "") or "") == definition.node_id
+                    ),
+                    None,
+                )
+                complete = (
+                    node is not None
+                    and str(getattr(node, "type", "") or "") == definition.node_kind
+                )
+            elif definition.manual_action == "CONNECT_EDGE":
+                complete = any(
+                    str(getattr(edge, "source", "") or "") == definition.source_node_id
+                    and str(getattr(edge, "target", "") or "") == definition.target_node_id
+                    and str(
+                        (getattr(edge, "data", None) or {}).get("role") or ""
+                    ) == str(definition.target_slot or "")
+                    for edge in list(getattr(canvas, "edges", []) or [])
+                )
+            else:
+                complete = False
+            status = (
+                "COMPLETED"
+                if complete
+                else ("READY" if prior_complete else "LOCKED")
+            )
+            logical_status[definition.logical_node_id] = status
+        elif definition.kind == "SUBMIT":
             output_status = logical_status.get(definition.logical_node_id, "LOCKED")
             if task.status in {
                 AigcTaskStatus.SUBMITTED,
@@ -225,15 +270,31 @@ def project_aigc_guide(
             status = "SKIPPED"
             logical_status[definition.logical_node_id] = status
         elif definition.kind == "INSPECT":
-            status = "COMPLETED"
+            upstream_ids = dependencies.get(definition.logical_node_id, set())
+            status = (
+                "COMPLETED"
+                if all(
+                    logical_status.get(logical_id) in {"COMPLETED", "SKIPPED"}
+                    for logical_id in upstream_ids
+                )
+                else "LOCKED"
+            )
             logical_status[definition.logical_node_id] = status
         else:
+            manual_ready = (
+                workflow.execution_mode != "MANUAL_BUILD"
+                or all(
+                    step.status in {"COMPLETED", "SKIPPED"}
+                    for step in projected
+                    if step.kind == "MANUAL_BUILD"
+                )
+            )
             upstream_ids = dependencies.get(definition.logical_node_id, set())
             upstream_ready = all(
                 logical_status.get(logical_id) in {"COMPLETED", "SKIPPED"}
                 for logical_id in upstream_ids
             )
-            if not upstream_ready:
+            if not upstream_ready or not manual_ready:
                 status = "LOCKED"
             else:
                 job = latest_jobs.get(definition.node_id)
@@ -249,7 +310,7 @@ def project_aigc_guide(
                         code="NODE_JOB_FAILED",
                     )
                 else:
-                    succeeded_at = _job_success_time(job)
+                    succeeded_at = _job_success_time(job, definition)
                     upstream_times = [
                         success_times[logical_id]
                         for logical_id in upstream_ids
@@ -257,9 +318,17 @@ def project_aigc_guide(
                     ]
                     if succeeded_at is None:
                         status = "FAILED"
+                        semantics_mismatch = (
+                            job_status == "succeeded"
+                            and bool(list(getattr(job, "outputs", []) or []))
+                        )
                         recovery = AigcGuideRecovery(
                             action="RETRY_NODE",
-                            code="NODE_OUTPUT_MISSING",
+                            code=(
+                                "NODE_JOB_SEMANTICS_MISMATCH"
+                                if semantics_mismatch
+                                else "NODE_OUTPUT_MISSING"
+                            ),
                         )
                     elif upstream_times and succeeded_at < max(upstream_times):
                         status = "READY"
@@ -280,6 +349,12 @@ def project_aigc_guide(
                 optional=definition.optional,
                 status=status,
                 recovery=recovery,
+                manual_action=definition.manual_action,
+                node_kind=definition.node_kind,
+                source_node_id=definition.source_node_id,
+                target_node_id=definition.target_node_id,
+                target_slot=definition.target_slot,
+                manual_node_data=definition.manual_node_data,
             )
         )
 
@@ -301,4 +376,3 @@ def project_aigc_guide(
         steps=tuple(projected),
         task_summary=_summary(task),
     )
-

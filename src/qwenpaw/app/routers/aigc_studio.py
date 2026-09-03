@@ -6064,6 +6064,8 @@ async def export_long_image(
         full_asset,
         slice_assets,
     )
+    job.outputs = [full_asset, *slice_assets]
+    _write_json(_json_path("jobs", job.id), job)
     _write_json(_json_path("canvases", updated_canvas.id), updated_canvas)
     return LongImageExportResult(
         full_asset=full_asset,

@@ -2107,6 +2107,17 @@ async def test_export_long_image_creates_full_image_and_upload_slices(tmp_path):
             assert payload["full_asset"]["meta"]["adapter"] == "long_image_export"
             assert payload["full_asset"]["meta"]["canvas_id"] == canvas.json()["id"]
 
+            jobs = await client.get(
+                "/api/aigc-studio/jobs",
+                params={"canvas_id": canvas.json()["id"]},
+            )
+            assert jobs.status_code == 200
+            persisted = jobs.json()["jobs"]
+            assert len(persisted) == 1
+            assert persisted[0]["node_id"] == "long-1"
+            assert persisted[0]["status"] == "succeeded"
+            assert persisted[0]["outputs"][0]["id"] == payload["full_asset"]["id"]
+
             slice_file = await client.get(payload["slice_assets"][0]["url"])
             assert slice_file.status_code == 200
             assert slice_file.headers["content-type"].startswith("image/png")

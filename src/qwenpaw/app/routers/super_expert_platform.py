@@ -20,6 +20,7 @@ from qwenpaw.aigc.workflow_compiler import (
     AvailableWorkflowModel,
     WorkflowCompileError,
     compile_workflow,
+    plan_manual_workflow,
 )
 from qwenpaw.aigc.workflow_contract import WorkflowBlueprint
 
@@ -376,7 +377,10 @@ class SuperExpertPlatformService:
             )
             return {
                 "task": task,
-                "payload": {"workflow_id": current.workflow.workflow_id},
+                "payload": {
+                    "workflow_id": current.workflow.workflow_id,
+                    "workflow_binding": current.binding.model_dump(mode="json"),
+                },
             }, current.binding
 
         catalog = await _load_workflow_capability_catalog()
@@ -421,7 +425,16 @@ class SuperExpertPlatformService:
                 == "MANUAL_BUILD_IF_UNSUPPORTED"
             ):
                 raise SuperExpertPlatformError(exc.code) from exc
-            workflow_id = id_factory("workflow")
+            manual = plan_manual_workflow(
+                request.workflow,
+                available_models=available_models,
+                id_factory=id_factory,
+                asset_resolver=lambda asset_id: resolve_owned_asset_for_workflow(
+                    user_id,
+                    asset_id,
+                ),
+            )
+            workflow_id = manual.workflow_id
             canvas = provision_blank_super_expert_aigc_workspace(
                 owner_user_id=user_id,
                 material_task_id=request.scope.material_task_id,
@@ -429,15 +442,14 @@ class SuperExpertPlatformService:
                 title=request.workflow.title,
             )
             provisioned_canvas_id = canvas.id
-            pending_output = id_factory("pending-output")
             binding = AigcTaskBinding(
                 **request.scope.model_dump(mode="json"),
                 canvas_id=canvas.id,
-                node_id=pending_output,
+                node_id=manual.output_node_id,
                 workflow_id=workflow_id,
                 execution_mode="MANUAL_BUILD",
-                node_bindings={},
-                output_node_id=pending_output,
+                node_bindings=manual.bindings,
+                output_node_id=manual.output_node_id,
                 workflow_revision=1,
                 guide_revision=1,
             )
@@ -448,7 +460,7 @@ class SuperExpertPlatformService:
                 workflow_revision=1,
                 guide_revision=1,
                 blueprint=request.workflow,
-                guide_steps=(),
+                guide_steps=manual.guide_steps,
                 manual_reason=exc.code,
             )
         else:
@@ -498,7 +510,10 @@ class SuperExpertPlatformService:
             raise
         return {
             "task": task,
-            "payload": {"workflow_id": workflow.workflow_id},
+            "payload": {
+                "workflow_id": workflow.workflow_id,
+                "workflow_binding": binding.model_dump(mode="json"),
+            },
         }, binding
 
     def _apply_capability(

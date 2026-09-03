@@ -132,9 +132,15 @@ def _job(canvas_id, node_id, ordinal, output_kind):
         id=f"job-{ordinal}",
         canvas_id=canvas_id,
         node_id=node_id,
-        capability="storyboard" if output_kind == "file" else f"text_to_{output_kind}",
+        capability=(
+            "storyboard"
+            if output_kind == "file"
+            else "text_to_image"
+            if output_kind == "image"
+            else "image_to_video"
+        ),
         provider_id="provider-1",
-        model_id="model-1",
+        model_id={"file": "text-1", "image": "image-1", "video": "video-1"}[output_kind],
         status="succeeded",
         created_at=stamp,
         updated_at=stamp,
