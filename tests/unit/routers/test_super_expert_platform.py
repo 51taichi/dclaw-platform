@@ -53,6 +53,8 @@ def _workflow_blueprint(*, kind: str = "video_generate", fallback: str = "FAIL_C
                 "kind": "prompt",
                 "title": "开场文案",
                 "capability": "storyboard",
+                "provider_id": "provider-1",
+                "model_id": "text-1",
                 "inputs": {"text": "失业后学抖音，从哪里开始？"},
                 "parameters": {},
                 "customer_action": "CLICK_GENERATE",
@@ -92,6 +94,15 @@ def _workflow_catalog():
     return project_workflow_capability_catalog(
         CapabilityList(
             capabilities=[
+                AigcCapabilityInfo(
+                    provider_id="provider-1",
+                    provider_name="Provider",
+                    model_id="text-1",
+                    model_name="Text One",
+                    capability="storyboard",
+                    source="model_registry",
+                    parameter_schema={"type": "object"},
+                ),
                 AigcCapabilityInfo(
                     provider_id="provider-1",
                     provider_name="Provider",
@@ -390,8 +401,9 @@ def test_workflow_catalog_exposes_all_canvas_nodes_and_real_models():
     assert {
         (model.provider_id, model.model_id, model.capability)
         for model in catalog.available_models
-    } == {
-        ("provider-1", "video-1", "text_to_video"),
+        } == {
+            ("provider-1", "text-1", "storyboard"),
+            ("provider-1", "video-1", "text_to_video"),
         ("provider-1", "video-1", "image_to_video"),
     }
 

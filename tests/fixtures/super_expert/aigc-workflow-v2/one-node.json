@@ -1,0 +1,38 @@
+{
+  "scope": {
+    "installation_id": "__INSTALLATION_ID__",
+    "conversation_id": "conversation-one-node",
+    "agent_task_id": "task-one-node",
+    "content_revision": 1,
+    "material_task_id": "material-one-node"
+  },
+  "event_id": "create-one-node",
+  "workflow": {
+    "schema_version": 1,
+    "title": "单节点招生短视频",
+    "execution_preference": "CUSTOMER_TRIGGERED",
+    "nodes": [
+      {
+        "node_id": "clip",
+        "kind": "video_generate",
+        "title": "生成招生短视频",
+        "capability": "text_to_video",
+        "provider_id": "provider-1",
+        "model_id": "video-1",
+        "inputs": {
+          "prompt": "真实课堂与就业服务场景，竖屏纪实风格。"
+        },
+        "parameters": {
+          "aspect_ratio": "9:16",
+          "duration_seconds": 5,
+          "generate_audio": false
+        },
+        "customer_action": "CLICK_GENERATE",
+        "optional": false
+      }
+    ],
+    "edges": [],
+    "output_node_id": "clip",
+    "fallback_policy": "FAIL_CLOSED"
+  }
+}

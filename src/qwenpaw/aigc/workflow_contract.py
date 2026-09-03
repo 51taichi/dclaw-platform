@@ -127,6 +127,7 @@ _NODE_REGISTRY: dict[str, NodeRegistration] = {
         output_type="text",
         control_id="aigc.text.generate-submit",
         customer_actions=("CLICK_GENERATE", "INSPECT", "NONE"),
+        requires_model=True,
     ),
     "image_generate": _registration(
         "image_generate",
@@ -293,7 +294,7 @@ def validate_workflow_blueprint(
             raise WorkflowContractError("workflow node kind is unavailable")
         if node.capability is not None and node.capability not in registration.capabilities:
             raise WorkflowContractError("workflow node capability is unavailable")
-        if registration.requires_model and (
+        if registration.requires_model and node.customer_action == "CLICK_GENERATE" and (
             not node.provider_id or not node.model_id or not node.capability
         ):
             raise WorkflowContractError("workflow node model identity is required")

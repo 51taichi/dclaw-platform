@@ -59,6 +59,7 @@ def test_registry_covers_every_current_canvas_node_type_with_honest_status():
     assert registry["video_compose"].provisioning == "MANUAL_ONLY"
     assert registry["director_stage"].provisioning == "UNAVAILABLE"
     assert registry["video_generate"].control_id == "aigc.video.generate-submit"
+    assert registry["prompt"].requires_model is True
 
 
 def test_blueprint_accepts_only_semantic_fields_and_forbids_raw_canvas_data():

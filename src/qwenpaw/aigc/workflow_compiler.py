@@ -170,7 +170,7 @@ def _validate_model(
     registration: NodeRegistration,
     available_models: Collection[AvailableWorkflowModel],
 ) -> None:
-    if not registration.requires_model:
+    if not registration.requires_model or node.customer_action != "CLICK_GENERATE":
         return
     if not node.provider_id or not node.model_id or not node.capability:
         _raise("MODEL_UNAVAILABLE")
@@ -246,7 +246,12 @@ def _node_data(
     prompt = str(inputs.get("prompt") or inputs.get("text") or "")
     common: dict[str, Any] = {"title": node.title, "showTryOptions": False}
     if node.kind == "prompt":
-        return {**common, "text": prompt, "composerText": prompt}
+        return {
+            **common,
+            "text": prompt,
+            "composerText": prompt,
+            "modelId": node.model_id,
+        }
     if node.kind == "image_generate":
         return {
             **common,

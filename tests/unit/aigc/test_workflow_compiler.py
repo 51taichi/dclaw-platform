@@ -92,6 +92,11 @@ def _models() -> tuple[AvailableWorkflowModel, ...]:
     return (
         AvailableWorkflowModel(
             provider_id="provider-1",
+            model_id="text-1",
+            capabilities=frozenset({"storyboard"}),
+        ),
+        AvailableWorkflowModel(
+            provider_id="provider-1",
             model_id="image-1",
             capabilities=frozenset({"text_to_image"}),
         ),
@@ -101,6 +106,26 @@ def _models() -> tuple[AvailableWorkflowModel, ...]:
             capabilities=frozenset({"image_to_video"}),
         ),
     )
+
+
+def test_clickable_prompt_is_bound_to_an_executable_text_model():
+    payload = _three_node_payload()
+    payload["nodes"][0].update({
+        "capability": "storyboard",
+        "provider_id": "provider-1",
+        "model_id": "text-1",
+        "customer_action": "CLICK_GENERATE",
+    })
+
+    compiled = compile_workflow(
+        WorkflowBlueprint.model_validate(payload),
+        available_models=_models(),
+        id_factory=_id_factory(),
+        asset_resolver=lambda _asset_id: None,
+    )
+
+    prompt = next(node for node in compiled.nodes if node.kind == "prompt")
+    assert prompt.data["modelId"] == "text-1"
 
 
 def _id_factory() -> Callable[[str], str]:

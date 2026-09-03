@@ -479,7 +479,7 @@ git commit -m "feat: project authoritative AIGC guide progress"
 - Consumes: `GET /tasks/{id}`, `GET /tasks/{id}/guide`, existing AIGC job events.
 - Produces: strict TypeScript `AigcWorkflowBinding`, `AigcGuideProjection`, and `{task, guide, refresh}` from `useAigcGuideTask()`.
 
-- [ ] **Step 1: Replace hook tests with server-authoritative behavior tests**
+- [x] **Step 1: Replace hook tests with server-authoritative behavior tests**
 
 ```tsx
 it("loads the task and its instance guide without requesting a static operation", async () => {
@@ -497,13 +497,13 @@ it("reloads the authoritative step after refresh", async () => {
 });
 ```
 
-- [ ] **Step 2: Run hook tests and confirm type/API failures**
+- [x] **Step 2: Run hook tests and confirm type/API failures**
 
 Run: `pnpm --dir console test -- --run src/pages/AigcStudio/components/GuidePanel/useAigcGuideTask.test.tsx`
 
 Expected: FAIL because `getGuide` and v2 types are missing.
 
-- [ ] **Step 3: Add strict API types and guide loader**
+- [x] **Step 3: Add strict API types and guide loader**
 
 ```typescript
 export type GuideStepStatus = "LOCKED" | "READY" | "RUNNING" | "COMPLETED" | "FAILED" | "SKIPPED";
@@ -521,7 +521,7 @@ getGuide: (materialTaskId: string) =>
 
 The hook loads task and guide concurrently for v2, falls back to `getOperation()` only for `execution_mode === "LEGACY"`, and exposes one `refresh()` that reloads both task and guide. Remove the browser-computed completion module after all imports are gone.
 
-- [ ] **Step 4: Run hook and TypeScript checks**
+- [x] **Step 4: Run hook and TypeScript checks**
 
 Run: `pnpm --dir console test -- --run src/pages/AigcStudio/components/GuidePanel/useAigcGuideTask.test.tsx`
 
@@ -529,7 +529,7 @@ Run: `pnpm --dir console exec tsc -b --noEmit`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit only the guide data-layer files**
+- [x] **Step 5: Commit only the guide data-layer files**
 
 ```bash
 git add console/src/api/modules/superExpertPlatform.ts console/src/pages/AigcStudio/components/GuidePanel/useAigcGuideTask.ts console/src/pages/AigcStudio/components/GuidePanel/useAigcGuideTask.test.tsx console/src/pages/AigcStudio/components/GuidePanel/guideStepCompletion.ts console/src/pages/AigcStudio/components/GuidePanel/guideStepCompletion.test.ts
@@ -558,7 +558,7 @@ git commit -m "feat: load authoritative AIGC guide state"
 - Consumes: `AigcGuideProjection`, physical `node_id`, stable `control_id`, canvas viewport callbacks.
 - Produces: a current-step-first panel, `onFocusStep(nodeId, controlId)`, highlighted real node control, server refresh after jobs, and canvas-relative centered minimap dock.
 
-- [ ] **Step 1: Write failing UI hierarchy and workflow interaction tests**
+- [x] **Step 1: Write failing UI hierarchy and workflow interaction tests**
 
 ```tsx
 it("renders the current action before collapsed task parameters", () => {
@@ -583,13 +583,13 @@ it("does not render create-node instructions for prebuilt mode", () => {
 
 Add a studio layout assertion that the minimap dock is inside the canvas surface and uses `left: 50%`/`translateX(-50%)`, not viewport `right` positioning.
 
-- [ ] **Step 2: Run panel and studio tests and confirm old behavior failures**
+- [x] **Step 2: Run panel and studio tests and confirm old behavior failures**
 
 Run: `pnpm --dir console test -- --run src/pages/AigcStudio/components/GuidePanel/AigcGuidePanel.test.tsx src/pages/AigcStudio/AigcStudio.test.tsx`
 
 Expected: FAIL because the old panel is parameter-first and `localStorage`-driven.
 
-- [ ] **Step 3: Rebuild the panel around current server step**
+- [x] **Step 3: Rebuild the panel around current server step**
 
 ```tsx
 <aside className={styles.panel} aria-label="AIGC 执行向导">
@@ -608,13 +608,13 @@ Expected: FAIL because the old panel is parameter-first and `localStorage`-drive
 
 Remove step-index reads/writes from `localStorage`. Keep pause as a local display preference only. `RUNNING` polls/refreshes; job completion refreshes the guide. `FAILED` offers the projector-provided recovery. `SUBMIT` resolves the asset from `binding.output_node_id ?? binding.node_id`.
 
-- [ ] **Step 4: Bind stable control IDs and focus the real node**
+- [x] **Step 4: Bind stable control IDs and focus the real node**
 
 Mark node wrappers and generation/retry controls with platform IDs. `onFocusStep` selects the requested physical node, centers it in the effective canvas, then calls `focusPlatformControl(controlId, nodeId)`. Missing controls show a blocked state and never fall through to another node.
 
 Use these registry-owned control IDs consistently in server projections and React elements: `aigc.text.generate-submit`, `aigc.image.generate-submit`, `aigc.video.generate-submit`, `aigc.audio.generate-submit`, `aigc.script.generate-submit`, and `aigc.long-image.generate-submit`. Scope lookup to `[data-aigc-node-id="<physical id>"]` before resolving the control ID so identical node kinds cannot focus the wrong button.
 
-- [ ] **Step 5: Center minimap controls within the canvas surface**
+- [x] **Step 5: Center minimap controls within the canvas surface**
 
 ```less
 .canvasSurface { position: relative; }
@@ -636,7 +636,7 @@ Use these registry-owned control IDs consistently in server projections and Reac
 
 Ensure the surface width already excludes the global left navigation and fixed guide panel; when guide width overlays the surface, expose a CSS custom property or inner `canvasViewport` wrapper whose width excludes the panel before centering.
 
-- [ ] **Step 6: Run focused UI, type, and build checks**
+- [x] **Step 6: Run focused UI, type, and build checks**
 
 Run: `pnpm --dir console test -- --run src/pages/AigcStudio/components/GuidePanel/AigcGuidePanel.test.tsx src/pages/AigcStudio/components/GuidePanel/useAigcGuideTask.test.tsx src/pages/AigcStudio/AigcStudio.test.tsx`
 
@@ -646,7 +646,7 @@ Run: `pnpm --dir console build`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit only AIGC console files**
+- [x] **Step 7: Commit only AIGC console files**
 
 ```bash
 git add console/src/pages/AigcStudio/components/GuidePanel console/src/pages/AigcStudio/components/CanvasMinimap/CanvasMinimap.tsx console/src/pages/AigcStudio/components/TextNode/TextComposer.tsx console/src/pages/AigcStudio/components/ImageNode/ImageComposer.tsx console/src/pages/AigcStudio/components/VideoNode/VideoComposer.tsx console/src/pages/AigcStudio/components/AudioNode/AudioComposer.tsx console/src/pages/AigcStudio/components/ScriptNode/ScriptComposer.tsx console/src/pages/AigcStudio/components/LongImageExportNode/LongImageExportNode.tsx console/src/pages/AigcStudio/index.tsx console/src/pages/AigcStudio/index.module.less console/src/pages/AigcStudio/AigcStudio.test.tsx console/src/api/modules/superExpertPlatform.ts
@@ -670,7 +670,7 @@ git commit -m "feat: guide customers through prebuilt AIGC workflows"
 - Consumes: tolerant/INI production intent already parsed into authoritative task production fields; workflow capability catalog.
 - Produces: `compile_luyu_workflow_intent(state, catalog) -> WorkflowBlueprintRequest`, `list_workflow_capabilities()`, and `create_aigc_workflow()`.
 
-- [ ] **Step 1: Write failing deterministic adapter tests**
+- [x] **Step 1: Write failing deterministic adapter tests**
 
 ```python
 def test_prompt_image_video_plan_compiles_without_model_json():
@@ -689,13 +689,13 @@ def test_ambiguous_or_unavailable_plan_fails_closed():
 
 Add runtime tests proving only S9 can create the workflow, only one material task is active, event bindings remain exact, and S0-S8/S10-S15 never call either new capability.
 
-- [ ] **Step 2: Run adapter and runtime tests and confirm missing capability failure**
+- [x] **Step 2: Run adapter and runtime tests and confirm missing capability failure**
 
 Run: `python3 -m unittest tests.test_luyu_aigc_workflow tests.test_super_expert_platform_contract tests.test_workspace_runtime`
 
 Expected: FAIL because the v2 workflow adapter is absent.
 
-- [ ] **Step 3: Implement strict catalog and create methods**
+- [x] **Step 3: Implement strict catalog and create methods**
 
 ```python
 async def list_workflow_capabilities(self) -> dict[str, Any]:
@@ -714,23 +714,23 @@ async def create_aigc_workflow(self, *, scope, event_id, idempotency_key, workfl
 
 Extend `TrustedBinding` with optional workflow metadata while keeping its existing seven fields and event-shape validation compatible.
 
-- [ ] **Step 4: Implement deterministic intent-to-blueprint compilation**
+- [x] **Step 4: Implement deterministic intent-to-blueprint compilation**
 
 The compiler reads only current S9 production fields and the returned catalog. It maps explicit ordered actions to closed semantic nodes, selects only available priced models, derives edges from declared material dependencies, and uses the current task/content revision in idempotency. It never parses arbitrary raw chat into a graph and never asks the model for physical IDs or raw canvas JSON.
 
-- [ ] **Step 5: Route S9 to v2 with a v1 compatibility fallback**
+- [x] **Step 5: Route S9 to v2 with a v1 compatibility fallback**
 
 If both new capabilities are granted, use workflow v2. If not, retain `aigc.task.create/2` only for the existing single text-to-video operation. A v2 validation/platform error remains a controlled no-progress result and must not silently downgrade to a semantically different one-node task.
 
 Update the S9 `platform_capabilities`, sealed manifest capability declarations, and customer reply to say the workflow is ready and the customer should execute its current node; do not claim “文生视频” for image or multi-node tasks.
 
-- [ ] **Step 6: Run Luyu focused and full contract suites**
+- [x] **Step 6: Run Luyu focused and full contract suites**
 
 Run: `python3 -m unittest tests.test_luyu_aigc_workflow tests.test_super_expert_platform_contract tests.test_workspace_runtime tests.test_luyu_aigc_closed_loop tests.test_goal_driven_dialogue_boundaries`
 
 Expected: PASS.
 
-- [ ] **Step 7: Do not commit in the Luyu directory**
+- [x] **Step 7: Do not commit in the Luyu directory**
 
 The user explicitly removed the local Git metadata from this directory. Preserve that decision; verify changes through tests and release manifests instead of creating a new repository.
 
@@ -748,7 +748,7 @@ The user explicitly removed the local Git metadata from this directory. Preserve
 - Consumes: signed capability manifests, DClaw workflow command/guide endpoint, console task route, Luyu S9 events.
 - Produces: one-node, three-node, manual fallback, refresh recovery, submission, and v1 regression evidence.
 
-- [ ] **Step 1: Add failing end-to-end fixture tests**
+- [x] **Step 1: Add failing end-to-end fixture tests**
 
 ```python
 @pytest.mark.asyncio
@@ -763,17 +763,17 @@ async def test_three_node_customer_triggered_closed_loop(app_client, signed_agen
     assert submitted["task"]["status"] == "SUBMITTED"
 ```
 
-- [ ] **Step 2: Run the integration test and confirm fixture/behavior failures**
+- [x] **Step 2: Run the integration test and confirm fixture/behavior failures**
 
 Run: `uv run pytest tests/integration/test_super_expert_aigc_workflow.py -q`
 
 Expected: FAIL until all cross-layer contracts agree.
 
-- [ ] **Step 3: Resolve contract mismatches without weakening validation**
+- [x] **Step 3: Resolve contract mismatches without weakening validation**
 
 Use the fixture as the single example payload across server, console mocks, and Luyu host mocks. Fix field names, statuses, control IDs, and event binding mismatches at their owning layer. Do not add permissive `Record<string, unknown>` fallbacks around v2 fields.
 
-- [ ] **Step 4: Run full relevant server and console suites**
+- [x] **Step 4: Run full relevant server and console suites**
 
 Run: `uv run pytest tests/unit/aigc tests/unit/app/super_experts tests/unit/app/sealed_agents/test_super_expert_manifest.py tests/unit/routers/test_super_expert_platform.py tests/integration/test_super_expert_aigc_workflow.py -q`
 
@@ -783,7 +783,7 @@ Run: `pnpm --dir '/Users/moxi/Desktop/codex space/dclaw-client/console' exec tsc
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit DClaw fixture and compatibility tests**
+- [x] **Step 5: Commit DClaw fixture and compatibility tests**
 
 ```bash
 git add tests/fixtures/super_expert/aigc-workflow-v2 tests/integration/test_super_expert_aigc_workflow.py
