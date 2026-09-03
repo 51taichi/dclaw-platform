@@ -37,6 +37,10 @@ router = APIRouter(
     prefix="/super-expert-platform",
     tags=["super-expert-platform"],
 )
+frontend_read_router = APIRouter(
+    prefix="/super-expert-platform",
+    tags=["super-expert-platform"],
+)
 
 
 class SuperExpertPlatformError(ValueError):
@@ -248,7 +252,7 @@ class SuperExpertPlatformService:
         if current is not None:
             current_scope = AigcTaskScope.model_validate(
                 current.binding.model_dump(
-                    exclude={"canvas_id", "node_id"},
+                    include=set(AigcTaskScope.model_fields),
                     mode="json",
                 ),
             )
@@ -387,6 +391,7 @@ def get_super_expert_platform_service() -> SuperExpertPlatformService:
     return _service
 
 
+@frontend_read_router.get("/tasks/{material_task_id}")
 @router.get("/tasks/{material_task_id}")
 def get_super_expert_task(
     material_task_id: str,
@@ -403,6 +408,7 @@ def get_super_expert_task(
     return task.model_dump(mode="json")
 
 
+@frontend_read_router.get("/operations/{operation_id}")
 @router.get("/operations/{operation_id}")
 def get_aigc_operation_contract(
     operation_id: str,

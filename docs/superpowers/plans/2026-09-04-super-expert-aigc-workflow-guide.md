@@ -219,7 +219,7 @@ git commit -m "feat: compile semantic AIGC workflows"
 - Consumes: `CompiledWorkflow` and existing `AigcTaskRepository.apply()`.
 - Produces: backward-compatible `AigcTaskBinding`, `AigcWorkflowDefinition`, `AigcGuideStepDefinition`, and workflow data stored atomically in `AigcMaterialTask`.
 
-- [ ] **Step 1: Write migration and idempotency tests**
+- [x] **Step 1: Write migration and idempotency tests**
 
 ```python
 def test_v1_task_document_loads_without_workflow_fields(tmp_path):
@@ -237,13 +237,13 @@ def test_workflow_create_replay_returns_same_definition(tmp_path):
     assert first.binding.node_id == first.binding.output_node_id
 ```
 
-- [ ] **Step 2: Run the new repository tests and confirm schema failure**
+- [x] **Step 2: Run the new repository tests and confirm schema failure**
 
 Run: `uv run pytest tests/unit/app/super_experts/test_aigc_workflow_tasks.py -q`
 
 Expected: FAIL because workflow fields do not exist.
 
-- [ ] **Step 3: Extend models without breaking v1 parsing**
+- [x] **Step 3: Extend models without breaking v1 parsing**
 
 ```python
 class AigcTaskBinding(BaseModel):
@@ -264,13 +264,13 @@ class AigcMaterialTask(BaseModel):
 
 Add `workflow` and optional `guide_event` to `AigcTaskCommand`; on create, require `binding.node_id == binding.output_node_id` for v2 and persist the immutable workflow definition in the same atomic task document. Add a `guide_update` command path that accepts only a binding-exact, revision-exact `SKIP_OPTIONAL` event, appends it to `guide_events`, increments the task version, and does not change the material task status. Keep the legacy guide-update no-op response for tasks without a workflow.
 
-- [ ] **Step 4: Run repository and v1 regression tests**
+- [x] **Step 4: Run repository and v1 regression tests**
 
 Run: `uv run pytest tests/unit/app/super_experts/test_aigc_workflow_tasks.py tests/unit/routers/test_super_expert_platform.py -q`
 
 Expected: PASS, including legacy fixture loading.
 
-- [ ] **Step 5: Commit the persistence unit**
+- [x] **Step 5: Commit the persistence unit**
 
 ```bash
 git add src/qwenpaw/app/super_experts/models.py src/qwenpaw/app/super_experts/aigc_tasks.py tests/unit/app/super_experts/test_aigc_workflow_tasks.py tests/unit/routers/test_super_expert_platform.py
