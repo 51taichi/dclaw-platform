@@ -202,7 +202,7 @@ import { useGenerationProgressSimulation } from "./useGenerationProgressSimulati
 import styles from "./index.module.less";
 import { AigcGuidePanel } from "./components/GuidePanel/AigcGuidePanel";
 import { useAigcGuideTask } from "./components/GuidePanel/useAigcGuideTask";
-import { getAigcGuideStepCompletion } from "./components/GuidePanel/guideStepCompletion";
+import { focusPlatformControl } from "./components/GuidePanel/controlRegistry";
 import { superExpertPlatformApi } from "../../api/modules/superExpertPlatform";
 
 function connectCanvasNodes(source: string, target: string): AigcCanvasEdge {
@@ -577,16 +577,17 @@ export default function AigcStudioPage() {
   useEffect(() => {
     const binding = guide.task?.binding;
     if (!binding) return;
+    const targetNodeId = guide.guide?.current_step?.node_id ?? binding.node_id;
     if (activeCanvas?.id === binding.canvas_id) {
-      if (selectedNodeId !== binding.node_id) {
-        setSelectedNodeId(binding.node_id);
+      if (targetNodeId && selectedNodeId !== targetNodeId) {
+        setSelectedNodeId(targetNodeId);
       }
       return;
     }
     let active = true;
     void activateCanvasById(binding.canvas_id)
       .then(() => {
-        if (active) setSelectedNodeId(binding.node_id);
+        if (active && targetNodeId) setSelectedNodeId(targetNodeId);
       })
       .catch(() => {
         if (active) {
@@ -602,6 +603,7 @@ export default function AigcStudioPage() {
     activeCanvas?.id,
     activateCanvasById,
     guide.task?.binding,
+    guide.guide?.current_step?.node_id,
     selectedNodeId,
   ]);
 
@@ -639,17 +641,6 @@ export default function AigcStudioPage() {
 
   const selectedNode = activeCanvas?.nodes.find(
     (node) => node.id === selectedNodeId,
-  );
-  const guideStepCompletion = useMemo(
-    () =>
-      guide.task
-        ? getAigcGuideStepCompletion({
-            task: guide.task,
-            activeCanvas,
-            jobs,
-          })
-        : {},
-    [activeCanvas, guide.task, jobs],
   );
   const annotationEditorNode = annotationEditorNodeId
     ? activeCanvas?.nodes.find((node) => node.id === annotationEditorNodeId)
@@ -1218,6 +1209,7 @@ export default function AigcStudioPage() {
         );
         return updated;
       });
+      if (guide.taskId) await guide.refresh();
     } catch (error) {
       console.error("Failed to run AIGC node", error);
       if (isFeedbackNode) {
@@ -1302,6 +1294,7 @@ export default function AigcStudioPage() {
         );
         return updated;
       });
+      if (guide.taskId) await guide.refresh();
     } catch (error) {
       console.error("Failed to export long image", error);
       updateNodeData(nodeToExport.id, {
@@ -1325,6 +1318,7 @@ export default function AigcStudioPage() {
   const handleRetryJob = async (jobId: string) => {
     const retried = await aigcStudioApi.retryJob(jobId);
     setJobs((prev) => prependCanvasJob(prev, retried));
+    if (guide.taskId) await guide.refresh();
   };
 
   const updateCanvasName = (name: string) => {
@@ -3598,13 +3592,51 @@ export default function AigcStudioPage() {
           AIGC 任务向导加载失败：{guide.error}
         </aside>
       ) : null}
-      {guide.taskId && guide.task && guide.operation ? (
+      {guide.taskId && guide.task && guide.guide ? (
         <AigcGuidePanel
-          taskId={guide.taskId}
           task={guide.task}
-          operation={guide.operation}
+          guide={guide.guide}
           activeCanvasId={activeCanvas?.id}
-          stepCompletion={guideStepCompletion}
+          onRefresh={guide.refresh}
+          onFocusStep={(nodeId, controlId) => {
+            const target = activeCanvas?.nodes.find((node) => node.id === nodeId);
+            if (!target) {
+              antdMessage.error("当前任务绑定的节点不可用，向导已停止推进");
+              return;
+            }
+            centerViewportOnNode(target);
+            window.setTimeout(() => {
+              if (!focusPlatformControl(controlId, nodeId)) {
+                antdMessage.error("当前步骤的操作按钮不可用，请刷新任务后重试");
+              }
+            }, 0);
+          }}
+          onSkipOptional={async (step) => {
+            const currentTask = guide.task;
+            if (!currentTask || !currentTask.binding.workflow_id) return;
+            const eventStorageKey = `dclaw:aigc-guide-skip:${guide.taskId}:${step.step_id}:${guide.guide!.guide_revision}`;
+            const eventId =
+              localStorage.getItem(eventStorageKey) || crypto.randomUUID();
+            localStorage.setItem(eventStorageKey, eventId);
+            await superExpertPlatformApi.command("aigc.guide.update", {
+              installation_id: currentTask.binding.installation_id,
+              contract_version: "1",
+              idempotency_key: eventId,
+              arguments: {
+                binding: currentTask.binding,
+                event_id: eventId,
+                guide: {
+                  action: "SKIP_OPTIONAL",
+                  workflow_id: currentTask.binding.workflow_id,
+                  guide_revision: guide.guide!.guide_revision,
+                  step_id: step.step_id,
+                  logical_node_id: step.logical_node_id,
+                  node_id: step.node_id,
+                },
+              },
+            });
+            await guide.refresh();
+          }}
           onReturnToChat={() => {
             const path = `/claw/${encodeURIComponent(guide.task!.binding.conversation_id)}`;
             window.history.pushState({}, "", path);
@@ -3617,7 +3649,10 @@ export default function AigcStudioPage() {
               return;
             }
             const boundNode = activeCanvas?.nodes.find(
-              (node) => node.id === currentTask.binding.node_id,
+              (node) =>
+                node.id ===
+                (currentTask.binding.output_node_id ??
+                  currentTask.binding.node_id),
             );
             const outputs = Array.isArray(boundNode?.data.outputs)
               ? boundNode.data.outputs
@@ -3647,11 +3682,16 @@ export default function AigcStudioPage() {
                 },
               },
             );
-            await guide.refreshTask();
+            await guide.refresh();
             antdMessage.success("素材已提交，专家将按当前业务阶段审核");
             return result.agent_review?.reply;
           }}
         />
+      ) : null}
+      {guide.taskId && guide.task && guide.operation && !guide.guide ? (
+        <aside className={styles.guideLoadError} role="status">
+          这是旧版单节点任务。请从原会话重新创建，即可使用完整工作流向导。
+        </aside>
       ) : null}
     </div>
   );

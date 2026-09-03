@@ -339,6 +339,7 @@ export function AudioComposer({
         <span>✦ {Number(node.data.audioCount ?? 1)}</span>
         <button
           type="button"
+          data-platform-control-id="aigc.audio.generate-submit"
           className={styles.runCircle}
           aria-label={t(
             "aigcStudio.audioNode.submitComposer",

@@ -2057,6 +2057,7 @@ export function ImageComposer({
           <div className={styles.upscaleRunRow}>
             <button
               type="button"
+              data-platform-control-id="aigc.image.generate-submit"
               className={styles.runCircle}
               aria-label={t(
                 "aigcStudio.imageNode.submitComposer",
@@ -2408,6 +2409,7 @@ export function ImageComposer({
           </button>
           <button
             type="button"
+            data-platform-control-id="aigc.image.generate-submit"
             className={styles.runCircle}
             aria-label={t(
               "aigcStudio.imageNode.submitComposer",
