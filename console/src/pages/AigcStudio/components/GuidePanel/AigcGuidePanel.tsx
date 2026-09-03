@@ -25,6 +25,7 @@ export function AigcGuidePanel({
   onFocusStep,
   onSkipOptional,
   onRefresh,
+  onManualBuild,
   onSubmit,
   onReturnToChat,
 }: {
@@ -34,6 +35,7 @@ export function AigcGuidePanel({
   onFocusStep?: (nodeId: string, controlId: string) => void;
   onSkipOptional?: (step: AigcGuideStepProjection) => Promise<void>;
   onRefresh?: () => Promise<unknown> | void;
+  onManualBuild?: (step: AigcGuideStepProjection) => Promise<void>;
   onSubmit?: () => Promise<string | void>;
   onReturnToChat?: () => void;
 }) {
@@ -105,7 +107,17 @@ export function AigcGuidePanel({
             </div>
           ) : null}
           <div className={styles.currentActions}>
-            {current.node_id && current.control_id ? (
+            {current.kind === "MANUAL_BUILD" && current.manual_action ? (
+              <button
+                type="button"
+                data-platform-control-id={current.control_id ?? undefined}
+                disabled={paused || pending || wrongCanvas || current.status !== "READY"}
+                onClick={() => void run(() => onManualBuild?.(current))}
+              >
+                {current.manual_action === "ADD_NODE" ? "添加此节点" : "连接这两个节点"}
+              </button>
+            ) : null}
+            {current.kind !== "MANUAL_BUILD" && current.node_id && current.control_id ? (
               <button
                 type="button"
                 disabled={paused || wrongCanvas || current.status === "LOCKED"}

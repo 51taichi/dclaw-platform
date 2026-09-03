@@ -62,6 +62,31 @@ describe("nodeModelSelection", () => {
       configuredModel,
     );
   });
+
+  it("never substitutes another provider or capability for a workflow-bound node", () => {
+    const node: AigcCanvasNode = {
+      id: "video-1",
+      type: "video_generate",
+      position: { x: 0, y: 0 },
+      data: {
+        workflowLogicalNodeId: "clip",
+        providerId: "volcengine",
+        modelId: "seedance2",
+        modelCapability: "image_to_video",
+      },
+    };
+
+    expect(
+      modelForNode(
+        [
+          model("text_to_video", "seedance2"),
+          model("image_to_video", "other-model"),
+        ],
+        node,
+        "text_to_video",
+      ),
+    ).toBeNull();
+  });
 });
 
 const model = (

@@ -126,9 +126,16 @@ export function modelForNode(
 ) {
   const options = modelOptionsForCapability(capabilities, capability);
   const currentKey = nodeModelKey(node);
-  const matched = options.find((model) => modelKey(model) === currentKey);
+  const boundCapability = textValue(node.data.modelCapability);
+  const workflowBound = Boolean(textValue(node.data.workflowLogicalNodeId));
+  const matched = options.find(
+    (model) =>
+      modelKey(model) === currentKey &&
+      (!boundCapability || model.capability === boundCapability),
+  );
   const snapshot = modelSnapshotFromNode(node, capability);
   if (matched) return matched;
+  if (workflowBound) return null;
   if (canUseNodeSnapshot(snapshot, options)) return snapshot;
   return options[0] ?? null;
 }

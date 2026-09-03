@@ -83,6 +83,16 @@ export function useAigcGuideTask(search: string) {
     };
   }, [load, taskId]);
 
+  useEffect(() => {
+    if (guide?.current_step?.status !== "RUNNING") return;
+    const timer = window.setTimeout(() => {
+      void refresh().catch((reason) => {
+        setError(reason instanceof Error ? reason.message : "向导刷新失败");
+      });
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [guide?.current_step?.status, guide?.current_step_id, refresh]);
+
   return {
     taskId,
     task,

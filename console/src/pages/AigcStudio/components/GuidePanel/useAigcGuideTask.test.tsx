@@ -121,4 +121,32 @@ describe("useAigcGuideTask", () => {
     );
     expect(api.getGuide).not.toHaveBeenCalled();
   });
+
+  it("polls authoritative state while the current workflow step is running", async () => {
+    api.getTask.mockResolvedValue(workflowTask);
+    api.getGuide
+      .mockResolvedValueOnce({
+        ...guide("clip.generate"),
+        current_step: {
+          ...guide("clip.generate").current_step,
+          status: "RUNNING",
+        },
+      })
+      .mockResolvedValueOnce({
+        ...guide("workflow.submit"),
+        current_step: {
+          ...guide("workflow.submit").current_step,
+          kind: "SUBMIT",
+          status: "READY",
+        },
+      });
+    const { result } = renderHook(() => useAigcGuideTask("?task=task-1"));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await waitFor(
+      () => expect(result.current.guide?.current_step_id).toBe("workflow.submit"),
+      { timeout: 3000 },
+    );
+    expect(api.getGuide).toHaveBeenCalledTimes(2);
+  });
 });

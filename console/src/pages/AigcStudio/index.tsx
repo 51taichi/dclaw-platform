@@ -201,9 +201,12 @@ import {
 import { useGenerationProgressSimulation } from "./useGenerationProgressSimulation";
 import styles from "./index.module.less";
 import { AigcGuidePanel } from "./components/GuidePanel/AigcGuidePanel";
+import { LegacyAigcGuidePanel } from "./components/GuidePanel/LegacyAigcGuidePanel";
+import { getAigcGuideStepCompletion } from "./components/GuidePanel/guideStepCompletion";
 import { useAigcGuideTask } from "./components/GuidePanel/useAigcGuideTask";
 import { focusPlatformControl } from "./components/GuidePanel/controlRegistry";
 import { superExpertPlatformApi } from "../../api/modules/superExpertPlatform";
+import { resolveWorkflowOutputAssetId } from "./workflowOutput";
 
 function connectCanvasNodes(source: string, target: string): AigcCanvasEdge {
   return {
@@ -2496,6 +2499,101 @@ export default function AigcStudioPage() {
       ? AlertCircle
       : CheckCircle2;
 
+  const submitGuidedAsset = async () => {
+    const currentTask = guide.task;
+    if (!currentTask) {
+      antdMessage.error("当前素材任务已失效，请从会话卡片重新进入");
+      return;
+    }
+    const outputNodeId =
+      currentTask.binding.output_node_id ?? currentTask.binding.node_id;
+    const assetId = activeCanvas
+      ? resolveWorkflowOutputAssetId(
+          activeCanvas.nodes,
+          activeCanvas.edges,
+          outputNodeId,
+        )
+      : "";
+    if (!assetId) {
+      antdMessage.error("当前绑定节点还没有可提交的成品");
+      return;
+    }
+    const eventStorageKey = `dclaw:aigc-submit:${guide.taskId}:${assetId}`;
+    const eventId = localStorage.getItem(eventStorageKey) || crypto.randomUUID();
+    localStorage.setItem(eventStorageKey, eventId);
+    const result = await superExpertPlatformApi.command("aigc.asset.submit", {
+      installation_id: currentTask.binding.installation_id,
+      contract_version: "1",
+      idempotency_key: eventId,
+      arguments: {
+        event_id: eventId,
+        binding: currentTask.binding,
+        asset_id: assetId,
+      },
+    });
+    await guide.refresh();
+    antdMessage.success("素材已提交，专家将按当前业务阶段审核");
+    return result.agent_review?.reply;
+  };
+
+  const performManualGuideStep = async (
+    step: import("../../api/modules/superExpertPlatform").AigcGuideStepProjection,
+  ) => {
+    if (!activeCanvas || activeCanvas.id !== guide.task?.binding.canvas_id) {
+      throw new Error("BOUND_CANVAS_MISMATCH");
+    }
+    let updated = activeCanvas;
+    if (step.manual_action === "ADD_NODE") {
+      if (!step.node_id || !step.node_kind) throw new Error("MANUAL_NODE_INVALID");
+      if (!activeCanvas.nodes.some((node) => node.id === step.node_id)) {
+        const template = createNodeForType(t, step.node_kind, activeCanvas.nodes.length);
+        const node = {
+          ...template,
+          id: step.node_id,
+          data: { ...template.data, ...(step.manual_node_data ?? {}) },
+        };
+        updated = { ...activeCanvas, nodes: [...activeCanvas.nodes, node] };
+        setSelectedNodeId(node.id);
+      }
+    } else if (step.manual_action === "CONNECT_EDGE") {
+      if (!step.source_node_id || !step.target_node_id) {
+        throw new Error("MANUAL_EDGE_INVALID");
+      }
+      const nodes = new Set(activeCanvas.nodes.map((node) => node.id));
+      if (!nodes.has(step.source_node_id) || !nodes.has(step.target_node_id)) {
+        throw new Error("MANUAL_EDGE_NODE_MISSING");
+      }
+      if (
+        !activeCanvas.edges.some(
+          (edge) =>
+            edge.source === step.source_node_id &&
+            edge.target === step.target_node_id &&
+            String(edge.data?.role ?? "") === String(step.target_slot ?? ""),
+        )
+      ) {
+        const edge = {
+          ...connectCanvasNodes(step.source_node_id, step.target_node_id),
+          id: `guide-${step.step_id}`,
+          data: { role: step.target_slot ?? "" },
+        };
+        updated = { ...activeCanvas, edges: [...activeCanvas.edges, edge] };
+      }
+    } else {
+      throw new Error("MANUAL_ACTION_UNSUPPORTED");
+    }
+    commitCanvas(updated);
+    await persistCanvas(updated);
+    await guide.refresh();
+  };
+
+  const legacyGuideCompletion = useMemo(
+    () =>
+      guide.task
+        ? getAigcGuideStepCompletion({ task: guide.task, activeCanvas, jobs })
+        : {},
+    [activeCanvas, guide.task, jobs],
+  );
+
   if (loading) {
     return <Spin style={{ display: "block", margin: "20vh auto" }} />;
   }
@@ -2549,6 +2647,7 @@ export default function AigcStudioPage() {
                 type="button"
                 className={styles.nodeType}
                 key={definition.type}
+                data-platform-control-id={`aigc.canvas.add-node.${definition.type}`}
                 onClick={() => handleAddNode(definition.type)}
               >
                 {definition.icon} {translatedNodeType(t, definition.type)}
@@ -3104,7 +3203,7 @@ export default function AigcStudioPage() {
                   t={t}
                   storyboardWorkflow={storyboardWorkflow}
                 />
-              ) : node.type === "video_generate" ? (
+              ) : node.type === "video_generate" || node.type === "video_compose" ? (
                 <VideoNode
                   node={
                     videoProgressSimulation.progressOverrides[node.id] ===
@@ -3598,6 +3697,7 @@ export default function AigcStudioPage() {
           guide={guide.guide}
           activeCanvasId={activeCanvas?.id}
           onRefresh={guide.refresh}
+          onManualBuild={performManualGuideStep}
           onFocusStep={(nodeId, controlId) => {
             const target = activeCanvas?.nodes.find((node) => node.id === nodeId);
             if (!target) {
@@ -3642,56 +3742,23 @@ export default function AigcStudioPage() {
             window.history.pushState({}, "", path);
             window.dispatchEvent(new PopStateEvent("popstate"));
           }}
-          onSubmit={async () => {
-            const currentTask = guide.task;
-            if (!currentTask) {
-              antdMessage.error("当前素材任务已失效，请从会话卡片重新进入");
-              return;
-            }
-            const boundNode = activeCanvas?.nodes.find(
-              (node) =>
-                node.id ===
-                (currentTask.binding.output_node_id ??
-                  currentTask.binding.node_id),
-            );
-            const outputs = Array.isArray(boundNode?.data.outputs)
-              ? boundNode.data.outputs
-              : [];
-            const firstOutput = outputs.find(
-              (item) => item && typeof item === "object" && "id" in item,
-            ) as { id?: unknown } | undefined;
-            const assetId = String(firstOutput?.id || "");
-            if (!assetId) {
-              antdMessage.error("当前绑定节点还没有可提交的视频成品");
-              return;
-            }
-            const eventStorageKey = `dclaw:aigc-submit:${guide.taskId}:${assetId}`;
-            const eventId =
-              localStorage.getItem(eventStorageKey) || crypto.randomUUID();
-            localStorage.setItem(eventStorageKey, eventId);
-            const result = await superExpertPlatformApi.command(
-              "aigc.asset.submit",
-              {
-                installation_id: currentTask.binding.installation_id,
-                contract_version: "1",
-                idempotency_key: eventId,
-                arguments: {
-                  event_id: eventId,
-                  binding: currentTask.binding,
-                  asset_id: assetId,
-                },
-              },
-            );
-            await guide.refresh();
-            antdMessage.success("素材已提交，专家将按当前业务阶段审核");
-            return result.agent_review?.reply;
-          }}
+          onSubmit={submitGuidedAsset}
         />
       ) : null}
       {guide.taskId && guide.task && guide.operation && !guide.guide ? (
-        <aside className={styles.guideLoadError} role="status">
-          这是旧版单节点任务。请从原会话重新创建，即可使用完整工作流向导。
-        </aside>
+        <LegacyAigcGuidePanel
+          taskId={guide.taskId}
+          task={guide.task}
+          operation={guide.operation}
+          activeCanvasId={activeCanvas?.id}
+          stepCompletion={legacyGuideCompletion}
+          onSubmit={submitGuidedAsset}
+          onReturnToChat={() => {
+            const path = `/claw/${encodeURIComponent(guide.task!.binding.conversation_id)}`;
+            window.history.pushState({}, "", path);
+            window.dispatchEvent(new PopStateEvent("popstate"));
+          }}
+        />
       ) : null}
     </div>
   );

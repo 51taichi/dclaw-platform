@@ -162,4 +162,34 @@ describe("AigcGuidePanel", () => {
     expect(screen.getByText(/不属于此任务/)).toBeInTheDocument();
     expect(screen.getByText(/BOUND_CANVAS_MISSING/)).toBeInTheDocument();
   });
+
+  it("executes one server-defined manual build action at a time", async () => {
+    const onManualBuild = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    const manualStep = {
+      ...readyGuide.current_step!,
+      step_id: "compose.manual-add",
+      kind: "MANUAL_BUILD" as const,
+      status: "READY" as const,
+      manual_action: "ADD_NODE" as const,
+      node_kind: "video_compose",
+    };
+    render(
+      <AigcGuidePanel
+        task={task}
+        guide={{
+          ...readyGuide,
+          execution_mode: "MANUAL_BUILD",
+          current_step_id: manualStep.step_id,
+          current_step: manualStep,
+          steps: [manualStep],
+        }}
+        activeCanvasId="canvas-1"
+        onManualBuild={onManualBuild}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "添加此节点" }));
+    expect(onManualBuild).toHaveBeenCalledWith(manualStep);
+  });
 });

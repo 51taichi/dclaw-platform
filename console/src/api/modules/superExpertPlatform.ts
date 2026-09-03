@@ -78,6 +78,12 @@ export interface AigcGuideStepProjection {
   optional: boolean;
   status: GuideStepStatus;
   recovery: AigcGuideRecovery | null;
+  manual_action?: "ADD_NODE" | "CONNECT_EDGE" | null;
+  node_kind?: string | null;
+  source_node_id?: string | null;
+  target_node_id?: string | null;
+  target_slot?: string | null;
+  manual_node_data?: Record<string, unknown> | null;
 }
 
 export interface AigcGuideProjection {
