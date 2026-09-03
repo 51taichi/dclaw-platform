@@ -1037,7 +1037,7 @@ export default function AigcStudioPage() {
       if (nodeToRun.type === "prompt") {
         return { ...base, textState: "failed" };
       }
-      if (["video_generate", "video_compose"].includes(nodeToRun.type)) {
+      if (nodeToRun.type === "video_generate") {
         return { ...base, videoState: "failed", videoProgress: null };
       }
       if (nodeToRun.type === "audio_generate") {
@@ -1068,7 +1068,7 @@ export default function AigcStudioPage() {
               "aigcStudio.textNode.missingModel",
               "当前文本节点没有可用模型，请先选择模型后再生成。",
             )
-          : ["video_generate", "video_compose"].includes(nodeToRun.type)
+          : nodeToRun.type === "video_generate"
           ? t(
               "aigcStudio.videoNode.missingModel",
               "当前视频节点没有可用模型，请先选择模型后再生成。",
@@ -1125,7 +1125,7 @@ export default function AigcStudioPage() {
             outputs: [],
             showTryOptions: false,
           }
-        : ["video_generate", "video_compose"].includes(nodeToRun.type)
+        : nodeToRun.type === "video_generate"
         ? {
             videoState: "generating",
             videoProgress: 1,
@@ -1187,7 +1187,7 @@ export default function AigcStudioPage() {
           model: runModel,
           parameters: jobRequest.request.parameters,
         });
-      } else if (["video_generate", "video_compose"].includes(nodeToRun.type)) {
+      } else if (nodeToRun.type === "video_generate") {
         videoProgressSimulation.startProgressSimulation({
           nodeId: nodeToRun.id,
           model: runModel,
@@ -1199,7 +1199,7 @@ export default function AigcStudioPage() {
       const finished = await aigcStudioApi.runJob(job.id);
       if (nodeToRun.type === "image_generate") {
         imageProgressSimulation.clearProgressSimulation(nodeToRun.id);
-      } else if (["video_generate", "video_compose"].includes(nodeToRun.type)) {
+      } else if (nodeToRun.type === "video_generate") {
         videoProgressSimulation.clearProgressSimulation(nodeToRun.id);
       }
       setJobs((prev) => replaceCanvasJob(prev, finished));
@@ -1233,7 +1233,7 @@ export default function AigcStudioPage() {
     } finally {
       if (nodeToRun.type === "image_generate") {
         imageProgressSimulation.clearProgressSimulation(nodeToRun.id);
-      } else if (["video_generate", "video_compose"].includes(nodeToRun.type)) {
+      } else if (nodeToRun.type === "video_generate") {
         videoProgressSimulation.clearProgressSimulation(nodeToRun.id);
       }
       setNodeRunning(canvasForRunSource.id, nodeToRun.id, false);
@@ -3037,7 +3037,7 @@ export default function AigcStudioPage() {
                         node.data.imageMode !== "upscale" &&
                         (!node.data.previewKind ||
                           node.data.previewKind === "uploaded")) ||
-                      ["video_generate", "video_compose"].includes(node.type)
+                      node.type === "video_generate"
                     ? nodeVisualHeight(
                         isExpandedImageResultsNode(node)
                           ? compactImageResultsNode(node)
@@ -3207,7 +3207,7 @@ export default function AigcStudioPage() {
                   t={t}
                   storyboardWorkflow={storyboardWorkflow}
                 />
-              ) : node.type === "video_generate" || node.type === "video_compose" ? (
+              ) : node.type === "video_generate" ? (
                 <VideoNode
                   node={
                     videoProgressSimulation.progressOverrides[node.id] ===
@@ -3341,7 +3341,7 @@ export default function AigcStudioPage() {
                   />
                 )}
               {selectedNodeId === node.id &&
-                ["video_generate", "video_compose"].includes(node.type) &&
+                node.type === "video_generate" &&
                 node.data.previewKind !== "storyboard_video_batch" && (
                   <VideoComposer
                     node={node}
@@ -3391,7 +3391,7 @@ export default function AigcStudioPage() {
               {selectedNodeId === node.id &&
                 isGenerationNode &&
                 !isWorkflowOnlyNodeType(node.type) &&
-                !["video_generate", "video_compose"].includes(node.type) &&
+                node.type !== "video_generate" &&
                 node.type !== "script_generate" &&
                 node.type !== "audio_generate" &&
                 !(

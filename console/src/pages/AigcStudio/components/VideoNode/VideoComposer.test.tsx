@@ -208,29 +208,6 @@ const createReferenceDataTransfer = () => {
 };
 
 describe("VideoComposer", () => {
-  it("renders the real generate control for a model-bound video-compose node", () => {
-    renderComposer({
-      node: {
-        ...videoNode({
-          workflowLogicalNodeId: "compose",
-          providerId: seedanceMiniModel.provider_id,
-          modelId: seedanceMiniModel.model_id,
-          modelCapability: seedanceMiniModel.capability,
-        }),
-        type: "video_compose",
-      },
-      currentModel: seedanceMiniModel,
-      modelOptions: [seedanceMiniModel],
-    });
-
-    expect(
-      document.querySelector(
-        '[data-platform-control-id="aigc.video.generate-submit"]',
-      ),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Seedance 2.0 Mini")).toBeInTheDocument();
-  });
-
   it("enables first-row modes from connected media inputs", () => {
     renderComposer({
       node: videoNode({

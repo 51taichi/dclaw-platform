@@ -156,4 +156,33 @@ describe("useAigcGuideTask", () => {
     );
     expect(api.getGuide).toHaveBeenCalledTimes(3);
   });
+
+  it("keeps polling after one transient guide refresh failure", async () => {
+    api.getTask.mockResolvedValue(workflowTask);
+    api.getGuide
+      .mockResolvedValueOnce({
+        ...guide("clip.generate"),
+        current_step: {
+          ...guide("clip.generate").current_step,
+          status: "RUNNING",
+        },
+      })
+      .mockRejectedValueOnce(new Error("temporary network error"))
+      .mockResolvedValueOnce({
+        ...guide("workflow.submit"),
+        current_step: {
+          ...guide("workflow.submit").current_step,
+          kind: "SUBMIT",
+          status: "READY",
+        },
+      });
+    const { result } = renderHook(() => useAigcGuideTask("?task=task-1"));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await waitFor(
+      () => expect(result.current.guide?.current_step_id).toBe("workflow.submit"),
+      { timeout: 4500 },
+    );
+    expect(api.getGuide).toHaveBeenCalledTimes(3);
+  });
 });

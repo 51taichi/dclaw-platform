@@ -695,4 +695,49 @@ describe("useVideoNodeWorkflow", () => {
       }),
     );
   });
+
+  it("preserves an exact reference-video workflow binding when submitting", () => {
+    const updateNodeData = vi.fn();
+    const runNode = vi.fn();
+    const referenceModel = {
+      ...selectedModel,
+      model_id: "video-understanding-1",
+      model_name: "Video Understanding",
+      capability: "reference_video",
+    };
+    const nodeWithPrompt: AigcCanvasNode = {
+      ...videoNode,
+      data: {
+        ...videoNode.data,
+        composerText: "分析参考视频并生成延续镜头",
+        workflowLogicalNodeId: "reference_clip",
+        providerId: referenceModel.provider_id,
+        modelId: referenceModel.model_id,
+        modelCapability: referenceModel.capability,
+      },
+    };
+    const { result } = renderHook(() =>
+      useVideoNodeWorkflow({
+        activeCanvas: canvasWithNode(nodeWithPrompt),
+        commitCanvas: vi.fn(),
+        updateNodeData,
+        setSelectedNodeId: vi.fn(),
+        modelOptions: [referenceModel],
+        t,
+        onRunNode: runNode,
+      }),
+    );
+
+    act(() => result.current.handleVideoComposerSubmit(nodeWithPrompt));
+
+    expect(runNode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          providerId: referenceModel.provider_id,
+          modelId: referenceModel.model_id,
+          modelCapability: "reference_video",
+        }),
+      }),
+    );
+  });
 });

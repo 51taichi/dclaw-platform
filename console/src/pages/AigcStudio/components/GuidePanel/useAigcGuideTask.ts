@@ -96,6 +96,7 @@ export function useAigcGuideTask(search: string) {
       } catch (reason) {
         if (active) {
           setError(reason instanceof Error ? reason.message : "向导刷新失败");
+          timer = window.setTimeout(poll, 1200);
         }
       }
     };
