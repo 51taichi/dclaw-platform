@@ -37,7 +37,7 @@
 - Consumes: existing `CanvasNode` type names and AIGC capability names.
 - Produces: `WorkflowBlueprint`, `WorkflowNode`, `WorkflowEdge`, `NodeRegistration`, `WorkflowCapabilityCatalog`, `workflow_node_registry()`, and `validate_workflow_blueprint()`.
 
-- [ ] **Step 1: Write failing strict-contract tests**
+- [x] **Step 1: Write failing strict-contract tests**
 
 ```python
 def test_registry_covers_every_canvas_node_type():
@@ -57,13 +57,13 @@ def test_blueprint_rejects_physical_and_unknown_fields():
         WorkflowNode.model_validate({**valid_node(), "data": {"raw": True}})
 ```
 
-- [ ] **Step 2: Run the contract tests and confirm they fail because the module is absent**
+- [x] **Step 2: Run the contract tests and confirm they fail because the module is absent**
 
 Run: `uv run pytest tests/unit/aigc/test_workflow_contract.py -q`
 
 Expected: FAIL during import of `qwenpaw.aigc.workflow_contract`.
 
-- [ ] **Step 3: Implement frozen, extra-forbid Pydantic contracts and the full node registry**
+- [x] **Step 3: Implement frozen, extra-forbid Pydantic contracts and the full node registry**
 
 ```python
 ProvisioningMode = Literal["AUTO_PROVISIONABLE", "MANUAL_ONLY", "UNAVAILABLE"]
@@ -100,13 +100,13 @@ class WorkflowBlueprint(BaseModel):
 
 Define all eleven registrations with input/output media types, allowed target slots, strict parameter schema, completion rule, stable control ID, and provisioning reason. Add `aigc.workflow.capabilities.list/1` and `aigc.workflow.create/1` to `PLATFORM_CAPABILITY_CATALOG_V1`, with creation depending on list capability.
 
-- [ ] **Step 4: Run contract and manifest tests**
+- [x] **Step 4: Run contract and manifest tests**
 
 Run: `uv run pytest tests/unit/aigc/test_workflow_contract.py tests/unit/app/sealed_agents/test_super_expert_manifest.py -q`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the protocol unit**
+- [x] **Step 5: Commit the protocol unit**
 
 ```bash
 git add src/qwenpaw/aigc/workflow_contract.py tests/unit/aigc/test_workflow_contract.py src/qwenpaw/app/super_experts/capabilities.py tests/unit/app/sealed_agents/test_super_expert_manifest.py
@@ -124,7 +124,7 @@ git commit -m "feat: define super expert AIGC workflow contract"
 - Consumes: `WorkflowBlueprint`, node registry, `CanvasNode`, `CanvasEdge`, and trusted existing assets.
 - Produces: `compile_workflow(blueprint, available_models, id_factory, asset_resolver) -> CompiledWorkflow`, `provision_super_expert_aigc_workflow(owner_user_id, material_task_id, compiled) -> Canvas`, and `provision_blank_super_expert_aigc_workspace(owner_user_id, material_task_id, workflow_id) -> Canvas`.
 
-- [ ] **Step 1: Write failing graph and factory tests**
+- [x] **Step 1: Write failing graph and factory tests**
 
 ```python
 def test_compile_prompt_image_video_graph():
@@ -144,13 +144,13 @@ def test_compile_rejects_invalid_graph_before_any_write(mutation):
         compile_workflow(mutation(three_node_blueprint()), deterministic_ids, no_assets)
 ```
 
-- [ ] **Step 2: Run compiler tests and confirm missing implementation failure**
+- [x] **Step 2: Run compiler tests and confirm missing implementation failure**
 
 Run: `uv run pytest tests/unit/aigc/test_workflow_compiler.py -q`
 
 Expected: FAIL because `compile_workflow` is unavailable.
 
-- [ ] **Step 3: Implement validation, topological ordering, layout, and node factories**
+- [x] **Step 3: Implement validation, topological ordering, layout, and node factories**
 
 ```python
 @dataclass(frozen=True)
@@ -174,7 +174,7 @@ def compile_workflow(
 
 Use a stable layered layout: topological depth controls `x` with 520px spacing and order within a depth controls `y` with 360px spacing. Node factories translate only semantic fields into DClaw-owned `node.data`. `reference_asset` accepts a same-owner asset ID only. Experimental nodes never compile as automatic.
 
-- [ ] **Step 4: Replace the one-video provisioner with a generic provisioner while retaining its wrapper**
+- [x] **Step 4: Replace the one-video provisioner with a generic provisioner while retaining its wrapper**
 
 ```python
 def provision_super_expert_aigc_workflow(*, owner_user_id, material_task_id, compiled):
@@ -194,13 +194,13 @@ def provision_super_expert_aigc_workflow(*, owner_user_id, material_task_id, com
 
 Keep `provision_super_expert_aigc_workspace()` as a v1-compatible adapter that compiles its existing text-to-video operation into one semantic node.
 
-- [ ] **Step 5: Run compiler and existing AIGC router tests**
+- [x] **Step 5: Run compiler and existing AIGC router tests**
 
 Run: `uv run pytest tests/unit/aigc/test_workflow_compiler.py tests/unit/aigc/test_operation_contract.py tests/unit/routers/test_super_expert_platform.py -q`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit the compiler unit**
+- [x] **Step 6: Commit the compiler unit**
 
 ```bash
 git add src/qwenpaw/aigc/workflow_compiler.py tests/unit/aigc/test_workflow_compiler.py src/qwenpaw/app/routers/aigc_studio.py

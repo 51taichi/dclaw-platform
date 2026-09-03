@@ -38,6 +38,7 @@ from fastapi import (
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from ...aigc.workflow_compiler import CompiledWorkflow
 from ...aigc.visual_dna import (
     CompiledVisualDna,
     VisualDnaCompileRequest,
@@ -996,8 +997,11 @@ def provision_super_expert_aigc_workspace(
         raise ValueError("AIGC workspace ownership is incomplete")
     if operation_id != "aigc.text_to_video.create":
         raise ValueError("AIGC operation cannot be provisioned")
-    canvas_id = str(uuid.uuid4())
-    node_id = str(uuid.uuid4())
+    # Prefix physical identifiers so every generated value remains valid for
+    # the shared super-expert domain-id contract even when a UUID starts with
+    # a digit.
+    canvas_id = f"canvas-{uuid.uuid4()}"
+    node_id = f"video-{uuid.uuid4()}"
     now = _now()
     node = CanvasNode(
         id=node_id,
@@ -1035,6 +1039,90 @@ def provision_super_expert_aigc_workspace(
     )
     _write_json(_json_path("canvases", canvas_id), canvas)
     return {"canvas_id": canvas_id, "node_id": node_id}
+
+
+def provision_super_expert_aigc_workflow(
+    *,
+    owner_user_id: str,
+    material_task_id: str,
+    compiled: CompiledWorkflow,
+) -> Canvas:
+    """Persist one fully validated, DClaw-owned workflow canvas."""
+    if not str(owner_user_id).strip() or not str(material_task_id).strip():
+        raise ValueError("AIGC workspace ownership is incomplete")
+    canvas_id = f"canvas-{uuid.uuid4()}"
+    now = _now()
+    canvas = Canvas(
+        id=canvas_id,
+        name=compiled.title,
+        nodes=[
+            CanvasNode(
+                id=node.physical_node_id,
+                type=node.kind,
+                position=node.position,
+                data=node.data,
+            )
+            for node in compiled.nodes
+        ],
+        edges=[
+            CanvasEdge(
+                id=edge.edge_id,
+                source=edge.source,
+                target=edge.target,
+                data={"role": edge.target_slot},
+            )
+            for edge in compiled.edges
+        ],
+        viewport=CanvasViewport(**compiled.viewport),
+        thumbnail=None,
+        meta={
+            "version": 2,
+            "owner_user_id": str(owner_user_id),
+            "super_expert_material_task_id": str(material_task_id),
+            "workflow_id": compiled.workflow_id,
+            "execution_mode": "PREBUILT_WORKFLOW",
+        },
+        created_at=now,
+        updated_at=now,
+    )
+    _write_json(_json_path("canvases", canvas_id), canvas)
+    return canvas
+
+
+def provision_blank_super_expert_aigc_workspace(
+    *,
+    owner_user_id: str,
+    material_task_id: str,
+    workflow_id: str,
+    title: str,
+) -> Canvas:
+    """Create the only valid starting point for an explicit manual fallback."""
+    if not all(
+        str(value).strip()
+        for value in (owner_user_id, material_task_id, workflow_id, title)
+    ):
+        raise ValueError("AIGC manual workspace binding is incomplete")
+    canvas_id = f"canvas-{uuid.uuid4()}"
+    now = _now()
+    canvas = Canvas(
+        id=canvas_id,
+        name=str(title),
+        nodes=[],
+        edges=[],
+        viewport=CanvasViewport(),
+        thumbnail=None,
+        meta={
+            "version": 2,
+            "owner_user_id": str(owner_user_id),
+            "super_expert_material_task_id": str(material_task_id),
+            "workflow_id": str(workflow_id),
+            "execution_mode": "MANUAL_BUILD",
+        },
+        created_at=now,
+        updated_at=now,
+    )
+    _write_json(_json_path("canvases", canvas_id), canvas)
+    return canvas
 
 
 def discard_super_expert_aigc_workspace(
@@ -5355,11 +5443,13 @@ def _provider_configured_for_aigc(provider: Any) -> bool:
     return bool(str(getattr(provider, "api_key", "") or "").strip())
 
 
-@router.get("/capabilities", response_model=CapabilityList)
-async def list_capabilities(request: Request) -> CapabilityList:
-    """List AIGC-capable provider/model/tool entries."""
+async def build_capability_list(manager: Any | None) -> CapabilityList:
+    """Build the AIGC inventory from an already resolved provider manager.
+
+    This keeps the inventory reusable by non-HTTP callers such as sealed
+    workspace runtimes without making them impersonate a Starlette request.
+    """
     capabilities: list[AigcCapabilityInfo] = []
-    manager = getattr(request.app.state, "provider_manager", None)
     if manager is not None:
         from ..billing.model_publication import ModelPublicationService
         from ..storage.engine import get_app_engine
@@ -5430,6 +5520,14 @@ async def list_capabilities(request: Request) -> CapabilityList:
         (c.provider_id, c.model_id, c.capability, c.source): c for c in capabilities
     }
     return CapabilityList(capabilities=list(deduped.values()))
+
+
+@router.get("/capabilities", response_model=CapabilityList)
+async def list_capabilities(request: Request) -> CapabilityList:
+    """List AIGC-capable provider/model/tool entries."""
+    return await build_capability_list(
+        getattr(request.app.state, "provider_manager", None),
+    )
 
 
 @router.get("/visual-dna/dimensions", response_model=VisualDnaDimensionList)
