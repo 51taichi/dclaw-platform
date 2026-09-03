@@ -131,6 +131,64 @@ async def test_validate_job_submission_rejects_workflow_model_mismatch(monkeypat
     )
 
 
+@pytest.mark.asyncio
+async def test_validate_job_submission_uses_authoritative_task_after_canvas_tamper(
+    monkeypatch,
+):
+    canvas = aigc_studio.Canvas(
+        id="canvas-1",
+        name="Tampered workflow",
+        nodes=[
+            aigc_studio.CanvasNode(
+                id="video-1",
+                type="video_generate",
+                position={"x": 0, "y": 0},
+                data={
+                    "providerId": "attacker-provider",
+                    "modelId": "attacker-model",
+                    "modelCapability": "text_to_video",
+                },
+            )
+        ],
+        edges=[],
+        created_at="2026-09-04T00:00:00Z",
+        updated_at="2026-09-04T00:00:00Z",
+    )
+    monkeypatch.setattr(aigc_studio, "_load_canvas_for_request", lambda *_a: canvas)
+    monkeypatch.setattr(
+        aigc_studio,
+        "_authoritative_workflow_execution_binding",
+        lambda *_a: ("provider-1", "video-1", "image_to_video"),
+    )
+
+    async def available(*_args):
+        return object()
+
+    monkeypatch.setattr(aigc_studio, "_find_capability", available)
+    tampered = aigc_studio.AigcJobCreate(
+        canvas_id="canvas-1",
+        node_id="video-1",
+        capability="text_to_video",
+        provider_id="attacker-provider",
+        model_id="attacker-model",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await aigc_studio._validate_job_submission(SimpleNamespace(), tampered)
+
+    assert exc_info.value.status_code == 409
+    await aigc_studio._validate_job_submission(
+        SimpleNamespace(),
+        tampered.model_copy(
+            update={
+                "provider_id": "provider-1",
+                "model_id": "video-1",
+                "capability": "image_to_video",
+            }
+        ),
+    )
+
+
 class _AllPublished(set):
     def __bool__(self):
         return True

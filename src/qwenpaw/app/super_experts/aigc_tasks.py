@@ -145,6 +145,23 @@ class AigcTaskRepository:
         with self._lock:
             return self._read().tasks.get(material_task_id)
 
+    def find_workflow_task_for_node(
+        self,
+        *,
+        canvas_id: str,
+        node_id: str,
+    ) -> AigcMaterialTask | None:
+        """Find the immutable workflow task owning one physical canvas node."""
+        with self._lock:
+            for task in self._read().tasks.values():
+                if (
+                    task.workflow is not None
+                    and task.binding.canvas_id == canvas_id
+                    and node_id in task.binding.node_bindings.values()
+                ):
+                    return task
+        return None
+
     def _apply_new_command(
         self,
         document: _TaskDocument,

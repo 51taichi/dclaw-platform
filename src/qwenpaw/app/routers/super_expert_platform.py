@@ -118,6 +118,42 @@ class SuperExpertPlatformService:
     def get_task(self, material_task_id: str):
         return self.task_repository.get(material_task_id)
 
+    def workflow_node_execution_binding(
+        self,
+        *,
+        canvas_id: str,
+        node_id: str,
+    ) -> tuple[str, str, str] | None:
+        task = self.task_repository.find_workflow_task_for_node(
+            canvas_id=canvas_id,
+            node_id=node_id,
+        )
+        if task is None or task.workflow is None:
+            return None
+        logical_id = next(
+            (
+                candidate
+                for candidate, physical in task.binding.node_bindings.items()
+                if physical == node_id
+            ),
+            None,
+        )
+        semantic_node = next(
+            (
+                candidate
+                for candidate in task.workflow.blueprint.nodes
+                if candidate.node_id == logical_id
+            ),
+            None,
+        )
+        if semantic_node is None:
+            return ("", "", "")
+        return (
+            semantic_node.provider_id or "",
+            semantic_node.model_id or "",
+            semantic_node.capability or "",
+        )
+
     def list_session_events(
         self,
         *,

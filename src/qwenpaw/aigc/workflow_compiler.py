@@ -359,7 +359,7 @@ def plan_manual_workflow(
     for node in blueprint.nodes:
         registration = registry[node.kind]
         if registration.provisioning == "UNAVAILABLE":
-            _raise("NODE_KIND_UNSUPPORTED")
+            _raise("NODE_KIND_UNAVAILABLE")
         _validate_inputs(node)
         _validate_scalar_parameters(node)
         _validate_model(node, registration, available_models)
@@ -493,6 +493,8 @@ def compile_workflow(
     for node in blueprint.nodes:
         registration = registry[node.kind]
         if registration.provisioning != "AUTO_PROVISIONABLE":
+            if registration.provisioning == "UNAVAILABLE":
+                _raise("NODE_KIND_UNAVAILABLE")
             _raise(
                 "NODE_KIND_UNSUPPORTED",
                 manual=registration.provisioning == "MANUAL_ONLY",

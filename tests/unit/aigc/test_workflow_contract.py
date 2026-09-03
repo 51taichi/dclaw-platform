@@ -56,7 +56,7 @@ def test_registry_covers_every_current_canvas_node_type_with_honest_status():
     }
     assert registry["video_generate"].provisioning == "AUTO_PROVISIONABLE"
     assert registry["reference_asset"].provisioning == "AUTO_PROVISIONABLE"
-    assert registry["video_compose"].provisioning == "MANUAL_ONLY"
+    assert registry["video_compose"].provisioning == "UNAVAILABLE"
     assert registry["director_stage"].provisioning == "UNAVAILABLE"
     assert registry["video_generate"].control_id == "aigc.video.generate-submit"
     assert registry["prompt"].requires_model is True

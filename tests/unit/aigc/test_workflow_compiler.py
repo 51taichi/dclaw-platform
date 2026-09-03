@@ -242,9 +242,8 @@ def test_compiler_reports_manual_only_node_without_partially_compiling():
         _node(
             "compose",
             "video_compose",
-            capability="image_to_video",
-            provider_id="provider-1",
-            model_id="video-1",
+            capability=None,
+            customer_action="NONE",
         )
     ]
     payload["edges"] = []
@@ -253,8 +252,8 @@ def test_compiler_reports_manual_only_node_without_partially_compiling():
     with pytest.raises(WorkflowCompileError) as captured:
         _compile(payload)
 
-    assert captured.value.code == "NODE_KIND_UNSUPPORTED"
-    assert captured.value.manual_fallback_allowed is True
+    assert captured.value.code == "NODE_KIND_UNAVAILABLE"
+    assert captured.value.manual_fallback_allowed is False
 
 
 def test_compiler_rejects_untrusted_reference_asset():

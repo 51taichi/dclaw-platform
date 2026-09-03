@@ -253,13 +253,11 @@ _NODE_REGISTRY: dict[str, NodeRegistration] = {
     "video_compose": _registration(
         "video_compose",
         "视频合成",
-        provisioning="MANUAL_ONLY",
-        capabilities=("image_to_video",),
+        provisioning="UNAVAILABLE",
         input_slots={"video": ("video",), "audio": ("audio",)},
         output_type="video",
-        control_id="aigc.video.generate-submit",
-        customer_actions=("CLICK_GENERATE",),
-        requires_model=True,
+        control_id=None,
+        customer_actions=("NONE",),
         provisioning_reason="stable_server_executor_unavailable",
     ),
     "director_stage": _registration(

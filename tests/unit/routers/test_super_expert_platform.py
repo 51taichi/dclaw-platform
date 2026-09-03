@@ -441,7 +441,7 @@ def test_workflow_catalog_exposes_all_canvas_nodes_and_real_models():
     assert len(catalog.nodes) == 11
     by_kind = {node.kind: node for node in catalog.nodes}
     assert by_kind["video_generate"].provisioning == "AUTO_PROVISIONABLE"
-    assert by_kind["video_compose"].provisioning == "MANUAL_ONLY"
+    assert by_kind["video_compose"].provisioning == "UNAVAILABLE"
     assert by_kind["director_stage"].provisioning == "UNAVAILABLE"
     assert {
         (model.provider_id, model.model_id, model.capability)
@@ -620,7 +620,7 @@ async def test_workflow_rejects_unavailable_model_without_creating_canvas(
 
 
 @pytest.mark.asyncio
-async def test_manual_only_workflow_fails_closed_or_creates_truly_blank_canvas(
+async def test_unavailable_workflow_never_creates_a_misleading_manual_canvas(
     tmp_path,
     monkeypatch,
 ):
@@ -643,12 +643,9 @@ async def test_manual_only_workflow_fails_closed_or_creates_truly_blank_canvas(
                 "node_id": "compose",
                 "kind": "video_compose",
                 "title": "视频合成",
-                "capability": "image_to_video",
-                "provider_id": "provider-1",
-                "model_id": "video-1",
                 "inputs": {},
                 "parameters": {},
-                "customer_action": "CLICK_GENERATE",
+                "customer_action": "NONE",
                 "optional": False,
             }
         ],
@@ -656,7 +653,7 @@ async def test_manual_only_workflow_fails_closed_or_creates_truly_blank_canvas(
         "output_node_id": "compose",
         "fallback_policy": "FAIL_CLOSED",
     }
-    with pytest.raises(SuperExpertPlatformError, match="NODE_KIND_UNSUPPORTED"):
+    with pytest.raises(SuperExpertPlatformError, match="NODE_KIND_UNAVAILABLE"):
         await service.execute(
             tenant_id="tenant-a",
             user_id="user-a",
@@ -671,27 +668,17 @@ async def test_manual_only_workflow_fails_closed_or_creates_truly_blank_canvas(
     arguments = _workflow_arguments(grant.installation_id, **manual_node)
     arguments["scope"]["material_task_id"] = "manual-material"
     arguments["event_id"] = "manual-event"
-    result = await service.execute(
-        tenant_id="tenant-a",
-        user_id="user-a",
-        installation_id=grant.installation_id,
-        capability="aigc.workflow.create/1",
-        contract_version="1",
-        arguments=arguments,
-        idempotency_key="manual-open",
-    )
-
-    binding = result["task"]["binding"]
-    assert binding["execution_mode"] == "MANUAL_BUILD"
-    assert binding["node_bindings"]["compose"] == binding["output_node_id"]
-    steps = result["task"]["workflow"]["guide_steps"]
-    assert steps[0]["manual_action"] == "ADD_NODE"
-    assert steps[0]["node_kind"] == "video_compose"
-    assert steps[0]["node_id"] == binding["node_bindings"]["compose"]
-    assert steps[1]["kind"] == "GENERATE"
-    canvas = aigc_studio._load_canvas(binding["canvas_id"])
-    assert canvas.nodes == []
-    assert canvas.edges == []
+    with pytest.raises(SuperExpertPlatformError, match="NODE_KIND_UNAVAILABLE"):
+        await service.execute(
+            tenant_id="tenant-a",
+            user_id="user-a",
+            installation_id=grant.installation_id,
+            capability="aigc.workflow.create/1",
+            contract_version="1",
+            arguments=arguments,
+            idempotency_key="manual-open",
+        )
+    assert list((tmp_path / "studio" / "canvases").glob("*.json")) == []
 
 
 @pytest.mark.asyncio

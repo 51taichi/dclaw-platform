@@ -1309,6 +1309,18 @@ async def _find_provider_model(
     return None, None
 
 
+def _authoritative_workflow_execution_binding(
+    canvas_id: str,
+    node_id: str,
+) -> tuple[str, str, str] | None:
+    from .super_expert_platform import get_super_expert_platform_service
+
+    return get_super_expert_platform_service().workflow_node_execution_binding(
+        canvas_id=canvas_id,
+        node_id=node_id,
+    )
+
+
 async def _validate_job_submission(request: Request, body: AigcJobCreate) -> None:
     canvas = _load_canvas_for_request(request, body.canvas_id)
     target_node = next((node for node in canvas.nodes if node.id == body.node_id), None)
@@ -1317,8 +1329,15 @@ async def _validate_job_submission(request: Request, body: AigcJobCreate) -> Non
             status_code=400,
             detail=f"Node '{body.node_id}' not found in canvas '{body.canvas_id}'.",
         )
-    if str(target_node.data.get("workflowLogicalNodeId") or "").strip():
-        expected = (
+    authoritative = _authoritative_workflow_execution_binding(
+        body.canvas_id,
+        body.node_id,
+    )
+    workflow_marker = str(
+        target_node.data.get("workflowLogicalNodeId") or ""
+    ).strip()
+    if authoritative is not None or workflow_marker:
+        expected = authoritative or (
             str(target_node.data.get("providerId") or "").strip(),
             str(target_node.data.get("modelId") or "").strip(),
             str(target_node.data.get("modelCapability") or "").strip(),
