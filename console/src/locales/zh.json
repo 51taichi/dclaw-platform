@@ -582,7 +582,7 @@
     "disabled": "已禁用",
     "sealed": "密封",
     "sealedWorkspace": "内部资产已密封",
-    "sealedManageHint": "请在密封/Agent页面管理版本与运行状态",
+    "sealedManageHint": "请在超级专家页面管理版本与运行状态",
     "disableConfirm": "确认禁用智能体",
     "disableConfirmDesc": "禁用后该智能体不会启动运行实例，但仍可在列表中查看",
     "enableConfirm": "确认启用智能体",
