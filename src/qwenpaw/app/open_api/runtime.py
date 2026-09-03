@@ -687,9 +687,10 @@ async def _prepare_open_chat(
     }
     if expert_team_id:
         native_meta["expert_team_id"] = expert_team_id
+    if invocation_id:
+        native_meta["open_invocation_id"] = str(invocation_id)
     if isolated_attempt:
         native_meta["execution_mode"] = "isolated_attempt"
-        native_meta["open_invocation_id"] = str(invocation_id)
         bind_isolated_agent_open_api(native_meta)
     native_payload = {
         "channel_id": channel,

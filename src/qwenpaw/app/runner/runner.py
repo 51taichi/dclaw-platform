@@ -35,6 +35,10 @@ from .utils import build_env_context
 from ..channels.schema import DEFAULT_CHANNEL
 from ..storage.engine import get_app_engine
 from ..storage.settings import get_storage_settings
+from ..open_api.agent_response_format import (
+    install_open_api_agent_response_format,
+    is_trusted_direct_agent_open_api,
+)
 from ...agents.react_agent import QwenPawAgent
 from ...exceptions import convert_model_exception
 from ...agents.utils.file_handling import (
@@ -576,6 +580,12 @@ class AgentRunner(Runner):
                     "agent_id": self.agent_id,
                     "root_agent_id": self.agent_id,
                     "_persist_context_dialog": not isolated_agent_open_api,
+                    "_open_api_direct_agent_execution": (
+                        is_trusted_direct_agent_open_api(
+                            channel,
+                            channel_meta,
+                        )
+                    ),
                 },
             )
 
@@ -773,6 +783,8 @@ class AgentRunner(Runner):
                 task_tracker=self._task_tracker,
                 plan_notebook=plan_notebook,
             )
+            if base_request_context["_open_api_direct_agent_execution"]:
+                install_open_api_agent_response_format(agent)
             await agent.register_mcp_clients()
             agent.set_console_output_enabled(enabled=False)
 

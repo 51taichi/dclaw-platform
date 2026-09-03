@@ -82,6 +82,7 @@ async def _run(
     trusted_isolation: bool = False,
     mission_handler=None,
     mission_detector=None,
+    request_context=None,
 ):
     FakeAgent.constructed = []
     session = RecordingSession()
@@ -121,6 +122,7 @@ async def _run(
         user_id="owner",
         channel=channel,
         channel_meta=effective_meta,
+        request_context=request_context,
     )
     output = [
         item
@@ -130,6 +132,62 @@ async def _run(
         )
     ]
     return session, chats, FakeAgent.constructed[0], output
+
+
+@pytest.mark.asyncio
+async def test_direct_agent_open_api_installs_response_format_policy_after_merge(
+    monkeypatch,
+    tmp_path,
+):
+    installed = []
+    monkeypatch.setattr(
+        runner_module,
+        "install_open_api_agent_response_format",
+        lambda agent: installed.append(agent) or True,
+    )
+
+    _session, _chats, agent_args, _output = await _run(
+        monkeypatch,
+        tmp_path,
+        channel="open:app-1",
+        channel_meta={
+            "target_type": "agent",
+            "publication_id": "publication-1",
+            "open_invocation_id": "invocation-1",
+        },
+        request_context={"_open_api_direct_agent_execution": False},
+    )
+
+    assert agent_args["request_context"][
+        "_open_api_direct_agent_execution"
+    ] is True
+    assert len(installed) == 1
+
+
+@pytest.mark.asyncio
+async def test_forged_request_context_cannot_install_response_format_policy(
+    monkeypatch,
+    tmp_path,
+):
+    installed = []
+    monkeypatch.setattr(
+        runner_module,
+        "install_open_api_agent_response_format",
+        lambda agent: installed.append(agent) or True,
+    )
+
+    _session, _chats, agent_args, _output = await _run(
+        monkeypatch,
+        tmp_path,
+        channel="console",
+        channel_meta={},
+        request_context={"_open_api_direct_agent_execution": True},
+    )
+
+    assert agent_args["request_context"][
+        "_open_api_direct_agent_execution"
+    ] is False
+    assert installed == []
 
 
 async def _async_none(**_kwargs):

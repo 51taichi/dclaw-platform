@@ -724,13 +724,16 @@ async def test_explicit_persistent_agent_preparation_keeps_existing_shape():
         _request(workspace=workspace),
         _publication(),
         payload,
-        invocation_id="ignored-for-persistent",
+        invocation_id="persistent-invocation-1",
     )
 
     assert prepared.session_id == "open:app-1:public-agent:ext-user:ext-session"
     assert prepared.chat_id == "chat-open-1"
     assert "execution_mode" not in prepared.payload["meta"]
-    assert "open_invocation_id" not in prepared.payload["meta"]
+    assert (
+        prepared.payload["meta"]["open_invocation_id"]
+        == "persistent-invocation-1"
+    )
     assert len(workspace.chat_manager.calls) == 1
 
 
