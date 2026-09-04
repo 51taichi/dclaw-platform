@@ -147,6 +147,7 @@ export const skillApi = {
 
     const data = await request<PoolSkillSpec[]>(
       `/skills/pool${includeHidden ? "?include_hidden=true" : ""}`,
+      { includeSelectedAgent: false },
     );
     // Ensure data is an array
     if (!Array.isArray(data)) {

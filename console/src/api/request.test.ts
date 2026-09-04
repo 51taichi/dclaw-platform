@@ -155,6 +155,20 @@ describe("request", () => {
     expect(headers.get("Authorization")).toBe("Bearer test-token");
   });
 
+  it("can omit selected Agent context while retaining authorization", async () => {
+    vi.mocked(buildAuthHeaders).mockReturnValue({
+      Authorization: "Bearer test-token",
+      "X-Agent-Id": "sealed-agent",
+    });
+    mockFetch(200, {});
+
+    await request("/skills/pool", { includeSelectedAgent: false });
+
+    const headers = requestedHeaders();
+    expect(headers.get("Authorization")).toBe("Bearer test-token");
+    expect(headers.has("X-Agent-Id")).toBe(false);
+  });
+
   it("request URL is correctly built by getApiUrl", async () => {
     mockFetch(200, {});
     await request("/models/active");

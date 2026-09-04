@@ -46,7 +46,15 @@ function getErrorMessageFromBody(
   return text;
 }
 
-function buildHeaders(method?: string, extra?: HeadersInit): Headers {
+export interface ApiRequestOptions extends RequestInit {
+  includeSelectedAgent?: boolean;
+}
+
+function buildHeaders(
+  method?: string,
+  extra?: HeadersInit,
+  includeSelectedAgent = true,
+): Headers {
   // Normalize extra to a Headers instance for consistent handling
   const headers = extra instanceof Headers ? extra : new Headers(extra);
 
@@ -59,6 +67,9 @@ function buildHeaders(method?: string, extra?: HeadersInit): Headers {
   }
 
   for (const [key, value] of Object.entries(buildAuthHeaders())) {
+    if (!includeSelectedAgent && key.toLowerCase() === "x-agent-id") {
+      continue;
+    }
     if (!headers.has(key)) {
       headers.set(key, value);
     }
@@ -69,14 +80,15 @@ function buildHeaders(method?: string, extra?: HeadersInit): Headers {
 
 export async function request<T = unknown>(
   path: string,
-  options: RequestInit = {},
+  options: ApiRequestOptions = {},
 ): Promise<T> {
   const url = getApiUrl(path);
   const method = options.method || "GET";
-  const headers = buildHeaders(method, options.headers);
+  const { includeSelectedAgent = true, ...fetchOptions } = options;
+  const headers = buildHeaders(method, options.headers, includeSelectedAgent);
 
   const response = await fetch(url, {
-    ...options,
+    ...fetchOptions,
     headers,
   });
 
