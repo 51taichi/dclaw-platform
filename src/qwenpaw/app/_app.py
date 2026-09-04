@@ -56,6 +56,7 @@ from .task_limits import create_task_limiter_from_env
 from .routers.agent_scoped import AgentContextMiddleware
 from .routers.approval import router as approval_router
 from .routers.voice import voice_router
+from .routers.realtime_stt import realtime_stt_router
 from ..envs import load_envs_into_environ
 from ..providers.provider_manager import ProviderManager
 from ..local_models.manager import LocalModelManager
@@ -793,6 +794,10 @@ app.include_router(
 # Voice channel: Twilio-facing endpoints at root level (not under /api/).
 # POST /voice/incoming, WS /voice/ws, POST /voice/status-callback
 app.include_router(voice_router, tags=["voice"])
+
+# Authenticated browser speech input gateway. Kept outside the HTTP-only auth
+# middleware/dependency stack because WebSocket authentication is explicit.
+app.include_router(realtime_stt_router, prefix="/api", tags=["realtime-stt"])
 
 # Custom channel routes (before SPA catch-all to ensure route priority)
 register_custom_channel_routes(app)
