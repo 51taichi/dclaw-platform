@@ -65,6 +65,7 @@ def test_redaction_never_exposes_secret_values():
         "DCLAW_POSTGRES_PASSWORD": "database-secret-value",
         "VOLCANO_API_KEY": "volcano-secret-value",
         "MXAPI_API_KEY": "mxapi-secret-value",
+        "DCLAW_STT_INTERNAL_TOKEN": "speech-secret-value",
         "DCLAW_HOST_PORT": "18088",
     }
 
@@ -72,6 +73,7 @@ def test_redaction_never_exposes_secret_values():
 
     assert rendered["DCLAW_HOST_PORT"] == "18088"
     assert rendered["DCLAW_ADMIN_PASSWORD"] == "<redacted>"
+    assert rendered["DCLAW_STT_INTERNAL_TOKEN"] == "<redacted>"
     assert "secret-value" not in repr(rendered)
 
 
@@ -156,6 +158,9 @@ def test_generated_env_enables_auth_and_complete_backends(tmp_path):
     assert values["DCLAW_BIND_HOST"] == "0.0.0.0"
     assert values["DCLAW_HOST_PORT"] == "18088"
     assert values["DCLAW_ADMIN_PASSWORD"] == "x" * 32
+    assert values["DCLAW_REALTIME_STT_ENABLED"] == "true"
+    assert values["DCLAW_STT_INTERNAL_TOKEN"] == "x" * 32
+    assert values["DCLAW_STT_MODEL"] == "base"
 
 
 def test_compose_public_url_is_optional_for_lan_request_origin():
@@ -164,3 +169,16 @@ def test_compose_public_url_is_optional_for_lan_request_origin():
     assert "QWENPAW_PUBLIC_BASE_URL: ${DCLAW_PUBLIC_BASE_URL:-}" in compose
     assert "PUBLIC_BASE_URL: ${DCLAW_PUBLIC_BASE_URL:-}" in compose
     assert "QWENPAW_PUBLIC_BASE_URL: http://127.0.0.1" not in compose
+
+
+def test_compose_keeps_realtime_stt_private_and_resource_bounded():
+    compose = (ROOT / "deploy/local/compose.local.yml").read_text(encoding="utf-8")
+    service = compose.split("  dclaw-stt:", 1)[1].split("  dclaw-postgres:", 1)[0]
+
+    assert "DCLAW_REALTIME_STT_ENABLED" in compose
+    assert "DCLAW_STT_UPSTREAM_URL" in compose
+    assert "DCLAW_STT_INTERNAL_TOKEN" in compose
+    assert "ports:" not in service
+    assert "mem_limit:" in service
+    assert "cpus:" in service
+    assert "dclaw-stt-models:/models" in service

@@ -20,6 +20,9 @@ services:
       PUBLIC_BASE_URL: ${DCLAW_PUBLIC_BASE_URL:-}
       VOLCANO_API_KEY: ${VOLCANO_API_KEY:-}
       MXAPI_API_KEY: ${MXAPI_API_KEY:-}
+      DCLAW_REALTIME_STT_ENABLED: ${DCLAW_REALTIME_STT_ENABLED:-false}
+      DCLAW_STT_UPSTREAM_URL: ws://dclaw-stt:8090/v1/transcribe
+      DCLAW_STT_INTERNAL_TOKEN: ${DCLAW_STT_INTERNAL_TOKEN:?DCLAW_STT_INTERNAL_TOKEN is required}
     volumes:
       - dclaw-data:/app/working
       - dclaw-secrets:/app/working.secret
@@ -36,6 +39,34 @@ services:
       interval: 10s
       timeout: 5s
       retries: 18
+
+  dclaw-stt:
+    image: ${DCLAW_STT_IMAGE:?DCLAW_STT_IMAGE is required}
+    container_name: dclaw-stt
+    restart: unless-stopped
+    environment:
+      DCLAW_STT_INTERNAL_TOKEN: ${DCLAW_STT_INTERNAL_TOKEN:?DCLAW_STT_INTERNAL_TOKEN is required}
+      DCLAW_STT_MODEL: ${DCLAW_STT_MODEL:-base}
+      DCLAW_STT_DEVICE: ${DCLAW_STT_DEVICE:-cpu}
+      DCLAW_STT_COMPUTE_TYPE: ${DCLAW_STT_COMPUTE_TYPE:-int8}
+      DCLAW_STT_MAX_SESSIONS: ${DCLAW_STT_MAX_SESSIONS:-10}
+      DCLAW_STT_INFERENCE_CONCURRENCY: ${DCLAW_STT_INFERENCE_CONCURRENCY:-2}
+    volumes:
+      - dclaw-stt-models:/models
+    networks:
+      - dclaw-net
+    cpus: "2.0"
+    mem_limit: 3g
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 180s
 
   dclaw-postgres:
     image: postgres:16-alpine
@@ -85,3 +116,5 @@ volumes:
     name: dclaw-postgres
   dclaw-redis:
     name: dclaw-redis
+  dclaw-stt-models:
+    name: dclaw-stt-models
