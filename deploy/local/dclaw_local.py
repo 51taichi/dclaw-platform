@@ -376,6 +376,8 @@ def command_build(config: DeploymentConfig) -> None:
             "cn.deepmega.dclaw.component=realtime-stt",
             "--tag",
             stt_tag,
+            "--build-arg",
+            f"DCLAW_BASE_IMAGE={tag}",
             "--file",
             str(config.server_root / "deploy/realtime_stt/Dockerfile"),
             str(config.server_root),

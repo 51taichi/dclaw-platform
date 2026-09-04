@@ -182,3 +182,13 @@ def test_compose_keeps_realtime_stt_private_and_resource_bounded():
     assert "mem_limit:" in service
     assert "cpus:" in service
     assert "dclaw-stt-models:/models" in service
+
+
+def test_stt_image_reuses_the_local_dclaw_base_without_docker_hub():
+    dockerfile = (ROOT / "deploy/realtime_stt/Dockerfile").read_text(
+        encoding="utf-8",
+    )
+
+    assert "ARG DCLAW_BASE_IMAGE" in dockerfile
+    assert "FROM ${DCLAW_BASE_IMAGE}" in dockerfile
+    assert "FROM python:" not in dockerfile
