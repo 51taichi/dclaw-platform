@@ -3,7 +3,10 @@
 
 from fastapi import APIRouter, Depends
 from ..guards import require_admin, require_user
-from ..sealed_agents.policy import deny_sealed_asset_access
+from ..sealed_agents.policy import (
+    deny_sealed_asset_access,
+    deny_sealed_skill_asset_access,
+)
 
 from .agents import router as agents_router
 from .config import router as config_router
@@ -86,7 +89,10 @@ asset_deps = [Depends(deny_sealed_asset_access)]
 user_api_router.include_router(workspace_router, dependencies=asset_deps)
 user_api_router.include_router(files_router, dependencies=asset_deps)
 user_api_router.include_router(settings_router)
-user_api_router.include_router(skills_router, dependencies=asset_deps)
+user_api_router.include_router(
+    skills_router,
+    dependencies=[Depends(deny_sealed_skill_asset_access)],
+)
 user_api_router.include_router(skills_stream_router, dependencies=asset_deps)
 user_api_router.include_router(tools_router, dependencies=asset_deps)
 user_api_router.include_router(plan_router, dependencies=asset_deps)

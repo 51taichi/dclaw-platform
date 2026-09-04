@@ -10,12 +10,22 @@ from qwenpaw.app.routers import agents as agents_router
 
 
 class Request:
-    def __init__(self, *, path_agent=None, state_agent=None, header_agent=None):
+    def __init__(
+        self,
+        *,
+        path_agent=None,
+        state_agent=None,
+        header_agent=None,
+        method="GET",
+        url_path="/api/user/skills",
+    ):
         self.path_params = {"agentId": path_agent} if path_agent else {}
         self.state = SimpleNamespace()
         if state_agent:
             self.state.agent_id = state_agent
         self.headers = {"X-Agent-Id": header_agent} if header_agent else {}
+        self.method = method
+        self.url = SimpleNamespace(path=url_path)
 
 
 @pytest.mark.parametrize(
@@ -54,6 +64,68 @@ def test_asset_guard_keeps_standard_agent_routes_unchanged(monkeypatch):
     )
 
     policy.deny_sealed_asset_access(Request(header_agent="ordinary"))
+
+
+def test_skill_asset_guard_allows_global_pool_listing_with_sealed_header(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        policy,
+        "get_sealed_agent_registry",
+        lambda: SimpleNamespace(is_sealed=lambda agent_id: agent_id == "luyu"),
+    )
+
+    policy.deny_sealed_skill_asset_access(
+        Request(
+            header_agent="luyu",
+            method="GET",
+            url_path="/api/user/skills/pool",
+        ),
+    )
+
+
+def test_skill_asset_guard_still_denies_sealed_workspace_download(monkeypatch):
+    monkeypatch.setattr(
+        policy,
+        "get_sealed_agent_registry",
+        lambda: SimpleNamespace(is_sealed=lambda agent_id: agent_id == "luyu"),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        policy.deny_sealed_skill_asset_access(
+            Request(
+                header_agent="luyu",
+                method="POST",
+                url_path="/api/user/skills/pool/download",
+            ),
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "url_path",
+    [
+        "/api/user/skills/poolish",
+        "/api/user/skills/pool/download/preview",
+    ],
+)
+def test_skill_asset_guard_does_not_overmatch_global_pool_paths(
+    monkeypatch,
+    url_path,
+):
+    monkeypatch.setattr(
+        policy,
+        "get_sealed_agent_registry",
+        lambda: SimpleNamespace(is_sealed=lambda agent_id: agent_id == "luyu"),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        policy.deny_sealed_skill_asset_access(
+            Request(header_agent="luyu", url_path=url_path),
+        )
+
+    assert exc_info.value.status_code == 403
 
 
 @pytest.mark.asyncio

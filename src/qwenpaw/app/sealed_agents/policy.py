@@ -55,3 +55,24 @@ def deny_sealed_asset_access(request: Request) -> None:
         SealedCapability.INSPECT,
         is_sealed=get_sealed_agent_registry().is_sealed(agent_id),
     )
+
+
+def deny_sealed_skill_asset_access(request: Request) -> None:
+    """Guard Agent skill assets without blocking the global skill pool.
+
+    The console carries its selected Agent in ``X-Agent-Id`` by default.  That
+    header is incidental for global pool operations and must not turn them
+    into sealed-Agent asset requests.  Pool transfers still resolve a concrete
+    Agent workspace, so they retain the normal sealed-asset guard.
+    """
+    path = str(getattr(getattr(request, "url", None), "path", "")).rstrip("/")
+    pool_marker = "/skills/pool"
+    _prefix, marker, pool_suffix = path.partition(pool_marker)
+    if marker and (not pool_suffix or pool_suffix.startswith("/")):
+        workspace_transfers = ("/upload", "/download")
+        if not any(
+            pool_suffix == transfer or pool_suffix.startswith(f"{transfer}/")
+            for transfer in workspace_transfers
+        ):
+            return
+    deny_sealed_asset_access(request)
