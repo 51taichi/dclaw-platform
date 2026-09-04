@@ -15,7 +15,7 @@ def test_realtime_stt_is_disabled_by_default(monkeypatch) -> None:
     with TestClient(app) as client:
         try:
             with client.websocket_connect(
-                "/api/user/workspace/realtime-transcribe?token=ignored",
+                "/api/user/workspace/realtime-transcribe",
             ):
                 pass
         except WebSocketDisconnect as exc:
@@ -49,6 +49,22 @@ def test_authenticate_requires_a_valid_resolvable_user(monkeypatch) -> None:
     assert realtime_stt.authenticate_browser_token("orphaned") is None
 
 
+def test_browser_token_is_decoded_from_websocket_subprotocol() -> None:
+    assert (
+        realtime_stt.browser_token_from_protocol_header(
+            "dclaw-stt, dclaw-auth.c2VjcmV0LnRva2Vu",
+        )
+        == "secret.token"
+    )
+    assert realtime_stt.browser_token_from_protocol_header("dclaw-stt") == ""
+    assert (
+        realtime_stt.browser_token_from_protocol_header(
+            "dclaw-auth.not-valid-encoding!",
+        )
+        == ""
+    )
+
+
 def test_enabled_socket_rejects_an_invalid_user_token(monkeypatch) -> None:
     monkeypatch.setenv("DCLAW_REALTIME_STT_ENABLED", "true")
     monkeypatch.setattr(realtime_stt, "verify_token", lambda token: None)
@@ -58,7 +74,8 @@ def test_enabled_socket_rejects_an_invalid_user_token(monkeypatch) -> None:
     with TestClient(app) as client:
         try:
             with client.websocket_connect(
-                "/api/user/workspace/realtime-transcribe?token=invalid",
+                "/api/user/workspace/realtime-transcribe",
+                subprotocols=["dclaw-stt", "dclaw-auth.aW52YWxpZA"],
             ):
                 pass
         except WebSocketDisconnect as exc:
