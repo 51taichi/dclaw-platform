@@ -29,6 +29,7 @@ SECRET_NAMES = frozenset(
         "VOLCANO_API_KEY",
         "MXAPI_API_KEY",
         "DCLAW_LUYU_SIGNING_PRIVATE_KEY",
+        "DCLAW_STT_INTERNAL_TOKEN",
     }
 )
 COPY_EXCLUDES = frozenset(
@@ -61,6 +62,7 @@ class DeploymentConfig:
     bind_host: str = "0.0.0.0"
     host_port: int = 18088
     image: str = "dclaw-local:current"
+    stt_image: str = "dclaw-stt-local:current"
     project_name: str = "dclaw-production"
     app_container: str = "dclaw"
     postgres_container: str = "dclaw-postgres"
@@ -110,6 +112,7 @@ def default_config() -> DeploymentConfig:
         bind_host=os.environ.get("DCLAW_BIND_HOST", "0.0.0.0"),
         host_port=int(os.environ.get("DCLAW_HOST_PORT", "18088")),
         image=os.environ.get("DCLAW_IMAGE", "dclaw-local:current"),
+        stt_image=os.environ.get("DCLAW_STT_IMAGE", "dclaw-stt-local:current"),
     )
 
 
@@ -136,6 +139,14 @@ def initial_environment(
         "QWENPAW_KNOWLEDGE_WORKERS": "2",
         "VOLCANO_API_KEY": "",
         "MXAPI_API_KEY": "",
+        "DCLAW_REALTIME_STT_ENABLED": "true",
+        "DCLAW_STT_IMAGE": config.stt_image,
+        "DCLAW_STT_INTERNAL_TOKEN": random_password(),
+        "DCLAW_STT_MODEL": "base",
+        "DCLAW_STT_DEVICE": "cpu",
+        "DCLAW_STT_COMPUTE_TYPE": "int8",
+        "DCLAW_STT_MAX_SESSIONS": "10",
+        "DCLAW_STT_INFERENCE_CONCURRENCY": "2",
     }
 
 
@@ -303,6 +314,14 @@ def require_environment(config: DeploymentConfig) -> dict[str, str]:
     values = parse_env(config.env_file)
     if not values:
         raise DeploymentError("local environment is not initialized")
+    defaults = initial_environment(config)
+    changed = False
+    for name, value in defaults.items():
+        if name not in values:
+            values[name] = value
+            changed = True
+    if changed:
+        write_env(config.env_file, values)
     validate_secret_values(config, values)
     return values
 
@@ -323,6 +342,10 @@ def command_init(config: DeploymentConfig) -> None:
 def command_build(config: DeploymentConfig) -> None:
     require_environment(config)
     tag, server_sha, client_sha = image_identity(config)
+    stt_fingerprint = content_fingerprint(
+        config.server_root / "deploy/realtime_stt",
+    )
+    stt_tag = f"dclaw-stt-local:s{server_sha[:8]}-{stt_fingerprint}"
     with tempfile.TemporaryDirectory(prefix="dclaw-local-build-") as temporary:
         context = Path(temporary) / "context"
         assemble_build_context(config.server_root, config.client_root, context)
@@ -343,8 +366,24 @@ def command_build(config: DeploymentConfig) -> None:
                 str(context),
             ]
         )
+    run(
+        [
+            "docker",
+            "build",
+            "--label",
+            f"cn.deepmega.dclaw.server-revision={server_sha}",
+            "--label",
+            "cn.deepmega.dclaw.component=realtime-stt",
+            "--tag",
+            stt_tag,
+            "--file",
+            str(config.server_root / "deploy/realtime_stt/Dockerfile"),
+            str(config.server_root),
+        ],
+    )
     values = parse_env(config.env_file)
     values["DCLAW_IMAGE"] = tag
+    values["DCLAW_STT_IMAGE"] = stt_tag
     write_env(config.env_file, values)
     write_env(
         config.release_file,
@@ -353,9 +392,11 @@ def command_build(config: DeploymentConfig) -> None:
             "SERVER_SHA": server_sha,
             "CLIENT_SHA": client_sha,
             "SOURCE_FINGERPRINT": tag.rsplit("-", 1)[-1],
+            "DCLAW_STT_IMAGE": stt_tag,
         },
     )
     print(f"image={tag}")
+    print(f"stt_image={stt_tag}")
 
 
 def _http_ok(url: str) -> bool:
