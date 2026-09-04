@@ -1,21 +1,26 @@
 import { describe, expect, it } from "vitest";
 import {
   buildRealtimeSpeechUrl,
+  buildRealtimeSpeechProtocols,
   downsampleTo16Khz,
   floatToPcm16,
 } from "./audio";
 
 describe("realtime speech audio", () => {
-  it("builds an authenticated websocket URL without changing the API path", () => {
+  it("keeps credentials out of the websocket URL", () => {
     expect(
       buildRealtimeSpeechUrl(
         "/api/user/workspace/realtime-transcribe",
-        "secret token",
         "https://dclaw.example/workbench",
       ),
-    ).toBe(
-      "wss://dclaw.example/api/user/workspace/realtime-transcribe?token=secret+token",
-    );
+    ).toBe("wss://dclaw.example/api/user/workspace/realtime-transcribe");
+  });
+
+  it("encodes authentication in websocket subprotocols", () => {
+    expect(buildRealtimeSpeechProtocols("secret.token")).toEqual([
+      "dclaw-stt",
+      "dclaw-auth.c2VjcmV0LnRva2Vu",
+    ]);
   });
 
   it("downsamples browser audio to 16 kHz", () => {
