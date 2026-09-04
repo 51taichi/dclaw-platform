@@ -36,8 +36,13 @@
 }
 
 @keyframes float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-8px); }
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
 }
 
 .sloganText {
@@ -59,14 +64,19 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #2563EB;
+  background: #2563eb;
   box-shadow: 0 0 8px rgba(37, 99, 235, 0.5);
   animation: pulse 2s ease-in-out infinite;
 }
 
 @keyframes pulse {
-  0%, 100% { box-shadow: 0 0 4px rgba(37, 99, 235, 0.3); }
-  50% { box-shadow: 0 0 12px rgba(37, 99, 235, 0.6); }
+  0%,
+  100% {
+    box-shadow: 0 0 4px rgba(37, 99, 235, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 12px rgba(37, 99, 235, 0.6);
+  }
 }
 
 // ─── Scene Tabs ───────────────────────────────────────────────────────────────
@@ -164,7 +174,8 @@
   flex-shrink: 0;
   position: relative;
 
-  &:hover, &:focus-within {
+  &:hover,
+  &:focus-within {
     border-color: rgba(0, 0, 0, 0.2);
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
   }
@@ -346,8 +357,8 @@
 }
 
 .modeBtnActive {
-  border-color: #2563EB;
-  color: #2563EB;
+  border-color: #2563eb;
+  color: #2563eb;
   background: rgba(37, 99, 235, 0.04);
 }
 
@@ -380,6 +391,33 @@
   &:hover {
     background: rgba(0, 0, 0, 0.04);
     color: rgba(0, 0, 0, 0.65);
+  }
+}
+
+.footerActionRecording {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+  animation: speechPulse 1.2s ease-in-out infinite;
+
+  &:hover {
+    color: #dc2626;
+    background: rgba(239, 68, 68, 0.16);
+  }
+}
+
+.speechStatus {
+  color: rgba(0, 0, 0, 0.5);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+@keyframes speechPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(239, 68, 68, 0.12);
   }
 }
 
@@ -467,7 +505,8 @@
     background: rgba(255, 255, 255, 0.04);
     border-color: rgba(255, 255, 255, 0.1);
 
-    &:hover, &:focus-within {
+    &:hover,
+    &:focus-within {
       border-color: rgba(255, 255, 255, 0.2);
       box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
     }
@@ -504,6 +543,10 @@
     }
   }
 
+  .speechStatus {
+    color: rgba(255, 255, 255, 0.5);
+  }
+
   .modeBtn {
     border-color: rgba(255, 255, 255, 0.1);
     background: transparent;
@@ -530,8 +573,13 @@
   .sendBtn {
     background: #fff;
     color: #1a1a1a;
-    &:hover { background: #e0e0e0; }
-    &:disabled { background: rgba(255, 255, 255, 0.1); color: rgba(255, 255, 255, 0.2); }
+    &:hover {
+      background: #e0e0e0;
+    }
+    &:disabled {
+      background: rgba(255, 255, 255, 0.1);
+      color: rgba(255, 255, 255, 0.2);
+    }
   }
 
   .attachmentCard {

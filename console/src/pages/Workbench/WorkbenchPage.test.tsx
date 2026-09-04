@@ -8,7 +8,14 @@ import WorkbenchPage from "./index";
 let currentPathname = "";
 let currentLocationState: unknown = null;
 
-const { mockCreateChat, mockUploadFile, mockUseAgentStore } = vi.hoisted(() => {
+const {
+  mockCreateChat,
+  mockUploadFile,
+  mockUseAgentStore,
+  mockSpeechStart,
+  mockSpeechStop,
+  mockSpeechDestroy,
+} = vi.hoisted(() => {
   const store = vi.fn(() => ({
     selectedAgent: "default",
     setSelectedAgent: vi.fn(),
@@ -25,6 +32,9 @@ const { mockCreateChat, mockUploadFile, mockUseAgentStore } = vi.hoisted(() => {
     mockCreateChat: vi.fn(),
     mockUploadFile: vi.fn(),
     mockUseAgentStore: store,
+    mockSpeechStart: vi.fn(),
+    mockSpeechStop: vi.fn(),
+    mockSpeechDestroy: vi.fn(),
   };
 });
 
@@ -32,6 +42,28 @@ vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string, fallback?: string) => fallback ?? key,
   }),
+}));
+
+vi.mock("../../features/realtimeSpeech/RealtimeSpeechController", () => ({
+  RealtimeSpeechController: class {
+    private options: { onStateChange: (state: string) => void };
+
+    constructor(options: { onStateChange: (state: string) => void }) {
+      this.options = options;
+    }
+
+    start = () => {
+      mockSpeechStart();
+      this.options.onStateChange("recording");
+    };
+
+    stop = () => {
+      mockSpeechStop();
+      this.options.onStateChange("idle");
+    };
+
+    destroy = mockSpeechDestroy;
+  },
 }));
 
 vi.mock("../../api", () => ({
@@ -211,5 +243,24 @@ describe("WorkbenchPage", () => {
 
     await waitFor(() => expect(mockUploadFile).toHaveBeenCalledWith(file));
     expect(await screen.findByText("dragged.txt")).toBeInTheDocument();
+  });
+
+  it("starts and stops dictation without sending the task", async () => {
+    const user = userEvent.setup();
+    const { container } = renderWithProviders(<WorkbenchPage />, {
+      initialEntries: ["/workbench"],
+    });
+    const microphone = container.querySelector(
+      'button[aria-label="开始语音输入"]',
+    ) as HTMLButtonElement | null;
+
+    expect(microphone).not.toBeNull();
+    await user.click(microphone!);
+    expect(mockSpeechStart).toHaveBeenCalledTimes(1);
+    expect(mockCreateChat).not.toHaveBeenCalled();
+
+    fireEvent.click(microphone!);
+    expect(mockSpeechStop).toHaveBeenCalledTimes(1);
+    expect(mockCreateChat).not.toHaveBeenCalled();
   });
 });

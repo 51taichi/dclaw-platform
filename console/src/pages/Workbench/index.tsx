@@ -25,6 +25,10 @@ import { buildWorkbenchPrompt } from "./promptTemplates";
 import { resizeTextareaToContent } from "../../utils/textareaAutosize";
 import { savePendingTaskIntent } from "../../utils/pendingTaskIntent";
 import {
+  RealtimeSpeechController,
+  type RealtimeSpeechState,
+} from "../../features/realtimeSpeech/RealtimeSpeechController";
+import {
   FileText,
   TrendingUp,
   BarChart3,
@@ -43,6 +47,7 @@ import {
   Paperclip,
   Send,
   Mic,
+  Square,
   Monitor,
   X,
 } from "lucide-react";
@@ -83,6 +88,14 @@ const createUploadId = (file: File) =>
 const hasDraggedFiles = (event: React.DragEvent<HTMLElement>) =>
   Array.from(event.dataTransfer.types || []).includes("Files");
 
+const joinSpeechText = (prefix: string, transcript: string) => {
+  if (!prefix || !transcript) return `${prefix}${transcript}`;
+  if (/\s$/.test(prefix)) return `${prefix}${transcript}`;
+  const bothChinese =
+    /[\u3400-\u9fff]$/.test(prefix) && /^[\u3400-\u9fff]/.test(transcript);
+  return `${prefix}${bothChinese ? "" : " "}${transcript}`;
+};
+
 export default function WorkbenchPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -94,6 +107,35 @@ export default function WorkbenchPage() {
   const dragDepthRef = useRef(0);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+  const [speechState, setSpeechState] = useState<RealtimeSpeechState>("idle");
+  const speechControllerRef = useRef<RealtimeSpeechController | null>(null);
+  const speechPrefixRef = useRef("");
+
+  useEffect(() => {
+    const controller = new RealtimeSpeechController({
+      onTranscript: (text) => {
+        setInputValue(joinSpeechText(speechPrefixRef.current, text));
+      },
+      onStateChange: setSpeechState,
+      onError: (errorMessage) => message.error(errorMessage),
+    });
+    speechControllerRef.current = controller;
+    return () => {
+      controller.destroy();
+      speechControllerRef.current = null;
+    };
+  }, []);
+
+  const handleSpeechToggle = useCallback(() => {
+    const controller = speechControllerRef.current;
+    if (!controller) return;
+    if (speechState === "idle") {
+      speechPrefixRef.current = inputValue;
+      void controller.start();
+    } else if (speechState !== "processing") {
+      controller.stop();
+    }
+  }, [inputValue, speechState]);
 
   const scenes: SceneConfig[] = [
     {
@@ -678,6 +720,7 @@ export default function WorkbenchPage() {
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
           onKeyDown={handleKeyDown}
+          disabled={speechState !== "idle"}
           rows={2}
         />
 
@@ -691,13 +734,43 @@ export default function WorkbenchPage() {
           </div>
 
           <div className={styles.footerRight}>
-            <button className={styles.footerAction}>
-              <Mic size={14} />
+            {speechState !== "idle" && (
+              <span className={styles.speechStatus}>
+                {speechState === "recording"
+                  ? t("workbench.speechListening", "正在听写…")
+                  : t("workbench.speechConnecting", "正在连接…")}
+              </span>
+            )}
+            <button
+              className={`${styles.footerAction} ${
+                speechState === "recording" ? styles.footerActionRecording : ""
+              }`}
+              aria-label={
+                speechState === "idle"
+                  ? t("workbench.startSpeech", "开始语音输入")
+                  : t("workbench.stopSpeech", "停止语音输入")
+              }
+              aria-pressed={speechState !== "idle"}
+              title={
+                speechState === "idle"
+                  ? t("workbench.startSpeech", "开始语音输入")
+                  : t("workbench.stopSpeech", "停止语音输入")
+              }
+              disabled={speechState === "processing"}
+              onClick={handleSpeechToggle}
+            >
+              {speechState === "recording" ? (
+                <Square size={12} fill="currentColor" />
+              ) : (
+                <Mic size={14} />
+              )}
             </button>
             <button
               className={styles.sendBtn}
               disabled={
-                (!inputValue.trim() && uploadedFiles.length === 0) || sending
+                (!inputValue.trim() && uploadedFiles.length === 0) ||
+                sending ||
+                speechState !== "idle"
               }
               onClick={handleSend}
             >
