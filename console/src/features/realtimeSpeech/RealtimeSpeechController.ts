@@ -1,5 +1,6 @@
 import { getApiToken, getApiUrl } from "../../api/config";
 import {
+  buildRealtimeSpeechProtocols,
   buildRealtimeSpeechUrl,
   downsampleTo16Khz,
   floatToPcm16,
@@ -69,9 +70,8 @@ export class RealtimeSpeechController {
 
       const url = buildRealtimeSpeechUrl(
         getApiUrl("/workspace/realtime-transcribe"),
-        token,
       );
-      await this.openSocket(url);
+      await this.openSocket(url, buildRealtimeSpeechProtocols(token));
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "无法启动语音输入";
@@ -104,9 +104,9 @@ export class RealtimeSpeechController {
     this.cleanup();
   }
 
-  private async openSocket(url: string): Promise<void> {
+  private async openSocket(url: string, protocols: string[]): Promise<void> {
     await new Promise<void>((resolve, reject) => {
-      const socket = new WebSocket(url);
+      const socket = new WebSocket(url, protocols);
       socket.binaryType = "arraybuffer";
       this.socket = socket;
 

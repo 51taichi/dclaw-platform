@@ -2,13 +2,20 @@ export const REALTIME_STT_SAMPLE_RATE = 16_000;
 
 export function buildRealtimeSpeechUrl(
   apiUrl: string,
-  token: string,
   pageUrl = window.location.href,
 ): string {
   const url = new URL(apiUrl, pageUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.searchParams.set("token", token);
   return url.toString();
+}
+
+export function buildRealtimeSpeechProtocols(token: string): string[] {
+  const encoded = window
+    .btoa(token)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+  return ["dclaw-stt", `dclaw-auth.${encoded}`];
 }
 
 export function downsampleTo16Khz(
