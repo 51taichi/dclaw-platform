@@ -1,4 +1,5 @@
-FROM python:3.11-slim
+ARG DCLAW_BASE_IMAGE
+FROM ${DCLAW_BASE_IMAGE}
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -7,7 +8,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY deploy/realtime_stt/requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+RUN uv pip install \
+      --python /app/venv/bin/python \
+      --index-url https://mirrors.aliyun.com/pypi/simple/ \
+      --no-cache-dir \
+      --requirement /tmp/requirements.txt \
+    && rm -f /tmp/requirements.txt
 
 COPY deploy/realtime_stt /app/deploy/realtime_stt
 
