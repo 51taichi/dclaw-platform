@@ -76,6 +76,8 @@ export function ModelsSection({
   };
 
   const handleModelChange = (model: string) => {
+    const selected = modelOptions.find((item) => item.id === model);
+    if (selected?.billing_eligible === false) return;
     setSelectedModel(model);
     setDirty(true);
   };
@@ -155,7 +157,10 @@ export function ModelsSection({
             onChange={handleModelChange}
             options={modelOptions.map((m) => ({
               value: m.id,
-              label: `${m.name} (${m.id})`,
+              label: `${m.name} (${m.id})${
+                m.billing_eligible === false ? ` · ${t("models.unpriced")}` : ""
+              }`,
+              disabled: m.billing_eligible === false,
             }))}
           />
         </div>

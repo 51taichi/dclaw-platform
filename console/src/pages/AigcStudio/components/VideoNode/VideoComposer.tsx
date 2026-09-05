@@ -447,18 +447,21 @@ export function VideoComposer({
       : VIDEO_CHARACTER_ASSETS.filter(
           (asset) => asset.kind === activeCharacterTab,
         );
+  const boundCapability = String(
+    node.data.modelCapability ?? "text_to_video",
+  ).trim() || "text_to_video";
   const videoModelOptions = modelOptionsForCapability(
     modelOptions,
-    "text_to_video",
+    boundCapability,
   );
   const currentVideoGenerationModel =
     currentModel &&
-    modelOptionsForCapability([currentModel], "text_to_video").length
+    modelOptionsForCapability([currentModel], boundCapability).length
       ? currentModel
       : null;
   const selectedVideoModel =
     currentVideoGenerationModel ??
-    modelForNode(modelOptions, node, "text_to_video");
+    modelForNode(modelOptions, node, boundCapability);
   const videoDurationConstraints =
     videoDurationConstraintsFor(selectedVideoModel);
   const videoAspectRatioOptions =

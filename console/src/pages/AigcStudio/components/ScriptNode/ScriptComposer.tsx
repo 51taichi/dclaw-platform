@@ -154,6 +154,7 @@ export function ScriptComposer({
         )}
         <button
           type="button"
+          data-platform-control-id="aigc.script.generate-submit"
           className={styles.runCircle}
           disabled={!composerText.trim() && !hasReference}
           aria-label={t("aigcStudio.scriptNode.submit", "提交脚本生成器")}

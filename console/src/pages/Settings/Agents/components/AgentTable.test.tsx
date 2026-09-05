@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import zh from "../../../../locales/zh.json";
 import { AgentTable } from "./AgentTable";
 
 vi.mock("react-i18next", () => ({
@@ -15,13 +16,19 @@ vi.mock("react-i18next", () => ({
         "agent.modelPlaceholder": "使用全局默认",
         "agent.sealed": "密封",
         "agent.sealedWorkspace": "内部资产已密封",
-        "agent.sealedManageHint": "请在密封/Agent页面管理版本与运行状态",
+        "agent.sealedManageHint": "请在超级专家页面管理版本与运行状态",
         "common.actions": "操作",
       })[key] ?? key,
   }),
 }));
 
 describe("AgentTable", () => {
+  it("uses the super expert page name in the sealed-agent management hint", () => {
+    expect(zh.agent.sealedManageHint).toBe(
+      "请在超级专家页面管理版本与运行状态",
+    );
+  });
+
   it("lets a sealed agent change its package-independent default model", async () => {
     const user = userEvent.setup();
     const onModelChange = vi.fn();
@@ -72,7 +79,7 @@ describe("AgentTable", () => {
     expect(screen.getByText("内部资产已密封")).toBeInTheDocument();
     expect(screen.queryByText("/private/sealed/luyu")).not.toBeInTheDocument();
     expect(
-      screen.getByText("请在密封/Agent页面管理版本与运行状态"),
+      screen.getByText("请在超级专家页面管理版本与运行状态"),
     ).toBeInTheDocument();
     expect(container.querySelector(".anticon-edit")).not.toBeInTheDocument();
     expect(container.querySelector(".anticon-delete")).not.toBeInTheDocument();

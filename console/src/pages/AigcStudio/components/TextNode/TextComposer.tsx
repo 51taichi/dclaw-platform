@@ -118,6 +118,7 @@ export function TextComposer({
         <span>1</span>
         <button
           type="button"
+          data-platform-control-id="aigc.text.generate-submit"
           className={styles.runCircle}
           disabled={!composerText.trim()}
           aria-label={t(

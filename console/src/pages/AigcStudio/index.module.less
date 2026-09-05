@@ -4486,9 +4486,11 @@
 }
 
 .minimapDock {
-  position: fixed;
-  right: 28px;
+  position: absolute;
+  left: 50%;
+  right: auto;
   bottom: 24px;
+  transform: translateX(-50%);
   z-index: 120;
   height: 36px;
   display: inline-flex;
@@ -4563,9 +4565,11 @@
 }
 
 .minimapPanel {
-  position: fixed;
-  right: 28px;
+  position: absolute;
+  left: 50%;
+  right: auto;
   bottom: 72px;
+  transform: translateX(-50%);
   z-index: 121;
   width: 158px;
   border: 1px solid #2f3238;

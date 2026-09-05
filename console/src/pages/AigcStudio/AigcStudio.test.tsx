@@ -4921,6 +4921,21 @@ describe("AigcStudioPage", () => {
     expect(screen.getByText("110%")).toBeInTheDocument();
   });
 
+  it("centers the minimap controls inside the canvas surface", async () => {
+    render(<AigcStudioPage />);
+
+    await screen.findByText("主视觉图片");
+    const surface = screen.getByTestId("aigc-canvas-surface");
+    const dock = screen.getByTestId("aigc-minimap-dock");
+    const style = window.getComputedStyle(dock);
+
+    expect(dock.parentElement).toBe(surface);
+    expect(style.position).toBe("absolute");
+    expect(style.left).toBe("50%");
+    expect(style.transform).toContain("translateX(-50%)");
+    expect(style.right).not.toBe("28px");
+  });
+
   it("pans the viewport by dragging blank canvas without moving nodes", async () => {
     render(<AigcStudioPage />);
 

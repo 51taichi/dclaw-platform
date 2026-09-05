@@ -16,6 +16,7 @@ import {
   Input,
   Select,
   Spin,
+  Modal,
   message as antdMessage,
 } from "antd";
 import {
@@ -193,17 +194,22 @@ import {
   type TemplateVariant,
 } from "./domain/componentRegistry";
 import {
+  effectiveDefaultForCapability,
   modelForNode,
   modelKey,
   modelLabelForNode,
   modelOptionsForNode,
+  modelSelectionState,
 } from "./nodeModelSelection";
 import { useGenerationProgressSimulation } from "./useGenerationProgressSimulation";
 import styles from "./index.module.less";
 import { AigcGuidePanel } from "./components/GuidePanel/AigcGuidePanel";
-import { useAigcGuideTask } from "./components/GuidePanel/useAigcGuideTask";
+import { LegacyAigcGuidePanel } from "./components/GuidePanel/LegacyAigcGuidePanel";
 import { getAigcGuideStepCompletion } from "./components/GuidePanel/guideStepCompletion";
+import { useAigcGuideTask } from "./components/GuidePanel/useAigcGuideTask";
+import { focusPlatformControl } from "./components/GuidePanel/controlRegistry";
 import { superExpertPlatformApi } from "../../api/modules/superExpertPlatform";
+import { resolveWorkflowOutputAssetId } from "./workflowOutput";
 
 function connectCanvasNodes(source: string, target: string): AigcCanvasEdge {
   return {
@@ -482,6 +488,7 @@ export default function AigcStudioPage() {
     autoSaveTimerRef,
     savedCanvasSignatureRef,
     capabilities,
+    capabilityDefaults,
     canvases,
     setCanvases,
     activeCanvas,
@@ -577,16 +584,17 @@ export default function AigcStudioPage() {
   useEffect(() => {
     const binding = guide.task?.binding;
     if (!binding) return;
+    const targetNodeId = guide.guide?.current_step?.node_id ?? binding.node_id;
     if (activeCanvas?.id === binding.canvas_id) {
-      if (selectedNodeId !== binding.node_id) {
-        setSelectedNodeId(binding.node_id);
+      if (targetNodeId && selectedNodeId !== targetNodeId) {
+        setSelectedNodeId(targetNodeId);
       }
       return;
     }
     let active = true;
     void activateCanvasById(binding.canvas_id)
       .then(() => {
-        if (active) setSelectedNodeId(binding.node_id);
+        if (active && targetNodeId) setSelectedNodeId(targetNodeId);
       })
       .catch(() => {
         if (active) {
@@ -602,6 +610,7 @@ export default function AigcStudioPage() {
     activeCanvas?.id,
     activateCanvasById,
     guide.task?.binding,
+    guide.guide?.current_step?.node_id,
     selectedNodeId,
   ]);
 
@@ -640,17 +649,10 @@ export default function AigcStudioPage() {
   const selectedNode = activeCanvas?.nodes.find(
     (node) => node.id === selectedNodeId,
   );
-  const guideStepCompletion = useMemo(
-    () =>
-      guide.task
-        ? getAigcGuideStepCompletion({
-            task: guide.task,
-            activeCanvas,
-            jobs,
-          })
-        : {},
-    [activeCanvas, guide.task, jobs],
-  );
+  const capabilityForCanvasNode = (node: AigcCanvasNode) => {
+    const boundCapability = String(node.data.modelCapability ?? "").trim();
+    return boundCapability || capabilityForNode(node.type);
+  };
   const annotationEditorNode = annotationEditorNodeId
     ? activeCanvas?.nodes.find((node) => node.id === annotationEditorNodeId)
     : undefined;
@@ -658,14 +660,28 @@ export default function AigcStudioPage() {
     ? imageAnnotationSourcePreviewUrl(annotationEditorNode)
     : "";
   const selectedCapability = selectedNode
-    ? capabilityForNode(selectedNode.type)
+    ? capabilityForCanvasNode(selectedNode)
     : "text_to_image";
   const selectedNodeUsesModel = selectedNode
     ? !isWorkflowOnlyNodeType(selectedNode.type)
     : false;
   const selectedNodeModel =
     selectedNodeUsesModel && selectedNode
-      ? modelForNode(capabilities, selectedNode, selectedCapability)
+      ? modelForNode(
+          capabilities,
+          selectedNode,
+          selectedCapability,
+          effectiveDefaultForCapability(capabilityDefaults, selectedCapability),
+        )
+      : null;
+  const selectedNodeModelState =
+    selectedNodeUsesModel && selectedNode
+      ? modelSelectionState(
+          capabilities,
+          selectedNode,
+          selectedCapability,
+          effectiveDefaultForCapability(capabilityDefaults, selectedCapability),
+        )
       : null;
   const selectedNodeModelOptions =
     selectedNodeUsesModel && selectedNode
@@ -946,12 +962,20 @@ export default function AigcStudioPage() {
   const modelOptionsForCanvasNode = (node: AigcCanvasNode) =>
     isWorkflowOnlyNodeType(node.type)
       ? []
-      : modelOptionsForNode(capabilities, node, capabilityForNode(node.type));
+      : modelOptionsForNode(capabilities, node, capabilityForCanvasNode(node));
 
   const currentModelForCanvasNode = (node: AigcCanvasNode) =>
     isWorkflowOnlyNodeType(node.type)
       ? null
-      : modelForNode(capabilities, node, capabilityForNode(node.type));
+      : modelForNode(
+          capabilities,
+          node,
+          capabilityForCanvasNode(node),
+          effectiveDefaultForCapability(
+            capabilityDefaults,
+            capabilityForCanvasNode(node),
+          ),
+        );
 
   const currentModelKeyForCanvasNode = (node: AigcCanvasNode) =>
     modelKey(currentModelForCanvasNode(node));
@@ -997,6 +1021,53 @@ export default function AigcStudioPage() {
   ) => {
     const canvasForRunSource = canvasOverride ?? activeCanvas;
     if (!canvasForRunSource || !nodeToRun) return;
+    const nodeCapability = capabilityForCanvasNode(nodeToRun);
+    const selection = modelSelectionState(
+      capabilities,
+      nodeToRun,
+      nodeCapability,
+      effectiveDefaultForCapability(capabilityDefaults, nodeCapability),
+    );
+    if (selection.invalidSavedModel && !selection.fallback) {
+      antdMessage.error(
+        t(
+          "aigcStudio.noFallbackModel",
+          "该模型已不可用，且当前没有可切换的默认模型。",
+        ),
+      );
+      return;
+    }
+    if (selection.invalidSavedModel && selection.fallback) {
+      const confirmed = await new Promise<boolean>((resolve) => {
+        Modal.confirm({
+          title: t("aigcStudio.modelUnavailable", "该模型已不可用"),
+          content: t(
+            "aigcStudio.switchToDefaultModel",
+            "是否切换到当前默认模型 {{model}} 后继续？",
+            { model: selection.fallback?.model_name },
+          ),
+          okText: t("aigcStudio.switchAndContinue", "切换并继续"),
+          cancelText: t("common.cancel", "取消"),
+          onOk: () => resolve(true),
+          onCancel: () => resolve(false),
+        });
+      });
+      if (!confirmed) return;
+      const switchedNode = {
+        ...nodeToRun,
+        data: {
+          ...nodeToRun.data,
+          modelLabel: selection.fallback.model_name,
+          providerId: selection.fallback.provider_id,
+          providerName: selection.fallback.provider_name,
+          modelId: selection.fallback.model_id,
+          modelCapability: selection.fallback.capability,
+        },
+      };
+      updateNodeData(nodeToRun.id, switchedNode.data);
+      await runNode(switchedNode, canvasOverride);
+      return;
+    }
     const nodeRunKey = runningNodeKey(canvasForRunSource.id, nodeToRun.id);
     if (runningNodeKeysRef.current.has(nodeRunKey)) return;
     const isFeedbackNode = [
@@ -1056,8 +1127,12 @@ export default function AigcStudioPage() {
       }
       return base;
     };
-    const nodeCapability = capabilityForNode(nodeToRun.type);
-    const runModel = modelForNode(capabilities, nodeToRun, nodeCapability);
+    const runModel = modelForNode(
+      capabilities,
+      nodeToRun,
+      nodeCapability,
+      effectiveDefaultForCapability(capabilityDefaults, nodeCapability),
+    );
     if (!runModel) {
       const missingModelMessage =
         nodeToRun.type === "image_generate"
@@ -1218,6 +1293,7 @@ export default function AigcStudioPage() {
         );
         return updated;
       });
+      if (guide.taskId) await guide.refresh();
     } catch (error) {
       console.error("Failed to run AIGC node", error);
       if (isFeedbackNode) {
@@ -1302,6 +1378,7 @@ export default function AigcStudioPage() {
         );
         return updated;
       });
+      if (guide.taskId) await guide.refresh();
     } catch (error) {
       console.error("Failed to export long image", error);
       updateNodeData(nodeToExport.id, {
@@ -1325,6 +1402,7 @@ export default function AigcStudioPage() {
   const handleRetryJob = async (jobId: string) => {
     const retried = await aigcStudioApi.retryJob(jobId);
     setJobs((prev) => prependCanvasJob(prev, retried));
+    if (guide.taskId) await guide.refresh();
   };
 
   const updateCanvasName = (name: string) => {
@@ -2502,6 +2580,101 @@ export default function AigcStudioPage() {
       ? AlertCircle
       : CheckCircle2;
 
+  const submitGuidedAsset = async () => {
+    const currentTask = guide.task;
+    if (!currentTask) {
+      antdMessage.error("当前素材任务已失效，请从会话卡片重新进入");
+      return;
+    }
+    const outputNodeId =
+      currentTask.binding.output_node_id ?? currentTask.binding.node_id;
+    const assetId = activeCanvas
+      ? resolveWorkflowOutputAssetId(
+          activeCanvas.nodes,
+          activeCanvas.edges,
+          outputNodeId,
+        )
+      : "";
+    if (!assetId) {
+      antdMessage.error("当前绑定节点还没有可提交的成品");
+      return;
+    }
+    const eventStorageKey = `dclaw:aigc-submit:${guide.taskId}:${assetId}`;
+    const eventId = localStorage.getItem(eventStorageKey) || crypto.randomUUID();
+    localStorage.setItem(eventStorageKey, eventId);
+    const result = await superExpertPlatformApi.command("aigc.asset.submit", {
+      installation_id: currentTask.binding.installation_id,
+      contract_version: "1",
+      idempotency_key: eventId,
+      arguments: {
+        event_id: eventId,
+        binding: currentTask.binding,
+        asset_id: assetId,
+      },
+    });
+    await guide.refresh();
+    antdMessage.success("素材已提交，专家将按当前业务阶段审核");
+    return result.agent_review?.reply;
+  };
+
+  const performManualGuideStep = async (
+    step: import("../../api/modules/superExpertPlatform").AigcGuideStepProjection,
+  ) => {
+    if (!activeCanvas || activeCanvas.id !== guide.task?.binding.canvas_id) {
+      throw new Error("BOUND_CANVAS_MISMATCH");
+    }
+    let updated = activeCanvas;
+    if (step.manual_action === "ADD_NODE") {
+      if (!step.node_id || !step.node_kind) throw new Error("MANUAL_NODE_INVALID");
+      if (!activeCanvas.nodes.some((node) => node.id === step.node_id)) {
+        const template = createNodeForType(t, step.node_kind, activeCanvas.nodes.length);
+        const node = {
+          ...template,
+          id: step.node_id,
+          data: { ...template.data, ...(step.manual_node_data ?? {}) },
+        };
+        updated = { ...activeCanvas, nodes: [...activeCanvas.nodes, node] };
+        setSelectedNodeId(node.id);
+      }
+    } else if (step.manual_action === "CONNECT_EDGE") {
+      if (!step.source_node_id || !step.target_node_id) {
+        throw new Error("MANUAL_EDGE_INVALID");
+      }
+      const nodes = new Set(activeCanvas.nodes.map((node) => node.id));
+      if (!nodes.has(step.source_node_id) || !nodes.has(step.target_node_id)) {
+        throw new Error("MANUAL_EDGE_NODE_MISSING");
+      }
+      if (
+        !activeCanvas.edges.some(
+          (edge) =>
+            edge.source === step.source_node_id &&
+            edge.target === step.target_node_id &&
+            String(edge.data?.role ?? "") === String(step.target_slot ?? ""),
+        )
+      ) {
+        const edge = {
+          ...connectCanvasNodes(step.source_node_id, step.target_node_id),
+          id: `guide-${step.step_id}`,
+          data: { role: step.target_slot ?? "" },
+        };
+        updated = { ...activeCanvas, edges: [...activeCanvas.edges, edge] };
+      }
+    } else {
+      throw new Error("MANUAL_ACTION_UNSUPPORTED");
+    }
+    commitCanvas(updated);
+    await persistCanvas(updated);
+    await guide.refresh();
+  };
+
+  const legacyGuideCompletion = useMemo(
+    () =>
+      guide.task
+        ? getAigcGuideStepCompletion({ task: guide.task, activeCanvas, jobs })
+        : {},
+    [activeCanvas, guide.task, jobs],
+  );
+
   if (loading) {
     return <Spin style={{ display: "block", margin: "20vh auto" }} />;
   }
@@ -2555,6 +2728,7 @@ export default function AigcStudioPage() {
                 type="button"
                 className={styles.nodeType}
                 key={definition.type}
+                data-platform-control-id={`aigc.canvas.add-node.${definition.type}`}
                 onClick={() => handleAddNode(definition.type)}
               >
                 {definition.icon} {translatedNodeType(t, definition.type)}
@@ -3224,7 +3398,7 @@ export default function AigcStudioPage() {
                     node={node}
                     imageComposerMenu={imageComposerMenu}
                     currentModel={currentModelForCanvasNode(node)}
-                    modelOptions={capabilities}
+                    modelOptions={modelOptionsForCanvasNode(node)}
                     currentModelKey={currentModelKeyForCanvasNode(node)}
                     referenceAssets={
                       activeCanvas
@@ -3250,7 +3424,7 @@ export default function AigcStudioPage() {
                     node={node}
                     videoComposerMenu={videoComposerMenu}
                     currentModel={currentModelForCanvasNode(node)}
-                    modelOptions={capabilities}
+                    modelOptions={modelOptionsForCanvasNode(node)}
                     currentModelKey={currentModelKeyForCanvasNode(node)}
                     connectedInputs={
                       activeCanvas
@@ -3279,7 +3453,7 @@ export default function AigcStudioPage() {
                 <AudioComposer
                   node={node}
                   currentModel={currentModelForCanvasNode(node)}
-                  modelOptions={capabilities}
+                  modelOptions={modelOptionsForCanvasNode(node)}
                   t={t}
                   workflow={audioWorkflow}
                   disabled={
@@ -3335,8 +3509,12 @@ export default function AigcStudioPage() {
                             modelLabelForNode(
                               capabilities,
                               node,
-                              capabilityForNode(node.type),
+                              capabilityForCanvasNode(node),
                               "",
+                              effectiveDefaultForCapability(
+                                capabilityDefaults,
+                                capabilityForCanvasNode(node),
+                              ),
                             ),
                         )}
                       </span>
@@ -3505,9 +3683,22 @@ export default function AigcStudioPage() {
                   }}
                   options={selectedNodeModelOptions.map((item) => ({
                     value: `${item.provider_id}:${item.model_id}`,
-                    label: `${item.provider_name} / ${item.model_name}`,
+                    label: `${item.provider_name} / ${item.model_name}${
+                      selectedNodeModelState?.invalidSavedModel &&
+                      modelKey(item) === selectedNodeModelKey
+                        ? ` · ${t("aigcStudio.modelUnavailable", "该模型已不可用")}`
+                        : ""
+                    }`,
+                    disabled:
+                      selectedNodeModelState?.invalidSavedModel &&
+                      modelKey(item) === selectedNodeModelKey,
                   }))}
                 />
+                {selectedNodeModelState?.invalidSavedModel && (
+                  <div style={{ color: "#d46b08", marginTop: 8 }}>
+                    {t("aigcStudio.modelUnavailable", "该模型已不可用")}
+                  </div>
+                )}
               </>
             ) : (
               <>
@@ -3598,58 +3789,72 @@ export default function AigcStudioPage() {
           AIGC 任务向导加载失败：{guide.error}
         </aside>
       ) : null}
-      {guide.taskId && guide.task && guide.operation ? (
+      {guide.taskId && guide.task && guide.guide ? (
         <AigcGuidePanel
-          taskId={guide.taskId}
           task={guide.task}
-          operation={guide.operation}
+          guide={guide.guide}
           activeCanvasId={activeCanvas?.id}
-          stepCompletion={guideStepCompletion}
+          onRefresh={guide.refresh}
+          onManualBuild={performManualGuideStep}
+          onFocusStep={(nodeId, controlId) => {
+            const target = activeCanvas?.nodes.find((node) => node.id === nodeId);
+            if (!target) {
+              antdMessage.error("当前任务绑定的节点不可用，向导已停止推进");
+              return;
+            }
+            centerViewportOnNode(target);
+            window.setTimeout(() => {
+              if (!focusPlatformControl(controlId, nodeId)) {
+                antdMessage.error("当前步骤的操作按钮不可用，请刷新任务后重试");
+              }
+            }, 0);
+          }}
+          onSkipOptional={async (step) => {
+            const currentTask = guide.task;
+            if (!currentTask || !currentTask.binding.workflow_id) return;
+            const eventStorageKey = `dclaw:aigc-guide-skip:${guide.taskId}:${step.step_id}:${guide.guide!.guide_revision}`;
+            const eventId =
+              localStorage.getItem(eventStorageKey) || crypto.randomUUID();
+            localStorage.setItem(eventStorageKey, eventId);
+            await superExpertPlatformApi.command("aigc.guide.update", {
+              installation_id: currentTask.binding.installation_id,
+              contract_version: "1",
+              idempotency_key: eventId,
+              arguments: {
+                binding: currentTask.binding,
+                event_id: eventId,
+                guide: {
+                  action: "SKIP_OPTIONAL",
+                  workflow_id: currentTask.binding.workflow_id,
+                  guide_revision: guide.guide!.guide_revision,
+                  step_id: step.step_id,
+                  logical_node_id: step.logical_node_id,
+                  node_id: step.node_id,
+                },
+              },
+            });
+            await guide.refresh();
+          }}
           onReturnToChat={() => {
             const path = `/claw/${encodeURIComponent(guide.task!.binding.conversation_id)}`;
             window.history.pushState({}, "", path);
             window.dispatchEvent(new PopStateEvent("popstate"));
           }}
-          onSubmit={async () => {
-            const currentTask = guide.task;
-            if (!currentTask) {
-              antdMessage.error("当前素材任务已失效，请从会话卡片重新进入");
-              return;
-            }
-            const boundNode = activeCanvas?.nodes.find(
-              (node) => node.id === currentTask.binding.node_id,
-            );
-            const outputs = Array.isArray(boundNode?.data.outputs)
-              ? boundNode.data.outputs
-              : [];
-            const firstOutput = outputs.find(
-              (item) => item && typeof item === "object" && "id" in item,
-            ) as { id?: unknown } | undefined;
-            const assetId = String(firstOutput?.id || "");
-            if (!assetId) {
-              antdMessage.error("当前绑定节点还没有可提交的视频成品");
-              return;
-            }
-            const eventStorageKey = `dclaw:aigc-submit:${guide.taskId}:${assetId}`;
-            const eventId =
-              localStorage.getItem(eventStorageKey) || crypto.randomUUID();
-            localStorage.setItem(eventStorageKey, eventId);
-            const result = await superExpertPlatformApi.command(
-              "aigc.asset.submit",
-              {
-                installation_id: currentTask.binding.installation_id,
-                contract_version: "1",
-                idempotency_key: eventId,
-                arguments: {
-                  event_id: eventId,
-                  binding: currentTask.binding,
-                  asset_id: assetId,
-                },
-              },
-            );
-            await guide.refreshTask();
-            antdMessage.success("素材已提交，专家将按当前业务阶段审核");
-            return result.agent_review?.reply;
+          onSubmit={submitGuidedAsset}
+        />
+      ) : null}
+      {guide.taskId && guide.task && guide.operation && !guide.guide ? (
+        <LegacyAigcGuidePanel
+          taskId={guide.taskId}
+          task={guide.task}
+          operation={guide.operation}
+          activeCanvasId={activeCanvas?.id}
+          stepCompletion={legacyGuideCompletion}
+          onSubmit={submitGuidedAsset}
+          onReturnToChat={() => {
+            const path = `/claw/${encodeURIComponent(guide.task!.binding.conversation_id)}`;
+            window.history.pushState({}, "", path);
+            window.dispatchEvent(new PopStateEvent("popstate"));
           }}
         />
       ) : null}

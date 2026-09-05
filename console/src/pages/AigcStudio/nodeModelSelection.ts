@@ -1,7 +1,11 @@
 import type {
   AigcCanvasNode,
+  AigcCapabilityDefaultsByCategory,
   AigcCapabilityInfo,
+  AigcModelCategory,
 } from "../../api/modules/aigcStudio";
+
+export type AigcModelRef = { provider_id: string; model_id: string };
 
 const IMAGE_CAPABILITIES = new Set([
   "text_to_image",
@@ -15,6 +19,25 @@ const VIDEO_GENERATION_CAPABILITIES = new Set([
   "text_to_video",
   "image_to_video",
 ]);
+
+export function categoryForCapability(capability: string): AigcModelCategory {
+  if (IMAGE_CAPABILITIES.has(capability)) return "image";
+  if (
+    VIDEO_GENERATION_CAPABILITIES.has(capability) ||
+    capability === "reference_video"
+  ) {
+    return "video";
+  }
+  if (capability.includes("audio")) return "audio";
+  return "text";
+}
+
+export function effectiveDefaultForCapability(
+  defaults: AigcCapabilityDefaultsByCategory,
+  capability: string,
+) {
+  return defaults[categoryForCapability(capability)]?.effective_default ?? null;
+}
 
 const CAPABILITY_PRIORITY = [
   "text_to_image",
@@ -110,27 +133,55 @@ export function modelSnapshotFromNode(
   };
 }
 
-const canUseNodeSnapshot = (
-  snapshot: AigcCapabilityInfo | null,
+export function modelForNewNode(
   options: AigcCapabilityInfo[],
-) => {
-  if (!snapshot) return false;
-  if (!options.length) return true;
-  return false;
-};
+  effectiveDefault?: AigcModelRef | null,
+) {
+  if (effectiveDefault) {
+    const preferred = options.find(
+      (model) =>
+        model.provider_id === effectiveDefault.provider_id &&
+        model.model_id === effectiveDefault.model_id,
+    );
+    if (preferred) return preferred;
+  }
+  return options[0] ?? null;
+}
+
+export function modelSelectionState(
+  capabilities: AigcCapabilityInfo[],
+  node: AigcCanvasNode,
+  capability: string,
+  effectiveDefault?: AigcModelRef | null,
+) {
+  const options = modelOptionsForCapability(capabilities, capability);
+  const snapshot = modelSnapshotFromNode(node, capability);
+  const currentKey = nodeModelKey(node);
+  const boundCapability = textValue(node.data.modelCapability);
+  const matched = options.find(
+    (model) =>
+      modelKey(model) === currentKey &&
+      (!boundCapability || model.capability === boundCapability),
+  );
+  const workflowBound = Boolean(textValue(node.data.workflowLogicalNodeId));
+  const fallback = modelForNewNode(options, effectiveDefault);
+  return {
+    selected: matched ?? (workflowBound ? null : snapshot ?? fallback),
+    fallback,
+    invalidSavedModel: Boolean(
+      snapshot && options.length > 0 && !matched && !workflowBound,
+    ),
+  };
+}
 
 export function modelForNode(
   capabilities: AigcCapabilityInfo[],
   node: AigcCanvasNode,
   capability: string,
+  effectiveDefault?: AigcModelRef | null,
 ) {
-  const options = modelOptionsForCapability(capabilities, capability);
-  const currentKey = nodeModelKey(node);
-  const matched = options.find((model) => modelKey(model) === currentKey);
-  const snapshot = modelSnapshotFromNode(node, capability);
-  if (matched) return matched;
-  if (canUseNodeSnapshot(snapshot, options)) return snapshot;
-  return options[0] ?? null;
+  return modelSelectionState(capabilities, node, capability, effectiveDefault)
+    .selected;
 }
 
 export function modelOptionsForNode(
@@ -140,9 +191,18 @@ export function modelOptionsForNode(
 ) {
   const options = modelOptionsForCapability(capabilities, capability);
   const snapshot = modelSnapshotFromNode(node, capability);
+  const workflowBound = Boolean(textValue(node.data.workflowLogicalNodeId));
+  if (workflowBound) {
+    if (!snapshot) return [];
+    return options.filter(
+      (model) =>
+        model.provider_id === snapshot.provider_id &&
+        model.model_id === snapshot.model_id &&
+        model.capability === snapshot.capability,
+    );
+  }
   if (
     !snapshot ||
-    !canUseNodeSnapshot(snapshot, options) ||
     options.some((model) => modelKey(model) === modelKey(snapshot))
   ) {
     return options;
@@ -155,8 +215,9 @@ export function modelLabelForNode(
   node: AigcCanvasNode,
   capability: string,
   fallback: string,
+  effectiveDefault?: AigcModelRef | null,
 ) {
-  const model = modelForNode(capabilities, node, capability);
+  const model = modelForNode(capabilities, node, capability, effectiveDefault);
   return String(
     node.data.modelLabel ?? model?.model_name ?? model?.model_id ?? fallback,
   );

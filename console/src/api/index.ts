@@ -35,6 +35,7 @@ import { openApiApi } from "./modules/openApi";
 import { webSearchApi } from "./modules/webSearch";
 import { agentExperienceLibraryApi } from "./modules/agentExperienceLibrary";
 import { billingApi } from "./modules/billing";
+import { aigcModelPolicyApi } from "./modules/aigcModelPolicy";
 
 export const api = {
   // Root
@@ -124,6 +125,9 @@ export const api = {
 
   // Billing
   ...billingApi,
+
+  // AIGC Studio model policy
+  ...aigcModelPolicyApi,
 };
 
 export default api;
@@ -138,4 +142,5 @@ export {
   webSearchApi,
   agentExperienceLibraryApi,
   billingApi,
+  aigcModelPolicyApi,
 };

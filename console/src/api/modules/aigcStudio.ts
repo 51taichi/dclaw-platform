@@ -24,6 +24,20 @@ export interface AigcCapabilityInfo {
   parameter_schema?: Record<string, unknown>;
 }
 
+export type AigcModelCategory = "text" | "image" | "video" | "audio";
+
+export interface AigcCapabilityDefaults {
+  configured: boolean;
+  configured_default: { provider_id: string; model_id: string } | null;
+  effective_default: { provider_id: string; model_id: string } | null;
+  fallback_active: boolean;
+  fallback_reason: string[];
+}
+
+export type AigcCapabilityDefaultsByCategory = Partial<
+  Record<AigcModelCategory, AigcCapabilityDefaults>
+>;
+
 export interface AigcCanvasNode {
   id: string;
   type: string;
@@ -357,9 +371,10 @@ async function uploadAssetDirectly(file: File): Promise<AigcAsset> {
 
 export const aigcStudioApi = {
   listCapabilities: () =>
-    request<{ capabilities: AigcCapabilityInfo[] }>(
-      "/aigc-studio/capabilities",
-    ),
+    request<{
+      capabilities: AigcCapabilityInfo[];
+      defaults: AigcCapabilityDefaultsByCategory;
+    }>("/aigc-studio/capabilities"),
 
   listVisualDnaDimensions: () =>
     request<{ dimensions: VisualDnaDimensionInfo[] }>(

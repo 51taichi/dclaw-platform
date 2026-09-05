@@ -715,13 +715,17 @@ export function useVideoNodeWorkflow({
       const prompt = String(
         node.data.composerText ?? node.data.text ?? "",
       ).trim();
+      const boundCapability = textValue(node.data.modelCapability);
       const selectedVideoModel = modelForNode(
         modelOptions,
         node,
-        "text_to_video",
+        boundCapability ?? "text_to_video",
       );
+      const workflowBound = Boolean(textValue(node.data.workflowLogicalNodeId));
       const currentModelLabel =
-        selectedVideoModel?.model_name ?? selectedVideoModel?.model_id;
+        selectedVideoModel?.model_name ??
+        selectedVideoModel?.model_id ??
+        (workflowBound ? textValue(node.data.modelLabel) : undefined);
 
       const nextData = {
         text: prompt || node.data.text || "",
@@ -729,9 +733,15 @@ export function useVideoNodeWorkflow({
         showTryOptions: false,
         videoModel: currentModelLabel,
         modelLabel: currentModelLabel,
-        providerId: selectedVideoModel?.provider_id,
-        modelId: selectedVideoModel?.model_id,
-        modelCapability: selectedVideoModel?.capability,
+        providerId:
+          selectedVideoModel?.provider_id ??
+          (workflowBound ? textValue(node.data.providerId) : undefined),
+        modelId:
+          selectedVideoModel?.model_id ??
+          (workflowBound ? textValue(node.data.modelId) : undefined),
+        modelCapability:
+          selectedVideoModel?.capability ??
+          (workflowBound ? boundCapability : undefined),
         aspectRatio: node.data.aspectRatio ?? "16:9",
         videoResolution: node.data.videoResolution ?? "720P",
         videoDuration: node.data.videoDuration ?? 5,

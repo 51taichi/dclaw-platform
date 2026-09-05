@@ -186,6 +186,7 @@ export function LongImageExportNode({
       {selected && (
         <button
           type="button"
+          data-platform-control-id="aigc.long-image.generate-submit"
           className={styles.longImageExportButton}
           disabled={disabled}
           aria-label={t("aigcStudio.longImageExport.export", "导出公众号长图")}
