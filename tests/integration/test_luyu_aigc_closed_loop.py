@@ -61,8 +61,9 @@ async def test_bound_material_can_resume_revise_resubmit_and_accept(tmp_path):
         "material_task_id": "material-1", "canvas_id": "canvas-1", "node_id": "video-1",
     }
 
-    await command(service, grant, "card.create", "e-card", binding, card={"card_type": "aigc_material_task"})
     await command(service, grant, "aigc.task.create", "e-create", binding)
+    # A material card projects an existing task; it cannot precede its binding.
+    await command(service, grant, "card.create", "e-card", binding, card={"card_type": "aigc_material_task"})
     await command(service, grant, "aigc.task.resume", "e-start", binding)
     # Leaving the page is a UI pause: the durable server task remains resumable
     # and is recovered from the same bound repository without a cancel command.

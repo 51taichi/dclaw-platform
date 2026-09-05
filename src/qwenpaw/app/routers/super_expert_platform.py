@@ -663,7 +663,7 @@ def _operation_catalog_path() -> Path:
 
 async def _load_workflow_capability_catalog():
     from ...providers.provider_manager import ProviderManager
-    from .aigc_studio import build_workflow_capability_catalog
+    from ..aigc.capability_service import build_workflow_capability_catalog
 
     return await build_workflow_capability_catalog(ProviderManager.get_instance())
 

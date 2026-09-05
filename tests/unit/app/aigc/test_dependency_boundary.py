@@ -27,6 +27,17 @@ def test_core_modules_do_not_import_upper_layer_contracts():
     assert not violations, "\n".join(violations)
 
 
+def test_legacy_binding_query_is_preserved_until_core_migration():
+    # Task 4 replaces this characterization with a strict system-route boundary.
+    # Do not make it green by deleting the execution constraint ahead of migration.
+    source_root = Path(__file__).resolve().parents[4] / "src"
+    tree = ast.parse((source_root / "qwenpaw/app/routers/aigc_studio.py").read_text())
+    binding_query = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                         and node.name == "_authoritative_workflow_execution_binding")
+    assert any(isinstance(node, ast.Attribute) and node.attr == "workflow_node_execution_binding"
+               for node in ast.walk(binding_query))
+
+
 def test_shared_resources_work_when_upper_layers_are_unavailable(tmp_path):
     source_root = Path(__file__).resolve().parents[4] / "src"
     result = subprocess.run(
@@ -42,12 +53,20 @@ class BlockUpperLayers(importlib.abc.MetaPathFinder):
                 raise ImportError('core tried to load upper layer: ' + fullname)
 
 sys.meta_path.insert(0, BlockUpperLayers())
-from qwenpaw.app.aigc.models import Canvas
+from qwenpaw.app.aigc.models import Canvas, CanvasUpsert, CapabilityList
 from qwenpaw.app.aigc.resource_store import AigcResourceStore
+from qwenpaw.app.aigc.canvas_service import AigcCanvasService
+from qwenpaw.app.aigc.asset_service import AigcAssetService
+from qwenpaw.app.aigc.capability_service import project_workflow_capability_catalog
 store = AigcResourceStore(Path(sys.argv[1]))
 canvas = Canvas(id='c', created_at='start', updated_at='start')
 store.write('canvases', 'c', canvas.model_dump())
 assert store.read('canvases', 'c')['id'] == 'c'
+service = AigcCanvasService(store)
+owned = service.create('user', CanvasUpsert(name='Without experts'))
+assert service.get('user', owned.id).name == 'Without experts'
+assert AigcAssetService(store).store is store
+assert project_workflow_capability_catalog(CapabilityList(capabilities=[])).nodes
 """, str(tmp_path)],
         env={**os.environ, "PYTHONPATH": str(source_root)},
         text=True, capture_output=True, timeout=20,

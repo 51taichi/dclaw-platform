@@ -39,7 +39,25 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from ...aigc.workflow_compiler import CompiledWorkflow
-from ...aigc.workflow_contract import workflow_node_registry
+from ..aigc.capability_service import (
+    _aigc_generation_capabilities_from_model_id,
+    _normalized_capability_token,
+    _is_text_model_capability,
+    _normalized_aigc_capabilities,
+    _append_reference_capabilities,
+    _has_output_generation_capability,
+    _capabilities_from_model,
+    _tool_capabilities,
+    _reference_image_limit_for_model,
+    _parameter_schema_for,
+    _provider_configured_for_aigc,
+    build_capability_list,
+    project_workflow_capability_catalog,
+    build_workflow_capability_catalog,
+    _MXAPI_SEEDANCE_ENDPOINTS,
+    _MXAPI_GROK_VIDEO_MODELS,
+    _MXAPI_JIMENG_VIDEO_MODELS,
+)
 from ...aigc.visual_dna import (
     CompiledVisualDna,
     VisualDnaCompileRequest,
@@ -73,6 +91,8 @@ from ..aigc.models import (
     AssetList,
 )
 from ..aigc.resource_store import AigcResourceError, AigcResourceStore
+from ..aigc.canvas_service import AigcCanvasService
+from ..aigc.asset_service import AigcAssetService
 from ..chat_access import current_user_id, is_admin_request
 from ..object_storage import get_object_storage_client
 from ..runtime.event_bus import RuntimeEvent, get_runtime_event_bus
@@ -139,33 +159,6 @@ AigcCapability = Literal[
     "storyboard",
 ]
 
-SUPPORTED_AIGC_CAPABILITIES = {
-    "text_to_image",
-    "image_edit",
-    "image_to_image",
-    "mask_edit",
-    "reference_image",
-    "text_to_video",
-    "image_to_video",
-    "reference_video",
-    "text_to_audio",
-    "storyboard",
-}
-TEXT_MODEL_CAPABILITY_ALIASES = {
-    "storyboard",
-}
-TEXT_MODEL_CAPABILITY_ALIASES_COMPACT = {
-    item.replace("_", "") for item in TEXT_MODEL_CAPABILITY_ALIASES
-}
-OUTPUT_GENERATION_CAPABILITIES = {
-    "text_to_image",
-    "image_edit",
-    "image_to_image",
-    "mask_edit",
-    "text_to_video",
-    "image_to_video",
-    "text_to_audio",
-}
 
 
 
@@ -656,6 +649,20 @@ def _resource_store(root: Path) -> AigcResourceStore:
 
 
 def _resource_http_error(error: AigcResourceError) -> HTTPException:
+    asset_errors = {
+        "ASSET_BINDING_MISMATCH": (403, "Asset binding mismatch."),
+        "ASSET_PATH_OUTSIDE_ROOTS": (403, "Asset file is outside allowed roots."),
+        "ASSET_FILE_NOT_FOUND": (404, "Asset file not found."),
+        "ASSET_TYPE_UNREVIEWABLE": (409, "Asset type cannot be reviewed."),
+        "ASSET_TYPE_MISMATCH": (409, "Asset type does not match workflow output."),
+    }
+    if error.code in asset_errors:
+        status, detail = asset_errors[error.code]
+        return HTTPException(status_code=status, detail=detail)
+    if error.code == "CANVAS_NOT_FOUND":
+        return HTTPException(status_code=404, detail="Canvas not found.")
+    if error.code == "ASSET_NOT_FOUND":
+        return HTTPException(status_code=404, detail="Asset not found.")
     if error.code == "RESOURCE_NOT_FOUND":
         return HTTPException(status_code=404, detail="AIGC Studio resource not found")
     if error.code == "CORRUPT_RESOURCE":
@@ -895,27 +902,24 @@ def _owned_meta_for_request(
 
 
 def _canvas_owner_user_id(canvas: Canvas) -> str | None:
-    owner = canvas.meta.get("owner_user_id")
-    if owner is None:
-        owner = canvas.meta.get("user_id")
-    if owner is None:
-        return None
-    owner_text = str(owner).strip()
-    return owner_text or None
+    return AigcCanvasService.owner(canvas)
 
 
 def _request_owns_canvas(request: Request, canvas: Canvas) -> bool:
-    owner = _canvas_owner_user_id(canvas)
-    if owner is None:
-        return current_user_id(request) == "0" or is_admin_request(request)
-    return owner == current_user_id(request)
+    return AigcCanvasService.can_access(
+        current_user_id(request), canvas,
+        allow_ownerless=current_user_id(request) == "0" or is_admin_request(request),
+    )
 
 
 def _load_canvas_for_request(request: Request, canvas_id: str) -> Canvas:
-    canvas = _load_canvas(canvas_id)
-    if not _request_owns_canvas(request, canvas):
-        raise HTTPException(status_code=404, detail="Canvas not found.")
-    return canvas
+    try:
+        return AigcCanvasService(_resource_store(STUDIO_ROOT)).get(
+            current_user_id(request), canvas_id,
+            allow_ownerless=current_user_id(request) == "0" or is_admin_request(request),
+        )
+    except AigcResourceError as exc:
+        raise _resource_http_error(exc) from exc
 
 
 def provision_super_expert_aigc_workspace(
@@ -933,9 +937,7 @@ def provision_super_expert_aigc_workspace(
     # Prefix physical identifiers so every generated value remains valid for
     # the shared super-expert domain-id contract even when a UUID starts with
     # a digit.
-    canvas_id = f"canvas-{uuid.uuid4()}"
     node_id = f"video-{uuid.uuid4()}"
-    now = _now()
     node = CanvasNode(
         id=node_id,
         type="video_generate",
@@ -954,8 +956,7 @@ def provision_super_expert_aigc_workspace(
             "modelId": str(arguments["model_id"]),
         },
     )
-    canvas = Canvas(
-        id=canvas_id,
+    body = CanvasUpsert(
         name=str(arguments["project_name"]),
         nodes=[node],
         edges=[],
@@ -967,11 +968,11 @@ def provision_super_expert_aigc_workspace(
             "super_expert_material_task_id": str(material_task_id),
             "super_expert_operation_id": operation_id,
         },
-        created_at=now,
-        updated_at=now,
     )
-    _write_json(_json_path("canvases", canvas_id), canvas)
-    return {"canvas_id": canvas_id, "node_id": node_id}
+    canvas = AigcCanvasService(_resource_store(STUDIO_ROOT)).create(
+        str(owner_user_id), body, id_prefix="canvas-",
+    )
+    return {"canvas_id": canvas.id, "node_id": node_id}
 
 
 def provision_super_expert_aigc_workflow(
@@ -980,46 +981,13 @@ def provision_super_expert_aigc_workflow(
     material_task_id: str,
     compiled: CompiledWorkflow,
 ) -> Canvas:
-    """Persist one fully validated, DClaw-owned workflow canvas."""
+    """Adapt a bound card to the shared canvas creation service."""
     if not str(owner_user_id).strip() or not str(material_task_id).strip():
         raise ValueError("AIGC workspace ownership is incomplete")
-    canvas_id = f"canvas-{uuid.uuid4()}"
-    now = _now()
-    canvas = Canvas(
-        id=canvas_id,
-        name=compiled.title,
-        nodes=[
-            CanvasNode(
-                id=node.physical_node_id,
-                type=node.kind,
-                position=node.position,
-                data=node.data,
-            )
-            for node in compiled.nodes
-        ],
-        edges=[
-            CanvasEdge(
-                id=edge.edge_id,
-                source=edge.source,
-                target=edge.target,
-                data={"role": edge.target_slot},
-            )
-            for edge in compiled.edges
-        ],
-        viewport=CanvasViewport(**compiled.viewport),
-        thumbnail=None,
-        meta={
-            "version": 2,
-            "owner_user_id": str(owner_user_id),
-            "super_expert_material_task_id": str(material_task_id),
-            "workflow_id": compiled.workflow_id,
-            "execution_mode": "PREBUILT_WORKFLOW",
-        },
-        created_at=now,
-        updated_at=now,
+    return AigcCanvasService(_resource_store(STUDIO_ROOT)).create_compiled(
+        owner_user_id, compiled,
+        meta={"super_expert_material_task_id": str(material_task_id)},
     )
-    _write_json(_json_path("canvases", canvas_id), canvas)
-    return canvas
 
 
 def provision_blank_super_expert_aigc_workspace(
@@ -1035,10 +1003,7 @@ def provision_blank_super_expert_aigc_workspace(
         for value in (owner_user_id, material_task_id, workflow_id, title)
     ):
         raise ValueError("AIGC manual workspace binding is incomplete")
-    canvas_id = f"canvas-{uuid.uuid4()}"
-    now = _now()
-    canvas = Canvas(
-        id=canvas_id,
+    body = CanvasUpsert(
         name=str(title),
         nodes=[],
         edges=[],
@@ -1051,11 +1016,10 @@ def provision_blank_super_expert_aigc_workspace(
             "workflow_id": str(workflow_id),
             "execution_mode": "MANUAL_BUILD",
         },
-        created_at=now,
-        updated_at=now,
     )
-    _write_json(_json_path("canvases", canvas_id), canvas)
-    return canvas
+    return AigcCanvasService(_resource_store(STUDIO_ROOT)).create(
+        str(owner_user_id), body, id_prefix="canvas-",
+    )
 
 
 def discard_super_expert_aigc_workspace(
@@ -1065,16 +1029,10 @@ def discard_super_expert_aigc_workspace(
     canvas_id: str,
 ) -> None:
     """Remove only a just-provisioned, still-unpublished task canvas."""
-    try:
-        canvas = _load_canvas(canvas_id)
-    except HTTPException:
-        return
-    if (
-        _canvas_owner_user_id(canvas) != str(owner_user_id)
-        or canvas.meta.get("super_expert_material_task_id") != material_task_id
-    ):
-        raise ValueError("AIGC workspace cleanup binding mismatch")
-    _delete_json(_json_path("canvases", canvas_id))
+    AigcCanvasService(_resource_store(STUDIO_ROOT)).discard_unstarted(
+        str(owner_user_id), canvas_id,
+        expected_meta={"super_expert_material_task_id": material_task_id},
+    )
 
 
 def resolve_owned_asset_for_workflow(
@@ -1085,11 +1043,8 @@ def resolve_owned_asset_for_workflow(
     if not str(owner_user_id).strip() or not str(asset_id).strip():
         return None
     try:
-        asset = AigcAsset(**_read_json(_json_path("assets", asset_id)))
-    except HTTPException:
-        return None
-    owner = asset.meta.get("owner_user_id") or asset.meta.get("user_id")
-    if str(owner or "").strip() != str(owner_user_id).strip():
+        asset = AigcAssetService(_resource_store(STUDIO_ROOT)).resolve_owned(owner_user_id, asset_id)
+    except AigcResourceError:
         return None
     return asset.model_dump(mode="json")
 
@@ -1111,35 +1066,26 @@ def load_super_expert_aigc_workflow_context(
         != str(material_task_id)
     ):
         return None, []
-    jobs = [
-        AigcJob(**_read_json(path))
-        for path in sorted(_dir("jobs").glob("*.json"))
-    ]
-    return canvas, [job for job in jobs if job.canvas_id == canvas_id]
+    return canvas, AigcCanvasService(_resource_store(STUDIO_ROOT)).jobs(canvas_id)
 
 
 def _request_can_access_asset(request: Request, asset: AigcAsset) -> bool:
-    owner = asset.meta.get("owner_user_id") or asset.meta.get("user_id")
-    if owner is not None:
-        return str(owner) == current_user_id(request)
-    canvas_id = str(asset.meta.get("canvas_id") or "")
-    if canvas_id:
-        try:
-            _load_canvas_for_request(request, canvas_id)
-        except HTTPException:
-            return False
-        return True
-    return current_user_id(request) == "0" or is_admin_request(request)
+    return AigcAssetService(_resource_store(STUDIO_ROOT)).can_access(
+        current_user_id(request), asset,
+        allow_ownerless=current_user_id(request) == "0" or is_admin_request(request),
+    )
 
 
 def _load_asset_for_request(request: Request, asset_id: str) -> AigcAsset:
-    path = _json_path("assets", asset_id)
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Asset not found.")
-    asset = AigcAsset(**_read_json(path))
-    if not _request_can_access_asset(request, asset):
-        raise HTTPException(status_code=404, detail="Asset not found.")
-    return asset
+    try:
+        return AigcAssetService(_resource_store(STUDIO_ROOT)).get(
+            current_user_id(request), asset_id,
+            allow_ownerless=current_user_id(request) == "0" or is_admin_request(request),
+        )
+    except AigcResourceError as exc:
+        if exc.code == "RESOURCE_NOT_FOUND":
+            raise HTTPException(status_code=404, detail="Asset not found.") from exc
+        raise _resource_http_error(exc) from exc
 
 
 def _request_can_access_job(request: Request, job: AigcJob) -> bool:
@@ -1457,15 +1403,7 @@ def _path_is_relative_to(path: Path, root: Path) -> bool:
 
 
 def _cloud_storage_meta(asset: AigcAsset) -> dict[str, Any] | None:
-    storage = asset.meta.get("storage")
-    if not isinstance(storage, dict):
-        return None
-    if storage.get("provider") != "aliyun_oss":
-        return None
-    object_key = str(storage.get("object_key") or "").strip()
-    if not object_key:
-        return None
-    return storage
+    return AigcAssetService.cloud_storage_meta(asset)
 
 
 def _cloud_storage_client_or_error():
@@ -1483,11 +1421,9 @@ def _signed_cloud_asset_url(
     storage = _cloud_storage_meta(asset)
     if not storage:
         return None
-    client = _cloud_storage_client_or_error()
-    object_key = str(storage["object_key"])
-    if ttl_seconds is None:
-        return client.signed_get_url(object_key)
-    return client.signed_get_url(object_key, ttl_seconds=ttl_seconds)
+    return AigcAssetService.signed_source(
+        asset, storage_client=_cloud_storage_client_or_error(), ttl_seconds=ttl_seconds,
+    )
 
 
 def _asset_kind_for_mime(mime_type: str) -> Literal["image", "video", "audio", "file"]:
@@ -1582,19 +1518,12 @@ async def _cloud_asset_file_response(asset: AigcAsset) -> Response | None:
 
 async def _asset_file_path_for_request(request: Request, asset: AigcAsset) -> Path:
     artifact_root = await _artifact_root_for_request(request)
-    asset_files_root = _dir("asset_files").resolve()
-    raw_path = Path(asset.path)
-    if raw_path.is_absolute():
-        target = raw_path.expanduser().resolve()
-    else:
-        target = (artifact_root / raw_path).resolve()
-
-    allowed_roots = [artifact_root.resolve(), asset_files_root]
-    if not any(_path_is_relative_to(target, root) for root in allowed_roots):
-        raise HTTPException(
-            status_code=403, detail="Asset file is outside allowed roots."
+    try:
+        return AigcAssetService(_resource_store(STUDIO_ROOT)).local_path(
+            asset, artifact_root=artifact_root,
         )
-    return target
+    except AigcResourceError as exc:
+        raise _resource_http_error(exc) from exc
 
 
 _GENERATED_ASSET_UPLOAD_RETRYABLE_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
@@ -2111,17 +2040,8 @@ _MXAPI_GPT_IMAGE_ASPECT_RATIOS = {
 }
 _MXAPI_NANO2_IMAGE_SIZES = {"1K", "2K", "4K"}
 _MXAPI_NANO2_ASPECT_RATIOS = {"1:1", "3:4", "4:3", "9:16", "16:9", "21:9"}
-_MXAPI_SEEDANCE_ENDPOINTS = {"seedance2", "seedance2-fast", "seedance2-mini"}
-_MXAPI_GROK_VIDEO_MODELS = {
-    "grok-imagine-video-1.5-fast",
-    "grok-imagine-video-1.5",
-}
 _MXAPI_GROK_VIDEO_ASPECT_RATIOS = {"2:3", "3:2", "1:1", "9:16", "16:9"}
 _MXAPI_GROK_VIDEO_RESOLUTIONS = {"480p", "720p", "1080p"}
-_MXAPI_JIMENG_VIDEO_MODELS = {
-    "doubao-seedance-1-0-pro-fast-251015",
-    "doubao-seedance-1-5-pro-251215",
-}
 _MXAPI_JIMENG_VIDEO_ASPECT_RATIOS = {
     "16:9",
     "9:16",
@@ -5175,530 +5095,6 @@ def _merge_node_output(canvas: Canvas, job: AigcJob) -> Canvas:
     return canvas.model_copy(update={"nodes": nodes, "updated_at": _now()})
 
 
-def _aigc_generation_capabilities_from_model_id(model_id: str) -> list[str]:
-    model_key = model_id.lower()
-    if "seedream" in model_key:
-        return ["text_to_image"]
-    if "seededit" in model_key:
-        return ["image_edit"]
-    return []
-
-
-def _normalized_capability_token(value: Any) -> str:
-    return re.sub(
-        r"[^0-9a-zA-Z_\u4e00-\u9fff]+",
-        "_",
-        str(value).strip(),
-    ).lower()
-
-
-def _is_text_model_capability(value: Any) -> bool:
-    token = _normalized_capability_token(value)
-    compact = token.replace("_", "")
-    return (
-        token in TEXT_MODEL_CAPABILITY_ALIASES
-        or compact in TEXT_MODEL_CAPABILITY_ALIASES_COMPACT
-    )
-
-
-def _normalized_aigc_capabilities(values: Any) -> list[str]:
-    if not isinstance(values, list):
-        return []
-    capabilities: list[str] = []
-    for item in values:
-        if item is None:
-            continue
-        token = _normalized_capability_token(item)
-        if not token:
-            continue
-        if token in SUPPORTED_AIGC_CAPABILITIES:
-            capabilities.append(token)
-            continue
-        if token == "image_to_prompt":
-            capabilities.extend(["storyboard", "reference_image"])
-            continue
-        if token in {"vision", "visual_text", "image_understanding"}:
-            capabilities.extend(["storyboard", "reference_image"])
-            continue
-        if _is_text_model_capability(item):
-            capabilities.append("storyboard")
-    return list(dict.fromkeys(capabilities))
-
-
-def _append_reference_capabilities(
-    capabilities: list[str],
-    model: Any,
-) -> list[str]:
-    next_capabilities = list(capabilities)
-    if getattr(model, "supports_image", False):
-        next_capabilities.append("reference_image")
-    if getattr(model, "supports_video", False):
-        next_capabilities.append("reference_video")
-    return list(dict.fromkeys(next_capabilities))
-
-
-def _has_output_generation_capability(capabilities: list[str]) -> bool:
-    return any(item in OUTPUT_GENERATION_CAPABILITIES for item in capabilities)
-
-
-def _capabilities_from_model(model: Any, provider: Any) -> list[str]:
-    direct = _normalized_aigc_capabilities(
-        list(getattr(model, "aigc_capabilities", []) or []),
-    )
-    if direct:
-        if _has_output_generation_capability(direct):
-            return direct
-        return _append_reference_capabilities(direct, model)
-
-    generate_kwargs = getattr(model, "generate_kwargs", {}) or {}
-    from_kwargs = _normalized_aigc_capabilities(
-        generate_kwargs.get("aigc_capabilities"),
-    )
-    if from_kwargs:
-        if _has_output_generation_capability(from_kwargs):
-            return from_kwargs
-        return _append_reference_capabilities(from_kwargs, model)
-
-    provider_meta = getattr(provider, "meta", {}) or {}
-    provider_caps = provider_meta.get("aigc_capabilities", {})
-    if isinstance(provider_caps, dict):
-        caps = _normalized_aigc_capabilities(
-            provider_caps.get(getattr(model, "id", "")),
-        )
-        if caps:
-            if _has_output_generation_capability(caps):
-                return caps
-            return _append_reference_capabilities(caps, model)
-
-    generation_caps = _aigc_generation_capabilities_from_model_id(
-        str(getattr(model, "id", "") or ""),
-    )
-    if generation_caps:
-        return generation_caps
-
-    return []
-
-
-def _tool_capabilities(tool_name: str) -> list[str]:
-    name = tool_name.lower()
-    if name.startswith("generate_image") or "text_to_image" in name:
-        return ["text_to_image"]
-    if name.startswith("edit_image") or "image_edit" in name:
-        return ["image_edit"]
-    if name.startswith("text_to_video"):
-        return ["text_to_video"]
-    if name.startswith("image_to_video"):
-        return ["image_to_video"]
-    if name.startswith("reference_to_video"):
-        return ["reference_video", "text_to_video"]
-    if name.startswith("text_to_audio") or name.startswith("generate_audio"):
-        return ["text_to_audio"]
-    if name.startswith("text_to_music") or name.startswith("generate_music"):
-        return ["text_to_audio"]
-    return []
-
-
-def _reference_image_limit_for_model(
-    *,
-    provider_id: str = "",
-    model_id: str = "",
-    model_name: str = "",
-    capability: str = "",
-) -> int | None:
-    if capability not in {"text_to_image", "image_to_image", "image_edit", "mask_edit"}:
-        return None
-    token = re.sub(
-        r"[^a-z0-9]+",
-        " ",
-        f"{provider_id} {model_id} {model_name}".lower(),
-    )
-    if "gpt image" in token and "2" in token:
-        return 16
-    if "nano2" in token or "banana2" in token:
-        return 16
-    if "seedream" in token and "4 5" in token:
-        return 10
-    return 4
-
-
-def _parameter_schema_for(
-    capability: str,
-    *,
-    provider_id: str = "",
-    model_id: str = "",
-    model_name: str = "",
-) -> dict[str, Any]:
-    common: dict[str, Any] = {
-        "type": "object",
-        "properties": {
-            "prompt": {"type": "string"},
-            "negative_prompt": {"type": "string"},
-            "seed": {"type": "integer"},
-        },
-    }
-    if capability == "storyboard":
-        common["properties"].update(
-            {
-                "textMode": {"type": "string"},
-                "referenceImages": {"type": "array", "items": {"type": "string"}},
-            },
-        )
-    elif capability.endswith("video"):
-        common["properties"].update(
-            {
-                "duration": {
-                    "type": "number",
-                    "minimum": 4,
-                    "maximum": 15,
-                    "default": 5,
-                },
-                "aspect_ratio": {"type": "string"},
-                "fps": {"type": "integer"},
-            },
-        )
-        normalized_model_id = model_id.strip().lower()
-        if normalized_model_id in _MXAPI_SEEDANCE_ENDPOINTS:
-            is_compact = normalized_model_id in {"seedance2-fast", "seedance2-mini"}
-            common["properties"].update(
-                {
-                    "duration": {
-                        "type": "number",
-                        "minimum": 4,
-                        "maximum": 15,
-                        "default": 5,
-                    },
-                    "aspect_ratio": {
-                        "type": "string",
-                        "enum": [
-                            "Auto",
-                            "16:9",
-                            "9:16",
-                            "1:1",
-                            "4:3",
-                            "3:4",
-                            "21:9",
-                        ],
-                        "default": "16:9",
-                    },
-                    "resolution": {
-                        "type": "string",
-                        "enum": (
-                            ["480P", "720P"]
-                            if is_compact
-                            else ["480P", "720P", "1080P", "4K"]
-                        ),
-                        "default": "720P",
-                    },
-                    "generate_audio": {"type": "boolean", "default": False},
-                    "return_last_frame": {"type": "boolean", "default": False},
-                },
-            )
-        elif normalized_model_id in _MXAPI_GROK_VIDEO_MODELS:
-            is_fast = normalized_model_id.endswith("-fast")
-            minimum, maximum, default = (6, 30, 10) if is_fast else (5, 15, 5)
-            reference_max = 7 if is_fast else 1
-            common["max_reference_images"] = reference_max
-            common["properties"].update(
-                {
-                    "duration": {
-                        "type": "number",
-                        "minimum": minimum,
-                        "maximum": maximum,
-                        "default": default,
-                    },
-                    "aspect_ratio": {
-                        "type": "string",
-                        "enum": ["2:3", "3:2", "1:1", "9:16", "16:9"],
-                        "default": "16:9",
-                    },
-                    "resolution": {
-                        "type": "string",
-                        "enum": (
-                            ["480P", "720P"] if is_fast else ["480P", "720P", "1080P"]
-                        ),
-                        "default": "720P",
-                    },
-                    "referenceImages": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "minItems": 0 if is_fast else 1,
-                        "maxItems": reference_max,
-                    },
-                },
-            )
-        elif normalized_model_id in _MXAPI_JIMENG_VIDEO_MODELS:
-            is_first_last = normalized_model_id == "doubao-seedance-1-5-pro-251215"
-            reference_min = 2 if is_first_last else 0
-            reference_max = 2 if is_first_last else 1
-            common["max_reference_images"] = reference_max
-            common["supported_video_modes"] = (
-                ["first_last_frames"]
-                if is_first_last
-                else ["text_to_video", "image_to_video"]
-            )
-            if is_first_last:
-                common["preferred_video_mode"] = "first_last_frames"
-            common["properties"].update(
-                {
-                    "duration": {
-                        "type": "number",
-                        "minimum": 2,
-                        "maximum": 12,
-                        "default": 5,
-                    },
-                    "aspect_ratio": {
-                        "type": "string",
-                        "enum": ["Auto", "16:9", "9:16", "1:1", "4:3", "3:4"],
-                        "default": "16:9",
-                    },
-                    "resolution": {
-                        "type": "string",
-                        "enum": ["480P", "720P", "1080P"],
-                        "default": "1080P",
-                    },
-                    "referenceImages": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "minItems": reference_min,
-                        "maxItems": reference_max,
-                    },
-                },
-            )
-    elif "audio" in capability or "music" in capability:
-        common["properties"].update(
-            {
-                "duration": {"type": "number"},
-                "voice": {"type": "string"},
-                "speech_rate": {"type": "number"},
-                "audio_mode": {"type": "string"},
-            },
-        )
-    else:
-        common["properties"].update(
-            {
-                "size": {"type": "string"},
-                "quality": {"type": "string"},
-                "n": {"type": "integer"},
-            },
-        )
-        reference_limit = _reference_image_limit_for_model(
-            provider_id=provider_id,
-            model_id=model_id,
-            model_name=model_name,
-            capability=capability,
-        )
-        if reference_limit:
-            common["max_reference_images"] = reference_limit
-            common["properties"]["referenceImages"] = {
-                "type": "array",
-                "items": {"type": "string"},
-                "maxItems": reference_limit,
-            }
-    return common
-
-
-def _provider_configured_for_aigc(provider: Any) -> bool:
-    if bool(getattr(provider, "disabled", False)):
-        return False
-    if getattr(provider, "require_api_key", True) is False:
-        return True
-    return bool(str(getattr(provider, "api_key", "") or "").strip())
-
-
-async def build_capability_list(manager: Any | None) -> CapabilityList:
-    """Build the AIGC inventory from an already resolved provider manager.
-
-    This keeps the inventory reusable by non-HTTP callers such as sealed
-    workspace runtimes without making them impersonate a Starlette request.
-    """
-    capabilities: list[AigcCapabilityInfo] = []
-    published: set[tuple[str, str]] | None = None
-    if manager is not None:
-        from ..billing.model_publication import ModelPublicationService
-        from ..storage.engine import get_app_engine
-        from ..storage.repos.price_catalog_repo import PriceCatalogRepository
-
-        published = ModelPublicationService(
-            PriceCatalogRepository(get_app_engine())
-        ).effective_pairs()
-        if published is None:
-            return CapabilityList(capabilities=[])
-        for provider in await manager.list_provider_info():
-            if not _provider_configured_for_aigc(provider):
-                continue
-            models = list(getattr(provider, "models", []) or []) + list(
-                getattr(provider, "extra_models", []) or [],
-            )
-            for model in models:
-                if (provider.id, model.id) not in published:
-                    continue
-                for capability in _capabilities_from_model(model, provider):
-                    capabilities.append(
-                        AigcCapabilityInfo(
-                            provider_id=provider.id,
-                            provider_name=provider.name,
-                            model_id=model.id,
-                            model_name=model.name,
-                            capability=capability,
-                            source="model_registry",
-                            parameter_schema=_parameter_schema_for(
-                                capability,
-                                provider_id=provider.id,
-                                model_id=model.id,
-                                model_name=model.name,
-                            ),
-                        ),
-                    )
-
-    try:
-        from ...plugins.registry import PluginRegistry
-
-        registry = PluginRegistry()
-        for manifest in registry.get_all_plugin_manifests().values():
-            plugin_id = manifest.get("id") or manifest.get("name", "plugin")
-            plugin_name = manifest.get("name", plugin_id)
-            for tool in (manifest.get("meta") or {}).get("tools", []):
-                if not isinstance(tool, dict) or not tool.get("name"):
-                    continue
-                for capability in _tool_capabilities(str(tool["name"])):
-                    capabilities.append(
-                        AigcCapabilityInfo(
-                            provider_id=f"plugin:{plugin_id}",
-                            provider_name=plugin_name,
-                            model_id=str(tool["name"]),
-                            model_name=tool.get("description") or str(tool["name"]),
-                            capability=capability,
-                            source="plugin_tool",
-                            parameter_schema=_parameter_schema_for(
-                                capability,
-                                model_id=str(tool["name"]),
-                                model_name=str(tool.get("description") or ""),
-                            ),
-                        ),
-                    )
-    except Exception:
-        pass
-
-    deduped = {
-        (c.provider_id, c.model_id, c.capability, c.source): c for c in capabilities
-    }
-    result = CapabilityList(capabilities=list(deduped.values()))
-    if manager is None or published is None:
-        return result
-
-    from ..aigc.model_policy import (
-        AIGC_MODEL_CATEGORIES,
-        AigcModelPolicyService,
-        filter_capabilities,
-        policy_enforcement_enabled,
-    )
-    from ..storage.repos.aigc_model_policy_repo import (
-        AigcModelPolicyRepository,
-    )
-
-    if not policy_enforcement_enabled():
-        return result
-
-    policy_service = AigcModelPolicyService(
-        AigcModelPolicyRepository(get_app_engine()),
-        published_pairs=published,
-        priced_pairs=published,
-    )
-    try:
-        effective = {
-            category: await policy_service.effective(category, manager)
-            for category in AIGC_MODEL_CATEGORIES
-        }
-    except Exception as exc:
-        from sqlalchemy.exc import OperationalError, ProgrammingError
-
-        if not isinstance(exc, (OperationalError, ProgrammingError)):
-            raise
-        logger.warning(
-            "AIGC model-policy tables are unavailable; preserving legacy inventory",
-        )
-        return result
-    allowed = {
-        category: {
-            (item.provider_id, item.model_id) for item in policy.models
-        }
-        for category, policy in effective.items()
-        if policy.configured
-    }
-    defaults = {
-        category: AigcCategoryDefaults(
-            configured=policy.configured,
-            configured_default=(
-                {
-                    "provider_id": policy.configured_default.provider_id,
-                    "model_id": policy.configured_default.model_id,
-                }
-                if policy.configured_default
-                else None
-            ),
-            effective_default=(
-                {
-                    "provider_id": policy.effective_default.provider_id,
-                    "model_id": policy.effective_default.model_id,
-                }
-                if policy.effective_default
-                else None
-            ),
-            fallback_active=policy.fallback_active,
-            fallback_reason=list(policy.fallback_reason),
-        )
-        for category, policy in effective.items()
-    }
-    return CapabilityList(
-        capabilities=filter_capabilities(result.capabilities, allowed),
-        defaults=defaults,
-    )
-
-
-def project_workflow_capability_catalog(
-    inventory: CapabilityList,
-) -> WorkflowCapabilityCatalog:
-    """Project the live priced model inventory onto the closed node registry."""
-    registry = workflow_node_registry()
-    models = tuple(
-        WorkflowAvailableModel(**item.model_dump(mode="python"))
-        for item in sorted(
-            inventory.capabilities,
-            key=lambda value: (
-                value.provider_id,
-                value.model_id,
-                value.capability,
-                value.source,
-            ),
-        )
-    )
-    nodes = tuple(
-        WorkflowNodeCapability(
-            kind=registration.kind,
-            title=registration.title,
-            provisioning=registration.provisioning,
-            provisioning_reason=registration.provisioning_reason,
-            capabilities=registration.capabilities,
-            input_keys=tuple(sorted(registration.input_keys)),
-            parameter_keys=tuple(sorted(registration.parameter_keys)),
-            input_slots={
-                key: tuple(values)
-                for key, values in sorted(registration.input_slots.items())
-            },
-            output_type=registration.output_type,
-            control_id=registration.control_id,
-            customer_actions=registration.customer_actions,
-        )
-        for registration in registry.values()
-    )
-    return WorkflowCapabilityCatalog(nodes=nodes, available_models=models)
-
-
-async def build_workflow_capability_catalog(
-    manager: Any | None,
-) -> WorkflowCapabilityCatalog:
-    """Return workflow nodes plus only currently published/priced models."""
-    return project_workflow_capability_catalog(await build_capability_list(manager))
 
 
 @router.get("/capabilities", response_model=CapabilityList)
@@ -5914,12 +5310,10 @@ async def list_canvases(
 
 @router.post("/canvases", response_model=Canvas, status_code=201)
 async def create_canvas(request: Request, body: CanvasUpsert = Body(...)) -> Canvas:
-    now = _now()
-    data = body.model_dump()
-    data["meta"] = _owned_meta_for_request(request, body.meta)
-    canvas = Canvas(id=str(uuid.uuid4()), created_at=now, updated_at=now, **data)
-    _write_json(_json_path("canvases", canvas.id), canvas)
-    return canvas
+    try:
+        return AigcCanvasService(_resource_store(STUDIO_ROOT)).create(current_user_id(request), body)
+    except AigcResourceError as exc:
+        raise _resource_http_error(exc) from exc
 
 
 @router.get("/canvases/{canvas_id}", response_model=Canvas)
@@ -5933,32 +5327,24 @@ async def update_canvas(
     canvas_id: str,
     body: CanvasUpsert = Body(...),
 ) -> Canvas:
-    existing = _load_canvas_for_request(request, canvas_id)
-    data = body.model_dump()
-    data["meta"] = _owned_meta_for_request(
-        request,
-        body.meta,
-        existing_owner=_canvas_owner_user_id(existing),
-    )
-    canvas = Canvas(
-        id=canvas_id,
-        created_at=existing.created_at,
-        updated_at=_now(),
-        **data,
-    )
-    _write_json(_json_path("canvases", canvas_id), canvas)
-    return canvas
+    try:
+        return AigcCanvasService(_resource_store(STUDIO_ROOT)).update(
+            current_user_id(request), canvas_id, body,
+            allow_ownerless=current_user_id(request) == "0" or is_admin_request(request),
+        )
+    except AigcResourceError as exc:
+        raise _resource_http_error(exc) from exc
 
 
 @router.delete("/canvases/{canvas_id}", status_code=204)
 async def delete_canvas(request: Request, canvas_id: str) -> Response:
-    canvas_path = _json_path("canvases", canvas_id)
-    _load_canvas_for_request(request, canvas_id)
-    _delete_json(canvas_path)
-    for job_path in _dir("jobs").glob("*.json"):
-        job = AigcJob(**_read_json(job_path))
-        if job.canvas_id == canvas_id:
-            _delete_json(job_path)
+    try:
+        AigcCanvasService(_resource_store(STUDIO_ROOT)).delete(
+            current_user_id(request), canvas_id,
+            allow_ownerless=current_user_id(request) == "0" or is_admin_request(request),
+        )
+    except AigcResourceError as exc:
+        raise _resource_http_error(exc) from exc
     return Response(status_code=204)
 
 
@@ -6186,25 +5572,18 @@ async def resolve_owned_asset_for_agent_review(
 ) -> dict[str, Any]:
     """Resolve one owner-authorized generated asset into a model content block."""
     asset = _load_asset_for_request(request, asset_id)
-    if (
-        str(asset.meta.get("canvas_id") or "") != canvas_id
-        or str(asset.meta.get("node_id") or "") not in node_ids
-    ):
-        raise HTTPException(status_code=403, detail="Asset binding mismatch.")
-    source_url = _signed_cloud_asset_url(asset)
-    if source_url is None:
-        target = await _asset_file_path_for_request(request, asset)
-        if not target.is_file():
-            raise HTTPException(status_code=404, detail="Asset file not found.")
-        source_url = target.as_uri()
-    if asset.kind not in {"image", "video", "audio"}:
-        raise HTTPException(status_code=409, detail="Asset type cannot be reviewed.")
-    if asset_kinds is not None and asset.kind not in asset_kinds:
-        raise HTTPException(status_code=409, detail="Asset type does not match workflow output.")
-    return {
-        "type": asset.kind,
-        "source": {"type": "url", "url": source_url},
-    }
+    service = AigcAssetService(_resource_store(STUDIO_ROOT))
+    try:
+        service.validate_review_binding(asset, canvas_id=canvas_id, node_ids=node_ids)
+        is_cloud = service.cloud_storage_meta(asset) is not None
+        client = _cloud_storage_client_or_error() if is_cloud else None
+        artifact_root = None if is_cloud else await _artifact_root_for_request(request)
+        return service.review_source(
+            asset, canvas_id=canvas_id, node_ids=node_ids, asset_kinds=asset_kinds,
+            artifact_root=artifact_root, storage_client=client,
+        )
+    except AigcResourceError as exc:
+        raise _resource_http_error(exc) from exc
 
 
 @public_router.get("/public-assets/{asset_id}/file", name="get_public_asset_file")

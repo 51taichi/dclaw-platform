@@ -65,8 +65,8 @@
 
 **Interfaces:** `AigcResourceStore(root: Path)`；`read(kind: str, resource_id: str) -> dict[str, Any]`、`write(kind: str, resource_id: str, value: dict[str, Any]) -> None`、`delete(kind: str, resource_id: str) -> None`。移动原 SAFE_ID_RE 行为，错误类型 `AigcResourceError(code: str)`，字段 `.code`。Canvas/Job/Asset DTO 保持原 schema。
 
-- [ ] 保存本轮开始的工作区差异清单；不把既有测试失败记为新改造导致。
-- [ ] 在新测试文件写入首个 RED：
+- [x] 保存本轮开始的工作区差异清单；不把既有测试失败记为新改造导致。
+- [x] 在新测试文件写入首个 RED：
 
 ```python
 def test_resource_store_survives_new_instance(tmp_path):
@@ -76,11 +76,11 @@ def test_resource_store_survives_new_instance(tmp_path):
     assert AigcResourceStore(tmp_path).read("canvases", "canvas-1") == {"id": "canvas-1"}
 ```
 
-- [ ] 运行 `.venv/bin/python -m pytest tests/unit/app/aigc/test_resource_store.py -q`，确认因模块尚不存在失败，而非环境缺依赖。
-- [ ] 移动原 DTO 和 `_safe_id/_json_path/_read_json/_write_json/_delete_json` 逻辑；缓存归属移动到 store，路由的 `STUDIO_ROOT` 只在 Service 工厂解析，以保持原测试路径隔离。原模型改为 import，不保留重复定义。
-- [ ] 增加路径穿越、损坏 JSON、写入中断保留旧文件、不同 root 缓存不串数据测试。依赖测试检查新增核心模块 AST 不导入 `routers`、`super_experts`、`workspace`，同时解析相对 import。现有反向调用先作为明确的现状特征断言，Task 4 才改为禁止，不添加永久 xfail。
-- [ ] 运行资源测试和 `tests/unit/routers/test_aigc_studio.py`；记录任何兼容性失败，修复类型迁移而非改预期绕过。
-- [ ] 单独提交本任务新差异；提交信息 `refactor(aigc): extract shared resource models and store`。
+- [x] 运行 `.venv/bin/python -m pytest tests/unit/app/aigc/test_resource_store.py -q`，确认因模块尚不存在失败，而非环境缺依赖。
+- [x] 移动原 DTO 和 `_safe_id/_json_path/_read_json/_write_json/_delete_json` 逻辑；缓存归属移动到 store，路由的 `STUDIO_ROOT` 只在 Service 工厂解析，以保持原测试路径隔离。原模型改为 import，不保留重复定义。
+- [x] 增加路径穿越、损坏 JSON、写入中断保留旧文件、不同 root 缓存不串数据测试。依赖测试检查新增核心模块 AST 不导入 `routers`、`super_experts`、`workspace`，同时解析相对 import。现有反向调用先作为明确的现状特征断言，Task 4 才改为禁止，不添加永久 xfail。
+- [x] 运行资源测试和 `tests/unit/routers/test_aigc_studio.py`；记录任何兼容性失败，修复类型迁移而非改预期绕过。
+- [x] 单独提交本任务新差异；提交信息 `refactor(aigc): extract shared resource models and store`。
 
 ## Task 2：两种入口共用画布、资产与目录 Service
 
@@ -88,7 +88,7 @@ def test_resource_store_survives_new_instance(tmp_path):
 
 **Interfaces:** `AigcCanvasService(store: AigcResourceStore)`；`create(owner_user_id: str, body: CanvasUpsert) -> Canvas`、`get(owner_user_id: str, canvas_id: str) -> Canvas`。`AigcAssetService(store)` 的 `resolve_owned(owner_user_id: str, asset_id: str) -> AigcAsset`。目录保留 `build_capability_list(manager)` 和 `project_workflow_capability_catalog(capabilities)` 原签名，仅改变所在模块。工作流创建由核心接收原 `CompiledWorkflow`，不接收专家安装对象。
 
-- [ ] 写 RED，验证新画布所有者来自服务端参数，调用方不能覆盖：
+- [x] 写 RED，验证新画布所有者来自服务端参数，调用方不能覆盖：
 
 ```python
 def test_canvas_owner_is_not_taken_from_payload(tmp_path):
@@ -100,13 +100,13 @@ def test_canvas_owner_is_not_taken_from_payload(tmp_path):
     assert canvas.meta["owner_user_id"] == "user-a"
 ```
 
-- [ ] 运行 `.venv/bin/python -m pytest tests/unit/app/aigc/test_shared_services.py -q`，确认 RED。
-- [ ] 移动画布与资产领域逻辑，保留系统入口既有管理员/历史无主资源访问政策，由可信入口提供访问上下文；专家入口禁止借用系统管理员兼容路径。两边不得另写一份 owner 判断。
-- [ ] 将 `provision_super_expert_*` 的专家 scope 解析留在适配层，实际 CanvasNode/Canvas 创建调用核心。兼容旧 meta 标识只由适配器映射；核心以通用 workflow/origin 关联保存，不解释陆羽状态。
-- [ ] 从路由移动能力目录构建及其依赖的纯参数辅助函数，不能保留一个核心函数再反向 import 路由。复用 `AigcModelPolicyService` 和现有发布目录筛选，不更改模型可用性政策。
-- [ ] 增加两入口共用 Service 的 spy 测试，以及跨用户画布/资产拒绝、实际模态来源保持、目录政策一致测试。
-- [ ] 运行 `.venv/bin/python -m pytest tests/unit/app/aigc/test_shared_services.py tests/unit/routers/test_aigc_studio.py tests/unit/routers/test_aigc_studio_provider_filter.py tests/unit/routers/test_aigc_model_policy.py tests/unit/routers/test_super_expert_platform.py -q`。
-- [ ] 提交 `refactor(aigc): share canvas asset and capability services`，保留原接口契约。
+- [x] 运行 `.venv/bin/python -m pytest tests/unit/app/aigc/test_shared_services.py -q`，确认 RED。
+- [x] 移动画布与资产领域逻辑，保留系统入口既有管理员/历史无主资源访问政策，由可信入口提供访问上下文；专家入口禁止借用系统管理员兼容路径。两边不得另写一份 owner 判断。
+- [x] 将 `provision_super_expert_*` 的专家 scope 解析留在适配层，实际 CanvasNode/Canvas 创建调用核心。兼容旧 meta 标识只由适配器映射；核心以通用 workflow/origin 关联保存，不解释陆羽状态。
+- [x] 从路由移动能力目录构建及其依赖的纯参数辅助函数，不能保留一个核心函数再反向 import 路由。复用 `AigcModelPolicyService` 和现有发布目录筛选，不更改模型可用性政策。
+- [x] 增加两入口共用 Service 的 spy 测试，以及跨用户画布/资产拒绝、实际模态来源保持、目录政策一致测试。
+- [x] 运行 `.venv/bin/python -m pytest tests/unit/app/aigc/test_shared_services.py tests/unit/routers/test_aigc_studio.py tests/unit/routers/test_aigc_studio_provider_filter.py tests/unit/routers/test_aigc_model_policy.py tests/unit/routers/test_super_expert_platform.py -q`。
+- [x] 提交 `refactor(aigc): share canvas asset and capability services`，保留原接口契约。
 
 ## Task 3：系统持有工作流约束与可恢复操作记录
 
@@ -234,4 +234,4 @@ git diff --check
 - 核心资源、专家任务、Agent 状态的唯一写入者保持分开；不把普通 Job 成功编译为审核通过。
 - plan 未要求所有未来模块使用画布、卡片或审核，也没有提前构建 MCP/RPA 接口。
 - 计划中的新增类型和方法定义在对应任务 Interfaces；旧接口仅移动和重导出，必须保留现有字段及版本。
-- 本文件完成不代表上述任何任务已实施；所有执行复选框保持未勾选。
+- 已按实际测试与提交更新 Task 1–2；Task 3–7 仍未完成，不把当前共享层提取视作完整解耦或线上验收。

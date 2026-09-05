@@ -48,10 +48,11 @@ async def test_resolve_owned_asset_for_agent_review_returns_bound_local_media(
     monkeypatch.setattr(aigc_studio, "_load_asset_for_request", lambda *_args: asset)
     monkeypatch.setattr(aigc_studio, "_signed_cloud_asset_url", lambda _asset: None)
 
-    async def local_path(*_args):
-        return media_path
+    async def artifact_root(*_args):
+        return tmp_path
 
-    monkeypatch.setattr(aigc_studio, "_asset_file_path_for_request", local_path)
+    monkeypatch.setattr(aigc_studio, "_artifact_root_for_request", artifact_root)
+    monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
     block = await aigc_studio.resolve_owned_asset_for_agent_review(
         SimpleNamespace(),
         "asset-review",

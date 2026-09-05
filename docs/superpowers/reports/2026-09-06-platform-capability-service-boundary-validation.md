@@ -4,7 +4,7 @@
 
 ## 当前进度
 
-Task 1 已完成资源类型和存储提取；其余任务尚未完成。未部署、未迁移生产数据、未调用付费生成。陆羽 S0–S4 未编辑。
+Task 1–2 已完成共享资源、画布、资产及目录 Service 的本批实现与独立审查。Task 3–7 尚未完成。未部署、未迁移生产数据、未调用付费生成。陆羽 S0–S4 未编辑。
 
 ## Task 1
 
@@ -12,7 +12,33 @@ Task 1 已完成资源类型和存储提取；其余任务尚未完成。未部�
 - 新资源测试首次 15 failed，均因计划中的独立模块尚不存在；随后实现共享模块。
 - 中间回归 9 failed、147 passed：旧测试初始化直接清理已移动的私有 `_JSON_CACHE`。改为清理按 root 缓存的存储工厂；没有改变业务断言、权限或审核预期。
 - 兼容回归 172 passed、4.15 秒：资源存储、独立导入边界、AIGC 路由、平台路由、编译器及工作流集成。
+- 增补静态依赖扫描后最终 173 passed、3.64 秒；提交 `e0e080e`。
 - 验证覆盖：独立进程禁止导入 HTTP/专家模块后读写核心资源；路径越界；原子替换失败保留旧文件；跨 root 缓存隔离；读取返回值修改不影响缓存；损坏文档；删除后不返回缓存。
 - 已有 dashscope 弃用警告保留；测试成功不代表真实 AIGC 或线上闭环验收。
 
 现有反向执行绑定查询尚未移除，按 Task 3/4 先建立并迁移核心权威约束后再切换，不能直接删除校验。
+
+## Task 2
+
+- 新共享服务测试首次 5 failed（模块不存在），能力目录新增测试首次 2 failed（模块不存在）；素材来源和旧创建入口委托测试首次 7 failed（方法缺失、旧入口尚未调用共享 Service），随后实现。
+- 画布 CRUD、编译图落盘、资产归属、实际模态/节点绑定/文件来源与能力目录移到共享层。旧入口保留薄适配；专家 Service 从路由迁出及组装在 Task 6，不将此处兼容包装当作最终依赖清理完成。
+- 两种目录入口使用同一目录构建函数；保留已发布模型、模型政策和提供商可用性筛选。创建和资产测试记录两种入口实际进入同一 Service。
+- 独立进程阻止导入 FastAPI、路由与专家模块后，创建/读取画布并投影能力目录成功。此项为增补验收，未宣称首次 RED。
+- 保留历史无主资源仅在系统管理员/禁用认证上下文可读的规则，专家严格归属解析不继承该兼容路径。
+- 创建补偿只清理匹配归属且未产生 Job/Asset 的画布；补充测试覆盖保留已使用资源、错绑定拒绝及重复清理。跨存储可恢复操作记录仍属 Task 3，不宣称当前补偿已具备并发原子性。
+- 扩大回归首次 1 failed、268 passed：旧闭环夹具先创建素材卡片，再创建任务，与工作区原有的“任务必须存在”校验冲突。隔离子进程只还原本轮目录 import 仍重现同一失败；加载提交版（没有该原有脏修改）的平台类则 2 passed。仅把夹具顺序改成先任务后卡片，不改生产 Gate 和原业务断言。
+- 修正夹具后 **269 passed、4.21 秒**，1 条已有 dashscope 弃用警告：
+
+```bash
+.venv/bin/python -m pytest tests/unit/aigc tests/unit/app/aigc tests/unit/app/super_experts tests/unit/app/test_super_expert_aigc_tasks.py tests/unit/app/test_super_expert_grants.py tests/unit/routers/test_aigc_studio.py tests/unit/routers/test_aigc_studio_provider_filter.py tests/unit/routers/test_aigc_model_policy.py tests/unit/routers/test_super_expert_platform.py tests/integration/test_super_expert_aigc_workflow.py tests/integration/test_luyu_aigc_closed_loop.py -q
+```
+
+上述闭环测试使用隔离任务仓库和模拟素材 ID，验证状态/事件，不是读取真实视频后的陆羽审核或线上闭环验收。
+
+### 检查点 A 审查
+
+- 独立只读审查：无 Critical/Important；审查方独立运行相关测试 106 passed。
+- 发现一个 P3：云端审核不应无条件创建本地工作区。新增测试先得到 1 failed，再改为仅本地素材解析工作区；云端直接使用已有签名来源。
+- 修正后同一广域回归 **270 passed、5.49 秒**，已有警告不变。另补“迁移前保留原权威执行约束查询”特征断言，边界测试 3 passed、0.43 秒；Task 4 会将其替换为禁止反向依赖的断言，不永久豁免。
+- 当前仍保留 `provision_super_expert_*` 旧路径包装以及原权威绑定反查，分别由 Task 6、Task 3–4 迁移；当前成果不能单独作为全面解耦上线版本。
+- 提交前最终完整相关回归：**271 passed、4.07 秒**，`git diff --cached --check` 通过。所有既有脏修改仍留在原处，本轮只暂存平台路由中的单行目录 import，没有夹带其原有卡片、审核与会话回传修改。
