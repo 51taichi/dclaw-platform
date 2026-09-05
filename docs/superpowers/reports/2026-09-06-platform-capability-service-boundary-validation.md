@@ -34,6 +34,17 @@ Task 1–7 的本地代码、独立审查、相关测试与交付记录已完成
 
 提交前对 64 个既有文件做 SHA256 指纹核对：除本轮计划/报告的明确更新外，其余内容保持不变。选择性暂存只迁入已审查的架构块，旧卡片/会话/审核相关差异保留在工作区新位置。
 
+### 六项失败的后续只读诊断
+
+在现有目录保留全部文件，仍使用空环境和临时 `QWENPAW_WORKING_DIR`，仅把已安装的 Codex 渲染工具目录加入 PATH，重跑上述六项：**4 passed、2 failed / 4.56 秒**。模板复制、console 静态入口及两个演示文稿测试均通过；没有修改测试断言或生产代码。这四项是独立源码导出/隔离 PATH 的环境差异，不需要据此更改 AIGC 实现，也不代表纯源码发布包已经包含模板和 console 构建。
+
+剩余两项：
+
+- 移动端：测试只替换 `routers.mobile.load_config`，但实际调用的 `agent_context.get_agent_for_request` 使用另一个模块的 `load_config`，得到没有 `legal` 的真实临时配置。仅在诊断进程内让后者读取同一测试配置后，原测试断言 **1 passed / 2.13 秒**。该探针不修改文件、不降低生产身份校验，不计入正式测试修复；建议仅补完整 fixture。
+- 计费升级：测试构造的旧 `billing_ledger_entries` 只有 id/business_type/business_key/created_at，`create_all → _ensure_open_api_billing_columns → _ensure_open_api_billing_indexes` 却创建依赖 event_type/status/wallet_id 的索引。前述改造前版本与现有目录均复现。修复前需进一步核对受支持的历史表结构，再决定补兼容迁移还是纠正非真实历史 fixture；不能直接跳过索引或猜测补写财务事实。
+
+这两项不属于已批准的 AIGC Service 解耦实现。下一步建议单独授权其最小兼容/测试修复，不改价格、扣费计算、授权边界，不执行生产迁移。当前仅更新诊断记录，原业务文件未编辑。
+
 ### 尚未验收 / 发布边界
 
 - 真实 AIGC 生成、真实模型审核、原任务会话的浏览器闭环均未在本次重构中执行。
