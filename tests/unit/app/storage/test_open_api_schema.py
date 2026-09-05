@@ -232,9 +232,23 @@ def test_open_api_billing_upgrade_is_idempotent_and_preserves_history(
             )
             conn.execute(
                 text(
+                    # Ledger scalar columns already existed in beb37fc,
+                    # before the OpenAPI bridge (4babcc9). Keep that historical
+                    # shape rather than a four-column stub that cannot support
+                    # the real ledger indexes.
                     "CREATE TABLE billing_ledger_entries ("
-                    "id VARCHAR PRIMARY KEY, business_type VARCHAR, "
-                    "business_key VARCHAR, created_at DATETIME)",
+                    "id VARCHAR PRIMARY KEY, wallet_id VARCHAR NOT NULL, "
+                    "event_type VARCHAR NOT NULL, "
+                    "status VARCHAR NOT NULL DEFAULT 'committed', "
+                    "credit_delta INTEGER NOT NULL, "
+                    "cash_delta_fen INTEGER NOT NULL DEFAULT 0, "
+                    "business_type VARCHAR NOT NULL, "
+                    "business_key VARCHAR NOT NULL, "
+                    "idempotency_key VARCHAR NOT NULL, "
+                    "actor_type VARCHAR NOT NULL DEFAULT 'system', "
+                    "actor_id VARCHAR, reason TEXT, "
+                    "metadata_json TEXT NOT NULL DEFAULT '{}', "
+                    "created_at DATETIME DEFAULT CURRENT_TIMESTAMP)",
                 ),
             )
             conn.execute(
@@ -291,8 +305,11 @@ def test_open_api_billing_upgrade_is_idempotent_and_preserves_history(
             conn.execute(
                 text(
                     "INSERT INTO billing_ledger_entries "
-                    "(id, business_type, business_key) "
-                    "VALUES ('ledger-before-cutover', 'legacy', 'legacy-key')",
+                    "(id, wallet_id, event_type, credit_delta, "
+                    "business_type, business_key, idempotency_key) "
+                    "VALUES ('ledger-before-cutover', 'historic-wallet', "
+                    "'usage_capture', -7, 'legacy', 'legacy-key', "
+                    "'ledger-before-cutover')",
                 ),
             )
 
@@ -364,6 +381,11 @@ def test_open_api_billing_upgrade_is_idempotent_and_preserves_history(
             for index in inspector.get_indexes("open_api_invocations")
         }
         assert ("billing_usage_order_id",) in invocation_indexes
+        ledger_indexes = {
+            tuple(index["column_names"])
+            for index in inspector.get_indexes("billing_ledger_entries")
+        }
+        assert ("event_type", "status", "created_at", "wallet_id") in ledger_indexes
         assert {"billing_usage_orders"} <= {
             foreign_key["referred_table"]
             for foreign_key in inspector.get_foreign_keys(
@@ -418,6 +440,17 @@ def test_open_api_billing_upgrade_is_idempotent_and_preserves_history(
                     "WHERE id = 'ledger-before-cutover'",
                 ),
             ).one() == ("legacy", "legacy-key")
+            assert conn.execute(
+                text(
+                    "SELECT wallet_id, event_type, status, credit_delta, "
+                    "cash_delta_fen, idempotency_key "
+                    "FROM billing_ledger_entries "
+                    "WHERE id = 'ledger-before-cutover'",
+                ),
+            ).one() == (
+                "historic-wallet", "usage_capture", "committed", -7, 0,
+                "ledger-before-cutover",
+            )
             assert conn.execute(
                 text(
                     "SELECT billing_status, quoted_credits, captured_credits, "

@@ -4,10 +4,11 @@
 
 ## 当前进度
 
-Task 1–7 的本地代码、独立审查、相关测试与交付记录已完成。Task 6 提交 `f86b5ce`；前置兼容挂载独立提交 `ade867e`。全仓测试仍有 6 项改造前即可复现的失败，分支集成 Gate 未通过，不进入合并/部署。未迁移生产数据、未调用付费生成。陆羽 S0–S4 未编辑，未重新执行其真实模型回归。以下 Task 分节保留各检查点当时的结果，当前结论以本节和最终验收汇总为准。
+Task 1–7 的本地代码、独立审查、相关测试与交付记录已完成。Task 6 提交 `f86b5ce`；前置兼容挂载独立提交 `ade867e`。后续核实并纠正两处测试夹具后，现有目录完整测试 **3888 passed、25 skipped、0 failed、58 warnings / 307.15 秒**。此前六项失败的诊断与解决经过保留如下，不再作为当前测试阻断。保留当前分支，不合并、推送或部署。未迁移生产数据、未调用付费生成。陆羽 S0–S4 未编辑，未重新执行其真实模型回归。以下 Task 分节保留各检查点当时的结果，当前结论以本节和最终验收汇总为准。
 
 ## 最终验收汇总（本地源码）
 
+- 最终全仓回归在用户指定的现有目录运行，保留全部原有修复和本机构建文件：**3888 passed、25 skipped、0 failed / 307.15 秒**。不是纯提交导出目录的全量验证，也不是生产部署验收。25 项跳过为 22 项未配置 PostgreSQL、1 项缺少 lark_oapi、1 项手动契约覆盖元测试、1 项既有已移除 schema 类型测试；没有新增 skip/xfail。
 - 现有目录（保留全部原有修复）的相关回归：**405 passed / 19.61 秒**。独立提交候选（不含其他原有修复）的同一测试路径集合：**373 passed / 20.08 秒**。均只有既有 dashscope 弃用警告。数量差异来自原有未提交测试，未删除测试来改变预期。
 - 独立候选应用启动：**2 passed / 42.92 秒**，环境无生产配置或凭据，使用隔离存储。静态依赖与两个独立核心子进程覆盖普通画布创建、工作流约束、终态与资产投影恢复；不代表完整 HTTP 应用在专家源码物理缺失时仍可运行供应商生成。
 - 通知失败/重试增补检查 **1 passed**：实际 Job 文件及钱包、账单、用量订单、执行、用量项表快照不变。事件回传不发起生成，不冒充客户提交或审核通过。
@@ -15,7 +16,7 @@ Task 1–7 的本地代码、独立审查、相关测试与交付记录已完成
 - 最终独立审查针对设计第 9 节核对实际候选，重点测试 **58 passed**，未发现新的 Critical/Important。24 个 Task 6 候选文件逐字核对独立 index；源码唯一 Service、调用方向和原 HTTP 签名保持。
 - 既有三节点向导测试用模拟 Job 元数据依次投影 `copy.generate → keyframe.generate → clip.generate → workflow.submit`；任务状态测试覆盖提交、修改、重提、通过及重复事件。它们不是可播放视频或真实专家审核证据。
 
-### 全仓测试及基线失败
+### 全仓测试及基线失败（历史检查点，已由最终回归更新）
 
 对独立候选执行完整 `pytest -q --tb=short --maxfail=10`，实际跑到 100%：**3824 passed、25 skipped、6 failed、58 warnings / 310.80 秒**。使用清理后的环境、临时 `QWENPAW_WORKING_DIR` 和仓库导出的源码，不导入本机生产配置。跳过包括未配置的 PostgreSQL、缺失的可选 SDK/formatter 和既有移除 schema 的测试；没有新增 skip/xfail。
 
@@ -44,6 +45,26 @@ Task 1–7 的本地代码、独立审查、相关测试与交付记录已完成
 - 计费升级：测试构造的旧 `billing_ledger_entries` 只有 id/business_type/business_key/created_at，`create_all → _ensure_open_api_billing_columns → _ensure_open_api_billing_indexes` 却创建依赖 event_type/status/wallet_id 的索引。前述改造前版本与现有目录均复现。修复前需进一步核对受支持的历史表结构，再决定补兼容迁移还是纠正非真实历史 fixture；不能直接跳过索引或猜测补写财务事实。
 
 这两项不属于已批准的 AIGC Service 解耦实现。下一步建议单独授权其最小兼容/测试修复，不改价格、扣费计算、授权边界，不执行生产迁移。当前仅更新诊断记录，原业务文件未编辑。
+
+### 两项测试夹具修正（后续核实）
+
+以上只读诊断中的计费原因已进一步核实，不需要修改生产迁移：`beb37fc` 的最初账本表已经包含 wallet_id、event_type、status、credit_delta 等字段；`4babcc9` 引入 OpenAPI 测试时使用了四列简化表，`43e547b` 的用量排名索引暴露了该夹具缺口。没有证据表明受支持的历史账本曾采用这张四列表。
+
+- `test_open_api_schema.py` 改用独立写出的历史标量列定义，不从当前生产 metadata 自动生成；保留原迁移、唯一性、外键和历史断言，另检查排名索引与原财务值不变。不新增生产补列，不猜测补写财务事实。
+- `test_mobile_router.py` 让 agent_context 的配置读取使用同一测试配置，仍执行真实的 Agent 存在性、启用状态和用户范围校验，没有替换授权函数。
+- 修复前定向重跑 **2 failed / 3.45 秒**；修正后两个完整测试文件 **19 passed / 2.49 秒**，一条既有警告。独立复核也运行 **19 passed**，未发现 Critical/Important，确认未降低原断言或掩盖生产缺陷。
+- 两处仅为验收夹具纠正，未修改生产 schema、移动端路由或 agent_context；不需要扩展到生产兼容修复。先前“需单独授权兼容修复”的建议由本次历史核实替代。
+
+修正后的全仓命令（空环境，无生产凭据；PATH 仅添加已安装的渲染工具，未安装新依赖）：
+
+```bash
+env -i \
+  PATH=/Users/moxi/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/usr/bin:/bin:/usr/sbin:/sbin \
+  QWENPAW_WORKING_DIR=/tmp/dclaw-boundary-index.u2iYfE/current-full-runtime \
+  .venv/bin/python -m pytest -q --tb=short --maxfail=10 -rs --disable-warnings
+```
+
+退出码 0，实际运行至 100%，**3888 passed、25 skipped、58 warnings / 307.15 秒**。提交前对 62 个非计划/报告的既有修改文件再次核对 SHA256，零差异；仅选择性提交上述两个测试文件与计划/报告。全仓成功覆盖当前工作目录，不将其中原有业务修复夹带到本轮提交。
 
 ### 尚未验收 / 发布边界
 
