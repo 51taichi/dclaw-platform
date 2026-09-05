@@ -42,6 +42,7 @@ from .sealed_agents import router as sealed_agents_router
 from .super_expert_platform import router as super_expert_platform_router
 from .aigc_studio import public_router as public_aigc_studio_router
 from .aigc_studio import router as aigc_studio_router
+from .aigc_model_policy import router as aigc_model_policy_router
 from .desktop import router as desktop_router
 from .mobile import router as mobile_router
 from .billing import admin_router as admin_billing_router
@@ -129,6 +130,7 @@ admin_api_router.include_router(admin_knowledge_router)
 admin_api_router.include_router(open_api_admin_router)
 admin_api_router.include_router(sealed_agents_router)
 admin_api_router.include_router(admin_billing_router)
+admin_api_router.include_router(aigc_model_policy_router)
 
 
 router.include_router(admin_api_router)
