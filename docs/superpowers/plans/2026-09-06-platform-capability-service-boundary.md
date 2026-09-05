@@ -116,7 +116,7 @@ def test_canvas_owner_is_not_taken_from_payload(tmp_path):
 
 新增 schema 表 `aigc_workflow_execution_bindings`（owner/canvas/node 唯一，保存 workflow revision 与 provider/model/capability）、`aigc_operation_journal`（owner/operation_id 唯一，command_digest、resource_snapshot、phase）。沿用启动期 `create_all`；请求路径不执行 DDL。
 
-- [ ] 写 RED：先用测试 SQLAlchemy SQLite Engine 和 `schema.create_all(engine)` 创建隔离库，再注册一条绑定，重建 repository 后仍可读取；同操作同参数重放不写第二条，同操作不同参数抛冲突。
+- [x] 写 RED：先用测试 SQLAlchemy SQLite Engine 和 `schema.create_all(engine)` 创建隔离库，再注册一条绑定，重建 repository 后仍可读取；同操作同参数重放不写第二条，同操作不同参数抛冲突。
 
 ```python
 def test_binding_requires_exact_model():
@@ -131,11 +131,11 @@ def test_binding_requires_exact_model():
         validate_execution(binding, provider_id="p", model_id="other", capability="text_to_video")
 ```
 
-- [ ] 运行 `.venv/bin/python -m pytest tests/unit/app/aigc/test_workflow_execution.py -q`，确认 RED。
-- [ ] 实现 `validate_execution(binding, *, provider_id: str, model_id: str, capability: str) -> None`。绑定来源仅受信创建/迁移；不接受画布 PUT 提供的“已验证”字段。原子注册一组节点，冲突整组回滚，不能部分通过。
-- [ ] 核心创建操作先固定资源 ID 与完整快照并记录 PREPARED，再落 JSON 资源及绑定，最后 APPLIED；重试读取同一操作快照。未 APPLIED 的受管节点不可执行。任何补偿只清理本操作新建且没有 Job/Asset 的资源。
-- [ ] 注入约束登记/JSON 写入/完成标记之间的失败，重试得到同一画布、不丢原资源。SQLite 与已配置的测试 Postgres 分别报告；没有测试 Postgres 时不宣称验证通过。
-- [ ] 运行本任务测试与既有 workflow compiler、platform router 测试。此时旧查询保持，尚未切换，提交 `feat(aigc): persist authoritative workflow execution bindings`。
+- [x] 运行 `.venv/bin/python -m pytest tests/unit/app/aigc/test_workflow_execution.py -q`，确认 RED。
+- [x] 实现 `validate_execution(binding, *, provider_id: str, model_id: str, capability: str) -> None`。绑定来源仅受信创建/迁移；不接受画布 PUT 提供的“已验证”字段。原子注册一组节点，冲突整组回滚，不能部分通过。
+- [x] 核心创建操作先固定资源 ID 与完整快照并记录 PREPARED，再落 JSON 资源及绑定，最后 APPLIED；重试读取同一操作快照。未 APPLIED 的受管节点不可执行。任何补偿只清理本操作新建且没有 Job/Asset 的资源。
+- [x] 注入约束登记/JSON 写入/完成标记之间的失败，重试得到同一画布、不丢原资源。SQLite 与已配置的测试 Postgres 分别报告；没有测试 Postgres 时不宣称验证通过。
+- [x] 运行本任务测试与既有 workflow compiler、platform router 测试。此时旧查询保持，尚未切换，提交 `feat(aigc): persist authoritative workflow execution bindings`。
 
 ## Task 4：迁移旧约束并消除核心反向调用
 

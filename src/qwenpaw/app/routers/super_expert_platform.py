@@ -25,6 +25,7 @@ from qwenpaw.aigc.workflow_compiler import (
 from qwenpaw.aigc.workflow_contract import WorkflowBlueprint, workflow_node_registry
 
 from ..billing.context import BillingSource
+from ..aigc.workflow_execution import AigcWorkflowExecutionService
 from ..billing.entrypoint import prepare_user_billing_execution
 from ..billing.usage import InsufficientUsageCreditsError
 from ..chat_access import ensure_chat_access
@@ -108,11 +109,13 @@ class SuperExpertPlatformService:
         task_repository: AigcTaskRepository,
         event_repository: SuperExpertEventRepository,
         event_bus: Any,
+        workflow_execution_service: AigcWorkflowExecutionService | None = None,
     ) -> None:
         self.grant_repository = grant_repository
         self.task_repository = task_repository
         self.event_repository = event_repository
         self.event_bus = event_bus
+        self.workflow_execution_service = workflow_execution_service
         self._review_locks: dict[str, asyncio.Lock] = {}
 
     def get_task(self, material_task_id: str):
@@ -428,21 +431,29 @@ class SuperExpertPlatformService:
                 },
             }, current.binding
 
-        catalog = await _load_workflow_capability_catalog()
-        model_capabilities: dict[tuple[str, str], set[str]] = {}
-        for model in catalog.available_models:
-            model_capabilities.setdefault(
-                (model.provider_id, model.model_id),
-                set(),
-            ).add(model.capability)
-        available_models = tuple(
-            AvailableWorkflowModel(
-                provider_id=provider_id,
-                model_id=model_id,
-                capabilities=frozenset(capabilities),
+        recovered = None
+        if self.workflow_execution_service is not None:
+            recovered = self.workflow_execution_service.resume(
+                user_id, f"workflow/{installation_id}/{idempotency_key}",
+                command=arguments,
+                meta={"super_expert_material_task_id": request.scope.material_task_id},
             )
-            for (provider_id, model_id), capabilities in model_capabilities.items()
-        )
+        if recovered is None:
+            catalog = await _load_workflow_capability_catalog()
+            model_capabilities: dict[tuple[str, str], set[str]] = {}
+            for model in catalog.available_models:
+                model_capabilities.setdefault(
+                    (model.provider_id, model.model_id),
+                    set(),
+                ).add(model.capability)
+            available_models = tuple(
+                AvailableWorkflowModel(
+                    provider_id=provider_id,
+                    model_id=model_id,
+                    capabilities=frozenset(capabilities),
+                )
+                for (provider_id, model_id), capabilities in model_capabilities.items()
+            )
 
         from .aigc_studio import (
             discard_super_expert_aigc_workspace,
@@ -454,15 +465,18 @@ class SuperExpertPlatformService:
         id_factory = lambda prefix: f"{prefix}-{uuid.uuid4()}"
         provisioned_canvas_id: str | None = None
         try:
-            compiled = compile_workflow(
-                request.workflow,
-                available_models=available_models,
-                id_factory=id_factory,
-                asset_resolver=lambda asset_id: resolve_owned_asset_for_workflow(
-                    user_id,
-                    asset_id,
-                ),
-            )
+            if recovered is not None:
+                canvas, compiled = recovered
+            else:
+                compiled = compile_workflow(
+                    request.workflow,
+                    available_models=available_models,
+                    id_factory=id_factory,
+                    asset_resolver=lambda asset_id: resolve_owned_asset_for_workflow(
+                        user_id,
+                        asset_id,
+                    ),
+                )
         except WorkflowCompileError as exc:
             if not (
                 exc.manual_fallback_allowed
@@ -509,12 +523,24 @@ class SuperExpertPlatformService:
                 manual_reason=exc.code,
             )
         else:
-            canvas = provision_super_expert_aigc_workflow(
-                owner_user_id=user_id,
-                material_task_id=request.scope.material_task_id,
-                compiled=compiled,
-            )
-            provisioned_canvas_id = canvas.id
+            if recovered is not None:
+                canvas, compiled = recovered
+            elif self.workflow_execution_service is None:
+                canvas = provision_super_expert_aigc_workflow(
+                    owner_user_id=user_id,
+                    material_task_id=request.scope.material_task_id,
+                    compiled=compiled,
+                )
+                provisioned_canvas_id = canvas.id
+            else:
+                canvas, compiled = self.workflow_execution_service.create(
+                    user_id, f"workflow/{installation_id}/{idempotency_key}",
+                    command=arguments, compiled=compiled,
+                    meta={"super_expert_material_task_id": request.scope.material_task_id},
+                )
+                # The core operation is durably APPLIED. A failed outer card
+                # write retries that same resource rather than deleting it and
+                # leaving an applied execution contract pointing at no canvas.
             binding = AigcTaskBinding(
                 **request.scope.model_dump(mode="json"),
                 canvas_id=canvas.id,
@@ -728,11 +754,18 @@ def get_super_expert_platform_service() -> SuperExpertPlatformService:
     global _service
     if _service is None:
         root = Path(WORKING_DIR) / "sealed_agents"
+        from ..aigc.resource_store import AigcResourceStore
+        from ..storage.engine import get_app_engine
+        from ..storage.repos.aigc_execution_repo import AigcExecutionRepository
         _service = SuperExpertPlatformService(
             grant_repository=SuperExpertGrantRepository(root),
             task_repository=AigcTaskRepository(root / "platform"),
             event_repository=SuperExpertEventRepository(root / "platform"),
             event_bus=get_runtime_event_bus(),
+            workflow_execution_service=AigcWorkflowExecutionService(
+                AigcResourceStore(Path(WORKING_DIR) / "aigc_studio"),
+                AigcExecutionRepository(get_app_engine()),
+            ),
         )
     return _service
 

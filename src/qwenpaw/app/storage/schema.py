@@ -30,6 +30,34 @@ from sqlalchemy.engine import Engine
 
 metadata = MetaData()
 
+aigc_operation_journal = Table(
+    "aigc_operation_journal", metadata,
+    Column("owner_user_id", String, primary_key=True),
+    Column("operation_id", String, primary_key=True),
+    Column("canvas_id", String, nullable=False),
+    Column("command_digest", String, nullable=False),
+    Column("resource_snapshot", Text, nullable=False),
+    Column("phase", String, nullable=False),
+    CheckConstraint("phase IN ('PREPARED', 'APPLIED')", name="ck_aigc_operation_phase"),
+)
+Index("ix_aigc_operation_canvas", aigc_operation_journal.c.owner_user_id,
+      aigc_operation_journal.c.canvas_id)
+
+aigc_workflow_execution_bindings = Table(
+    "aigc_workflow_execution_bindings", metadata,
+    Column("owner_user_id", String, primary_key=True),
+    Column("canvas_id", String, primary_key=True),
+    Column("node_id", String, primary_key=True),
+    Column("workflow_id", String, nullable=False),
+    Column("workflow_revision", Integer, nullable=False),
+    Column("logical_node_id", String, nullable=False),
+    Column("provider_id", String, nullable=False),
+    Column("model_id", String, nullable=False),
+    Column("capability", String, nullable=False),
+    Column("operation_id", String, nullable=False),
+    CheckConstraint("workflow_revision > 0", name="ck_aigc_binding_revision"),
+)
+
 users = Table(
     "users",
     metadata,

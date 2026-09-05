@@ -52,21 +52,36 @@ class AigcCanvasService:
     def create(
         self, owner_user_id: str, body: CanvasUpsert, *, id_prefix: str = "",
     ) -> Canvas:
+        canvas = self._build(owner_user_id, body, id_prefix=id_prefix)
+        self.store.write("canvases", canvas.id, canvas.model_dump())
+        return canvas
+
+    @staticmethod
+    def _build(
+        owner_user_id: str, body: CanvasUpsert, *, id_prefix: str = "",
+    ) -> Canvas:
         if not owner_user_id or not owner_user_id.strip():
             raise AigcResourceError("INVALID_OWNER")
         now = datetime.now(timezone.utc).isoformat()
         data = body.model_dump()
         data["meta"]["owner_user_id"] = owner_user_id
-        canvas = Canvas(
+        return Canvas(
             id=id_prefix + str(uuid.uuid4()), created_at=now, updated_at=now, **data,
         )
-        self.store.write("canvases", canvas.id, canvas.model_dump())
-        return canvas
 
     def create_compiled(
         self, owner_user_id: str, compiled: CompiledWorkflow,
         *, meta: dict[str, Any] | None = None,
     ) -> Canvas:
+        canvas = self.build_compiled(owner_user_id, compiled, meta=meta)
+        self.store.write("canvases", canvas.id, canvas.model_dump())
+        return canvas
+
+    def build_compiled(
+        self, owner_user_id: str, compiled: CompiledWorkflow,
+        *, meta: dict[str, Any] | None = None,
+    ) -> Canvas:
+        """Build an unwritten snapshot for the core operation journal."""
         body = CanvasUpsert(
             name=compiled.title,
             nodes=[
@@ -89,7 +104,7 @@ class AigcCanvasService:
                 "execution_mode": "PREBUILT_WORKFLOW",
             },
         )
-        return self.create(owner_user_id, body, id_prefix="canvas-")
+        return self._build(owner_user_id, body, id_prefix="canvas-")
 
     def update(
         self, owner_user_id: str, canvas_id: str, body: CanvasUpsert,

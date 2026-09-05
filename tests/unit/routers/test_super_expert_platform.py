@@ -587,6 +587,61 @@ async def test_workflow_task_write_failure_removes_provisioned_canvas(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("catalog_unavailable_on_retry", [False, True])
+async def test_core_managed_workflow_recovers_platform_binding_failure(tmp_path, monkeypatch, catalog_unavailable_on_retry):
+    from sqlalchemy import create_engine
+    from qwenpaw.app.aigc.resource_store import AigcResourceStore
+    from qwenpaw.app.aigc.workflow_execution import AigcWorkflowExecutionService
+    from qwenpaw.app.storage.repos.aigc_execution_repo import AigcExecutionRepository
+    from qwenpaw.app.storage.schema import create_all
+    from qwenpaw.app.routers import aigc_studio
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'core.sqlite'}")
+    create_all(engine)
+    monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
+    service, grant, bus = _service(tmp_path)
+    core = AigcWorkflowExecutionService(AigcResourceStore(tmp_path / "studio"), AigcExecutionRepository(engine))
+    service.workflow_execution_service = core
+
+    async def catalog():
+        return _workflow_catalog()
+
+    monkeypatch.setattr(router_module, "_load_workflow_capability_catalog", catalog)
+    arguments = _workflow_arguments(grant.installation_id)
+    original_apply = service.task_repository.apply
+
+    def fail(*_args, **_kwargs):
+        raise OSError("task write interrupted")
+
+    monkeypatch.setattr(service.task_repository, "apply", fail)
+    with pytest.raises(OSError, match="task write interrupted"):
+        await service.execute(tenant_id="tenant-a", user_id="user-a",
+                              installation_id=grant.installation_id,
+                              capability="aigc.workflow.create/1", contract_version="1",
+                              arguments=arguments, idempotency_key="recover-core")
+    canvases = list((tmp_path / "studio/canvases").glob("*.json"))
+    assert len(canvases) == 1
+    assert not bus.events
+    monkeypatch.setattr(service.task_repository, "apply", original_apply)
+    if catalog_unavailable_on_retry:
+        async def unavailable_catalog():
+            raise OSError("catalog temporarily unavailable")
+
+        monkeypatch.setattr(router_module, "_load_workflow_capability_catalog", unavailable_catalog)
+    result = await service.execute(tenant_id="tenant-a", user_id="user-a",
+                                   installation_id=grant.installation_id,
+                                   capability="aigc.workflow.create/1", contract_version="1",
+                                   arguments=arguments, idempotency_key="recover-core")
+    binding = result["task"]["binding"]
+    assert binding["canvas_id"] == canvases[0].stem
+    assert len(list((tmp_path / "studio/canvases").glob("*.json"))) == 1
+    contract = core.repository.get_binding("user-a", binding["canvas_id"], binding["node_bindings"]["clip"])
+    assert (contract.provider_id, contract.model_id, contract.capability) == ("provider-1", "video-1", "text_to_video")
+    assert len(bus.events) == 1
+    engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_workflow_rejects_unavailable_model_without_creating_canvas(
     tmp_path,
     monkeypatch,
