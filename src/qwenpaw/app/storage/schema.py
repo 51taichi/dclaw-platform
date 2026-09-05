@@ -2461,6 +2461,11 @@ def _sqlite_table_copy(conn, source_table: Table) -> Table:
 
 def _ensure_open_api_billing_indexes(engine: Engine) -> None:
     """Create the bridge indexes after fresh creation or a legacy rebuild."""
+    inspector = inspect(engine)
+    ledger_columns = {
+        column["name"]
+        for column in inspector.get_columns("billing_ledger_entries")
+    }
     statements = (
         "CREATE INDEX IF NOT EXISTS idx_open_api_invocations_publication_created "  # noqa: E501
         "ON open_api_invocations (publication_id, created_at DESC)",
@@ -2488,6 +2493,12 @@ def _ensure_open_api_billing_indexes(engine: Engine) -> None:
     )
     with engine.begin() as conn:
         for statement in statements:
+            if (
+                "idx_billing_ledger_entries_usage_ranking" in statement
+                and not {"event_type", "status", "created_at", "wallet_id"}
+                <= ledger_columns
+            ):
+                continue
             conn.execute(text(statement))
 
 
