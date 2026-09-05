@@ -35,6 +35,14 @@ def command_digest(value: Any) -> str:
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
+def job_creation_timestamp(snapshot: dict[str, Any]) -> float:
+    try:
+        created = datetime.fromisoformat(snapshot["created_at"].replace("Z", "+00:00"))
+        return (created if created.tzinfo else created.replace(tzinfo=timezone.utc)).timestamp()
+    except (ValueError, TypeError):
+        return 0  # Undated historical jobs precede all dated jobs.
+
+
 class AigcExecutionRepository:
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
@@ -467,11 +475,7 @@ class AigcExecutionRepository:
         # multiple authorized administrators, but still only one current output.
         key = dict(canvas_id=snapshot["canvas_id"], node_id=snapshot["node_id"])
         match = and_(*(node_results.c[name] == value for name, value in key.items()))
-        try:
-            created = datetime.fromisoformat(snapshot["created_at"].replace("Z", "+00:00"))
-            stamp = (created if created.tzinfo else created.replace(tzinfo=timezone.utc)).timestamp()
-        except (ValueError, TypeError):
-            stamp = 0  # Undated historical jobs precede all dated jobs.
+        stamp = job_creation_timestamp(snapshot)
         try:
             with connection.begin_nested():
                 connection.execute(insert(node_results).values(**key, job_id=snapshot["id"], job_created_at=stamp))
@@ -480,6 +484,14 @@ class AigcExecutionRepository:
         current = connection.execute(select(node_results).where(match).with_for_update()).mappings().one()
         if stamp >= current["job_created_at"]:
             connection.execute(update(node_results).where(match).values(job_id=snapshot["id"], job_created_at=stamp))
+
+    def get_node_result(self, canvas_id: str, node_id: str) -> dict[str, Any] | None:
+        """Read the canonical successful output head; caller authorizes its scope."""
+        with self.engine.connect() as connection:
+            row = connection.execute(select(node_results).where(
+                node_results.c.canvas_id == canvas_id, node_results.c.node_id == node_id,
+            )).mappings().one_or_none()
+        return dict(row) if row else None
 
     def pending_job_results(self, limit: int = 100) -> list[dict[str, Any]]:
         with self.engine.connect() as connection:

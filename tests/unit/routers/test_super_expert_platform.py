@@ -245,6 +245,11 @@ class Bus:
 
 
 def _service(tmp_path):
+    from qwenpaw.app.aigc.asset_service import AigcAssetService
+    from qwenpaw.app.aigc.canvas_service import AigcCanvasService
+    from qwenpaw.app.aigc.resource_store import AigcResourceStore
+    from qwenpaw.app.super_experts.aigc_adapter import AigcServiceAdapter
+
     grants = SuperExpertGrantRepository(tmp_path / "grants")
     preview = grants.preview("agent-1", _release(), tenant_id="tenant-a")
     grant = grants.grant_installation(preview, administrator_id="admin-1")
@@ -254,6 +259,11 @@ def _service(tmp_path):
         task_repository=AigcTaskRepository(tmp_path / "tasks"),
         event_repository=SuperExpertEventRepository(tmp_path / "events"),
         event_bus=bus,
+        aigc_adapter=AigcServiceAdapter(
+            AigcCanvasService(AigcResourceStore(tmp_path / "studio")),
+            AigcAssetService(AigcResourceStore(tmp_path / "studio")),
+            catalog_loader=lambda: router_module._load_workflow_capability_catalog(),
+        ),
     )
     return service, grant, bus
 
@@ -1130,7 +1140,7 @@ async def test_asset_review_dispatch_uses_bound_session_and_media(monkeypatch):
         }
 
     monkeypatch.setattr(
-        "qwenpaw.app.routers.aigc_studio.resolve_owned_asset_for_agent_review",
+        "qwenpaw.app.routers.super_expert_platform.resolve_owned_asset_for_agent_review",
         resolve,
     )
     billing = SimpleNamespace(
@@ -1217,7 +1227,7 @@ async def test_duplicate_asset_submit_replays_the_durable_agent_review(
         }
 
     monkeypatch.setattr(
-        "qwenpaw.app.routers.aigc_studio.resolve_owned_asset_for_agent_review",
+        "qwenpaw.app.routers.super_expert_platform.resolve_owned_asset_for_agent_review",
         resolve,
     )
     request = SimpleNamespace(state=SimpleNamespace(tenant_id="tenant-a"))
@@ -1334,7 +1344,7 @@ async def test_asset_review_dispatch_runs_inside_user_billing(monkeypatch):
 
     monkeypatch.setattr(router_module, "prepare_user_billing_execution", prepare)
     monkeypatch.setattr(
-        "qwenpaw.app.routers.aigc_studio.resolve_owned_asset_for_agent_review",
+        "qwenpaw.app.routers.super_expert_platform.resolve_owned_asset_for_agent_review",
         lambda *_a, **_k: None,
     )
 
@@ -1342,7 +1352,7 @@ async def test_asset_review_dispatch_runs_inside_user_billing(monkeypatch):
         return {"type": "image", "source": {"type": "url", "url": "file:///tmp/a"}}
 
     monkeypatch.setattr(
-        "qwenpaw.app.routers.aigc_studio.resolve_owned_asset_for_agent_review",
+        "qwenpaw.app.routers.super_expert_platform.resolve_owned_asset_for_agent_review",
         resolve,
     )
 

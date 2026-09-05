@@ -280,7 +280,7 @@ def test_generic_provisioner_persists_the_compiled_graph(tmp_path, monkeypatch):
     aigc_studio._resource_store.cache_clear()
     compiled = _compile()
 
-    canvas = aigc_studio.provision_super_expert_aigc_workflow(
+    canvas = _adapter(aigc_studio.STUDIO_ROOT).provision_workflow(
         owner_user_id="user-1",
         material_task_id="material-1",
         compiled=compiled,
@@ -311,7 +311,7 @@ def test_manual_fallback_provisioner_creates_a_truly_blank_canvas(
     monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
     aigc_studio._resource_store.cache_clear()
 
-    canvas = aigc_studio.provision_blank_super_expert_aigc_workspace(
+    canvas = _adapter(aigc_studio.STUDIO_ROOT).provision_blank_workspace(
         owner_user_id="user-1",
         material_task_id="material-1",
         workflow_id="workflow-1",
@@ -322,3 +322,12 @@ def test_manual_fallback_provisioner_creates_a_truly_blank_canvas(
     assert canvas.edges == []
     assert canvas.meta["workflow_id"] == "workflow-1"
     assert canvas.meta["execution_mode"] == "MANUAL_BUILD"
+
+
+def _adapter(root):
+    from qwenpaw.app.aigc.asset_service import AigcAssetService
+    from qwenpaw.app.aigc.canvas_service import AigcCanvasService
+    from qwenpaw.app.aigc.resource_store import AigcResourceStore
+    from qwenpaw.app.super_experts.aigc_adapter import AigcServiceAdapter
+    store = AigcResourceStore(root)
+    return AigcServiceAdapter(AigcCanvasService(store), AigcAssetService(store))

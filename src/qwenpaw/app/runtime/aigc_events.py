@@ -13,6 +13,21 @@ from .event_bus import RuntimeEvent, RuntimeEventBus
 logger = logging.getLogger(__name__)
 
 
+def build_event_consumers(repository, bus, *, enable_super_experts: bool):
+    """Application wiring; disabling the outer component leaves core delivery on."""
+    consumers = [AigcRuntimeNotifications(repository, bus)]
+    if enable_super_experts:
+        from ..super_experts.aigc_event_adapter import AigcEventAdapter
+        from ..super_experts.composition import (
+            get_super_expert_platform_service, installation_is_active, resolve_event_scope,
+        )
+        consumers.append(AigcEventAdapter(
+            get_super_expert_platform_service(), repository,
+            scope_resolver=resolve_event_scope, installation_is_active=installation_is_active,
+        ))
+    return consumers
+
+
 class AigcRuntimeNotifications:
     def __init__(self, repository: AigcExecutionRepository, bus: RuntimeEventBus, *, clock=time.time):
         self.repository = repository

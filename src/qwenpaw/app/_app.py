@@ -602,7 +602,7 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
     from .aigc.job_lifecycle import AigcJobLifecycle
     from .aigc.resource_store import AigcResourceStore
     from .routers.aigc_studio import STUDIO_ROOT
-    from .runtime.aigc_events import AigcRecoveryWorker, AigcRuntimeNotifications
+    from .runtime.aigc_events import AigcRecoveryWorker, build_event_consumers
     from .runtime.event_bus import get_runtime_event_bus
     from .storage.engine import get_app_engine
     from .storage.repos.aigc_execution_repo import AigcExecutionRepository
@@ -610,7 +610,12 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
     aigc_repository = AigcExecutionRepository(get_app_engine())
     aigc_recovery = AigcRecoveryWorker(
         AigcJobLifecycle(AigcResourceStore(STUDIO_ROOT), aigc_repository),
-        [AigcRuntimeNotifications(aigc_repository, get_runtime_event_bus())],
+        build_event_consumers(
+            aigc_repository, get_runtime_event_bus(),
+            enable_super_experts=os.getenv(
+                "QWENPAW_SUPER_EXPERT_AIGC_EVENTS_ENABLED", "true",
+            ).strip().lower() in {"1", "true", "yes", "on"},
+        ),
     )
     app.state.aigc_recovery_worker = aigc_recovery
     aigc_recovery.start()

@@ -172,7 +172,7 @@ async def test_declared_turn_never_falls_back_to_direct_model_on_failure(
         lambda **_kwargs: authorization,
         raising=False,
     )
-    from qwenpaw.app.routers import super_expert_platform as platform_module
+    from qwenpaw.app.super_experts import composition as platform_module
 
     class PlatformService:
         def list_session_events(self, **_kwargs):
@@ -266,7 +266,7 @@ async def test_declared_turn_passes_loaded_conversation_history_to_runtime(
         lambda **_kwargs: authorization,
         raising=False,
     )
-    from qwenpaw.app.routers import super_expert_platform as platform_module
+    from qwenpaw.app.super_experts import composition as platform_module
 
     class PlatformService:
         def list_session_events(self, **_kwargs):

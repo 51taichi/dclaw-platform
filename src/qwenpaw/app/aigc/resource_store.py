@@ -4,15 +4,15 @@ from __future__ import annotations
 
 from copy import deepcopy
 from contextlib import contextmanager
-import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import tempfile
-import time
 from threading import RLock
 from typing import Any
+
+from ..storage.json_file_lock import JsonFileBusyError, JsonFileLock
 
 
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -30,48 +30,18 @@ class AigcResourceStore:
         self.root = Path(root).resolve()
         self._cache: dict[str, tuple[tuple[int, int, int], dict[str, Any]]] = {}
         self._lock = RLock()
-        self._held_mutations: set[str] = set()
+        self._file_lock = JsonFileLock(self.root)
 
     @contextmanager
     def _mutation_lock(self, path: Path):
         """Coordinate JSON replacement and compare/write across worker processes."""
-        key = str(path)
         with self._lock:
-            if key in self._held_mutations:
-                yield
-                return
-            lock_path = self._contained(
-                self.root / ".locks" / (hashlib.sha256(key.encode()).hexdigest() + ".lock"),
-            )
-            lock_path.parent.mkdir(parents=True, exist_ok=True)
-            with lock_path.open("a+b") as handle:
-                if os.name == "nt":
-                    import msvcrt
-                    if handle.seek(0, os.SEEK_END) == 0:
-                        handle.write(b"\0")
-                        handle.flush()
-                    handle.seek(0)
-                    acquire = lambda: msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-                    release = lambda: msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    import fcntl
-                    acquire = lambda: fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    release = lambda: fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-                deadline = time.monotonic() + 5
-                while True:
-                    try:
-                        acquire()
-                        break
-                    except (BlockingIOError, OSError):
-                        if time.monotonic() >= deadline:
-                            raise AigcResourceError("RESOURCE_BUSY", path.name)
-                        time.sleep(0.01)
-                self._held_mutations.add(key)
-                try:
+            path = self._contained(path)
+            try:
+                with self._file_lock.hold(path):
                     yield
-                finally:
-                    self._held_mutations.remove(key)
-                    release()
+            except JsonFileBusyError as exc:
+                raise AigcResourceError("RESOURCE_BUSY", path.name) from exc
 
     @staticmethod
     def safe_id(value: str) -> str:

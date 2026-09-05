@@ -188,7 +188,7 @@ async def _run_standard_or_orchestrated_turn(
             config=orchestration,
         )
         tenant_id = str(getattr(request, "tenant_id", "local") or "local")
-        from ..routers.super_expert_platform import (
+        from ..super_experts.composition import (
             get_super_expert_platform_service,
         )
         platform_service = get_super_expert_platform_service()

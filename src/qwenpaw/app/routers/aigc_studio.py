@@ -100,6 +100,11 @@ from ..aigc.asset_service import AigcAssetService
 from ..chat_access import current_user_id, is_admin_request
 from ..object_storage import get_object_storage_client
 from ..runtime.event_bus import RuntimeEvent, get_runtime_event_bus
+from ..runtime.aigc_media import (
+    resource_http_error as _resource_http_error,
+    artifact_root_for_request as _shared_artifact_root_for_request,
+    review_media_source,
+)
 
 router = APIRouter(prefix="/aigc-studio", tags=["aigc-studio"])
 public_router = APIRouter(prefix="/aigc-studio", tags=["aigc-studio"])
@@ -652,28 +657,6 @@ def _resource_store(root: Path) -> AigcResourceStore:
     return AigcResourceStore(root)
 
 
-def _resource_http_error(error: AigcResourceError) -> HTTPException:
-    asset_errors = {
-        "ASSET_BINDING_MISMATCH": (403, "Asset binding mismatch."),
-        "ASSET_PATH_OUTSIDE_ROOTS": (403, "Asset file is outside allowed roots."),
-        "ASSET_FILE_NOT_FOUND": (404, "Asset file not found."),
-        "ASSET_TYPE_UNREVIEWABLE": (409, "Asset type cannot be reviewed."),
-        "ASSET_TYPE_MISMATCH": (409, "Asset type does not match workflow output."),
-    }
-    if error.code in asset_errors:
-        status, detail = asset_errors[error.code]
-        return HTTPException(status_code=status, detail=detail)
-    if error.code == "CANVAS_NOT_FOUND":
-        return HTTPException(status_code=404, detail="Canvas not found.")
-    if error.code == "ASSET_NOT_FOUND":
-        return HTTPException(status_code=404, detail="Asset not found.")
-    if error.code == "RESOURCE_NOT_FOUND":
-        return HTTPException(status_code=404, detail="AIGC Studio resource not found")
-    if error.code == "CORRUPT_RESOURCE":
-        return HTTPException(status_code=500, detail=f"Corrupt Studio file: {error.resource_name}")
-    return HTTPException(status_code=400, detail="Invalid AIGC Studio resource id")
-
-
 def _safe_id(item_id: str) -> str:
     try:
         return AigcResourceStore.safe_id(item_id)
@@ -924,153 +907,6 @@ def _load_canvas_for_request(request: Request, canvas_id: str) -> Canvas:
         )
     except AigcResourceError as exc:
         raise _resource_http_error(exc) from exc
-
-
-def provision_super_expert_aigc_workspace(
-    *,
-    owner_user_id: str,
-    material_task_id: str,
-    operation_id: str,
-    arguments: dict[str, Any],
-) -> dict[str, str]:
-    """Create the real user-owned canvas and node for one guided task."""
-    if not str(owner_user_id).strip() or not str(material_task_id).strip():
-        raise ValueError("AIGC workspace ownership is incomplete")
-    if operation_id != "aigc.text_to_video.create":
-        raise ValueError("AIGC operation cannot be provisioned")
-    # Prefix physical identifiers so every generated value remains valid for
-    # the shared super-expert domain-id contract even when a UUID starts with
-    # a digit.
-    node_id = f"video-{uuid.uuid4()}"
-    node = CanvasNode(
-        id=node_id,
-        type="video_generate",
-        position={"x": 120.0, "y": 120.0},
-        data={
-            "title": "视频节点",
-            "text": str(arguments["prompt"]),
-            "videoMode": "blank",
-            "showTryOptions": False,
-            "aspectRatio": str(arguments["aspect_ratio"]),
-            "videoResolution": "720P",
-            "videoDuration": int(arguments["duration_seconds"]),
-            "videoAudio": True,
-            "videoCount": 1,
-            "activeVideoTab": "text_to_video",
-            "modelId": str(arguments["model_id"]),
-        },
-    )
-    body = CanvasUpsert(
-        name=str(arguments["project_name"]),
-        nodes=[node],
-        edges=[],
-        viewport=CanvasViewport(),
-        thumbnail=None,
-        meta={
-            "version": 1,
-            "owner_user_id": str(owner_user_id),
-            "super_expert_material_task_id": str(material_task_id),
-            "super_expert_operation_id": operation_id,
-        },
-    )
-    canvas = AigcCanvasService(_resource_store(STUDIO_ROOT)).create(
-        str(owner_user_id), body, id_prefix="canvas-",
-    )
-    return {"canvas_id": canvas.id, "node_id": node_id}
-
-
-def provision_super_expert_aigc_workflow(
-    *,
-    owner_user_id: str,
-    material_task_id: str,
-    compiled: CompiledWorkflow,
-) -> Canvas:
-    """Adapt a bound card to the shared canvas creation service."""
-    if not str(owner_user_id).strip() or not str(material_task_id).strip():
-        raise ValueError("AIGC workspace ownership is incomplete")
-    return AigcCanvasService(_resource_store(STUDIO_ROOT)).create_compiled(
-        owner_user_id, compiled,
-        meta={"super_expert_material_task_id": str(material_task_id)},
-    )
-
-
-def provision_blank_super_expert_aigc_workspace(
-    *,
-    owner_user_id: str,
-    material_task_id: str,
-    workflow_id: str,
-    title: str,
-) -> Canvas:
-    """Create the only valid starting point for an explicit manual fallback."""
-    if not all(
-        str(value).strip()
-        for value in (owner_user_id, material_task_id, workflow_id, title)
-    ):
-        raise ValueError("AIGC manual workspace binding is incomplete")
-    body = CanvasUpsert(
-        name=str(title),
-        nodes=[],
-        edges=[],
-        viewport=CanvasViewport(),
-        thumbnail=None,
-        meta={
-            "version": 2,
-            "owner_user_id": str(owner_user_id),
-            "super_expert_material_task_id": str(material_task_id),
-            "workflow_id": str(workflow_id),
-            "execution_mode": "MANUAL_BUILD",
-        },
-    )
-    return AigcCanvasService(_resource_store(STUDIO_ROOT)).create(
-        str(owner_user_id), body, id_prefix="canvas-",
-    )
-
-
-def discard_super_expert_aigc_workspace(
-    *,
-    owner_user_id: str,
-    material_task_id: str,
-    canvas_id: str,
-) -> None:
-    """Remove only a just-provisioned, still-unpublished task canvas."""
-    AigcCanvasService(_resource_store(STUDIO_ROOT)).discard_unstarted(
-        str(owner_user_id), canvas_id,
-        expected_meta={"super_expert_material_task_id": material_task_id},
-    )
-
-
-def resolve_owned_asset_for_workflow(
-    owner_user_id: str,
-    asset_id: str,
-) -> dict[str, Any] | None:
-    """Resolve only an existing asset explicitly owned by the target user."""
-    if not str(owner_user_id).strip() or not str(asset_id).strip():
-        return None
-    try:
-        asset = AigcAssetService(_resource_store(STUDIO_ROOT)).resolve_owned(owner_user_id, asset_id)
-    except AigcResourceError:
-        return None
-    return asset.model_dump(mode="json")
-
-
-def load_super_expert_aigc_workflow_context(
-    *,
-    canvas_id: str,
-    material_task_id: str,
-) -> tuple[Canvas | None, list[AigcJob]]:
-    """Load only the canvas and jobs bound to one authoritative material task."""
-    try:
-        canvas = _load_canvas(canvas_id)
-    except HTTPException as exc:
-        if exc.status_code == 404:
-            return None, []
-        raise
-    if (
-        str(canvas.meta.get("super_expert_material_task_id") or "")
-        != str(material_task_id)
-    ):
-        return None, []
-    return canvas, AigcCanvasService(_resource_store(STUDIO_ROOT)).jobs(canvas_id)
 
 
 def _request_can_access_asset(request: Request, asset: AigcAsset) -> bool:
@@ -1334,23 +1170,7 @@ async def _publish_job_event(job: AigcJob, message: str) -> None:
 
 
 async def _artifact_root_for_request(request: Request) -> Path:
-    override = getattr(request.app.state, "aigc_artifact_root", None)
-    if override:
-        root = Path(override).expanduser().resolve()
-        root.mkdir(parents=True, exist_ok=True)
-        return root
-
-    try:
-        from ..agent_context import get_agent_for_request
-
-        workspace = await get_agent_for_request(request)
-        root = Path(workspace.workspace_dir).expanduser().resolve()
-        root.mkdir(parents=True, exist_ok=True)
-        return root
-    except Exception:
-        fallback = _dir("workspace_artifacts").resolve()
-        fallback.mkdir(parents=True, exist_ok=True)
-        return fallback
+    return await _shared_artifact_root_for_request(request, _resource_store(STUDIO_ROOT))
 
 
 def _asset_kind_for_capability(
@@ -5623,17 +5443,11 @@ async def resolve_owned_asset_for_agent_review(
     """Resolve one owner-authorized generated asset into a model content block."""
     asset = _load_asset_for_request(request, asset_id)
     service = AigcAssetService(_resource_store(STUDIO_ROOT))
-    try:
-        service.validate_review_binding(asset, canvas_id=canvas_id, node_ids=node_ids)
-        is_cloud = service.cloud_storage_meta(asset) is not None
-        client = _cloud_storage_client_or_error() if is_cloud else None
-        artifact_root = None if is_cloud else await _artifact_root_for_request(request)
-        return service.review_source(
-            asset, canvas_id=canvas_id, node_ids=node_ids, asset_kinds=asset_kinds,
-            artifact_root=artifact_root, storage_client=client,
-        )
-    except AigcResourceError as exc:
-        raise _resource_http_error(exc) from exc
+    return await review_media_source(
+        request, service, asset, canvas_id=canvas_id, node_ids=node_ids,
+        asset_kinds=asset_kinds, artifact_root_resolver=_artifact_root_for_request,
+        storage_client_factory=_cloud_storage_client_or_error,
+    )
 
 
 @public_router.get("/public-assets/{asset_id}/file", name="get_public_asset_file")

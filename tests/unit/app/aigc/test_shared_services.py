@@ -193,12 +193,12 @@ async def test_system_and_expert_canvas_creation_share_service(tmp_path, monkeyp
     await aigc_studio.create_canvas(
         SimpleNamespace(state=SimpleNamespace(user_id="u")), CanvasUpsert(name="System"),
     )
-    aigc_studio.provision_super_expert_aigc_workspace(
+    _adapter(aigc_studio.STUDIO_ROOT).provision_workspace(
         owner_user_id="u", material_task_id="m", operation_id="aigc.text_to_video.create",
         arguments={"prompt": "test", "aspect_ratio": "9:16", "duration_seconds": 5,
                    "model_id": "model", "project_name": "test"},
     )
-    aigc_studio.provision_blank_super_expert_aigc_workspace(
+    _adapter(aigc_studio.STUDIO_ROOT).provision_blank_workspace(
         owner_user_id="u", material_task_id="manual", workflow_id="wf", title="Manual",
     )
     assert calls == ["u", "u", "u"]
@@ -253,10 +253,10 @@ async def test_system_asset_and_workflow_reference_share_owner_service(tmp_path,
 
     monkeypatch.setattr(AigcAssetService, "load", load)
     system = aigc_studio._load_asset_for_request(SimpleNamespace(state=SimpleNamespace(user_id="u")), "asset")
-    expert = aigc_studio.resolve_owned_asset_for_workflow("u", "asset")
+    expert = _adapter(aigc_studio.STUDIO_ROOT).resolve_owned_asset("u", "asset")
     assert calls == ["asset", "asset"]
     assert system.model_dump(mode="json") == expert
-    assert aigc_studio.resolve_owned_asset_for_workflow("other", "asset") is None
+    assert _adapter(aigc_studio.STUDIO_ROOT).resolve_owned_asset("other", "asset") is None
 
 
 @pytest.mark.asyncio
@@ -281,3 +281,12 @@ async def test_cloud_review_never_resolves_local_workspace(tmp_path, monkeypatch
     assert result["type"] == "video"
     assert result["source"]["url"] == "https://media.example.test/signed"
     root_resolver.assert_not_awaited()
+
+
+def _adapter(root):
+    from qwenpaw.app.aigc.asset_service import AigcAssetService
+    from qwenpaw.app.aigc.canvas_service import AigcCanvasService
+    from qwenpaw.app.aigc.resource_store import AigcResourceStore
+    from qwenpaw.app.super_experts.aigc_adapter import AigcServiceAdapter
+    store = AigcResourceStore(root)
+    return AigcServiceAdapter(AigcCanvasService(store), AigcAssetService(store))

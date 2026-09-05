@@ -10,6 +10,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from ..storage.json_file_lock import JsonFileLock
+
 
 class SuperExpertEventEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -47,9 +49,10 @@ class SuperExpertEventRepository:
         self.root = Path(root)
         self.path = self.root / "super_expert_events.json"
         self._lock = threading.RLock()
+        self._file_lock = JsonFileLock(self.root)
 
     def append(self, event: SuperExpertEventEnvelope) -> bool:
-        with self._lock:
+        with self._lock, self._file_lock.hold(self.path):
             document = self._read()
             existing = document.events.get(event.event_id)
             if existing is not None:
@@ -93,7 +96,7 @@ class SuperExpertEventRepository:
     ) -> dict[str, Any]:
         if not event_id or not isinstance(receipt.get("reply"), str):
             raise ValueError("agent review receipt is invalid")
-        with self._lock:
+        with self._lock, self._file_lock.hold(self.path):
             document = self._read()
             existing = document.review_receipts.get(event_id)
             if existing is not None:
