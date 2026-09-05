@@ -22,8 +22,11 @@ import {
 import { useAgentStore, type ActiveMode } from "../../stores/agentStore";
 import { workspaceApi } from "../../api/modules/workspace";
 import { chatApi } from "../../api/modules/chat";
-import { agentApi, TranscriptionError } from "../../api/modules/agent";
 import { agentsApi } from "../../api/modules/agents";
+import {
+  RealtimeSpeechController,
+  type RealtimeSpeechState,
+} from "../../features/realtimeSpeech/RealtimeSpeechController";
 import { resizeTextareaToContent } from "../../utils/textareaAutosize";
 import { getRouteChatId } from "../../pages/Chat/routeSession";
 import styles from "./index.module.less";
@@ -60,7 +63,6 @@ interface WorkspaceFileNode {
 
 // ── Constants & Helpers ──────────────────────────────────────────
 const CHAT_ATTACHMENT_MAX_MB = 25;
-const MAX_RECORDING_DURATION_MS = 5 * 60 * 1000; // 5 minutes
 
 const createUploadId = (file: File) =>
   `${file.name}-${file.size}-${file.lastModified}-${
@@ -75,6 +77,14 @@ const normalizeActiveMode = (mode?: string): ActiveMode | undefined => {
     return mode;
   }
   return undefined;
+};
+
+const joinSpeechText = (prefix: string, transcript: string) => {
+  if (!prefix || !transcript) return `${prefix}${transcript}`;
+  if (/\s$/.test(prefix)) return `${prefix}${transcript}`;
+  const bothChinese =
+    /[\u3400-\u9fff]$/.test(prefix) && /^[\u3400-\u9fff]/.test(transcript);
+  return `${prefix}${bothChinese ? "" : " "}${transcript}`;
 };
 
 // Speech wave animation for premium look
@@ -202,12 +212,9 @@ export default function WorkbenchInput({
   }, [mentionQuery]);
 
   // ── States for Voice Recording ──────────────────────────────────
-  const [recording, setRecording] = useState(false);
-  const [transcribing, setTranscribing] = useState(false);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const internalRecordingRef = useRef(false);
-  const recordingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [speechState, setSpeechState] = useState<RealtimeSpeechState>("idle");
+  const speechControllerRef = useRef<RealtimeSpeechController | null>(null);
+  const speechPrefixRef = useRef("");
 
   // ── Fetch Agents for @ Mentions ─────────────────────────────────
   const fetchAgents = useCallback(async () => {
@@ -355,111 +362,33 @@ export default function WorkbenchInput({
     [disabled, uploadFiles],
   );
 
-  // ── Voice Recording Handlers ────────────────────────────────────
-  const stopRecording = useCallback(() => {
-    if (mediaRecorderRef.current && internalRecordingRef.current) {
-      mediaRecorderRef.current.stop();
-      internalRecordingRef.current = false;
-      setRecording(false);
-    }
+  // ── Realtime Voice Input ────────────────────────────────────────
+  useEffect(() => {
+    const controller = new RealtimeSpeechController({
+      onTranscript: (text) => {
+        setCustomInputValue(joinSpeechText(speechPrefixRef.current, text));
+      },
+      onStateChange: setSpeechState,
+      onError: (errorMessage) => message.error(errorMessage),
+    });
+    speechControllerRef.current = controller;
+    return () => {
+      controller.destroy();
+      speechControllerRef.current = null;
+    };
   }, []);
 
-  const startRecording = useCallback(async () => {
-    if (internalRecordingRef.current || transcribing || disabled) return;
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mimeType = MediaRecorder.isTypeSupported("audio/webm")
-        ? "audio/webm"
-        : "audio/mp4";
-      const recorder = new MediaRecorder(stream, { mimeType });
-      chunksRef.current = [];
-
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          chunksRef.current.push(e.data);
-        }
-      };
-
-      recorder.onstop = async () => {
-        stream.getTracks().forEach((track) => track.stop());
-        if (recordingTimerRef.current) {
-          clearTimeout(recordingTimerRef.current);
-          recordingTimerRef.current = null;
-        }
-        const blob = new Blob(chunksRef.current, { type: mimeType });
-
-        const sizeMb = blob.size / 1024 / 1024;
-        if (sizeMb > CHAT_ATTACHMENT_MAX_MB) {
-          message.error(
-            t(
-              "chat.speech.fileTooLarge",
-              `录音文件过大，限制 ${CHAT_ATTACHMENT_MAX_MB}MB`,
-            ),
-          );
-          return;
-        }
-
-        setTranscribing(true);
-        try {
-          const result = await agentApi.transcribeAudio(blob);
-          if (result.text) {
-            setCustomInputValue((prev) => {
-              const spacing = prev.trim() ? " " : "";
-              return prev + spacing + result.text;
-            });
-          }
-        } catch (err) {
-          console.error("Transcription error:", err);
-          if (
-            err instanceof TranscriptionError &&
-            err.code === "TRANSCRIPTION_DISABLED"
-          ) {
-            message.warning(
-              t("chat.speech.transcriptionDisabled", "语音转写服务未启用"),
-            );
-          } else {
-            message.error(
-              t("chat.speech.transcriptionFailed", "音频转文字失败"),
-            );
-          }
-        } finally {
-          setTranscribing(false);
-        }
-      };
-
-      recorder.start();
-      mediaRecorderRef.current = recorder;
-      internalRecordingRef.current = true;
-      setRecording(true);
-
-      // Auto stop at max length limit
-      recordingTimerRef.current = setTimeout(() => {
-        if (internalRecordingRef.current) {
-          message.warning(
-            t(
-              "chat.speech.recordingTooLong",
-              "录音已达最大时长，自动结束并处理",
-            ),
-          );
-          stopRecording();
-        }
-      }, MAX_RECORDING_DURATION_MS);
-    } catch (err) {
-      console.error("Microphone access error:", err);
-      message.error(
-        t("chat.speech.microphoneError", "获取麦克风失败，请检查授权配置"),
-      );
-    }
-  }, [disabled, transcribing, stopRecording, t]);
-
   const toggleRecording = useCallback(() => {
-    if (transcribing || disabled) return;
-    if (internalRecordingRef.current) {
-      stopRecording();
-    } else {
-      startRecording();
+    if (disabled) return;
+    const controller = speechControllerRef.current;
+    if (!controller) return;
+    if (speechState === "idle") {
+      speechPrefixRef.current = customInputValue;
+      void controller.start();
+    } else if (speechState !== "processing") {
+      controller.stop();
     }
-  }, [disabled, transcribing, startRecording, stopRecording]);
+  }, [customInputValue, disabled, speechState]);
 
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
@@ -865,7 +794,7 @@ export default function WorkbenchInput({
           onChange={handleCustomChange}
           onKeyDown={handleCustomKeyDown}
           rows={2}
-          disabled={disabled}
+          disabled={disabled || speechState !== "idle"}
         />
 
         <div className={styles.inputFooter}>
@@ -886,24 +815,25 @@ export default function WorkbenchInput({
           <div className={styles.footerRight}>
             <button
               className={`${styles.footerAction} ${
-                recording ? styles.voiceRecordingActive : ""
+                speechState === "recording" ? styles.voiceRecordingActive : ""
               }`}
               onClick={toggleRecording}
-              disabled={transcribing || disabled}
+              disabled={speechState === "processing" || disabled}
+              aria-label={
+                speechState === "idle"
+                  ? t("workbench.startSpeech", "开始语音输入")
+                  : t("workbench.stopSpeech", "停止语音输入")
+              }
+              aria-pressed={speechState !== "idle"}
               title={
-                transcribing
-                  ? t("chat.speech.transcribing", "正在转写...")
-                  : recording
-                  ? t("chat.speech.stopRecording", "停止录音 (Ctrl+Shift+M)")
-                  : t(
-                      "chat.speech.startRecording",
-                      "开始语音录制 (Ctrl+Shift+M)",
-                    )
+                speechState === "idle"
+                  ? t("workbench.startSpeech", "开始语音输入")
+                  : t("workbench.stopSpeech", "停止语音输入")
               }
             >
-              {transcribing ? (
+              {speechState === "connecting" || speechState === "processing" ? (
                 <LoadingOutlined style={{ fontSize: 14 }} />
-              ) : recording ? (
+              ) : speechState === "recording" ? (
                 <RecordingIcon />
               ) : (
                 <Mic size={14} />
@@ -921,7 +851,8 @@ export default function WorkbenchInput({
                     uploadedFiles.length === 0 &&
                     mentionedFiles.length === 0) ||
                 disabled ||
-                isInjectingContext
+                isInjectingContext ||
+                speechState !== "idle"
               }
               onClick={isGenerating ? onStop : handleCustomSend}
               title={
