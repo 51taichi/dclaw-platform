@@ -39,7 +39,7 @@ export function AigcModelsSection({ state }: { state?: PolicyState }) {
   };
 
   return (
-    <Card className={styles.aigcModelsSection}>
+    <Card className={`${styles.slotSection} ${styles.aigcModelsSection}`}>
       <div className={styles.aigcSectionHeading}>
         <h3>{t("models.aigc.title")}</h3>
         <p>{t("models.aigc.description")}</p>

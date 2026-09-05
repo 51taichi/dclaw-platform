@@ -1,6 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import styles from "../../index.module.less";
 import { AigcModelsSection, type PolicyState } from "./AigcModelsSection";
 
 vi.mock("react-i18next", () => ({
@@ -73,6 +74,9 @@ describe("AigcModelsSection", () => {
   it("renders four categories and caps each summary at three models", () => {
     render(<AigcModelsSection state={fixture()} />);
 
+    expect(
+      screen.getByText("models.aigc.title").closest(".ant-card"),
+    ).toHaveClass(styles.slotSection);
     expect(screen.getByText("models.aigc.textTitle")).toBeInTheDocument();
     expect(screen.getByText("models.aigc.imageTitle")).toBeInTheDocument();
     expect(screen.getByText("models.aigc.videoTitle")).toBeInTheDocument();
