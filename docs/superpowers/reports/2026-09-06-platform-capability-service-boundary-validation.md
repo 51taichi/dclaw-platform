@@ -4,7 +4,7 @@
 
 ## 当前进度
 
-Task 1–3 已完成共享 Service、核心工作流执行绑定和可恢复操作记录，并通过独立审查。Task 4–7 尚未完成。未部署、未迁移生产数据、未调用付费生成。陆羽 S0–S4 未编辑。
+Task 1–4 已完成共享 Service、核心工作流执行绑定、可恢复操作记录、离线迁移工具和生成约束查询切换，并通过独立审查。Task 5–7 尚未完成。未部署、未迁移生产数据、未调用付费生成。陆羽 S0–S4 未编辑。
 
 ## Task 1
 
@@ -53,3 +53,31 @@ Task 1–3 已完成共享 Service、核心工作流执行绑定和可恢复操�
 - 恢复不会绕过生成时的模型政策、提供商可用性或素材归属校验；本阶段只恢复已接受的资源创建，不启动生成。
 - 提交前广域相关回归：**294 passed、6.57 秒**，1 条已有 dashscope 弃用警告。测试使用临时 SQLite 与 JSON 目录；未配置测试 PostgreSQL，故 PostgreSQL 并发语义尚未实测。
 - 旧专家绑定反查仍保留到 Task 4 迁移/切换完成；现版本不具备单独部署条件，也不代表线上 AIGC 审核闭环完成。平台路由与测试仅暂存本轮新增的核心接入/恢复块，保留原有未提交修复。
+
+## Task 4 / 检查点 B
+
+- 新迁移与查询切换测试首次 **10 failed**：迁移模块缺失、旧校验仍接受未迁移的可编辑模型字段。实现迁移后 8 passed、2 failed；再切换系统查询到核心记录，两项通过。
+- 静态边界测试从“迁移前保留反查”改为禁止反向 import，先 1 failed、2 passed，再移除反向查询。动态子进程禁用 FastAPI、路由、专家模块后，可登记与读取核心绑定并拒绝错误模型；后者为增补验收。
+- 离线迁移默认 dry-run，不执行 DDL、不改任务/画布/资产文件；真实旧平台夹具创建三节点工作流后，apply 两次第二次 unchanged，原文件字节保持不变。核心绑定整组冲突回滚，检查 owner、workflow revision、逻辑/物理节点对应及节点类型；约束来自持久蓝图，不信任画布模型参数。
+- 命令行测试先 2 failed（脚本不存在），实现后通过；默认预检零写入，拒绝不存在的 SQLite 文件而不自动创建空库，错误输出不带数据库连接串或异常正文。缺表只报 CORE_SCHEMA_NOT_INITIALIZED，不在工具或请求内偷偷建表。
+- 生成校验切换引入必需数据库依赖，既有路由夹具未初始化新表，首次 39 failed、106 passed，返回 503。补充每测试隔离 SQLAlchemy Engine/schema，并为工作流模型约束测试登记真实核心记录；原业务断言保留，随后相关 113 passed。数据库不可用时生产路径仍拒绝生成，不靠放行修复测试。
+- 独立审查复现两项 Important：更换物理节点 ID 并删除所有标记可绕过约束；PREBUILT 缺蓝图被误计为正常 skip。增加 3 个失败案例后，改为核心整画布受管识别、缺节点绑定拒绝执行、先验证 binding/workflow 一致性再处理 LEGACY。最终审查均关闭，无新 Critical/Important；审查方执行 46 passed。
+- 另补旧 queued Job 的前台/后台执行测试，首次均未拦截；现在 `/run` 在状态写入和供应商调用前复用同一提交校验。已成功/取消的任务保持原有直接返回行为。模型三元组比对统一调用核心 validate_execution，没有再写一套比对规则。
+- 最终广域相关回归：**313 passed、14.97 秒**，1 条已有 dashscope 弃用警告；git diff --check 通过。SQLite 与隔离 JSON 验证，不宣称 PostgreSQL 或真实视频审核已验收。
+
+### 迁移范围与上线前提
+
+本阶段仅自动迁移拥有完整、同 revision、PREBUILT_WORKFLOW 蓝图的旧任务。合法 LEGACY 单节点任务原本没有不可变蓝图，保留原行为并统计 skipped；MANUAL_BUILD、缺蓝图、缺节点、归属/版本冲突必须进入 conflicts，不能猜参数后强行登记。人工搭建旧任务需单独对账后才能切换，不把 conflict 当作迁移成功。
+
+离线预检示例（仅展示占位路径，未执行线上迁移）：
+
+```bash
+.venv/bin/python scripts/migrate_aigc_execution_bindings.py \
+  --legacy-root /path/to/sealed_agents/platform \
+  --studio-root /path/to/aigc_studio \
+  --database-url sqlite:////path/to/existing-database.sqlite
+```
+
+必须先进入维护窗口、停止应用写入、备份并通过现有 schema 初始化流程建好新表，再运行预检；消除 conflicts 后才可对批准的目标显式加 --apply。工具退出码：0 无冲突、1 有资源冲突、2 输入/存储错误。未提供在线双写迁移或自动清理功能。
+
+旧 provision_super_expert_* 包装及专家应用 Service 迁出仍属 Task 6；持久结果/事件与回传属 Task 5–6，最终整体验收属 Task 7。当前代码不应单独部署，原任务会话 → 卡片 → AIGC → 审核回传的线上闭环不在本批成功声明内。

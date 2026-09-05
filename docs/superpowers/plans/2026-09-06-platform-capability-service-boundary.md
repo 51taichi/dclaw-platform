@@ -143,11 +143,11 @@ def test_binding_requires_exact_model():
 
 **Interfaces:** `migrate_bindings(*, legacy_root: Path, studio_root: Path, engine: Engine, apply: bool = False) -> dict[str, Any]` 位于 `binding_migration.py`。返回 scanned、eligible、migrated、unchanged、conflicts 列表/计数；冲突条目仅含资源 ID 和安全原因，无素材正文。CLI 必需 `--legacy-root`、`--studio-root`、`--database-url`，默认只读，显式 `--apply` 才写测试/批准目标。
 
-- [ ] 用既有 `tests/fixtures/super_expert/aigc-workflow-v2/three-node.json` 通过旧平台创建夹具，不手工伪造 PASS。写 RED 验证 dry-run 不产生核心绑定，apply 两次第二次 unchanged，画布/任务/资产 ID 不变。
-- [ ] 运行 `.venv/bin/python -m pytest tests/unit/app/super_experts/test_binding_migration.py -q`，确认 RED。
-- [ ] 实现迁移：检查旧 task 状态、实际所有者、物理/逻辑节点一一对应和同 revision 蓝图；冲突不得覆盖现有核心记录。迁移只调用 Task 3 受信登记 Service；核心不 import 迁移器。
-- [ ] `_authoritative_workflow_execution_binding` 改查核心记录。已登记约束即使客户端删掉 workflow 标识仍有效；受管画布缺少记录时拒绝生成并返回可诊断迁移错误，不信任可编辑 data 的模型参数。
-- [ ] 将依赖测试升级为严格禁止 `aigc_studio` 或核心模块依赖 `super_expert_platform`/专家仓库。新增 subprocess 禁止导入专家模块后调用核心 Service 的测试；应用路由总装不计为核心依赖。
+- [x] 用既有 `tests/fixtures/super_expert/aigc-workflow-v2/three-node.json` 通过旧平台创建夹具，不手工伪造 PASS。写 RED 验证 dry-run 不产生核心绑定，apply 两次第二次 unchanged，画布/任务/资产 ID 不变。
+- [x] 运行 `.venv/bin/python -m pytest tests/unit/app/super_experts/test_binding_migration.py -q`，确认 RED。
+- [x] 实现迁移：检查旧 task 状态、实际所有者、物理/逻辑节点一一对应和同 revision 蓝图；冲突不得覆盖现有核心记录。迁移只调用 Task 3 受信登记 Service；核心不 import 迁移器。
+- [x] `_authoritative_workflow_execution_binding` 改查核心记录。已登记约束即使客户端删掉 workflow 标识仍有效；受管画布缺少记录时拒绝生成并返回可诊断迁移错误，不信任可编辑 data 的模型参数。
+- [x] 将依赖测试升级为严格禁止 `aigc_studio` 或核心模块依赖 `super_expert_platform`/专家仓库。新增 subprocess 禁止导入专家模块后调用核心 Service 的测试；应用路由总装不计为核心依赖。
 
 ```python
 def test_core_source_has_no_platform_service_call():
@@ -156,9 +156,9 @@ def test_core_source_has_no_platform_service_call():
     assert "get_super_expert_platform_service" not in source
 ```
 
-- [ ] 上述文本断言只作具体回归；同时运行 AST 相对 import 检查和动态阻断导入，防止改名绕过。
-- [ ] 运行 Task 3/4 测试、`tests/unit/routers/test_aigc_studio.py`、`tests/integration/test_super_expert_aigc_workflow.py`；验证模型篡改仍被拒绝。
-- [ ] 提交 `refactor(aigc): remove reverse dependency on expert platform`。不自动迁移线上，切换部署必须先有独立 dry-run 报告。
+- [x] 上述文本断言只作具体回归；同时运行 AST 相对 import 检查和动态阻断导入，防止改名绕过。
+- [x] 运行 Task 3/4 测试、`tests/unit/routers/test_aigc_studio.py`、`tests/integration/test_super_expert_aigc_workflow.py`；验证模型篡改仍被拒绝。
+- [x] 提交 `refactor(aigc): remove reverse dependency on expert platform`。不自动迁移线上，切换部署必须先有独立 dry-run 报告。
 
 ## Task 5：持久化核心结果与事件，隔离通知故障
 
@@ -234,4 +234,4 @@ git diff --check
 - 核心资源、专家任务、Agent 状态的唯一写入者保持分开；不把普通 Job 成功编译为审核通过。
 - plan 未要求所有未来模块使用画布、卡片或审核，也没有提前构建 MCP/RPA 接口。
 - 计划中的新增类型和方法定义在对应任务 Interfaces；旧接口仅移动和重导出，必须保留现有字段及版本。
-- 已按实际测试与提交更新 Task 1–2；Task 3–7 仍未完成，不把当前共享层提取视作完整解耦或线上验收。
+- 已按实际测试与提交更新 Task 1–4；Task 5–7 仍未完成，不把共享层与约束迁移视作完整解耦或线上验收。

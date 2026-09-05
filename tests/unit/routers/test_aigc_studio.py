@@ -28,6 +28,18 @@ from qwenpaw.app.storage.schema import create_all
 from qwenpaw.app.storage.settings import get_storage_settings
 
 
+@pytest.fixture(autouse=True)
+def execution_repository(tmp_path, monkeypatch):
+    from sqlalchemy import create_engine
+    from qwenpaw.app.storage.repos.aigc_execution_repo import AigcExecutionRepository
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'aigc-core.sqlite'}")
+    create_all(engine)
+    monkeypatch.setattr("qwenpaw.app.storage.engine.get_app_engine", lambda: engine)
+    yield AigcExecutionRepository(engine)
+    engine.dispose()
+
+
 @pytest.mark.asyncio
 async def test_resolve_owned_asset_for_agent_review_returns_bound_local_media(
     tmp_path,
@@ -91,10 +103,18 @@ async def test_resolve_owned_asset_for_agent_review_rejects_binding_mismatch(
 
 
 @pytest.mark.asyncio
-async def test_validate_job_submission_rejects_workflow_model_mismatch(monkeypatch):
+async def test_validate_job_submission_rejects_workflow_model_mismatch(monkeypatch, execution_repository):
+    from qwenpaw.app.aigc.workflow_execution import WorkflowExecutionBinding
+
+    execution_repository.register_bindings([WorkflowExecutionBinding(
+        owner_user_id="user-a", canvas_id="canvas-1", workflow_id="workflow-1",
+        workflow_revision=1, node_id="video-1", logical_node_id="clip",
+        provider_id="provider-1", model_id="video-1", capability="image_to_video",
+    )], "test-workflow")
     canvas = aigc_studio.Canvas(
         id="canvas-1",
         name="Workflow",
+        meta={"owner_user_id": "user-a"},
         nodes=[
             aigc_studio.CanvasNode(
                 id="video-1",
@@ -139,7 +159,7 @@ async def test_validate_job_submission_rejects_workflow_model_mismatch(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_validate_job_submission_uses_authoritative_task_after_canvas_tamper(
+async def test_validate_job_submission_uses_core_binding_after_canvas_tamper(
     monkeypatch,
 ):
     canvas = aigc_studio.Canvas(
@@ -165,7 +185,11 @@ async def test_validate_job_submission_uses_authoritative_task_after_canvas_tamp
     monkeypatch.setattr(
         aigc_studio,
         "_authoritative_workflow_execution_binding",
-        lambda *_a: ("provider-1", "video-1", "image_to_video"),
+        lambda *_a: aigc_studio.WorkflowExecutionBinding(
+            owner_user_id="user-a", canvas_id="canvas-1", workflow_id="workflow-1",
+            workflow_revision=1, node_id="video-1", logical_node_id="clip",
+            provider_id="provider-1", model_id="video-1", capability="image_to_video",
+        ),
     )
 
     async def available(*_args):

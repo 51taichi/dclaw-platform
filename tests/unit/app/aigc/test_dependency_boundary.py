@@ -27,15 +27,20 @@ def test_core_modules_do_not_import_upper_layer_contracts():
     assert not violations, "\n".join(violations)
 
 
-def test_legacy_binding_query_is_preserved_until_core_migration():
-    # Task 4 replaces this characterization with a strict system-route boundary.
-    # Do not make it green by deleting the execution constraint ahead of migration.
+def test_system_route_does_not_import_expert_platform():
     source_root = Path(__file__).resolve().parents[4] / "src"
-    tree = ast.parse((source_root / "qwenpaw/app/routers/aigc_studio.py").read_text())
-    binding_query = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
-                         and node.name == "_authoritative_workflow_execution_binding")
-    assert any(isinstance(node, ast.Attribute) and node.attr == "workflow_node_execution_binding"
-               for node in ast.walk(binding_query))
+    source = (source_root / "qwenpaw/app/routers/aigc_studio.py").read_text()
+    assert "get_super_expert_platform_service" not in source
+    for node in ast.walk(ast.parse(source)):
+        names = []
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            module = "." * node.level + (node.module or "")
+            name = importlib.util.resolve_name(module, "qwenpaw.app.routers")
+            names = [name, *(name + "." + alias.name for alias in node.names)]
+        assert not any(name.startswith("qwenpaw.app.super_experts")
+                       or name.startswith("qwenpaw.app.routers.super_expert_platform") for name in names)
 
 
 def test_shared_resources_work_when_upper_layers_are_unavailable(tmp_path):
@@ -67,6 +72,25 @@ owned = service.create('user', CanvasUpsert(name='Without experts'))
 assert service.get('user', owned.id).name == 'Without experts'
 assert AigcAssetService(store).store is store
 assert project_workflow_capability_catalog(CapabilityList(capabilities=[])).nodes
+from sqlalchemy import create_engine
+from qwenpaw.app.storage.schema import create_all
+from qwenpaw.app.storage.repos.aigc_execution_repo import AigcExecutionRepository
+from qwenpaw.app.aigc.workflow_execution import WorkflowExecutionBinding, validate_execution
+engine = create_engine('sqlite:///' + str(Path(sys.argv[1]) / 'core.sqlite'))
+create_all(engine)
+repository = AigcExecutionRepository(engine)
+binding = WorkflowExecutionBinding(owner_user_id='u', canvas_id='c', workflow_id='w',
+    workflow_revision=1, node_id='n', logical_node_id='clip', provider_id='p',
+    model_id='m', capability='text_to_video')
+repository.register_bindings([binding], 'migration')
+saved = repository.get_binding('u', 'c', 'n')
+try:
+    validate_execution(saved, provider_id='p', model_id='other', capability='text_to_video')
+except ValueError as exc:
+    assert str(exc) == 'EXECUTION_BINDING_MISMATCH'
+else:
+    raise AssertionError('mismatched model accepted without experts')
+engine.dispose()
 """, str(tmp_path)],
         env={**os.environ, "PYTHONPATH": str(source_root)},
         text=True, capture_output=True, timeout=20,

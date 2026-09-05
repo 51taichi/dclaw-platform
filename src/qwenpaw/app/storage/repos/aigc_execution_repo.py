@@ -113,6 +113,10 @@ class AigcExecutionRepository:
         owner = bindings[0].owner_user_id
         try:
             with self.transaction() as connection:
+                prior = self._operation(connection, owner, operation_id)
+                if prior is not None and prior["command_digest"] != digest:
+                    raise ValueError("OPERATION_CONFLICT")
+                self._classify_bindings(connection, bindings)
                 # A savepoint also handles concurrent PostgreSQL registration of
                 # the same operation without leaving the transaction aborted.
                 try:
@@ -134,6 +138,36 @@ class AigcExecutionRepository:
                 ).values(phase="APPLIED"))
         except IntegrityError as exc:
             raise ValueError("EXECUTION_BINDING_CONFLICT") from exc
+
+    @staticmethod
+    def _classify_bindings(connection: Connection, bindings: list[WorkflowExecutionBinding]) -> str:
+        """Read-only migration assessment; registration repeats it transactionally."""
+        canvas_id = bindings[0].canvas_id
+        pending = connection.execute(select(operations.c.operation_id).where(
+            operations.c.canvas_id == canvas_id, operations.c.phase != "APPLIED",
+        )).first()
+        if pending is not None:
+            raise ValueError("WORKFLOW_OPERATION_INCOMPLETE")
+        expected = {binding.node_id: asdict(binding) for binding in bindings}
+        rows = connection.execute(select(bindings_table).where(
+            bindings_table.c.canvas_id == canvas_id,
+        )).mappings().all()
+        for row in rows:
+            target = expected.get(row["node_id"])
+            if target is None or any(row[key] != value for key, value in target.items()):
+                raise ValueError("EXECUTION_BINDING_CONFLICT")
+            phase = connection.execute(select(operations.c.phase).where(
+                operations.c.owner_user_id == row["owner_user_id"],
+                operations.c.operation_id == row["operation_id"],
+            )).scalar_one_or_none()
+            if phase != "APPLIED":
+                raise ValueError("WORKFLOW_OPERATION_INCOMPLETE")
+        return "unchanged" if len(rows) == len(bindings) else "eligible"
+
+    def classify_bindings(self, bindings: list[WorkflowExecutionBinding]) -> str:
+        self._validate_group(bindings)
+        with self.engine.connect() as connection:
+            return self._classify_bindings(connection, bindings)
 
     def get_binding(self, owner_user_id: str, canvas_id: str,
                     node_id: str) -> WorkflowExecutionBinding | None:
@@ -161,3 +195,15 @@ class AigcExecutionRepository:
             return WorkflowExecutionBinding(**{
                 key: row[key] for key in WorkflowExecutionBinding.__dataclass_fields__
             })
+
+    def is_managed_canvas(self, canvas_id: str) -> bool:
+        """Trusted caller has already authorized the canvas, independently of meta."""
+        with self.engine.connect() as connection:
+            operation = connection.execute(select(operations.c.operation_id).where(
+                operations.c.canvas_id == canvas_id,
+            ).limit(1)).first()
+            if operation is not None:
+                return True
+            return connection.execute(select(bindings_table.c.node_id).where(
+                bindings_table.c.canvas_id == canvas_id,
+            ).limit(1)).first() is not None

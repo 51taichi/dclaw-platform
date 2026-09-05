@@ -39,6 +39,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from ...aigc.workflow_compiler import CompiledWorkflow
+from ..aigc.workflow_execution import WorkflowExecutionBinding, validate_execution
 from ..aigc.capability_service import (
     _aigc_generation_capabilities_from_model_id,
     _normalized_capability_token,
@@ -1154,13 +1155,24 @@ async def _find_provider_model(
 def _authoritative_workflow_execution_binding(
     canvas_id: str,
     node_id: str,
-) -> tuple[str, str, str] | None:
-    from .super_expert_platform import get_super_expert_platform_service
+    owner_user_id: str,
+) -> WorkflowExecutionBinding | None:
+    from sqlalchemy.exc import SQLAlchemyError
+    from ..storage.engine import get_app_engine
+    from ..storage.repos.aigc_execution_repo import AigcExecutionRepository
 
-    return get_super_expert_platform_service().workflow_node_execution_binding(
-        canvas_id=canvas_id,
-        node_id=node_id,
-    )
+    try:
+        repository = AigcExecutionRepository(get_app_engine())
+        binding = repository.get_binding(
+            owner_user_id, canvas_id, node_id,
+        )
+        if binding is None and repository.is_managed_canvas(canvas_id):
+            raise HTTPException(status_code=409, detail="WORKFLOW_NODE_BINDING_REQUIRED")
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=503, detail="WORKFLOW_EXECUTION_STORE_UNAVAILABLE") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="WORKFLOW_OPERATION_INCOMPLETE") from exc
+    return binding
 
 
 async def _validate_job_submission(request: Request, body: AigcJobCreate) -> None:
@@ -1174,22 +1186,24 @@ async def _validate_job_submission(request: Request, body: AigcJobCreate) -> Non
     authoritative = _authoritative_workflow_execution_binding(
         body.canvas_id,
         body.node_id,
+        AigcCanvasService.owner(canvas) or "",
     )
     workflow_marker = str(
         target_node.data.get("workflowLogicalNodeId") or ""
     ).strip()
-    if authoritative is not None or workflow_marker:
-        expected = authoritative or (
-            str(target_node.data.get("providerId") or "").strip(),
-            str(target_node.data.get("modelId") or "").strip(),
-            str(target_node.data.get("modelCapability") or "").strip(),
+    if authoritative is None and (workflow_marker or canvas.meta.get("workflow_id")):
+        raise HTTPException(
+            status_code=409, detail="WORKFLOW_BINDING_MIGRATION_REQUIRED",
         )
-        actual = (body.provider_id, body.model_id, body.capability)
-        if not all(expected) or actual != expected:
+    if authoritative is not None:
+        try:
+            validate_execution(authoritative, provider_id=body.provider_id,
+                               model_id=body.model_id, capability=body.capability)
+        except ValueError as exc:
             raise HTTPException(
                 status_code=409,
                 detail="Workflow-bound node execution mismatch.",
-            )
+            ) from exc
     await _assert_job_model_policy_allowed(request, body)
     capability = await _find_capability(
         request,
@@ -5419,6 +5433,10 @@ async def run_job(
         return job
     if job.status == "succeeded":
         return job
+
+    # Jobs queued before a migration/policy change still need the current core
+    # contract before either foreground or background provider execution starts.
+    await _validate_job_submission(request, AigcJobCreate(**job.model_dump()))
 
     if background:
         if job.status != "running":
