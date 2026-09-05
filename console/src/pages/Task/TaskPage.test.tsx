@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, screen, waitFor } from "@testing-library/react";
-import { useLocation } from "react-router-dom";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { renderWithProviders } from "@/test/common_setup";
 import TaskPage from "./index";
 
@@ -268,6 +268,15 @@ function LocationProbe() {
   return null;
 }
 
+function TaskRouteSwitchProbe() {
+  const navigate = useNavigate();
+  return (
+    <button type="button" onClick={() => navigate("/task/replacement-task")}>
+      switch task route
+    </button>
+  );
+}
+
 function buildChatResponse(chatId: string): Response {
   return new Response("data: {}\n\n", {
     status: 200,
@@ -413,6 +422,25 @@ describe("TaskPage", () => {
     view.unmount();
 
     expect(mockSetActiveSessionId).toHaveBeenCalledWith(null);
+  });
+
+  it("clears the preparing overlay when the task route changes during initial loading", async () => {
+    renderWithProviders(
+      <>
+        <LocationProbe />
+        <TaskRouteSwitchProbe />
+        <TaskPage />
+      </>,
+      { initialEntries: ["/task/stale-task"] },
+    );
+
+    await screen.findByTestId("preparing-overlay");
+    fireEvent.click(screen.getByRole("button", { name: "switch task route" }));
+
+    await waitFor(
+      () => expect(screen.queryByTestId("preparing-overlay")).toBeNull(),
+      { timeout: 2500 },
+    );
   });
 
   it("resumes a persisted Workbench intent for an empty precreated task after refresh", async () => {
