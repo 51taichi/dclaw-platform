@@ -181,7 +181,7 @@ def test_core_source_has_no_platform_service_call():
 
 **Interfaces:** 移动 `SuperExpertPlatformService` 保持 `execute`、`get_task`、`list_session_events` 对外签名；构造函数增加显式 AIGC Service 依赖，由应用层组装，不在 Service 内 import 路由。`AigcEventAdapter(platform_service, execution_repository)` 的 `async deliver_pending(limit: int = 100) -> int` 返回已确认消费数量。
 
-- [ ] 在既有集成测试中使用两个不同 agent_id/安装、两个原会话，创建各自任务。为其中一个实际 Job 产生核心事件，写 RED 验证仅目标会话收到状态更新。
+- [x] 在既有集成测试中使用两个不同 agent_id/安装、两个原会话，创建各自任务。为其中一个实际 Job 产生核心事件，写 RED 验证仅目标会话收到状态更新。
 
 ```python
 # 加入现有测试构造的 service/grant/task 夹具中，断言原绑定而非当前页面选中专家。
@@ -190,33 +190,35 @@ assert event.conversation_id == task.binding.conversation_id
 assert event.material_task_id == task.binding.material_task_id
 ```
 
-- [ ] 运行 `.venv/bin/python -m pytest tests/unit/app/super_experts/test_aigc_event_adapter.py -q`，确认 RED。
-- [ ] 将原路由 Service 移动为唯一实现；旧路径只单向 re-export 类型兼容，核心及新适配器不导入旧路由。清单与 scope/grant 不变，不新增可绕过授权的命令。
-- [ ] 核心事件按 owner/canvas/node/workflow revision 查开放层绑定。生成完成仅更新展示进度，不自动提交审核。客户提交继续沿现有 `aigc.asset.submit` 受信链路；审核完成仍用 `aigc.review.complete`，不制造陆羽 Gate PASS。
-- [ ] 消费状态区分 pending/delivered/blocked，撤销安装或资源版本失效时 blocked 并保存原因，不回传给其他专家、不通过换 conversation 强行投递。重复事件不重复触发审核，乱序版本不能回退卡片状态。
-- [ ] 应用启动层组装并启动可取消消费者；关闭专家组件时不启动适配器，但核心结果与查询仍正常。共享核心不能要求安装/会话才能记录事件。
-- [ ] 补取消、超时、消费者宕机、重复回调、并发跨用户和失效资产测试；同时断言调用失败未额外创建 Job 或收费记录。
-- [ ] 运行 `.venv/bin/python -m pytest tests/unit/app/super_experts tests/unit/routers/test_super_expert_platform.py tests/unit/app/test_super_expert_grants.py tests/integration/test_super_expert_aigc_workflow.py -q`。
-- [ ] 提交 `refactor(platform): adapt AIGC services and durable events`。
+- [x] 运行 `.venv/bin/python -m pytest tests/unit/app/super_experts/test_aigc_event_adapter.py -q`，确认 RED。
+- [x] 将原路由 Service 移动为唯一实现；旧路径只单向 re-export 类型兼容，核心及新适配器不导入旧路由。清单与 scope/grant 不变，不新增可绕过授权的命令。
+- [x] 核心事件按 owner/canvas/node/workflow revision 查开放层绑定。生成完成仅更新展示进度，不自动提交审核。客户提交继续沿现有 `aigc.asset.submit` 受信链路；审核完成仍用 `aigc.review.complete`，不制造陆羽 Gate PASS。
+- [x] 消费状态区分 pending/delivered/blocked，撤销安装或资源版本失效时 blocked 并保存原因，不回传给其他专家、不通过换 conversation 强行投递。重复事件不重复触发审核，乱序版本不能回退卡片状态。
+- [x] 应用启动层组装并启动可取消消费者；关闭专家组件时不启动适配器，但核心结果与查询仍正常。共享核心不能要求安装/会话才能记录事件。
+- [x] 补取消、超时、消费者宕机、重复回调、并发跨用户和失效资产测试；同时断言调用失败未额外创建 Job 或收费记录。通知失败及恢复后实际 Job 文件、钱包、账单和执行表快照保持不变。
+- [x] 运行 `.venv/bin/python -m pytest tests/unit/app/super_experts tests/unit/routers/test_super_expert_platform.py tests/unit/app/test_super_expert_grants.py tests/integration/test_super_expert_aigc_workflow.py -q`（纳入更广的相关回归）。
+- [x] 提交 `refactor(platform): adapt AIGC services and durable events`：`f86b5ce`。既有认证兼容挂载单独提交为前置修复 `ade867e`，不夹带其他脏修改。
 
 ## Task 7：兼容验收与可审计交付
 
 **Files:** Extend `tests/integration/test_super_expert_aigc_workflow.py`, `tests/integration/test_luyu_aigc_closed_loop.py`; create `tests/integration/test_aigc_core_without_experts.py`, `docs/superpowers/reports/2026-09-06-platform-capability-service-boundary-validation.md`; update `docs/super-expert-platform-v1.md` only for verified architecture。
 
-- [ ] 新增首次失败的独立核心集成测试：阻断专家模块导入，调用系统 Service 创建普通画布，并验证已有受管工作流仍按核心记录拒绝错误模型。测试隔离存储，无外部生成。
-- [ ] 运行 `.venv/bin/python -m pytest tests/integration/test_aigc_core_without_experts.py -q`；若前面实现已使它通过，记录为补充验收而不是虚称 RED。
-- [ ] 原接口契约快照核对：现有卡片 URL、conversation route、guide、submit receipt 格式保持；重启后原画布可恢复。真实视频读取/业务审核未完成时明确列为独立阻塞，不填假素材假装端到端成功。
-- [ ] 完整相关回归命令：
+- [x] 新增独立核心集成测试：阻断专家模块导入，调用系统 Service 创建普通画布，并验证已有受管工作流仍按核心记录拒绝错误模型。测试隔离存储，无外部生成；现有实现已满足，为增补验收而非 RED。
+- [x] 运行 `.venv/bin/python -m pytest tests/integration/test_aigc_core_without_experts.py -q`；两个独立进程分别创建与重启读取，测试通过，未虚称 RED。
+- [x] 原接口契约快照核对：现有卡片 URL、conversation route、guide、submit receipt 格式保持；重启后原画布可恢复。源码签名、既有路由和隔离状态测试验证；真实视频读取、真实业务审核及浏览器闭环仍未验收。
+- [x] 完整相关回归命令：
+
+最新现有目录回归 405 passed / 19.61 秒；排除其他脏修复的独立提交候选 373 passed / 20.08 秒，候选应用启动 2 passed / 42.92 秒。两种目录的测试数量不同来自原有未提交测试，不代表漏跑同一测试集。交付前如再修改生产代码仍需重跑。
 
 ```bash
 .venv/bin/python -m pytest tests/unit/aigc tests/unit/app/aigc tests/unit/app/super_experts tests/unit/app/test_super_expert_aigc_tasks.py tests/unit/app/test_super_expert_grants.py tests/unit/routers/test_aigc_studio.py tests/unit/routers/test_aigc_studio_provider_filter.py tests/unit/routers/test_aigc_model_policy.py tests/unit/routers/test_super_expert_platform.py tests/integration/test_super_expert_aigc_workflow.py tests/integration/test_luyu_aigc_closed_loop.py tests/integration/test_aigc_core_without_experts.py -q
 git diff --check
 ```
 
-- [ ] 记录测试环境、数量、失败/跳过原因；隔离真实模型审核与模拟生成结果分别列出。不运行真实付费生成或线上迁移来消除未完成标记。
-- [ ] 核对最终 diff：核心无专家反向调用、无复制 Service、无 S0–S4 编辑、无模型政策/计费业务变更。requesting-code-review 对上述实际 diff 做独立审查。
-- [ ] 交付当前结果、迁移 dry-run 命令和原会话验收入口；明确尚未部署。由后续发布步骤审核打包差异、备份/迁移报告和回滚兼容，不自动切换生产。
-- [ ] 仅提交本轮测试与报告，`test(aigc): verify shared service boundaries and recovery`。
+- [x] 记录测试环境、数量、失败/跳过原因；隔离真实模型审核与模拟生成结果分别列出。不运行真实付费生成或线上迁移来消除未完成标记。全仓 3824 passed / 25 skipped / 6 failed；六项均在改造前 `3225c52` 同环境复现，未跨范围修复，合并/部署仍暂停。
+- [x] 核对最终 diff：核心无专家反向调用、无复制 Service、无 S0–S4 编辑、无模型政策/计费业务变更。requesting-code-review 已对实际候选独立审查，重点复跑 58 passed，无新的 Critical/Important；S0–S4 未编辑不等于重新完成其运行时回归。
+- [x] 交付当前结果、迁移 dry-run 命令和原会话验收入口；明确尚未部署。由后续发布步骤审核打包差异、备份/迁移报告和回滚兼容，不自动切换生产。详见验证报告顶部的本地结论及尚未验收边界。
+- [x] 仅提交本轮测试与报告，`test(aigc): verify shared service boundaries and recovery`。不含原有未提交的业务修复；当前分支保留，不合并或推送。
 
 ## 检查点与执行方式
 
@@ -234,4 +236,4 @@ git diff --check
 - 核心资源、专家任务、Agent 状态的唯一写入者保持分开；不把普通 Job 成功编译为审核通过。
 - plan 未要求所有未来模块使用画布、卡片或审核，也没有提前构建 MCP/RPA 接口。
 - 计划中的新增类型和方法定义在对应任务 Interfaces；旧接口仅移动和重导出，必须保留现有字段及版本。
-- 已按实际测试与提交更新 Task 1–5；Task 6–7 仍未完成，不把共享层与约束迁移视作完整解耦或线上验收。
+- 已按实际测试与提交更新 Task 1–7 的本地实现/验收。全仓六项基线失败阻断分支集成；真实生成、真实专家审核和线上闭环未验收，不以本地相关回归替代。

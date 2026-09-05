@@ -4,7 +4,46 @@
 
 ## 当前进度
 
-Task 1–5 已完成共享 Service、核心工作流执行绑定、可恢复操作记录、离线迁移工具、生成约束查询切换及核心结果/通知恢复，并通过独立审查。Task 6–7 尚未完成。未部署、未迁移生产数据、未调用付费生成。陆羽 S0–S4 未编辑。
+Task 1–7 的本地代码、独立审查、相关测试与交付记录已完成。Task 6 提交 `f86b5ce`；前置兼容挂载独立提交 `ade867e`。全仓测试仍有 6 项改造前即可复现的失败，分支集成 Gate 未通过，不进入合并/部署。未迁移生产数据、未调用付费生成。陆羽 S0–S4 未编辑，未重新执行其真实模型回归。以下 Task 分节保留各检查点当时的结果，当前结论以本节和最终验收汇总为准。
+
+## 最终验收汇总（本地源码）
+
+- 现有目录（保留全部原有修复）的相关回归：**405 passed / 19.61 秒**。独立提交候选（不含其他原有修复）的同一测试路径集合：**373 passed / 20.08 秒**。均只有既有 dashscope 弃用警告。数量差异来自原有未提交测试，未删除测试来改变预期。
+- 独立候选应用启动：**2 passed / 42.92 秒**，环境无生产配置或凭据，使用隔离存储。静态依赖与两个独立核心子进程覆盖普通画布创建、工作流约束、终态与资产投影恢复；不代表完整 HTTP 应用在专家源码物理缺失时仍可运行供应商生成。
+- 通知失败/重试增补检查 **1 passed**：实际 Job 文件及钱包、账单、用量订单、执行、用量项表快照不变。事件回传不发起生成，不冒充客户提交或审核通过。
+- 独立候选最初 **370 passed / 2 failed**：两项前端兼容前缀返回 404。独立审查用 HEAD 路由同样复现，定位到此前未提交的兼容挂载。仅此 9 行原有修复作为前置提交 `ade867e` 保留，认证仍为 `require_user`；HEAD 加该修复单独验证 **3 passed**。其他卡片恢复、会话模型、媒体审核上下文、计费等原有修复没有夹带进架构候选。
+- 最终独立审查针对设计第 9 节核对实际候选，重点测试 **58 passed**，未发现新的 Critical/Important。24 个 Task 6 候选文件逐字核对独立 index；源码唯一 Service、调用方向和原 HTTP 签名保持。
+- 既有三节点向导测试用模拟 Job 元数据依次投影 `copy.generate → keyframe.generate → clip.generate → workflow.submit`；任务状态测试覆盖提交、修改、重提、通过及重复事件。它们不是可播放视频或真实专家审核证据。
+
+### 全仓测试及基线失败
+
+对独立候选执行完整 `pytest -q --tb=short --maxfail=10`，实际跑到 100%：**3824 passed、25 skipped、6 failed、58 warnings / 310.80 秒**。使用清理后的环境、临时 `QWENPAW_WORKING_DIR` 和仓库导出的源码，不导入本机生产配置。跳过包括未配置的 PostgreSQL、缺失的可选 SDK/formatter 和既有移除 schema 的测试；没有新增 skip/xfail。
+
+将同 6 项在所有本轮架构改造之前的 `3225c52` 独立导出目录、同样隔离环境中重新运行，**6 failed / 2.97 秒**，错误逐项一致：
+
+| 测试 | 当前失败原因 |
+| --- | --- |
+| `test_copy_workspace_md_files_does_not_install_bootstrap_by_default` | 导出源码没有被 git 忽略的 AGENTS.md 模板 |
+| `test_presentation_builder_strict_qa_rejects_empty_slides` | 隔离 PATH 没有 soffice/libreoffice 与 pdftoppm |
+| `test_presentation_builder_auto_routes_roadmap_bullets_to_visual_layouts` | 隔离 PATH 没有 soffice/libreoffice |
+| `test_open_api_billing_upgrade_is_idempotent_and_preserves_history` | 旧计费表缺 `event_type`，索引创建失败 |
+| `test_console_spa_index_disables_browser_cache` | 导出源码没有被 git 忽略的 console 构建文件，返回 404 |
+| `test_mobile_tasks_match_web_task_list_across_enabled_agents` | 测试中的 `legal` Agent 无法由既有请求上下文取得，返回 404 |
+
+此处仅证明相同环境的改造前基线可复现，不宣称这些模块在线上正常。没有为了全绿修改计费、移动端、模板或放松断言；全仓集成/合并暂停，后续需独立处理基线和测试环境。保留当前分支与全部用户原有修改，不推送、不自动清理目录。
+
+提交前对 64 个既有文件做 SHA256 指纹核对：除本轮计划/报告的明确更新外，其余内容保持不变。选择性暂存只迁入已审查的架构块，旧卡片/会话/审核相关差异保留在工作区新位置。
+
+### 尚未验收 / 发布边界
+
+- 真实 AIGC 生成、真实模型审核、原任务会话的浏览器闭环均未在本次重构中执行。
+- PostgreSQL 并发和 Windows 文件锁未实测；已测试 SQLite、macOS 文件锁及真实子进程并发。
+- 尚未部署；旧工作流须在维护窗口备份、初始化核心表并执行独立 dry-run。冲突不能猜测补齐或直接放行，迁移方法见本文末部。
+- 同画布多卡片、跨卡素材版本依赖、其他模块能力开放不在此次改造范围内。专家消费者开关只控制事件适配，不是整个专家 API 的禁用开关。
+
+### 原会话验收入口
+
+原有测试会话：`http://127.0.0.1:18088/task/f2294f76-4e08-4d83-8bb4-aad52344488e`（来自用户测试记录，不表示当前服务已运行或该会话已恢复）。上线验收必须从该会话或新的授权测试会话点击实际卡片，不手工拼一个画布链接替代：核对原任务绑定 → 按向导制作 → 提交 → 由发起专家审核 → 返回同一会话查看真实状态。未完成前不得宣称线上闭环通过。
 
 ## Task 5：结果恢复与投递保护
 
@@ -32,6 +71,35 @@ Task 1–5 已完成共享 Service、核心工作流执行绑定、可恢复操�
 仍未完成：Task 6 原专家/原会话事件适配与 Service 迁出；Task 7 独立运行、接口兼容整体验收。SQLite 与 macOS 多进程文件锁已测试，PostgreSQL、Windows 和线上真实素材审核未实测。本批不得作为完整可部署版本。
 
 本轮没有更改陆羽 S0–S4、模型发布政策、计费或真实素材审核；模拟供应商返回值只用于故障注入，不冒充真实生成和真实审核成功。
+
+## Task 6 第一部分：专家应用 Service 与创建适配器迁出
+
+- `SuperExpertPlatformService` 从 HTTP 路由迁入 `super_experts/service.py`，只有一个实现；旧路由保持类型 re-export 和既有 HTTP 路径。默认工厂移到 `super_experts/composition.py`，runner 直接使用该工厂。
+- 专家卡片对应的创建、空画布、编译图落盘适配、未使用资源补偿及工作流上下文查询移到 `super_experts/aigc_adapter.py`。核心系统路由不再持有专家专属 provision 函数，也不反向调用新适配器。适配器通过显式注入的核心 Canvas/Asset Service 工作，没有 HTTP 自调用或另一套资源实现。
+- 两项新边界测试先 **2 failed**（新模块缺失），迁移后暴露 grants 类型注解带入 sealed package/FastAPI 的非必要导入；改为 TYPE_CHECKING 后通过。独立子进程禁止 HTTP 路由/FastAPI 导入，实际创建画布、读取预填节点、拒绝跨 owner、确认未创建生成 Job。默认 composition 属应用组装层，其经 grants 引入既有 sealed policy 的 FastAPI 依赖不属于核心，未扩大修改该包。
+- 调整原测试的内部入口及依赖注入夹具，保留原权限、画布、审核和回传断言。广域相关回归 **373 passed、15.08 秒**；runner 独立回归 **5 passed、1.66 秒**；一条已有 dashscope 弃用警告。迁移后的隔离应用启动 **2 passed、41.45 秒**。独立复核 **124 passed**，未发现新的 Critical/Important。
+- 本部分尚未提交：原平台路由与 runner 中存在用户已有未提交修复，迁移时原样保留；不得把整个文件差异一并暂存。Task 5 已单独提交 `cab6a0f`。
+- Task 6 仍缺：核心事件到原安装/专家/会话/卡片的可靠适配、过期/撤权/乱序边界，以及可选消费者启动接线；外层审核入口对系统路由辅助函数的调用也仍待清理。Task 7 整体验收未完成，不宣称已全面解耦或线上闭环成功。
+
+## Task 6 第二部分：原会话事件适配、顺序与并发保护
+
+- 新事件适配器首先得到 10 个缺失模块失败，再逐步实现。只消费核心生成进度，按真实安装 release/digest、grant、会话 owner/agent/tenant、画布/节点/工作流 revision 与输出资产快照查验原绑定；不自动提交素材、不写 ACCEPTED、不创建生成 Job。会话支持公共 chat ID 与内部 session ID，歧义拒绝回传。
+- 事件先持久化、后通知；总线故障保留同一事件 ID 重试。安装停用、原归属失配、任务取消、版本失效或素材丢失时记录 blocked，不转投另一个专家或会话。`QWENPAW_SUPER_EXPERT_AIGC_EVENTS_ENABLED` 可关闭专家消费者，核心恢复消费者照常组装。
+- 顺序失败测试复现旧 Job 消息覆盖新成功；增加核心节点成果头读取。独立审查进一步复现“旧消息已过检查，新消息抢先发出”的并发窗口。新增同节点交错测试先失败，再用跨进程节点锁覆盖 fresh 检查、事件保存和异步通知，修复后通过。
+- 独立审查复现事件仓库跨实例整文档覆盖导致已确认事件丢失。线程交错测试先失败；`append` 和 `save_review_receipt` 完整读改写使用共享文件锁。锁实现提取至 `storage/json_file_lock.py`，核心资源存储复用，未复制另一套锁。线程混合事件/回执写入及两个真实子进程并发写入通过。
+- 同步文件等待阻塞主循环的测试先失败；现在后台线程持锁，主循环负责异步发布，取消/超时在 finally 释放并 drain 当前写入。定向组合 **57 passed**。独立复核 **44 passed**，两项 Important 均关闭，取消中写入及重领没有新 Important。
+- 审核入口不再 import 系统 AIGC 路由。公共素材源组合、artifact root 解析和错误映射移到应用层 `runtime/aigc_media.py`，底层仍是同一个 Asset Service；系统入口保留历史授权兼容，专家入口要求明确 owner。三例新包装测试先失败，再通过；相关路由/共享素材测试 **165 passed**，独立复核同为 **165 passed**，未发现新的 Critical/Important。
+- 本轮广域相关回归 **403 passed、19.85 秒**（含 runner），一条已有 dashscope 弃用警告；隔离应用启动 **2 passed、42.79 秒**。未调用外部付费生成或真实模型审核，未修改部署配置及陆羽 S0–S4；工作区原有部署/计费修改保持原样。
+- 新增跨用户并发回传及 Job 文件不变验收时，第一次因测试段落插入位置错误出现 NameError，已修正测试归属；不是生产代码回归，不将该失败算为 TDD RED。
+- 当前 Task 6 差异仍未提交：平台 Service 迁移包含原文件里用户已有修改，需按迁移前后来源分离暂存，不能整体提交脏目录。本节更新覆盖上一节“仍缺”中的已实现项，不代表最终接口/线上闭环验收完成。
+
+## Task 7 增补验收进展
+
+- 新增 `test_aigc_core_without_experts.py`：两个独立 Python 进程均禁止导入专家组件、HTTP 路由与 FastAPI；第一进程通过核心 Service 创建普通画布和完整受管三节点图，保存隔离成果元数据；第二进程重启读取图、Job/资产投影和通用事件，仍拒绝错误模型与跨 owner 访问。**1 passed、0.77 秒**，属增补验收而非 RED。
+- 使用元数据夹具验证依赖、持久化与访问边界，不冒充真实视频可播放或业务审核通过。最终接口契约核对、完整测试重跑、交付整理及选择性提交仍待完成；未部署、未迁移生产数据。
+- 后续汇总回归 **405 passed、18.22 秒**，包含跨用户并发回传、独立核心重启和 runner；一条已有 dashscope 弃用警告，`git diff --check` 通过。跨用户回传仅更新各自原会话，Job 文件和业务任务状态未改变。
+- 接口 AST 对照 HEAD：系统 32 个路由、平台原 5 个路由的路径/装饰器/参数保持；三个迁移的请求 DTO 定义保持。首次全量平台路由相等断言因工作区原有的 3 个新增端点失败，核实为 `list_super_expert_cards`、`get_conversation_route`、`execute_frontend_super_expert_command`，本轮保留，未删除或回滚；不能以 HEAD 全量覆盖现有工作区。
+- 本轮接口源码对照加既有路由/工作流/闭环状态测试通过，但尚不等价于浏览器真实素材审核验收。剩余为交付文档最终整理与按原始修改来源选择性提交；未启动生产服务、未运行线上迁移。
 
 ## Task 1
 
