@@ -159,7 +159,7 @@ async def test_fixture_manifest_and_one_node_request_are_compatible(
     assert manifest["contract"] == "aigc.workflow.create/1"
     assert set(manifest["fixtures"]) == {"one-node.json", "three-node.json"}
     monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
-    aigc_studio._JSON_CACHE.clear()
+    aigc_studio._resource_store.cache_clear()
     monkeypatch.setattr(platform_router, "_load_workflow_capability_catalog", _catalog)
     service, grant = _service(tmp_path)
     arguments = _fixture("one-node.json", grant.installation_id)
@@ -180,7 +180,7 @@ async def test_three_node_customer_triggered_closed_loop(tmp_path, monkeypatch):
     from qwenpaw.app.routers import aigc_studio
 
     monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
-    aigc_studio._JSON_CACHE.clear()
+    aigc_studio._resource_store.cache_clear()
     monkeypatch.setattr(platform_router, "_load_workflow_capability_catalog", _catalog)
     service, grant = _service(tmp_path)
     arguments = _fixture("three-node.json", grant.installation_id)

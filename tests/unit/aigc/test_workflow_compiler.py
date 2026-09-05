@@ -277,7 +277,7 @@ def test_generic_provisioner_persists_the_compiled_graph(tmp_path, monkeypatch):
     from qwenpaw.app.routers import aigc_studio
 
     monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
-    aigc_studio._JSON_CACHE.clear()
+    aigc_studio._resource_store.cache_clear()
     compiled = _compile()
 
     canvas = aigc_studio.provision_super_expert_aigc_workflow(
@@ -309,7 +309,7 @@ def test_manual_fallback_provisioner_creates_a_truly_blank_canvas(
     from qwenpaw.app.routers import aigc_studio
 
     monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
-    aigc_studio._JSON_CACHE.clear()
+    aigc_studio._resource_store.cache_clear()
 
     canvas = aigc_studio.provision_blank_super_expert_aigc_workspace(
         owner_user_id="user-1",

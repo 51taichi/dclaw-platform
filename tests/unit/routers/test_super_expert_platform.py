@@ -354,7 +354,7 @@ async def test_create_v2_provisions_one_real_owned_canvas_and_persists_operation
     from qwenpaw.app.routers import aigc_studio
 
     monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
-    aigc_studio._JSON_CACHE.clear()
+    aigc_studio._resource_store.cache_clear()
     service, grant, bus = _service(tmp_path)
     generated_ids = iter(
         (
@@ -461,7 +461,7 @@ async def test_authorized_workflow_create_provisions_all_nodes_and_bindings(
     from qwenpaw.app.routers import aigc_studio
 
     monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
-    aigc_studio._JSON_CACHE.clear()
+    aigc_studio._resource_store.cache_clear()
     service, grant, bus = _service(tmp_path)
 
     async def catalog():
@@ -509,7 +509,7 @@ async def test_output_wrapper_review_uses_nearest_producing_node(tmp_path, monke
     from qwenpaw.app.routers import aigc_studio
 
     monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
-    aigc_studio._JSON_CACHE.clear()
+    aigc_studio._resource_store.cache_clear()
     service, grant, _bus = _service(tmp_path)
 
     async def catalog():
@@ -560,7 +560,7 @@ async def test_workflow_task_write_failure_removes_provisioned_canvas(
     from qwenpaw.app.routers import aigc_studio
 
     monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
-    aigc_studio._JSON_CACHE.clear()
+    aigc_studio._resource_store.cache_clear()
     service, grant, _bus = _service(tmp_path)
 
     async def catalog():
@@ -594,7 +594,7 @@ async def test_workflow_rejects_unavailable_model_without_creating_canvas(
     from qwenpaw.app.routers import aigc_studio
 
     monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
-    aigc_studio._JSON_CACHE.clear()
+    aigc_studio._resource_store.cache_clear()
     service, grant, _bus = _service(tmp_path)
 
     async def empty_catalog():
@@ -627,7 +627,7 @@ async def test_unavailable_workflow_never_creates_a_misleading_manual_canvas(
     from qwenpaw.app.routers import aigc_studio
 
     monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
-    aigc_studio._JSON_CACHE.clear()
+    aigc_studio._resource_store.cache_clear()
     service, grant, _bus = _service(tmp_path)
 
     async def catalog():
@@ -689,7 +689,7 @@ async def test_workflow_guide_endpoint_projects_real_canvas_and_blocks_if_delete
     from qwenpaw.app.routers import aigc_studio
 
     monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
-    aigc_studio._JSON_CACHE.clear()
+    aigc_studio._resource_store.cache_clear()
     service, grant, _bus = _service(tmp_path)
 
     async def catalog():
@@ -730,7 +730,7 @@ async def test_workflow_guide_endpoint_projects_real_canvas_and_blocks_if_delete
 
     canvas_id = created["task"]["binding"]["canvas_id"]
     aigc_studio._json_path("canvases", canvas_id).unlink()
-    aigc_studio._JSON_CACHE.clear()
+    aigc_studio._resource_store.cache_clear()
     blocked = router_module.get_super_expert_task_guide("material-v2-1", request)
     assert blocked["current_step"]["status"] == "BLOCKED"
     assert blocked["current_step"]["recovery"]["code"] == "BOUND_CANVAS_MISSING"
@@ -744,7 +744,7 @@ async def test_workflow_guide_update_persists_only_optional_bound_skip(
     from qwenpaw.app.routers import aigc_studio
 
     monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
-    aigc_studio._JSON_CACHE.clear()
+    aigc_studio._resource_store.cache_clear()
     service, grant, _bus = _service(tmp_path)
 
     async def catalog():

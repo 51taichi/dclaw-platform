@@ -36,7 +36,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 from ...aigc.workflow_compiler import CompiledWorkflow
 from ...aigc.workflow_contract import workflow_node_registry
@@ -52,6 +52,27 @@ from ...aigc.visual_dna import (
     list_visual_dna_elements,
 )
 from ...constant import SECRET_DIR, WORKING_DIR
+from ..aigc.models import (
+    JobStatus,
+    CanvasNode,
+    CanvasEdge,
+    CanvasViewport,
+    CanvasUpsert,
+    Canvas,
+    CanvasList,
+    AigcCapabilityInfo,
+    AigcCategoryDefaults,
+    CapabilityList,
+    WorkflowAvailableModel,
+    WorkflowNodeCapability,
+    WorkflowCapabilityCatalog,
+    AigcJobCreate,
+    AigcAsset,
+    AigcJob,
+    JobList,
+    AssetList,
+)
+from ..aigc.resource_store import AigcResourceError, AigcResourceStore
 from ..chat_access import current_user_id, is_admin_request
 from ..object_storage import get_object_storage_client
 from ..runtime.event_bus import RuntimeEvent, get_runtime_event_bus
@@ -61,8 +82,6 @@ public_router = APIRouter(prefix="/aigc-studio", tags=["aigc-studio"])
 logger = logging.getLogger(__name__)
 
 STUDIO_ROOT = WORKING_DIR / "aigc_studio"
-SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
-_JSON_CACHE: dict[str, tuple[int, dict[str, Any]]] = {}
 _JOB_RUN_TASKS: dict[str, asyncio.Task[AigcJob]] = {}
 _ASSET_FILE_URL_RE = re.compile(r"/aigc-studio/assets/([^/]+)/file")
 _IMAGE_RESOLUTION_LONG_EDGE = {
@@ -148,146 +167,6 @@ OUTPUT_GENERATION_CAPABILITIES = {
     "text_to_audio",
 }
 
-JobStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]
-
-
-class CanvasNode(BaseModel):
-    id: str
-    type: str
-    position: dict[str, float] = Field(default_factory=dict)
-    data: dict[str, Any] = Field(default_factory=dict)
-
-
-class CanvasEdge(BaseModel):
-    id: str
-    source: str
-    target: str
-    sourceHandle: str | None = None
-    targetHandle: str | None = None
-    data: dict[str, Any] = Field(default_factory=dict)
-
-
-class CanvasViewport(BaseModel):
-    x: float = 0
-    y: float = 0
-    zoom: float = 1
-
-
-class CanvasUpsert(BaseModel):
-    name: str = Field(default="Untitled canvas")
-    nodes: list[CanvasNode] = Field(default_factory=list)
-    edges: list[CanvasEdge] = Field(default_factory=list)
-    viewport: CanvasViewport = Field(default_factory=CanvasViewport)
-    thumbnail: str | None = None
-    meta: dict[str, Any] = Field(default_factory=dict)
-
-
-class Canvas(CanvasUpsert):
-    id: str
-    created_at: str
-    updated_at: str
-
-
-class CanvasList(BaseModel):
-    canvases: list[Canvas]
-
-
-class AigcCapabilityInfo(BaseModel):
-    provider_id: str
-    provider_name: str
-    model_id: str
-    model_name: str
-    capability: str
-    source: Literal["model_registry", "plugin_tool"]
-    parameter_schema: dict[str, Any] = Field(default_factory=dict)
-
-
-class AigcCategoryDefaults(BaseModel):
-    configured: bool = False
-    configured_default: dict[str, str] | None = None
-    effective_default: dict[str, str] | None = None
-    fallback_active: bool = False
-    fallback_reason: list[str] = Field(default_factory=list)
-
-
-class CapabilityList(BaseModel):
-    capabilities: list[AigcCapabilityInfo]
-    defaults: dict[str, AigcCategoryDefaults] = Field(default_factory=dict)
-
-
-class WorkflowAvailableModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    provider_id: str
-    provider_name: str
-    model_id: str
-    model_name: str
-    capability: str
-    source: Literal["model_registry", "plugin_tool"]
-    parameter_schema: dict[str, Any] = Field(default_factory=dict)
-
-
-class WorkflowNodeCapability(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    kind: str
-    title: str
-    provisioning: Literal["AUTO_PROVISIONABLE", "MANUAL_ONLY", "UNAVAILABLE"]
-    provisioning_reason: str | None = None
-    capabilities: tuple[str, ...]
-    input_keys: tuple[str, ...]
-    parameter_keys: tuple[str, ...]
-    input_slots: dict[str, tuple[str, ...]]
-    output_type: str
-    control_id: str | None
-    customer_actions: tuple[str, ...]
-
-
-class WorkflowCapabilityCatalog(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    schema_version: Literal[1] = 1
-    nodes: tuple[WorkflowNodeCapability, ...]
-    available_models: tuple[WorkflowAvailableModel, ...]
-
-
-class AigcJobCreate(BaseModel):
-    canvas_id: str
-    node_id: str
-    capability: str
-    provider_id: str
-    model_id: str
-    inputs: dict[str, Any] = Field(default_factory=dict)
-    parameters: dict[str, Any] = Field(default_factory=dict)
-
-
-class AigcAsset(BaseModel):
-    id: str
-    kind: Literal["image", "video", "audio", "file"]
-    name: str
-    path: str
-    url: str | None = None
-    mime_type: str | None = None
-    created_at: str
-    meta: dict[str, Any] = Field(default_factory=dict)
-
-
-class AigcJob(AigcJobCreate):
-    id: str
-    status: JobStatus
-    created_at: str
-    updated_at: str
-    outputs: list[AigcAsset] = Field(default_factory=list)
-    error: str | None = None
-    logs: list[str] = Field(default_factory=list)
-
-
-class JobList(BaseModel):
-    jobs: list[AigcJob]
-
-
-class AssetList(BaseModel):
-    assets: list[AigcAsset]
 
 
 class AssetSignedUrl(BaseModel):
@@ -765,51 +644,59 @@ def _now() -> str:
 
 
 def _dir(name: str) -> Path:
-    path = STUDIO_ROOT / name
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    try:
+        return _resource_store(STUDIO_ROOT).directory(name)
+    except AigcResourceError as exc:
+        raise _resource_http_error(exc) from exc
+
+
+@lru_cache(maxsize=16)
+def _resource_store(root: Path) -> AigcResourceStore:
+    return AigcResourceStore(root)
+
+
+def _resource_http_error(error: AigcResourceError) -> HTTPException:
+    if error.code == "RESOURCE_NOT_FOUND":
+        return HTTPException(status_code=404, detail="AIGC Studio resource not found")
+    if error.code == "CORRUPT_RESOURCE":
+        return HTTPException(status_code=500, detail=f"Corrupt Studio file: {error.resource_name}")
+    return HTTPException(status_code=400, detail="Invalid AIGC Studio resource id")
 
 
 def _safe_id(item_id: str) -> str:
-    if not SAFE_ID_RE.fullmatch(item_id):
-        raise HTTPException(status_code=400, detail="Invalid AIGC Studio resource id")
-    return item_id
+    try:
+        return AigcResourceStore.safe_id(item_id)
+    except AigcResourceError as exc:
+        raise _resource_http_error(exc) from exc
 
 
 def _json_path(kind: str, item_id: str) -> Path:
-    return _dir(kind) / f"{_safe_id(item_id)}.json"
+    try:
+        return _resource_store(STUDIO_ROOT).path(kind, item_id)
+    except AigcResourceError as exc:
+        raise _resource_http_error(exc) from exc
 
 
 def _read_json(path: Path) -> dict[str, Any]:
     try:
-        stat = path.stat()
-        cache_key = str(path.resolve())
-        cached = _JSON_CACHE.get(cache_key)
-        if cached and cached[0] == stat.st_mtime_ns:
-            return dict(cached[1])
-        payload = json.loads(path.read_text("utf-8"))
-        _JSON_CACHE[cache_key] = (stat.st_mtime_ns, payload)
-        return dict(payload)
-    except FileNotFoundError as exc:
-        raise HTTPException(
-            status_code=404, detail="AIGC Studio resource not found"
-        ) from exc
-    except json.JSONDecodeError as exc:
-        raise HTTPException(
-            status_code=500, detail=f"Corrupt Studio file: {path.name}"
-        ) from exc
+        return _resource_store(STUDIO_ROOT).read_path(path)
+    except AigcResourceError as exc:
+        raise _resource_http_error(exc) from exc
 
 
 def _write_json(path: Path, payload: BaseModel | dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
     data = payload.model_dump() if isinstance(payload, BaseModel) else payload
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
-    _JSON_CACHE.pop(str(path.resolve()), None)
+    try:
+        _resource_store(STUDIO_ROOT).write_path(path, data)
+    except AigcResourceError as exc:
+        raise _resource_http_error(exc) from exc
 
 
 def _delete_json(path: Path) -> None:
-    path.unlink()
-    _JSON_CACHE.pop(str(path.resolve()), None)
+    try:
+        _resource_store(STUDIO_ROOT).delete_path(path)
+    except AigcResourceError as exc:
+        raise _resource_http_error(exc) from exc
 
 
 def _should_refresh_builtin_prompt_template(template: AigcStyleTemplate) -> bool:
