@@ -71,7 +71,7 @@ const fixture = (): PolicyState => ({
 });
 
 describe("AigcModelsSection", () => {
-  it("renders four categories and caps each summary at three models", () => {
+  it("renders the three usable categories and caps each summary at three models", () => {
     render(<AigcModelsSection state={fixture()} />);
 
     expect(
@@ -80,7 +80,7 @@ describe("AigcModelsSection", () => {
     expect(screen.getByText("models.aigc.textTitle")).toBeInTheDocument();
     expect(screen.getByText("models.aigc.imageTitle")).toBeInTheDocument();
     expect(screen.getByText("models.aigc.videoTitle")).toBeInTheDocument();
-    expect(screen.getByText("models.aigc.audioTitle")).toBeInTheDocument();
+    expect(screen.queryByText("models.aigc.audioTitle")).not.toBeInTheDocument();
     expect(screen.queryByText("models.aigc.description")).not.toBeInTheDocument();
     expect(
       screen.queryByText("models.aigc.textDescription"),
