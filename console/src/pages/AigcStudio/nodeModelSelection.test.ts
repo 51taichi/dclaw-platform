@@ -5,7 +5,10 @@ import type {
   AigcCapabilityInfo,
 } from "../../api/modules/aigcStudio";
 import {
+  categoryForCapability,
+  modelForNewNode,
   modelForNode,
+  modelSelectionState,
   modelOptionsForCapability,
   modelOptionsForNode,
 } from "./nodeModelSelection";
@@ -23,6 +26,50 @@ const imageModel = (
 });
 
 describe("nodeModelSelection", () => {
+  it("maps text, image, video, and audio capabilities to policy categories", () => {
+    expect(categoryForCapability("storyboard")).toBe("text");
+    expect(categoryForCapability("text_to_image")).toBe("image");
+    expect(categoryForCapability("image_to_video")).toBe("video");
+    expect(categoryForCapability("text_to_audio")).toBe("audio");
+  });
+
+  it("uses the server effective default instead of the first capability", () => {
+    const first = imageModel("text_to_image", "first");
+    const preferred = imageModel("text_to_image", "preferred");
+
+    expect(
+      modelForNewNode([first, preferred], {
+        provider_id: "volcengine",
+        model_id: "preferred",
+      }),
+    ).toEqual(preferred);
+  });
+
+  it("keeps an invalid saved model visible until switching is confirmed", () => {
+    const fallback = imageModel("text_to_image", "fallback");
+    const node: AigcCanvasNode = {
+      id: "image-1",
+      type: "image_generate",
+      position: { x: 0, y: 0 },
+      data: {
+        providerId: "mxapi",
+        providerName: "MXAPI",
+        modelId: "removed-model",
+        modelLabel: "Removed model",
+        modelCapability: "text_to_image",
+      },
+    };
+
+    const state = modelSelectionState([fallback], node, "text_to_image", {
+      provider_id: "volcengine",
+      model_id: "fallback",
+    });
+    expect(state.invalidSavedModel).toBe(true);
+    expect(state.selected?.model_id).toBe("removed-model");
+    expect(state.fallback).toEqual(fallback);
+    expect(node.data.modelId).toBe("removed-model");
+  });
+
   it("deduplicates multi-capability image models for component model pickers", () => {
     expect(
       modelOptionsForCapability(
@@ -40,7 +87,7 @@ describe("nodeModelSelection", () => {
     ]);
   });
 
-  it("does not expose a stale node snapshot when configured options exist", () => {
+  it("keeps a stale node snapshot visible when configured options exist", () => {
     const configuredModel = model("storyboard", "glm-4-7", "GLM-4.7");
     const node: AigcCanvasNode = {
       id: "text-1",
@@ -56,10 +103,11 @@ describe("nodeModelSelection", () => {
     };
 
     expect(modelOptionsForNode([configuredModel], node, "storyboard")).toEqual([
+      expect.objectContaining({ model_id: "Qwen/Qwen3.5-122B-A10B" }),
       configuredModel,
     ]);
     expect(modelForNode([configuredModel], node, "storyboard")).toEqual(
-      configuredModel,
+      expect.objectContaining({ model_id: "Qwen/Qwen3.5-122B-A10B" }),
     );
   });
 

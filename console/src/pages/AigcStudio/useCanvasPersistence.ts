@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   aigcStudioApi,
   type AigcCanvas,
+  type AigcCapabilityDefaultsByCategory,
   type AigcCapabilityInfo,
   type AigcJob,
 } from "../../api/modules/aigcStudio";
@@ -35,6 +36,8 @@ export function useCanvasPersistence({
   const pendingSaveCanvasRef = useRef<AigcCanvas | null>(null);
   const savedCanvasSignatureRef = useRef<string | null>(null);
   const [capabilities, setCapabilities] = useState<AigcCapabilityInfo[]>([]);
+  const [capabilityDefaults, setCapabilityDefaults] =
+    useState<AigcCapabilityDefaultsByCategory>({});
   const [canvases, setCanvases] = useState<AigcCanvas[]>([]);
   const [activeCanvas, setActiveCanvas] = useState<AigcCanvas | null>(null);
   const [jobs, setJobs] = useState<AigcJob[]>([]);
@@ -93,6 +96,7 @@ export function useCanvasPersistence({
         aigcStudioApi.listCanvases(),
       ]);
       setCapabilities(capabilityRes.capabilities);
+      setCapabilityDefaults(capabilityRes.defaults ?? {});
 
       const localizedCanvases = canvasRes.canvases.map(
         (canvas) =>
@@ -184,6 +188,8 @@ export function useCanvasPersistence({
     savedCanvasSignatureRef,
     capabilities,
     setCapabilities,
+    capabilityDefaults,
+    setCapabilityDefaults,
     canvases,
     setCanvases,
     activeCanvas,

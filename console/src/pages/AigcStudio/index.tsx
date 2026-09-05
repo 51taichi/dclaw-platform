@@ -16,6 +16,7 @@ import {
   Input,
   Select,
   Spin,
+  Modal,
   message as antdMessage,
 } from "antd";
 import {
@@ -193,10 +194,12 @@ import {
   type TemplateVariant,
 } from "./domain/componentRegistry";
 import {
+  effectiveDefaultForCapability,
   modelForNode,
   modelKey,
   modelLabelForNode,
   modelOptionsForNode,
+  modelSelectionState,
 } from "./nodeModelSelection";
 import { useGenerationProgressSimulation } from "./useGenerationProgressSimulation";
 import styles from "./index.module.less";
@@ -485,6 +488,7 @@ export default function AigcStudioPage() {
     autoSaveTimerRef,
     savedCanvasSignatureRef,
     capabilities,
+    capabilityDefaults,
     canvases,
     setCanvases,
     activeCanvas,
@@ -663,7 +667,21 @@ export default function AigcStudioPage() {
     : false;
   const selectedNodeModel =
     selectedNodeUsesModel && selectedNode
-      ? modelForNode(capabilities, selectedNode, selectedCapability)
+      ? modelForNode(
+          capabilities,
+          selectedNode,
+          selectedCapability,
+          effectiveDefaultForCapability(capabilityDefaults, selectedCapability),
+        )
+      : null;
+  const selectedNodeModelState =
+    selectedNodeUsesModel && selectedNode
+      ? modelSelectionState(
+          capabilities,
+          selectedNode,
+          selectedCapability,
+          effectiveDefaultForCapability(capabilityDefaults, selectedCapability),
+        )
       : null;
   const selectedNodeModelOptions =
     selectedNodeUsesModel && selectedNode
@@ -949,7 +967,15 @@ export default function AigcStudioPage() {
   const currentModelForCanvasNode = (node: AigcCanvasNode) =>
     isWorkflowOnlyNodeType(node.type)
       ? null
-      : modelForNode(capabilities, node, capabilityForCanvasNode(node));
+      : modelForNode(
+          capabilities,
+          node,
+          capabilityForCanvasNode(node),
+          effectiveDefaultForCapability(
+            capabilityDefaults,
+            capabilityForCanvasNode(node),
+          ),
+        );
 
   const currentModelKeyForCanvasNode = (node: AigcCanvasNode) =>
     modelKey(currentModelForCanvasNode(node));
@@ -995,6 +1021,53 @@ export default function AigcStudioPage() {
   ) => {
     const canvasForRunSource = canvasOverride ?? activeCanvas;
     if (!canvasForRunSource || !nodeToRun) return;
+    const nodeCapability = capabilityForCanvasNode(nodeToRun);
+    const selection = modelSelectionState(
+      capabilities,
+      nodeToRun,
+      nodeCapability,
+      effectiveDefaultForCapability(capabilityDefaults, nodeCapability),
+    );
+    if (selection.invalidSavedModel && !selection.fallback) {
+      antdMessage.error(
+        t(
+          "aigcStudio.noFallbackModel",
+          "该模型已不可用，且当前没有可切换的默认模型。",
+        ),
+      );
+      return;
+    }
+    if (selection.invalidSavedModel && selection.fallback) {
+      const confirmed = await new Promise<boolean>((resolve) => {
+        Modal.confirm({
+          title: t("aigcStudio.modelUnavailable", "该模型已不可用"),
+          content: t(
+            "aigcStudio.switchToDefaultModel",
+            "是否切换到当前默认模型 {{model}} 后继续？",
+            { model: selection.fallback?.model_name },
+          ),
+          okText: t("aigcStudio.switchAndContinue", "切换并继续"),
+          cancelText: t("common.cancel", "取消"),
+          onOk: () => resolve(true),
+          onCancel: () => resolve(false),
+        });
+      });
+      if (!confirmed) return;
+      const switchedNode = {
+        ...nodeToRun,
+        data: {
+          ...nodeToRun.data,
+          modelLabel: selection.fallback.model_name,
+          providerId: selection.fallback.provider_id,
+          providerName: selection.fallback.provider_name,
+          modelId: selection.fallback.model_id,
+          modelCapability: selection.fallback.capability,
+        },
+      };
+      updateNodeData(nodeToRun.id, switchedNode.data);
+      await runNode(switchedNode, canvasOverride);
+      return;
+    }
     const nodeRunKey = runningNodeKey(canvasForRunSource.id, nodeToRun.id);
     if (runningNodeKeysRef.current.has(nodeRunKey)) return;
     const isFeedbackNode = [
@@ -1054,8 +1127,12 @@ export default function AigcStudioPage() {
       }
       return base;
     };
-    const nodeCapability = capabilityForCanvasNode(nodeToRun);
-    const runModel = modelForNode(capabilities, nodeToRun, nodeCapability);
+    const runModel = modelForNode(
+      capabilities,
+      nodeToRun,
+      nodeCapability,
+      effectiveDefaultForCapability(capabilityDefaults, nodeCapability),
+    );
     if (!runModel) {
       const missingModelMessage =
         nodeToRun.type === "image_generate"
@@ -3434,6 +3511,10 @@ export default function AigcStudioPage() {
                               node,
                               capabilityForCanvasNode(node),
                               "",
+                              effectiveDefaultForCapability(
+                                capabilityDefaults,
+                                capabilityForCanvasNode(node),
+                              ),
                             ),
                         )}
                       </span>
@@ -3602,9 +3683,22 @@ export default function AigcStudioPage() {
                   }}
                   options={selectedNodeModelOptions.map((item) => ({
                     value: `${item.provider_id}:${item.model_id}`,
-                    label: `${item.provider_name} / ${item.model_name}`,
+                    label: `${item.provider_name} / ${item.model_name}${
+                      selectedNodeModelState?.invalidSavedModel &&
+                      modelKey(item) === selectedNodeModelKey
+                        ? ` · ${t("aigcStudio.modelUnavailable", "该模型已不可用")}`
+                        : ""
+                    }`,
+                    disabled:
+                      selectedNodeModelState?.invalidSavedModel &&
+                      modelKey(item) === selectedNodeModelKey,
                   }))}
                 />
+                {selectedNodeModelState?.invalidSavedModel && (
+                  <div style={{ color: "#d46b08", marginTop: 8 }}>
+                    {t("aigcStudio.modelUnavailable", "该模型已不可用")}
+                  </div>
+                )}
               </>
             ) : (
               <>
