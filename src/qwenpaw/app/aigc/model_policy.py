@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
@@ -12,6 +14,48 @@ AIGC_MODEL_CATEGORIES: tuple[AigcModelCategory, ...] = (
     "video",
     "audio",
 )
+
+
+def policy_enforcement_enabled(
+    environ: Mapping[str, str] | None = None,
+) -> bool:
+    value = (environ or os.environ).get("AIGC_MODEL_POLICY_ENFORCEMENT", "")
+    return value.strip().lower() not in {"0", "false", "off"}
+
+
+def category_for_capability(capability: str) -> AigcModelCategory:
+    normalized = str(capability).strip().lower()
+    if normalized == "storyboard":
+        return "text"
+    if "audio" in normalized or "music" in normalized:
+        return "audio"
+    if "video" in normalized:
+        return "video"
+    return "image"
+
+
+def filter_capabilities(
+    capabilities: list[Any],
+    allowed_by_category: dict[AigcModelCategory, set[tuple[str, str]]],
+) -> list[Any]:
+    """Filter registry models while preserving non-model plugin capabilities."""
+    filtered: list[Any] = []
+    for item in capabilities:
+        if getattr(item, "source", "model_registry") != "model_registry":
+            filtered.append(item)
+            continue
+        category = category_for_capability(str(getattr(item, "capability", "")))
+        allowed = allowed_by_category.get(category)
+        if (
+            allowed is None
+            or (
+                str(getattr(item, "provider_id", "")),
+                str(getattr(item, "model_id", "")),
+            )
+            in allowed
+        ):
+            filtered.append(item)
+    return filtered
 
 
 @dataclass(frozen=True)
@@ -54,6 +98,17 @@ class AigcPolicyInventory:
             if item.provider_id == provider_id and item.model_id == model_id:
                 return item
         raise LookupError(f"unknown AIGC model: {category}/{provider_id}/{model_id}")
+
+
+@dataclass(frozen=True)
+class EffectiveCategoryPolicy:
+    category: AigcModelCategory
+    configured: bool
+    models: tuple[InventoryItem, ...]
+    configured_default: ModelRef | None
+    effective_default: ModelRef | None
+    fallback_active: bool
+    fallback_reason: tuple[str, ...] = ()
 
 
 def _model_categories(model: Any) -> tuple[AigcModelCategory, ...]:
@@ -192,3 +247,76 @@ class AigcModelPolicyService:
                 )
             )
         return inventory
+
+    async def effective(
+        self,
+        category: AigcModelCategory,
+        manager: Any,
+    ) -> EffectiveCategoryPolicy:
+        inventory = await self.inventory(manager)
+        policy = self.policies.get(category)
+        candidates = inventory.categories[category]
+        by_key = {(item.provider_id, item.model_id): item for item in candidates}
+
+        if not policy or not policy.get("configured", True):
+            available = tuple(item for item in candidates if item.selectable)
+            default = available[0].ref if available else None
+            return EffectiveCategoryPolicy(
+                category=category,
+                configured=False,
+                models=available,
+                configured_default=None,
+                effective_default=default,
+                fallback_active=False,
+            )
+
+        ordered_refs = [
+            ModelRef(str(item["provider_id"]), str(item["model_id"]))
+            for item in sorted(
+                policy.get("models", ()),
+                key=lambda item: int(item.get("sort_order", 0)),
+            )
+        ]
+        configured_default = next(
+            (
+                ModelRef(str(item["provider_id"]), str(item["model_id"]))
+                for item in policy.get("models", ())
+                if item.get("is_default")
+            ),
+            None,
+        )
+        available = tuple(
+            by_key[(ref.provider_id, ref.model_id)]
+            for ref in ordered_refs
+            if (ref.provider_id, ref.model_id) in by_key
+            and by_key[(ref.provider_id, ref.model_id)].selectable
+        )
+        configured_item = (
+            by_key.get((configured_default.provider_id, configured_default.model_id))
+            if configured_default
+            else None
+        )
+        configured_valid = bool(configured_item and configured_item.selectable)
+        effective_default = (
+            configured_default
+            if configured_valid
+            else (available[0].ref if available else None)
+        )
+        return EffectiveCategoryPolicy(
+            category=category,
+            configured=True,
+            models=available,
+            configured_default=configured_default,
+            effective_default=effective_default,
+            fallback_active=(
+                configured_default is not None
+                and effective_default != configured_default
+            ),
+            fallback_reason=(
+                configured_item.reasons
+                if configured_item and not configured_item.selectable
+                else (
+                    ("missing",) if configured_default and not configured_item else ()
+                )
+            ),
+        )

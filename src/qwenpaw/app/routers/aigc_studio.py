@@ -202,8 +202,17 @@ class AigcCapabilityInfo(BaseModel):
     parameter_schema: dict[str, Any] = Field(default_factory=dict)
 
 
+class AigcCategoryDefaults(BaseModel):
+    configured: bool = False
+    configured_default: dict[str, str] | None = None
+    effective_default: dict[str, str] | None = None
+    fallback_active: bool = False
+    fallback_reason: list[str] = Field(default_factory=list)
+
+
 class CapabilityList(BaseModel):
     capabilities: list[AigcCapabilityInfo]
+    defaults: dict[str, AigcCategoryDefaults] = Field(default_factory=dict)
 
 
 class WorkflowAvailableModel(BaseModel):
@@ -1348,6 +1357,7 @@ async def _validate_job_submission(request: Request, body: AigcJobCreate) -> Non
                 status_code=409,
                 detail="Workflow-bound node execution mismatch.",
             )
+    await _assert_job_model_policy_allowed(request, body)
     capability = await _find_capability(
         request,
         body.provider_id,
@@ -1361,6 +1371,61 @@ async def _validate_job_submission(request: Request, body: AigcJobCreate) -> Non
                 "Requested capability is not available for provider "
                 f"'{body.provider_id}' model '{body.model_id}'."
             ),
+        )
+
+
+async def _assert_job_model_policy_allowed(
+    request: Request,
+    body: AigcJobCreate,
+) -> None:
+    if body.provider_id.startswith("plugin:"):
+        return
+    from sqlalchemy.exc import OperationalError, ProgrammingError
+
+    from ..aigc.model_policy import (
+        AigcModelPolicyService,
+        category_for_capability,
+        policy_enforcement_enabled,
+    )
+    from ..billing.model_publication import ModelPublicationService
+    from ..storage.engine import get_app_engine
+    from ..storage.repos.aigc_model_policy_repo import (
+        AigcModelPolicyRepository,
+    )
+    from ..storage.repos.price_catalog_repo import PriceCatalogRepository
+
+    if not policy_enforcement_enabled():
+        return
+    engine = get_app_engine()
+    repository = AigcModelPolicyRepository(engine)
+    category = category_for_capability(body.capability)
+    try:
+        policy = repository.get(category)
+    except (OperationalError, ProgrammingError):
+        return
+    if not policy or not policy.get("configured", True):
+        return
+    published = ModelPublicationService(
+        PriceCatalogRepository(engine)
+    ).effective_pairs() or set()
+    manager = getattr(request.app.state, "provider_manager", None)
+    effective = await AigcModelPolicyService(
+        repository,
+        published_pairs=published,
+        priced_pairs=published,
+    ).effective(category, manager)
+    allowed = {
+        (item.provider_id, item.model_id) for item in effective.models
+    }
+    if (body.provider_id, body.model_id) not in allowed:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "aigc_model_not_allowed",
+                "category": category,
+                "provider_id": body.provider_id,
+                "model_id": body.model_id,
+            },
         )
 
 
@@ -5560,6 +5625,7 @@ async def build_capability_list(manager: Any | None) -> CapabilityList:
     workspace runtimes without making them impersonate a Starlette request.
     """
     capabilities: list[AigcCapabilityInfo] = []
+    published: set[tuple[str, str]] | None = None
     if manager is not None:
         from ..billing.model_publication import ModelPublicationService
         from ..storage.engine import get_app_engine
@@ -5629,7 +5695,77 @@ async def build_capability_list(manager: Any | None) -> CapabilityList:
     deduped = {
         (c.provider_id, c.model_id, c.capability, c.source): c for c in capabilities
     }
-    return CapabilityList(capabilities=list(deduped.values()))
+    result = CapabilityList(capabilities=list(deduped.values()))
+    if manager is None or published is None:
+        return result
+
+    from ..aigc.model_policy import (
+        AIGC_MODEL_CATEGORIES,
+        AigcModelPolicyService,
+        filter_capabilities,
+        policy_enforcement_enabled,
+    )
+    from ..storage.repos.aigc_model_policy_repo import (
+        AigcModelPolicyRepository,
+    )
+
+    if not policy_enforcement_enabled():
+        return result
+
+    policy_service = AigcModelPolicyService(
+        AigcModelPolicyRepository(get_app_engine()),
+        published_pairs=published,
+        priced_pairs=published,
+    )
+    try:
+        effective = {
+            category: await policy_service.effective(category, manager)
+            for category in AIGC_MODEL_CATEGORIES
+        }
+    except Exception as exc:
+        from sqlalchemy.exc import OperationalError, ProgrammingError
+
+        if not isinstance(exc, (OperationalError, ProgrammingError)):
+            raise
+        logger.warning(
+            "AIGC model-policy tables are unavailable; preserving legacy inventory",
+        )
+        return result
+    allowed = {
+        category: {
+            (item.provider_id, item.model_id) for item in policy.models
+        }
+        for category, policy in effective.items()
+        if policy.configured
+    }
+    defaults = {
+        category: AigcCategoryDefaults(
+            configured=policy.configured,
+            configured_default=(
+                {
+                    "provider_id": policy.configured_default.provider_id,
+                    "model_id": policy.configured_default.model_id,
+                }
+                if policy.configured_default
+                else None
+            ),
+            effective_default=(
+                {
+                    "provider_id": policy.effective_default.provider_id,
+                    "model_id": policy.effective_default.model_id,
+                }
+                if policy.effective_default
+                else None
+            ),
+            fallback_active=policy.fallback_active,
+            fallback_reason=list(policy.fallback_reason),
+        )
+        for category, policy in effective.items()
+    }
+    return CapabilityList(
+        capabilities=filter_capabilities(result.capabilities, allowed),
+        defaults=defaults,
+    )
 
 
 def project_workflow_capability_catalog(
