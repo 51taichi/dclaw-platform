@@ -1315,7 +1315,10 @@ export default function ChatPage() {
           }
         }, 300);
 
-        return () => clearInterval(interval);
+        return () => {
+          clearInterval(interval);
+          setIsPreparing(false);
+        };
       }
     }
     // NOTE: location.state is intentionally excluded from deps. The intent
