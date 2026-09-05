@@ -597,11 +597,29 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
                 exc_info=True,
             )
 
+    # Application composition only: core AIGC recovery has no expert dependency
+    # and never invokes a provider or starts paid generation.
+    from .aigc.job_lifecycle import AigcJobLifecycle
+    from .aigc.resource_store import AigcResourceStore
+    from .routers.aigc_studio import STUDIO_ROOT
+    from .runtime.aigc_events import AigcRecoveryWorker, AigcRuntimeNotifications
+    from .runtime.event_bus import get_runtime_event_bus
+    from .storage.engine import get_app_engine
+    from .storage.repos.aigc_execution_repo import AigcExecutionRepository
+
+    aigc_repository = AigcExecutionRepository(get_app_engine())
+    aigc_recovery = AigcRecoveryWorker(
+        AigcJobLifecycle(AigcResourceStore(STUDIO_ROOT), aigc_repository),
+        [AigcRuntimeNotifications(aigc_repository, get_runtime_event_bus())],
+    )
+    app.state.aigc_recovery_worker = aigc_recovery
+    aigc_recovery.start()
     _bg_task = asyncio.create_task(_background_startup())
 
     try:
         yield
     finally:
+        await aigc_recovery.stop()
         # Cancel background startup if still in progress
         if not _bg_task.done():
             _bg_task.cancel()

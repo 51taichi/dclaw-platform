@@ -108,3 +108,45 @@ def test_canvas_round_trip_uses_shared_models(tmp_path):
         "viewport": {"x": 0.0, "y": 0.0, "zoom": 1.0}, "thumbnail": None,
         "meta": {}, "created_at": "start", "updated_at": "start",
     }
+def test_stale_projection_write_preserves_new_canvas_edits(tmp_path):
+    from qwenpaw.app.aigc.resource_store import AigcResourceStore
+
+    first = AigcResourceStore(tmp_path)
+    second = AigcResourceStore(tmp_path)
+    first.write("canvases", "c", {"id": "c", "name": "before"})
+    observed = first.read("canvases", "c")
+    second.write("canvases", "c", {"id": "c", "name": "customer edit"})
+    assert not first.compare_and_write("canvases", "c", observed, {"id": "c", "name": "stale"})
+    assert second.read("canvases", "c")["name"] == "customer edit"
+
+
+def _increment_resource(root):
+    store = store_module().AigcResourceStore(root)
+    for _ in range(20):
+        for _retry in range(1000):
+            current = store.read("canvases", "counter")
+            if store.compare_and_write("canvases", "counter", current, {"value": current["value"] + 1}):
+                break
+        else:
+            raise AssertionError("Concurrent writer made no progress")
+
+
+def test_compare_and_write_is_atomic_across_processes(tmp_path):
+    import multiprocessing
+
+    store = store_module().AigcResourceStore(tmp_path)
+    store.write("canvases", "counter", {"value": 0})
+    context = multiprocessing.get_context("spawn")
+    workers = [context.Process(target=_increment_resource, args=(tmp_path,)) for _ in range(2)]
+    try:
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(10)
+            assert worker.exitcode == 0
+    finally:
+        for worker in workers:
+            if worker.is_alive():
+                worker.terminate()
+                worker.join(5)
+    assert store.read("canvases", "counter") == {"value": 40}

@@ -40,6 +40,9 @@ from pydantic import BaseModel, Field
 
 from ...aigc.workflow_compiler import CompiledWorkflow
 from ..aigc.workflow_execution import WorkflowExecutionBinding, validate_execution
+from ..aigc.job_lifecycle import AigcJobLifecycle, _merge_node_output
+from ..aigc.provider_execution import ProviderExecution, execution_command
+from ..aigc.provider_errors import ProviderSubmissionRejected, ProviderTaskFailed
 from ..aigc.capability_service import (
     _aigc_generation_capabilities_from_model_id,
     _normalized_capability_token,
@@ -1175,7 +1178,7 @@ def _authoritative_workflow_execution_binding(
     return binding
 
 
-async def _validate_job_submission(request: Request, body: AigcJobCreate) -> None:
+def _validate_job_resource_binding(request: Request, body: AigcJobCreate) -> None:
     canvas = _load_canvas_for_request(request, body.canvas_id)
     target_node = next((node for node in canvas.nodes if node.id == body.node_id), None)
     if target_node is None:
@@ -1204,6 +1207,10 @@ async def _validate_job_submission(request: Request, body: AigcJobCreate) -> Non
                 status_code=409,
                 detail="Workflow-bound node execution mismatch.",
             ) from exc
+
+
+async def _validate_job_submission(request: Request, body: AigcJobCreate) -> None:
+    _validate_job_resource_binding(request, body)
     await _assert_job_model_policy_allowed(request, body)
     capability = await _find_capability(
         request,
@@ -2629,6 +2636,33 @@ def _mxapi_submit_body(
     return body
 
 
+async def _mxapi_submit_request(
+    url: str, headers: dict[str, str], body: dict[str, Any], *,
+    accepted_codes: set, error_message: str,
+    execution: ProviderExecution | None = None, slot: str, adapter: str,
+) -> str:
+    """Checkpoint only after local request validation, just before external I/O."""
+    async def send() -> str:
+        timeout = httpx.Timeout(60.0, connect=15.0)
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+            try:
+                response = await client.post(url, headers=headers, json=body)
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                error = (ProviderSubmissionRejected if exc.response.status_code in {400, 401, 403, 404, 422, 429}
+                         else RuntimeError)
+                raise error(_mxapi_http_error_message(exc.response)) from exc
+        payload = response.json()
+        task_id = _mxapi_task_id(payload)
+        if payload.get("code") not in accepted_codes or not task_id:
+            error = (ProviderSubmissionRejected if not task_id and str(payload.get("code")) in {"400", "401", "403", "404", "422", "429"}
+                     else RuntimeError)
+            raise error(_clean_text(payload.get("message")) or error_message)
+        return task_id
+
+    return await execution.submit(slot, adapter, send) if execution else await send()
+
+
 async def _mxapi_submit_task(
     provider: Any,
     job: AigcJob,
@@ -2636,6 +2670,8 @@ async def _mxapi_submit_task(
     prompt: str,
     reference_images: list[str],
     adapter: str,
+    execution: ProviderExecution | None = None,
+    slot: str = "image-0",
 ) -> str:
     api_key = _mxapi_config_value(provider, "api_key", "MXAPI_KEY")
     if not api_key:
@@ -2650,27 +2686,11 @@ async def _mxapi_submit_task(
         channel=channel,
     )
     url = _mxapi_submit_url(provider, adapter)
-    timeout = httpx.Timeout(60.0, connect=15.0)
-    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-        try:
-            response = await client.post(
-                url,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                    "X-Channel": channel,
-                },
-                json=body,
-            )
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise RuntimeError(_mxapi_http_error_message(exc.response)) from exc
-    payload = response.json()
-    task_id = _mxapi_task_id(payload)
-    if payload.get("code") not in {None, 200} or not task_id:
-        message = _clean_text(payload.get("message")) or "MXAPI task submission failed."
-        raise RuntimeError(message)
-    return task_id
+    return await _mxapi_submit_request(
+        url, {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "X-Channel": channel}, body,
+        accepted_codes={None, 200}, error_message="MXAPI task submission failed.",
+        execution=execution, slot=slot, adapter=adapter,
+    )
 
 
 def _mxapi_completed_image_url(payload: dict[str, Any]) -> str | None:
@@ -2730,7 +2750,7 @@ async def _mxapi_query_task(
                     return "completed", image_url
                 raise RuntimeError("MXAPI completed without an image URL.")
             if status == "failed":
-                raise RuntimeError(_mxapi_error_message(payload))
+                raise ProviderTaskFailed(_mxapi_error_message(payload))
             return "running", None
     if last_not_found:
         return "running", None
@@ -3099,6 +3119,8 @@ async def _mxapi_seedance_submit_task(
     provider: Any,
     model: Any,
     job: AigcJob,
+    *,
+    execution: ProviderExecution | None = None,
 ) -> str:
     api_key = _mxapi_config_value(provider, "api_key", "MXAPI_KEY")
     if not api_key:
@@ -3106,29 +3128,11 @@ async def _mxapi_seedance_submit_task(
 
     body = _mxapi_seedance_submit_body(request, job)
     url = _mxapi_seedance_submit_url(provider, model, job)
-    timeout = httpx.Timeout(60.0, connect=15.0)
-    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-        try:
-            response = await client.post(
-                url,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=body,
-            )
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise RuntimeError(_mxapi_http_error_message(exc.response)) from exc
-    payload = response.json()
-    task_id = _mxapi_task_id(payload)
-    if payload.get("code") not in {None, 200, "200"} or not task_id:
-        message = (
-            _clean_text(payload.get("message"))
-            or "MXAPI Seedance task submission failed."
-        )
-        raise RuntimeError(message)
-    return task_id
+    return await _mxapi_submit_request(
+        url, {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, body,
+        accepted_codes={None, 200, "200"}, error_message="MXAPI Seedance task submission failed.",
+        execution=execution, slot="video", adapter="mxapi_seedance2",
+    )
 
 
 def _mxapi_seedance_task_query_url(provider: Any, task_id: str) -> str:
@@ -3206,7 +3210,7 @@ async def _mxapi_seedance_query_task(
             return "completed", video_url, payload
         raise RuntimeError("MXAPI Seedance completed without a video URL.")
     if status in _MXAPI_SEEDANCE_FAILED_STATUSES:
-        raise RuntimeError(_mxapi_seedance_error_message(payload))
+        raise ProviderTaskFailed(_mxapi_seedance_error_message(payload))
     return "running", None, payload
 
 
@@ -3399,34 +3403,20 @@ async def _mxapi_jimeng_submit_task(
     provider: Any,
     model: Any,
     job: AigcJob,
+    *,
+    execution: ProviderExecution | None = None,
 ) -> str:
     api_key = _mxapi_config_value(provider, "api_key", "MXAPI_KEY")
     if not api_key:
         raise RuntimeError(f"Provider '{job.provider_id}' is missing an API key.")
 
     url = f"{_mxapi_base_url(provider)}/api/v2/video/generate"
-    timeout = httpx.Timeout(60.0, connect=15.0)
-    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-        try:
-            response = await client.post(
-                url,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=_mxapi_jimeng_submit_body(request, model, job),
-            )
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise RuntimeError(_mxapi_http_error_message(exc.response)) from exc
-    payload = response.json()
-    task_id = _mxapi_task_id(payload)
-    if payload.get("code") not in {None, 0, 200, "200"} or not task_id:
-        message = _clean_text(payload.get("message")) or (
-            "MXAPI Jimeng task submission failed."
-        )
-        raise RuntimeError(message)
-    return task_id
+    body = _mxapi_jimeng_submit_body(request, model, job)
+    return await _mxapi_submit_request(
+        url, {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, body,
+        accepted_codes={None, 0, 200, "200"}, error_message="MXAPI Jimeng task submission failed.",
+        execution=execution, slot="video", adapter="mxapi_jimeng_video",
+    )
 
 
 def _mxapi_grok_model_id(model: Any, job: AigcJob) -> str:
@@ -3544,6 +3534,8 @@ async def _mxapi_grok_submit_task(
     provider: Any,
     model: Any,
     job: AigcJob,
+    *,
+    execution: ProviderExecution | None = None,
 ) -> str:
     api_key = _mxapi_config_value(provider, "api_key", "MXAPI_KEY")
     if not api_key:
@@ -3552,29 +3544,11 @@ async def _mxapi_grok_submit_task(
     body = _mxapi_grok_submit_body(request, model, job)
     channel = _mxapi_channel(provider, job.parameters)
     url = f"{_mxapi_base_url(provider)}/api/v2/video/grok"
-    timeout = httpx.Timeout(60.0, connect=15.0)
-    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-        try:
-            response = await client.post(
-                url,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                    "X-Channel": channel,
-                },
-                json=body,
-            )
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise RuntimeError(_mxapi_http_error_message(exc.response)) from exc
-    payload = response.json()
-    task_id = _mxapi_task_id(payload)
-    if payload.get("code") not in {None, 0, 200, "200"} or not task_id:
-        message = _clean_text(payload.get("message")) or (
-            "MXAPI Grok task submission failed."
-        )
-        raise RuntimeError(message)
-    return task_id
+    return await _mxapi_submit_request(
+        url, {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "X-Channel": channel}, body,
+        accepted_codes={None, 0, 200, "200"}, error_message="MXAPI Grok task submission failed.",
+        execution=execution, slot="video", adapter="mxapi_grok_video",
+    )
 
 
 def _mxapi_grok_task_query_url(provider: Any, task_id: str) -> str:
@@ -3630,7 +3604,7 @@ async def _mxapi_grok_query_task(
             return "completed", video_url, payload
         raise RuntimeError("MXAPI Grok completed without a video URL.")
     if status in _MXAPI_SEEDANCE_FAILED_STATUSES:
-        raise RuntimeError(_mxapi_grok_error_message(payload))
+        raise ProviderTaskFailed(_mxapi_grok_error_message(payload))
     return "running", None, payload
 
 
@@ -4302,6 +4276,7 @@ async def _execute_seedream_image(
     provider: Any,
     *,
     adapter: str,
+    execution: ProviderExecution | None = None,
 ) -> list[AigcAsset]:
     if job.capability not in {
         "text_to_image",
@@ -4348,6 +4323,8 @@ async def _execute_seedream_image(
         extra_body["sequential_image_generation"] = "disabled"
 
     client = _openai_client(api_key, getattr(provider, "base_url", "") or None)
+    if execution is not None:
+        execution.check_active()
     result = await client.images.generate(**request_kwargs)
     if request_kwargs.get("stream") is True:
         assets = await _collect_seedream_stream_assets(
@@ -4376,6 +4353,8 @@ async def _execute_seedream_image(
                 fill_extra_body = dict(extra_body)
                 fill_extra_body["sequential_image_generation"] = "disabled"
                 fill_extra_body.pop("sequential_image_generation_options", None)
+                if execution is not None:
+                    execution.check_active()
                 fill_result = await client.images.generate(
                     model=job.model_id,
                     prompt=base_prompt,
@@ -4444,6 +4423,7 @@ async def _execute_mxapi_gpt_image(
     provider: Any,
     *,
     adapter: str,
+    execution: ProviderExecution | None = None,
 ) -> list[AigcAsset]:
     if job.capability not in {"text_to_image", "image_to_image", "image_edit"}:
         raise RuntimeError(f"MXAPI image adapter does not support {job.capability}.")
@@ -4451,12 +4431,6 @@ async def _execute_mxapi_gpt_image(
     prompt = _image_prompt_from_job(job)
     if not prompt:
         raise RuntimeError("Prompt is required for MXAPI image generation.")
-
-    reference_images = _mxapi_reference_images(request, job)
-    if job.capability != "text_to_image" and not reference_images:
-        raise RuntimeError(
-            "MXAPI image editing requires at least one reference image URL."
-        )
 
     count = _image_count(job.parameters) or 1
 
@@ -4487,17 +4461,25 @@ async def _execute_mxapi_gpt_image(
         _write_json(_json_path("assets", asset.id), asset)
         return asset
 
-    async def submit_single() -> str:
+    async def submit_single(index: int) -> str:
+        accepted = execution.accepted(f"image-{index}", adapter) if execution else None
+        if accepted is not None:
+            return accepted
+        reference_images = _mxapi_reference_images(request, job)
+        if job.capability != "text_to_image" and not reference_images:
+            raise RuntimeError("MXAPI image editing requires at least one reference image URL.")
         return await _mxapi_submit_task(
             provider,
             job,
             prompt=prompt,
             reference_images=reference_images,
             adapter=adapter,
+            execution=execution,
+            slot=f"image-{index}",
         )
 
     if count == 1:
-        task_id = await submit_single()
+        task_id = await submit_single(0)
         return [await finish_single(0, task_id)]
 
     # MXAPI exposes a single-image task endpoint. Submit batch slots one by one so
@@ -4506,11 +4488,13 @@ async def _execute_mxapi_gpt_image(
     # not discard images that were generated successfully by the other slots.
     submitted: list[tuple[int, str]] = []
     failures: list[tuple[int, str]] = []
+    uncertain_failure = False
     for index in range(count):
         try:
-            submitted.append((index, await submit_single()))
+            submitted.append((index, await submit_single(index)))
         except Exception as exc:
             failures.append((index, _exception_message(exc)))
+            uncertain_failure |= not isinstance(exc, ProviderTaskFailed)
 
     results = await asyncio.gather(
         *(finish_single(index, task_id) for index, task_id in submitted),
@@ -4520,6 +4504,7 @@ async def _execute_mxapi_gpt_image(
     for (index, _task_id), result in zip(submitted, results, strict=True):
         if isinstance(result, Exception):
             failures.append((index, _exception_message(result)))
+            uncertain_failure |= not isinstance(result, ProviderTaskFailed)
         elif isinstance(result, BaseException):
             raise result
         else:
@@ -4530,7 +4515,8 @@ async def _execute_mxapi_gpt_image(
         details = "; ".join(
             f"Image {index + 1}: {message}" for index, message in failures
         )
-        raise RuntimeError(
+        error_type = RuntimeError if uncertain_failure else ProviderTaskFailed
+        raise error_type(
             f"MXAPI image batch failed (0/{count} succeeded). {details}",
         )
 
@@ -4561,11 +4547,14 @@ async def _execute_mxapi_seedance_video(
     model: Any,
     *,
     adapter: str,
+    execution: ProviderExecution | None = None,
 ) -> list[AigcAsset]:
     if job.capability not in {"text_to_video", "image_to_video", "reference_video"}:
         raise RuntimeError(f"MXAPI Seedance adapter does not support {job.capability}.")
 
-    task_id = await _mxapi_seedance_submit_task(request, provider, model, job)
+    task_id = execution.accepted("video", adapter) if execution else None
+    if task_id is None:
+        task_id = await _mxapi_seedance_submit_task(request, provider, model, job, execution=execution)
     video_url, payload = await _mxapi_seedance_poll_task(provider, task_id)
     content, mime_type = await _download_remote_asset(video_url)
     suffix = _suffix_for_mime_type(mime_type, fallback="mp4")
@@ -4593,11 +4582,14 @@ async def _execute_mxapi_grok_video(
     model: Any,
     *,
     adapter: str,
+    execution: ProviderExecution | None = None,
 ) -> list[AigcAsset]:
     if job.capability not in {"text_to_video", "image_to_video"}:
         raise RuntimeError(f"MXAPI Grok adapter does not support {job.capability}.")
 
-    task_id = await _mxapi_grok_submit_task(request, provider, model, job)
+    task_id = execution.accepted("video", adapter) if execution else None
+    if task_id is None:
+        task_id = await _mxapi_grok_submit_task(request, provider, model, job, execution=execution)
     video_url, payload = await _mxapi_grok_poll_task(provider, task_id)
     content, mime_type = await _download_remote_asset(video_url)
     suffix = _suffix_for_mime_type(mime_type, fallback="mp4")
@@ -4626,11 +4618,14 @@ async def _execute_mxapi_jimeng_video(
     model: Any,
     *,
     adapter: str,
+    execution: ProviderExecution | None = None,
 ) -> list[AigcAsset]:
     if job.capability not in {"text_to_video", "image_to_video"}:
         raise RuntimeError(f"MXAPI Jimeng adapter does not support {job.capability}.")
 
-    task_id = await _mxapi_jimeng_submit_task(request, provider, model, job)
+    task_id = execution.accepted("video", adapter) if execution else None
+    if task_id is None:
+        task_id = await _mxapi_jimeng_submit_task(request, provider, model, job, execution=execution)
     video_url, payload = await _mxapi_seedance_poll_task(provider, task_id)
     content, mime_type = await _download_remote_asset(video_url)
     suffix = _suffix_for_mime_type(mime_type, fallback="mp4")
@@ -4947,9 +4942,15 @@ async def _execute_text_generation(
     return [asset]
 
 
-async def _execute_job(request: Request, job: AigcJob) -> list[AigcAsset]:
+async def _execute_job(request: Request, job: AigcJob, execution: ProviderExecution | None = None) -> list[AigcAsset]:
     provider, model = await _find_provider_model(request, job.provider_id, job.model_id)
+    if execution is not None:
+        execution.check_active()
     adapter = _aigc_adapter_for(provider, model, job)
+    if execution is not None and execution.read_only and adapter not in {
+        "mxapi_seedance2", "mxapi_grok_video", "mxapi_jimeng_video", "mxapi_gpt_image", "mxapi_nano2",
+    }:
+        raise RuntimeError("PROVIDER_RECOVERY_NOT_SUPPORTED")
     if adapter == "artifact_stub":
         return [await _create_stub_artifact(request, job)]
     if job.capability == "storyboard":
@@ -4961,9 +4962,9 @@ async def _execute_job(request: Request, job: AigcJob) -> list[AigcAsset]:
     ):
         adapter = "openai_image"
     if adapter == "volcengine_seedream":
-        return await _execute_seedream_image(request, job, provider, adapter=adapter)
+        return await _execute_seedream_image(request, job, provider, adapter=adapter, execution=execution)
     if adapter in {"mxapi_gpt_image", "mxapi_nano2"}:
-        return await _execute_mxapi_gpt_image(request, job, provider, adapter=adapter)
+        return await _execute_mxapi_gpt_image(request, job, provider, adapter=adapter, execution=execution)
     if adapter == "mxapi_seedance2":
         return await _execute_mxapi_seedance_video(
             request,
@@ -4971,6 +4972,7 @@ async def _execute_job(request: Request, job: AigcJob) -> list[AigcAsset]:
             provider,
             model,
             adapter=adapter,
+            execution=execution,
         )
     if adapter == "mxapi_grok_video":
         return await _execute_mxapi_grok_video(
@@ -4979,6 +4981,7 @@ async def _execute_job(request: Request, job: AigcJob) -> list[AigcAsset]:
             provider,
             model,
             adapter=adapter,
+            execution=execution,
         )
     if adapter == "mxapi_jimeng_video":
         return await _execute_mxapi_jimeng_video(
@@ -4987,6 +4990,7 @@ async def _execute_job(request: Request, job: AigcJob) -> list[AigcAsset]:
             provider,
             model,
             adapter=adapter,
+            execution=execution,
         )
     if adapter == "openai_image":
         return await _execute_openai_image(request, job, provider, adapter=adapter)
@@ -5002,48 +5006,97 @@ async def _mark_job_running(job: AigcJob) -> AigcJob:
     if not job.logs or job.logs[-1] != "Job started.":
         job.logs.append("Job started.")
     _write_json(_json_path("jobs", job.id), job)
-    await _publish_job_event(job, "AIGC job running")
+    try:
+        await _publish_job_event(job, "AIGC job running")
+    except Exception:
+        logger.warning("AIGC running notification unavailable for job %s", job.id)
     return job
 
 
 async def _run_job_to_completion(request: Request, job_id: str) -> AigcJob:
+    from ..storage.engine import get_app_engine
+    from ..storage.repos.aigc_execution_repo import AigcExecutionRepository
+
     job = _load_job(job_id)
     if job.status in {"cancelled", "succeeded"}:
         return job
+    canvas_owner = AigcCanvasService.owner(_load_canvas(job.canvas_id))
+    owner = canvas_owner or current_user_id(request)
+    allow_ownerless = canvas_owner is None and (current_user_id(request) == "0" or is_admin_request(request))
+    lifecycle = AigcJobLifecycle(_resource_store(STUDIO_ROOT), AigcExecutionRepository(get_app_engine()))
+    recovered = lifecycle.recover_terminal(job, owner_user_id=owner)
+    if recovered is not None:
+        return recovered
+    try:
+        command = execution_command(job)
+        attempt = lifecycle.repository.begin_job_attempt(job.id, owner, command=command)
+        read_only = lifecycle.repository.has_provider_tasks(job.id)
+    except ValueError as exc:
+        if str(exc) == "JOB_ALREADY_SUCCEEDED":
+            recovered = lifecycle.recover_terminal(job, owner_user_id=owner)
+            if recovered is not None:
+                return recovered
+        if str(exc) != "JOB_RECONCILIATION_REQUIRED":
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        try:
+            attempt = lifecycle.repository.resume_job_attempt(job.id, owner, command=command)
+            read_only = True
+        except ValueError as recovery_error:
+            raise HTTPException(status_code=409, detail=str(recovery_error)) from recovery_error
+    execution = ProviderExecution(lifecycle.repository, job.id, attempt, read_only=read_only)
     if job.status != "running":
-        job = await _mark_job_running(job)
+        try:
+            job = await _mark_job_running(job)
+        except BaseException:
+            # No provider call has occurred: this attempt can safely be retried.
+            lifecycle.repository.finish_job_attempt(job.id, attempt)
+            raise
 
     try:
         from ..billing.model_publication import ModelPublicationService
         from ..storage.engine import get_app_engine
         from ..storage.repos.price_catalog_repo import PriceCatalogRepository
 
-        if not ModelPublicationService(
+        if not execution.read_only and not ModelPublicationService(
             PriceCatalogRepository(get_app_engine())
         ).is_published(job.provider_id, job.model_id):
             raise RuntimeError("Model is not published in the active price catalog")
-        outputs = await _execute_job(request, job)
-        job.outputs = outputs
-        job.status = "succeeded"
-        job.error = None
-        job.logs.append("Job succeeded.")
-        job.updated_at = _now()
-        _write_json(_json_path("jobs", job_id), job)
-        await _publish_job_event(job, "AIGC job succeeded")
-
-        canvas = _load_canvas(job.canvas_id)
-        updated_canvas = _merge_node_output(canvas, job)
-        _write_json(_json_path("canvases", canvas.id), updated_canvas)
-        return job
+        async with execution.keepalive():
+            outputs = await _execute_job(request, job, execution)
     except Exception as exc:
-        error_message = _exception_message(exc)
-        job.status = "failed"
-        job.error = error_message
-        job.updated_at = _now()
-        job.logs.append(f"Job failed: {error_message}")
-        _write_json(_json_path("jobs", job_id), job)
-        await _publish_job_event(job, "AIGC job failed")
-        return job
+        recovered = lifecycle.recover_terminal(job, owner_user_id=owner)
+        if recovered is not None:
+            return recovered
+        if lifecycle.repository.has_provider_tasks(job.id) and not isinstance(exc, ProviderTaskFailed):
+            lifecycle.repository.finish_job_attempt(job.id, attempt, uncertain=True)
+            raise HTTPException(status_code=503, detail="JOB_RESULT_RECONCILIATION_REQUIRED") from exc
+        failure = _exception_message(exc)
+    except asyncio.CancelledError:
+        lifecycle.repository.finish_job_attempt(job.id, attempt, uncertain=True)
+        raise
+    else:
+        failure = None
+    try:
+        # Provider failure and result/notification failure are different facts.
+        # Never enter the provider-failure branch after generation succeeded.
+        job = (lifecycle.record_failure(job, failure, owner_user_id=owner, allow_ownerless=allow_ownerless,
+                                       attempt_token=attempt)
+               if failure is not None else lifecycle.record_success(
+                   job, outputs, owner_user_id=owner, allow_ownerless=allow_ownerless, attempt_token=attempt))
+    except Exception as exc:
+        recovered = lifecycle.recover_terminal(job, owner_user_id=owner)
+        if recovered is not None:
+            return recovered
+        try:
+            lifecycle.repository.finish_job_attempt(job.id, attempt, uncertain=True)
+        except Exception:
+            logger.warning("AIGC attempt still pending reconciliation for job %s", job.id)
+        raise HTTPException(status_code=503, detail="JOB_RESULT_RECONCILIATION_REQUIRED") from exc
+    try:
+        await _publish_job_event(job, f"AIGC job {job.status}")
+    except Exception:
+        logger.warning("AIGC UI notification pending for job %s", job.id)
+    return job
 
 
 def _start_background_job_run(request: Request, job_id: str) -> None:
@@ -5059,54 +5112,14 @@ def _start_background_job_run(request: Request, job_id: str) -> None:
             _JOB_RUN_TASKS.pop(job_id, None)
         try:
             finished_task.result()
+        except asyncio.CancelledError:
+            pass
         except Exception:
             logger.exception("Background AIGC job runner crashed for job %s", job_id)
 
     task.add_done_callback(cleanup)
 
 
-def _merge_node_output(canvas: Canvas, job: AigcJob) -> Canvas:
-    output_payload = [asset.model_dump() for asset in job.outputs]
-    nodes = []
-    for node in canvas.nodes:
-        if node.id != job.node_id:
-            nodes.append(node)
-            continue
-        data = {
-            **node.data,
-            "job_id": job.id,
-            "job_status": job.status,
-            "outputs": output_payload,
-        }
-        if node.type == "image_generate" and job.status == "succeeded":
-            data["imageState"] = "generated"
-            data["imageProgress"] = None
-            data["generatedAspectRatio"] = job.parameters.get("aspectRatio")
-        if node.type == "prompt" and job.status == "succeeded":
-            generated_text = next(
-                (
-                    str(asset.meta.get("text") or "").strip()
-                    for asset in job.outputs
-                    if str(asset.meta.get("text") or "").strip()
-                ),
-                "",
-            )
-            data["textState"] = "generated"
-            data["showTryOptions"] = False
-            if generated_text:
-                data["text"] = generated_text
-        if node.type == "video_generate" and job.status == "succeeded":
-            data["videoState"] = "generated"
-            data["videoProgress"] = None
-            data["generatedAspectRatio"] = job.parameters.get(
-                "aspectRatio",
-                job.parameters.get("aspect_ratio"),
-            )
-        if node.type == "audio_generate" and job.status == "succeeded":
-            data["audioState"] = "generated"
-            data["audioProgress"] = None
-        nodes.append(node.model_copy(update={"data": data}))
-    return canvas.model_copy(update={"nodes": nodes, "updated_at": _now()})
 
 
 
@@ -5397,13 +5410,17 @@ async def get_job(request: Request, job_id: str) -> AigcJob:
 
 @router.post("/jobs/{job_id}/cancel", response_model=AigcJob)
 async def cancel_job(request: Request, job_id: str) -> AigcJob:
+    from ..storage.engine import get_app_engine
+    from ..storage.repos.aigc_execution_repo import AigcExecutionRepository
+
     job = _load_job_for_request(request, job_id)
     if job.status in {"succeeded", "failed", "cancelled"}:
         return job
-    job.status = "cancelled"
-    job.updated_at = _now()
-    job.logs.append("Job cancelled by user.")
-    _write_json(_json_path("jobs", job_id), job)
+    canvas_owner = AigcCanvasService.owner(_load_canvas_for_request(request, job.canvas_id))
+    job = AigcJobLifecycle(_resource_store(STUDIO_ROOT), AigcExecutionRepository(get_app_engine())).cancel(
+        job, owner_user_id=canvas_owner or current_user_id(request),
+        allow_ownerless=canvas_owner is None and (current_user_id(request) == "0" or is_admin_request(request)),
+    )
     await _publish_job_event(job, "AIGC job cancelled")
     return job
 
@@ -5428,15 +5445,30 @@ async def run_job(
     job_id: str,
     background: bool = False,
 ) -> AigcJob:
+    from ..storage.engine import get_app_engine
+    from ..storage.repos.aigc_execution_repo import AigcExecutionRepository
+
     job = _load_job_for_request(request, job_id)
     if job.status == "cancelled":
         return job
     if job.status == "succeeded":
         return job
 
-    # Jobs queued before a migration/policy change still need the current core
-    # contract before either foreground or background provider execution starts.
-    await _validate_job_submission(request, AigcJobCreate(**job.model_dump()))
+    repository = AigcExecutionRepository(get_app_engine())
+    owner = AigcCanvasService.owner(_load_canvas_for_request(request, job.canvas_id)) or current_user_id(request)
+    recovered = AigcJobLifecycle(_resource_store(STUDIO_ROOT), repository).recover_terminal(job, owner_user_id=owner)
+    if recovered is not None:
+        return recovered
+    try:
+        query_only = repository.can_query_provider_tasks(job.id, owner, execution_command(job))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    body = AigcJobCreate(**job.model_dump())
+    if query_only:
+        _validate_job_resource_binding(request, body)
+    else:
+        # Queued/new submissions still require the current policy and catalog.
+        await _validate_job_submission(request, body)
 
     if background:
         if job.status != "running":

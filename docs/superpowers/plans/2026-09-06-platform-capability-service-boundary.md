@@ -166,14 +166,14 @@ def test_core_source_has_no_platform_service_call():
 
 **Interfaces:** `AigcDomainEvent` 字段 event_id、schema_version=1、owner_user_id、resource_id、resource_version、event_type、operation_id、payload；event_type 闭集 job.succeeded/job.failed/asset.ready/resource.changed，不含专家身份。新增 `aigc_domain_events`、`aigc_event_deliveries`，后者按 event_id/consumer_id 唯一。`AigcJobLifecycle(store, repository)` 提供 `record_success(job: AigcJob, outputs: list[AigcAsset]) -> AigcJob`、`recover_projections() -> int`。
 
-- [ ] 在原 `_run_job_to_completion` 测试夹具中 monkeypatch `_execute_job` 返回已保存的测试素材、`_publish_job_event` 抛异常，断言最终 Job 为 succeeded；先运行看到失败，不能先改异常处理。
-- [ ] 记录第二个 RED：成功快照持久化后模拟进程退出，重建 Service 调用 recover_projections，不调用供应商，恢复 Job 和画布输出。
-- [ ] 实现成功结果快照、操作状态和领域事件在同一 SQL 事务记录；既有 Job/Canvas JSON 是可恢复投影。已有未迁入 Job 仍可读；不全量迁移历史 Job，也不新增另一份供模型直接修改的权威状态。
-- [ ] 缩小供应商执行的异常区间。投影/通知错误记录 delivery/projection_pending，不能把成功改失败。若供应商结果尚未持久化即崩溃，状态标记需对账，不盲目重新调用；复用现有 provider job ID 查询能力，不承诺外部 API 恰好执行一次。
-- [ ] 核心消费回执使用数据库唯一键和有限租约，进程重启可重领。最大单轮处理 100 条，失败退避 5/15/60 秒后封顶 300 秒，取消信号及时退出；不要用无限同步循环阻塞客户请求。
-- [ ] 原 RuntimeEventBus 用作 UI 通知通道，不作唯一持久记录。事件 payload 保留原 UI 所需字段，禁止泄露凭据及本地私有文件路径。
-- [ ] 运行 `.venv/bin/python -m pytest tests/unit/app/aigc/test_job_lifecycle.py tests/unit/routers/test_aigc_studio.py tests/unit/app/test_runtime_events_router.py -q`。
-- [ ] 提交 `fix(aigc): preserve successful results when event delivery fails`。
+- [x] 在原 `_run_job_to_completion` 测试夹具中 monkeypatch `_execute_job` 返回已保存的测试素材、`_publish_job_event` 抛异常，断言最终 Job 为 succeeded；先运行看到失败，不能先改异常处理。
+- [x] 记录第二个 RED：成功快照持久化后模拟进程退出，重建 Service 调用 recover_projections，不调用供应商，恢复 Job 和画布输出。
+- [x] 实现成功结果快照、操作状态和领域事件在同一 SQL 事务记录；既有 Job/Canvas JSON 是可恢复投影。已有未迁入 Job 仍可读；不全量迁移历史 Job，也不新增另一份供模型直接修改的权威状态。
+- [x] 缩小供应商执行的异常区间。投影/通知错误记录 delivery/projection_pending，不能把成功改失败。若供应商结果尚未持久化即崩溃，状态标记需对账，不盲目重新调用；复用现有 provider job ID 查询能力，不承诺外部 API 恰好执行一次。
+- [x] 核心消费回执使用数据库唯一键和有限租约，进程重启可重领。最大单轮处理 100 条，失败退避 5/15/60 秒后封顶 300 秒，取消信号及时退出；不要用无限同步循环阻塞客户请求。
+- [x] 原 RuntimeEventBus 用作 UI 通知通道，不作唯一持久记录。事件 payload 保留原 UI 所需字段，禁止泄露凭据及本地私有文件路径。
+- [x] 运行 `.venv/bin/python -m pytest tests/unit/app/aigc/test_job_lifecycle.py tests/unit/routers/test_aigc_studio.py tests/unit/app/test_runtime_events_router.py -q`。
+- [x] 提交 `fix(aigc): preserve successful results when event delivery fails`。
 
 ## Task 6：提取开放层 Service 与通用事件适配
 
@@ -234,4 +234,4 @@ git diff --check
 - 核心资源、专家任务、Agent 状态的唯一写入者保持分开；不把普通 Job 成功编译为审核通过。
 - plan 未要求所有未来模块使用画布、卡片或审核，也没有提前构建 MCP/RPA 接口。
 - 计划中的新增类型和方法定义在对应任务 Interfaces；旧接口仅移动和重导出，必须保留现有字段及版本。
-- 已按实际测试与提交更新 Task 1–4；Task 5–7 仍未完成，不把共享层与约束迁移视作完整解耦或线上验收。
+- 已按实际测试与提交更新 Task 1–5；Task 6–7 仍未完成，不把共享层与约束迁移视作完整解耦或线上验收。

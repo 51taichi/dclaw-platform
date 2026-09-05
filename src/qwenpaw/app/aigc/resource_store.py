@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from contextlib import contextmanager
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import tempfile
+import time
 from threading import RLock
 from typing import Any
 
@@ -27,6 +30,48 @@ class AigcResourceStore:
         self.root = Path(root).resolve()
         self._cache: dict[str, tuple[tuple[int, int, int], dict[str, Any]]] = {}
         self._lock = RLock()
+        self._held_mutations: set[str] = set()
+
+    @contextmanager
+    def _mutation_lock(self, path: Path):
+        """Coordinate JSON replacement and compare/write across worker processes."""
+        key = str(path)
+        with self._lock:
+            if key in self._held_mutations:
+                yield
+                return
+            lock_path = self._contained(
+                self.root / ".locks" / (hashlib.sha256(key.encode()).hexdigest() + ".lock"),
+            )
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            with lock_path.open("a+b") as handle:
+                if os.name == "nt":
+                    import msvcrt
+                    if handle.seek(0, os.SEEK_END) == 0:
+                        handle.write(b"\0")
+                        handle.flush()
+                    handle.seek(0)
+                    acquire = lambda: msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    release = lambda: msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    acquire = lambda: fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    release = lambda: fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                deadline = time.monotonic() + 5
+                while True:
+                    try:
+                        acquire()
+                        break
+                    except (BlockingIOError, OSError):
+                        if time.monotonic() >= deadline:
+                            raise AigcResourceError("RESOURCE_BUSY", path.name)
+                        time.sleep(0.01)
+                self._held_mutations.add(key)
+                try:
+                    yield
+                finally:
+                    self._held_mutations.remove(key)
+                    release()
 
     @staticmethod
     def safe_id(value: str) -> str:
@@ -77,12 +122,20 @@ class AigcResourceStore:
     def write(self, kind: str, resource_id: str, value: dict[str, Any]) -> None:
         self.write_path(self.path(kind, resource_id), value)
 
+    def compare_and_write(self, kind: str, resource_id: str,
+                          expected: dict[str, Any], value: dict[str, Any]) -> bool:
+        with self._mutation_lock(self.path(kind, resource_id)):
+            if self.read(kind, resource_id) != expected:
+                return False
+            self.write(kind, resource_id, value)
+            return True
+
     def write_path(self, path: Path, value: dict[str, Any]) -> None:
         path = self._contained(Path(path))
         if not isinstance(value, dict):
             raise AigcResourceError("CORRUPT_RESOURCE", path.name)
         encoded = json.dumps(value, ensure_ascii=False, indent=2)
-        with self._lock:
+        with self._mutation_lock(path):
             path.parent.mkdir(parents=True, exist_ok=True)
             temporary: Path | None = None
             try:
@@ -105,7 +158,7 @@ class AigcResourceStore:
 
     def delete_path(self, path: Path) -> None:
         path = self._contained(Path(path))
-        with self._lock:
+        with self._mutation_lock(path):
             try:
                 path.unlink()
             except FileNotFoundError as exc:

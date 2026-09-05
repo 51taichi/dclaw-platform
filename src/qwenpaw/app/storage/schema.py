@@ -11,6 +11,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    Float,
     Index,
     Integer,
     MetaData,
@@ -29,6 +30,75 @@ from sqlalchemy import (
 from sqlalchemy.engine import Engine
 
 metadata = MetaData()
+
+aigc_job_attempts = Table(
+    "aigc_job_attempts", metadata,
+    Column("job_id", String, primary_key=True),
+    Column("owner_user_id", String, nullable=False),
+    Column("attempt_token", String, nullable=False),
+    Column("phase", String, nullable=False),
+    Column("command_digest", String, nullable=True),
+    Column("lease_until", Float, nullable=False, default=0),
+    CheckConstraint("phase IN ('running', 'finished', 'reconciliation_required', 'cancelled')", name="ck_aigc_attempt_phase"),
+)
+
+aigc_provider_tasks = Table(
+    "aigc_provider_tasks", metadata,
+    Column("job_id", String, primary_key=True),
+    Column("slot", String, primary_key=True),
+    Column("adapter", String, nullable=False),
+    Column("remote_task_id", String, nullable=True),
+    Column("rejection_error", Text, nullable=True),
+)
+
+aigc_job_results = Table(
+    "aigc_job_results", metadata,
+    Column("job_id", String, primary_key=True),
+    Column("owner_user_id", String, nullable=False),
+    Column("canvas_id", String, nullable=False),
+    Column("node_id", String, nullable=False),
+    Column("resource_version", Integer, nullable=False),
+    Column("operation_id", String, nullable=False),
+    Column("snapshot", Text, nullable=False),
+    Column("command_digest", String, nullable=False),
+    Column("projection_status", String, nullable=False),
+    Column("allow_ownerless", Boolean, nullable=False, default=False),
+    Column("projection_attempted_at", Float, nullable=False, default=0),
+    CheckConstraint("projection_status IN ('pending', 'applied')", name="ck_aigc_job_projection"),
+)
+
+aigc_node_results = Table(
+    "aigc_node_results", metadata,
+    Column("canvas_id", String, primary_key=True),
+    Column("node_id", String, primary_key=True),
+    Column("job_id", String, nullable=False),
+    Column("job_created_at", Float, nullable=False),
+)
+
+aigc_domain_events = Table(
+    "aigc_domain_events", metadata,
+    Column("event_id", String, primary_key=True),
+    Column("owner_user_id", String, nullable=False),
+    Column("resource_id", String, nullable=False),
+    Column("resource_version", Integer, nullable=False),
+    Column("event_type", String, nullable=False),
+    Column("event", Text, nullable=False),
+    Column("created_at", Float, nullable=False),
+)
+Index("ix_aigc_domain_event_order", aigc_domain_events.c.created_at, aigc_domain_events.c.event_id)
+
+aigc_event_deliveries = Table(
+    "aigc_event_deliveries", metadata,
+    Column("event_id", String, primary_key=True),
+    Column("consumer_id", String, primary_key=True),
+    Column("status", String, nullable=False),
+    Column("attempts", Integer, nullable=False, default=0),
+    Column("lease_token", String),
+    Column("lease_until", Float, nullable=False, default=0),
+    Column("next_attempt", Float, nullable=False, default=0),
+    Column("error_code", String),
+    CheckConstraint("status IN ('pending', 'inflight', 'delivered', 'blocked')", name="ck_aigc_delivery_status"),
+)
 
 aigc_operation_journal = Table(
     "aigc_operation_journal", metadata,

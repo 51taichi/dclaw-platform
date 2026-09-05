@@ -2389,7 +2389,7 @@ async def test_run_job_background_mode_returns_before_provider_finishes(
     provider_started = asyncio.Event()
     provider_release = asyncio.Event()
 
-    async def slow_execute_job(request, job):
+    async def slow_execute_job(request, job, execution=None):
         provider_started.set()
         await provider_release.wait()
         return [
@@ -4945,7 +4945,7 @@ async def test_run_job_records_exception_class_when_message_is_empty(
     app = make_mxapi_app(tmp_path)
     transport = ASGITransport(app=app)
 
-    async def fail_with_empty_message(_request, _job):
+    async def fail_with_empty_message(_request, _job, _execution=None):
         raise httpx.ReadTimeout("")
 
     monkeypatch.setattr(aigc_studio, "_execute_job", fail_with_empty_message)
