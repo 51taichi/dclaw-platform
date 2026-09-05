@@ -151,6 +151,50 @@ token_usage_logs = Table(
     Column("created_at", DateTime(timezone=True), server_default=func.now()),
 )
 
+aigc_model_policies = Table(
+    "aigc_model_policies",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("category", String, nullable=False, unique=True),
+    Column("configured", Boolean, nullable=False, server_default=true()),
+    Column("version", Integer, nullable=False, server_default="1"),
+    Column("updated_by", Integer),
+    Column("updated_at", DateTime(timezone=True), server_default=func.now()),
+    CheckConstraint(
+        "category IN ('text', 'image', 'video', 'audio')",
+        name="ck_aigc_model_policies_category",
+    ),
+)
+
+aigc_model_policy_items = Table(
+    "aigc_model_policy_items",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column(
+        "policy_id",
+        Integer,
+        ForeignKey("aigc_model_policies.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("provider_id", String, nullable=False),
+    Column("model_id", String, nullable=False),
+    Column("sort_order", Integer, nullable=False),
+    Column("is_default", Boolean, nullable=False, server_default=false()),
+)
+Index(
+    "uq_aigc_model_policy_items_model",
+    aigc_model_policy_items.c.policy_id,
+    aigc_model_policy_items.c.provider_id,
+    aigc_model_policy_items.c.model_id,
+    unique=True,
+)
+Index(
+    "uq_aigc_model_policy_items_order",
+    aigc_model_policy_items.c.policy_id,
+    aigc_model_policy_items.c.sort_order,
+    unique=True,
+)
+
 expert_team_templates = Table(
     "expert_team_templates",
     metadata,

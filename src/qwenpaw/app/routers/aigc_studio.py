@@ -36,8 +36,10 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
+from ...aigc.workflow_compiler import CompiledWorkflow
+from ...aigc.workflow_contract import workflow_node_registry
 from ...aigc.visual_dna import (
     CompiledVisualDna,
     VisualDnaCompileRequest,
@@ -200,8 +202,53 @@ class AigcCapabilityInfo(BaseModel):
     parameter_schema: dict[str, Any] = Field(default_factory=dict)
 
 
+class AigcCategoryDefaults(BaseModel):
+    configured: bool = False
+    configured_default: dict[str, str] | None = None
+    effective_default: dict[str, str] | None = None
+    fallback_active: bool = False
+    fallback_reason: list[str] = Field(default_factory=list)
+
+
 class CapabilityList(BaseModel):
     capabilities: list[AigcCapabilityInfo]
+    defaults: dict[str, AigcCategoryDefaults] = Field(default_factory=dict)
+
+
+class WorkflowAvailableModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider_id: str
+    provider_name: str
+    model_id: str
+    model_name: str
+    capability: str
+    source: Literal["model_registry", "plugin_tool"]
+    parameter_schema: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkflowNodeCapability(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: str
+    title: str
+    provisioning: Literal["AUTO_PROVISIONABLE", "MANUAL_ONLY", "UNAVAILABLE"]
+    provisioning_reason: str | None = None
+    capabilities: tuple[str, ...]
+    input_keys: tuple[str, ...]
+    parameter_keys: tuple[str, ...]
+    input_slots: dict[str, tuple[str, ...]]
+    output_type: str
+    control_id: str | None
+    customer_actions: tuple[str, ...]
+
+
+class WorkflowCapabilityCatalog(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    nodes: tuple[WorkflowNodeCapability, ...]
+    available_models: tuple[WorkflowAvailableModel, ...]
 
 
 class AigcJobCreate(BaseModel):
@@ -996,8 +1043,11 @@ def provision_super_expert_aigc_workspace(
         raise ValueError("AIGC workspace ownership is incomplete")
     if operation_id != "aigc.text_to_video.create":
         raise ValueError("AIGC operation cannot be provisioned")
-    canvas_id = str(uuid.uuid4())
-    node_id = str(uuid.uuid4())
+    # Prefix physical identifiers so every generated value remains valid for
+    # the shared super-expert domain-id contract even when a UUID starts with
+    # a digit.
+    canvas_id = f"canvas-{uuid.uuid4()}"
+    node_id = f"video-{uuid.uuid4()}"
     now = _now()
     node = CanvasNode(
         id=node_id,
@@ -1037,6 +1087,90 @@ def provision_super_expert_aigc_workspace(
     return {"canvas_id": canvas_id, "node_id": node_id}
 
 
+def provision_super_expert_aigc_workflow(
+    *,
+    owner_user_id: str,
+    material_task_id: str,
+    compiled: CompiledWorkflow,
+) -> Canvas:
+    """Persist one fully validated, DClaw-owned workflow canvas."""
+    if not str(owner_user_id).strip() or not str(material_task_id).strip():
+        raise ValueError("AIGC workspace ownership is incomplete")
+    canvas_id = f"canvas-{uuid.uuid4()}"
+    now = _now()
+    canvas = Canvas(
+        id=canvas_id,
+        name=compiled.title,
+        nodes=[
+            CanvasNode(
+                id=node.physical_node_id,
+                type=node.kind,
+                position=node.position,
+                data=node.data,
+            )
+            for node in compiled.nodes
+        ],
+        edges=[
+            CanvasEdge(
+                id=edge.edge_id,
+                source=edge.source,
+                target=edge.target,
+                data={"role": edge.target_slot},
+            )
+            for edge in compiled.edges
+        ],
+        viewport=CanvasViewport(**compiled.viewport),
+        thumbnail=None,
+        meta={
+            "version": 2,
+            "owner_user_id": str(owner_user_id),
+            "super_expert_material_task_id": str(material_task_id),
+            "workflow_id": compiled.workflow_id,
+            "execution_mode": "PREBUILT_WORKFLOW",
+        },
+        created_at=now,
+        updated_at=now,
+    )
+    _write_json(_json_path("canvases", canvas_id), canvas)
+    return canvas
+
+
+def provision_blank_super_expert_aigc_workspace(
+    *,
+    owner_user_id: str,
+    material_task_id: str,
+    workflow_id: str,
+    title: str,
+) -> Canvas:
+    """Create the only valid starting point for an explicit manual fallback."""
+    if not all(
+        str(value).strip()
+        for value in (owner_user_id, material_task_id, workflow_id, title)
+    ):
+        raise ValueError("AIGC manual workspace binding is incomplete")
+    canvas_id = f"canvas-{uuid.uuid4()}"
+    now = _now()
+    canvas = Canvas(
+        id=canvas_id,
+        name=str(title),
+        nodes=[],
+        edges=[],
+        viewport=CanvasViewport(),
+        thumbnail=None,
+        meta={
+            "version": 2,
+            "owner_user_id": str(owner_user_id),
+            "super_expert_material_task_id": str(material_task_id),
+            "workflow_id": str(workflow_id),
+            "execution_mode": "MANUAL_BUILD",
+        },
+        created_at=now,
+        updated_at=now,
+    )
+    _write_json(_json_path("canvases", canvas_id), canvas)
+    return canvas
+
+
 def discard_super_expert_aigc_workspace(
     *,
     owner_user_id: str,
@@ -1054,6 +1188,47 @@ def discard_super_expert_aigc_workspace(
     ):
         raise ValueError("AIGC workspace cleanup binding mismatch")
     _delete_json(_json_path("canvases", canvas_id))
+
+
+def resolve_owned_asset_for_workflow(
+    owner_user_id: str,
+    asset_id: str,
+) -> dict[str, Any] | None:
+    """Resolve only an existing asset explicitly owned by the target user."""
+    if not str(owner_user_id).strip() or not str(asset_id).strip():
+        return None
+    try:
+        asset = AigcAsset(**_read_json(_json_path("assets", asset_id)))
+    except HTTPException:
+        return None
+    owner = asset.meta.get("owner_user_id") or asset.meta.get("user_id")
+    if str(owner or "").strip() != str(owner_user_id).strip():
+        return None
+    return asset.model_dump(mode="json")
+
+
+def load_super_expert_aigc_workflow_context(
+    *,
+    canvas_id: str,
+    material_task_id: str,
+) -> tuple[Canvas | None, list[AigcJob]]:
+    """Load only the canvas and jobs bound to one authoritative material task."""
+    try:
+        canvas = _load_canvas(canvas_id)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            return None, []
+        raise
+    if (
+        str(canvas.meta.get("super_expert_material_task_id") or "")
+        != str(material_task_id)
+    ):
+        return None, []
+    jobs = [
+        AigcJob(**_read_json(path))
+        for path in sorted(_dir("jobs").glob("*.json"))
+    ]
+    return canvas, [job for job in jobs if job.canvas_id == canvas_id]
 
 
 def _request_can_access_asset(request: Request, asset: AigcAsset) -> bool:
@@ -1143,13 +1318,46 @@ async def _find_provider_model(
     return None, None
 
 
+def _authoritative_workflow_execution_binding(
+    canvas_id: str,
+    node_id: str,
+) -> tuple[str, str, str] | None:
+    from .super_expert_platform import get_super_expert_platform_service
+
+    return get_super_expert_platform_service().workflow_node_execution_binding(
+        canvas_id=canvas_id,
+        node_id=node_id,
+    )
+
+
 async def _validate_job_submission(request: Request, body: AigcJobCreate) -> None:
     canvas = _load_canvas_for_request(request, body.canvas_id)
-    if not any(node.id == body.node_id for node in canvas.nodes):
+    target_node = next((node for node in canvas.nodes if node.id == body.node_id), None)
+    if target_node is None:
         raise HTTPException(
             status_code=400,
             detail=f"Node '{body.node_id}' not found in canvas '{body.canvas_id}'.",
         )
+    authoritative = _authoritative_workflow_execution_binding(
+        body.canvas_id,
+        body.node_id,
+    )
+    workflow_marker = str(
+        target_node.data.get("workflowLogicalNodeId") or ""
+    ).strip()
+    if authoritative is not None or workflow_marker:
+        expected = authoritative or (
+            str(target_node.data.get("providerId") or "").strip(),
+            str(target_node.data.get("modelId") or "").strip(),
+            str(target_node.data.get("modelCapability") or "").strip(),
+        )
+        actual = (body.provider_id, body.model_id, body.capability)
+        if not all(expected) or actual != expected:
+            raise HTTPException(
+                status_code=409,
+                detail="Workflow-bound node execution mismatch.",
+            )
+    await _assert_job_model_policy_allowed(request, body)
     capability = await _find_capability(
         request,
         body.provider_id,
@@ -1163,6 +1371,61 @@ async def _validate_job_submission(request: Request, body: AigcJobCreate) -> Non
                 "Requested capability is not available for provider "
                 f"'{body.provider_id}' model '{body.model_id}'."
             ),
+        )
+
+
+async def _assert_job_model_policy_allowed(
+    request: Request,
+    body: AigcJobCreate,
+) -> None:
+    if body.provider_id.startswith("plugin:"):
+        return
+    from sqlalchemy.exc import OperationalError, ProgrammingError
+
+    from ..aigc.model_policy import (
+        AigcModelPolicyService,
+        category_for_capability,
+        policy_enforcement_enabled,
+    )
+    from ..billing.model_publication import ModelPublicationService
+    from ..storage.engine import get_app_engine
+    from ..storage.repos.aigc_model_policy_repo import (
+        AigcModelPolicyRepository,
+    )
+    from ..storage.repos.price_catalog_repo import PriceCatalogRepository
+
+    if not policy_enforcement_enabled():
+        return
+    engine = get_app_engine()
+    repository = AigcModelPolicyRepository(engine)
+    category = category_for_capability(body.capability)
+    try:
+        policy = repository.get(category)
+    except (OperationalError, ProgrammingError):
+        return
+    if not policy or not policy.get("configured", True):
+        return
+    published = ModelPublicationService(
+        PriceCatalogRepository(engine)
+    ).effective_pairs() or set()
+    manager = getattr(request.app.state, "provider_manager", None)
+    effective = await AigcModelPolicyService(
+        repository,
+        published_pairs=published,
+        priced_pairs=published,
+    ).effective(category, manager)
+    allowed = {
+        (item.provider_id, item.model_id) for item in effective.models
+    }
+    if (body.provider_id, body.model_id) not in allowed:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "aigc_model_not_allowed",
+                "category": category,
+                "provider_id": body.provider_id,
+                "model_id": body.model_id,
+            },
         )
 
 
@@ -5355,11 +5618,14 @@ def _provider_configured_for_aigc(provider: Any) -> bool:
     return bool(str(getattr(provider, "api_key", "") or "").strip())
 
 
-@router.get("/capabilities", response_model=CapabilityList)
-async def list_capabilities(request: Request) -> CapabilityList:
-    """List AIGC-capable provider/model/tool entries."""
+async def build_capability_list(manager: Any | None) -> CapabilityList:
+    """Build the AIGC inventory from an already resolved provider manager.
+
+    This keeps the inventory reusable by non-HTTP callers such as sealed
+    workspace runtimes without making them impersonate a Starlette request.
+    """
     capabilities: list[AigcCapabilityInfo] = []
-    manager = getattr(request.app.state, "provider_manager", None)
+    published: set[tuple[str, str]] | None = None
     if manager is not None:
         from ..billing.model_publication import ModelPublicationService
         from ..storage.engine import get_app_engine
@@ -5429,7 +5695,138 @@ async def list_capabilities(request: Request) -> CapabilityList:
     deduped = {
         (c.provider_id, c.model_id, c.capability, c.source): c for c in capabilities
     }
-    return CapabilityList(capabilities=list(deduped.values()))
+    result = CapabilityList(capabilities=list(deduped.values()))
+    if manager is None or published is None:
+        return result
+
+    from ..aigc.model_policy import (
+        AIGC_MODEL_CATEGORIES,
+        AigcModelPolicyService,
+        filter_capabilities,
+        policy_enforcement_enabled,
+    )
+    from ..storage.repos.aigc_model_policy_repo import (
+        AigcModelPolicyRepository,
+    )
+
+    if not policy_enforcement_enabled():
+        return result
+
+    policy_service = AigcModelPolicyService(
+        AigcModelPolicyRepository(get_app_engine()),
+        published_pairs=published,
+        priced_pairs=published,
+    )
+    try:
+        effective = {
+            category: await policy_service.effective(category, manager)
+            for category in AIGC_MODEL_CATEGORIES
+        }
+    except Exception as exc:
+        from sqlalchemy.exc import OperationalError, ProgrammingError
+
+        if not isinstance(exc, (OperationalError, ProgrammingError)):
+            raise
+        logger.warning(
+            "AIGC model-policy tables are unavailable; preserving legacy inventory",
+        )
+        return result
+    allowed = {
+        category: {
+            (item.provider_id, item.model_id) for item in policy.models
+        }
+        for category, policy in effective.items()
+        if policy.configured
+    }
+    defaults = {
+        category: AigcCategoryDefaults(
+            configured=policy.configured,
+            configured_default=(
+                {
+                    "provider_id": policy.configured_default.provider_id,
+                    "model_id": policy.configured_default.model_id,
+                }
+                if policy.configured_default
+                else None
+            ),
+            effective_default=(
+                {
+                    "provider_id": policy.effective_default.provider_id,
+                    "model_id": policy.effective_default.model_id,
+                }
+                if policy.effective_default
+                else None
+            ),
+            fallback_active=policy.fallback_active,
+            fallback_reason=list(policy.fallback_reason),
+        )
+        for category, policy in effective.items()
+    }
+    return CapabilityList(
+        capabilities=filter_capabilities(result.capabilities, allowed),
+        defaults=defaults,
+    )
+
+
+def project_workflow_capability_catalog(
+    inventory: CapabilityList,
+) -> WorkflowCapabilityCatalog:
+    """Project the live priced model inventory onto the closed node registry."""
+    registry = workflow_node_registry()
+    models = tuple(
+        WorkflowAvailableModel(**item.model_dump(mode="python"))
+        for item in sorted(
+            inventory.capabilities,
+            key=lambda value: (
+                value.provider_id,
+                value.model_id,
+                value.capability,
+                value.source,
+            ),
+        )
+    )
+    nodes = tuple(
+        WorkflowNodeCapability(
+            kind=registration.kind,
+            title=registration.title,
+            provisioning=registration.provisioning,
+            provisioning_reason=registration.provisioning_reason,
+            capabilities=registration.capabilities,
+            input_keys=tuple(sorted(registration.input_keys)),
+            parameter_keys=tuple(sorted(registration.parameter_keys)),
+            input_slots={
+                key: tuple(values)
+                for key, values in sorted(registration.input_slots.items())
+            },
+            output_type=registration.output_type,
+            control_id=registration.control_id,
+            customer_actions=registration.customer_actions,
+        )
+        for registration in registry.values()
+    )
+    return WorkflowCapabilityCatalog(nodes=nodes, available_models=models)
+
+
+async def build_workflow_capability_catalog(
+    manager: Any | None,
+) -> WorkflowCapabilityCatalog:
+    """Return workflow nodes plus only currently published/priced models."""
+    return project_workflow_capability_catalog(await build_capability_list(manager))
+
+
+@router.get("/capabilities", response_model=CapabilityList)
+async def list_capabilities(request: Request) -> CapabilityList:
+    """List AIGC-capable provider/model/tool entries."""
+    return await build_capability_list(
+        getattr(request.app.state, "provider_manager", None),
+    )
+
+
+@router.get("/workflow-capabilities", response_model=WorkflowCapabilityCatalog)
+async def list_workflow_capabilities(request: Request) -> WorkflowCapabilityCatalog:
+    return await build_workflow_capability_catalog(
+        getattr(request.app.state, "provider_manager", None),
+    )
 
 
 @router.get("/visual-dna/dimensions", response_model=VisualDnaDimensionList)
@@ -5835,6 +6232,8 @@ async def export_long_image(
         full_asset,
         slice_assets,
     )
+    job.outputs = [full_asset, *slice_assets]
+    _write_json(_json_path("jobs", job.id), job)
     _write_json(_json_path("canvases", updated_canvas.id), updated_canvas)
     return LongImageExportResult(
         full_asset=full_asset,
@@ -5895,13 +6294,14 @@ async def resolve_owned_asset_for_agent_review(
     asset_id: str,
     *,
     canvas_id: str,
-    node_id: str,
+    node_ids: set[str],
+    asset_kinds: set[str] | None = None,
 ) -> dict[str, Any]:
     """Resolve one owner-authorized generated asset into a model content block."""
     asset = _load_asset_for_request(request, asset_id)
     if (
         str(asset.meta.get("canvas_id") or "") != canvas_id
-        or str(asset.meta.get("node_id") or "") != node_id
+        or str(asset.meta.get("node_id") or "") not in node_ids
     ):
         raise HTTPException(status_code=403, detail="Asset binding mismatch.")
     source_url = _signed_cloud_asset_url(asset)
@@ -5912,6 +6312,8 @@ async def resolve_owned_asset_for_agent_review(
         source_url = target.as_uri()
     if asset.kind not in {"image", "video", "audio"}:
         raise HTTPException(status_code=409, detail="Asset type cannot be reviewed.")
+    if asset_kinds is not None and asset.kind not in asset_kinds:
+        raise HTTPException(status_code=409, detail="Asset type does not match workflow output.")
     return {
         "type": asset.kind,
         "source": {"type": "url", "url": source_url},

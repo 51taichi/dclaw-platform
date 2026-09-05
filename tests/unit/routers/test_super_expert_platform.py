@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from httpx import ASGITransport, AsyncClient
 
+from qwenpaw.app.guards import require_user
+from qwenpaw.app.routers import router as api_router
 from qwenpaw.app.routers import super_expert_platform as router_module
 from qwenpaw.app.routers.super_expert_platform import (
     PlatformCommandRequest,
@@ -15,9 +19,16 @@ from qwenpaw.app.sealed_agents.models import SealedReleaseRecord
 from qwenpaw.app.super_experts.aigc_tasks import AigcTaskRepository
 from qwenpaw.app.super_experts.events import SuperExpertEventRepository
 from qwenpaw.app.super_experts.grants import SuperExpertGrantRepository
+from qwenpaw.app.routers.aigc_studio import (
+    AigcCapabilityInfo,
+    CapabilityList,
+    project_workflow_capability_catalog,
+)
 
 
 CAPABILITIES = (
+    ("aigc.workflow.capabilities.list/1", "1"),
+    ("aigc.workflow.create/1", "1"),
     ("aigc.task.create", "1"),
     ("aigc.task.create/2", "1"),
     ("aigc.task.resume", "1"),
@@ -28,6 +39,150 @@ CAPABILITIES = (
     ("card.create", "1"),
     ("card.update", "1"),
 )
+
+
+def _workflow_blueprint(*, kind: str = "video_generate", fallback: str = "FAIL_CLOSED"):
+    capability = "text_to_video" if kind == "video_generate" else "image_to_video"
+    return {
+        "schema_version": 1,
+        "title": "三节点招生短视频",
+        "execution_preference": "CUSTOMER_TRIGGERED",
+        "nodes": [
+            {
+                "node_id": "copy",
+                "kind": "prompt",
+                "title": "开场文案",
+                "capability": "storyboard",
+                "provider_id": "provider-1",
+                "model_id": "text-1",
+                "inputs": {"text": "失业后学抖音，从哪里开始？"},
+                "parameters": {},
+                "customer_action": "CLICK_GENERATE",
+                "optional": False,
+            },
+            {
+                "node_id": "clip",
+                "kind": kind,
+                "title": "开场视频",
+                "capability": capability,
+                "provider_id": "provider-1",
+                "model_id": "video-1",
+                "inputs": {"prompt": "真实课堂，竖屏纪实"},
+                "parameters": {"duration_seconds": 5, "aspect_ratio": "9:16"},
+                "customer_action": "CLICK_GENERATE",
+                "optional": False,
+            },
+        ],
+        "edges": [
+            {"source": "copy", "target": "clip", "target_slot": "prompt"}
+        ],
+        "output_node_id": "clip",
+        "fallback_policy": fallback,
+    }
+
+
+def _workflow_arguments(installation_id: str, **workflow_changes):
+    workflow = {**_workflow_blueprint(), **workflow_changes}
+    return {
+        "scope": _scope(installation_id),
+        "event_id": "workflow-event-1",
+        "workflow": workflow,
+    }
+
+
+def _workflow_catalog():
+    return project_workflow_capability_catalog(
+        CapabilityList(
+            capabilities=[
+                AigcCapabilityInfo(
+                    provider_id="provider-1",
+                    provider_name="Provider",
+                    model_id="text-1",
+                    model_name="Text One",
+                    capability="storyboard",
+                    source="model_registry",
+                    parameter_schema={"type": "object"},
+                ),
+                AigcCapabilityInfo(
+                    provider_id="provider-1",
+                    provider_name="Provider",
+                    model_id="video-1",
+                    model_name="Video One",
+                    capability="text_to_video",
+                    source="model_registry",
+                    parameter_schema={"type": "object"},
+                ),
+                AigcCapabilityInfo(
+                    provider_id="provider-1",
+                    provider_name="Provider",
+                    model_id="video-1",
+                    model_name="Video One",
+                    capability="image_to_video",
+                    source="model_registry",
+                    parameter_schema={"type": "object"},
+                ),
+            ]
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_super_expert_read_api_supports_frontend_compatibility_prefix():
+    """The shipped frontend path must resolve to the authenticated platform API."""
+    app = FastAPI()
+    app.include_router(api_router, prefix="/api")
+    app.dependency_overrides[require_user] = lambda: "user-1"
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get(
+            "/api/super-expert-platform/operations/aigc.text_to_video.create",
+        )
+
+    assert response.status_code == 200
+    assert response.json()["operation_id"] == "aigc.text_to_video.create"
+
+
+@pytest.mark.asyncio
+async def test_super_expert_frontend_compatibility_prefix_requires_user():
+    """The compatibility mount must never make platform operations public."""
+    app = FastAPI()
+    app.include_router(api_router, prefix="/api")
+
+    def deny_user():
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    app.dependency_overrides[require_user] = deny_user
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get(
+            "/api/super-expert-platform/operations/aigc.text_to_video.create",
+        )
+
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_super_expert_frontend_compatibility_prefix_is_read_only():
+    """The console compatibility path must not duplicate command endpoints."""
+    app = FastAPI()
+    app.include_router(api_router, prefix="/api")
+    app.dependency_overrides[require_user] = lambda: "user-1"
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/api/super-expert-platform/commands/aigc.task.resume",
+            json={},
+        )
+
+    assert response.status_code == 404
 
 
 def _release():
@@ -147,6 +302,51 @@ async def test_authorized_command_validates_full_binding_and_publishes_once(tmp_
 
 
 @pytest.mark.asyncio
+async def test_asset_validation_happens_before_submit_state_transition(tmp_path):
+    service, grant, _bus = _service(tmp_path)
+    binding = _binding()
+    binding["installation_id"] = grant.installation_id
+    await service.execute(
+        tenant_id="tenant-a",
+        installation_id=grant.installation_id,
+        capability="aigc.task.create",
+        contract_version="1",
+        arguments={"binding": binding, "event_id": "create"},
+        idempotency_key="create",
+    )
+    await service.execute(
+        tenant_id="tenant-a",
+        installation_id=grant.installation_id,
+        capability="aigc.task.resume",
+        contract_version="1",
+        arguments={"binding": binding, "event_id": "resume"},
+        idempotency_key="resume",
+    )
+
+    async def reject_asset(_binding, _asset_id, _task):
+        raise SuperExpertPlatformError("asset binding mismatch")
+
+    with pytest.raises(SuperExpertPlatformError, match="asset binding mismatch"):
+        await service.execute(
+            tenant_id="tenant-a",
+            installation_id=grant.installation_id,
+            capability="aigc.asset.submit",
+            contract_version="1",
+            arguments={
+                "binding": binding,
+                "event_id": "submit",
+                "asset_id": "wrong-asset",
+            },
+            idempotency_key="submit",
+            asset_validator=reject_asset,
+        )
+
+    task = service.get_task("material-1")
+    assert task is not None
+    assert task.status == router_module.AigcTaskStatus.IN_PROGRESS
+
+
+@pytest.mark.asyncio
 async def test_create_v2_provisions_one_real_owned_canvas_and_persists_operation(
     tmp_path,
     monkeypatch,
@@ -156,6 +356,13 @@ async def test_create_v2_provisions_one_real_owned_canvas_and_persists_operation
     monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
     aigc_studio._JSON_CACHE.clear()
     service, grant, bus = _service(tmp_path)
+    generated_ids = iter(
+        (
+            UUID("7f090b06-12d8-4dd6-8bba-98d12a2e90fe"),
+            UUID("8d5315c4-3311-46a8-bf39-4839ea5b6faf"),
+        ),
+    )
+    monkeypatch.setattr(aigc_studio.uuid, "uuid4", lambda: next(generated_ids))
     arguments = {
         "scope": _scope(grant.installation_id),
         "event_id": "event-v2-1",
@@ -188,6 +395,8 @@ async def test_create_v2_provisions_one_real_owned_canvas_and_persists_operation
     assert task["operation_arguments"] == _operation()["arguments"]
     assert task["binding"]["canvas_id"] != "canvas-material-v2-1"
     assert task["binding"]["node_id"] != "video-material-v2-1"
+    assert task["binding"]["canvas_id"].startswith("canvas-")
+    assert task["binding"]["node_id"].startswith("video-")
     canvas = aigc_studio._load_canvas(task["binding"]["canvas_id"])
     assert canvas.meta["owner_user_id"] == "user-a"
     assert canvas.name == "天门就业培训招生视频"
@@ -224,6 +433,363 @@ async def test_create_v2_rejects_agent_supplied_canvas_or_node_ids(tmp_path):
             arguments=arguments,
             idempotency_key="key-v2-1",
         )
+
+
+def test_workflow_catalog_exposes_all_canvas_nodes_and_real_models():
+    catalog = _workflow_catalog()
+
+    assert len(catalog.nodes) == 11
+    by_kind = {node.kind: node for node in catalog.nodes}
+    assert by_kind["video_generate"].provisioning == "AUTO_PROVISIONABLE"
+    assert by_kind["video_compose"].provisioning == "UNAVAILABLE"
+    assert by_kind["director_stage"].provisioning == "UNAVAILABLE"
+    assert {
+        (model.provider_id, model.model_id, model.capability)
+        for model in catalog.available_models
+        } == {
+            ("provider-1", "text-1", "storyboard"),
+            ("provider-1", "video-1", "text_to_video"),
+        ("provider-1", "video-1", "image_to_video"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_authorized_workflow_create_provisions_all_nodes_and_bindings(
+    tmp_path,
+    monkeypatch,
+):
+    from qwenpaw.app.routers import aigc_studio
+
+    monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
+    aigc_studio._JSON_CACHE.clear()
+    service, grant, bus = _service(tmp_path)
+
+    async def catalog():
+        return _workflow_catalog()
+
+    monkeypatch.setattr(router_module, "_load_workflow_capability_catalog", catalog)
+    arguments = _workflow_arguments(grant.installation_id)
+
+    first = await service.execute(
+        tenant_id="tenant-a",
+        user_id="user-a",
+        installation_id=grant.installation_id,
+        capability="aigc.workflow.create/1",
+        contract_version="1",
+        arguments=arguments,
+        idempotency_key="workflow-key-1",
+    )
+    replay = await service.execute(
+        tenant_id="tenant-a",
+        user_id="user-a",
+        installation_id=grant.installation_id,
+        capability="aigc.workflow.create/1",
+        contract_version="1",
+        arguments=arguments,
+        idempotency_key="workflow-key-1",
+    )
+
+    assert replay == first
+    binding = first["task"]["binding"]
+    assert binding["execution_mode"] == "PREBUILT_WORKFLOW"
+    assert set(binding["node_bindings"]) == {"copy", "clip"}
+    assert binding["node_id"] == binding["output_node_id"]
+    canvas = aigc_studio._load_canvas(binding["canvas_id"])
+    assert [node.type for node in canvas.nodes] == ["prompt", "video_generate"]
+    assert len(canvas.edges) == 1
+    assert canvas.edges[0].source == binding["node_bindings"]["copy"]
+    assert canvas.edges[0].target == binding["node_bindings"]["clip"]
+    assert len(bus.events) == 1
+    event = bus.events[0].payload["envelope"]
+    assert event["payload"]["workflow_binding"] == binding
+
+
+@pytest.mark.asyncio
+async def test_output_wrapper_review_uses_nearest_producing_node(tmp_path, monkeypatch):
+    from qwenpaw.app.routers import aigc_studio
+
+    monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
+    aigc_studio._JSON_CACHE.clear()
+    service, grant, _bus = _service(tmp_path)
+
+    async def catalog():
+        return _workflow_catalog()
+
+    monkeypatch.setattr(router_module, "_load_workflow_capability_catalog", catalog)
+    base = _workflow_blueprint()
+    output_node = {
+        "node_id": "final",
+        "kind": "output",
+        "title": "最终视频",
+        "inputs": {"label": "成片"},
+        "parameters": {},
+        "customer_action": "INSPECT",
+        "optional": False,
+    }
+    arguments = _workflow_arguments(
+        grant.installation_id,
+        nodes=[*base["nodes"], output_node],
+        edges=[
+            *base["edges"],
+            {"source": "clip", "target": "final", "target_slot": "asset"},
+        ],
+        output_node_id="final",
+    )
+    result = await service.execute(
+        tenant_id="tenant-a",
+        user_id="user-a",
+        installation_id=grant.installation_id,
+        capability="aigc.workflow.create/1",
+        contract_version="1",
+        arguments=arguments,
+        idempotency_key="workflow-output-wrapper",
+    )
+    task = service.get_task(result["task"]["binding"]["material_task_id"])
+    assert task is not None
+
+    assert router_module._workflow_review_node_ids(task) == {
+        result["task"]["binding"]["node_bindings"]["clip"]
+    }
+
+
+@pytest.mark.asyncio
+async def test_workflow_task_write_failure_removes_provisioned_canvas(
+    tmp_path,
+    monkeypatch,
+):
+    from qwenpaw.app.routers import aigc_studio
+
+    monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
+    aigc_studio._JSON_CACHE.clear()
+    service, grant, _bus = _service(tmp_path)
+
+    async def catalog():
+        return _workflow_catalog()
+
+    monkeypatch.setattr(router_module, "_load_workflow_capability_catalog", catalog)
+
+    def fail(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(service.task_repository, "apply", fail)
+    with pytest.raises(OSError, match="disk full"):
+        await service.execute(
+            tenant_id="tenant-a",
+            user_id="user-a",
+            installation_id=grant.installation_id,
+            capability="aigc.workflow.create/1",
+            contract_version="1",
+            arguments=_workflow_arguments(grant.installation_id),
+            idempotency_key="workflow-key-1",
+        )
+
+    assert list((tmp_path / "studio" / "canvases").glob("*.json")) == []
+
+
+@pytest.mark.asyncio
+async def test_workflow_rejects_unavailable_model_without_creating_canvas(
+    tmp_path,
+    monkeypatch,
+):
+    from qwenpaw.app.routers import aigc_studio
+
+    monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
+    aigc_studio._JSON_CACHE.clear()
+    service, grant, _bus = _service(tmp_path)
+
+    async def empty_catalog():
+        return project_workflow_capability_catalog(CapabilityList(capabilities=[]))
+
+    monkeypatch.setattr(
+        router_module,
+        "_load_workflow_capability_catalog",
+        empty_catalog,
+    )
+    with pytest.raises(SuperExpertPlatformError, match="MODEL_UNAVAILABLE"):
+        await service.execute(
+            tenant_id="tenant-a",
+            user_id="user-a",
+            installation_id=grant.installation_id,
+            capability="aigc.workflow.create/1",
+            contract_version="1",
+            arguments=_workflow_arguments(grant.installation_id),
+            idempotency_key="workflow-key-1",
+        )
+
+    assert not (tmp_path / "studio" / "canvases").exists()
+
+
+@pytest.mark.asyncio
+async def test_unavailable_workflow_never_creates_a_misleading_manual_canvas(
+    tmp_path,
+    monkeypatch,
+):
+    from qwenpaw.app.routers import aigc_studio
+
+    monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
+    aigc_studio._JSON_CACHE.clear()
+    service, grant, _bus = _service(tmp_path)
+
+    async def catalog():
+        return _workflow_catalog()
+
+    monkeypatch.setattr(router_module, "_load_workflow_capability_catalog", catalog)
+    manual_node = {
+        "schema_version": 1,
+        "title": "人工合成流程",
+        "execution_preference": "CUSTOMER_TRIGGERED",
+        "nodes": [
+            {
+                "node_id": "compose",
+                "kind": "video_compose",
+                "title": "视频合成",
+                "inputs": {},
+                "parameters": {},
+                "customer_action": "NONE",
+                "optional": False,
+            }
+        ],
+        "edges": [],
+        "output_node_id": "compose",
+        "fallback_policy": "FAIL_CLOSED",
+    }
+    with pytest.raises(SuperExpertPlatformError, match="NODE_KIND_UNAVAILABLE"):
+        await service.execute(
+            tenant_id="tenant-a",
+            user_id="user-a",
+            installation_id=grant.installation_id,
+            capability="aigc.workflow.create/1",
+            contract_version="1",
+            arguments=_workflow_arguments(grant.installation_id, **manual_node),
+            idempotency_key="manual-closed",
+        )
+
+    manual_node["fallback_policy"] = "MANUAL_BUILD_IF_UNSUPPORTED"
+    arguments = _workflow_arguments(grant.installation_id, **manual_node)
+    arguments["scope"]["material_task_id"] = "manual-material"
+    arguments["event_id"] = "manual-event"
+    with pytest.raises(SuperExpertPlatformError, match="NODE_KIND_UNAVAILABLE"):
+        await service.execute(
+            tenant_id="tenant-a",
+            user_id="user-a",
+            installation_id=grant.installation_id,
+            capability="aigc.workflow.create/1",
+            contract_version="1",
+            arguments=arguments,
+            idempotency_key="manual-open",
+        )
+    assert list((tmp_path / "studio" / "canvases").glob("*.json")) == []
+
+
+@pytest.mark.asyncio
+async def test_workflow_guide_endpoint_projects_real_canvas_and_blocks_if_deleted(
+    tmp_path,
+    monkeypatch,
+):
+    from qwenpaw.app.routers import aigc_studio
+
+    monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
+    aigc_studio._JSON_CACHE.clear()
+    service, grant, _bus = _service(tmp_path)
+
+    async def catalog():
+        return _workflow_catalog()
+
+    monkeypatch.setattr(router_module, "_load_workflow_capability_catalog", catalog)
+    created = await service.execute(
+        tenant_id="tenant-a",
+        user_id="user-a",
+        installation_id=grant.installation_id,
+        capability="aigc.workflow.create/1",
+        contract_version="1",
+        arguments=_workflow_arguments(grant.installation_id),
+        idempotency_key="workflow-key-1",
+    )
+    monkeypatch.setattr(
+        router_module,
+        "get_super_expert_platform_service",
+        lambda: service,
+    )
+    access_checks = []
+    monkeypatch.setattr(
+        router_module,
+        "ensure_chat_access",
+        lambda _request, conversation_id, allow_admin: access_checks.append(
+            (conversation_id, allow_admin)
+        ),
+    )
+    request = SimpleNamespace(state=SimpleNamespace(user_id="user-a"))
+
+    guide = router_module.get_super_expert_task_guide("material-v2-1", request)
+
+    assert guide["current_step_id"] == "copy.generate"
+    assert guide["current_step"]["node_id"] == created["task"]["binding"][
+        "node_bindings"
+    ]["copy"]
+    assert access_checks == [("conversation-1", True)]
+
+    canvas_id = created["task"]["binding"]["canvas_id"]
+    aigc_studio._json_path("canvases", canvas_id).unlink()
+    aigc_studio._JSON_CACHE.clear()
+    blocked = router_module.get_super_expert_task_guide("material-v2-1", request)
+    assert blocked["current_step"]["status"] == "BLOCKED"
+    assert blocked["current_step"]["recovery"]["code"] == "BOUND_CANVAS_MISSING"
+
+
+@pytest.mark.asyncio
+async def test_workflow_guide_update_persists_only_optional_bound_skip(
+    tmp_path,
+    monkeypatch,
+):
+    from qwenpaw.app.routers import aigc_studio
+
+    monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
+    aigc_studio._JSON_CACHE.clear()
+    service, grant, _bus = _service(tmp_path)
+
+    async def catalog():
+        return _workflow_catalog()
+
+    monkeypatch.setattr(router_module, "_load_workflow_capability_catalog", catalog)
+    blueprint = _workflow_blueprint()
+    blueprint["nodes"][0]["optional"] = True
+    created = await service.execute(
+        tenant_id="tenant-a",
+        user_id="user-a",
+        installation_id=grant.installation_id,
+        capability="aigc.workflow.create/1",
+        contract_version="1",
+        arguments={
+            "scope": _scope(grant.installation_id),
+            "event_id": "workflow-create",
+            "workflow": blueprint,
+        },
+        idempotency_key="workflow-create",
+    )
+    binding = created["task"]["binding"]
+    skipped = await service.execute(
+        tenant_id="tenant-a",
+        user_id="user-a",
+        installation_id=grant.installation_id,
+        capability="aigc.guide.update",
+        contract_version="1",
+        arguments={
+            "binding": binding,
+            "event_id": "skip-copy",
+            "guide": {
+                "action": "SKIP_OPTIONAL",
+                "workflow_id": binding["workflow_id"],
+                "guide_revision": binding["guide_revision"],
+                "step_id": "copy.generate",
+                "logical_node_id": "copy",
+                "node_id": binding["node_bindings"]["copy"],
+            },
+        },
+        idempotency_key="skip-copy",
+    )
+
+    assert skipped["task"]["guide_events"][0]["step_id"] == "copy.generate"
+    assert skipped["task"]["status"] == "WAITING_TO_START"
 
 
 @pytest.mark.asyncio
@@ -589,6 +1155,16 @@ async def test_duplicate_asset_submit_replays_the_durable_agent_review(
         return {"status": "completed", "reply": "同一份审核结论。"}
 
     monkeypatch.setattr(router_module, "_dispatch_agent_asset_review", dispatch)
+    async def resolve(*_args, **_kwargs):
+        return {
+            "type": "video",
+            "source": {"type": "url", "url": "file:///tmp/result.mp4"},
+        }
+
+    monkeypatch.setattr(
+        "qwenpaw.app.routers.aigc_studio.resolve_owned_asset_for_agent_review",
+        resolve,
+    )
     request = SimpleNamespace(state=SimpleNamespace(tenant_id="tenant-a"))
     command = PlatformCommandRequest(
         installation_id=grant.installation_id,

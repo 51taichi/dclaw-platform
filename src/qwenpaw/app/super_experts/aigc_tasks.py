@@ -16,6 +16,8 @@ from .models import (
     AigcTaskBinding,
     AigcTaskEvent,
     AigcTaskStatus,
+    AigcWorkflowDefinition,
+    AigcWorkflowGuideEvent,
 )
 
 
@@ -37,6 +39,7 @@ class AigcTaskCommand(BaseModel):
         "accept",
         "cancel",
         "invalidate",
+        "guide_update",
     ]
     event_id: str = Field(min_length=1)
     binding: AigcTaskBinding
@@ -44,6 +47,8 @@ class AigcTaskCommand(BaseModel):
     operation_id: str | None = Field(default=None, min_length=1)
     operation_version: str | None = Field(default=None, min_length=1)
     operation_arguments: dict[str, Any] = Field(default_factory=dict)
+    workflow: AigcWorkflowDefinition | None = None
+    guide_event: AigcWorkflowGuideEvent | None = None
 
 
 class _IdempotencyRecord(BaseModel):
@@ -84,8 +89,18 @@ _TERMINAL = {
 
 
 def _command_digest(command: AigcTaskCommand) -> str:
+    payload = command.model_dump(mode="json")
+    # These timestamps are assigned by the trusted domain models when callers
+    # omit them. They describe when DClaw accepted the object, not command
+    # identity, so a retried semantic command must not receive a new digest.
+    workflow = payload.get("workflow")
+    if isinstance(workflow, dict):
+        workflow.pop("created_at", None)
+    guide_event = payload.get("guide_event")
+    if isinstance(guide_event, dict):
+        guide_event.pop("occurred_at", None)
     encoded = json.dumps(
-        command.model_dump(mode="json"),
+        payload,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -130,6 +145,23 @@ class AigcTaskRepository:
         with self._lock:
             return self._read().tasks.get(material_task_id)
 
+    def find_workflow_task_for_node(
+        self,
+        *,
+        canvas_id: str,
+        node_id: str,
+    ) -> AigcMaterialTask | None:
+        """Find the immutable workflow task owning one physical canvas node."""
+        with self._lock:
+            for task in self._read().tasks.values():
+                if (
+                    task.workflow is not None
+                    and task.binding.canvas_id == canvas_id
+                    and node_id in task.binding.node_bindings.values()
+                ):
+                    return task
+        return None
+
     def _apply_new_command(
         self,
         document: _TaskDocument,
@@ -142,6 +174,9 @@ class AigcTaskRepository:
                 raise AigcTaskError("task already exists")
             if command.asset_id is not None:
                 raise AigcTaskError("asset cannot be bound before submission")
+            if command.guide_event is not None:
+                raise AigcTaskError("guide event is not valid for task creation")
+            self._validate_workflow_creation(command)
             event = AigcTaskEvent(
                 event_id=command.event_id,
                 action=command.action,
@@ -156,6 +191,7 @@ class AigcTaskRepository:
                 operation_id=command.operation_id,
                 operation_version=command.operation_version,
                 operation_arguments=command.operation_arguments,
+                workflow=command.workflow,
             )
         if current is None:
             raise AigcTaskError("task transition requires an existing task")
@@ -163,6 +199,11 @@ class AigcTaskRepository:
             raise AigcTaskError("task binding mismatch")
         if current.status in _TERMINAL:
             raise AigcTaskError("illegal task transition from terminal state")
+
+        if command.action == "guide_update":
+            return self._apply_guide_update(current, command)
+        if command.workflow is not None or command.guide_event is not None:
+            raise AigcTaskError("workflow data is not valid for this transition")
 
         if command.action in {"cancel", "invalidate"}:
             target = (
@@ -209,6 +250,105 @@ class AigcTaskRepository:
                 "events": (*current.events, event),
                 "updated_at": event.occurred_at,
             },
+        )
+
+    @staticmethod
+    def _validate_workflow_creation(command: AigcTaskCommand) -> None:
+        binding = command.binding
+        workflow = command.workflow
+        if workflow is None:
+            if (
+                binding.workflow_id is not None
+                or binding.execution_mode != "LEGACY"
+                or binding.node_bindings
+                or binding.output_node_id is not None
+                or binding.workflow_revision is not None
+                or binding.guide_revision is not None
+            ):
+                raise AigcTaskError("workflow definition is required")
+            return
+        if binding.workflow_id != workflow.workflow_id:
+            raise AigcTaskError("workflow binding mismatch")
+        if binding.execution_mode != workflow.execution_mode:
+            raise AigcTaskError("workflow execution mode mismatch")
+        if binding.workflow_revision != workflow.workflow_revision:
+            raise AigcTaskError("workflow revision mismatch")
+        if binding.guide_revision != workflow.guide_revision:
+            raise AigcTaskError("guide revision mismatch")
+        if not binding.output_node_id or binding.node_id != binding.output_node_id:
+            raise AigcTaskError("output binding mismatch")
+        if workflow.execution_mode == "PREBUILT_WORKFLOW":
+            logical_ids = {node.node_id for node in workflow.blueprint.nodes}
+            if set(binding.node_bindings) != logical_ids:
+                raise AigcTaskError("workflow node binding mismatch")
+            if workflow.blueprint.output_node_id not in binding.node_bindings:
+                raise AigcTaskError("output binding mismatch")
+            if (
+                binding.node_bindings[workflow.blueprint.output_node_id]
+                != binding.output_node_id
+            ):
+                raise AigcTaskError("output binding mismatch")
+            for step in workflow.guide_steps:
+                physical_id = binding.node_bindings.get(step.logical_node_id)
+                if physical_id != step.node_id:
+                    raise AigcTaskError("workflow guide binding mismatch")
+
+    @staticmethod
+    def _apply_guide_update(
+        current: AigcMaterialTask,
+        command: AigcTaskCommand,
+    ) -> AigcMaterialTask:
+        workflow = current.workflow
+        guide_event = command.guide_event
+        if workflow is None or guide_event is None:
+            raise AigcTaskError("workflow guide update requires a workflow")
+        if command.workflow is not None:
+            raise AigcTaskError("workflow cannot be replaced by a guide update")
+        if guide_event.event_id != command.event_id:
+            raise AigcTaskError("guide event id mismatch")
+        if guide_event.workflow_id != workflow.workflow_id:
+            raise AigcTaskError("workflow binding mismatch")
+        if guide_event.guide_revision != workflow.guide_revision:
+            raise AigcTaskError("guide revision mismatch")
+        step = next(
+            (
+                candidate
+                for candidate in workflow.guide_steps
+                if candidate.step_id == guide_event.step_id
+            ),
+            None,
+        )
+        if step is None:
+            raise AigcTaskError("workflow guide step not found")
+        if not step.optional:
+            raise AigcTaskError("only optional guide steps can be skipped")
+        if (
+            step.logical_node_id != guide_event.logical_node_id
+            or step.node_id != guide_event.node_id
+            or current.binding.node_bindings.get(guide_event.logical_node_id)
+            != guide_event.node_id
+        ):
+            raise AigcTaskError("workflow guide binding mismatch")
+        if any(
+            existing.step_id == guide_event.step_id
+            and existing.action == guide_event.action
+            for existing in current.guide_events
+        ):
+            raise AigcTaskError("workflow guide step was already skipped")
+        event = AigcTaskEvent(
+            event_id=command.event_id,
+            action=command.action,
+            from_status=current.status,
+            to_status=current.status,
+            occurred_at=guide_event.occurred_at,
+        )
+        return current.model_copy(
+            update={
+                "version": current.version + 1,
+                "events": (*current.events, event),
+                "guide_events": (*current.guide_events, guide_event),
+                "updated_at": event.occurred_at,
+            }
         )
 
     def _read(self) -> _TaskDocument:

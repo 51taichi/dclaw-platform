@@ -1,0 +1,80 @@
+{
+  "scope": {
+    "installation_id": "__INSTALLATION_ID__",
+    "conversation_id": "conversation-three-node",
+    "agent_task_id": "task-three-node",
+    "content_revision": 7,
+    "material_task_id": "material-three-node"
+  },
+  "event_id": "create-three-node",
+  "workflow": {
+    "schema_version": 1,
+    "title": "文案、关键帧与短视频",
+    "execution_preference": "CUSTOMER_TRIGGERED",
+    "nodes": [
+      {
+        "node_id": "copy",
+        "kind": "prompt",
+        "title": "生成开场文案",
+        "capability": "storyboard",
+        "provider_id": "provider-1",
+        "model_id": "text-1",
+        "inputs": {
+          "text": "失业后学抖音，第一步应该做什么？"
+        },
+        "parameters": {},
+        "customer_action": "CLICK_GENERATE",
+        "optional": false
+      },
+      {
+        "node_id": "keyframe",
+        "kind": "image_generate",
+        "title": "生成痛点关键帧",
+        "capability": "text_to_image",
+        "provider_id": "provider-1",
+        "model_id": "image-1",
+        "inputs": {
+          "prompt": "真实课堂，学员面对手机学习短视频运营。"
+        },
+        "parameters": {
+          "aspect_ratio": "9:16",
+          "count": 1
+        },
+        "customer_action": "CLICK_GENERATE",
+        "optional": false
+      },
+      {
+        "node_id": "clip",
+        "kind": "video_generate",
+        "title": "生成开场视频",
+        "capability": "image_to_video",
+        "provider_id": "provider-1",
+        "model_id": "video-1",
+        "inputs": {
+          "prompt": "轻微推进镜头，人物自然看向手机。"
+        },
+        "parameters": {
+          "aspect_ratio": "9:16",
+          "duration_seconds": 5,
+          "generate_audio": false
+        },
+        "customer_action": "CLICK_GENERATE",
+        "optional": false
+      }
+    ],
+    "edges": [
+      {
+        "source": "copy",
+        "target": "keyframe",
+        "target_slot": "prompt"
+      },
+      {
+        "source": "keyframe",
+        "target": "clip",
+        "target_slot": "first_frame"
+      }
+    ],
+    "output_node_id": "clip",
+    "fallback_policy": "FAIL_CLOSED"
+  }
+}

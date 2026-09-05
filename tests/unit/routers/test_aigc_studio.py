@@ -20,6 +20,12 @@ from qwenpaw.app.routers import aigc_studio
 from qwenpaw.app.routers.aigc_studio import public_router, router
 from qwenpaw.app.runtime.event_bus import MemoryRuntimeEventBus
 from qwenpaw.app.billing.model_publication import ModelPublicationService
+from qwenpaw.app.storage.engine import create_engine_from_settings
+from qwenpaw.app.storage.repos.aigc_model_policy_repo import (
+    AigcModelPolicyRepository,
+)
+from qwenpaw.app.storage.schema import create_all
+from qwenpaw.app.storage.settings import get_storage_settings
 
 
 @pytest.mark.asyncio
@@ -50,7 +56,7 @@ async def test_resolve_owned_asset_for_agent_review_returns_bound_local_media(
         SimpleNamespace(),
         "asset-review",
         canvas_id="canvas-1",
-        node_id="node-1",
+        node_ids={"node-1", "node-2"},
     )
     assert block == {
         "type": "video",
@@ -78,9 +84,115 @@ async def test_resolve_owned_asset_for_agent_review_rejects_binding_mismatch(
             SimpleNamespace(),
             "asset-review",
             canvas_id="canvas-1",
-            node_id="node-1",
+            node_ids={"node-1"},
         )
     assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_validate_job_submission_rejects_workflow_model_mismatch(monkeypatch):
+    canvas = aigc_studio.Canvas(
+        id="canvas-1",
+        name="Workflow",
+        nodes=[
+            aigc_studio.CanvasNode(
+                id="video-1",
+                type="video_generate",
+                position={"x": 0, "y": 0},
+                data={
+                    "workflowLogicalNodeId": "clip",
+                    "providerId": "provider-1",
+                    "modelId": "video-1",
+                    "modelCapability": "image_to_video",
+                },
+            )
+        ],
+        edges=[],
+        created_at="2026-09-04T00:00:00Z",
+        updated_at="2026-09-04T00:00:00Z",
+    )
+    monkeypatch.setattr(aigc_studio, "_load_canvas_for_request", lambda *_a: canvas)
+
+    async def available(*_args):
+        return object()
+
+    monkeypatch.setattr(aigc_studio, "_find_capability", available)
+    body = aigc_studio.AigcJobCreate(
+        canvas_id="canvas-1",
+        node_id="video-1",
+        capability="text_to_video",
+        provider_id="provider-1",
+        model_id="video-1",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await aigc_studio._validate_job_submission(SimpleNamespace(), body)
+
+    assert exc_info.value.status_code == 409
+    assert "workflow-bound" in str(exc_info.value.detail).lower()
+
+    await aigc_studio._validate_job_submission(
+        SimpleNamespace(),
+        body.model_copy(update={"capability": "image_to_video"}),
+    )
+
+
+@pytest.mark.asyncio
+async def test_validate_job_submission_uses_authoritative_task_after_canvas_tamper(
+    monkeypatch,
+):
+    canvas = aigc_studio.Canvas(
+        id="canvas-1",
+        name="Tampered workflow",
+        nodes=[
+            aigc_studio.CanvasNode(
+                id="video-1",
+                type="video_generate",
+                position={"x": 0, "y": 0},
+                data={
+                    "providerId": "attacker-provider",
+                    "modelId": "attacker-model",
+                    "modelCapability": "text_to_video",
+                },
+            )
+        ],
+        edges=[],
+        created_at="2026-09-04T00:00:00Z",
+        updated_at="2026-09-04T00:00:00Z",
+    )
+    monkeypatch.setattr(aigc_studio, "_load_canvas_for_request", lambda *_a: canvas)
+    monkeypatch.setattr(
+        aigc_studio,
+        "_authoritative_workflow_execution_binding",
+        lambda *_a: ("provider-1", "video-1", "image_to_video"),
+    )
+
+    async def available(*_args):
+        return object()
+
+    monkeypatch.setattr(aigc_studio, "_find_capability", available)
+    tampered = aigc_studio.AigcJobCreate(
+        canvas_id="canvas-1",
+        node_id="video-1",
+        capability="text_to_video",
+        provider_id="attacker-provider",
+        model_id="attacker-model",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await aigc_studio._validate_job_submission(SimpleNamespace(), tampered)
+
+    assert exc_info.value.status_code == 409
+    await aigc_studio._validate_job_submission(
+        SimpleNamespace(),
+        tampered.model_copy(
+            update={
+                "provider_id": "provider-1",
+                "model_id": "video-1",
+                "capability": "image_to_video",
+            }
+        ),
+    )
 
 
 class _AllPublished(set):
@@ -738,7 +850,94 @@ async def test_capabilities_fail_closed_without_effective_catalog(
         response = await client.get("/api/aigc-studio/capabilities")
 
     assert response.status_code == 200
-    assert response.json() == {"capabilities": []}
+    assert response.json() == {"capabilities": [], "defaults": {}}
+
+
+async def test_configured_image_policy_filters_capabilities_and_returns_default(
+    tmp_path,
+    monkeypatch,
+):
+    engine = create_engine_from_settings(
+        get_storage_settings({"QWENPAW_SQLITE_PATH": str(tmp_path / "policy.sqlite")})
+    )
+    create_all(engine)
+    repository = AigcModelPolicyRepository(engine)
+    selected = {"provider_id": "stub-aigc", "model_id": "stub-image"}
+    repository.replace("image", None, [selected], selected, 7)
+    monkeypatch.setattr(
+        "qwenpaw.app.storage.engine.get_app_engine",
+        lambda: engine,
+    )
+    app = make_app(tmp_path)
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/aigc-studio/capabilities")
+
+    assert response.status_code == 200
+    payload = response.json()
+    image_pairs = {
+        (item["provider_id"], item["model_id"])
+        for item in payload["capabilities"]
+        if item["capability"] in {"text_to_image", "image_edit"}
+        and item["source"] == "model_registry"
+    }
+    assert image_pairs == {("stub-aigc", "stub-image")}
+    assert payload["defaults"]["image"] == {
+        "configured": True,
+        "configured_default": selected,
+        "effective_default": selected,
+        "fallback_active": False,
+        "fallback_reason": [],
+    }
+    engine.dispose()
+
+
+async def test_job_submission_rejects_model_removed_from_allowlist(
+    tmp_path,
+    monkeypatch,
+):
+    engine = create_engine_from_settings(
+        get_storage_settings(
+            {"QWENPAW_SQLITE_PATH": str(tmp_path / "policy-job.sqlite")}
+        )
+    )
+    create_all(engine)
+    repository = AigcModelPolicyRepository(engine)
+    selected = {"provider_id": "stub-aigc", "model_id": "stub-image"}
+    repository.replace("image", None, [selected], selected, 7)
+    monkeypatch.setattr(
+        "qwenpaw.app.storage.engine.get_app_engine",
+        lambda: engine,
+    )
+    app = make_app(tmp_path)
+    transport = ASGITransport(app=app)
+
+    with patch("qwenpaw.app.routers.aigc_studio.STUDIO_ROOT", tmp_path / "studio"):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            canvas = await client.post(
+                "/api/aigc-studio/canvases",
+                json={
+                    "name": "policy",
+                    "nodes": [{"id": "image-1", "type": "image_generate"}],
+                    "edges": [],
+                },
+            )
+            response = await client.post(
+                "/api/aigc-studio/jobs",
+                json={
+                    "canvas_id": canvas.json()["id"],
+                    "node_id": "image-1",
+                    "capability": "text_to_image",
+                    "provider_id": "openai",
+                    "model_id": "gpt-image-2",
+                    "inputs": {"prompt": "blocked"},
+                },
+            )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "aigc_model_not_allowed"
+    engine.dispose()
 
 
 async def test_visual_dna_catalog_search_and_compile_endpoints(tmp_path):
@@ -2106,6 +2305,17 @@ async def test_export_long_image_creates_full_image_and_upload_slices(tmp_path):
             assert payload["slice_assets"][0]["name"].startswith("long-1-slice-")
             assert payload["full_asset"]["meta"]["adapter"] == "long_image_export"
             assert payload["full_asset"]["meta"]["canvas_id"] == canvas.json()["id"]
+
+            jobs = await client.get(
+                "/api/aigc-studio/jobs",
+                params={"canvas_id": canvas.json()["id"]},
+            )
+            assert jobs.status_code == 200
+            persisted = jobs.json()["jobs"]
+            assert len(persisted) == 1
+            assert persisted[0]["node_id"] == "long-1"
+            assert persisted[0]["status"] == "succeeded"
+            assert persisted[0]["outputs"][0]["id"] == payload["full_asset"]["id"]
 
             slice_file = await client.get(payload["slice_assets"][0]["url"])
             assert slice_file.status_code == 200
@@ -5258,9 +5468,7 @@ async def test_run_seedream_group_job_uses_streaming_sequential_request(
     assert job["status"] == "succeeded"
     assert calls[0] == {
         "model": "doubao-seedream-4-5-251128",
-        "prompt": (
-            "生成一组共4张连贯插画\n\n" "务必一次生成 4 张图片结果（不是 1 张）。"
-        ),
+        "prompt": ("生成一组共4张连贯插画\n\n务必一次生成 4 张图片结果（不是 1 张）。"),
         "size": "2K",
         "response_format": "b64_json",
         "stream": True,
