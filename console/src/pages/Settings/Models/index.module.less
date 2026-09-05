@@ -130,6 +130,7 @@
   height: 238px;
 }
 .aigcCategoryCard :global(.ant-card-body) {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -165,7 +166,7 @@
   flex-direction: column;
   gap: 6px;
   min-height: 0;
-  margin-top: 12px;
+  margin: 12px 0 36px;
 }
 .aigcSummaryItem {
   display: flex;
@@ -199,6 +200,10 @@
   font-size: 12px;
 }
 .aigcCategoryFooter {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  left: 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;

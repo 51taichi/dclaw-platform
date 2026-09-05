@@ -89,6 +89,13 @@ describe("AigcModelsSection", () => {
     expect(
       within(imageCard!).getByText("models.aigc.viewAll 20"),
     ).toBeInTheDocument();
+
+    const footer = within(imageCard!).getByText(
+      "models.aigc.selectedCount 20",
+    ).parentElement;
+    expect(footer).not.toBeNull();
+    expect(window.getComputedStyle(footer!).position).toBe("absolute");
+    expect(window.getComputedStyle(footer!).bottom).toBe("16px");
   });
 
   it("shows unavailable inventory with a reason and disabled option", async () => {
