@@ -128,4 +128,3 @@ class StreamingSession:
 
     def close(self) -> None:
         self._buffer.clear()
-
