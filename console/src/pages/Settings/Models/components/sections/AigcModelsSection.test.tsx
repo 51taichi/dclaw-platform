@@ -81,6 +81,19 @@ describe("AigcModelsSection", () => {
     expect(screen.getByText("models.aigc.imageTitle")).toBeInTheDocument();
     expect(screen.getByText("models.aigc.videoTitle")).toBeInTheDocument();
     expect(screen.getByText("models.aigc.audioTitle")).toBeInTheDocument();
+    expect(screen.queryByText("models.aigc.description")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("models.aigc.textDescription"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("models.aigc.imageDescription"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("models.aigc.videoDescription"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("models.aigc.audioDescription"),
+    ).not.toBeInTheDocument();
     const imageCard = screen
       .getByText("models.aigc.imageTitle")
       .closest("section");
