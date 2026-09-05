@@ -1632,6 +1632,7 @@
     "embeddingDisabled": "Semantic embedding is disabled; keyword search remains available",
     "testAndEnable": "Test and enable",
     "disableEmbedding": "Disable",
+    "unpriced": "Unpriced",
     "aigc": {
       "title": "AIGC Creative Studio Models",
       "description": "Configure the models and defaults available in Creative Studio. Only published, priced models from available providers can be selected.",

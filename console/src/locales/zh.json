@@ -1481,6 +1481,7 @@
     "embeddingDisabled": "知识库向量检索已停用，将继续使用关键词检索",
     "testAndEnable": "测试并启用",
     "disableEmbedding": "停用",
+    "unpriced": "未定价",
     "aigc": {
       "title": "AIGC 创意工作室模型",
       "description": "配置创意工作室可使用的模型与默认项；仅已发布、已定价且供应商可用的模型可以选择。",

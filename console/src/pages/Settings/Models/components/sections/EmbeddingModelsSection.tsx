@@ -129,10 +129,22 @@ export function EmbeddingModelsSection({
             showSearch
             optionFilterProp="label"
             value={selectedModel}
-            onChange={setSelectedModel}
+            onChange={(modelId) => {
+              const selected = modelOptions.find(
+                (model) => model.id === modelId,
+              );
+              if (selected?.billing_eligible !== false) {
+                setSelectedModel(modelId);
+              }
+            }}
             options={modelOptions.map((model) => ({
               value: model.id,
-              label: `${model.name} (${model.id})`,
+              label: `${model.name} (${model.id})${
+                model.billing_eligible === false
+                  ? ` · ${t("models.unpriced")}`
+                  : ""
+              }`,
+              disabled: model.billing_eligible === false,
             }))}
           />
         </div>

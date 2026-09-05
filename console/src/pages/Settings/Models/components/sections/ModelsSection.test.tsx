@@ -40,12 +40,16 @@ vi.mock("@agentscope-ai/design", () => ({
     options = [],
     placeholder,
   }: {
-    options?: Array<{ value: string; label: string }>;
+    options?: Array<{ value: string; label: string; disabled?: boolean }>;
     placeholder?: string;
   }) => (
     <select aria-label={placeholder}>
       {options.map((option) => (
-        <option key={option.value} value={option.value}>
+        <option
+          key={option.value}
+          value={option.value}
+          disabled={option.disabled}
+        >
           {option.label}
         </option>
       ))}
@@ -140,5 +144,35 @@ describe("ModelsSection", () => {
     expect(
       screen.queryByText("Embedding Model (embedding-model)"),
     ).not.toBeInTheDocument();
+  });
+
+  it("shows unpriced LLM models but prevents selecting them", () => {
+    render(
+      <ModelsSection
+        providers={[
+          buildProvider({
+            models: [
+              {
+                id: "unpriced-model",
+                name: "Unpriced Model",
+                billing_eligible: false,
+                supports_multimodal: false,
+                supports_image: false,
+                supports_video: false,
+                generate_kwargs: {},
+              },
+            ],
+          }),
+        ]}
+        activeModels={{
+          active_llm: { provider_id: "provider", model: "unpriced-model" },
+        }}
+        onSaved={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("option", { name: /models\.unpriced/ }),
+    ).toBeDisabled();
   });
 });

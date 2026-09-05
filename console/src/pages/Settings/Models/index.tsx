@@ -13,6 +13,7 @@ import { useTranslation } from "react-i18next";
 import type { ProviderInfo } from "../../../api/types/provider";
 import styles from "./index.module.less";
 import { EmbeddingModelsSection } from "./components/sections/EmbeddingModelsSection";
+import { AigcModelsSection } from "./components/sections/AigcModelsSection";
 
 /* ------------------------------------------------------------------ */
 /* Main Page                                                           */
@@ -117,6 +118,7 @@ function ModelsPage() {
               activeModels={activeModels}
               onSaved={fetchAll}
             />
+            <AigcModelsSection />
             {/* ---- Providers Section ---- */}
             <div className={styles.providersBlock}>
               <div className={styles.sectionHeaderRow}>
