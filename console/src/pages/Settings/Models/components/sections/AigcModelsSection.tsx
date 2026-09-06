@@ -4,15 +4,18 @@ import { useTranslation } from "react-i18next";
 
 import type { AigcModelCategory } from "@/api/modules/aigcModelPolicy";
 import { useAppMessage } from "@/hooks/useAppMessage";
-import {
-  AIGC_MODEL_CATEGORIES,
-  useAigcModelPolicy,
-} from "../../hooks/useAigcModelPolicy";
+import { useAigcModelPolicy } from "../../hooks/useAigcModelPolicy";
 import styles from "../../index.module.less";
 import { AigcModelCategoryCard } from "./AigcModelCategoryCard";
 import { AigcModelManagerDrawer } from "./AigcModelManagerDrawer";
 
 export type PolicyState = ReturnType<typeof useAigcModelPolicy>;
+
+const VISIBLE_AIGC_MODEL_CATEGORIES: AigcModelCategory[] = [
+  "text",
+  "image",
+  "video",
+];
 
 export function AigcModelsSection({ state }: { state?: PolicyState }) {
   const internalState = useAigcModelPolicy();
@@ -39,17 +42,16 @@ export function AigcModelsSection({ state }: { state?: PolicyState }) {
   };
 
   return (
-    <Card className={styles.aigcModelsSection}>
+    <Card className={`${styles.slotSection} ${styles.aigcModelsSection}`}>
       <div className={styles.aigcSectionHeading}>
         <h3>{t("models.aigc.title")}</h3>
-        <p>{t("models.aigc.description")}</p>
       </div>
       {policyState.error && (
         <Alert type="error" showIcon message={policyState.error} />
       )}
       <Spin spinning={policyState.loading}>
         <div className={styles.aigcCategoryGrid}>
-          {AIGC_MODEL_CATEGORIES.map((category) => (
+          {VISIBLE_AIGC_MODEL_CATEGORIES.map((category) => (
             <AigcModelCategoryCard
               key={category}
               category={category}

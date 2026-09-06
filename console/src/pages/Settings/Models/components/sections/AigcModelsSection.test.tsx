@@ -1,6 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import styles from "../../index.module.less";
 import { AigcModelsSection, type PolicyState } from "./AigcModelsSection";
 
 vi.mock("react-i18next", () => ({
@@ -70,13 +71,29 @@ const fixture = (): PolicyState => ({
 });
 
 describe("AigcModelsSection", () => {
-  it("renders four categories and caps each summary at three models", () => {
+  it("renders the three usable categories and caps each summary at three models", () => {
     render(<AigcModelsSection state={fixture()} />);
 
     expect(screen.getByText("models.aigc.textTitle")).toBeInTheDocument();
     expect(screen.getByText("models.aigc.imageTitle")).toBeInTheDocument();
     expect(screen.getByText("models.aigc.videoTitle")).toBeInTheDocument();
-    expect(screen.getByText("models.aigc.audioTitle")).toBeInTheDocument();
+    expect(screen.queryByText("models.aigc.audioTitle")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("models.aigc.title").closest(".ant-card"),
+    ).toHaveClass(styles.slotSection);
+    expect(screen.queryByText("models.aigc.description")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("models.aigc.textDescription"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("models.aigc.imageDescription"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("models.aigc.videoDescription"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("models.aigc.audioDescription"),
+    ).not.toBeInTheDocument();
     const imageCard = screen
       .getByText("models.aigc.imageTitle")
       .closest("section");
@@ -85,6 +102,13 @@ describe("AigcModelsSection", () => {
     expect(
       within(imageCard!).getByText("models.aigc.viewAll 20"),
     ).toBeInTheDocument();
+
+    const footer = within(imageCard!).getByText(
+      "models.aigc.selectedCount 20",
+    ).parentElement;
+    expect(footer).not.toBeNull();
+    expect(window.getComputedStyle(footer!).position).toBe("absolute");
+    expect(window.getComputedStyle(footer!).bottom).toBe("16px");
   });
 
   it("shows unavailable inventory with a reason and disabled option", async () => {

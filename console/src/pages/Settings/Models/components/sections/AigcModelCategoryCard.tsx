@@ -45,9 +45,6 @@ export function AigcModelCategoryCard({
               {!configured && <Tag>{t("models.aigc.legacy")}</Tag>}
               {dirty && <span className={styles.aigcDirtyMark}>•</span>}
             </div>
-            <p className={styles.aigcCategoryDescription}>
-              {t(`models.aigc.${category}Description`)}
-            </p>
           </div>
           <Button icon={<SettingOutlined />} onClick={onManage}>
             {t("models.aigc.manage")}
