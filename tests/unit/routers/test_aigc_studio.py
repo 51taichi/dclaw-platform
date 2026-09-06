@@ -918,6 +918,68 @@ async def test_configured_image_policy_filters_capabilities_and_returns_default(
     engine.dispose()
 
 
+@pytest.mark.parametrize(
+    "configured,published,disabled,api_key,tagged,expected",
+    [
+        (True, True, False, "configured", False, True),
+        (True, True, False, "configured", True, True),
+        (False, True, False, "configured", False, False),
+        (True, False, False, "configured", False, False),
+        (True, True, True, "configured", False, False),
+        (True, True, False, "", False, False),
+    ],
+)
+async def test_text_policy_inventory_preserves_availability_and_selection_gates(
+    tmp_path, monkeypatch, configured, published, disabled, api_key,
+    tagged, expected,
+):
+    from qwenpaw.app.storage.engine import get_app_engine
+
+    selected = {"provider_id": "text-provider", "model_id": "configured-llm"}
+    if configured:
+        AigcModelPolicyRepository(get_app_engine()).replace(
+            "text", None, [selected], selected, 7,
+        )
+    provider = ProviderInfo(
+        id="text-provider", name="Text Provider", api_key=api_key,
+        disabled=disabled,
+        models=[
+            ModelInfo(
+                id="configured-llm", name="Configured LLM",
+                aigc_capabilities=["storyboard"] if tagged else [],
+            ),
+            ModelInfo(id="not-selected", name="Unselected LLM"),
+        ],
+    )
+
+    class Manager:
+        async def list_provider_info(self):
+            return [provider]
+
+    monkeypatch.setattr(
+        ModelPublicationService, "effective_pairs",
+        lambda _self: (
+            {("text-provider", "configured-llm"),
+             ("text-provider", "not-selected")}
+            if published else set()
+        ),
+    )
+    app = make_app(tmp_path)
+    app.state.provider_manager = Manager()
+    request = SimpleNamespace(app=app)
+    inventory = await aigc_studio.list_capabilities(request)
+    projected = [
+        item.model_id for item in inventory.capabilities
+        if item.provider_id == "text-provider" and item.capability == "storyboard"
+    ]
+    assert projected == (["configured-llm"] if expected else [])
+    # Submission uses the same capability lookup, not just the visible menu.
+    found = await aigc_studio._find_capability(
+        request, "text-provider", "configured-llm", "storyboard",
+    )
+    assert (found is not None) == expected
+
+
 async def test_job_submission_rejects_model_removed_from_allowlist(
     tmp_path,
     monkeypatch,
@@ -2458,11 +2520,31 @@ async def test_run_job_background_mode_returns_before_provider_finishes(
             assert finished.json()["outputs"][0]["id"] == "asset-background"
 
 
-async def test_run_storyboard_job_uses_chat_model_and_saves_text_meta(tmp_path):
+@pytest.mark.parametrize("configured_ordinary_llm", [False, True])
+async def test_run_storyboard_job_uses_chat_model_and_saves_text_meta(
+    tmp_path, configured_ordinary_llm,
+):
     """Text nodes should run through a chat model and keep text in asset metadata."""
     app = make_text_app(tmp_path)
     transport = ASGITransport(app=app)
     manager = app.state.provider_manager
+
+    if configured_ordinary_llm:
+        from qwenpaw.app.storage.engine import get_app_engine
+
+        manager.provider.models[0].aigc_capabilities = []
+        selected = {"provider_id": "text-provider", "model_id": "gvlm-3-1"}
+        AigcModelPolicyRepository(get_app_engine()).replace(
+            "text", None, [selected], selected, 7,
+        )
+
+    inventory = await aigc_studio.list_capabilities(SimpleNamespace(app=app))
+    text_models = [
+        item for item in inventory.capabilities if item.capability == "storyboard"
+    ]
+    assert [(item.provider_id, item.model_id) for item in text_models] == [
+        ("text-provider", "gvlm-3-1"),
+    ]
 
     with patch("qwenpaw.app.routers.aigc_studio.STUDIO_ROOT", tmp_path / "studio"):
         async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -2495,6 +2577,7 @@ async def test_run_storyboard_job_uses_chat_model_and_saves_text_meta(tmp_path):
                 },
             )
 
+            assert created.status_code == 202, created.text
             ran = await client.post(
                 f"/api/aigc-studio/jobs/{created.json()['id']}/run",
             )

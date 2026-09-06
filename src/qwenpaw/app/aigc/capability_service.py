@@ -500,6 +500,32 @@ async def build_capability_list(manager: Any | None) -> CapabilityList:
             "AIGC model-policy tables are unavailable; preserving legacy inventory",
         )
         return result
+    # An explicit text policy also selects ordinary LLMs without an AIGC
+    # storyboard tag. Project only its effective (published/priced/available)
+    # entries so the inventory and job validation agree with the admin policy.
+    text_policy = effective["text"]
+    if text_policy.configured:
+        existing_text_models = {
+            (item.provider_id, item.model_id)
+            for item in result.capabilities
+            if item.capability == "storyboard" and item.source == "model_registry"
+        }
+        for item in text_policy.models:
+            if (item.provider_id, item.model_id) in existing_text_models:
+                continue
+            result.capabilities.append(
+                AigcCapabilityInfo(
+                    provider_id=item.provider_id,
+                    provider_name=item.provider_name,
+                    model_id=item.model_id,
+                    model_name=item.model_name,
+                    capability="storyboard",
+                    source="model_registry",
+                    parameter_schema=_parameter_schema_for("storyboard"),
+                ),
+            )
+            existing_text_models.add((item.provider_id, item.model_id))
+
     allowed = {
         category: {
             (item.provider_id, item.model_id) for item in policy.models
