@@ -2307,6 +2307,14 @@ def _external_asset_reference_url(request: Request, asset_id: str) -> str | None
             return signed_cloud_url
         if public_base:
             return _public_asset_reference_url(request, asset_id)
+        provider_source = _clean_text(asset.meta.get("source_url"))
+        parsed_source = urlparse(provider_source)
+        if (
+            parsed_source.scheme in {"http", "https"}
+            and parsed_source.hostname
+            and not _is_private_or_local_host(parsed_source.hostname)
+        ):
+            return provider_source
     if public_base:
         return _public_asset_reference_url(request, asset_id)
     return None
@@ -4834,18 +4842,36 @@ async def _mark_job_running(job: AigcJob) -> AigcJob:
 
 
 async def _run_job_to_completion(request: Request, job_id: str) -> AigcJob:
+    from ..aigc.billing import (
+        AigcBillingReservation,
+        reserve_aigc_job,
+        settle_cancelled_aigc_job,
+    )
     from ..storage.engine import get_app_engine
     from ..storage.repos.aigc_execution_repo import AigcExecutionRepository
 
     job = _load_job(job_id)
-    if job.status in {"cancelled", "succeeded"}:
+    if job.status == "succeeded":
         return job
     canvas_owner = AigcCanvasService.owner(_load_canvas(job.canvas_id))
     owner = canvas_owner or current_user_id(request)
     allow_ownerless = canvas_owner is None and (current_user_id(request) == "0" or is_admin_request(request))
     lifecycle = AigcJobLifecycle(_resource_store(STUDIO_ROOT), AigcExecutionRepository(get_app_engine()))
+    if job.status == "cancelled":
+        settle_cancelled_aigc_job(
+            job,
+            owner,
+            supplier_references=lifecycle.repository.provider_task_references(job.id),
+        )
+        return job
     recovered = lifecycle.recover_terminal(job, owner_user_id=owner)
     if recovered is not None:
+        if recovered.status == "cancelled":
+            settle_cancelled_aigc_job(
+                recovered,
+                owner,
+                supplier_references=lifecycle.repository.provider_task_references(job.id),
+            )
         return recovered
     try:
         command = execution_command(job)
@@ -4872,6 +4898,7 @@ async def _run_job_to_completion(request: Request, job_id: str) -> AigcJob:
             lifecycle.repository.finish_job_attempt(job.id, attempt)
             raise
 
+    billing: AigcBillingReservation | None = None
     try:
         from ..billing.model_publication import ModelPublicationService
         from ..storage.engine import get_app_engine
@@ -4881,20 +4908,91 @@ async def _run_job_to_completion(request: Request, job_id: str) -> AigcJob:
             PriceCatalogRepository(get_app_engine())
         ).is_published(job.provider_id, job.model_id):
             raise RuntimeError("Model is not published in the active price catalog")
+        # AIGC adapters call media suppliers directly, outside the Agent model
+        # wrapper. Reserve the published price explicitly before any supplier
+        # activity; the immutable job id makes recovery idempotent.
+        billing = reserve_aigc_job(job, owner)
         async with execution.keepalive():
             outputs = await _execute_job(request, job, execution)
     except Exception as exc:
         recovered = lifecycle.recover_terminal(job, owner_user_id=owner)
         if recovered is not None:
+            if recovered.status == "cancelled":
+                references = lifecycle.repository.provider_task_references(job.id)
+                if billing is not None and billing.item_status == "held":
+                    billing.settle_failure(
+                        error="CancelledError",
+                        supplier_reference=references[0] if references else job.id,
+                        uncertain=bool(references),
+                    )
+                else:
+                    settle_cancelled_aigc_job(
+                        recovered,
+                        owner,
+                        supplier_references=references,
+                    )
             return recovered
-        if lifecycle.repository.has_provider_tasks(job.id) and not isinstance(exc, ProviderTaskFailed):
+        references = lifecycle.repository.provider_task_references(job.id)
+        # A durable supplier reference means the remote side accepted work.
+        # Its outcome is unknown after a transport/process failure regardless
+        # of whether this particular test/runtime has billing enabled.
+        uncertain = bool(
+            references
+            and not isinstance(exc, (ProviderSubmissionRejected, ProviderTaskFailed))
+        )
+        if billing is not None:
+            try:
+                billing.settle_failure(
+                    error=exc,
+                    supplier_reference=references[0] if references else job.id,
+                    uncertain=uncertain,
+                )
+            except Exception as billing_error:
+                lifecycle.repository.finish_job_attempt(job.id, attempt, uncertain=True)
+                raise HTTPException(
+                    status_code=503,
+                    detail="JOB_BILLING_RECONCILIATION_REQUIRED",
+                ) from billing_error
+        if uncertain:
             lifecycle.repository.finish_job_attempt(job.id, attempt, uncertain=True)
             raise HTTPException(status_code=503, detail="JOB_RESULT_RECONCILIATION_REQUIRED") from exc
         failure = _exception_message(exc)
     except asyncio.CancelledError:
-        lifecycle.repository.finish_job_attempt(job.id, attempt, uncertain=True)
+        if billing is not None:
+            references = lifecycle.repository.provider_task_references(job.id)
+            try:
+                billing.settle_failure(
+                    error="CancelledError",
+                    supplier_reference=references[0] if references else job.id,
+                    uncertain=bool(references),
+                )
+            except Exception:
+                logger.exception(
+                    "AIGC billing cancellation reconciliation failed for job %s",
+                    job.id,
+                )
+        lifecycle.repository.finish_job_attempt(
+            job.id,
+            attempt,
+            uncertain=bool(
+                lifecycle.repository.provider_task_references(job.id),
+            ),
+        )
         raise
     else:
+        if billing is not None:
+            references = lifecycle.repository.provider_task_references(job.id)
+            try:
+                billing.settle_success(
+                    outputs=outputs,
+                    supplier_reference=references[0] if references else job.id,
+                )
+            except Exception as exc:
+                lifecycle.repository.finish_job_attempt(job.id, attempt, uncertain=True)
+                raise HTTPException(
+                    status_code=503,
+                    detail="JOB_BILLING_RECONCILIATION_REQUIRED",
+                ) from exc
         failure = None
     try:
         # Provider failure and result/notification failure are different facts.
@@ -5230,17 +5328,37 @@ async def get_job(request: Request, job_id: str) -> AigcJob:
 
 @router.post("/jobs/{job_id}/cancel", response_model=AigcJob)
 async def cancel_job(request: Request, job_id: str) -> AigcJob:
+    from ..aigc.billing import settle_cancelled_aigc_job
     from ..storage.engine import get_app_engine
     from ..storage.repos.aigc_execution_repo import AigcExecutionRepository
 
     job = _load_job_for_request(request, job_id)
-    if job.status in {"succeeded", "failed", "cancelled"}:
+    if job.status in {"succeeded", "failed"}:
         return job
     canvas_owner = AigcCanvasService.owner(_load_canvas_for_request(request, job.canvas_id))
-    job = AigcJobLifecycle(_resource_store(STUDIO_ROOT), AigcExecutionRepository(get_app_engine())).cancel(
-        job, owner_user_id=canvas_owner or current_user_id(request),
-        allow_ownerless=canvas_owner is None and (current_user_id(request) == "0" or is_admin_request(request)),
-    )
+    owner = canvas_owner or current_user_id(request)
+    if job.status != "cancelled":
+        job = AigcJobLifecycle(
+            _resource_store(STUDIO_ROOT),
+            AigcExecutionRepository(get_app_engine()),
+        ).cancel(
+            job,
+            owner_user_id=owner,
+            allow_ownerless=canvas_owner is None
+            and (current_user_id(request) == "0" or is_admin_request(request)),
+        )
+    repository = AigcExecutionRepository(get_app_engine())
+    try:
+        settle_cancelled_aigc_job(
+            job,
+            owner,
+            supplier_references=repository.provider_task_references(job.id),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="JOB_BILLING_RECONCILIATION_REQUIRED",
+        ) from exc
     await _publish_job_event(job, "AIGC job cancelled")
     return job
 

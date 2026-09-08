@@ -1031,6 +1031,15 @@ def test_order_and_reconciliation_pages_use_constant_query_count(reporting):
     assert reconciliation_queries <= 3
     reconciliation_id = queue["items"][0]["reconciliation_id"]
     assert str(UUID(reconciliation_id)) == reconciliation_id
+    queue_item = queue["items"][0]["item"]
+    assert queue_item["quoted_credits"] == 6
+    assert queue_item["evidence"] == {
+        "supplier_reference_present": True,
+        "execution_outcome": "succeeded",
+    }
+    assert queue_item["created_at"] == (
+        NOW - timedelta(hours=2)
+    ).isoformat()
     serialized = json.dumps(queue)
     assert "item-alice-reconciling" not in serialized
     assert "call-alice-reconciling" not in serialized
@@ -1278,6 +1287,42 @@ def test_environment_cannot_bypass_explicit_enforced_activation(
 
     assert runtime.mode == "shadow"
     assert runtime.usage_service.mode == "shadow"
+
+
+def test_super_expert_open_api_runtime_uses_independent_4096_output_profile(
+    monkeypatch,
+    reporting,
+):
+    _service, _repository, engine = reporting
+    monkeypatch.delenv("DCLAW_OPEN_API_DEFAULT_OUTPUT_TOKENS", raising=False)
+    monkeypatch.delenv("DCLAW_SUPER_EXPERT_DEFAULT_OUTPUT_TOKENS", raising=False)
+    monkeypatch.setattr(open_api_runtime, "get_app_engine", lambda: engine)
+
+    regular = open_api_runtime.create_open_api_billing_runtime()
+    super_expert = open_api_runtime.create_open_api_billing_runtime(
+        output_profile="super_expert",
+    )
+
+    assert regular.default_max_output_tokens == 2048
+    assert super_expert.default_max_output_tokens == 4096
+
+
+def test_super_expert_output_profile_has_its_own_environment_override(
+    monkeypatch,
+    reporting,
+):
+    _service, _repository, engine = reporting
+    monkeypatch.setenv("DCLAW_OPEN_API_DEFAULT_OUTPUT_TOKENS", "1536")
+    monkeypatch.setenv("DCLAW_SUPER_EXPERT_DEFAULT_OUTPUT_TOKENS", "6144")
+    monkeypatch.setattr(open_api_runtime, "get_app_engine", lambda: engine)
+
+    regular = open_api_runtime.create_open_api_billing_runtime()
+    super_expert = open_api_runtime.create_open_api_billing_runtime(
+        output_profile="super_expert",
+    )
+
+    assert regular.default_max_output_tokens == 1536
+    assert super_expert.default_max_output_tokens == 6144
 
 
 def _reporting_client(monkeypatch, service, repository) -> TestClient:

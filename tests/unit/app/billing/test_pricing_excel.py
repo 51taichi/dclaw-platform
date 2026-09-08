@@ -123,8 +123,18 @@ def test_confirm_creates_cost_policy_and_draft_only(tmp_path):
     }
     assert repo.latest_trusted_costs()[0]["rmb_cost_decimal"] == "0.004"
     assert repo.list_policies()[0]["multiplier_decimal"] == "1.5"
-    with pytest.raises(ValueError, match="already confirmed"):
-        service.confirm_import(preview["id"], "1")
+    repeated = service.confirm_import(preview["id"], "1")
+    assert repeated == {
+        "id": preview["id"],
+        "status": "confirmed",
+        "pricing_preview": {
+            "catalog_id": "draft-1",
+            "review": {"included_dimensions": 1},
+        },
+        "already_confirmed": True,
+    }
+    assert len(repo.list_cost_snapshots()) == 1
+    assert repo.list_policies()[0]["revision"] == 1
     engine.dispose()
 
 
@@ -252,7 +262,7 @@ def test_draft_export_has_three_sheets_and_enabled_models_without_db_costs():
     assert "1.5" in instructions
 
 
-def test_draft_round_trip_recomputes_prices_and_requires_exclusion_reason():
+def test_unpriced_text_export_is_ready_for_cost_and_source_only_completion():
     model = PriceableModel(
         "volcengine-cn",
         "火山方舟",
@@ -270,14 +280,34 @@ def test_draft_round_trip_recomputes_prices_and_requires_exclusion_reason():
     workbook = load_workbook(BytesIO(content))
     sheet = workbook["价格草案"]
     headers = {cell.value: cell.column for cell in sheet[1]}
-    sheet.cell(2, headers["是否纳入本次发布"], "否")
-    sheet.cell(2, headers["排除原因"]).value = None
+    assert sheet.max_row == 3
+    assert {sheet.cell(row, headers["计价维度"]).value for row in (2, 3)} == {
+        "input_tokens",
+        "output_tokens",
+    }
+    for row in (2, 3):
+        assert sheet.cell(row, headers["能力"]).value == "chat"
+        assert sheet.cell(row, headers["单位数量"]).value == 1_000_000
+        assert sheet.cell(row, headers["规格条件"]).value == "{}"
+        assert sheet.cell(row, headers["默认倍率"]).value == "1.5"
+        assert sheet.cell(row, headers["来源类型"]).value == "manual"
+        assert sheet.cell(row, headers["验证状态"]).value == "manual_pending"
+        assert sheet.cell(row, headers["是否纳入本次发布"]).value == "是"
+        assert sheet.cell(row, headers["审批理由"]).value == "管理员人工定价"
+        assert sheet.cell(row, headers["人民币销售价"]).value is None
+        assert sheet.cell(row, headers["积分价格"]).value is None
+        sheet.cell(row, headers["人民币成本"], "10" if row == 2 else "45")
+        sheet.cell(row, headers["官方来源"], "https://api.liuma.ai/pricing")
     output = BytesIO()
     workbook.save(output)
 
-    blocked = service.preview_import(output.getvalue(), "draft.xlsx", "1")
-    assert blocked["status"] == "blocked"
-    assert blocked["rows"][0]["code"] == "exclusion_reason_required"
+    preview = service.preview_import(output.getvalue(), "draft.xlsx", "1")
+    assert preview["status"] == "ready"
+    assert len(preview["valid_rows"]) == 2
+    assert {row["unit_key"] for row in preview["valid_rows"]} == {
+        "input_tokens",
+        "output_tokens",
+    }
 
 
 def test_exported_missing_price_rows_have_a_round_trip_safe_exclusion_reason():
@@ -298,13 +328,39 @@ def test_exported_missing_price_rows_have_a_round_trip_safe_exclusion_reason():
     workbook = load_workbook(BytesIO(content), read_only=True)
     sheet = workbook["价格草案"]
     headers = {cell.value: cell.column for cell in sheet[1]}
-    assert sheet.cell(2, headers["是否纳入本次发布"]).value == "否"
-    assert sheet.cell(2, headers["排除原因"]).value == "暂无可信价格"
+    assert sheet.cell(2, headers["是否纳入本次发布"]).value == "是"
+    assert sheet.cell(2, headers["排除原因"]).value is None
 
     preview = service.preview_import(content, "draft.xlsx", "1")
-    assert preview["status"] == "ready"
-    assert preview["valid_rows"][0]["excluded"] is True
-    assert preview["valid_rows"][0]["exclusion_reason"] == "暂无可信价格"
+    assert preview["status"] == "blocked"
+    assert {row["code"] for row in preview["rows"]} == {"trusted_cost_missing"}
+
+
+def test_import_rejects_supplied_derived_values_that_do_not_match_cost():
+    model = PriceableModel(
+        "custom-provider", "Custom", "missing-model", "Missing", "text"
+    )
+    draft = PricingDraftBuilder(OfficialPriceRegistry.load_bundled()).build(
+        [model], [], [], []
+    )
+    service = PricingExcelService(Repo())
+    workbook = load_workbook(BytesIO(service.export_draft(draft)))
+    sheet = workbook["价格草案"]
+    headers = {cell.value: cell.column for cell in sheet[1]}
+    for row in (2, 3):
+        sheet.cell(row, headers["人民币成本"], "10")
+        sheet.cell(row, headers["官方来源"], "https://example.com/pricing")
+        sheet.cell(row, headers["人民币销售价"], "1")
+        sheet.cell(row, headers["积分价格"], 1)
+    output = BytesIO()
+    workbook.save(output)
+
+    preview = service.preview_import(output.getvalue(), "draft.xlsx", "1")
+
+    assert preview["status"] == "blocked"
+    assert {row["code"] for row in preview["rows"]} == {
+        "derived_price_mismatch"
+    }
 
 
 def test_multitier_official_draft_round_trips_without_false_duplicates():

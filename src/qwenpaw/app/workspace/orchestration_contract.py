@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
 from qwenpaw.config.config import (
     OrchestrationConfig,
@@ -33,6 +33,13 @@ class WorkspaceTurnRequest(BaseModel):
     granted_capabilities: dict[str, str]
     state_root: Path
     transaction_root: Path
+
+    # Assigned by WorkspaceTurnOrchestrator after request validation.  These
+    # values are deliberately absent from the wire/model schema: customer
+    # input cannot forge or extend the host's monotonic execution budget.
+    _runtime_deadline_monotonic: float | None = PrivateAttr(default=None)
+    _runtime_deadline_reserve_seconds: float = PrivateAttr(default=0.0)
+    _runtime_continuation: bool = PrivateAttr(default=False)
 
     @field_validator("state_root", "transaction_root")
     @classmethod

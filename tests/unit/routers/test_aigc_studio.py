@@ -2307,6 +2307,70 @@ async def test_run_job_creates_workspace_artifact_and_asset(tmp_path):
             assert assets.json()["assets"][0]["id"] == job["outputs"][0]["id"]
 
 
+async def test_run_job_settles_aigc_billing_before_success_projection(
+    tmp_path,
+    monkeypatch,
+):
+    events = []
+
+    class Reservation:
+        def settle_success(self, *, outputs, supplier_reference):
+            events.append(("settled", len(outputs), supplier_reference))
+
+        def settle_failure(self, **_kwargs):
+            events.append(("released",))
+
+    def reserve(job, owner):
+        events.append(("reserved", job.id, owner))
+        return Reservation()
+
+    monkeypatch.setattr(
+        "qwenpaw.app.aigc.billing.reserve_aigc_job",
+        reserve,
+    )
+    app = make_app(tmp_path)
+    transport = ASGITransport(app=app)
+
+    with patch("qwenpaw.app.routers.aigc_studio.STUDIO_ROOT", tmp_path / "studio"):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            canvas = await client.post(
+                "/api/aigc-studio/canvases",
+                json={
+                    "name": "Billing board",
+                    "nodes": [
+                        {
+                            "id": "image-1",
+                            "type": "image_generate",
+                            "position": {"x": 0, "y": 0},
+                            "data": {},
+                        },
+                    ],
+                    "edges": [],
+                    "viewport": {"x": 0, "y": 0, "zoom": 1},
+                },
+            )
+            created = await client.post(
+                "/api/aigc-studio/jobs",
+                json={
+                    "canvas_id": canvas.json()["id"],
+                    "node_id": "image-1",
+                    "capability": "text_to_image",
+                    "provider_id": "stub-aigc",
+                    "model_id": "stub-image",
+                    "inputs": {"prompt": "Billing integration"},
+                },
+            )
+
+            ran = await client.post(
+                f"/api/aigc-studio/jobs/{created.json()['id']}/run",
+            )
+
+    assert ran.status_code == 200
+    assert ran.json()["status"] == "succeeded"
+    assert events[0] == ("reserved", created.json()["id"], "0")
+    assert events[1] == ("settled", 1, created.json()["id"])
+
+
 async def test_export_long_image_creates_full_image_and_upload_slices(tmp_path):
     """Long-image export should compose upstream text and image nodes into assets."""
     app = make_app(tmp_path)
@@ -4740,6 +4804,72 @@ def test_external_asset_reference_url_uses_long_ttl_signed_oss_without_public_ba
 
     assert url == "https://oss.example.test/aigc/generated/cloud-ref.png?Expires=86400"
     assert signed_gets == [("aigc/generated/cloud-ref.png", 86400)]
+
+
+def test_external_asset_reference_url_falls_back_to_public_provider_source(
+    tmp_path,
+    monkeypatch,
+):
+    """Provider-generated media remains usable as a local reference without OSS."""
+    monkeypatch.delenv("AIGC_STUDIO_PUBLIC_BASE_URL", raising=False)
+    monkeypatch.delenv("QWENPAW_PUBLIC_BASE_URL", raising=False)
+    monkeypatch.delenv("PUBLIC_BASE_URL", raising=False)
+    request = SimpleNamespace(
+        state=SimpleNamespace(user_id="0", role="user"),
+    )
+    asset = aigc_studio.AigcAsset(
+        id="provider-ref",
+        kind="image",
+        name="provider-ref.png",
+        path="aigc_studio/provider-ref.png",
+        url="http://127.0.0.1:18088/api/user/aigc-studio/assets/provider-ref/file",
+        mime_type="image/png",
+        created_at="2026-09-08T00:00:00Z",
+        meta={
+            "owner_user_id": "0",
+            "source_url": "https://media.provider.example/generated/provider-ref.png",
+        },
+    )
+
+    with patch("qwenpaw.app.routers.aigc_studio.STUDIO_ROOT", tmp_path / "studio"):
+        aigc_studio._write_json(aigc_studio._json_path("assets", asset.id), asset)
+
+        url = aigc_studio._external_asset_reference_url(request, asset.id)
+
+    assert url == "https://media.provider.example/generated/provider-ref.png"
+
+
+def test_external_asset_reference_url_rejects_private_provider_source(
+    tmp_path,
+    monkeypatch,
+):
+    """Stored provider metadata cannot bypass the external-reference host check."""
+    monkeypatch.delenv("AIGC_STUDIO_PUBLIC_BASE_URL", raising=False)
+    monkeypatch.delenv("QWENPAW_PUBLIC_BASE_URL", raising=False)
+    monkeypatch.delenv("PUBLIC_BASE_URL", raising=False)
+    request = SimpleNamespace(
+        state=SimpleNamespace(user_id="0", role="user"),
+    )
+    asset = aigc_studio.AigcAsset(
+        id="private-provider-ref",
+        kind="image",
+        name="private-provider-ref.png",
+        path="aigc_studio/private-provider-ref.png",
+        url="/api/user/aigc-studio/assets/private-provider-ref/file",
+        mime_type="image/png",
+        created_at="2026-09-08T00:00:00Z",
+        meta={
+            "owner_user_id": "0",
+            "source_url": "http://127.0.0.1/internal/provider-ref.png",
+        },
+    )
+
+    with patch("qwenpaw.app.routers.aigc_studio.STUDIO_ROOT", tmp_path / "studio"):
+        aigc_studio._write_json(aigc_studio._json_path("assets", asset.id), asset)
+
+        url = aigc_studio._external_asset_reference_url(request, asset.id)
+
+    assert url is None
 
 
 async def test_run_mxapi_gpt_image_surfaces_submit_error_body(

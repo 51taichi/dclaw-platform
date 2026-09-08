@@ -51,6 +51,7 @@ from ..utils.console_static import (
 from ..utils.system_info import summarize_python_environment
 from .auth import AuthMiddleware, auto_register_from_env
 from .performance import RequestTimingMiddleware
+from .desktop_version_gate import DesktopVersionGateMiddleware
 from .routers import router as api_router, create_agent_scoped_router
 from .task_limits import create_task_limiter_from_env
 from .routers.agent_scoped import AgentContextMiddleware
@@ -720,6 +721,9 @@ app.add_middleware(AgentContextMiddleware)
 app.add_middleware(AuthMiddleware)
 
 app.add_middleware(RequestTimingMiddleware)
+
+# Browser requests do not carry desktop metadata and pass through unchanged.
+app.add_middleware(DesktopVersionGateMiddleware)
 
 # Apply CORS middleware for configured exact origins and desktop localhost origins.
 if CORS_ORIGINS or CORS_ORIGIN_REGEX:

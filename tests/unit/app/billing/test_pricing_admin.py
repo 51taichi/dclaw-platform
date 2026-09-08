@@ -152,9 +152,7 @@ def test_generate_draft_reads_persisted_ai_candidate(service):
     )
 
     assert saved[0]["include_in_publish"] is True
-    assert pricing.generate_draft("1")["rows"][0][
-        "include_in_publish"
-    ] is True
+    assert pricing.generate_draft("1")["rows"][0]["include_in_publish"] is True
     assert repo.list_audits()[0]["action"] == "draft.model_decisions.updated"
 
     batch = pricing.batch_set_model_decision(
@@ -167,9 +165,9 @@ def test_generate_draft_reads_persisted_ai_candidate(service):
         actor_id="admin-1",
     )
     assert batch["updated_models"] == 1
-    assert pricing.generate_draft("1")["rows"][0][
-        "include_in_publish"
-    ] is False
+    assert (
+        pricing.generate_draft("1")["rows"][0]["include_in_publish"] is False
+    )
 
 
 def test_initial_preview_blocks_non_text_model_without_any_trusted_cost(
@@ -290,6 +288,38 @@ def test_import_draft_cannot_publish_until_import_is_confirmed(service):
     )
 
 
+def test_confirmed_verified_import_persists_unit_size_for_round_trip(service):
+    _pricing, repo = service
+    rows = [
+        {
+            "provider_id": "dashscope",
+            "model_key": "qwen-plus",
+            "category": "text",
+            "capability": "chat",
+            "unit_key": "input_tokens",
+            "unit_size": 1_000_000,
+            "conditions": {},
+            "rmb_cost_decimal": "76",
+            "multiplier_decimal": "1.5",
+            "source_type": "trusted_cost",
+            "source_url": "https://example.com/pricing",
+            "verification_status": "verified",
+            "excluded": False,
+        }
+    ]
+    imported = repo.record_import(
+        "unit-size-digest",
+        "prices.xlsx",
+        "1",
+        {"status": "ready", "valid_rows": rows},
+    )
+
+    repo.apply_import_rows(imported["id"], rows, "prices.xlsx", "1", {})
+
+    stored = repo.latest_trusted_costs()[0]
+    assert stored["conditions_json"] == '{"unit_size":1000000}'
+
+
 def test_generated_draft_lists_enabled_models_and_allows_reasoned_subset(
     service,
 ):
@@ -408,8 +438,10 @@ def test_imported_exclusion_publishes_only_eligible_models(service):
         },
     )()
     rows = _import_rows(pricing)
-    rows[-1]["excluded"] = True
-    rows[-1]["exclusion_reason"] = "暂不纳入"
+    for row in rows:
+        if row["model_key"] == "unpriced-model":
+            row["excluded"] = True
+            row["exclusion_reason"] = "暂不纳入"
 
     preview = pricing.preview_initial_catalog("1", rows)
 
@@ -516,35 +548,24 @@ def test_imported_draft_rejects_missing_dimension_and_read_only_tampering(
         pricing.preview_initial_catalog("1", rows)
 
 
-def test_missing_model_accepts_explicit_manual_multidimensional_completion(
+def test_missing_text_model_accepts_exported_input_and_output_completion(
     service,
 ):
     pricing, _repo = service
     rows = _import_rows(pricing)
-    missing = rows[0]
-    manual_rows = []
-    for unit, amount in (
-        ("input_tokens", "0.01"),
-        ("output_tokens", "0.03"),
-        ("cache_read_tokens", "0.002"),
-    ):
-        manual_rows.append(
-            {
-                **missing,
-                "capability": "chat",
-                "unit_key": unit,
-                "unit_size": 1000,
-                "conditions": {},
-                "rmb_cost_decimal": amount,
-                "multiplier_decimal": "1.5",
-                "source_type": "manual",
-                "source_url": "https://example.com/vendor-price",
-                "verification_status": "manual_pending",
-                "excluded": False,
-            }
+    assert {row["unit_key"] for row in rows} == {
+        "input_tokens",
+        "output_tokens",
+    }
+    for row in rows:
+        row.update(
+            rmb_cost_decimal=(
+                "10" if row["unit_key"] == "input_tokens" else "45"
+            ),
+            source_url="https://example.com/vendor-price",
         )
 
-    preview = pricing.preview_initial_catalog("1", manual_rows)
+    preview = pricing.preview_initial_catalog("1", rows)
 
     assert preview["publishable"] is True
     catalog = pricing.catalogs.get_catalog(preview["catalog_id"])
@@ -552,7 +573,6 @@ def test_missing_model_accepts_explicit_manual_multidimensional_completion(
     assert {item["unit_key"] for item in dimensions} == {
         "input_tokens",
         "output_tokens",
-        "cache_read_tokens",
     }
 
 

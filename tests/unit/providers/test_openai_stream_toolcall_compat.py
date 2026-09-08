@@ -5,11 +5,20 @@ import json
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from agentscope.model import OpenAIChatModel
+from openai import NOT_GIVEN
 
 from qwenpaw.providers.openai_chat_model_compat import (
     OpenAIChatModelCompat,
     _sanitize_tool_call,
 )
+
+
+class _ProviderBadRequest(RuntimeError):
+    status_code = 400
 
 
 class CompatHarnessOpenAIChatModel(OpenAIChatModelCompat):
@@ -169,3 +178,45 @@ def test_sanitize_tool_call_normalizes_non_string_arguments() -> None:
     assert sanitized_missing_name_and_arguments is not None
     assert sanitized_missing_name_and_arguments.function.name == ""
     assert sanitized_missing_name_and_arguments.function.arguments == ""
+
+
+async def test_json_object_prompt_rejection_retries_without_response_format(
+) -> None:
+    model = OpenAIChatModelCompat(
+        "deepseek-v4-flash",
+        api_key="sk-test",
+        stream=True,
+        generate_kwargs={"response_format": {"type": "json_object"}},
+    )
+    expected = SimpleNamespace(content=[{"type": "text", "text": "ok"}])
+    error = _ProviderBadRequest(
+        "Prompt must contain the word 'json' in some form to use "
+        "'response_format' of type 'json_object'.",
+    )
+
+    mocked_call = AsyncMock(side_effect=[error, expected])
+    with patch.object(OpenAIChatModel, "__call__", mocked_call):
+        result = await model(
+            messages=[{"role": "user", "content": "hello"}],
+        )
+
+    assert result is expected
+    assert mocked_call.await_count == 2
+    assert mocked_call.await_args_list[1].kwargs["response_format"] is NOT_GIVEN
+
+
+async def test_unrelated_bad_request_is_not_retried() -> None:
+    model = OpenAIChatModelCompat(
+        "deepseek-v4-flash",
+        api_key="sk-test",
+        stream=True,
+        generate_kwargs={"response_format": {"type": "json_object"}},
+    )
+    error = _ProviderBadRequest("Invalid API key")
+
+    mocked_call = AsyncMock(side_effect=error)
+    with patch.object(OpenAIChatModel, "__call__", mocked_call):
+        with pytest.raises(_ProviderBadRequest, match="Invalid API key"):
+            await model(messages=[{"role": "user", "content": "hello"}])
+
+    assert mocked_call.await_count == 1

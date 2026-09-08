@@ -308,6 +308,17 @@ class AigcExecutionRepository:
         with self.engine.connect() as connection:
             return connection.execute(select(provider_tasks.c.slot).where(provider_tasks.c.job_id == job_id).limit(1)).first() is not None
 
+    def provider_task_references(self, job_id: str) -> list[str]:
+        """Return accepted supplier task ids in stable slot order."""
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                select(provider_tasks.c.remote_task_id).where(
+                    provider_tasks.c.job_id == job_id,
+                    provider_tasks.c.remote_task_id.is_not(None),
+                ).order_by(provider_tasks.c.slot),
+            ).all()
+        return [str(row[0]) for row in rows if str(row[0] or "").strip()]
+
     def can_query_provider_tasks(self, job_id: str, owner: str, command: dict) -> bool:
         """A persisted acceptance permits querying, never a new submission."""
         with self.engine.connect() as connection:

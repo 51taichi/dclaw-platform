@@ -1477,17 +1477,12 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
 
     @staticmethod
     def _is_bad_request_or_media_error(exc: Exception) -> bool:
-        """Return True for 400-class or media-related model errors.
+        """Return True only when the model error is media-related.
 
-        Targets bad-request (400) errors because unsupported media
-        content typically causes request validation failures.  Keyword
-        matching provides an extra safety net for providers that use
-        non-standard status codes.
+        A provider can use status 400 for many unrelated validation errors.
+        Retrying all of them after stripping media both hides the real cause
+        and performs a second request that cannot succeed.
         """
-        status = getattr(exc, "status_code", None)
-        if status == 400:
-            return True
-
         error_str = str(exc).lower()
         keywords = [
             "image",

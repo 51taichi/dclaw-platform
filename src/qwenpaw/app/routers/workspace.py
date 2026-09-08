@@ -429,6 +429,72 @@ def _assert_root_fallback_allowed(
         )
 
 
+def _structured_media_files_from_state(
+    state_text: str,
+    workspace_dir: Path,
+) -> list[str]:
+    """Return local media paths explicitly embedded in structured chat state."""
+    try:
+        payload = json.loads(state_text)
+    except (TypeError, ValueError):
+        return []
+
+    root = workspace_dir.resolve()
+    result: list[str] = []
+    seen: set[str] = set()
+
+    def add_candidate(value: object) -> None:
+        if not isinstance(value, str):
+            return
+        candidate = value.strip()
+        if candidate.startswith("file://"):
+            candidate = candidate.removeprefix("file://")
+        elif "://" in candidate or candidate.startswith(("data:", "blob:")):
+            return
+
+        candidate_path = Path(candidate)
+        resolved = (
+            candidate_path.resolve()
+            if candidate_path.is_absolute()
+            else (root / candidate_path).resolve()
+        )
+        try:
+            rel_path = resolved.relative_to(root).as_posix()
+        except ValueError:
+            return
+        if (
+            not rel_path
+            or is_internal_task_file(rel_path)
+            or not resolved.is_file()
+            or rel_path in seen
+        ):
+            return
+        seen.add(rel_path)
+        result.append(rel_path)
+
+    def walk(value: object) -> None:
+        if isinstance(value, list):
+            for item in value:
+                walk(item)
+            return
+        if not isinstance(value, dict):
+            return
+
+        if value.get("type") in {"image", "video", "audio", "file"}:
+            source = value.get("source")
+            if isinstance(source, dict) and source.get("type") == "url":
+                add_candidate(source.get("url"))
+            for key in ("image_url", "video_url", "file_url", "data"):
+                add_candidate(value.get(key))
+
+        for child in value.values():
+            if isinstance(child, (dict, list)):
+                walk(child)
+
+    walk(payload)
+    return result
+
+
 def _explicit_artifact_files_for_chat(chat_id: str | None, workspace_dir: Path) -> list[str]:
     """Return user artifact files explicitly mentioned by a chat's state."""
     if not chat_id:
@@ -451,7 +517,9 @@ def _explicit_artifact_files_for_chat(chat_id: str | None, workspace_dir: Path) 
         result: list[str] = []
         seen: set[str] = set()
         for state_text in state_texts:
-            for path in extract_user_task_files_from_text(state_text, workspace_dir):
+            paths = extract_user_task_files_from_text(state_text, workspace_dir)
+            paths.extend(_structured_media_files_from_state(state_text, workspace_dir))
+            for path in paths:
                 for session_id in session_ids:
                     path = strip_session_data_prefix(path, session_id)
                 if path in seen:

@@ -78,6 +78,7 @@ class SuperExpertPlatformService:
         task_repository: AigcTaskRepository,
         event_repository: SuperExpertEventRepository,
         event_bus: Any,
+        event_session_resolver: Callable[[str], str] | None = None,
         workflow_execution_service: AigcWorkflowExecutionService | None = None,
         aigc_adapter: AigcServiceAdapter | None = None,
     ) -> None:
@@ -85,6 +86,7 @@ class SuperExpertPlatformService:
         self.task_repository = task_repository
         self.event_repository = event_repository
         self.event_bus = event_bus
+        self.event_session_resolver = event_session_resolver or (lambda value: value)
         self.workflow_execution_service = workflow_execution_service
         self.aigc = aigc_adapter
         self._review_locks: dict[str, asyncio.Lock] = {}
@@ -238,15 +240,16 @@ class SuperExpertPlatformService:
             event_type=_EVENT_TYPES[capability],
             payload=event_payload,
         )
+        runtime_session_id = self.event_session_resolver(binding.conversation_id)
         if self.event_repository.append(envelope):
             await self.event_bus.publish(
                 RuntimeEvent(
                     id=event_id,
                     type="super_expert_event",
                     scope="session",
-                    session_id=binding.conversation_id,
+                    session_id=runtime_session_id,
                     job_id=binding.material_task_id,
-                    status=(task.status.value if task is not None else None),
+                    status=(task.status.value if task is not None else result.get("card_status")),
                     payload={"envelope": envelope.model_dump(mode="json")},
                 ),
             )
@@ -561,7 +564,29 @@ class SuperExpertPlatformService:
         idempotency_key: str,
     ) -> dict[str, Any]:
         if capability in {"card.create", "card.update"}:
-            return {"payload": dict(arguments.get("card") or {})}
+            current = self.task_repository.get(binding.material_task_id)
+            if current is not None and current.binding != binding:
+                raise SuperExpertPlatformError("card task binding mismatch")
+            card = dict(arguments.get("card") or {})
+            if current is None:
+                if card.get("card_type") == "aigc_material_task":
+                    raise SuperExpertPlatformError("card task is unavailable")
+                return {"payload": {key: value for key, value in card.items()
+                                    if key not in {"task_status", "task_version"}}}
+            # Card commands do not mutate the material task or start a Job.
+            # They carry their own trusted status so an earlier SSE is optional.
+            reserved = {"task_status", "task_version"}
+            card = {key: value for key, value in card.items() if key not in reserved}
+            prior = self.event_repository.get(event_id)
+            if prior is not None:
+                prior_card = {key: value for key, value in prior.payload.items() if key not in reserved}
+                if prior_card != card or prior.event_type != _EVENT_TYPES[capability]:
+                    raise SuperExpertPlatformError("card event id is already bound")
+                # Preserve the original event snapshot after task progress.
+                # append(envelope) still validates every original binding field.
+                return {"payload": dict(prior.payload), "card_status": prior.payload.get("task_status")}
+            card.update(task_status=current.status.value, task_version=current.version)
+            return {"payload": card, "card_status": current.status.value}
         current = self.task_repository.get(binding.material_task_id)
         if capability == "aigc.task.create":
             action = "create"

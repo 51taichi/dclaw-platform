@@ -28,6 +28,27 @@ from qwenpaw.app.routers import open_api
 from qwenpaw.app.task_limits import TaskConcurrencyLimiter
 
 
+def test_output_profile_is_larger_only_for_super_expert_release():
+    base = {
+        "release_id": "release-1",
+        "version": "1.0.0",
+        "content_digest": "a" * 64,
+        "signer_id": "signer-1",
+    }
+
+    assert open_api._output_profile_for_release(None) == "default"
+    assert (
+        open_api._output_profile_for_release(SealedReleaseRecord(**base))
+        == "default"
+    )
+    assert (
+        open_api._output_profile_for_release(
+            SealedReleaseRecord(**base, package_type="super_expert"),
+        )
+        == "super_expert"
+    )
+
+
 class FakeOpenApiRepository:
     def __init__(self, publication: dict[str, Any] | None = None) -> None:
         self.publication = publication
@@ -511,7 +532,7 @@ def _stub_router_billing_runtime(monkeypatch):
     monkeypatch.setattr(
         open_api,
         "create_open_api_billing_runtime",
-        lambda: _FakeBillingRuntime(open_api.get_open_api_repository()),
+        lambda **_kwargs: _FakeBillingRuntime(open_api.get_open_api_repository()),
     )
 
 

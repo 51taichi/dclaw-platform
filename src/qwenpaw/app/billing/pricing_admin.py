@@ -190,7 +190,9 @@ class PricingAdminService:
                 continue
             selected.add((row["provider_id"], row["model_key"]))
         if not selected:
-            raise ValueError("no pricing draft models matched the batch filter")
+            raise ValueError(
+                "no pricing draft models matched the batch filter"
+            )
         saved = self.set_model_decisions(
             draft_key,
             [
@@ -615,7 +617,11 @@ class PricingAdminService:
             canonical_cost = canonical["rmb_cost_decimal"]
             if imported_cost is None and canonical_cost is None:
                 pass
-            elif Decimal(str(imported_cost)) == Decimal(str(canonical_cost)):
+            elif (
+                imported_cost is not None
+                and canonical_cost is not None
+                and Decimal(str(imported_cost)) == Decimal(str(canonical_cost))
+            ):
                 for field in (
                     "source_type",
                     "source_url",
@@ -627,7 +633,8 @@ class PricingAdminService:
                     if str(row.get(field) or "") != canonical[field]:
                         raise ValueError(
                             "pricing draft read-only field changed: "
-                            f"{field} ({model_identity[0]}/{model_identity[1]})"
+                            f"{field} "
+                            f"({model_identity[0]}/{model_identity[1]})"
                         )
             elif not (
                 str(row.get("source_type") or "") == "manual"

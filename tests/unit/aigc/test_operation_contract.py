@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10 test environments
+    import tomli as tomllib
 
 import pytest
 from pydantic import ValidationError
@@ -17,6 +21,18 @@ CONTRACT = (
     Path(__file__).parents[3]
     / "src/qwenpaw/aigc/contracts/aigc-operation-contract-v1.json"
 )
+
+
+def test_operation_contract_is_declared_as_python_package_data():
+    project = tomllib.loads(
+        (Path(__file__).parents[3] / "pyproject.toml").read_text(
+            encoding="utf-8",
+        ),
+    )
+
+    assert "aigc/contracts/*.json" in project["tool"]["setuptools"][
+        "package-data"
+    ]["qwenpaw"]
 
 
 def test_v1_text_to_video_contract_has_stable_unique_human_controls():

@@ -233,6 +233,11 @@ async def _run_standard_or_orchestrated_turn(
                 idempotency_key=idempotency_key,
             )
 
+        from ..workspace.media_review_context import current_review_input
+        review_input = current_review_input(
+            user_id=str(request.user_id), installation_id=authorization.installation_id,
+            conversation_id=str(request.session_id),
+        )
         result = await run_workspace_orchestration_turn(
             agent=agent,
             original_messages=messages,
@@ -248,6 +253,7 @@ async def _run_standard_or_orchestrated_turn(
                 "platformEvents": [
                     event.model_dump(mode="json") for event in platform_events
                 ],
+                **({"aigcReviewInput": review_input} if review_input is not None else {}),
             },
         )
     except WorkspaceOrchestrationError:

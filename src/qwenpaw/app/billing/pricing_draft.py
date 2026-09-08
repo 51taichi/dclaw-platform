@@ -89,7 +89,8 @@ class PricingDraftBuilder:
         decisions: Sequence[Mapping[str, Any]] = (),
     ) -> PricingDraftResult:
         mapping_index = {
-            (str(row["provider_id"]), str(row["model_key"])): row for row in mappings
+            (str(row["provider_id"]), str(row["model_key"])): row
+            for row in mappings
         }
         cost_index = {
             (
@@ -108,9 +109,12 @@ class PricingDraftBuilder:
             if row.get("excluded") is True
         }
         decision_index = {
-            (str(row["provider_id"]), str(row["model_key"])): row for row in decisions
+            (str(row["provider_id"]), str(row["model_key"])): row
+            for row in decisions
         }
-        candidate_index: dict[tuple[str, str, str, str, str], Mapping[str, Any]] = {}
+        candidate_index: dict[
+            tuple[str, str, str, str, str], Mapping[str, Any]
+        ] = {}
         for row in candidates:
             key = (
                 str(row["provider_id"]),
@@ -132,7 +136,9 @@ class PricingDraftBuilder:
             official_provider_id = (
                 str(mapping["official_provider_id"])
                 if mapping and mapping.get("official_provider_id")
-                else model.provider_id if model.official_model_id else None
+                else model.provider_id
+                if model.official_model_id
+                else None
             )
             official_model_id = (
                 str(mapping["official_model_id"])
@@ -145,7 +151,9 @@ class PricingDraftBuilder:
                     for dimension in self.registry.dimensions(
                         official_provider_id, official_model_id
                     )
-                    if _region_matches(dimension.conditions, model.pricing_region)
+                    if _region_matches(
+                        dimension.conditions, model.pricing_region
+                    )
                 )
                 if official_provider_id and official_model_id
                 else ()
@@ -184,7 +192,9 @@ class PricingDraftBuilder:
                         evidence_level = str(
                             candidate.get("evidence_level") or "failed"
                         )
-                        multiplier_value = candidate.get("default_multiplier_decimal")
+                        multiplier_value = candidate.get(
+                            "default_multiplier_decimal"
+                        )
                         multiplier = (
                             Decimal(str(multiplier_value))
                             if multiplier_value is not None
@@ -226,23 +236,29 @@ class PricingDraftBuilder:
                                 multiplier,
                                 sale,
                                 int(
-                                    (sale * self.credits_per_yuan).to_integral_value(
-                                        rounding=ROUND_CEILING
-                                    )
+                                    (
+                                        sale * self.credits_per_yuan
+                                    ).to_integral_value(rounding=ROUND_CEILING)
                                 ),
                                 f"candidate:{evidence_level}",
                                 str(candidate.get("source_url") or "") or None,
                                 str(
-                                    candidate.get("verification_status") or "candidate"
+                                    candidate.get("verification_status")
+                                    or "candidate"
                                 ),
                                 include,
                                 reason,
-                                str(candidate.get("registry_version") or "") or None,
+                                str(candidate.get("registry_version") or "")
+                                or None,
                                 evidence_level,
-                                str(candidate.get("evidence_excerpt") or "") or None,
+                                str(candidate.get("evidence_excerpt") or "")
+                                or None,
                                 (
-                                    Decimal(str(candidate["confidence_decimal"]))
-                                    if candidate.get("confidence_decimal") is not None
+                                    Decimal(
+                                        str(candidate["confidence_decimal"])
+                                    )
+                                    if candidate.get("confidence_decimal")
+                                    is not None
                                     else None
                                 ),
                                 str(candidate.get("ai_model") or "") or None,
@@ -257,7 +273,9 @@ class PricingDraftBuilder:
                         for key, row in cost_index.items()
                         if key[:2] == model_key
                         and _region_matches(
-                            json.loads(str(row.get("conditions_json") or "{}")),
+                            json.loads(
+                                str(row.get("conditions_json") or "{}")
+                            ),
                             model.pricing_region,
                         )
                     ),
@@ -284,14 +302,16 @@ class PricingDraftBuilder:
                             or conditions.pop(
                                 "unit_size",
                                 (
-                                    1000
+                                    1_000_000
                                     if str(trusted["unit_key"])
                                     in {"input_tokens", "output_tokens"}
                                     else 1
                                 ),
                             )
                         )
-                        source_reference = str(trusted.get("source_reference") or "")
+                        source_reference = str(
+                            trusted.get("source_reference") or ""
+                        )
                         rows.append(
                             PricingDraftRow(
                                 model.provider_id,
@@ -301,7 +321,9 @@ class PricingDraftBuilder:
                                 official_provider_id,
                                 official_model_id,
                                 model.category,
-                                str(trusted.get("capability") or model.category),
+                                str(
+                                    trusted.get("capability") or model.category
+                                ),
                                 str(trusted["unit_key"]),
                                 unit_size,
                                 conditions,
@@ -328,32 +350,57 @@ class PricingDraftBuilder:
                     if official_model_id is None
                     else "official_price_missing"
                 )
-                risks.append(PricingDraftRisk(code, model.provider_id, model.model_key))
-                rows.append(
-                    PricingDraftRow(
-                        model.provider_id,
-                        model.provider_name,
-                        model.model_key,
-                        model.model_name,
-                        official_provider_id,
-                        official_model_id,
-                        model.category,
-                        "",
-                        "",
-                        1,
-                        {},
-                        None,
-                        self.default_multiplier,
-                        None,
-                        None,
-                        "missing",
-                        None,
-                        "unmatched" if official_model_id is None else "missing",
-                        False,
-                        exclusion_reason,
-                        None,
-                    )
+                risks.append(
+                    PricingDraftRisk(code, model.provider_id, model.model_key)
                 )
+                missing_dimensions = (
+                    ("input_tokens", "output_tokens")
+                    if model.category == "text"
+                    else ("",)
+                )
+                for unit_key in missing_dimensions:
+                    is_fillable_text = bool(unit_key)
+                    rows.append(
+                        PricingDraftRow(
+                            model.provider_id,
+                            model.provider_name,
+                            model.model_key,
+                            model.model_name,
+                            official_provider_id,
+                            official_model_id,
+                            model.category,
+                            "chat" if is_fillable_text else "",
+                            unit_key,
+                            1_000_000 if is_fillable_text else 1,
+                            {},
+                            None,
+                            self.default_multiplier,
+                            None,
+                            None,
+                            "manual" if is_fillable_text else "missing",
+                            None,
+                            (
+                                "manual_pending"
+                                if is_fillable_text
+                                else (
+                                    "unmatched"
+                                    if official_model_id is None
+                                    else "missing"
+                                )
+                            ),
+                            is_fillable_text and not bool(exclusion),
+                            exclusion_reason,
+                            None,
+                            evidence_level=(
+                                "manual"
+                                if is_fillable_text
+                                else "official_verified"
+                            ),
+                            approval_reason=(
+                                "管理员人工定价" if is_fillable_text else None
+                            ),
+                        )
+                    )
                 continue
             matched.add(model_key)
             for dimension in dimensions:
@@ -400,7 +447,9 @@ class PricingDraftBuilder:
                     if override
                     else dimension.rmb_cost
                 )
-                source_type = "trusted_cost" if override else "official_registry"
+                source_type = (
+                    "trusted_cost" if override else "official_registry"
+                )
                 sale = rmb_cost * self.default_multiplier
                 credits = int(
                     (sale * self.credits_per_yuan).to_integral_value(
@@ -481,7 +530,9 @@ def _candidate_digest(candidate: Mapping[str, Any]) -> str:
     ).hexdigest()
 
 
-def _region_matches(conditions: Mapping[str, Any], pricing_region: str | None) -> bool:
+def _region_matches(
+    conditions: Mapping[str, Any], pricing_region: str | None
+) -> bool:
     official_region = conditions.get("region")
     if official_region is None:
         return True

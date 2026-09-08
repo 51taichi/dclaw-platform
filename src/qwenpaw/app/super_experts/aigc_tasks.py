@@ -145,6 +145,11 @@ class AigcTaskRepository:
         with self._lock:
             return self._read().tasks.get(material_task_id)
 
+    def list_for_conversations(self, conversation_ids: set[str]) -> tuple[AigcMaterialTask, ...]:
+        """Read task snapshots for an already authorized chat and its aliases."""
+        with self._lock:
+            return tuple(task for task in self._read().tasks.values()
+                         if task.binding.conversation_id in conversation_ids)
 
     def find_workflow_task_for_node(
         self,

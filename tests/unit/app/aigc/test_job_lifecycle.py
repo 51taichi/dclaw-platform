@@ -18,6 +18,12 @@ def resources(tmp_path, monkeypatch):
     engine = create_engine(f"sqlite:///{tmp_path / 'core.sqlite'}")
     create_all(engine)
     monkeypatch.setattr("qwenpaw.app.storage.engine.get_app_engine", lambda: engine)
+    # These lifecycle tests exercise provider/result recovery, not pricing.
+    # Keep billing isolated; dedicated AIGC billing tests cover real holds.
+    monkeypatch.setattr(
+        "qwenpaw.app.aigc.billing.reserve_aigc_job",
+        lambda *_args, **_kwargs: None,
+    )
     store = AigcResourceStore(tmp_path / "studio")
     canvas = AigcCanvasService(store).create("owner", CanvasUpsert(nodes=[
         CanvasNode(id="video", type="video_generate", position={"x": 0, "y": 0}),

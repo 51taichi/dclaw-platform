@@ -175,7 +175,7 @@ class PricingExcelService:
                         "detail": str(exc),
                     }
                 ]
-            self.repository.replace_import_preview(  # type: ignore[attr-defined]
+            self.repository.replace_import_preview(  # type: ignore[attr-defined]  # noqa: E501
                 str(stored["id"]), preview
             )
         return {"id": stored["id"], **preview}
@@ -315,11 +315,20 @@ class PricingExcelService:
             return {"row": number, "code": "invalid_decimal"}, None
         if multiplier_value < Decimal("1.3"):
             return {"row": number, "code": "below_safe_floor"}, None
-        if (
-            Decimal(str(sale_price)) != expected_sale
-            or int(credits) != expected_credits
-        ):
-            return {"row": number, "code": "derived_price_mismatch"}, None
+        derived_values_blank = sale_price in (None, "") and credits in (
+            None,
+            "",
+        )
+        if not derived_values_blank:
+            try:
+                derived_values_match = (
+                    Decimal(str(sale_price)) == expected_sale
+                    and int(credits) == expected_credits
+                )
+            except (InvalidOperation, TypeError, ValueError):
+                derived_values_match = False
+            if not derived_values_match:
+                return {"row": number, "code": "derived_price_mismatch"}, None
         return None, {
             "provider_id": key[0],
             "model_key": key[1],
@@ -444,7 +453,7 @@ class PricingExcelService:
         instructions.append(
             (
                 "人工补价",
-                "缺价行可复制为多个维度；填写能力、计价维度、单位数量、规格条件、人民币成本、HTTPS来源，将来源类型改为manual、验证状态改为manual_pending，再导入审批。",
+                "缺价文本模型已自动生成输入、输出两个计价维度；管理员只需填写人民币成本和HTTPS来源，销售价与积分由系统自动计算。",
             )
         )
         instructions.append(
@@ -471,7 +480,12 @@ class PricingExcelService:
         if stored["status"] == "confirmed" and stored["preview"].get(
             "pricing_preview"
         ):
-            raise ValueError("import already confirmed or missing")
+            return {
+                "id": import_id,
+                "status": "confirmed",
+                "pricing_preview": stored["preview"]["pricing_preview"],
+                "already_confirmed": True,
+            }
         preview = stored["preview"]
         if preview["status"] != "ready":
             raise ValueError("blocked import cannot be confirmed")

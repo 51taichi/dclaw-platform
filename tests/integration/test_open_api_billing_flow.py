@@ -261,7 +261,7 @@ def _billing_flow(tmp_path, monkeypatch):
     monkeypatch.setattr(
         open_api,
         "create_open_api_billing_runtime",
-        lambda: runtime,
+        lambda **_kwargs: runtime,
     )
     try:
         yield SimpleNamespace(

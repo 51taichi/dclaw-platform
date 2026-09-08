@@ -113,6 +113,37 @@ def test_client_generates_signed_put_url_with_content_type() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured_value", "expected_write_timeout"),
+    [
+        (None, 600.0),
+        ("900", 900.0),
+        ("invalid", 600.0),
+        ("1", 60.0),
+        ("7200", 3600.0),
+    ],
+)
+async def test_default_http_client_uses_configurable_oss_write_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    configured_value: str | None,
+    expected_write_timeout: float,
+) -> None:
+    if configured_value is None:
+        monkeypatch.delenv("DCLAW_OSS_WRITE_TIMEOUT_SECONDS", raising=False)
+    else:
+        monkeypatch.setenv("DCLAW_OSS_WRITE_TIMEOUT_SECONDS", configured_value)
+
+    client = AliyunOssClient._default_http_client()
+    try:
+        assert client.timeout.connect == 15.0
+        assert client.timeout.read == 60.0
+        assert client.timeout.write == expected_write_timeout
+        assert client.timeout.pool == 60.0
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_upload_puts_bytes_to_signed_oss_resource() -> None:
     calls: list[dict] = []
 

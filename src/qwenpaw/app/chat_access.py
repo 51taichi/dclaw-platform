@@ -45,11 +45,22 @@ def get_chat_row_for_current_user(
         raise HTTPException(status_code=404, detail="Chat not found")
 
     user_id = current_user_id(request)
-    for row in rows:
-        if allow_admin and is_admin_request(request):
-            return row
-        if str(row["user_id"]) == user_id:
-            return row
+    is_admin = allow_admin and is_admin_request(request)
+    accessible_rows = [
+        row for row in rows if is_admin or str(row["user_id"]) == user_id
+    ]
+    if accessible_rows:
+        # A chat UUID can also appear as another row's session_id. Prefer the
+        # exact chat identity so a legacy duplicate cannot hide the original
+        # conversation and its full history.
+        return next(
+            (
+                row
+                for row in accessible_rows
+                if str(row["id"]) == str(chat_id)
+            ),
+            accessible_rows[0],
+        )
 
     raise HTTPException(status_code=404, detail="Chat not found")
 

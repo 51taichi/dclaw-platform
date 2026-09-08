@@ -1,0 +1,12 @@
+# Include these locations in the HTTPS server block for this deployment.
+location = /latest.json {
+    alias /opt/dclaw-updates/latest.json;
+    default_type application/json;
+    add_header Cache-Control "no-store" always;
+}
+
+location /desktop/ {
+    alias /opt/dclaw-updates/desktop/;
+    autoindex off;
+    add_header Cache-Control "public, max-age=31536000, immutable" always;
+}

@@ -7,6 +7,7 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import posixpath
 import time
 from dataclasses import dataclass, field
@@ -21,6 +22,7 @@ from ..constant import SECRET_DIR
 
 MASKED_SECRET = "********"
 DEFAULT_CONFIG_PATH = SECRET_DIR / "object_storage.json"
+DEFAULT_OSS_WRITE_TIMEOUT_SECONDS = 600.0
 
 
 def _utc_now() -> str:
@@ -56,6 +58,15 @@ def _normalize_ttl(value: Any) -> int:
     except (TypeError, ValueError):
         ttl = 900
     return max(60, min(ttl, 604800))
+
+
+def _oss_write_timeout_seconds() -> float:
+    raw = os.environ.get("DCLAW_OSS_WRITE_TIMEOUT_SECONDS")
+    try:
+        timeout = float(raw) if raw is not None else DEFAULT_OSS_WRITE_TIMEOUT_SECONDS
+    except (TypeError, ValueError):
+        timeout = DEFAULT_OSS_WRITE_TIMEOUT_SECONDS
+    return max(60.0, min(timeout, 3600.0))
 
 
 def _is_aliyun_oss_endpoint(host: str) -> bool:
@@ -315,7 +326,11 @@ class AliyunOssClient:
     @staticmethod
     def _default_http_client() -> httpx.AsyncClient:
         return httpx.AsyncClient(
-            timeout=httpx.Timeout(60.0, connect=15.0),
+            timeout=httpx.Timeout(
+                60.0,
+                connect=15.0,
+                write=_oss_write_timeout_seconds(),
+            ),
             follow_redirects=True,
         )
 

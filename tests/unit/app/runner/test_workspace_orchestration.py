@@ -22,6 +22,7 @@ from qwenpaw.app.workspace.orchestration import (
     AuthorizedWorkspaceRelease,
     authorize_workspace_release,
     _candidate_execution_messages,
+    _agent_execute_response_format,
     _execute_internal_candidate,
     is_workspace_business_turn,
     resolve_active_workspace_authorization,
@@ -205,8 +206,26 @@ def test_candidate_execution_projects_runtime_system_instruction_as_last_user_tu
     assert [message.role for message in projected] == ["user", "user"]
     assert "ONLY JSON" in projected[-1].get_text_content()
     assert projected[-1].get_text_content().endswith(
-        "禁止用普通字符串或字符串 \"null\" 代替。"
+        "不得输出面向客户的普通回答或任何前后解释。"
     )
+
+
+def test_candidate_execution_does_not_override_runtime_ini_format_with_json_rules():
+    messages = [
+        Msg(
+            name="runtime",
+            role="system",
+            content="只输出 INI-lite。\n[method]\nmethod_id=M01",
+        ),
+        Msg(name="user", role="user", content="好"),
+    ]
+
+    projected = _candidate_execution_messages(messages)
+    candidate_instruction = projected[-1].get_text_content()
+
+    assert "只输出 INI-lite" in candidate_instruction
+    assert "JSON 类型" not in candidate_instruction
+    assert 'JSON null' not in candidate_instruction
 
 
 @pytest.mark.asyncio
@@ -278,6 +297,65 @@ async def test_internal_candidate_keeps_latest_nonempty_stream_chunk():
     assert result.invocation_id == "chunk-1"
     assert model.max_tokens == 4096
     assert model.extra_body == {"thinking": {"type": "disabled"}}
+
+
+@pytest.mark.asyncio
+async def test_internal_candidate_forwards_validated_json_response_format():
+    class Formatter:
+        async def format(self, *, msgs):
+            return msgs
+
+    class Model:
+        stream = False
+        model_key = "openai-compatible:test"
+
+        async def __call__(self, prompt, **kwargs):
+            assert kwargs["response_format"] == {"type": "json_object"}
+            assert kwargs["max_tokens"] == 8192
+            return SimpleNamespace(id="json-1", content=[{"type": "text", "text": "{}"}])
+
+    result = await _execute_internal_candidate(
+        SimpleNamespace(name="agent", formatter=Formatter(), model=Model()),
+        [Msg(name="runtime", role="system", content="Return strict JSON")],
+        response_format="json_object",
+    )
+    assert result.get_text_content() == "{}"
+
+
+@pytest.mark.asyncio
+async def test_fallback_agent_rejects_json_format_instead_of_ignoring_it():
+    class FallbackAgent:
+        # A self-declared flag is not a trusted host/model API and must not
+        # turn a format request into an ordinary prompt-only call.
+        supports_json_object_response_format = True
+
+        async def __call__(self, messages):
+            raise AssertionError("unsupported fallback must not execute")
+
+    with pytest.raises(WorkspaceOrchestrationError):
+        await _execute_internal_candidate(
+            FallbackAgent(), [Msg(name="runtime", role="system", content="JSON")],
+            response_format="json_object",
+        )
+
+    with pytest.raises(WorkspaceOrchestrationError):
+        await _execute_internal_candidate(
+            SimpleNamespace(name="direct", formatter=object(), model=object()),
+            [Msg(name="runtime", role="system", content="JSON")],
+            response_format={},
+        )
+
+
+def test_agent_execute_response_format_is_closed_and_does_not_coerce_values():
+    assert _agent_execute_response_format({"messages": []}) is None
+    assert _agent_execute_response_format({
+        "messages": [], "response_format": "json_object",
+    }) == "json_object"
+    for invalid in (None, False, True, "json", {}, 0):
+        with pytest.raises(WorkspaceOrchestrationError):
+            _agent_execute_response_format({
+                "messages": [], "response_format": invalid,
+            })
 
 
 @pytest.mark.parametrize(
@@ -403,6 +481,21 @@ def _request_for(transaction, **overrides):
     return WorkspaceTurnRequest(**values)
 
 
+def test_runtime_deadline_is_host_private_not_request_input(tmp_path):
+    transaction = WorkspaceStateTransaction.begin(
+        tmp_path / "state-store", installation_id="installation-1",
+        session_id="session-1", invocation_id="inv-private-deadline",
+    )
+    request = _request_for(transaction)
+
+    assert "_runtime_deadline_monotonic" not in request.model_dump()
+    with pytest.raises(ValidationError):
+        WorkspaceTurnRequest(**{
+            **request.model_dump(),
+            "_runtime_deadline_monotonic": 999999999.0,
+        })
+
+
 def test_state_transaction_commits_or_discards_as_one_unit(tmp_path):
     transaction = WorkspaceStateTransaction.begin(
         tmp_path,
@@ -510,6 +603,233 @@ async def test_generic_runtime_candidate_is_internal_and_complete_is_visible(tmp
     assert result.error_code is None
     assert candidate_calls == [{"prompt": "normalized"}]
     assert (transaction.state_root / "state.txt").read_text() == "committed"
+
+
+@pytest.mark.asyncio
+async def test_configured_runtime_checkpoints_before_host_deadline(tmp_path):
+    """A later slow owner must not erase an earlier validated owner commit."""
+    workspace = tmp_path / "workspace"
+    (workspace / "config").mkdir(parents=True)
+    for skill in ("interview", "diagnose"):
+        path = workspace / "skills" / skill / "SKILL.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"# {skill}\nUse only supplied evidence.\n")
+    definition = {
+        "id": "deadline-flow", "version": "3.0.0", "entry_node": "collect", "nodes": [
+            {"id": "collect", "goal": "collect", "main_skill": "interview",
+             "collect_fields": ["business"],
+             "fact_policies": {"business": {"sources": ["customer"], "allow_unknown": False}},
+             "required_methods": [], "dimensions": [], "support_skills": [],
+             "next_node": "decide", "return_nodes": []},
+            {"id": "decide", "goal": "decide", "main_skill": "diagnose",
+             "collect_fields": [], "required_methods": [], "dimensions": [],
+             "support_skills": [], "next_node": None, "return_nodes": []},
+        ],
+    }
+    (workspace / "config" / "flow.json").write_text(json.dumps(definition))
+    _write_runtime(workspace, """
+        from pathlib import Path
+        import json
+        from qwenpaw.app.workspace.flow_runtime import ConfiguredFlowRuntime
+        def create_runtime():
+            root = Path(__file__).resolve().parent
+            definition = json.loads((root / "config" / "flow.json").read_text())
+            return ConfiguredFlowRuntime(root, definition, contract_driven=True)
+    """)
+    transaction = WorkspaceStateTransaction.begin(
+        tmp_path / "state-store", installation_id="installation-1",
+        session_id="session-1", invocation_id="inv-budget",
+    )
+
+    async def execute(arguments):
+        payload = json.loads(arguments["messages"][-1]["content"])
+        if payload["operation"] == "generate" and payload["node"]["id"] == "decide":
+            await asyncio.sleep(1)
+        if payload["operation"] == "generate":
+            return {"text": json.dumps({"candidate": {
+                "reply": "business captured", "facts": {"business": {
+                    "value": "English lessons", "source": "customer",
+                    "status": "known", "quote": "English lessons"}},
+                "outcomes": {}, "node_completed": True,
+                "interaction": {"kind": "none"}, "actions": []},
+                "methods": {}, "support_requests": []})}
+        return {"text": json.dumps({
+            "candidate_digest": payload["candidate_digest"], "acceptable": True,
+            "context_revision": payload["context"]["revision"],
+            "context_node": payload["node"]["id"], "facts_valid": True,
+            "reply_valid": True, "dimensions": {}, "issues": []})}
+
+    orchestrator = WorkspaceTurnOrchestrator(
+        workspace_root=workspace,
+        config=OrchestrationConfig.model_validate(_orchestration()),
+        signed_files=frozenset({"runtime.py"}), execute_agent=execute,
+        session_context=lambda: {}, timeout_seconds=0.15,
+    )
+    request = _request_for(transaction, normalized_input={"messages": [{
+        "name": "user", "role": "user", "content": "English lessons"}]})
+
+    result = await orchestrator.invoke(request, transaction)
+
+    assert result.error_code is None
+    saved = json.loads((transaction.state_root / "configured-flow.json").read_text())
+    assert saved["revision"] == 1 and saved["current_node"] == "decide"
+    assert saved["recovery"] == {"node_id": "decide", "reason": "turn_budget_exhausted"}
+
+
+@pytest.mark.asyncio
+async def test_one_inbound_turn_automatically_resumes_checkpointed_next_owner(tmp_path):
+    workspace = tmp_path / "workspace"
+    (workspace / "config").mkdir(parents=True)
+    for skill in ("interview", "diagnose"):
+        path = workspace / "skills" / skill / "SKILL.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"# {skill}\nUse only supplied evidence.\n")
+    definition = {
+        "id": "continuation-flow", "version": "3.0.0", "entry_node": "collect", "nodes": [
+            {"id": "collect", "goal": "collect", "main_skill": "interview",
+             "collect_fields": ["business"],
+             "fact_policies": {"business": {"sources": ["customer"], "allow_unknown": False}},
+             "required_methods": [], "dimensions": [], "support_skills": [],
+             "next_node": "decide", "return_nodes": []},
+            {"id": "decide", "goal": "decide", "main_skill": "diagnose",
+             "collect_fields": [], "required_methods": [], "dimensions": [],
+             "support_skills": [], "next_node": None, "return_nodes": []},
+        ],
+    }
+    (workspace / "config" / "flow.json").write_text(json.dumps(definition))
+    _write_runtime(workspace, """
+        from pathlib import Path
+        import json
+        from qwenpaw.app.workspace.flow_runtime import ConfiguredFlowRuntime
+        def create_runtime():
+            root = Path(__file__).resolve().parent
+            return ConfiguredFlowRuntime(root, json.loads((root / "config" / "flow.json").read_text()), contract_driven=True)
+    """)
+
+    class Formatter:
+        async def format(self, *, msgs):
+            return msgs
+
+    class DirectModel:
+        stream = False
+        model_key = "openai-compatible:fixture"
+
+        def __init__(self, owner):
+            self.owner = owner
+
+        async def __call__(self, prompt, **kwargs):
+            message = await self.owner(prompt)
+            return SimpleNamespace(id="fixture", content=[{
+                "type": "text", "text": message.get_text_content(),
+            }])
+
+    class Agent:
+
+        def __init__(self):
+            self.slow_calls = 0
+            self.decide_customer_texts = []
+            self.formatter = Formatter()
+            self.model = DirectModel(self)
+
+        async def __call__(self, messages):
+            payload = next(json.loads(message.get_text_content()) for message in messages
+                           if message.name == "node_context")
+            operation = payload["operation"]
+            if operation == "generate":
+                node_id = payload["node"]["id"]
+                if node_id == "decide":
+                    self.decide_customer_texts.append(payload["customer_text"])
+                    if self.slow_calls == 0:
+                        self.slow_calls += 1
+                        await asyncio.sleep(1)
+                facts = ({"business": {"value": "English lessons", "source": "customer",
+                          "status": "known", "quote": "English lessons"}}
+                         if node_id == "collect" else {})
+                value = {"candidate": {"reply": f"done:{node_id}", "facts": facts,
+                    "outcomes": {}, "node_completed": True,
+                    "interaction": {"kind": "none"}, "actions": []},
+                    "methods": {}, "support_requests": []}
+            elif operation == "assess":
+                value = {"candidate_digest": payload["candidate_digest"], "acceptable": True,
+                    "context_revision": payload["context"]["revision"],
+                    "context_node": payload["node"]["id"], "facts_valid": True,
+                    "reply_valid": True, "dimensions": {}, "issues": []}
+            elif operation == "render":
+                value = {"reply": "final decision"}
+            else:
+                value = {"valid": True, "issues": []}
+            return Msg(name="assistant", role="assistant", content=json.dumps(value))
+
+    agent = Agent()
+    authorization = AuthorizedWorkspaceRelease(
+        installation_id="installation-1", release_id="release-1",
+        release_digest=f"sha256:{'a' * 64}",
+        granted_capabilities={capability: "1" for capability in HOST_CAPABILITIES_V1},
+        signed_workspace_files=frozenset({"runtime.py"}),
+    )
+    inbound = [Msg(name="user", role="user", content="English lessons")]
+
+    result = await run_workspace_orchestration_turn(
+        agent=agent, original_messages=inbound,
+        request=SimpleNamespace(session_id="session-1", user_id="user-1", channel="console"),
+        agent_id="generic-agent", workspace_root=workspace,
+        state_storage_root=tmp_path / "state-store",
+        config=OrchestrationConfig.model_validate(_orchestration()),
+        authorization=authorization, timeout_seconds=0.15,
+    )
+
+    assert result.error_code is None and result.message == {"reply": "final decision"}
+    state_files = list((tmp_path / "state-store" / "state").rglob("configured-flow.json"))
+    saved = json.loads(state_files[0].read_text())
+    assert saved["revision"] == 2 and saved["status"] == "completed"
+    assert [item["node_id"] for item in saved["history"]] == ["collect", "decide"]
+    assert agent.decide_customer_texts == ["", ""]
+    assert inbound[0].get_text_content() == "English lessons"
+
+
+@pytest.mark.asyncio
+async def test_automatic_continuation_does_not_reapply_conversation_reset(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _write_runtime(workspace, """
+        import json
+        from pathlib import Path
+        class Runtime:
+            async def handle(self, request, host):
+                path = Path(request.transaction_root) / "reset-count.json"
+                count = json.loads(path.read_text()) if path.exists() else 0
+                if request.safe_metadata.get("conversationReset") is True:
+                    count += 1
+                path.write_text(json.dumps(count))
+                continued = getattr(request, "_runtime_continuation", False)
+                await host.call("runtime.complete", {
+                    "invocation_id": request.invocation_id,
+                    "message": {"reply": (request.safe_metadata.get("platformEvents", [{}])[0].get("event_id", "missing")
+                                           if continued else "checkpoint")},
+                    "diagnostics": ({} if continued else {"continuation_reason": "turn_budget_exhausted"}),
+                })
+        def create_runtime(): return Runtime()
+    """)
+    authorization = AuthorizedWorkspaceRelease(
+        installation_id="installation-1", release_id="release-1",
+        release_digest=f"sha256:{'a' * 64}",
+        granted_capabilities={capability: "1" for capability in HOST_CAPABILITIES_V1},
+        signed_workspace_files=frozenset({"runtime.py"}),
+    )
+    result = await run_workspace_orchestration_turn(
+        agent=lambda _: None,
+        original_messages=[Msg(name="user", role="user", content="reset and analyze")],
+        request=SimpleNamespace(session_id="session-1", user_id="user-1", channel="console"),
+        agent_id="generic-agent", workspace_root=workspace,
+        state_storage_root=tmp_path / "state-store",
+        config=OrchestrationConfig.model_validate(_orchestration()),
+        authorization=authorization, safe_metadata={
+            "conversationReset": True, "platformEvents": [{"event_id": "evidence-1"}],
+        }, timeout_seconds=0.15,
+    )
+    state_file = next((tmp_path / "state-store" / "state").rglob("reset-count.json"))
+    assert result.message == {"reply": "evidence-1"}
+    assert json.loads(state_file.read_text()) == 1
 
 
 @pytest.mark.asyncio
@@ -998,6 +1318,92 @@ async def test_runner_adapter_executes_internal_candidate_without_streaming(tmp_
         "orchestration.completed",
     ]
     assert all(event["invocation_id"] for event in trace_events)
+
+
+@pytest.mark.asyncio
+async def test_local_raw_model_trace_records_each_agent_execute_request_and_response(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setenv("DCLAW_WORKSPACE_MODEL_TRACE_RAW", "true")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _write_runtime(
+        workspace,
+        """
+        class Runtime:
+            async def handle(self, request, host):
+                candidate = await host.call("agent.execute", {
+                    "messages": [{"name": "runtime", "role": "system", "content": "Return JSON"}],
+                    "response_format": "json_object",
+                })
+                await host.call("runtime.complete", {
+                    "invocation_id": request.invocation_id,
+                    "message": {"reply": candidate["text"]},
+                })
+        def create_runtime(): return Runtime()
+        """,
+    )
+
+    class Formatter:
+        async def format(self, *, msgs):
+            return msgs
+
+    class Model:
+        stream = False
+        model_key = "deepseek:test"
+
+        async def __call__(self, prompt, **kwargs):
+            return SimpleNamespace(
+                id="response-raw-1",
+                content=[{"type": "text", "text": '{"reply":"第一段\\\\n第二段"}'}],
+            )
+
+    authorization = AuthorizedWorkspaceRelease(
+        installation_id="installation-1",
+        release_id="release-1",
+        release_digest=f"sha256:{'a' * 64}",
+        granted_capabilities={
+            capability: "1" for capability in HOST_CAPABILITIES_V1
+        },
+        signed_workspace_files=frozenset({"runtime.py"}),
+    )
+    storage = tmp_path / "state-store"
+
+    result = await run_workspace_orchestration_turn(
+        agent=SimpleNamespace(
+            name="agent", formatter=Formatter(), model=Model(),
+        ),
+        original_messages=[Msg(name="user", role="user", content="开始")],
+        request=SimpleNamespace(
+            session_id="session-1", user_id="user-1", channel="console",
+        ),
+        agent_id="luyu_traffic_operator",
+        workspace_root=workspace,
+        state_storage_root=storage,
+        config=OrchestrationConfig.model_validate(_orchestration()),
+        authorization=authorization,
+    )
+
+    assert result.message == {"reply": '{"reply":"第一段\\\\n第二段"}'}
+    events = [
+        json.loads(line)
+        for line in runtime_trace_path(
+            storage,
+            installation_id="installation-1",
+            session_id="session-1",
+        ).read_text(encoding="utf-8").splitlines()
+    ]
+    started = next(event for event in events if event["event_type"] == "agent.execute.started")
+    completed = next(event for event in events if event["event_type"] == "agent.execute.completed")
+    assert started["payload"]["call_number"] == 1
+    assert started["payload"]["response_format"] == "json_object"
+    assert started["payload"]["model_key"] == "deepseek:test"
+    assert started["payload"]["messages"][0]["content"] == "Return JSON"
+    assert completed["payload"]["call_id"] == started["payload"]["call_id"]
+    assert completed["payload"]["response_id"] == "response-raw-1"
+    assert completed["payload"]["text"] == '{"reply":"第一段\\\\n第二段"}'
+    assert completed["payload"]["has_text"] is True
+    assert completed["payload"]["duration_ms"] >= 0
 
 
 @pytest.mark.asyncio

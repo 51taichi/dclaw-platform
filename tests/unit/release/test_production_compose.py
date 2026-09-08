@@ -35,6 +35,7 @@ def test_application_uses_exact_existing_mounts_and_network() -> None:
         "dclaw-data:/app/working",
         "dclaw-secrets:/app/working.secret",
         "dclaw-backups:/app/working.backups",
+        "/opt/dclaw-updates:/opt/dclaw-updates:ro",
     ]
     assert app["networks"] == ["dclaw-net"]
 

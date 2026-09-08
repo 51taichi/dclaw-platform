@@ -159,12 +159,18 @@ class UsageService:
         request: QuoteRequest,
         *,
         business_key: str,
+        source_type: str | None = None,
+        source_id: str | None = None,
     ) -> dict[str, Any]:
         """Lock one published retail quote for an authenticated owner."""
         normalized_owner = str(owner_id).strip()
         normalized_key = business_key.strip()
         if not normalized_owner or not normalized_key:
             raise ValueError("owner and business key must be non-empty")
+        normalized_source_type = str(source_type or "").strip() or None
+        normalized_source_id = str(source_id or "").strip() or None
+        if (normalized_source_type is None) != (normalized_source_id is None):
+            raise ValueError("source type and id must be provided together")
 
         if self.mode == "off":
             quote = self.pricing.quote(request)
@@ -179,6 +185,11 @@ class UsageService:
         )
         if existing is not None:
             self._assert_replay_matches(existing, request)
+            self._assert_source_replay_matches(
+                existing,
+                normalized_source_type,
+                normalized_source_id,
+            )
             return self._decode_order(existing)
 
         quote = self.pricing.quote(request)
@@ -191,6 +202,8 @@ class UsageService:
             "catalog_id": catalog_id,
             "price_rule_id": quote.storage_rule_id or quote.rule_id,
             "business_key": stored_key,
+            "source_type": normalized_source_type,
+            "source_id": normalized_source_id,
             "status": "quoted",
             "provider_id": request.provider_id,
             "model_key": request.model_key,
@@ -204,6 +217,16 @@ class UsageService:
                     **request.to_jsonable(),
                     "billing_mode": self.mode,
                     "client_business_key": normalized_key,
+                    **(
+                        {
+                            "source": {
+                                "type": normalized_source_type,
+                                "id": normalized_source_id,
+                            },
+                        }
+                        if normalized_source_type is not None
+                        else {}
+                    ),
                 },
             ),
             "price_snapshot_json": _dump_json(quote.to_jsonable()),
@@ -220,6 +243,11 @@ class UsageService:
             if existing["wallet_id"] != wallet["id"]:
                 raise UsageOrderConflictError(normalized_key) from exc
             self._assert_replay_matches(existing, request)
+            self._assert_source_replay_matches(
+                existing,
+                normalized_source_type,
+                normalized_source_id,
+            )
             return self._decode_order(existing)
         return self.get_order(order_id)
 
@@ -792,6 +820,11 @@ class UsageService:
     ) -> None:
         """Validate and lock the invocation claim in this transaction."""
         source_type = str(order.get("source_type") or "")
+        if source_type == "aigc":
+            # AIGC media calls are fenced by the durable job-attempt token in
+            # AigcExecutionRepository. Usage orders are private implementation
+            # details and use the immutable job id as their idempotency key.
+            return
         if source_type != "open_api":
             if source_type in {
                 "client",
@@ -1235,6 +1268,22 @@ class UsageService:
         ):
             raise IdempotencyConflictError(
                 "idempotency key is already bound to another quote request",
+            )
+
+    @staticmethod
+    def _assert_source_replay_matches(
+        order: Mapping[str, Any],
+        source_type: str | None,
+        source_id: str | None,
+    ) -> None:
+        if source_type is None:
+            return
+        if (
+            str(order.get("source_type") or "") != source_type
+            or str(order.get("source_id") or "") != source_id
+        ):
+            raise IdempotencyConflictError(
+                "idempotency key is already bound to another usage source",
             )
 
     def _catalog_id(self, version: str) -> str:

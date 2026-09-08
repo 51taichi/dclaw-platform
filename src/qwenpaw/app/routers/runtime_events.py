@@ -24,11 +24,19 @@ async def stream_runtime_events(
     since_id: str | None = Query(None, description="Last consumed runtime event id"),
 ) -> StreamingResponse:
     """Stream user-visible runtime events for one accessible session."""
-    ensure_chat_access(request, session_id, allow_admin=True)
+    chat_row = ensure_chat_access(request, session_id, allow_admin=True)
+    runtime_session_id = (
+        str(chat_row.get("session_id") or session_id)
+        if isinstance(chat_row, dict)
+        else session_id
+    )
     bus = get_runtime_event_bus()
 
     async def events() -> AsyncGenerator[str, None]:
-        subscription = bus.subscribe(session_id=session_id, since_id=since_id)
+        subscription = bus.subscribe(
+            session_id=runtime_session_id,
+            since_id=since_id,
+        )
         try:
             while True:
                 try:

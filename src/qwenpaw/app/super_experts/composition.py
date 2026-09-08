@@ -44,6 +44,13 @@ def installation_is_active(grant, *, registry=None) -> bool:
                 and release.capability_digest == grant.capability_digest)
 
 
+def _resolve_runtime_session_id(conversation_id: str) -> str:
+    # Console routes accept public chat UUIDs, while SSE subscribes to the
+    # stored session ID. Resolve delivery only; never rewrite task bindings.
+    from ..storage.repos.audit_repo import get_audit_repository
+
+    row = get_audit_repository().get_chat_identity(conversation_id)
+    return str(row.get("session_id") or conversation_id) if row else conversation_id
 
 
 def get_super_expert_platform_service() -> SuperExpertPlatformService:
@@ -58,6 +65,7 @@ def get_super_expert_platform_service() -> SuperExpertPlatformService:
             task_repository=AigcTaskRepository(root / "platform"),
             event_repository=SuperExpertEventRepository(root / "platform"),
             event_bus=get_runtime_event_bus(),
+            event_session_resolver=_resolve_runtime_session_id,
             aigc_adapter=AigcServiceAdapter(
                 AigcCanvasService(AigcResourceStore(Path(WORKING_DIR) / "aigc_studio")),
                 AigcAssetService(AigcResourceStore(Path(WORKING_DIR) / "aigc_studio")),

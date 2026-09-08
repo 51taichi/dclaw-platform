@@ -26,19 +26,12 @@ from qwenpaw.aigc.workflow_contract import WorkflowBlueprint, workflow_node_regi
 
 from ..billing.context import BillingSource
 from ..aigc.workflow_execution import AigcWorkflowExecutionService
+from ..agent_context import get_current_chat_model, set_current_chat_model
 from ..billing.entrypoint import prepare_user_billing_execution
 from ..billing.usage import InsufficientUsageCreditsError
 from ..chat_access import ensure_chat_access
 from ..aigc.resource_store import AigcResourceError
 from ..runtime.aigc_media import review_media_source, resource_http_error
-from ..super_experts.service import (
-    SuperExpertPlatformService, SuperExpertPlatformError, PlatformCommandRequest,
-    AigcCreateOperation, AigcWorkflowCreateArguments, _operation_catalog_path,
-)
-from ..super_experts.aigc_adapter import (
-    load_workflow_capability_catalog as _load_workflow_capability_catalog,
-)
-from ..super_experts.composition import get_super_expert_platform_service
 from ..runtime.event_bus import RuntimeEvent, get_runtime_event_bus
 from ..super_experts.aigc_tasks import (
     AigcTaskCommand,
@@ -68,22 +61,16 @@ frontend_read_router = APIRouter(
 )
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+from ..super_experts.service import (
+    SuperExpertPlatformService, SuperExpertPlatformError, PlatformCommandRequest,
+    AigcCreateOperation, AigcWorkflowCreateArguments, _operation_catalog_path,
+)
+from ..super_experts.aigc_adapter import (
+    load_workflow_capability_catalog as _load_workflow_capability_catalog,
+)
+from ..super_experts.composition import (
+    get_super_expert_platform_service, _resolve_runtime_session_id,
+)
 
 
 async def resolve_owned_asset_for_agent_review(
@@ -160,6 +147,45 @@ def _workflow_review_node_ids(task: Any) -> set[str]:
     return _workflow_review_binding(task)[0]
 
 
+@frontend_read_router.get("/conversation-route")
+def get_conversation_route(conversation_id: str, request: Request) -> dict[str, str]:
+    """Resolve a user's deep link before any agent-scoped chat request."""
+    row = ensure_chat_access(request, conversation_id)
+    agent_id = str((row or {}).get("agent_id") or "").strip()
+    if not agent_id:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    return {"conversation_id": conversation_id, "agent_id": agent_id,
+            "chat_id": str(row.get("id") or conversation_id)}
+
+
+@frontend_read_router.get("/cards")
+@router.get("/cards")
+def list_super_expert_cards(conversation_id: str, request: Request) -> dict[str, Any]:
+    """Restore cards from persisted tasks, independently of the SSE buffer."""
+    row = ensure_chat_access(request, conversation_id, allow_admin=True)
+    aliases = {conversation_id}
+    if isinstance(row, dict):
+        aliases.update(str(row[key]) for key in ("id", "session_id") if row.get(key))
+    service = get_super_expert_platform_service()
+    tenant_id = str(getattr(request.state, "tenant_id", "local") or "local")
+    from urllib.parse import quote
+
+    cards = []
+    for task in service.task_repository.list_for_conversations(aliases):
+        grant = service.grant_repository.get(task.binding.installation_id)
+        if grant is None or grant.tenant_id != tenant_id:
+            continue
+        title = (task.workflow.blueprint.title if task.workflow is not None
+                 else task.operation_arguments.get("title")) or "AIGC 素材制作任务"
+        cards.append({
+            "material_task_id": task.binding.material_task_id,
+            "title": title,
+            "instruction": "打开已绑定画布，按向导完成当前制作步骤。",
+            "status": task.status.value,
+            "binding": task.binding.model_dump(mode="json"),
+            "href": "/aigc-studio?task=" + quote(task.binding.material_task_id, safe=""),
+        })
+    return {"cards": cards}
 
 
 @frontend_read_router.get("/tasks/{material_task_id}")
@@ -231,6 +257,30 @@ def get_aigc_operation_contract(
 async def get_workflow_capability_catalog(_request: Request) -> dict[str, Any]:
     catalog = await _load_workflow_capability_catalog()
     return catalog.model_dump(mode="json")
+
+
+@frontend_read_router.post("/commands/{capability}")
+async def execute_frontend_super_expert_command(
+    capability: str,
+    command: PlatformCommandRequest,
+    request: Request,
+) -> dict[str, Any]:
+    # The shipped card sends the original seven-field binding. Only enrich
+    # this exact shape for resume, after ownership and every supplied field
+    # match. Canonical agent commands retain their full-binding requirement.
+    binding = command.arguments.get("binding")
+    legacy_keys = {"installation_id", "conversation_id", "agent_task_id",
+                   "content_revision", "material_task_id", "canvas_id", "node_id"}
+    if capability == "aigc.task.resume" and isinstance(binding, dict) and set(binding) == legacy_keys:
+        ensure_chat_access(request, str(binding.get("conversation_id") or ""), allow_admin=True)
+        current = get_super_expert_platform_service().get_task(str(binding.get("material_task_id") or ""))
+        expected = current.binding.model_dump(mode="json") if current is not None else {}
+        if current is None or any(expected.get(key) != value for key, value in binding.items()):
+            raise HTTPException(status_code=400, detail="card task binding mismatch")
+        command = command.model_copy(update={
+            "arguments": {**command.arguments, "binding": expected},
+        })
+    return await execute_super_expert_command(capability, command, request)
 
 
 @router.post("/commands/{capability}")
@@ -370,14 +420,33 @@ async def _dispatch_agent_asset_review(
         raise SuperExpertPlatformError("agent review dispatch is unavailable") from exc
 
     user_id = str(getattr(request.state, "user_id", "platform-user") or "platform-user")
+    # Review is a continuation of the bound conversation, not a new model
+    # selection. Resolve without creating a second platform-channel chat.
+    resolved_chat_id = binding.conversation_id
+    chat = await workspace.chat_manager.get_chat(binding.conversation_id)
+    if chat is None:
+        chat_id = await workspace.chat_manager.get_chat_id_by_session(
+            binding.conversation_id, "console", user_id=user_id,
+        )
+        if chat_id:
+            resolved_chat_id = chat_id
+            chat = await workspace.chat_manager.get_chat(chat_id)
+    chat_model = (
+        chat.meta.get("active_model")
+        if chat is not None and str(chat.user_id) == user_id and isinstance(chat.meta, dict)
+        else None
+    )
     turn_request = SimpleNamespace(
-        session_id=binding.conversation_id,
+        # Continue the exact bound chat on its original channel. Supplying the
+        # conversation id with a synthetic platform channel used to create a
+        # second chat whose short history then shadowed the original one.
+        session_id=str(getattr(chat, "id", None) or resolved_chat_id),
         user_id=user_id,
-        channel="platform:aigc-review",
+        channel=str(getattr(chat, "channel", None) or "console"),
         tenant_id=grant.tenant_id,
         channel_meta={},
         request_context={"platform_event": "aigc.asset.submitted"},
-        root_session_id=binding.conversation_id,
+        root_session_id=str(getattr(chat, "id", None) or resolved_chat_id),
     )
     messages = [
         Msg(
@@ -411,8 +480,13 @@ async def _dispatch_agent_asset_review(
             "asset_id": asset_id,
         },
     )
+    previous_model = get_current_chat_model()
+    set_current_chat_model(chat_model)
+    from ..workspace.media_review_context import bind_review_input
     try:
-        with prepared.activate():
+        with prepared.activate(), bind_review_input(
+            user_id=user_id, binding=binding, asset_id=asset_id, media_block=media_block,
+        ):
             async for message, is_last in workspace.runner.query_handler(
                 messages,
                 turn_request,
@@ -428,6 +502,8 @@ async def _dispatch_agent_asset_review(
     except Exception as exc:
         prepared.finalize("failed", error_code="MODEL_ERROR")
         raise SuperExpertPlatformError("agent review dispatch failed") from exc
+    finally:
+        set_current_chat_model(previous_model)
     if final_message is None:
         prepared.finalize("failed", error_code="MISSING_COMPLETION")
         raise SuperExpertPlatformError("agent review did not complete")
