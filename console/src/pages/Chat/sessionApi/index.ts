@@ -97,7 +97,9 @@ export function isDraftSessionId(sessionId?: string | null): boolean {
 }
 
 function getRouteSessionId(): string | null {
-  const match = window.location.pathname.match(/^\/(?:chat|task|claw)\/([^/?#]+)/);
+  const match = window.location.pathname.match(
+    /^\/(?:chat|task|claw)\/([^/?#]+)/,
+  );
   if (!match?.[1]) return null;
   try {
     return decodeURIComponent(match[1]);
@@ -153,7 +155,13 @@ function contentToRequestParts(
   content: unknown,
 ): Array<Record<string, unknown>> {
   if (typeof content === "string") {
-    return [{ type: "text", text: stripSkillInvocationPrefix(content), status: "created" }];
+    return [
+      {
+        type: "text",
+        text: stripSkillInvocationPrefix(content),
+        status: "created",
+      },
+    ];
   }
   if (!Array.isArray(content)) {
     return [{ type: "text", text: String(content || ""), status: "created" }];
@@ -162,7 +170,11 @@ function contentToRequestParts(
   const parts = (content as ContentItem[])
     .map(resolveContentItemUrl)
     .map((c) => {
-      if (strippedFirstText || c.type !== "text" || typeof c.text !== "string") {
+      if (
+        strippedFirstText ||
+        c.type !== "text" ||
+        typeof c.text !== "string"
+      ) {
         return c;
       }
       strippedFirstText = true;
@@ -877,7 +889,11 @@ class SessionApi implements IAgentScopeRuntimeWebUISessionAPI {
     const backendMessages = chatHistory.messages || [];
     // Rewrite all media URLs inside the history payload before conversion.
     if (backendMessages.length) {
-      rewritePayloadMediaUrls(backendMessages, displayId);
+      const historyAgentId =
+        typeof listEntry?.meta?.agent_id === "string"
+          ? listEntry.meta.agent_id
+          : undefined;
+      rewritePayloadMediaUrls(backendMessages, displayId, historyAgentId);
     }
     const displayMessages = generating
       ? messagesBeforeRunningResponse(backendMessages)
@@ -962,11 +978,21 @@ class SessionApi implements IAgentScopeRuntimeWebUISessionAPI {
       ) as ExtendedSession | undefined;
     }
 
-    if (!fromList) {
-      return this.removeMissingSession(sessionId);
+    // The sidebar list may be stale or still scoped to the previous agent.
+    // Only the authenticated detail endpoint can confirm that a deep link is missing.
+    const loaded = await this.fetchAndBuildSession(
+      sessionId,
+      sessionId,
+      fromList,
+    );
+    if (
+      !fromList &&
+      !isDraftSessionId(loaded.id) &&
+      !this.sessionList.some((session) => session.id === loaded.id)
+    ) {
+      this.sessionList.unshift(loaded);
     }
-
-    return this.fetchAndBuildSession(sessionId, sessionId, fromList);
+    return loaded;
   }
 
   /**
@@ -1041,7 +1067,7 @@ class SessionApi implements IAgentScopeRuntimeWebUISessionAPI {
       if (routeSession) {
         this.updateWindowVariables(routeSession);
       } else {
-        this.removeMissingSession(routeSessionId);
+        await this.getSession(routeSessionId);
       }
 
       return [...this.sessionList];

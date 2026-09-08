@@ -93,6 +93,44 @@ export interface BillingUsageItem {
   catalog_version: string;
 }
 
+export interface BillingReconciliationItem extends BillingUsageItem {
+  quoted_credits: number;
+  created_at: string;
+  evidence: {
+    supplier_reference_present: boolean;
+    execution_outcome: string;
+  };
+}
+
+export interface BillingReconciliationRecord {
+  reconciliation_id: string;
+  order: BillingUsageOrder;
+  item: BillingReconciliationItem;
+}
+
+export interface BillingReconciliationResolution {
+  billability: "billable" | "not_billable";
+  reason: string;
+  actual_input_tokens: number;
+  actual_output_tokens: number;
+}
+
+export interface BillingReconciliationAudit {
+  audit_id: string;
+  reconciliation_id: string;
+  order_id: string;
+  actor_id: string;
+  reason: string;
+  idempotency_key: string;
+  resolution: {
+    status: "captured" | "released";
+    billability: "billable" | "not_billable";
+    actual_tokens: { input: number; output: number };
+    charged_credits: number;
+  };
+  created_at: string;
+}
+
 export interface BillingUsageOrder {
   id: string;
   owner_user_id?: string;

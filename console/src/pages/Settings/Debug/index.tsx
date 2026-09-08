@@ -12,7 +12,6 @@ import {
 } from "antd";
 import dayjs from "dayjs";
 import { PageHeader } from "@/components/PageHeader";
-import { useDesktopUpdateCheck } from "@/components/DesktopUpdateChecker";
 import { useDebugLogs, backendLevelColor } from "./useDebugLogs";
 import { LogViewer } from "./components";
 import styles from "./index.module.less";
@@ -21,11 +20,6 @@ const { Text } = Typography;
 
 export default function DebugPage() {
   const { t } = useTranslation();
-  const {
-    checking: updateChecking,
-    lastResult: updateResult,
-    checkForUpdates,
-  } = useDesktopUpdateCheck();
   const {
     backendLogs,
     initialLoading,
@@ -60,40 +54,6 @@ export default function DebugPage() {
             "View backend daemon log file to help diagnose issues. Logs refresh automatically while this page is open.",
           )}
         />
-        <Card
-          title={t("desktopUpdate.title", "Desktop updates")}
-          extra={
-            <Button
-              loading={updateChecking}
-              onClick={() => void checkForUpdates({ silent: false })}
-            >
-              {t("desktopUpdate.check", "Check for updates")}
-            </Button>
-          }
-        >
-          <Space direction="vertical" size="small">
-            <Text type="secondary">
-              {t(
-                "desktopUpdate.domesticChannel",
-                "Updates are checked through the domestic DClaw update service and downloaded from the domestic CDN.",
-              )}
-            </Text>
-            {updateResult ? (
-              <Text>
-                {updateResult.has_update
-                  ? t(
-                      "desktopUpdate.updateAvailable",
-                      "Desktop update available",
-                    )
-                  : t(
-                      "desktopUpdate.noUpdate",
-                      "You are already using the latest desktop version.",
-                    )}{" "}
-                {updateResult.version}
-              </Text>
-            ) : null}
-          </Space>
-        </Card>
         <Card
           title={t("debug.backend.title", "Backend logs")}
           extra={

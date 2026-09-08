@@ -113,6 +113,27 @@ export interface SuperExpertPlatformCommandResult {
 }
 
 export const superExpertPlatformApi = {
+  getConversationRoute: (conversationId: string) =>
+    request<{ conversation_id: string; agent_id: string; chat_id: string }>(
+      `/super-expert-platform/conversation-route?conversation_id=${encodeURIComponent(
+        conversationId,
+      )}`,
+    ),
+  listCards: (conversationId: string) =>
+    request<{
+      cards: Array<{
+        material_task_id: string;
+        title: string;
+        instruction: string;
+        status: string;
+        binding: AigcWorkflowBinding;
+        href: string;
+      }>;
+    }>(
+      `/super-expert-platform/cards?conversation_id=${encodeURIComponent(
+        conversationId,
+      )}`,
+    ),
   getTask: (materialTaskId: string) =>
     request<BoundAigcTask>(
       `/super-expert-platform/tasks/${encodeURIComponent(materialTaskId)}`,
@@ -123,7 +144,9 @@ export const superExpertPlatformApi = {
     ),
   getGuide: (materialTaskId: string) =>
     request<AigcGuideProjection>(
-      `/super-expert-platform/tasks/${encodeURIComponent(materialTaskId)}/guide`,
+      `/super-expert-platform/tasks/${encodeURIComponent(
+        materialTaskId,
+      )}/guide`,
     ),
   command: (capability: string, command: SuperExpertPlatformCommand) =>
     request<SuperExpertPlatformCommandResult>(

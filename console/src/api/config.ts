@@ -58,7 +58,7 @@ function matchesApiPrefix(path: string, prefix: string): boolean {
   );
 }
 
-function getApiBaseUrl(): string {
+export function getApiBaseUrl(): string {
   if (
     typeof window !== "undefined" &&
     typeof window.__DCLAW_DESKTOP_API_BASE_URL__ === "string" &&

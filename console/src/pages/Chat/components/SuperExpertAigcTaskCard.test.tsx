@@ -10,9 +10,9 @@ const labels: Record<SuperExpertAigcTaskCardProjection["status"], string> = {
   WAITING_TO_START: "等待开始",
   IN_PROGRESS: "制作中",
   PAUSED: "已暂停",
-  SUBMITTED: "已提交审核",
+  SUBMITTED: "待审核",
   REVISION_REQUIRED: "需要修改",
-  ACCEPTED: "已通过",
+  ACCEPTED: "已审核",
   CANCELLED: "已取消",
   INVALIDATED: "已失效",
 };
@@ -30,6 +30,35 @@ function projection(
 }
 
 describe("SuperExpertAigcTaskCard", () => {
+  it("has one entry while producing, not a duplicate workflow link", () => {
+    render(
+      <SuperExpertAigcTaskCard
+        projection={projection("IN_PROGRESS")}
+        onCommand={vi.fn()}
+      />,
+    );
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it("opens accepted results read-only instead of restarting production", () => {
+    render(
+      <SuperExpertAigcTaskCard
+        projection={projection("ACCEPTED")}
+        onCommand={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("link", { name: "查看成果" })).toHaveAttribute(
+      "href",
+      "/aigc-studio?task=task-1",
+    );
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("已审核");
+    expect(
+      screen.queryByText("按照右侧向导完成视频制作。"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/素材已通过审核/)).toBeInTheDocument();
+  });
   for (const [status, label] of Object.entries(labels)) {
     it(`renders ${status}`, () => {
       render(

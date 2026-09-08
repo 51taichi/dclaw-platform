@@ -30,7 +30,6 @@ import { ApprovalProvider } from "./contexts/ApprovalContext";
 import { RuntimeEventProvider } from "./contexts/RuntimeEventContext";
 import { Suspense } from "react";
 import { lazyImportWithRetry } from "./utils/lazyWithRetry";
-import { DesktopUpdateChecker } from "./components/DesktopUpdateChecker";
 
 const LoginPage = lazyImportWithRetry("./pages/Login/index");
 import { languageApi } from "./api/modules/language";
@@ -196,7 +195,6 @@ function AppInner() {
         }}
       >
         <AntdApp>
-          <DesktopUpdateChecker />
           <RuntimeEventProvider>
             <ApprovalProvider>
               <Routes>

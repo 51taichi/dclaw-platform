@@ -26,6 +26,8 @@ const {
   mockGetRunByChat,
   mockGetExpertTeam,
   mockChatSubmit,
+  mockListAigcCards,
+  mockGetAigcTask,
 } = vi.hoisted(() => {
   const store = vi.fn(() => ({
     selectedAgent: "default",
@@ -57,8 +59,18 @@ const {
     mockGetRunByChat: vi.fn(),
     mockGetExpertTeam: vi.fn(),
     mockChatSubmit: vi.fn(),
+    mockListAigcCards: vi.fn(),
+    mockGetAigcTask: vi.fn(),
   };
 });
+
+vi.mock("../../api/modules/superExpertPlatform", () => ({
+  superExpertPlatformApi: {
+    listCards: mockListAigcCards,
+    getTask: mockGetAigcTask,
+    command: vi.fn(),
+  },
+}));
 
 vi.mock("@agentscope-ai/chat", async () => {
   const React = await vi.importActual<typeof import("react")>("react");
@@ -210,7 +222,9 @@ vi.mock("../../contexts/RuntimeEventContext", () => ({
 }));
 
 vi.mock("../../components/WorkbenchInput", () => ({
-  default: () => <div data-testid="workbench-input" />,
+  default: ({ topAccessory }: { topAccessory?: React.ReactNode }) => (
+    <div data-testid="workbench-input">{topAccessory}</div>
+  ),
 }));
 
 vi.mock("../Chat/components/ChatActionGroup", () => ({
@@ -301,6 +315,7 @@ describe("TaskPage", () => {
     vi.clearAllMocks();
     vi.useRealTimers();
     capturedOptions = null;
+    mockListAigcCards.mockResolvedValue({ cards: [] });
     currentPathname = "";
     sessionStorage.clear();
     setDocumentVisibilityState("visible");
@@ -354,6 +369,91 @@ describe("TaskPage", () => {
     }
     vi.clearAllMocks();
     sessionStorage.clear();
+  });
+
+  it("restores a clickable AIGC card on /task after reopening without SSE events", async () => {
+    const binding = {
+      installation_id: "install-1",
+      conversation_id: "demo-chat",
+      agent_task_id: "task-1",
+      content_revision: 1,
+      material_task_id: "material-1",
+      canvas_id: "canvas-1",
+      node_id: "video-1",
+      workflow_id: "workflow-1",
+    };
+    mockListAigcCards.mockResolvedValue({
+      cards: [
+        {
+          material_task_id: "material-1",
+          title: "生成主题图片和视频",
+          status: "IN_PROGRESS",
+          binding,
+          href: "/aigc-studio?task=material-1",
+          instruction: "先生成图片，再生成视频",
+        },
+      ],
+    });
+    mockGetAigcTask.mockResolvedValue({ binding, status: "IN_PROGRESS" });
+    const view = renderWithProviders(<TaskPage />, {
+      initialEntries: ["/task/demo-chat"],
+    });
+    expect(await screen.findByText("生成主题图片和视频")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "继续制作" }),
+    ).toHaveAttribute("data-deep-link", "/aigc-studio?task=material-1");
+    view.unmount();
+    renderWithProviders(
+      <>
+        <LocationProbe />
+        <TaskPage />
+      </>,
+      { initialEntries: ["/task/demo-chat"] },
+    );
+    expect(await screen.findByText("生成主题图片和视频")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "继续制作" }));
+    await waitFor(() => expect(currentPathname).toBe("/aigc-studio"));
+  });
+
+  it("does not open the previous chat's material when a pending click finishes after switching", async () => {
+    let finish: (value: unknown) => void = () => {};
+    mockGetAigcTask.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    mockListAigcCards.mockImplementation((cid: string) =>
+      Promise.resolve({
+        cards:
+          cid === "demo-chat"
+            ? [
+                {
+                  material_task_id: "material-1",
+                  title: "旧会话素材",
+                  status: "IN_PROGRESS",
+                  binding: { installation_id: "install-1" },
+                  instruction: "",
+                },
+              ]
+            : [],
+      }),
+    );
+    renderWithProviders(
+      <>
+        <LocationProbe />
+        <TaskRouteSwitchProbe />
+        <TaskPage />
+      </>,
+      { initialEntries: ["/task/demo-chat"] },
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "继续制作" }));
+    fireEvent.click(screen.getByRole("button", { name: "switch task route" }));
+    await waitFor(() => expect(currentPathname).toBe("/task/replacement-task"));
+    await act(async () => {
+      finish({ status: "IN_PROGRESS", binding: {} });
+    });
+    expect(currentPathname).toBe("/task/replacement-task");
+    expect(screen.queryByText("旧会话素材")).not.toBeInTheDocument();
   });
 
   it("does not query expert-team runs for route chats outside the current user's list", async () => {

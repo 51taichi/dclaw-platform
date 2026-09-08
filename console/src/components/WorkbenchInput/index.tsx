@@ -38,6 +38,7 @@ interface WorkbenchInputProps {
   isClawMode?: boolean;
   isGenerating?: boolean;
   topAccessory?: React.ReactNode;
+  inFlow?: boolean;
   onStop?: () => void;
   onSkillSelect?: (skill: ToolbarSkillItem) => void;
   // Controlled overrides for task-specific mode
@@ -146,6 +147,7 @@ export default function WorkbenchInput({
   isClawMode = false,
   isGenerating = false,
   topAccessory,
+  inFlow = false,
   onStop,
   overrideSelectedAgent,
   overrideActiveMode,
@@ -596,7 +598,7 @@ export default function WorkbenchInput({
   };
 
   return (
-    <div className={styles.chatToolbarWrapper}>
+    <div className={`${styles.chatToolbarWrapper} ${inFlow ? styles.inFlow : ""}`}>
       {topAccessory && (
         <div className={styles.inputTopAccessory}>{topAccessory}</div>
       )}

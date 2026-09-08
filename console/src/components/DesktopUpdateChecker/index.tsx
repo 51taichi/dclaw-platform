@@ -1,129 +1,99 @@
-import { useCallback, useEffect, useState } from "react";
-import { App } from "antd";
-import { useTranslation } from "react-i18next";
-import { rootApi } from "@/api/modules/root";
-import {
-  desktopUpdateApi,
-  type DesktopUpdatePlatform,
-  type DesktopUpdateResponse,
-} from "@/api/modules/desktopUpdate";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Button, Progress } from "antd";
+import { check, type Update } from "@tauri-apps/plugin-updater";
+import { relaunch, exit } from "@tauri-apps/plugin-process";
 import { isDesktopApp } from "@/utils/env";
-import { openExternalLink } from "@/utils/openExternalLink";
+import { DESKTOP_UPDATE_REQUIRED_EVENT } from "@/desktop/httpGate";
+import styles from "./index.module.less";
 
-const DISMISSED_KEY = "dclaw_desktop_update_dismissed_version";
+type GateState = "checking" | "downloading" | "installing" | "ready" | "error";
+const CHECK_TIMEOUT_MS = 10_000;
 
-function detectDesktopUpdatePlatform(): DesktopUpdatePlatform | null {
-  if (typeof navigator === "undefined") {
-    return null;
-  }
-  const text = `${navigator.platform || ""} ${
-    navigator.userAgent || ""
-  }`.toLowerCase();
-  if (text.includes("win")) return "win";
-  if (text.includes("mac")) return "mac";
-  return null;
+async function checkWithTimeout(): Promise<Update | null> {
+  return Promise.race([
+    check(),
+    new Promise<never>((_, reject) =>
+      window.setTimeout(
+        () => reject(new Error("检查更新超时，请检查网络后重试")),
+        CHECK_TIMEOUT_MS,
+      ),
+    ),
+  ]);
 }
 
-function rememberDismissed(version: string) {
-  sessionStorage.setItem(DISMISSED_KEY, version);
-}
+export function DesktopUpdateGate({ children }: { children: ReactNode }) {
+  // Development builds must remain usable before release signing keys exist.
+  const desktop =
+    !import.meta.env.DEV && isDesktopApp() && "__TAURI_INTERNALS__" in window;
+  const [state, setState] = useState<GateState>(desktop ? "checking" : "ready");
+  const [message, setMessage] = useState("正在检查客户端版本…");
+  const [progress, setProgress] = useState(0);
 
-function wasDismissed(version: string): boolean {
-  return sessionStorage.getItem(DISMISSED_KEY) === version;
-}
-
-export function useDesktopUpdateCheck() {
-  const { t } = useTranslation();
-  const { modal, message } = App.useApp();
-  const [checking, setChecking] = useState(false);
-  const [lastResult, setLastResult] = useState<DesktopUpdateResponse | null>(
-    null,
-  );
-
-  const showUpdateModal = useCallback(
-    (result: DesktopUpdateResponse) => {
-      modal.confirm({
-        title: t("desktopUpdate.updateAvailable", "Desktop update available"),
-        content: (
-          <div>
-            <p>
-              {t("desktopUpdate.newVersion", "New version")}: {result.version}
-            </p>
-            {result.release_notes ? <p>{result.release_notes}</p> : null}
-          </div>
-        ),
-        okText: t("desktopUpdate.download", "Download"),
-        cancelText: t("common.cancel", "Cancel"),
-        onOk: () => {
-          openExternalLink(result.download_url);
-          rememberDismissed(result.version);
-        },
-        onCancel: () => rememberDismissed(result.version),
+  const runUpdateGate = useCallback(async () => {
+    if (!desktop) return;
+    setState("checking");
+    setMessage("正在检查客户端版本…");
+    setProgress(0);
+    try {
+      const update = await checkWithTimeout();
+      if (!update) {
+        setState("ready");
+        return;
+      }
+      setState("downloading");
+      setMessage(`正在更新 v${update.currentVersion} → v${update.version}`);
+      let downloaded = 0;
+      let total = 0;
+      await update.downloadAndInstall((event) => {
+        if (event.event === "Started") total = event.data.contentLength ?? 0;
+        if (event.event === "Progress") {
+          downloaded += event.data.chunkLength;
+          if (total > 0)
+            setProgress(Math.min(100, Math.round((downloaded / total) * 100)));
+        }
+        if (event.event === "Finished") {
+          setProgress(100);
+          setState("installing");
+          setMessage("更新安装完成，正在重新启动…");
+        }
       });
-    },
-    [modal, t],
-  );
-
-  const checkForUpdates = useCallback(
-    async ({ silent = false }: { silent?: boolean } = {}) => {
-      const platform = detectDesktopUpdatePlatform();
-      if (!platform) {
-        if (!silent) {
-          message.info(
-            t(
-              "desktopUpdate.unsupportedPlatform",
-              "Desktop updates are only available for Windows and macOS.",
-            ),
-          );
-        }
-        return null;
-      }
-
-      setChecking(true);
-      try {
-        const { version } = await rootApi.getVersion();
-        const result = await desktopUpdateApi.checkUpdate(platform, version);
-        setLastResult(result);
-        if (result.has_update && result.download_url) {
-          if (!silent || !wasDismissed(result.version)) {
-            showUpdateModal(result);
-          }
-        } else if (!silent) {
-          message.success(
-            t(
-              "desktopUpdate.noUpdate",
-              "You are already using the latest desktop version.",
-            ),
-          );
-        }
-        return result;
-      } catch (error) {
-        if (!silent) {
-          message.error(
-            error instanceof Error
-              ? error.message
-              : t("desktopUpdate.checkFailed", "Failed to check updates."),
-          );
-        }
-        return null;
-      } finally {
-        setChecking(false);
-      }
-    },
-    [message, showUpdateModal, t],
-  );
-
-  return { checking, lastResult, checkForUpdates };
-}
-
-export function DesktopUpdateChecker() {
-  const { checkForUpdates } = useDesktopUpdateCheck();
+      await relaunch();
+    } catch (error) {
+      setState("error");
+      setMessage(
+        error instanceof Error ? error.message : "客户端更新失败，请重试",
+      );
+    }
+  }, [desktop]);
 
   useEffect(() => {
-    if (isDesktopApp()) {
-      void checkForUpdates({ silent: true });
-    }
-  }, [checkForUpdates]);
+    void runUpdateGate();
+    const forceUpdate = () => void runUpdateGate();
+    window.addEventListener(DESKTOP_UPDATE_REQUIRED_EVENT, forceUpdate);
+    return () =>
+      window.removeEventListener(DESKTOP_UPDATE_REQUIRED_EVENT, forceUpdate);
+  }, [runUpdateGate]);
 
-  return null;
+  if (state === "ready") return <>{children}</>;
+  return (
+    <main className={styles.gate}>
+      <img className={styles.logo} src="/dclaw-logo-light.svg" alt="" />
+      <div className={styles.message}>{message}</div>
+      {state === "downloading" || state === "installing" ? (
+        <Progress
+          percent={progress}
+          status="active"
+          showInfo={state === "downloading"}
+        />
+      ) : null}
+      {state === "error" ? (
+        <div className={styles.actions}>
+          <Button type="primary" onClick={() => void runUpdateGate()}>
+            重试
+          </Button>
+          <Button onClick={() => void exit(0)}>退出</Button>
+        </div>
+      ) : null}
+    </main>
+  );
 }

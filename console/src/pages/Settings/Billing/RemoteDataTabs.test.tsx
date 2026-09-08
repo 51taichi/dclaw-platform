@@ -3,10 +3,16 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { billingApi } from "../../../api/modules/billing";
 import { adminUsersApi } from "../../../api/modules/adminUsers";
-import { UsageTab } from "./RemoteDataTabs";
+import type { BillingReconciliationRecord } from "../../../api/types/billing";
+import { ReconciliationTab, UsageTab } from "./RemoteDataTabs";
 
 vi.mock("../../../api/modules/billing", () => ({
-  billingApi: { listAdminUsage: vi.fn() },
+  billingApi: {
+    listAdminUsage: vi.fn(),
+    listReconciliation: vi.fn(),
+    listReconciliationAudits: vi.fn(),
+    resolveReconciliation: vi.fn(),
+  },
 }));
 
 vi.mock("../../../api/modules/adminUsers", () => ({
@@ -15,6 +21,7 @@ vi.mock("../../../api/modules/adminUsers", () => ({
 
 describe("UsageTab", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     vi.mocked(adminUsersApi.listUsers).mockResolvedValue([
       { id: 24, username: "dingmai", role: "user", created_at: "" },
     ]);
@@ -65,5 +72,120 @@ describe("UsageTab", () => {
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
     expect(screen.getByText("order-1")).toBeInTheDocument();
     expect(screen.getByText("admin-20260831075100")).toBeInTheDocument();
+  });
+});
+
+describe("ReconciliationTab", () => {
+  const reconciliationItem: BillingReconciliationRecord = {
+    reconciliation_id: "reconciliation-1",
+    order: {
+      id: "order-1",
+      owner_user_id: "24",
+      source: "openapi",
+      expert: null,
+      expert_team: null,
+      status: "reconciling",
+      billing_status: "reconciling",
+      billing_mode: "enforced",
+      is_estimate: false,
+      catalog_version: "admin-20260831075100",
+      quoted_credits: 23,
+      captured_credits: 7,
+      released_credits: 4,
+      reconciling_credits: 12,
+      actual_debited_credits: 7,
+      call_count: 2,
+      credits: { held: 12, captured: 7, released: 4, reconciling: 12 },
+      tokens: { input: 1000, output: 100 },
+      created_at: "2026-09-04T02:03:04+00:00",
+      updated_at: "2026-09-04T02:03:05+00:00",
+      publication: { id: "publication-1", name: "小顶客服" },
+      application: { id: "app-1", name: "客服系统" },
+    },
+    item: {
+      call_sequence: 2,
+      expert_role: null,
+      model: "deepseek-v4-flash",
+      provider: "volcengine",
+      capability: "chat",
+      tokens: { input: 0, output: 0 },
+      quoted_credits: 12,
+      charged_credits: 0,
+      status: "reconciling",
+      catalog_version: "admin-20260831075100",
+      created_at: "2026-09-04T02:03:04+00:00",
+      evidence: {
+        supplier_reference_present: false,
+        execution_outcome: "timed_out",
+      },
+    },
+  };
+
+  beforeEach(() => {
+    vi.mocked(adminUsersApi.listUsers).mockResolvedValue([
+      { id: 24, username: "dingmai", role: "user", created_at: "" },
+    ]);
+    vi.mocked(billingApi.listReconciliation).mockResolvedValue({
+      items: [reconciliationItem],
+      next_cursor: "next-page",
+    });
+    vi.mocked(billingApi.listReconciliationAudits).mockResolvedValue({
+      items: [],
+      next_cursor: null,
+    });
+  });
+
+  it("renders actionable reconciliation columns instead of raw JSON", async () => {
+    render(<ReconciliationTab />);
+
+    expect(await screen.findByText("dingmai")).toBeInTheDocument();
+    expect(screen.getByText("小顶客服")).toBeInTheDocument();
+    expect(screen.getByText("deepseek-v4-flash")).toBeInTheDocument();
+    expect(screen.getByText("volcengine")).toBeInTheDocument();
+    expect(screen.getByText("12")).toBeInTheDocument();
+    expect(screen.getByText("已扣 7")).toBeInTheDocument();
+    expect(screen.getByText("已释放 4")).toBeInTheDocument();
+    expect(screen.getByText("缺少供应商凭证")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "确认收费" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "确认不收费" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/"reconciliation_id"/)).not.toBeInTheDocument();
+  });
+
+  it("requires a reason and submits a non-billable decision", async () => {
+    const user = userEvent.setup();
+    vi.mocked(
+      (
+        billingApi as typeof billingApi & {
+          resolveReconciliation: ReturnType<typeof vi.fn>;
+        }
+      ).resolveReconciliation,
+    ).mockResolvedValue({ audit_id: "audit-1" });
+    render(<ReconciliationTab />);
+
+    await user.click(await screen.findByRole("button", { name: "确认不收费" }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("处理依据"), "供应商后台确认未收费");
+    await user.click(screen.getByRole("button", { name: "提交对账结果" }));
+
+    expect(
+      (
+        billingApi as typeof billingApi & {
+          resolveReconciliation: ReturnType<typeof vi.fn>;
+        }
+      ).resolveReconciliation,
+    ).toHaveBeenCalledWith(
+      "reconciliation-1",
+      {
+        billability: "not_billable",
+        reason: "供应商后台确认未收费",
+        actual_input_tokens: 0,
+        actual_output_tokens: 0,
+      },
+      expect.any(String),
+    );
   });
 });

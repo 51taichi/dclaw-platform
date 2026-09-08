@@ -1,3 +1,5 @@
+import { submitGuidedTaskAsset } from "./guidedTaskActions";
+import { useGuidedTaskReturn } from "./useGuidedTaskReturn";
 import {
   type CSSProperties,
   type ChangeEvent as ReactChangeEvent,
@@ -478,6 +480,9 @@ function AigcAssetOutput({ asset }: { asset: AigcAsset }) {
 export default function AigcStudioPage() {
   const { t } = useTranslation();
   const guide = useAigcGuideTask(window.location.search);
+  const returnToGuidedConversation = useGuidedTaskReturn(guide.task, (path) =>
+    window.location.assign(path),
+  );
   const canvasSurfaceRef = useRef<HTMLDivElement | null>(null);
   const canvasImageInputRef = useRef<HTMLInputElement | null>(null);
   const canvasVideoInputRef = useRef<HTMLInputElement | null>(null);
@@ -2584,7 +2589,7 @@ export default function AigcStudioPage() {
     const currentTask = guide.task;
     if (!currentTask) {
       antdMessage.error("当前素材任务已失效，请从会话卡片重新进入");
-      return;
+      return false;
     }
     const outputNodeId =
       currentTask.binding.output_node_id ?? currentTask.binding.node_id;
@@ -2597,24 +2602,14 @@ export default function AigcStudioPage() {
       : "";
     if (!assetId) {
       antdMessage.error("当前绑定节点还没有可提交的成品");
-      return;
+      return false;
     }
-    const eventStorageKey = `dclaw:aigc-submit:${guide.taskId}:${assetId}`;
-    const eventId = localStorage.getItem(eventStorageKey) || crypto.randomUUID();
-    localStorage.setItem(eventStorageKey, eventId);
-    const result = await superExpertPlatformApi.command("aigc.asset.submit", {
-      installation_id: currentTask.binding.installation_id,
-      contract_version: "1",
-      idempotency_key: eventId,
-      arguments: {
-        event_id: eventId,
-        binding: currentTask.binding,
-        asset_id: assetId,
-      },
-    });
-    await guide.refresh();
+    if (activeCanvas?.id !== currentTask.binding.canvas_id) return false;
+    await submitGuidedTaskAsset(currentTask, assetId);
+    // Submission already persisted; a projection refresh failure must not undo it.
+    await guide.refresh().catch(() => undefined);
     antdMessage.success("素材已提交，专家将按当前业务阶段审核");
-    return result.agent_review?.reply;
+    return true;
   };
 
   const performManualGuideStep = async (
@@ -2625,9 +2620,14 @@ export default function AigcStudioPage() {
     }
     let updated = activeCanvas;
     if (step.manual_action === "ADD_NODE") {
-      if (!step.node_id || !step.node_kind) throw new Error("MANUAL_NODE_INVALID");
+      if (!step.node_id || !step.node_kind)
+        throw new Error("MANUAL_NODE_INVALID");
       if (!activeCanvas.nodes.some((node) => node.id === step.node_id)) {
-        const template = createNodeForType(t, step.node_kind, activeCanvas.nodes.length);
+        const template = createNodeForType(
+          t,
+          step.node_kind,
+          activeCanvas.nodes.length,
+        );
         const node = {
           ...template,
           id: step.node_id,
@@ -2922,31 +2922,6 @@ export default function AigcStudioPage() {
             onClick={(event) => event.stopPropagation()}
             onChange={handleCanvasFileInput}
           />
-          <CanvasRail
-            railPanel={railPanel}
-            t={t}
-            onToggleAddMenu={() => {
-              setAddMenuOpen((open) => !open);
-              setAddMenuAnchor(null);
-              setRailPanel(null);
-            }}
-            onSelectPanel={(panel) => {
-              setRailPanel((activePanel) =>
-                activePanel === panel ? null : panel,
-              );
-              setAddMenuOpen(false);
-            }}
-            onOpenStyleLibrary={handleOpenStyleLibrary}
-          />
-
-          {addMenuOpen && (
-            <CanvasAddMenu
-              anchor={addMenuAnchor}
-              t={t}
-              onAddNode={handleAddNode}
-            />
-          )}
-
           {canvasContextMenu && (
             <CanvasContextMenu
               menu={canvasContextMenu}
@@ -2983,18 +2958,6 @@ export default function AigcStudioPage() {
             />
           )}
 
-          {railPanel && (
-            <CanvasRailPanel
-              railPanel={railPanel}
-              assetRecords={assetRecords}
-              subjectRecords={subjectRecords}
-              historyRecords={historyRecords}
-              t={t}
-              onTemplate={handleTemplateNode}
-              onUseAssetRecord={handleUseAssetRecord}
-            />
-          )}
-
           <CanvasEdgeLayer
             edgeLines={visibleEdgeLines}
             onDeleteEdge={handleDeleteCanvasEdge}
@@ -3010,27 +2973,6 @@ export default function AigcStudioPage() {
           {activeCanvas?.nodes.length === 0 && (
             <CanvasTemplateLauncher t={t} onTemplate={handleTemplateNode} />
           )}
-
-          <CanvasMinimap
-            minimapOpen={minimapOpen}
-            viewportScale={viewportScale}
-            viewport={
-              activeCanvas?.viewport ?? { x: 0, y: 0, zoom: viewportScale }
-            }
-            visibleWidth={canvasSurfaceSize.visibleWidth}
-            visibleHeight={canvasSurfaceSize.visibleHeight}
-            nodes={activeCanvas?.nodes ?? []}
-            selectedNode={selectedNode}
-            selectedNodeId={selectedNodeId}
-            canvasBounds={canvasBounds}
-            t={t}
-            onFitViewport={fitViewportToNodes}
-            onCenterSelectedNode={centerViewportOnSelectedNode}
-            onToggleMinimap={() => setMinimapOpen((open) => !open)}
-            onUpdateViewportScale={updateViewportScale}
-            onCenterNode={centerViewportOnNode}
-            onMoveViewport={commitViewport}
-          />
 
           {activeCanvas?.nodes.map((node) => (
             <div
@@ -3645,6 +3587,69 @@ export default function AigcStudioPage() {
             </div>
           )}
         </div>
+        <div
+          className={styles.canvasChrome}
+          data-testid="aigc-canvas-chrome"
+          aria-label={t("aigcStudio.canvasControls", "画布控件")}
+        >
+          <CanvasRail
+            railPanel={railPanel}
+            t={t}
+            onToggleAddMenu={() => {
+              setAddMenuOpen((open) => !open);
+              setAddMenuAnchor(null);
+              setRailPanel(null);
+            }}
+            onSelectPanel={(panel) => {
+              setRailPanel((activePanel) =>
+                activePanel === panel ? null : panel,
+              );
+              setAddMenuOpen(false);
+            }}
+            onOpenStyleLibrary={handleOpenStyleLibrary}
+          />
+
+          {addMenuOpen && (
+            <CanvasAddMenu
+              anchor={addMenuAnchor}
+              t={t}
+              onAddNode={handleAddNode}
+            />
+          )}
+
+          {railPanel && (
+            <CanvasRailPanel
+              railPanel={railPanel}
+              assetRecords={assetRecords}
+              subjectRecords={subjectRecords}
+              historyRecords={historyRecords}
+              t={t}
+              onTemplate={handleTemplateNode}
+              onUseAssetRecord={handleUseAssetRecord}
+            />
+          )}
+
+          <CanvasMinimap
+            minimapOpen={minimapOpen}
+            viewportScale={viewportScale}
+            viewport={
+              activeCanvas?.viewport ?? { x: 0, y: 0, zoom: viewportScale }
+            }
+            visibleWidth={canvasSurfaceSize.visibleWidth}
+            visibleHeight={canvasSurfaceSize.visibleHeight}
+            nodes={activeCanvas?.nodes ?? []}
+            selectedNode={selectedNode}
+            selectedNodeId={selectedNodeId}
+            canvasBounds={canvasBounds}
+            t={t}
+            onFitViewport={fitViewportToNodes}
+            onCenterSelectedNode={centerViewportOnSelectedNode}
+            onToggleMinimap={() => setMinimapOpen((open) => !open)}
+            onUpdateViewportScale={updateViewportScale}
+            onCenterNode={centerViewportOnNode}
+            onMoveViewport={commitViewport}
+          />
+        </div>
       </main>
 
       <aside className={styles.inspector}>
@@ -3686,7 +3691,10 @@ export default function AigcStudioPage() {
                     label: `${item.provider_name} / ${item.model_name}${
                       selectedNodeModelState?.invalidSavedModel &&
                       modelKey(item) === selectedNodeModelKey
-                        ? ` · ${t("aigcStudio.modelUnavailable", "该模型已不可用")}`
+                        ? ` · ${t(
+                            "aigcStudio.modelUnavailable",
+                            "该模型已不可用",
+                          )}`
                         : ""
                     }`,
                     disabled:
@@ -3797,7 +3805,9 @@ export default function AigcStudioPage() {
           onRefresh={guide.refresh}
           onManualBuild={performManualGuideStep}
           onFocusStep={(nodeId, controlId) => {
-            const target = activeCanvas?.nodes.find((node) => node.id === nodeId);
+            const target = activeCanvas?.nodes.find(
+              (node) => node.id === nodeId,
+            );
             if (!target) {
               antdMessage.error("当前任务绑定的节点不可用，向导已停止推进");
               return;
@@ -3812,7 +3822,9 @@ export default function AigcStudioPage() {
           onSkipOptional={async (step) => {
             const currentTask = guide.task;
             if (!currentTask || !currentTask.binding.workflow_id) return;
-            const eventStorageKey = `dclaw:aigc-guide-skip:${guide.taskId}:${step.step_id}:${guide.guide!.guide_revision}`;
+            const eventStorageKey = `dclaw:aigc-guide-skip:${guide.taskId}:${
+              step.step_id
+            }:${guide.guide!.guide_revision}`;
             const eventId =
               localStorage.getItem(eventStorageKey) || crypto.randomUUID();
             localStorage.setItem(eventStorageKey, eventId);
@@ -3835,11 +3847,7 @@ export default function AigcStudioPage() {
             });
             await guide.refresh();
           }}
-          onReturnToChat={() => {
-            const path = `/claw/${encodeURIComponent(guide.task!.binding.conversation_id)}`;
-            window.history.pushState({}, "", path);
-            window.dispatchEvent(new PopStateEvent("popstate"));
-          }}
+          onReturnToChat={returnToGuidedConversation}
           onSubmit={submitGuidedAsset}
         />
       ) : null}
@@ -3851,11 +3859,7 @@ export default function AigcStudioPage() {
           activeCanvasId={activeCanvas?.id}
           stepCompletion={legacyGuideCompletion}
           onSubmit={submitGuidedAsset}
-          onReturnToChat={() => {
-            const path = `/claw/${encodeURIComponent(guide.task!.binding.conversation_id)}`;
-            window.history.pushState({}, "", path);
-            window.dispatchEvent(new PopStateEvent("popstate"));
-          }}
+          onReturnToChat={returnToGuidedConversation}
         />
       ) : null}
     </div>

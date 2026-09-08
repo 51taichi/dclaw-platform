@@ -4,6 +4,8 @@ import "./i18n";
 import "./styles/animations.css";
 import { installHostExternals } from "./plugins/hostExternals";
 import { registerHostModulesEager } from "./plugins/dynamicModuleRegistry";
+import { DesktopUpdateGate } from "./components/DesktopUpdateChecker";
+import { installDesktopHttpGate } from "./desktop/httpGate";
 
 // Expose host dependencies (React, antd, etc.) on window
 // so that plugin UI modules can use them without bundling their own copies.
@@ -38,4 +40,12 @@ if (typeof window !== "undefined") {
   };
 }
 
-createRoot(document.getElementById("root")!).render(<App />);
+void installDesktopHttpGate()
+  .catch(() => undefined)
+  .finally(() => {
+    createRoot(document.getElementById("root")!).render(
+      <DesktopUpdateGate>
+        <App />
+      </DesktopUpdateGate>,
+    );
+  });

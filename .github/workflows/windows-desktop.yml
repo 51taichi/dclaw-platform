@@ -50,6 +50,9 @@ jobs:
 
       - name: Build NSIS and MSI installers
         run: npm run desktop:build:cn
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_CN }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD_CN }}
 
       - name: Upload Windows installers
         uses: actions/upload-artifact@v4
@@ -58,4 +61,8 @@ jobs:
           if-no-files-found: error
           path: |
             console/src-tauri/target/desktop-cn/release/bundle/nsis/*.exe
+            console/src-tauri/target/desktop-cn/release/bundle/nsis/*.zip
+            console/src-tauri/target/desktop-cn/release/bundle/nsis/*.sig
             console/src-tauri/target/desktop-cn/release/bundle/msi/*.msi
+            console/src-tauri/target/desktop-cn/release/bundle/msi/*.zip
+            console/src-tauri/target/desktop-cn/release/bundle/msi/*.sig

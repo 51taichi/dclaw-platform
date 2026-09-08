@@ -293,7 +293,10 @@ export function toDisplayUrl(
   if (workspaceId && (displayUrl.includes("/api/") || displayUrl.includes("/console/"))) {
     if (!displayUrl.includes("chatId=")) {
       const separator = displayUrl.includes("?") ? "&" : "?";
-      displayUrl += `${separator}chatId=${encodeURIComponent(workspaceId)}&agent_id=${encodeURIComponent(workspaceId)}`;
+      displayUrl += `${separator}chatId=${encodeURIComponent(workspaceId)}`;
+      if (agentId) {
+        displayUrl += `&agent_id=${encodeURIComponent(agentId)}`;
+      }
     }
   }
   return displayUrl;
@@ -315,7 +318,7 @@ export function rewritePayloadMediaUrls(
   }
 
   if (
-    payload.type === "image" &&
+    ["image", "video", "audio"].includes(payload.type) &&
     payload.source &&
     typeof payload.source === "object" &&
     payload.source.type === "url" &&
