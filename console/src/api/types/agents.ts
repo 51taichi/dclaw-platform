@@ -12,6 +12,7 @@ export interface AgentSummary {
   scope?: "local" | "global";
   version?: string | null;
   availability?: "available" | "unavailable";
+  open_api_enabled?: boolean;
   capabilities?: AgentCapabilities;
   active_model?: ModelSlotConfig | null;
 }

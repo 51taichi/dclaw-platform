@@ -115,6 +115,11 @@ export function AgentTable({
           {record.agent_type === "sealed" && (
             <Tag color="blue">{t("agent.sealed")}</Tag>
           )}
+          {record.open_api_enabled && (
+            <Tooltip title="已开放 OpenAPI 接口">
+              <Tag color="purple">API</Tag>
+            </Tooltip>
+          )}
           {!record.enabled && <Tag color="error">{t("agent.disabled")}</Tag>}
         </Space>
       ),

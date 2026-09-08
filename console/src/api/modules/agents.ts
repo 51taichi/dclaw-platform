@@ -49,7 +49,10 @@ async function uploadAgentPackage<T>(
 // Multi-agent management API
 export const agentsApi = {
   // List all agents
-  listAgents: () => request<AgentListResponse>("/agents"),
+  listAgents: (options: { excludeOpenApi?: boolean } = {}) =>
+    request<AgentListResponse>(
+      `/agents${options.excludeOpenApi ? "?exclude_open_api=true" : ""}`,
+    ),
 
   // Get agent details
   getAgent: (agentId: string) =>
