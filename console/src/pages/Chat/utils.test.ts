@@ -1,4 +1,5 @@
 import { describe, it, test, expect, vi } from "vitest";
+import { chatApi } from "@/api/modules/chat";
 import {
   extractCopyableText,
   extractUserMessageText,
@@ -6,6 +7,7 @@ import {
   toStoredName,
   normalizeContentUrls,
   toDisplayUrl,
+  rewritePayloadMediaUrls,
   filterApprovalsForSession,
 } from "./utils";
 import type { CopyableResponse } from "./utils";
@@ -315,5 +317,24 @@ describe("toDisplayUrl", () => {
     ).toBe(
       "http://localhost:8000/api/user/workspace/preview/__qwenpaw_preview__/default/chat-123/media/ppt_visual_schemes/imagegen_1782712947438.png",
     );
+  });
+
+  it("rewrites structured video sources with distinct chat and agent context", () => {
+    vi.mocked(chatApi.filePreviewUrl).mockImplementationOnce(
+      (path: string) => `http://localhost:8000/api/user/files/preview/${path}`,
+    );
+    const payload = {
+      type: "video",
+      source: {
+        type: "url",
+        url: "file:///app/working/sealed_agents/runtime_workspaces/luyu_traffic_operator/release/agent/aigc_studio/result.mp4",
+      },
+    };
+
+    rewritePayloadMediaUrls(payload, "chat-123", "luyu_traffic_operator");
+
+    expect(payload.source.url).toContain("chatId=chat-123");
+    expect(payload.source.url).toContain("agent_id=luyu_traffic_operator");
+    expect(payload.source.url).not.toContain("agent_id=chat-123");
   });
 });

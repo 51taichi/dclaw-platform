@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Check, LocateFixed, Pause, Play } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ArrowLeft, Check, LocateFixed, Pause, Play } from "lucide-react";
 
 import type {
   AigcOperationContract,
@@ -22,8 +22,8 @@ export function LegacyAigcGuidePanel({
   operation: AigcOperationContract;
   activeCanvasId?: string | null;
   stepCompletion: Record<string, boolean>;
-  onSubmit?: () => Promise<string | void>;
-  onReturnToChat?: () => void;
+  onSubmit?: () => Promise<boolean>;
+  onReturnToChat?: () => Promise<void> | void;
 }) {
   const storageKey = `dclaw:aigc-guide:${taskId}:step`;
   const [stepIndex, setStepIndex] = useState(() =>
@@ -31,15 +31,26 @@ export function LegacyAigcGuidePanel({
   );
   const [paused, setPaused] = useState(false);
   const [pending, setPending] = useState(false);
-  const safeIndex = Math.min(stepIndex, Math.max(0, operation.human_guide.length - 1));
+  const inFlight = useRef(false);
+  const [error, setError] = useState("");
+  const safeIndex = Math.min(
+    stepIndex,
+    Math.max(0, operation.human_guide.length - 1),
+  );
   const step = operation.human_guide[safeIndex];
   const [controlAvailable, setControlAvailable] = useState(false);
-  const wrongCanvas = Boolean(activeCanvasId && task.binding.canvas_id !== activeCanvasId);
+  const wrongCanvas = Boolean(
+    activeCanvasId && task.binding.canvas_id !== activeCanvasId,
+  );
 
-  useEffect(() => localStorage.setItem(storageKey, String(stepIndex)), [stepIndex, storageKey]);
+  useEffect(
+    () => localStorage.setItem(storageKey, String(stepIndex)),
+    [stepIndex, storageKey],
+  );
   useEffect(() => {
     if (!step) return;
-    const refresh = () => setControlAvailable(Boolean(resolveControl(step.control_id)));
+    const refresh = () =>
+      setControlAvailable(Boolean(resolveControl(step.control_id)));
     refresh();
     const observer = new MutationObserver(refresh);
     observer.observe(document.body, { childList: true, subtree: true });
@@ -51,32 +62,64 @@ export function LegacyAigcGuidePanel({
 
   return (
     <aside className={styles.panel} aria-label="旧版 AIGC 执行向导">
-      <header>
-        <span>当前操作向导</span>
-        <strong>{operation.title}</strong>
-        <small>{safeIndex + 1} / {operation.human_guide.length}</small>
-      </header>
-      <section className={styles.currentStep} aria-label="当前步骤">
-        <div className={styles.stepEyebrow}><span>现在只做这一步</span></div>
-        <h2>{step.title}</h2>
-        <p>{step.instruction}</p>
-        {!controlAvailable || wrongCanvas ? (
-          <div className={styles.blocked}>
-            {wrongCanvas ? "当前画布不属于此任务。" : step.recovery}
+      <div
+        className={styles.panelContent}
+        role="region"
+        aria-label="向导内容"
+        tabIndex={0}
+      >
+        <header>
+          <span>当前操作向导</span>
+          <strong>{operation.title}</strong>
+          <small>
+            {safeIndex + 1} / {operation.human_guide.length}
+          </small>
+        </header>
+        <section className={styles.currentStep} aria-label="当前步骤">
+          <div className={styles.stepEyebrow}>
+            <span>现在只做这一步</span>
           </div>
-        ) : null}
+          <h2>{step.title}</h2>
+          <p>{step.instruction}</p>
+          {!controlAvailable || wrongCanvas ? (
+            <div className={styles.blocked}>
+              {wrongCanvas ? "当前画布不属于此任务。" : step.recovery}
+            </div>
+          ) : null}
+          <button
+            type="button"
+            disabled={!controlAvailable || wrongCanvas || paused}
+            onClick={() => focusPlatformControl(step.control_id)}
+          >
+            <LocateFixed size={14} />
+            定位当前控件
+          </button>
+        </section>
+        {error ? <p role="alert">{error}</p> : null}
+      </div>
+      <footer aria-label="向导操作">
         <button
           type="button"
-          disabled={!controlAvailable || wrongCanvas || paused}
-          onClick={() => focusPlatformControl(step.control_id)}
+          disabled={pending || !onReturnToChat}
+          onClick={() => {
+            if (inFlight.current) return;
+            inFlight.current = true;
+            setPending(true);
+            void Promise.resolve()
+              .then(() => onReturnToChat?.())
+              .catch(() =>
+                setError("暂时无法返回任务会话，制作进度已保留，请重试。"),
+              )
+              .finally(() => {
+                inFlight.current = false;
+                setPending(false);
+              });
+          }}
         >
-          <LocateFixed size={14} />定位当前控件
+          <ArrowLeft size={14} />
+          返回任务会话
         </button>
-      </section>
-      <footer>
-        {task.status === "ACCEPTED" ? (
-          <button type="button" onClick={onReturnToChat}>返回原会话</button>
-        ) : (
+        {!["ACCEPTED", "SUBMITTED"].includes(task.status) ? (
           <>
             <button type="button" onClick={() => setPaused((value) => !value)}>
               {paused ? <Play size={14} /> : <Pause size={14} />}
@@ -84,18 +127,51 @@ export function LegacyAigcGuidePanel({
             </button>
             <button
               type="button"
-              disabled={paused || pending || wrongCanvas || !complete}
+              data-guide-submit={finalStep || undefined}
+              disabled={
+                paused ||
+                pending ||
+                wrongCanvas ||
+                !complete ||
+                (finalStep && (!onSubmit || !onReturnToChat))
+              }
               onClick={() => {
                 if (!finalStep) return setStepIndex((value) => value + 1);
+                if (inFlight.current) return;
+                inFlight.current = true;
                 setPending(true);
-                void Promise.resolve(onSubmit?.()).finally(() => setPending(false));
+                setError("");
+                void (async () => {
+                  try {
+                    if ((await onSubmit?.()) !== true) {
+                      setError("尚未提交审核，请确认绑定节点已有成品后再试。");
+                      return;
+                    }
+                    try {
+                      await onReturnToChat?.();
+                    } catch {
+                      setError(
+                        "素材已提交，但暂时无法返回会话。请点击返回任务会话重试。",
+                      );
+                    }
+                  } catch {
+                    setError("提交未能完成，素材和制作进度已保留，请重试。");
+                  } finally {
+                    inFlight.current = false;
+                    setPending(false);
+                  }
+                })();
               }}
             >
               <Check size={14} />
-              {finalStep ? (pending ? "专家审核中…" : "提交给专家审核") : "本步已完成"}
+              {finalStep
+                ? pending
+                  ? "正在提交…"
+                  : "提交审核并返回会话"
+                : "本步已完成"}
             </button>
           </>
-        )}
+        ) : null}
       </footer>
     </aside>
   );

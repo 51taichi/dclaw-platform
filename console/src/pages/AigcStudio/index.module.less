@@ -350,6 +350,18 @@
   cursor: grabbing;
 }
 
+.canvasChrome {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.canvasChrome > * {
+  pointer-events: auto;
+}
+
 .canvasRail {
   position: absolute;
   left: 18px;

@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { Button, Input } from "@agentscope-ai/design";
+import { Tabs } from "antd";
 import { PlusOutlined, SearchOutlined, SyncOutlined } from "@ant-design/icons";
 import { useProviders } from "./useProviders";
 import {
@@ -24,6 +25,7 @@ function ModelsPage() {
   const { providers, activeModels, loading, error, fetchAll } = useProviders();
   const [addProviderOpen, setAddProviderOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [activeTab, setActiveTab] = useState("providers");
 
   const refreshProvidersSilently = useCallback(() => {
     void fetchAll(false);
@@ -108,72 +110,92 @@ function ModelsPage() {
           />
           {/* ---- Scrollable Content ---- */}
           <div className={styles.content}>
-            <ModelsSection
-              providers={providers}
-              activeModels={activeModels}
-              onSaved={fetchAll}
-            />
-            <EmbeddingModelsSection
-              providers={providers}
-              activeModels={activeModels}
-              onSaved={fetchAll}
-            />
-            <AigcModelsSection />
-            {/* ---- Providers Section ---- */}
-            <div className={styles.providersBlock}>
-              <div className={styles.sectionHeaderRow}>
-                <PageHeader
-                  current={t("models.providersTitle")}
-                  className={styles.providersPageHeader}
-                />
-                <div className={styles.headerRight}>
-                  {/* ---- Search ---- */}
-                  <div className={styles.searchRow}>
-                    <Input
-                      placeholder={t("models.searchPlaceholder")}
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className={styles.searchInput}
-                      prefix={<SearchOutlined />}
-                      allowClear
-                    />
-                    <Button
-                      icon={<SyncOutlined />}
-                      onClick={() => fetchAll()}
-                      className={styles.searchBtn}
-                      title={t("common.refresh")}
-                    />
-                  </div>
-                  <Button
-                    type="default"
-                    icon={<PlusOutlined />}
-                    onClick={() => setAddProviderOpen(true)}
-                    className={styles.addProviderBtn}
-                  >
-                    {t("models.addProvider")}
-                  </Button>
-                </div>
-              </div>
+            <Tabs
+              activeKey={activeTab}
+              onChange={setActiveTab}
+              destroyOnHidden={false}
+              items={[
+                {
+                  key: "providers",
+                  label: t("models.providersTitle"),
+                  children: (
+                    <div className={styles.providersBlock}>
+                      <div className={styles.sectionHeaderRow}>
+                        <PageHeader
+                          current={t("models.providersTitle")}
+                          className={styles.providersPageHeader}
+                        />
+                        <div className={styles.headerRight}>
+                          {/* ---- Search ---- */}
+                          <div className={styles.searchRow}>
+                            <Input
+                              placeholder={t("models.searchPlaceholder")}
+                              value={searchQuery}
+                              onChange={(e) => setSearchQuery(e.target.value)}
+                              className={styles.searchInput}
+                              prefix={<SearchOutlined />}
+                              allowClear
+                            />
+                            <Button
+                              icon={<SyncOutlined />}
+                              onClick={() => fetchAll()}
+                              className={styles.searchBtn}
+                              title={t("common.refresh")}
+                            />
+                          </div>
+                          <Button
+                            type="default"
+                            icon={<PlusOutlined />}
+                            onClick={() => setAddProviderOpen(true)}
+                            className={styles.addProviderBtn}
+                          >
+                            {t("models.addProvider")}
+                          </Button>
+                        </div>
+                      </div>
 
-              {localProviders.length > 0 && (
-                <div className={styles.providerGroup}>
-                  {/* <h4 className={styles.providerGroupTitle}>
+                      {localProviders.length > 0 && (
+                        <div className={styles.providerGroup}>
+                          {/* <h4 className={styles.providerGroupTitle}>
                   {t("models.localEmbedded")}
                 </h4> */}
-                  <div className={styles.providerCards}>
-                    {renderProviderCards(localProviders)}
-                  </div>
-                </div>
-              )}
+                          <div className={styles.providerCards}>
+                            {renderProviderCards(localProviders)}
+                          </div>
+                        </div>
+                      )}
 
-              {regularProviders.length > 0 && (
-                <div className={styles.providerGroup}>
-                  <div className={styles.providerCards}>
-                    {renderProviderCards(regularProviders)}
-                  </div>
-                </div>
-              )}
-            </div>
+                      {regularProviders.length > 0 && (
+                        <div className={styles.providerGroup}>
+                          <div className={styles.providerCards}>
+                            {renderProviderCards(regularProviders)}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ),
+                },
+                {
+                  key: "configuration",
+                  label: t("models.configurationTab"),
+                  children: (
+                    <>
+                      <ModelsSection
+                        providers={providers}
+                        activeModels={activeModels}
+                        onSaved={refreshProvidersSilently}
+                      />
+                      <EmbeddingModelsSection
+                        providers={providers}
+                        activeModels={activeModels}
+                        onSaved={refreshProvidersSilently}
+                      />
+                      <AigcModelsSection />
+                    </>
+                  ),
+                },
+              ]}
+            />
 
             <CustomProviderModal
               open={addProviderOpen}

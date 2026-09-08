@@ -19,12 +19,14 @@ export default defineConfig(({ mode }) => {
   // Empty = same-origin; frontend and backend served together, no hardcoded host.
   // Use a dedicated Vite-prefixed key so unrelated shell BASE_URL values don't leak into the build.
   const apiBaseUrl = env.VITE_API_BASE_URL ?? "";
+  const desktopBrandId = env.DCLAW_DESKTOP_BRAND_ID ?? "dclaw";
 
   return {
     define: {
       VITE_API_BASE_URL: JSON.stringify(apiBaseUrl),
       TOKEN: JSON.stringify(env.TOKEN || ""),
       MOBILE: false,
+      DCLAW_DESKTOP_BRAND_ID: JSON.stringify(desktopBrandId),
     },
     plugins: [react(), cssStubPlugin],
     css: {

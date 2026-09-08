@@ -4921,15 +4921,19 @@ describe("AigcStudioPage", () => {
     expect(screen.getByText("110%")).toBeInTheDocument();
   });
 
-  it("centers the minimap controls inside the canvas surface", async () => {
+  it("keeps persistent canvas controls in a viewport overlay outside the pannable surface", async () => {
     render(<AigcStudioPage />);
 
     await screen.findByText("主视觉图片");
     const surface = screen.getByTestId("aigc-canvas-surface");
+    const chrome = screen.getByTestId("aigc-canvas-chrome");
     const dock = screen.getByTestId("aigc-minimap-dock");
+    const rail = screen.getByRole("button", { name: "添加节点" }).parentElement;
     const style = window.getComputedStyle(dock);
 
-    expect(dock.parentElement).toBe(surface);
+    expect(surface).not.toContainElement(chrome);
+    expect(dock.parentElement).toBe(chrome);
+    expect(rail?.parentElement).toBe(chrome);
     expect(style.position).toBe("absolute");
     expect(style.left).toBe("50%");
     expect(style.transform).toContain("translateX(-50%)");

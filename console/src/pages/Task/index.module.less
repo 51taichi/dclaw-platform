@@ -28,9 +28,11 @@
   min-height: 0;
   height: 100%;
   width: 100%;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow-y: hidden;
   overflow-x: hidden;
-  padding-bottom: 260px; /* Space for the bottom composer stack */
+  padding-bottom: 0;
 
   :global {
     [class*="chat-anywhere-default-header-right"] {
@@ -76,6 +78,13 @@
   :global(.dark-mode) & {
     scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
   }
+}
+
+.runtimeViewport {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  position: relative;
 }
 
 .suggestionLabel {
@@ -534,4 +543,3 @@
   width: 100%;
   animation: magicSlideIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
-

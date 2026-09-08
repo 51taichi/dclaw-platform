@@ -111,8 +111,17 @@ export default function PricingTab() {
           </Space>
         ),
         onOk: async () => {
-          await billingApi.confirmPricingImport(preview.id, activeUnlock.token);
+          const result = (await billingApi.confirmPricingImport(
+            preview.id,
+            activeUnlock.token,
+          )) as { already_confirmed?: boolean };
           await load();
+          setActiveTab("drafts");
+          if (result.already_confirmed) {
+            message.info("该文件此前已审批导入，本次未重复创建价格草稿");
+          } else {
+            message.success("价格草稿已审批导入");
+          }
         },
       });
     }

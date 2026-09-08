@@ -23,7 +23,10 @@ vi.mock("../../../api/modules/console", () => ({
   },
 }));
 
-const makeChatSpec = (id: string, overrides: Partial<ChatSpec> = {}): ChatSpec => ({
+const makeChatSpec = (
+  id: string,
+  overrides: Partial<ChatSpec> = {},
+): ChatSpec => ({
   id,
   name: `${id} name`,
   session_id: id,
@@ -38,6 +41,7 @@ const makeChatSpec = (id: string, overrides: Partial<ChatSpec> = {}): ChatSpec =
 describe("Chat sessionApi", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetChat.mockReset();
     sessionApi.reset();
     sessionApi.onSessionRemoved = null;
     sessionApi.onSessionSelected = null;
@@ -102,6 +106,9 @@ describe("Chat sessionApi", () => {
   it("does not keep stale route chat ids as the active browser session", async () => {
     window.history.pushState({}, "", "/task/stale-chat-id");
     mockListChats.mockResolvedValue([]);
+    mockGetChat.mockRejectedValueOnce(
+      new Error('Chat not found: stale-chat-id - {"detail":"Chat not found"}'),
+    );
     const onSessionRemoved = vi.fn();
     sessionApi.onSessionRemoved = onSessionRemoved;
 
@@ -112,6 +119,20 @@ describe("Chat sessionApi", () => {
     expect(onSessionRemoved).toHaveBeenCalledWith("stale-chat-id");
   });
 
+  it("keeps an accessible route during runtime ensureSession with an empty list", async () => {
+    window.history.pushState({}, "", "/task/existing-material-chat");
+    mockListChats.mockResolvedValue([]);
+    mockGetChat.mockResolvedValue({ messages: [], status: "idle" });
+    const removed = vi.fn();
+    sessionApi.onSessionRemoved = removed;
+    const sessions = await sessionApi.createSession({});
+    expect(sessions.map((session) => session.id)).toContain(
+      "existing-material-chat",
+    );
+    expect(removed).not.toHaveBeenCalled();
+    expect((window as any).currentSessionId).toBe("existing-material-chat");
+  });
+
   it("returns a draft session without generating a timestamp id", async () => {
     const session = await sessionApi.getSession(DRAFT_SESSION_ID);
 
@@ -120,19 +141,34 @@ describe("Chat sessionApi", () => {
     expect((window as any).currentSessionId).toBeUndefined();
   });
 
-  it("treats route chats missing from the current user's list as removed", async () => {
+  it("verifies route chats absent from the list before treating them as removed", async () => {
     window.history.pushState({}, "", "/task/stale-chat-id");
     const onSessionRemoved = vi.fn();
     const onSessionSelected = vi.fn();
     sessionApi.onSessionRemoved = onSessionRemoved;
     sessionApi.onSessionSelected = onSessionSelected;
+    mockGetChat.mockRejectedValueOnce(
+      new Error('Chat not found: stale-chat-id - {"detail":"Chat not found"}'),
+    );
 
     const session = await sessionApi.getSession("stale-chat-id");
 
     expect(session.id).toBe(DRAFT_SESSION_ID);
-    expect(mockGetChat).not.toHaveBeenCalled();
+    expect(mockGetChat).toHaveBeenCalledWith("stale-chat-id");
     expect(onSessionRemoved).toHaveBeenCalledWith("stale-chat-id");
     expect(onSessionSelected).not.toHaveBeenCalled();
+  });
+
+  it("keeps an accessible deep-linked task when the sidebar list has not caught up", async () => {
+    window.history.pushState({}, "", "/task/existing-material-chat");
+    mockListChats.mockResolvedValue([]);
+    mockGetChat.mockResolvedValue({ messages: [], status: "idle" });
+    const removed = vi.fn();
+    sessionApi.onSessionRemoved = removed;
+    const session = await sessionApi.getSession("existing-material-chat");
+    expect(session.id).toBe("existing-material-chat");
+    expect(mockGetChat).toHaveBeenCalledWith("existing-material-chat");
+    expect(removed).not.toHaveBeenCalled();
   });
 
   it("treats inaccessible route chats as removed instead of throwing", async () => {
@@ -407,6 +443,35 @@ describe("Chat sessionApi", () => {
     const userContent = (messages[0] as any).cards[0].data.input[0].content;
 
     expect(userContent[0].text).toBe("创作一个6月1日儿童节的剧本");
+  });
+
+  it("uses the chat agent when rewriting structured history video URLs", async () => {
+    const videoSource = {
+      type: "url",
+      url: "file:///app/working/sealed_agents/runtime_workspaces/luyu_traffic_operator/release/agent/aigc_studio/result.mp4",
+    };
+    mockListChats.mockResolvedValueOnce([
+      makeChatSpec("chat-id", {
+        meta: { agent_id: "luyu_traffic_operator" },
+      }),
+    ]);
+    mockGetChat.mockResolvedValue({
+      status: "idle",
+      messages: [
+        {
+          id: "msg-user",
+          role: "user",
+          type: "message",
+          content: [{ type: "video", source: videoSource }],
+        },
+      ],
+    });
+
+    await sessionApi.getSessionList();
+    await sessionApi.getSession("chat-id");
+
+    expect(videoSource.url).toContain("chatId=chat-id");
+    expect(videoSource.url).toContain("agent_id=luyu_traffic_operator");
   });
 
   it("uses fresh backend status when refreshing the session list", async () => {

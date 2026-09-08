@@ -1624,6 +1624,7 @@
   "models": {
     "llmConfiguration": "LLM Configuration",
     "providersTitle": "Providers",
+    "configurationTab": "Configuration",
     "providersDescription": "Configure API keys and endpoints for each provider.",
     "llmTitle": "Models",
     "defaultLlm": "Default LLM",

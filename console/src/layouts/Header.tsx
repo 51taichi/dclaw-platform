@@ -9,6 +9,7 @@ import { useTheme } from "../contexts/ThemeContext";
 import ThemeToggleButton from "../components/ThemeToggleButton";
 import BalanceBadge from "../features/billing/BalanceBadge";
 import styles from "./index.module.less";
+import { DesktopVersion } from "../components/DesktopVersion";
 
 const { Header: AntHeader } = Layout;
 
@@ -30,6 +31,7 @@ export default function Header() {
           className={styles.logoImg}
           draggable={false}
         />
+        <DesktopVersion />
       </div>
       <Space size="middle">
         {!isAdminMode && <BalanceBadge />}

@@ -5,13 +5,30 @@
   right: 16px;
   bottom: 16px;
   width: 340px;
-  overflow: auto;
-  padding: 18px;
+  max-width: calc(100vw - 32px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-sizing: border-box;
   border: 1px solid #30343b;
   border-radius: 14px;
   color: #e5e7eb;
   background: rgba(20, 22, 27, 0.97);
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.4);
+}
+.panelContent {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #454c58 transparent;
+  padding: 18px;
+  overflow-wrap: anywhere;
+}
+.panelContent:focus-visible {
+  outline: 2px solid #67e8f9;
+  outline-offset: -3px;
 }
 .panel header,
 .panel section,
@@ -58,6 +75,17 @@
   cursor: not-allowed;
   opacity: 0.45;
 }
+.panel button svg {
+  flex-shrink: 0;
+}
+.panel footer button[data-guide-submit] {
+  grid-column: 1 / -1;
+  min-height: 40px;
+  white-space: nowrap;
+  background: #315efb;
+  border-color: #315efb;
+  color: #fff;
+}
 .blocked {
   margin-top: 14px;
   padding: 10px;
@@ -75,6 +103,10 @@
   margin-bottom: 8px;
 }
 .panel footer {
+  flex: none;
+  padding: 14px 18px 18px;
+  border-top: 1px solid #30343b;
+  background: #14161b;
   grid-template-columns: 1fr 1.35fr;
 }
 .currentStep {
@@ -82,7 +114,11 @@
   padding: 16px;
   border: 1px solid rgba(53, 211, 255, 0.35);
   border-radius: 12px;
-  background: linear-gradient(145deg, rgba(21, 55, 68, 0.7), rgba(27, 30, 36, 0.95));
+  background: linear-gradient(
+    145deg,
+    rgba(21, 55, 68, 0.7),
+    rgba(27, 30, 36, 0.95)
+  );
 }
 .stepEyebrow,
 .currentActions,
@@ -131,8 +167,40 @@
   color: #cbd5e1;
   font-weight: 600;
 }
-.parameters p:first-of-type {
-  margin-top: 10px;
+.parameterGroups {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+.parameterGroup {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+.parameterGroup h3 {
+  margin: 0;
+  color: #e5e7eb;
+  font-size: 13px;
+}
+.parameterGroup dl {
+  gap: 8px;
+  margin: 0;
+}
+.parameterGroup dl > div {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+.parameterGroup dt,
+.parameterGroup dd {
+  margin: 0;
+}
+.parameterGroup dd {
+  color: #cbd5e1;
+  white-space: pre-wrap;
 }
 .completedSteps ul {
   margin: 0;

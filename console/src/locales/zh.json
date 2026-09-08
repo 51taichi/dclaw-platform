@@ -1473,6 +1473,7 @@
   "models": {
     "llmConfiguration": "LLM 配置",
     "providersTitle": "提供商",
+    "configurationTab": "配置",
     "providersDescription": "为每个提供商配置 API 密钥和端点。",
     "llmTitle": "模型",
     "defaultLlm": "默认LLM",

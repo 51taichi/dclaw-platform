@@ -13,6 +13,9 @@ vi.mock("../../../api/modules/billing", () => ({
     listPricingModelMappings: vi.fn(),
     generatePricingDraft: vi.fn(),
     exportPricing: vi.fn(),
+    unlockPricing: vi.fn(),
+    previewPricingImport: vi.fn(),
+    confirmPricingImport: vi.fn(),
     setPricingExclusion: vi.fn(),
     listPricingCollectionJobs: vi.fn(),
     savePricingModelMapping: vi.fn(),
@@ -130,6 +133,62 @@ describe("PricingTab", () => {
     expect(screen.queryByText("生成价格草案")).not.toBeInTheDocument();
     expect(screen.queryByText(/官网价格同步：/)).not.toBeInTheDocument();
     expect(billingApi.listPricingCollectionJobs).not.toHaveBeenCalled();
+  });
+
+  it("acknowledges an Excel file that was already approved", async () => {
+    const user = userEvent.setup();
+    vi.mocked(billingApi.unlockPricing).mockResolvedValue({
+      token: "unlock-token",
+      expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+    });
+    vi.mocked(billingApi.previewPricingImport).mockResolvedValue({
+      id: "existing-import",
+      status: "ready",
+      rows: [],
+      valid_rows: [
+        {
+          provider_id: "liuma",
+          model_key: "gpt-5.6-sol",
+          excluded: false,
+        },
+      ],
+      pricing_preview: {
+        publishable: true,
+        blockers: [],
+        review: {
+          included_models: 1,
+          included_dimensions: 2,
+          excluded_models: 0,
+          manual_dimensions: 2,
+          rows: [],
+        },
+      },
+    });
+    vi.mocked(billingApi.confirmPricingImport).mockResolvedValue({
+      id: "existing-import",
+      status: "confirmed",
+      already_confirmed: true,
+    });
+
+    render(<PricingTab />);
+    await user.click(await screen.findByText("解锁计费设置"));
+    await user.type(screen.getByLabelText("管理员密码"), "password");
+    await user.click(screen.getByText("确认解锁"));
+
+    const input =
+      document.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(input).not.toBeNull();
+    await user.upload(
+      input!,
+      new File(["workbook"], "pricing-list.xlsx", {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      }),
+    );
+    await user.click(await screen.findByText("确认审批导入"));
+
+    expect(
+      await screen.findByText("该文件此前已审批导入，本次未重复创建价格草稿"),
+    ).toBeInTheDocument();
   });
 
   it("counts durable draft catalogs in the draft tab", async () => {

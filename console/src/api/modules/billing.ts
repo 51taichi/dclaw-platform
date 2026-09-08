@@ -2,6 +2,9 @@ import { request } from "../request";
 import type {
   BillingLedgerEntry,
   BillingUsageOrder,
+  BillingReconciliationAudit,
+  BillingReconciliationRecord,
+  BillingReconciliationResolution,
   BillingUsageSummary,
   BillingWallet,
   Page,
@@ -251,11 +254,28 @@ export const billingApi = {
     request<Page<BillingUsageOrder>>(
       `/admin/billing/usage-orders${query(params)}`,
     ),
-  listReconciliation: () =>
-    request<Page<Record<string, unknown>>>("/admin/billing/reconciliation"),
-  listReconciliationAudits: () =>
-    request<Page<Record<string, unknown>>>(
-      "/admin/billing/reconciliation-audits",
+  listReconciliation: (params: { limit?: number; cursor?: string } = {}) =>
+    request<Page<BillingReconciliationRecord>>(
+      `/admin/billing/reconciliation${query(params)}`,
+    ),
+  resolveReconciliation: (
+    id: string,
+    payload: BillingReconciliationResolution,
+    idempotencyKey: string,
+  ) =>
+    request<BillingReconciliationAudit>(
+      `/admin/billing/reconciliation/${encodeURIComponent(id)}/resolve`,
+      {
+        method: "POST",
+        headers: idempotencyHeaders(idempotencyKey),
+        body: JSON.stringify(payload),
+      },
+    ),
+  listReconciliationAudits: (
+    params: { limit?: number; cursor?: string } = {},
+  ) =>
+    request<Page<BillingReconciliationAudit>>(
+      `/admin/billing/reconciliation-audits${query(params)}`,
     ),
   getRollout: () => request<Record<string, unknown>>("/admin/billing/rollout"),
   activateRollout: (mode: "off" | "shadow" | "observe" | "enforced") =>

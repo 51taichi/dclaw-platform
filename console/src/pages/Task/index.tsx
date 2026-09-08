@@ -55,6 +55,7 @@ import { useApprovalContext } from "../../contexts/ApprovalContext";
 import { planApi } from "../../api/modules/plan";
 import PreparingOverlay from "../Chat/components/PreparingOverlay";
 import { TaskArtifactCard } from "../Chat/components/TaskArtifactCard";
+import { SuperExpertAigcCards } from "../Chat/components/SuperExpertAigcCards";
 import { scheduleArtifactCardScans } from "../Chat/utils/artifactCardScanScheduler";
 import { createRoot } from "react-dom/client";
 import { shouldRedirectAfterAgentChange } from "./agentRoutePolicy";
@@ -2122,33 +2123,39 @@ export default function ChatPage() {
       >
         {isPreparing && <PreparingOverlay />}
         <div className={styles.chatMessagesArea}>
-          <AgentScopeRuntimeWebUI
-            key={`${selectedAgent}:${runtimeReloadKey}`}
-            options={options}
-            ref={chatRef}
-          />
+          <div className={styles.runtimeViewport}>
+            <AgentScopeRuntimeWebUI
+              key={`${selectedAgent}:${runtimeReloadKey}`}
+              options={options}
+              ref={chatRef}
+            />
+          </div>
           <WorkbenchInput
+            inFlow
             isGenerating={isGenerating}
             topAccessory={
-              (isGenerating && !!chatId && !isDraftSessionId(chatId)) ||
-              selectedExpertTeam ||
-              currentExpertTeamRun ? (
-                <>
-                  <RunningSessionNotice
-                    visible={
-                      isGenerating && !!chatId && !isDraftSessionId(chatId)
-                    }
-                    variant="inline"
+              <>
+                {chatId && !isDraftSessionId(chatId) && (
+                  <SuperExpertAigcCards
+                    key={chatId}
+                    conversationId={chatId}
+                    watchForNewCards={isGenerating}
                   />
-                  {(selectedExpertTeam || currentExpertTeamRun) && (
-                    <ExpertTeamStatusStrip
-                      chatId={chatId}
-                      visible
-                      variant="composer"
-                    />
-                  )}
-                </>
-              ) : null
+                )}
+                <RunningSessionNotice
+                  visible={
+                    isGenerating && !!chatId && !isDraftSessionId(chatId)
+                  }
+                  variant="inline"
+                />
+                {(selectedExpertTeam || currentExpertTeamRun) && (
+                  <ExpertTeamStatusStrip
+                    chatId={chatId}
+                    visible
+                    variant="composer"
+                  />
+                )}
+              </>
             }
             onStop={() => {
               const currentSession = window.currentSessionId || chatId || "";

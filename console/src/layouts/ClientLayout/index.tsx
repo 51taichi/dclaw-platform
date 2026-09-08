@@ -13,6 +13,7 @@ import styles from "../index.module.less";
 import ClawPage from "../../pages/Claw";
 import WorkbenchPage from "../../pages/Workbench";
 import TaskPage from "../../pages/Task";
+import TaskConversationRoute from "../../pages/Task/TaskConversationRoute";
 import AigcStudioPage from "../../pages/AigcStudio";
 import WalletPage from "../../pages/Wallet";
 
@@ -85,7 +86,14 @@ export default function ClientLayout() {
                   <Route path="/workbench" element={<WorkbenchPage />} />
                   <Route path="/aigc-studio" element={<AigcStudioPage />} />
                   <Route path="/claw/*" element={<ClawPage />} />
-                  <Route path="/task/*" element={<TaskPage />} />
+                  <Route
+                    path="/task/*"
+                    element={
+                      <TaskConversationRoute>
+                        <TaskPage />
+                      </TaskConversationRoute>
+                    }
+                  />
                   <Route path="/experts" element={<ExpertsPage />} />
                   <Route path="/skill-market" element={<SkillMarketPage />} />
                   <Route path="/explore" element={<ExplorePage />} />

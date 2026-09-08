@@ -83,9 +83,9 @@ const STATUS_LABELS: Record<SuperExpertAigcTaskStatus, string> = {
   WAITING_TO_START: "等待开始",
   IN_PROGRESS: "制作中",
   PAUSED: "已暂停",
-  SUBMITTED: "已提交审核",
+  SUBMITTED: "待审核",
   REVISION_REQUIRED: "需要修改",
-  ACCEPTED: "已通过",
+  ACCEPTED: "已审核",
   CANCELLED: "已取消",
   INVALIDATED: "已失效",
 };
@@ -100,14 +100,24 @@ function actionLabel(status: SuperExpertAigcTaskStatus): string | null {
 export function SuperExpertAigcTaskCard({
   projection,
   onCommand,
+  compact = false,
+  emphasized = false,
 }: {
   projection: SuperExpertAigcTaskCardProjection;
   onCommand: (command: "resume", materialTaskId: string) => Promise<void>;
+  compact?: boolean;
+  emphasized?: boolean;
 }) {
   const [submitting, setSubmitting] = useState(false);
   const actionInFlight = useRef(false);
   const label = actionLabel(projection.status);
   const route = buildAigcTaskRoute(projection.materialTaskId);
+  const instruction =
+    projection.status === "ACCEPTED"
+      ? "素材已通过审核，可查看成果并用于后续创作。"
+      : projection.status === "SUBMITTED"
+      ? "素材已提交，等待陆羽审核。"
+      : projection.instruction;
 
   const act = async () => {
     if (actionInFlight.current) return;
@@ -123,8 +133,68 @@ export function SuperExpertAigcTaskCard({
     }
   };
 
+  if (compact) {
+    const content = (
+      <>
+        <span className={styles.icon}>
+          {projection.status === "ACCEPTED" ? (
+            <CircleCheck size={16} />
+          ) : (
+            <Video size={16} />
+          )}
+        </span>
+        <strong className={styles.compactTitle}>{projection.title}</strong>
+        <span
+          className={styles.status}
+          role="status"
+          data-status={projection.status}
+        >
+          {STATUS_LABELS[projection.status]}
+        </span>
+      </>
+    );
+    return (
+      <section
+        className={`${styles.card} ${styles.compact} ${
+          emphasized ? styles.emphasized : ""
+        }`}
+        data-card-id={projection.cardId}
+        data-task-status={projection.status}
+      >
+        {label ? (
+          <button
+            type="button"
+            className={styles.compactEntry}
+            title={projection.title}
+            aria-label={label}
+            disabled={submitting}
+            data-deep-link={route}
+            onClick={() => void act()}
+          >
+            {content}
+          </button>
+        ) : (
+          <a
+            className={styles.compactEntry}
+            title={projection.title}
+            aria-label={
+              projection.status === "ACCEPTED" ? "查看成果" : "查看详情"
+            }
+            href={route}
+          >
+            {content}
+          </a>
+        )}
+      </section>
+    );
+  }
+
   return (
-    <section className={styles.card} data-card-id={projection.cardId}>
+    <section
+      className={`${styles.card} ${emphasized ? styles.emphasized : ""}`}
+      data-card-id={projection.cardId}
+      data-task-status={projection.status}
+    >
       <div className={styles.heading}>
         <span className={styles.icon}>
           {projection.status === "ACCEPTED" ? (
@@ -134,31 +204,41 @@ export function SuperExpertAigcTaskCard({
           )}
         </span>
         <div className={styles.titleBlock}>
-          <strong>{projection.title}</strong>
-          <span className={styles.status} data-status={projection.status}>
+          <strong title={projection.title}>{projection.title}</strong>
+          <span
+            className={styles.status}
+            role="status"
+            data-status={projection.status}
+          >
             {STATUS_LABELS[projection.status]}
           </span>
         </div>
       </div>
-      {projection.instruction ? (
-        <p className={styles.instruction}>{projection.instruction}</p>
-      ) : null}
-      {label ? (
-        <button
-          type="button"
-          className={styles.action}
-          disabled={submitting}
-          data-deep-link={route}
-          onClick={() => void act()}
-        >
-          {projection.status === "REVISION_REQUIRED" ? (
-            <RotateCcw size={15} />
-          ) : (
-            <ExternalLink size={15} />
-          )}
-          {label}
-        </button>
-      ) : null}
+      {instruction ? <p className={styles.instruction}>{instruction}</p> : null}
+      <div className={styles.footer}>
+        <span className={styles.kind}>AIGC 工作流</span>
+        {label ? (
+          <button
+            type="button"
+            className={styles.action}
+            disabled={submitting}
+            data-deep-link={route}
+            onClick={() => void act()}
+          >
+            {projection.status === "REVISION_REQUIRED" ? (
+              <RotateCcw size={15} />
+            ) : (
+              <ExternalLink size={15} />
+            )}
+            {label}
+          </button>
+        ) : (
+          <a className={styles.resultLink} href={route}>
+            {projection.status === "ACCEPTED" ? "查看成果" : "查看详情"}
+            <ExternalLink size={14} />
+          </a>
+        )}
+      </div>
     </section>
   );
 }
