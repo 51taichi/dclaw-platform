@@ -56,6 +56,7 @@ from ...security.skill_scanner import SkillScanError
 from ..multi_agent_manager import MultiAgentManager
 from ...constant import WORKING_DIR
 from ..storage.repos.chat_list_repo import get_chat_list_repository
+from ..storage.repos.open_api_repo import get_open_api_repository
 from ..sealed_agents.models import AgentCapabilities, SealedCapability
 from ..sealed_agents.policy import assert_sealed_capability
 from ..sealed_agents.registry import get_sealed_agent_registry
@@ -85,6 +86,7 @@ class AgentSummary(BaseModel):
     scope: str = "private"
     version: str | None = None
     availability: str = "available"
+    open_api_enabled: bool = False
     capabilities: AgentCapabilities = Field(
         default_factory=AgentCapabilities.for_standard,
     )
@@ -233,10 +235,18 @@ def _agent_package_bad_request(exc: Exception) -> HTTPException:
     summary="List all agents",
     description="Get list of all configured agents",
 )
-async def list_agents() -> AgentListResponse:
+async def list_agents(exclude_open_api: bool = False) -> AgentListResponse:
     """List all configured agents."""
     config = load_config()
     ordered_agent_ids = _normalized_agent_order(config)
+    open_api_agent_ids = {
+        str(publication.get("target_id"))
+        for publication in get_open_api_repository().list_publications(
+            enabled_only=True,
+        )
+        if publication.get("target_type") == "agent"
+        and publication.get("target_id")
+    }
 
     agents = []
     sealed_registry = get_sealed_agent_registry()
@@ -265,6 +275,7 @@ async def list_agents() -> AgentListResponse:
                     workspace_dir=agent_ref.workspace_dir,
                     enabled=getattr(agent_ref, "enabled", True),
                     active_model=active_model,
+                    open_api_enabled=agent_id in open_api_agent_ids,
                 ),
             )
         except Exception:  # noqa: E722
@@ -275,6 +286,7 @@ async def list_agents() -> AgentListResponse:
                     description="",
                     workspace_dir=agent_ref.workspace_dir,
                     enabled=getattr(agent_ref, "enabled", True),
+                    open_api_enabled=agent_id in open_api_agent_ids,
                 ),
             )
 
@@ -307,9 +319,13 @@ async def list_agents() -> AgentListResponse:
                     if sealed.enabled and active_release is not None
                     else "unavailable"
                 ),
+                open_api_enabled=sealed.agent_id in open_api_agent_ids,
                 capabilities=AgentCapabilities.for_sealed_global(),
             ),
         )
+
+    if exclude_open_api:
+        agents = [agent for agent in agents if not agent.open_api_enabled]
 
     return AgentListResponse(agents=agents)
 

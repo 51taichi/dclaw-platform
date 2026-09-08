@@ -15,6 +15,21 @@ from qwenpaw.app.routers import agents as agents_router
 from qwenpaw.app.sealed_agents.models import SealedAgentRecord
 
 
+@pytest.fixture(autouse=True)
+def _no_open_api_publications(monkeypatch):
+    class Repository:
+        @staticmethod
+        def list_publications(enabled_only=False):
+            assert enabled_only is True
+            return []
+
+    monkeypatch.setattr(
+        agents_router,
+        "get_open_api_repository",
+        lambda: Repository(),
+    )
+
+
 def _build_config(
     profile_ids: list[str],
     agent_order: list[str] | None = None,
@@ -86,6 +101,54 @@ async def test_list_agents_appends_missing_ids(monkeypatch):
         "default",
         "beta",
         "alpha",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_list_agents_marks_and_can_exclude_open_api_agents(monkeypatch):
+    config = _build_config(
+        ["default", "api_agent", "disabled_publication_agent"],
+        agent_order=["default", "api_agent", "disabled_publication_agent"],
+    )
+
+    class Repository:
+        @staticmethod
+        def list_publications(enabled_only=False):
+            assert enabled_only is True
+            return [
+                {
+                    "target_type": "agent",
+                    "target_id": "api_agent",
+                    "status": "enabled",
+                },
+                {
+                    "target_type": "expert_team",
+                    "target_id": "team-1",
+                    "status": "enabled",
+                },
+            ]
+
+    monkeypatch.setattr(agents_router, "load_config", lambda: config)
+    monkeypatch.setattr(agents_router, "load_agent_config", _agent_config)
+    monkeypatch.setattr(
+        agents_router,
+        "get_open_api_repository",
+        lambda: Repository(),
+    )
+
+    complete = await agents_router.list_agents()
+    assert {
+        agent.id: agent.open_api_enabled for agent in complete.agents
+    } == {
+        "default": False,
+        "api_agent": True,
+        "disabled_publication_agent": False,
+    }
+
+    client_visible = await agents_router.list_agents(exclude_open_api=True)
+    assert [agent.id for agent in client_visible.agents] == [
+        "default",
+        "disabled_publication_agent",
     ]
 
 
