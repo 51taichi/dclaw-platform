@@ -207,11 +207,14 @@ def workspace_result_to_message(
         except Exception as exc:
             raise WorkspaceOrchestrationError("invalid_completion") from exc
     if isinstance(message.get("reply"), str):
-        return Msg(
-            name=agent_name,
-            role="assistant",
-            content=message["reply"],
-        )
+        content = message["reply"]
+        display_text = (result.diagnostics or {}).get("display_text")
+        if isinstance(display_text, str) and display_text:
+            content = [
+                {"type": "text", "text": message["reply"]},
+                {"type": "text", "text": "\n\n---\n\n" + display_text},
+            ]
+        return Msg(name=agent_name, role="assistant", content=content)
     raise WorkspaceOrchestrationError("invalid_completion")
 
 

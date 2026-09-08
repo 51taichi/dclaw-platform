@@ -111,7 +111,7 @@ class BillingModelMeter:
         self,
         usage_service: UsageService,
         *,
-        default_max_output_tokens: int = 1024,
+        default_max_output_tokens: int = 2048,
         platform_max_output_tokens: int | None = None,
         pricing_region_resolver: Callable[[str], str | None] | None = None,
     ) -> None:

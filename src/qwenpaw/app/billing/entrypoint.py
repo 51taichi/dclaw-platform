@@ -165,6 +165,20 @@ class PreparedBillingExecution:
             return False
 
 
+def _meter_for_source(usage_service: UsageService, source: BillingSource) -> BillingModelMeter:
+    """Use the same base/expert budgets for all authenticated entry points."""
+    from ..sealed_agents.registry import get_sealed_agent_registry
+
+    output_tokens = 2048
+    if source.expert_id:
+        record = get_sealed_agent_registry().get_agent(source.expert_id)
+        if (record is not None and record.enabled
+                and record.active_release is not None
+                and record.active_release.package_type == "super_expert"):
+            output_tokens = 4096
+    return BillingModelMeter(usage_service, default_max_output_tokens=output_tokens)
+
+
 def prepare_user_billing_execution(
     payer_user_id: str,
     source: BillingSource,
@@ -200,7 +214,7 @@ def prepare_user_billing_execution(
         session=session,
         fence=fence,
         execution_repository=execution_repository,
-        meter=BillingModelMeter(usage_service),
+        meter=_meter_for_source(usage_service, session.source),
         usage_service=usage_service,
     )
 
@@ -262,7 +276,7 @@ def resume_user_billing_execution(
         session=session,
         fence=fence,
         execution_repository=execution_repository,
-        meter=BillingModelMeter(usage_service),
+        meter=_meter_for_source(usage_service, session.source),
         usage_service=usage_service,
     )
 

@@ -1289,7 +1289,7 @@ def test_environment_cannot_bypass_explicit_enforced_activation(
     assert runtime.usage_service.mode == "shadow"
 
 
-def test_super_expert_open_api_runtime_uses_independent_4096_output_profile(
+def test_base_entrypoints_default_to_2048_and_super_expert_to_4096(
     monkeypatch,
     reporting,
 ):
@@ -1305,6 +1305,10 @@ def test_super_expert_open_api_runtime_uses_independent_4096_output_profile(
 
     assert regular.default_max_output_tokens == 2048
     assert super_expert.default_max_output_tokens == 4096
+    from qwenpaw.app.billing.model_meter import BillingModelMeter
+    console = BillingModelMeter(regular.usage_service)
+    assert console.default_max_output_tokens == 2048
+    assert console.platform_max_output_tokens == 2048
 
 
 def test_super_expert_output_profile_has_its_own_environment_override(
