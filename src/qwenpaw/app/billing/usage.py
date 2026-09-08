@@ -543,22 +543,13 @@ class UsageService:
             economic_tier = _economic_tier(quote.snapshot)
             budget = int(order["budget_credits"])
             budget_blocked = bool(
-                budget
-                and int(order["captured_credits"])
-                + int(order["held_credits"])
-                + quote.credits
-                > budget,
+                budget and int(order["captured_credits"]) >= budget,
             )
             mode = self._order_mode(order)
             if budget_blocked and mode == "enforced":
                 raise InsufficientUsageCreditsError(
-                    quote.credits,
-                    max(
-                        budget
-                        - int(order["captured_credits"])
-                        - int(order["held_credits"]),
-                        0,
-                    ),
+                    1,
+                    0,
                 )
 
             source_type = str(order.get("source_type") or "")
@@ -575,49 +566,45 @@ class UsageService:
                     would_pass = False
                     would_block_reason = "invocation_budget_exceeded"
                 else:
-                    (
-                        would_pass,
-                        would_block_reason,
-                    ) = self.repository.evaluate_hold_in_connection(
-                        conn,
-                        str(order["wallet_id"]),
-                        quote.credits,
-                        capability=normalized.capability,
-                        tier=economic_tier,
+                    available = (
+                        self.repository.effective_available_in_connection(
+                            conn,
+                            str(order["wallet_id"]),
+                        )
                     )
-            if mode == "enforced" and quote.credits:
-                try:
-                    self.repository.append_transaction_in_connection(
-                        conn,
-                        LedgerTransaction(
-                            wallet_id=str(order["wallet_id"]),
-                            event_type="usage_hold",
-                            credits=quote.credits,
-                            business_type="usage_item",
-                            business_key=item_business_key,
-                            idempotency_key=(
-                                f"{idempotency_namespace}:"
-                                f"{normalized.usage_order_id}:"
-                                f"{normalized.item_key}:hold"
-                            ),
-                            metadata={
-                                "capability": normalized.capability,
-                                "tier": economic_tier,
-                                "source_type": source_type,
-                                "source_id": str(order["source_id"]),
-                                "item_key": normalized.item_key,
-                            },
+                    would_pass = available > 0
+                    would_block_reason = (
+                        None if would_pass else "insufficient_credits"
+                    )
+            if mode == "enforced":
+                balance = self.repository.append_transaction_in_connection(
+                    conn,
+                    LedgerTransaction(
+                        wallet_id=str(order["wallet_id"]),
+                        event_type="usage_hold",
+                        credits=0,
+                        business_type="usage_item",
+                        business_key=item_business_key,
+                        idempotency_key=(
+                            f"{idempotency_namespace}:"
+                            f"{normalized.usage_order_id}:"
+                            f"{normalized.item_key}:hold"
                         ),
-                    )
-                except InsufficientCreditsError as exc:
-                    balance = self.repository.balance_in_connection(
-                        conn,
-                        str(order["wallet_id"]),
-                    )
+                        metadata={
+                            "actual_usage_only": True,
+                            "capability": normalized.capability,
+                            "tier": economic_tier,
+                            "source_type": source_type,
+                            "source_id": str(order["source_id"]),
+                            "item_key": normalized.item_key,
+                        },
+                    ),
+                )
+                if balance.available <= 0:
                     raise InsufficientUsageCreditsError(
-                        quote.credits,
+                        1,
                         balance.available,
-                    ) from exc
+                    )
 
             now = datetime.now(timezone.utc)
             conn.execute(
@@ -712,7 +699,7 @@ class UsageService:
                 actual_credits = actual_quote.credits
                 if actual_credits > quoted:
                     raise UsageOrderStateError(
-                        "actual retail credits exceed the pre-call hold",
+                        "actual retail credits exceed the maximum quote",
                     )
 
             source_type = str(order.get("source_type") or "")
@@ -722,7 +709,7 @@ class UsageService:
                 normalized.item_key,
             )
             idempotency_namespace = _item_idempotency_namespace(source_type)
-            if self._order_mode(order) == "enforced" and quoted:
+            if self._order_mode(order) == "enforced":
                 if normalized.billability == "billable" and actual_credits:
                     self.repository.append_transaction_in_connection(
                         conn,
@@ -1443,7 +1430,9 @@ def _item_business_key(
     usage_order_id: str,
     item_key: str,
 ) -> str:
-    namespace = "open-api-item" if source_type == "open_api" else "billing-item"
+    namespace = (
+        "open-api-item" if source_type == "open_api" else "billing-item"
+    )
     return f"{namespace}:{usage_order_id}:{item_key}"
 
 

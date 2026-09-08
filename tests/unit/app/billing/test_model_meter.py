@@ -547,18 +547,24 @@ async def test_generic_provider_validation_after_contact_is_reconciling(
 
 
 @pytest.mark.asyncio
-async def test_insufficient_reservation_stops_before_provider_execution(
+async def test_zero_balance_stops_before_provider_execution(
     usage_service,
 ):
     from qwenpaw.app.billing.model_meter import BillingModelMeter
 
     service, session = usage_service
-    with service.repository.engine.begin() as conn:
-        conn.execute(
-            update(billing_usage_orders)
-            .where(billing_usage_orders.c.id == session.usage_order_id)
-            .values(budget_credits=1),
-        )
+    service.repository.hold(
+        session.wallet_id,
+        credits=20,
+        business_key="exhaust-wallet",
+        idempotency_key="exhaust-wallet:hold",
+    )
+    service.repository.capture(
+        session.wallet_id,
+        credits=20,
+        business_key="exhaust-wallet",
+        idempotency_key="exhaust-wallet:capture",
+    )
     model = _Model(
         _Response(usage=SimpleNamespace(input_tokens=3, output_tokens=2)),
     )
@@ -664,7 +670,7 @@ async def test_contacted_supplier_write_failure_stays_reconciling(
     item = service.list_items(session.usage_order_id)[0]
     assert item["billability"] == "unknown"
     assert item["status"] == "reconciling"
-    assert service.repository.balance(session.wallet_id).held > 0
+    assert service.repository.balance(session.wallet_id).held == 0
     assert failing_service.settle_attempts == 2
 
 
@@ -922,7 +928,7 @@ async def test_financial_write_fallback_attempts_reconciliation_once(
     assert failing_service.settle_attempts == 2
     item = service.list_items(session.usage_order_id)[0]
     assert item["status"] == "reconciling"
-    assert service.repository.balance(session.wallet_id).held > 0
+    assert service.repository.balance(session.wallet_id).held == 0
 
 
 @pytest.mark.asyncio
