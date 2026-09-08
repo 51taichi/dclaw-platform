@@ -198,7 +198,7 @@ def test_begin_resolves_wallet_only_from_publication_bound_user(
     assert session.bound_user_id != "caller-controlled-user"
 
 
-def test_zero_balance_blocks_model_call_even_when_overdraft_flag_is_enabled(
+def test_overdraft_enabled_user_can_continue_model_calls_below_zero(
     coordinator,
     engine,
 ):
@@ -222,16 +222,24 @@ def test_zero_balance_blocks_model_call_even_when_overdraft_flag_is_enabled(
 
     session = coordinator.begin_invocation(_command(mode="enforced"))
     service = UsageService(coordinator.repository, coordinator.pricing)
-    with pytest.raises(InsufficientUsageCreditsError) as raised:
-        service.reserve_model_call(_reserve(session, "free-call"))
+    first = service.reserve_model_call(_reserve(session, "first-call"))
+    service.settle_model_call(
+        _settle(session, "first-call", "billable"),
+    )
+    second = service.reserve_model_call(_reserve(session, "second-call"))
+    service.settle_model_call(
+        _settle(session, "second-call", "billable"),
+    )
 
     assert session.mode == "enforced"
-    assert raised.value.required == 1
-    assert raised.value.available == 0
-    assert coordinator.repository.balance(session.wallet_id).available == 0
-    assert coordinator.repository.balance(session.wallet_id).debt == 0
+    assert first.status == "held"
+    assert second.status == "held"
+    assert coordinator.repository.balance(session.wallet_id).available == -2
+    assert coordinator.repository.balance(session.wallet_id).debt == 2
     assert coordinator.repository.balance(session.wallet_id).held == 0
-    assert service.list_items(session.usage_order_id) == []
+    assert [
+        item["status"] for item in service.list_items(session.usage_order_id)
+    ] == ["captured", "captured"]
 
 
 def test_same_key_and_canonical_payload_replays_existing_pair(

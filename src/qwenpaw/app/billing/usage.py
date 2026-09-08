@@ -559,6 +559,12 @@ class UsageService:
                 normalized.item_key,
             )
             idempotency_namespace = _item_idempotency_namespace(source_type)
+            overdraft_enabled = (
+                self.repository.overdraft_enabled_in_connection(
+                    conn,
+                    str(order["wallet_id"]),
+                )
+            )
             would_pass: bool | None = None
             would_block_reason: str | None = None
             if mode == "observe":
@@ -572,7 +578,7 @@ class UsageService:
                             str(order["wallet_id"]),
                         )
                     )
-                    would_pass = available > 0
+                    would_pass = overdraft_enabled or available > 0
                     would_block_reason = (
                         None if would_pass else "insufficient_credits"
                     )
@@ -600,7 +606,7 @@ class UsageService:
                         },
                     ),
                 )
-                if balance.available <= 0:
+                if balance.available <= 0 and not overdraft_enabled:
                     raise InsufficientUsageCreditsError(
                         1,
                         balance.available,
