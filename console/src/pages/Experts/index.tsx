@@ -13,6 +13,7 @@ import type { AgentSummary } from "../../api/types/agents";
 import { useEffect } from "react";
 import sessionApi from "../Chat/sessionApi";
 import { resolveExpertSummonTarget } from "./navigation";
+import { clientVisibleAgents } from "./visibility";
 
 type ExpertCardItem = {
   id: string;
@@ -51,9 +52,12 @@ export default function ExpertsPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    Promise.all([agentsApi.listAgents(), expertTeamsApi.listExpertTeams()])
+    Promise.all([
+      agentsApi.listAgents({ excludeOpenApi: true }),
+      expertTeamsApi.listExpertTeams(),
+    ])
       .then(([agentRes, teamRes]) => {
-        setAgents(agentRes.agents || []);
+        setAgents(clientVisibleAgents(agentRes.agents || []));
         setTeams(teamRes || []);
       })
       .catch(() => message.error(t("common.fetchFailed", "获取专家失败")))
@@ -175,7 +179,9 @@ export default function ExpertsPage() {
             className={`${styles.cardAction} ${styles.cardActionPrimary}`}
             onClick={() => {
               const currentAgent = useAgentStore.getState().selectedAgent;
-              const rawFrom = (location.state as any)?.from || "/workbench";
+              const rawFrom =
+                (location.state as { from?: string } | null)?.from ||
+                "/workbench";
               const from = rawFrom.startsWith("/chat/")
                 ? rawFrom.replace(/^\/chat/, "/task")
                 : rawFrom;

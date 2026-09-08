@@ -125,4 +125,41 @@ describe("AgentTable", () => {
     expect(container.querySelector(".lucide-eye")).toBeInTheDocument();
     expect(screen.getByRole("combobox")).not.toBeDisabled();
   });
+
+  it("marks agents with an enabled OpenAPI publication", () => {
+    render(
+      <AgentTable
+        agents={[
+          {
+            id: "api-agent",
+            name: "API Agent",
+            description: "External application agent",
+            workspace_dir: "/workspaces/api-agent",
+            enabled: true,
+            open_api_enabled: true,
+          },
+          {
+            id: "desktop-agent",
+            name: "Desktop Agent",
+            description: "Desktop agent",
+            workspace_dir: "/workspaces/desktop-agent",
+            enabled: true,
+            open_api_enabled: false,
+          },
+        ]}
+        loading={false}
+        reordering={false}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+        onToggle={vi.fn()}
+        onReorder={vi.fn()}
+        modelOptions={[]}
+        savingModelAgentId={null}
+        onModelChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("API")).toBeInTheDocument();
+    expect(screen.getAllByText(/Agent$/)).toHaveLength(2);
+  });
 });
