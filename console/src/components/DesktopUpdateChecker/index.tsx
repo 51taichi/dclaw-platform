@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Button, Progress } from "antd";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch, exit } from "@tauri-apps/plugin-process";
@@ -28,9 +28,11 @@ export function DesktopUpdateGate({ children }: { children: ReactNode }) {
   const [state, setState] = useState<GateState>(desktop ? "checking" : "ready");
   const [message, setMessage] = useState("正在检查客户端版本…");
   const [progress, setProgress] = useState(0);
+  const updateInFlightRef = useRef(false);
 
   const runUpdateGate = useCallback(async () => {
-    if (!desktop) return;
+    if (!desktop || updateInFlightRef.current) return;
+    updateInFlightRef.current = true;
     setState("checking");
     setMessage("正在检查客户端版本…");
     setProgress(0);
@@ -48,8 +50,15 @@ export function DesktopUpdateGate({ children }: { children: ReactNode }) {
         if (event.event === "Started") total = event.data.contentLength ?? 0;
         if (event.event === "Progress") {
           downloaded += event.data.chunkLength;
-          if (total > 0)
-            setProgress(Math.min(100, Math.round((downloaded / total) * 100)));
+          if (total > 0) {
+            const nextProgress = Math.min(
+              100,
+              Math.round((downloaded / total) * 100),
+            );
+            setProgress((currentProgress) =>
+              Math.max(currentProgress, nextProgress),
+            );
+          }
         }
         if (event.event === "Finished") {
           setProgress(100);
@@ -63,6 +72,8 @@ export function DesktopUpdateGate({ children }: { children: ReactNode }) {
       setMessage(
         error instanceof Error ? error.message : "客户端更新失败，请重试",
       );
+    } finally {
+      updateInFlightRef.current = false;
     }
   }, [desktop]);
 
