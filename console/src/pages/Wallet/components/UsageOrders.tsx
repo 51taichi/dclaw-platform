@@ -15,7 +15,7 @@ const sourceLabels: Record<BillingUsageOrder["source"], string> = {
 
 const statusLabels: Record<string, string> = {
   quoted: "待调用",
-  held: "已冻结",
+  held: "调用中",
   settled: "已结算",
   reconciling: "待对账",
   captured: "已扣费",

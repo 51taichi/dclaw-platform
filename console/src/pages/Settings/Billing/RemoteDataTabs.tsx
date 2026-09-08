@@ -29,8 +29,8 @@ const sourceLabels: Record<string, string> = {
 };
 
 const statusLabels: Record<string, { label: string; color: string }> = {
-  quoted: { label: "已报价", color: "default" },
-  held: { label: "已冻结", color: "processing" },
+  quoted: { label: "待调用", color: "default" },
+  held: { label: "调用中", color: "processing" },
   settled: { label: "已结算", color: "success" },
   reconciling: { label: "对账中", color: "warning" },
 };
@@ -113,16 +113,10 @@ export function UsageTab() {
             ),
           },
           {
-            title: "积分",
-            width: 150,
-            render: (_, row) => (
-              <Space direction="vertical" size={0}>
-                <span>报价 {formatNumber(row.quoted_credits)}</span>
-                <Typography.Text type="secondary">
-                  实扣 {formatNumber(row.actual_debited_credits)}
-                </Typography.Text>
-              </Space>
-            ),
+            title: "实扣积分",
+            width: 120,
+            dataIndex: "actual_debited_credits",
+            render: (value: number) => formatNumber(value),
           },
           { title: "调用次数", width: 100, dataIndex: "call_count" },
           {
@@ -181,16 +175,8 @@ export function UsageTab() {
             <Descriptions.Item label="目录版本">
               {selected.catalog_version}
             </Descriptions.Item>
-            <Descriptions.Item label="报价积分">
-              {formatNumber(selected.quoted_credits)}
-            </Descriptions.Item>
-            <Descriptions.Item label="实际扣减">
+            <Descriptions.Item label="实扣积分">
               {formatNumber(selected.actual_debited_credits)}
-            </Descriptions.Item>
-            <Descriptions.Item label="冻结 / 结算 / 释放" span={2}>
-              {formatNumber(selected.credits.held)} /{" "}
-              {formatNumber(selected.credits.captured)} /{" "}
-              {formatNumber(selected.credits.released)}
             </Descriptions.Item>
             <Descriptions.Item label="输入 Token">
               {formatNumber(selected.tokens.input)}

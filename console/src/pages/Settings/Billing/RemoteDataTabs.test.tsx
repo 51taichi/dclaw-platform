@@ -60,7 +60,9 @@ describe("UsageTab", () => {
     expect(screen.getByText("ID 24")).toBeInTheDocument();
     expect(screen.getByText("OpenAPI")).toBeInTheDocument();
     expect(screen.getByText("输入 58,457")).toBeInTheDocument();
+    expect(screen.getAllByText("实扣积分")).not.toHaveLength(0);
     expect(screen.getByText("已结算")).toBeInTheDocument();
+    expect(screen.queryByText(/报价/)).not.toBeInTheDocument();
     expect(screen.queryByText(/"source": "openapi"/)).not.toBeInTheDocument();
   });
 
@@ -72,6 +74,8 @@ describe("UsageTab", () => {
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
     expect(screen.getByText("order-1")).toBeInTheDocument();
     expect(screen.getByText("admin-20260831075100")).toBeInTheDocument();
+    expect(screen.getAllByText("实扣积分")).not.toHaveLength(0);
+    expect(screen.queryByText("报价积分")).not.toBeInTheDocument();
   });
 });
 
