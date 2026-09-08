@@ -133,6 +133,8 @@ class TokenRecordingModelWrapper(ChatModelBase):
                 provider_id=self._provider_id,
                 model_key=self.model_name,
                 messages=messages,
+                tools=tools,
+                structured_model=structured_model,
                 max_output_tokens=prepared_call.max_output_tokens,
                 item_key=billing_item_key,
             )

@@ -715,7 +715,11 @@ async def test_contacted_supplier_write_failure_stays_reconciling(
     item = service.list_items(session.usage_order_id)[0]
     assert item["billability"] == "unknown"
     assert item["status"] == "reconciling"
-    assert service.repository.balance(session.wallet_id).held == 0
+    assert service.repository.balance(session.wallet_id).held == 2
+    evidence = json.loads(
+        _stored_item(service, session.usage_order_id)["supplier_evidence_json"],
+    )
+    assert evidence["settlement_error_type"] == "OSError"
     assert failing_service.settle_attempts == 2
 
 
@@ -973,7 +977,64 @@ async def test_financial_write_fallback_attempts_reconciliation_once(
     assert failing_service.settle_attempts == 2
     item = service.list_items(session.usage_order_id)[0]
     assert item["status"] == "reconciling"
-    assert service.repository.balance(session.wallet_id).held == 0
+    assert service.repository.balance(session.wallet_id).held == 2
+
+
+@pytest.mark.asyncio
+async def test_tools_and_structured_schema_are_included_in_preauthorization(
+    usage_service,
+):
+    """Provider-counted prompt metadata must not exceed the maximum quote."""
+    from qwenpaw.app.billing.model_meter import BillingModelMeter
+
+    class _StructuredReply:
+        @staticmethod
+        def model_json_schema():
+            return {
+                "type": "object",
+                "properties": {
+                    "answer": {"type": "string", "description": "回答" * 80},
+                },
+                "required": ["answer"],
+            }
+
+    service, session = usage_service
+    model = _Model(
+        _Response(
+            usage=SimpleNamespace(input_tokens=1200, output_tokens=2),
+        ),
+    )
+    wrapper = TokenRecordingModelWrapper(
+        "provider",
+        model,
+        meter=BillingModelMeter(service),
+    )
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "lookup",
+                "description": "x" * 1200,
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+    ]
+    token = _scope(session)
+    try:
+        await wrapper(
+            messages=[],
+            tools=tools,
+            structured_model=_StructuredReply,
+            max_tokens=1000,
+        )
+    finally:
+        reset_current_billing_context(token)
+
+    stored = _stored_item(service, session.usage_order_id)
+    reservation = json.loads(stored["usage_snapshot_json"])["reservation"]
+    assert reservation["input_tokens"] > len(json.dumps(tools))
+    assert stored["status"] == "captured"
+    assert stored["quoted_credits"] >= stored["charged_credits"]
 
 
 @pytest.mark.asyncio

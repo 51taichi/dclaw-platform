@@ -1306,13 +1306,11 @@ class BillingRepository:
         hold_id: str,
         hold_metadata: dict[str, Any],
     ) -> None:
-        """Capture measured usage without requiring a maximum-token hold.
+        """Settle legacy zero-credit holds from older deployments.
 
-        A model call is authorized only while its net wallet balance is
-        positive.  Once the supplier reports real token usage, available lots
-        fund as much of the charge as possible and the remainder becomes debt.
-        This deliberately allows the completed call to take the wallet below
-        zero while preserving immutable, idempotent ledger accounting.
+        New calls reserve their maximum quote before provider contact. This
+        compatibility path may create debt only for wallets whose owner is
+        explicitly allowed to overdraw.
         """
         now = self._clock()
         allocations = self._allocate_any_available_lots(
@@ -1322,6 +1320,13 @@ class BillingRepository:
         )
         funded_credits = sum(amount for _, amount in allocations)
         debt_credits = command.credits - funded_credits
+        if debt_credits and not self.overdraft_enabled_in_connection(
+            conn,
+            command.wallet_id,
+        ):
+            raise InsufficientCreditsError(
+                "wallet cannot cover actual usage and overdraft is disabled",
+            )
         capture_ledger_id = str(uuid4())
         self._insert_ledger(
             conn,

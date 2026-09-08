@@ -21,7 +21,10 @@ from qwenpaw.app.billing.pricing import (
     PriceRule,
     QuoteRequest,
 )
-from qwenpaw.app.billing.models import LedgerTransaction
+from qwenpaw.app.billing.models import (
+    InsufficientCreditsError,
+    LedgerTransaction,
+)
 from qwenpaw.app.billing.usage import (
     InsufficientUsageCreditsError,
     ReserveModelCall,
@@ -240,6 +243,43 @@ def test_overdraft_enabled_user_can_continue_model_calls_below_zero(
     assert [
         item["status"] for item in service.list_items(session.usage_order_id)
     ] == ["captured", "captured"]
+
+
+def test_legacy_actual_usage_hold_cannot_overdraw_an_ordinary_user(
+    coordinator,
+):
+    """In-flight calls from the old zero-hold format remain fail-closed."""
+    session = coordinator.begin_invocation(_command(mode="enforced"))
+    _fund(coordinator, session, 1)
+    business_key = "legacy-zero-hold"
+    coordinator.repository.append_transaction(
+        LedgerTransaction(
+            wallet_id=session.wallet_id,
+            event_type="usage_hold",
+            credits=0,
+            business_type="usage_item",
+            business_key=business_key,
+            idempotency_key="legacy-zero-hold:hold",
+            metadata={"actual_usage_only": True},
+        ),
+    )
+
+    with pytest.raises(InsufficientCreditsError):
+        coordinator.repository.append_transaction(
+            LedgerTransaction(
+                wallet_id=session.wallet_id,
+                event_type="usage_capture",
+                credits=2,
+                business_type="usage_item",
+                business_key=business_key,
+                idempotency_key="legacy-zero-hold:capture",
+            ),
+        )
+
+    balance = coordinator.repository.balance(session.wallet_id)
+    assert balance.available == 1
+    assert balance.debt == 0
+    assert balance.held == 0
 
 
 def test_same_key_and_canonical_payload_replays_existing_pair(
@@ -600,7 +640,7 @@ def test_model_items_incrementally_hold_then_project_mixed_settlement(
     assert (
         first.usage_order_id == second.usage_order_id == third.usage_order_id
     )
-    assert coordinator.repository.balance(session.wallet_id).held == 0
+    assert coordinator.repository.balance(session.wallet_id).held == 6
     assert len(service.list_items(session.usage_order_id)) == 3
 
     captured = service.settle_model_call(
@@ -619,24 +659,20 @@ def test_model_items_incrementally_hold_then_project_mixed_settlement(
     order = service.get_order(session.usage_order_id)
     assert order["captured_credits"] == 1
     assert order["released_credits"] == 3
-    assert order["reconciling_credits"] == 0
-    assert coordinator.repository.balance(session.wallet_id).held == 0
+    assert order["reconciling_credits"] == 2
+    assert coordinator.repository.balance(session.wallet_id).held == 2
 
 
-def test_actual_charge_can_make_balance_negative_then_blocks_next_call(
+def test_reservation_preflight_rejects_insufficient_increment(
     coordinator,
     monkeypatch,
 ):
     session = coordinator.begin_invocation(_command(mode="enforced"))
-    _fund(coordinator, session, 1)
+    _fund(coordinator, session, 2)
     service = UsageService(coordinator.repository, coordinator.pricing)
     supplier_calls: list[str] = []
 
     service.reserve_model_call(_reserve(session, "call-1"))
-    service.settle_model_call(
-        _settle(session, "call-1", "billable", output_tokens=1000),
-    )
-    balance = coordinator.repository.balance(session.wallet_id)
 
     def reject_cross_transaction_balance(_wallet_id):
         raise AssertionError("must not open a second wallet transaction")
@@ -649,15 +685,10 @@ def test_actual_charge_can_make_balance_negative_then_blocks_next_call(
     with pytest.raises(InsufficientUsageCreditsError) as raised:
         service.reserve_model_call(_reserve(session, "call-2"))
 
-    assert raised.value.required == 1
-    assert raised.value.available == -1
+    assert raised.value.required == 2
+    assert raised.value.available == 0
     assert not supplier_calls
-    assert (
-        service.list_items(session.usage_order_id)[0]["status"] == "captured"
-    )
-    assert balance.available == -1
-    assert balance.debt == 1
-    assert balance.held == 0
+    assert service.list_items(session.usage_order_id)[0]["status"] == "held"
 
 
 def test_model_item_replay_is_idempotent_and_payload_drift_conflicts(
@@ -698,13 +729,10 @@ def test_invocation_budget_rejects_the_next_model_reservation(
     service = UsageService(coordinator.repository, coordinator.pricing)
 
     service.reserve_model_call(_reserve(session, "call-1"))
-    service.settle_model_call(
-        _settle(session, "call-1", "billable", output_tokens=1000),
-    )
     with pytest.raises(InsufficientUsageCreditsError) as raised:
         service.reserve_model_call(_reserve(session, "call-2"))
 
-    assert raised.value.required == 1
+    assert raised.value.required == 2
     assert raised.value.available == 0
 
 
@@ -739,7 +767,7 @@ def test_model_call_uses_the_catalog_locked_by_its_invocation(
     assert held.quoted_credits == 2
 
 
-def test_positive_trial_balance_allows_model_call_without_pre_hold(
+def test_trial_lot_fails_closed_for_disallowed_model_tier(
     coordinator,
 ):
     session = coordinator.begin_invocation(_command(mode="enforced"))
@@ -761,13 +789,13 @@ def test_positive_trial_balance_allows_model_call_without_pre_hold(
         ),
     )
 
-    service = UsageService(coordinator.repository, coordinator.pricing)
-    service.reserve_model_call(_reserve(session, "call-1", tier="high_cost"))
-    service.settle_model_call(
-        _settle(session, "call-1", "billable", output_tokens=1000),
-    )
+    with pytest.raises(InsufficientUsageCreditsError):
+        UsageService(
+            coordinator.repository,
+            coordinator.pricing,
+        ).reserve_model_call(_reserve(session, "call-1", tier="high_cost"))
 
-    assert coordinator.repository.balance(session.wallet_id).available == 8
+    assert coordinator.repository.balance(session.wallet_id).available == 10
     assert coordinator.repository.balance(session.wallet_id).held == 0
 
 
@@ -821,7 +849,7 @@ def test_observe_dry_run_records_pass_without_any_accounting_mutation(
     assert coordinator.repository.balance(session.wallet_id) == before
 
 
-def test_observe_dry_run_uses_positive_net_balance_without_mutation(
+def test_observe_dry_run_applies_trial_tier_policy_without_mutation(
     coordinator,
     engine,
 ):
@@ -869,8 +897,8 @@ def test_observe_dry_run_uses_positive_net_balance_without_mutation(
             .select_from(billing_ledger_entries)
             .where(billing_ledger_entries.c.event_type == "usage_hold"),
         )
-    assert item["would_pass"] is True
-    assert item["would_block_reason"] is None
+    assert item["would_pass"] is False
+    assert item["would_block_reason"] == "ineligible_credit_lots"
     assert usage_ledger == 0
     assert coordinator.repository.balance(session.wallet_id) == before
 
@@ -974,7 +1002,7 @@ def test_observe_dry_run_excludes_expired_lot_without_expiry_writes(
     )
 
 
-def test_enforced_model_call_uses_balance_instead_of_tier_preauthorization(
+def test_enforced_trial_eligibility_uses_catalog_tier_not_request_tier(
     coordinator,
 ):
     _publish_model_tier(coordinator, "high_cost")
@@ -1000,14 +1028,13 @@ def test_enforced_model_call_uses_balance_instead_of_tier_preauthorization(
         ),
     )
 
-    UsageService(
-        coordinator.repository,
-        coordinator.pricing,
-    ).reserve_model_call(
-        _reserve(session, "trusted-tier", tier="standard"),
-    )
-    assert coordinator.repository.balance(session.wallet_id).available == 10
-    assert coordinator.repository.balance(session.wallet_id).held == 0
+    with pytest.raises(InsufficientUsageCreditsError):
+        UsageService(
+            coordinator.repository,
+            coordinator.pricing,
+        ).reserve_model_call(
+            _reserve(session, "trusted-tier", tier="standard"),
+        )
 
 
 def test_billable_zero_actual_usage_releases_its_entire_hold(coordinator):
@@ -1050,7 +1077,7 @@ def test_reconciling_item_later_settles_when_supplier_evidence_arrives(
     assert coordinator.repository.balance(session.wallet_id).held == 0
 
 
-def test_positive_trial_balance_does_not_require_pre_call_tier_policy(
+def test_trial_lot_without_explicit_allowed_tiers_fails_closed(
     coordinator,
 ):
     session = coordinator.begin_invocation(_command(mode="enforced"))
@@ -1071,12 +1098,11 @@ def test_positive_trial_balance_does_not_require_pre_call_tier_policy(
         ),
     )
 
-    UsageService(
-        coordinator.repository,
-        coordinator.pricing,
-    ).reserve_model_call(_reserve(session, "call-1", tier="standard"))
-    assert coordinator.repository.balance(session.wallet_id).available == 10
-    assert coordinator.repository.balance(session.wallet_id).held == 0
+    with pytest.raises(InsufficientUsageCreditsError):
+        UsageService(
+            coordinator.repository,
+            coordinator.pricing,
+        ).reserve_model_call(_reserve(session, "call-1", tier="standard"))
 
 
 def test_sqlite_concurrent_same_model_item_reservation_replays_once(
@@ -1096,4 +1122,4 @@ def test_sqlite_concurrent_same_model_item_reservation_replays_once(
 
     assert first == second
     assert len(service.list_items(session.usage_order_id)) == 1
-    assert coordinator.repository.balance(session.wallet_id).held == 0
+    assert coordinator.repository.balance(session.wallet_id).held == 2

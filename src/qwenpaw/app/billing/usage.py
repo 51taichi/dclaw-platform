@@ -543,13 +543,22 @@ class UsageService:
             economic_tier = _economic_tier(quote.snapshot)
             budget = int(order["budget_credits"])
             budget_blocked = bool(
-                budget and int(order["captured_credits"]) >= budget,
+                budget
+                and int(order["captured_credits"])
+                + int(order["held_credits"])
+                + quote.credits
+                > budget,
             )
             mode = self._order_mode(order)
             if budget_blocked and mode == "enforced":
                 raise InsufficientUsageCreditsError(
-                    1,
-                    0,
+                    quote.credits,
+                    max(
+                        budget
+                        - int(order["captured_credits"])
+                        - int(order["held_credits"]),
+                        0,
+                    ),
                 )
 
             source_type = str(order.get("source_type") or "")
@@ -559,12 +568,6 @@ class UsageService:
                 normalized.item_key,
             )
             idempotency_namespace = _item_idempotency_namespace(source_type)
-            overdraft_enabled = (
-                self.repository.overdraft_enabled_in_connection(
-                    conn,
-                    str(order["wallet_id"]),
-                )
-            )
             would_pass: bool | None = None
             would_block_reason: str | None = None
             if mode == "observe":
@@ -572,45 +575,49 @@ class UsageService:
                     would_pass = False
                     would_block_reason = "invocation_budget_exceeded"
                 else:
-                    available = (
-                        self.repository.effective_available_in_connection(
-                            conn,
-                            str(order["wallet_id"]),
-                        )
+                    (
+                        would_pass,
+                        would_block_reason,
+                    ) = self.repository.evaluate_hold_in_connection(
+                        conn,
+                        str(order["wallet_id"]),
+                        quote.credits,
+                        capability=normalized.capability,
+                        tier=economic_tier,
                     )
-                    would_pass = overdraft_enabled or available > 0
-                    would_block_reason = (
-                        None if would_pass else "insufficient_credits"
-                    )
-            if mode == "enforced":
-                balance = self.repository.append_transaction_in_connection(
-                    conn,
-                    LedgerTransaction(
-                        wallet_id=str(order["wallet_id"]),
-                        event_type="usage_hold",
-                        credits=0,
-                        business_type="usage_item",
-                        business_key=item_business_key,
-                        idempotency_key=(
-                            f"{idempotency_namespace}:"
-                            f"{normalized.usage_order_id}:"
-                            f"{normalized.item_key}:hold"
+            if mode == "enforced" and quote.credits:
+                try:
+                    self.repository.append_transaction_in_connection(
+                        conn,
+                        LedgerTransaction(
+                            wallet_id=str(order["wallet_id"]),
+                            event_type="usage_hold",
+                            credits=quote.credits,
+                            business_type="usage_item",
+                            business_key=item_business_key,
+                            idempotency_key=(
+                                f"{idempotency_namespace}:"
+                                f"{normalized.usage_order_id}:"
+                                f"{normalized.item_key}:hold"
+                            ),
+                            metadata={
+                                "capability": normalized.capability,
+                                "tier": economic_tier,
+                                "source_type": source_type,
+                                "source_id": str(order["source_id"]),
+                                "item_key": normalized.item_key,
+                            },
                         ),
-                        metadata={
-                            "actual_usage_only": True,
-                            "capability": normalized.capability,
-                            "tier": economic_tier,
-                            "source_type": source_type,
-                            "source_id": str(order["source_id"]),
-                            "item_key": normalized.item_key,
-                        },
-                    ),
-                )
-                if balance.available <= 0 and not overdraft_enabled:
-                    raise InsufficientUsageCreditsError(
-                        1,
-                        balance.available,
                     )
+                except InsufficientCreditsError as exc:
+                    balance = self.repository.balance_in_connection(
+                        conn,
+                        str(order["wallet_id"]),
+                    )
+                    raise InsufficientUsageCreditsError(
+                        quote.credits,
+                        balance.available,
+                    ) from exc
 
             now = datetime.now(timezone.utc)
             conn.execute(
@@ -715,7 +722,7 @@ class UsageService:
                 normalized.item_key,
             )
             idempotency_namespace = _item_idempotency_namespace(source_type)
-            if self._order_mode(order) == "enforced":
+            if self._order_mode(order) == "enforced" and quoted:
                 if normalized.billability == "billable" and actual_credits:
                     self.repository.append_transaction_in_connection(
                         conn,

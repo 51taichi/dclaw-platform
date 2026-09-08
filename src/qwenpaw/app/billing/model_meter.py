@@ -9,6 +9,7 @@ financial path has completed.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from threading import Lock
@@ -39,6 +40,11 @@ from .usage import (
     UsageExecutionGuard,
     UsageService,
 )
+
+
+logger = logging.getLogger(__name__)
+
+_PROVIDER_PROMPT_OVERHEAD_TOKENS = 256
 
 
 class MissingBillingContextError(RuntimeError):
@@ -133,6 +139,8 @@ class BillingModelMeter:
         provider_id: str,
         model_key: str,
         messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        structured_model: Any | None = None,
         max_output_tokens: int | None = None,
         item_key: str | None = None,
     ) -> MeteredModelCall | None:
@@ -187,7 +195,11 @@ class BillingModelMeter:
                 model_key=normalized_model,
                 capability="chat",
                 parameters=parameters,
-                input_tokens=_estimate_input_tokens(messages),
+                input_tokens=_estimate_input_tokens(
+                    messages,
+                    tools=tools,
+                    structured_model=structured_model,
+                ),
                 max_output_tokens=output_tokens,
                 invocation_id=invocation_id,
                 execution_fence=execution_fence,
@@ -345,7 +357,7 @@ class BillingModelMeter:
     def record_financial_write_failure(
         self,
         call: MeteredModelCall,
-        _error: BaseException,
+        error: BaseException,
         supplier_reference: SupplierReference,
         execution_outcome: str,
     ) -> BaseException | None:
@@ -364,6 +376,7 @@ class BillingModelMeter:
                     evidence=_evidence(
                         supplier_reference=supplier_reference,
                         response_class="financial_write_failure",
+                        settlement_error_type=type(error).__name__,
                     ),
                     actual_input_tokens=0,
                     actual_output_tokens=0,
@@ -405,6 +418,13 @@ class BillingModelMeter:
         except BillingExecutionFencedError:
             raise
         except Exception as exc:
+            logger.exception(
+                "billing settlement failed after provider contact "
+                "(order_id=%s item_key=%s error_type=%s)",
+                call.session.usage_order_id,
+                call.item_key,
+                type(exc).__name__,
+            )
             fallback_error = self.record_financial_write_failure(
                 call,
                 exc,
@@ -447,15 +467,42 @@ def _item_key(
     return f"model:{uuid4()}"
 
 
-def _estimate_input_tokens(messages: list[dict[str, Any]]) -> int:
-    """Conservative, content-free persisted estimate used only for a hold."""
+def _estimate_input_tokens(
+    messages: list[dict[str, Any]],
+    *,
+    tools: list[dict[str, Any]] | None = None,
+    structured_model: Any | None = None,
+) -> int:
+    """Conservatively authorize the complete provider prompt.
+
+    Official provider usage includes tool definitions and structured-output
+    schemas in addition to chat messages. Persist only the numeric estimate;
+    request contents never enter billing evidence.
+    """
+    payload: dict[str, Any] = {"messages": messages}
+    if tools:
+        payload["tools"] = tools
+    if structured_model is not None:
+        schema_factory = getattr(structured_model, "model_json_schema", None)
+        try:
+            payload["structured_output_schema"] = (
+                schema_factory()
+                if callable(schema_factory)
+                else str(structured_model)
+            )
+        except Exception:
+            payload["structured_output_schema"] = str(structured_model)
     serialized = json.dumps(
-        messages,
+        payload,
         ensure_ascii=False,
         sort_keys=True,
         default=str,
     )
-    return max(1, len(serialized.encode("utf-8")))
+    return max(
+        1,
+        len(serialized.encode("utf-8"))
+        + _PROVIDER_PROMPT_OVERHEAD_TOKENS,
+    )
 
 
 def _official_usage(response: Any) -> dict[str, int] | None:
@@ -522,6 +569,7 @@ def _evidence(
     response_class: str,
     official_usage: Mapping[str, int] | None = None,
     status: int | None = None,
+    settlement_error_type: str | None = None,
 ) -> dict[str, Any]:
     evidence: dict[str, Any] = {
         "adapter_version": BillingModelMeter.adapter_version,
@@ -535,6 +583,8 @@ def _evidence(
         evidence["official_usage"] = dict(official_usage)
     if status is not None:
         evidence["status"] = status
+    if settlement_error_type:
+        evidence["settlement_error_type"] = settlement_error_type
     return evidence
 
 
