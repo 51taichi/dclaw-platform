@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, AsyncGenerator, Type
 
 from agentscope.model import OpenAIChatModel
 from agentscope.model._model_response import ChatResponse
+from openai import NOT_GIVEN
 from pydantic import BaseModel
 
 from qwenpaw.local_models.tag_parser import (
@@ -21,6 +23,31 @@ from qwenpaw.providers.openai_response_diagnostics import (
     is_openai_response_diagnostics_capture_enabled,
     stash_openai_response_diagnostics,
 )
+
+
+logger = logging.getLogger(__name__)
+
+
+def _is_json_object_prompt_rejection(exc: Exception) -> bool:
+    """Match the provider error raised for an invalid JSON-mode prompt."""
+    status = getattr(exc, "status_code", None)
+    message = str(exc).lower()
+    is_bad_request = status == 400 or "error code: 400" in message
+    return bool(
+        is_bad_request
+        and "response_format" in message
+        and "json_object" in message
+        and "prompt" in message
+        and "json" in message
+        and "must contain" in message
+    )
+
+
+def _uses_json_object_response_format(value: Any) -> bool:
+    """Return whether an OpenAI request option enables legacy JSON mode."""
+    if isinstance(value, dict):
+        return value.get("type") == "json_object"
+    return getattr(value, "type", None) == "json_object"
 
 
 def _clone_with_overrides(obj: Any, **overrides: Any) -> Any:
@@ -397,6 +424,55 @@ class OpenAIChatModelCompat(OpenAIChatModel):
     and transparent ``extra_content`` (Gemini thought_signature) relay."""
 
     billing_provider_kind = "openai"
+
+    async def __call__(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        tool_choice: Any = None,
+        structured_model: Type[BaseModel] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Retry legacy JSON mode once when a provider rejects the prompt.
+
+        Some OpenAI-compatible providers require the literal word ``json``
+        in the prompt whenever ``response_format=json_object`` is configured.
+        Normal ReAct turns do not need structured output, so retrying without
+        that optional request parameter is safe and avoids a blank response.
+        """
+        try:
+            return await super().__call__(
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                structured_model=structured_model,
+                **kwargs,
+            )
+        except Exception as exc:
+            response_format = kwargs.get(
+                "response_format",
+                self.generate_kwargs.get("response_format"),
+            )
+            if (
+                structured_model is not None
+                or not _uses_json_object_response_format(response_format)
+                or not _is_json_object_prompt_rejection(exc)
+            ):
+                raise
+
+            logger.warning(
+                "Provider rejected response_format=json_object for a normal "
+                "chat prompt; retrying once without response_format",
+            )
+            retry_kwargs = dict(kwargs)
+            retry_kwargs["response_format"] = NOT_GIVEN
+            return await super().__call__(
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                structured_model=structured_model,
+                **retry_kwargs,
+            )
 
     def _format_tools_json_schemas(
         self,

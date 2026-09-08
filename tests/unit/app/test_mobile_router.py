@@ -338,6 +338,12 @@ async def test_mobile_tasks_match_web_task_list_across_enabled_agents(
         ),
         raising=False,
     )
+    # Workspace resolution validates the same enabled-agent configuration in
+    # agent_context; patch its lookup too, not the authorization function.
+    monkeypatch.setattr(
+        "qwenpaw.app.agent_context.load_config",
+        mobile_router.load_config,
+    )
     monkeypatch.setattr(
         mobile_router,
         "get_chat_list_repository",

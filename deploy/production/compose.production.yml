@@ -13,6 +13,7 @@ services:
       - dclaw-data:/app/working
       - dclaw-secrets:/app/working.secret
       - dclaw-backups:/app/working.backups
+      - /opt/dclaw-updates:/opt/dclaw-updates:ro
     networks:
       - dclaw-net
 

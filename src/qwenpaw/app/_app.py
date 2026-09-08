@@ -51,6 +51,7 @@ from ..utils.console_static import (
 from ..utils.system_info import summarize_python_environment
 from .auth import AuthMiddleware, auto_register_from_env
 from .performance import RequestTimingMiddleware
+from .desktop_version_gate import DesktopVersionGateMiddleware
 from .routers import router as api_router, create_agent_scoped_router
 from .task_limits import create_task_limiter_from_env
 from .routers.agent_scoped import AgentContextMiddleware
@@ -597,11 +598,34 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
                 exc_info=True,
             )
 
+    # Application composition only: core AIGC recovery has no expert dependency
+    # and never invokes a provider or starts paid generation.
+    from .aigc.job_lifecycle import AigcJobLifecycle
+    from .aigc.resource_store import AigcResourceStore
+    from .routers.aigc_studio import STUDIO_ROOT
+    from .runtime.aigc_events import AigcRecoveryWorker, build_event_consumers
+    from .runtime.event_bus import get_runtime_event_bus
+    from .storage.engine import get_app_engine
+    from .storage.repos.aigc_execution_repo import AigcExecutionRepository
+
+    aigc_repository = AigcExecutionRepository(get_app_engine())
+    aigc_recovery = AigcRecoveryWorker(
+        AigcJobLifecycle(AigcResourceStore(STUDIO_ROOT), aigc_repository),
+        build_event_consumers(
+            aigc_repository, get_runtime_event_bus(),
+            enable_super_experts=os.getenv(
+                "QWENPAW_SUPER_EXPERT_AIGC_EVENTS_ENABLED", "true",
+            ).strip().lower() in {"1", "true", "yes", "on"},
+        ),
+    )
+    app.state.aigc_recovery_worker = aigc_recovery
+    aigc_recovery.start()
     _bg_task = asyncio.create_task(_background_startup())
 
     try:
         yield
     finally:
+        await aigc_recovery.stop()
         # Cancel background startup if still in progress
         if not _bg_task.done():
             _bg_task.cancel()
@@ -697,6 +721,9 @@ app.add_middleware(AgentContextMiddleware)
 app.add_middleware(AuthMiddleware)
 
 app.add_middleware(RequestTimingMiddleware)
+
+# Browser requests do not carry desktop metadata and pass through unchanged.
+app.add_middleware(DesktopVersionGateMiddleware)
 
 # Apply CORS middleware for configured exact origins and desktop localhost origins.
 if CORS_ORIGINS or CORS_ORIGIN_REGEX:

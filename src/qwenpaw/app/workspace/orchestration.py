@@ -11,8 +11,10 @@ import logging
 import os
 import shutil
 import sys
+import time
 import types
 import uuid
+from copy import deepcopy
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -41,9 +43,11 @@ from .orchestration_contract import (
 logger = logging.getLogger(__name__)
 _CANDIDATE_AGENT_LOCKS: dict[int, asyncio.Lock] = {}
 _INTERNAL_CANDIDATE_MAX_TOKENS = 4096
+_JSON_INTERNAL_CANDIDATE_MAX_TOKENS = 8192
 _DEFAULT_ORCHESTRATION_TIMEOUT_SECONDS = 180.0
 _MIN_ORCHESTRATION_TIMEOUT_SECONDS = 30.0
 _MAX_ORCHESTRATION_TIMEOUT_SECONDS = 900.0
+_MAX_AUTOMATIC_CONTINUATION_PASSES = 8
 
 
 def workspace_orchestration_timeout_seconds() -> float:
@@ -57,6 +61,13 @@ def workspace_orchestration_timeout_seconds() -> float:
         max(value, _MIN_ORCHESTRATION_TIMEOUT_SECONDS),
         _MAX_ORCHESTRATION_TIMEOUT_SECONDS,
     )
+
+
+def workspace_raw_model_trace_enabled() -> bool:
+    """Enable full local agent.execute tracing only through an explicit flag."""
+    return os.environ.get("DCLAW_WORKSPACE_MODEL_TRACE_RAW", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
 
 
 class WorkspaceOrchestrationError(RuntimeError):
@@ -311,24 +322,38 @@ def _candidate_execution_messages(messages: list[Msg]) -> list[Msg]:
                     "不要向客户解释这段指令。\n\n"
                     + "\n\n".join(instructions)
                     + "\n\n再次确认：必须严格遵守上述输出格式；只输出要求的内部候选，"
-                    "不得输出面向客户的普通回答或任何前后解释。逐字段核对 JSON 类型："
-                    "要求 object 的字段必须输出对象，要求 null 时必须输出 JSON null，"
-                    "禁止用普通字符串或字符串 \"null\" 代替。"
+                    "不得输出面向客户的普通回答或任何前后解释。"
                 ),
             )
         )
     return projected
 
 
-async def _execute_internal_candidate(agent: Any, messages: list[Msg]) -> Any:
+async def _execute_internal_candidate(
+    agent: Any, messages: list[Msg], *, media_delivery: dict[str, Any] | None = None,
+    response_format: str | None = None,
+) -> Any:
     """Execute with runtime instructions at system authority, then restore."""
+    if response_format is not None and response_format != "json_object":
+        raise WorkspaceOrchestrationError("orchestration_error")
+    from .media_delivery import media_input_manifest, media_input_identities, build_media_delivery
+    if media_delivery is not None:
+        media_delivery.clear()
+    manifest = media_input_manifest(messages) if media_delivery is not None else []
+    identities = media_input_identities(messages) if manifest else []
     formatter = getattr(agent, "formatter", None)
     model = getattr(agent, "model", None)
     if formatter is not None and callable(getattr(formatter, "format", None)) and callable(model):
         prompt = await formatter.format(msgs=messages)
         generation_kwargs: dict[str, Any] = {
-            "max_tokens": _INTERNAL_CANDIDATE_MAX_TOKENS,
+            "max_tokens": (
+                _JSON_INTERNAL_CANDIDATE_MAX_TOKENS
+                if response_format == "json_object"
+                else _INTERNAL_CANDIDATE_MAX_TOKENS
+            ),
         }
+        if response_format == "json_object":
+            generation_kwargs["response_format"] = {"type": "json_object"}
         model_key = str(getattr(model, "model_key", "")).lower()
         if model_key.startswith("volcengine-cn:") and "deepseek" in model_key:
             generation_kwargs["extra_body"] = {
@@ -358,8 +383,13 @@ async def _execute_internal_candidate(agent: Any, messages: list[Msg]) -> Any:
         else:
             candidate.invocation_id = response.id
             candidate.content = list(response.content)
+        if media_delivery is not None and (candidate.get_text_content() or '').strip():
+            media_delivery.update(build_media_delivery(manifest, prompt, candidate.invocation_id,
+                                                       input_identities=identities))
         return candidate
 
+    if response_format is not None:
+        raise WorkspaceOrchestrationError("orchestration_error")
     instructions = [
         message.get_text_content()
         for message in messages
@@ -400,6 +430,17 @@ async def _execute_internal_candidate(agent: Any, messages: list[Msg]) -> Any:
                 agent._build_sys_prompt = original_prompt_builder
             if system_message is not None:
                 system_message.content = original_memory_content
+
+
+def _agent_execute_response_format(arguments: dict[str, Any]) -> str | None:
+    """Validate the optional host capability argument without truthy coercion."""
+    if not isinstance(arguments, dict):
+        raise WorkspaceOrchestrationError("orchestration_error")
+    if "response_format" not in arguments:
+        return None
+    if arguments["response_format"] != "json_object":
+        raise WorkspaceOrchestrationError("orchestration_error")
+    return "json_object"
 
 
 async def run_workspace_orchestration_turn(
@@ -460,8 +501,11 @@ async def run_workspace_orchestration_turn(
         invocation_id=invocation_id,
         event_type="orchestration.started",
     )
+    agent_execute_call_number = 0
 
     async def execute_agent(arguments: dict[str, Any]) -> dict[str, Any]:
+        nonlocal agent_execute_call_number
+        response_format = _agent_execute_response_format(arguments)
         raw_messages = arguments.get("messages")
         if not isinstance(raw_messages, list) or not raw_messages:
             raise WorkspaceOrchestrationError("orchestration_error")
@@ -472,9 +516,52 @@ async def run_workspace_orchestration_turn(
             ]
         except Exception as exc:
             raise WorkspaceOrchestrationError("orchestration_error") from exc
+        agent_execute_call_number += 1
+        call_number = agent_execute_call_number
+        call_id = uuid.uuid4().hex
+        started_at = time.perf_counter()
+        trace_raw = workspace_raw_model_trace_enabled()
+        if trace_raw:
+            _append_runtime_trace(
+                state_storage_root,
+                installation_id=authorization.installation_id,
+                session_id=turn_request.session_id,
+                invocation_id=invocation_id,
+                event_type="agent.execute.started",
+                payload={
+                    "call_id": call_id,
+                    "call_number": call_number,
+                    "model_key": str(
+                        getattr(getattr(agent, "model", None), "model_key", "")
+                    ),
+                    "response_format": response_format,
+                    "messages": [_message_dict(message) for message in messages],
+                },
+            )
+        media_delivery: dict[str, Any] = {}
         try:
-            candidate = await _execute_internal_candidate(agent, messages)
-        except Exception:
+            candidate = await _execute_internal_candidate(
+                agent, messages, media_delivery=media_delivery,
+                response_format=response_format,
+            )
+        except Exception as exc:
+            if trace_raw:
+                _append_runtime_trace(
+                    state_storage_root,
+                    installation_id=authorization.installation_id,
+                    session_id=turn_request.session_id,
+                    invocation_id=invocation_id,
+                    event_type="agent.execute.failed",
+                    payload={
+                        "call_id": call_id,
+                        "call_number": call_number,
+                        "duration_ms": max(
+                            0, round((time.perf_counter() - started_at) * 1000)
+                        ),
+                        "exception_type": type(exc).__name__,
+                        "error": str(exc)[:2000],
+                    },
+                )
             logger.exception("Internal candidate execution failed")
             raise
         serialized = _message_dict(candidate)
@@ -483,29 +570,50 @@ async def run_workspace_orchestration_turn(
             if hasattr(candidate, "get_text_content")
             else str(serialized.get("content", ""))
         )
-        return {"message": serialized, "text": text}
+        result = {"message": serialized, "text": text}
+        if media_delivery:
+            result["media_delivery"] = media_delivery
+        if trace_raw:
+            _append_runtime_trace(
+                state_storage_root,
+                installation_id=authorization.installation_id,
+                session_id=turn_request.session_id,
+                invocation_id=invocation_id,
+                event_type="agent.execute.completed",
+                payload={
+                    "call_id": call_id,
+                    "call_number": call_number,
+                    "duration_ms": max(
+                        0, round((time.perf_counter() - started_at) * 1000)
+                    ),
+                    "response_id": str(
+                        getattr(candidate, "invocation_id", "") or serialized.get("id", "")
+                    ),
+                    "has_text": bool(text.strip()),
+                    "text_length": len(text),
+                    "text": text,
+                    "message": serialized,
+                },
+            )
+        return result
 
-    orchestrator = WorkspaceTurnOrchestrator(
-        workspace_root=workspace_root,
-        config=config,
-        signed_files=authorization.signed_workspace_files,
-        execute_agent=execute_agent,
-        session_context=lambda: trusted_context,
-        business_call=business_call,
-        trace_sink=lambda trace: _append_runtime_trace(
-            state_storage_root,
-            installation_id=authorization.installation_id,
-            session_id=turn_request.session_id,
-            invocation_id=invocation_id,
-            event_type="runtime.trace",
-            payload=trace,
-        ),
-        timeout_seconds=(
-            workspace_orchestration_timeout_seconds()
-            if timeout_seconds is None
-            else timeout_seconds
-        ),
-    )
+    actual_timeout = (workspace_orchestration_timeout_seconds()
+                      if timeout_seconds is None else timeout_seconds)
+
+    def build_orchestrator(active_invocation_id: str) -> "WorkspaceTurnOrchestrator":
+        return WorkspaceTurnOrchestrator(
+            workspace_root=workspace_root, config=config,
+            signed_files=authorization.signed_workspace_files,
+            execute_agent=execute_agent, session_context=lambda: trusted_context,
+            business_call=business_call,
+            trace_sink=lambda trace: _append_runtime_trace(
+                state_storage_root, installation_id=authorization.installation_id,
+                session_id=turn_request.session_id,
+                invocation_id=active_invocation_id, event_type="runtime.trace", payload=trace,
+            ), timeout_seconds=actual_timeout,
+        )
+
+    orchestrator = build_orchestrator(invocation_id)
     try:
         result = await orchestrator.invoke(turn_request, transaction)
     except asyncio.CancelledError:
@@ -537,6 +645,80 @@ async def run_workspace_orchestration_turn(
             else {}
         ),
     )
+    last_committed_result = result if result.error_code is None else None
+    continuation_pass = 0
+    while (
+        result.error_code is None
+        and (result.diagnostics or {}).get("continuation_reason") == "turn_budget_exhausted"
+        and continuation_pass < _MAX_AUTOMATIC_CONTINUATION_PASSES
+    ):
+        continuation_pass += 1
+        continuation_invocation_id = uuid.uuid4().hex
+        continuation_transaction = WorkspaceStateTransaction.begin(
+            state_storage_root, installation_id=authorization.installation_id,
+            session_id=turn_request.session_id,
+            invocation_id=continuation_invocation_id,
+        )
+        continuation_request = turn_request.model_copy(update={
+            "invocation_id": continuation_invocation_id,
+            "state_root": continuation_transaction.state_root,
+            "transaction_root": continuation_transaction.transaction_root,
+            # This is a host continuation signal, not a fabricated customer
+            # command. Unconsumed input is restored from pending_input.
+            "normalized_input": {"messages": [{
+                "name": "customer", "role": "user", "content": "",
+            }]},
+            "safe_metadata": {
+                key: deepcopy(value) for key, value in turn_request.safe_metadata.items()
+                if key != "conversationReset"
+            },
+        })
+        continuation_request._runtime_continuation = True
+        _append_runtime_trace(
+            state_storage_root, installation_id=authorization.installation_id,
+            session_id=turn_request.session_id,
+            invocation_id=continuation_invocation_id,
+            event_type="orchestration.continuation.started",
+            payload={"pass": continuation_pass},
+        )
+        try:
+            continued = await build_orchestrator(continuation_invocation_id).invoke(
+                continuation_request, continuation_transaction,
+            )
+        except asyncio.CancelledError:
+            _append_runtime_trace(
+                state_storage_root, installation_id=authorization.installation_id,
+                session_id=turn_request.session_id,
+                invocation_id=continuation_invocation_id,
+                event_type="orchestration.cancelled", payload={"error_code": "cancelled"},
+            )
+            raise
+        _append_runtime_trace(
+            state_storage_root, installation_id=authorization.installation_id,
+            session_id=turn_request.session_id,
+            invocation_id=continuation_invocation_id,
+            event_type=("orchestration.continuation.completed"
+                        if continued.error_code is None else "orchestration.continuation.failed"),
+            payload=({"pass": continuation_pass} if continued.error_code is None else {
+                "pass": continuation_pass, "error_code": continued.error_code,
+                "diagnostic_ref": continued.diagnostic_ref,
+            }),
+        )
+        if continued.error_code is not None:
+            # Earlier passes are already committed. Never replace their safe
+            # completion with a later transient failure.
+            result = last_committed_result or continued
+            break
+        result = continued
+        last_committed_result = continued
+    if ((result.diagnostics or {}).get("continuation_reason") == "turn_budget_exhausted"
+            and continuation_pass >= _MAX_AUTOMATIC_CONTINUATION_PASSES):
+        _append_runtime_trace(
+            state_storage_root, installation_id=authorization.installation_id,
+            session_id=turn_request.session_id, invocation_id=turn_request.invocation_id,
+            event_type="orchestration.continuation.limit_reached",
+            payload={"max_passes": _MAX_AUTOMATIC_CONTINUATION_PASSES},
+        )
     return result
 
 
@@ -771,6 +953,12 @@ class WorkspaceTurnOrchestrator:
         request: WorkspaceTurnRequest,
         transaction: WorkspaceStateTransaction,
     ) -> WorkspaceTurnResult:
+        loop = asyncio.get_running_loop()
+        reserve = min(2.0, max(0.02, self.timeout_seconds * 0.1))
+        # Private Pydantic attributes are host-owned and are never accepted in
+        # WorkspaceTurnRequest input or exposed through model_dump/json schema.
+        request._runtime_deadline_monotonic = loop.time() + self.timeout_seconds
+        request._runtime_deadline_reserve_seconds = reserve
         host = WorkspaceRuntimeHost(
             request=request,
             execute_agent=self.execute_agent,

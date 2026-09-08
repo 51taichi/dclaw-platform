@@ -640,6 +640,29 @@ class ConsoleChannel(BaseChannel):
                     if usage_data and hasattr(event, "usage"):
                         setattr(event, "usage", usage_data)
 
+                    response_error = self._get_response_error_message(event)
+                    if response_error:
+                        error_message = Message(
+                            id=(
+                                f"error_{session_id}_"
+                                f"{int(datetime.now().timestamp() * 1000)}"
+                            ),
+                            type=MessageType.MESSAGE,
+                            role="assistant",
+                            content=[
+                                TextContent(
+                                    type=ContentType.TEXT,
+                                    text=f"请求处理失败：{response_error}",
+                                ),
+                            ],
+                            name="DClaw",
+                            status=RunStatus.Completed,
+                        )
+                        error_json = self._serialize_event_for_sse(
+                            error_message,
+                        )
+                        yield f"data: {error_json}\n\n"
+
                 data = self._serialize_event_for_sse(event)
                 yield f"data: {data}\n\n"
 

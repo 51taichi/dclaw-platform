@@ -835,9 +835,12 @@ class TestConsoleStreaming:
             "meta": {},
         }
 
+        events = []
         with pytest.raises(RuntimeError, match="model failed"):
-            async for _event in stream_channel.stream_one(payload):
-                pass
+            async for event in stream_channel.stream_one(payload):
+                events.append(event)
+
+        assert any("model failed" in event for event in events)
 
     async def test_consume_one_drain_stream(self, stream_channel):
         """consume_one should drain stream_one."""

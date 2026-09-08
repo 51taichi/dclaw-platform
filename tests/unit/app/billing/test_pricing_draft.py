@@ -33,7 +33,7 @@ def test_builder_expands_verified_dimensions_with_default_multiplier():
     assert draft.coverage.missing_models == 0
 
 
-def test_builder_keeps_unmapped_custom_model_as_blocking_row():
+def test_builder_expands_unpriced_text_model_into_fillable_token_dimensions():
     model = PriceableModel(
         "custom-provider", "Custom", "alias", "Alias", "text"
     )
@@ -41,9 +41,21 @@ def test_builder_keeps_unmapped_custom_model_as_blocking_row():
         [model], costs=[], mappings=[], exclusions=[]
     )
 
-    assert len(draft.rows) == 1
-    assert draft.rows[0].verification_status == "unmatched"
-    assert draft.rows[0].include_in_publish is False
+    assert len(draft.rows) == 2
+    assert {row.unit_key for row in draft.rows} == {
+        "input_tokens",
+        "output_tokens",
+    }
+    assert all(row.capability == "chat" for row in draft.rows)
+    assert all(row.unit_size == 1_000_000 for row in draft.rows)
+    assert all(row.conditions == {} for row in draft.rows)
+    assert all(row.rmb_cost is None for row in draft.rows)
+    assert all(row.source_type == "manual" for row in draft.rows)
+    assert all(
+        row.verification_status == "manual_pending" for row in draft.rows
+    )
+    assert all(row.include_in_publish is True for row in draft.rows)
+    assert all(row.approval_reason == "管理员人工定价" for row in draft.rows)
     assert draft.risks[0].code == "official_model_unmatched"
 
 
@@ -182,6 +194,33 @@ def test_verified_manual_costs_cover_model_without_bundled_registry():
     assert all(row.source_type == "trusted_cost" for row in draft.rows)
 
 
+def test_legacy_token_cost_without_unit_size_keeps_per_million_semantics():
+    model = PriceableModel(
+        "custom-provider", "Custom", "private-model", "Private", "text"
+    )
+    costs = [
+        {
+            "provider_id": "custom-provider",
+            "model_key": "private-model",
+            "capability": "chat",
+            "unit_key": unit,
+            "rmb_cost_decimal": amount,
+            "verification_status": "verified",
+            "conditions_json": "{}",
+        }
+        for unit, amount in (
+            ("input_tokens", "76"),
+            ("output_tokens", "341"),
+        )
+    ]
+
+    draft = PricingDraftBuilder(OfficialPriceRegistry.load_bundled()).build(
+        [model], costs, [], []
+    )
+
+    assert {row.unit_size for row in draft.rows} == {1_000_000}
+
+
 def test_region_specific_registry_price_never_crosses_provider_endpoint():
     singapore = PriceableModel(
         "dashscope",
@@ -210,7 +249,11 @@ def test_region_specific_registry_price_never_crosses_provider_endpoint():
         [],
     )
 
-    assert draft.rows[0].source_type == "missing"
+    assert {row.source_type for row in draft.rows} == {"manual"}
+    assert {row.unit_key for row in draft.rows} == {
+        "input_tokens",
+        "output_tokens",
+    }
     assert draft.coverage.blocking_models == 1
 
 
@@ -230,9 +273,7 @@ def test_ai_estimate_candidate_appears_with_safe_multiplier_and_nonpublish():
         "official_model_id": "future-model",
         "capability": "chat",
         "unit_key": "input_tokens",
-        "conditions_json": (
-            '{"region":"cn-beijing","unit_size":1000000}'
-        ),
+        "conditions_json": ('{"region":"cn-beijing","unit_size":1000000}'),
         "source_url": "",
         "rmb_cost_decimal": "3",
         "evidence_level": "ai_no_evidence",

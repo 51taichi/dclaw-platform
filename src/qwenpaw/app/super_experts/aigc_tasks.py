@@ -145,6 +145,12 @@ class AigcTaskRepository:
         with self._lock:
             return self._read().tasks.get(material_task_id)
 
+    def list_for_conversations(self, conversation_ids: set[str]) -> tuple[AigcMaterialTask, ...]:
+        """Read task snapshots for an already authorized chat and its aliases."""
+        with self._lock:
+            return tuple(task for task in self._read().tasks.values()
+                         if task.binding.conversation_id in conversation_ids)
+
     def find_workflow_task_for_node(
         self,
         *,
@@ -161,6 +167,15 @@ class AigcTaskRepository:
                 ):
                     return task
         return None
+
+    def find_tasks_for_node(self, *, canvas_id: str, node_id: str) -> tuple[AigcMaterialTask, ...]:
+        """Return every matching immutable binding; callers must reject ambiguity."""
+        with self._lock:
+            return tuple(task for task in self._read().tasks.values()
+                         if task.binding.canvas_id == canvas_id and (
+                             task.binding.node_id == node_id
+                             or node_id in task.binding.node_bindings.values()
+                         ))
 
     def _apply_new_command(
         self,

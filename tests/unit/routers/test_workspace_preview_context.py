@@ -168,6 +168,61 @@ def test_explicit_artifact_files_for_chat_resolves_media_deliverables(
     ]
 
 
+def test_explicit_artifact_files_for_chat_allows_structured_video_source_only(
+    monkeypatch,
+    tmp_path,
+):
+    media_dir = tmp_path / "aigc_studio" / "canvas-1"
+    media_dir.mkdir(parents=True)
+    video_path = media_dir / "result.mp4"
+    video_path.write_bytes(b"video")
+    outside_path = tmp_path.parent / "outside-secret.mp4"
+    outside_path.write_bytes(b"secret")
+
+    class FakeWorkspaceContextRepository:
+        def list_chat_identity_rows(self, chat_id):
+            return [{"id": chat_id, "session_id": "session-1"}]
+
+        def get_session_state_texts(self, chat_ids):
+            return [
+                json.dumps(
+                    {
+                        "agent": {
+                            "memory": {
+                                "content": [
+                                    {
+                                        "type": "video",
+                                        "source": {
+                                            "type": "url",
+                                            "url": video_path.as_uri(),
+                                        },
+                                    },
+                                    {
+                                        "type": "video",
+                                        "source": {
+                                            "type": "url",
+                                            "url": outside_path.as_uri(),
+                                        },
+                                    },
+                                    {"unrelated": video_path.as_uri()},
+                                ],
+                            },
+                        },
+                    },
+                ),
+            ]
+
+    monkeypatch.setattr(
+        workspace_router,
+        "get_workspace_context_repository",
+        lambda: FakeWorkspaceContextRepository(),
+    )
+
+    assert _explicit_artifact_files_for_chat("chat-1", tmp_path) == [
+        "aigc_studio/canvas-1/result.mp4",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_user_artifacts_do_not_fallback_scan_shared_workspace(
     monkeypatch,

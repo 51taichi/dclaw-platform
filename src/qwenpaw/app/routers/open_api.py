@@ -36,6 +36,7 @@ from ..expert_teams import (
 from ..open_api.runtime import (
     ExecutionLeaseLostError,
     OpenMessageRequest,
+    OpenApiOutputProfile,
     PreparedOpenRun,
     create_open_api_billing_runtime,
     open_api_billing_context,
@@ -92,6 +93,16 @@ def _resolve_sealed_publication_release(
             detail="Sealed agent target is unavailable",
         )
     return record.active_release
+
+
+def _output_profile_for_release(
+    release: SealedReleaseRecord | None,
+) -> OpenApiOutputProfile:
+    """Keep the larger output budget scoped to verified super experts."""
+
+    if release is not None and release.package_type == "super_expert":
+        return "super_expert"
+    return "default"
 
 
 @router.post(
@@ -156,7 +167,9 @@ async def post_open_message(
     # become a wallet selector in direct or nested runtime paths.
     request.state.user_id = bound_user_id
 
-    billing = create_open_api_billing_runtime()
+    billing = create_open_api_billing_runtime(
+        output_profile=_output_profile_for_release(active_sealed_release),
+    )
     billing_payload = payload.model_dump(mode="json")
     if payload.execution_mode == "persistent":
         billing_payload.pop("execution_mode", None)

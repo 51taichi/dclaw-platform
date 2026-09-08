@@ -124,3 +124,34 @@ def test_chat_access_uses_user_repository(monkeypatch):
 
     assert repo.lookups == ["session-repo"]
     assert row["id"] == "chat-repo"
+
+
+def test_chat_access_prefers_exact_chat_id_over_duplicate_session(monkeypatch):
+    class FakeUserRepository:
+        @staticmethod
+        def find_chat_access_rows(_chat_id_or_session_id):
+            return [
+                {
+                    "id": "review-duplicate",
+                    "user_id": "3",
+                    "session_id": "original-chat",
+                    "channel": "platform:aigc-review",
+                },
+                {
+                    "id": "original-chat",
+                    "user_id": "3",
+                    "session_id": "console-session",
+                    "channel": "console",
+                },
+            ]
+
+    monkeypatch.setattr(
+        chat_access,
+        "get_user_repository",
+        lambda: FakeUserRepository(),
+    )
+
+    row = chat_access.ensure_chat_access(_request_for_user(3), "original-chat")
+
+    assert row["id"] == "original-chat"
+    assert row["channel"] == "console"

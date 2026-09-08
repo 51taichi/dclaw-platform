@@ -375,28 +375,40 @@ def build_bootstrap_guidance(
 def _get_active_model_info():
     """Resolve the active model's ModelInfo and model name.
 
-    Tries agent-specific model first, then falls back to global.
+    Uses the same chat > agent > global priority as model creation.
 
     Returns:
         A ``(ModelInfo, model_name)`` tuple.  Both elements are *None*
         when the active model cannot be resolved.
     """
     try:
-        from ..app.agent_context import get_current_agent_id
-        from ..config.config import load_agent_config
+        from ..app.agent_context import get_current_agent_id, get_current_chat_model
+        from ..config.config import ModelSlotConfig, load_agent_config
         from ..providers.provider_manager import ProviderManager
+        from .model_factory import is_auto_model_slot
 
         manager = ProviderManager.get_instance()
 
-        # Try to get agent-specific model first
         active = None
-        try:
-            agent_id = get_current_agent_id()
-            agent_config = load_agent_config(agent_id)
-            if agent_config.active_model:
-                active = agent_config.active_model
-        except Exception:
-            pass
+        chat_model = get_current_chat_model()
+        if chat_model:
+            chat_slot = ModelSlotConfig(
+                provider_id=chat_model.get("provider_id", ""),
+                model=chat_model.get("model", ""),
+            )
+            # Auto is a routing sentinel, not a provider/model. Preserve its
+            # existing default capability lookup; this override concerns
+            # concrete chat selections, not per-endpoint Auto negotiation.
+            if not is_auto_model_slot(chat_slot):
+                active = chat_slot
+        if active is None:
+            try:
+                agent_id = get_current_agent_id()
+                agent_config = load_agent_config(agent_id)
+                if agent_config.active_model:
+                    active = agent_config.active_model
+            except Exception:
+                pass
 
         # Fallback to global active model
         if not active:
@@ -422,7 +434,7 @@ def get_active_model_supports_multimodal() -> bool:
     model_info, _ = _get_active_model_info()
     if model_info is None:
         return False
-    return bool(model_info.supports_multimodal)
+    return bool(model_info.supports_multimodal or model_info.supports_image or model_info.supports_video)
 
 
 def get_active_model_multimodal_raw() -> bool | None:

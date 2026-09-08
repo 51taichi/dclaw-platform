@@ -2,6 +2,51 @@
 
 This API is the generic platform capability layer used by officially signed super experts. It exposes platform primitives; it does not contain an Agent's business stages, Controller, Harness, Skills, scoring, or content methods.
 
+## Shared implementation and dependency boundary
+
+System APIs and super-expert APIs remain separate interfaces. Both use the same
+AIGC core Services; neither makes an HTTP request to the other entrance.
+
+- `app/aigc/` owns resource models/storage, canvases, asset access, model capability
+  projection, workflow execution constraints, terminal results and generic events.
+- `app/super_experts/service.py` owns installation/capability authorization and
+  material-task commands. `aigc_adapter.py` converts accepted expert scope into
+  explicit core Service calls; the HTTP router is not its implementation.
+- `app/super_experts/aigc_event_adapter.py` maps durable core progress to the
+  original authorized expert, conversation and material task. It checks the
+  active installation, ownership, resource bindings and workflow revision before
+  notification. Core services do not import this adapter or expert repositories.
+- `app/runtime/aigc_media.py` composes authorized media-source access for both
+  HTTP entrances using the shared Asset Service. The system entrance retains its
+  existing legacy access policy; the expert entrance requires explicit ownership.
+
+Generation success is not customer submission or expert approval. Core results
+and generic events are persisted together; projection or notification failures
+remain recoverable without changing a successful generation into failure.
+Expert progress notifications are at-least-once and carry stable event IDs.
+Consumers must deduplicate them. Same-node expert delivery is serialized through
+fresh validation, persistence and publication so a late old result cannot be
+published after a newer successful result. Failed notification retries do not
+start generation, create a second billing order or mark material as accepted.
+
+The application composes the optional expert consumer. Setting
+`QWENPAW_SUPER_EXPERT_AIGC_EVENTS_ENABLED=false` disables that consumer only;
+generic core recovery still operates. This is not a switch that disables the
+entire expert API or changes installed grants. The default conversation scope
+resolver uses the existing local tenant and rejects ambiguous chat/session IDs;
+a deployment with a different tenant model needs a trusted matching resolver.
+
+Existing managed workflows require migration of their trusted execution bindings
+before rollout; editable canvas metadata is not authorization. The migration
+tool defaults to dry-run, requires an existing initialized database and reports
+conflicts rather than guessing missing blueprints or node mappings. Do not run
+it against a live writer. See the [validation and rollout record](superpowers/reports/2026-09-06-platform-capability-service-boundary-validation.md)
+for tested scope, backup/maintenance prerequisites and the dry-run command.
+
+This refactor does not add MCP/RPA capabilities, a compositor, cross-card asset
+versioning, or automatic business review. Local metadata/transport tests are not
+evidence of live video generation or real expert approval.
+
 ## Capability groups
 
 - Card: `card.create`, `card.update`.
@@ -126,7 +171,14 @@ A prompt → image → video workflow uses three semantic nodes and two typed ed
 }
 ```
 
-DClaw validates the graph, node/slot compatibility, model publication and pricing, parameter bounds and owned assets before assigning physical IDs. It then writes the complete canvas and versioned task binding. If task persistence fails, the newly provisioned canvas is removed. Replays return the same workflow; changed content under the same idempotency identity is rejected.
+DClaw validates the graph, node/slot compatibility, model publication and pricing,
+parameter bounds and owned assets before assigning physical IDs. Core creation
+records a stable operation and resource snapshot, then persists the canvas and
+trusted execution bindings. If the outer material-task write fails after the
+core operation is APPLIED, that core canvas is retained; retry restores the same
+task binding without creating another canvas. Legacy compensation may remove only
+this operation's newly created, unused resources. Replays return the same
+workflow; changed content under the same idempotency identity is rejected.
 
 `MANUAL_BUILD_IF_UNSUPPORTED` applies only when the compiler identifies a registered `MANUAL_ONLY` node. It creates a genuinely empty canvas and records the unsupported reason. Invalid schemas, unavailable models, invalid prices/parameters, inaccessible assets, incompatible edges and `UNAVAILABLE` nodes never fall back.
 

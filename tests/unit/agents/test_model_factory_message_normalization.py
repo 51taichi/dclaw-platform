@@ -22,6 +22,61 @@ from qwenpaw.agents import model_factory
 from qwenpaw.constant import MEDIA_UNSUPPORTED_PLACEHOLDER
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selected,default,capability,expected_type", [
+    ("chat", "text", {"supports_multimodal": True}, "image"),
+    ("chat", "text", {"supports_image": True}, "image"),
+    ("chat", "text", {"supports_video": True}, "image"),
+    ("chat", "vision", {"supports_multimodal": False}, "text"),
+    ("missing", "vision", {}, "text"),
+    (None, "vision", {}, "image"),
+    (None, "text", {}, "text"),
+    ("auto", "vision", {}, "image"),
+    ("auto", "text", {}, "text"),
+])
+async def test_selected_chat_model_controls_actual_media_normalization(monkeypatch, selected, default, capability, expected_type):
+    from qwenpaw.app.agent_context import get_current_chat_model, set_current_chat_model
+    from qwenpaw.config import config
+    from qwenpaw.providers.provider import ModelInfo
+    from qwenpaw.providers.provider_manager import ProviderManager
+    models = [
+        ModelInfo(id="text", name="text", supports_multimodal=False),
+        ModelInfo(id="vision", name="vision", supports_multimodal=True),
+        ModelInfo(id="chat", name="chat", **capability),
+    ]
+    provider = SimpleNamespace(models=models, extra_models=[])
+    manager = SimpleNamespace(get_provider=lambda _id: provider)
+    monkeypatch.setattr(ProviderManager, "get_instance", lambda: manager)
+    monkeypatch.setattr(config, "load_agent_config", lambda _id: SimpleNamespace(
+        active_model=config.ModelSlotConfig(provider_id="test", model=default)))
+    previous = get_current_chat_model()
+    slot = {"provider_id": "auto", "model": "routing"} if selected == "auto" else (
+        {"provider_id": "test", "model": selected} if selected else None)
+    set_current_chat_model(slot)
+    try:
+        original = _media_messages()
+        normalized, _, _ = model_factory._normalize_messages_for_formatter(
+            original, OpenAIChatFormatter, SimpleNamespace())
+        assert normalized[0].content[0]["type"] == expected_type
+        assert original[0].content[0]["type"] == "image"
+        # Exercise the real formatter through its outbound OpenAI payload,
+        # not only the pre-format copy. A remote image URL is not fetched here.
+        image = Msg(name="user", role="user", content=[{
+            "type": "image", "source": {"type": "url", "url": "https://assets.example.test/current.png"},
+        }])
+        formatter = model_factory._create_file_block_support_formatter(OpenAIChatFormatter)()
+        outbound = await formatter.format(msgs=[image])
+        blocks = outbound[0]["content"]
+        if expected_type == "image":
+            assert any(block.get("type") == "image_url" and
+                       block["image_url"]["url"] == "https://assets.example.test/current.png"
+                       for block in blocks)
+        else:
+            assert all(block.get("type") == "text" for block in blocks)
+    finally:
+        set_current_chat_model(previous)
+
+
 def _media_messages() -> list[Msg]:
     """Create a list of messages with media blocks for testing."""
     return [

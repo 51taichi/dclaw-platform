@@ -1242,14 +1242,19 @@ class BillingReportingService:
                 billing_usage_orders.c.status == filters.status,
             )
         if filters.source is not None:
-            statement = statement.where(
-                billing_usage_orders.c.source_type
-                == (
-                    "open_api"
-                    if filters.source == "openapi"
-                    else filters.source
-                ),
-            )
+            if filters.source == "client":
+                statement = statement.where(
+                    billing_usage_orders.c.source_type.in_(("client", "aigc")),
+                )
+            else:
+                statement = statement.where(
+                    billing_usage_orders.c.source_type
+                    == (
+                        "open_api"
+                        if filters.source == "openapi"
+                        else filters.source
+                    ),
+                )
         item_predicates = [
             item_filter.c.usage_order_id == billing_usage_orders.c.id,
         ]
@@ -1521,6 +1526,12 @@ def _public_item_row(
     }
     if include_internal:
         result["_internal_id"] = str(item["id"])
+        result["quoted_credits"] = int(item["quoted_credits"])
+        result["created_at"] = _aware_utc(item["created_at"]).isoformat()
+        result["evidence"] = {
+            "supplier_reference_present": bool(item["supplier_reference"]),
+            "execution_outcome": str(item["execution_outcome"]),
+        }
     if item["would_pass"] is not None:
         result["would_pass"] = bool(item["would_pass"])
         result["would_block_reason"] = item["would_block_reason"]
@@ -1540,7 +1551,11 @@ def _expert_role(item_key: str) -> str | None:
 
 
 def _public_source(source_type: str) -> str:
-    return "openapi" if source_type == "open_api" else source_type
+    if source_type == "open_api":
+        return "openapi"
+    if source_type == "aigc":
+        return "client"
+    return source_type
 
 
 def _audit_row(

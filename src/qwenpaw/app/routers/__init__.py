@@ -79,6 +79,8 @@ router.include_router(
     open_api_knowledge_router,
     dependencies=[Depends(require_user)],
 )
+# Compatibility mount for the shipped console bundle.  The canonical user API
+# remains under /user/super-expert-platform; both paths enforce the same guard.
 router.include_router(
     super_expert_platform_frontend_read_router,
     dependencies=[Depends(require_user)],

@@ -13,7 +13,6 @@ from qwenpaw.app.routers.aigc_studio import (
     AigcCapabilityInfo,
     AigcJob,
     CapabilityList,
-    load_super_expert_aigc_workflow_context,
     project_workflow_capability_catalog,
 )
 from qwenpaw.app.routers.super_expert_platform import SuperExpertPlatformService
@@ -92,6 +91,11 @@ async def _catalog():
 
 
 def _service(tmp_path):
+    from qwenpaw.app.aigc.asset_service import AigcAssetService
+    from qwenpaw.app.aigc.canvas_service import AigcCanvasService
+    from qwenpaw.app.aigc.resource_store import AigcResourceStore
+    from qwenpaw.app.super_experts.aigc_adapter import AigcServiceAdapter
+
     grants = SuperExpertGrantRepository(tmp_path / "grants")
     grant = grants.grant_installation(
         grants.preview("luyu-workflow-v2", _release(), tenant_id="tenant-a"),
@@ -102,6 +106,11 @@ def _service(tmp_path):
         task_repository=AigcTaskRepository(tmp_path / "tasks"),
         event_repository=SuperExpertEventRepository(tmp_path / "events"),
         event_bus=Bus(),
+        aigc_adapter=AigcServiceAdapter(
+            AigcCanvasService(AigcResourceStore(tmp_path / "studio")),
+            AigcAssetService(AigcResourceStore(tmp_path / "studio")),
+            catalog_loader=lambda: platform_router._load_workflow_capability_catalog(),
+        ),
     )
     return service, grant
 
@@ -159,7 +168,7 @@ async def test_fixture_manifest_and_one_node_request_are_compatible(
     assert manifest["contract"] == "aigc.workflow.create/1"
     assert set(manifest["fixtures"]) == {"one-node.json", "three-node.json"}
     monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
-    aigc_studio._JSON_CACHE.clear()
+    aigc_studio._resource_store.cache_clear()
     monkeypatch.setattr(platform_router, "_load_workflow_capability_catalog", _catalog)
     service, grant = _service(tmp_path)
     arguments = _fixture("one-node.json", grant.installation_id)
@@ -180,7 +189,7 @@ async def test_three_node_customer_triggered_closed_loop(tmp_path, monkeypatch):
     from qwenpaw.app.routers import aigc_studio
 
     monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
-    aigc_studio._JSON_CACHE.clear()
+    aigc_studio._resource_store.cache_clear()
     monkeypatch.setattr(platform_router, "_load_workflow_capability_catalog", _catalog)
     service, grant = _service(tmp_path)
     arguments = _fixture("three-node.json", grant.installation_id)
@@ -193,7 +202,7 @@ async def test_three_node_customer_triggered_closed_loop(tmp_path, monkeypatch):
     )
     binding = created["task"]["binding"]
     task = service.get_task(binding["material_task_id"])
-    canvas, stored_jobs = load_super_expert_aigc_workflow_context(
+    canvas, stored_jobs = service.aigc.workflow_context(
         canvas_id=binding["canvas_id"], material_task_id=binding["material_task_id"],
     )
     guide = project_aigc_guide(task=task, canvas=canvas, jobs=stored_jobs)

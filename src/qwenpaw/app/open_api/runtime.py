@@ -47,6 +47,11 @@ from ..storage.engine import get_app_engine
 from ..storage.repos.billing_repo import BillingRepository
 from ..storage.repos.open_api_repo import SqlAlchemyOpenApiRepository
 from ..storage.repos.price_catalog_repo import PriceCatalogRepository
+
+
+OpenApiOutputProfile = Literal["default", "super_expert"]
+_DEFAULT_OPEN_API_OUTPUT_TOKENS = 2048
+_DEFAULT_SUPER_EXPERT_OUTPUT_TOKENS = 4096
 from ..storage.schema import (
     billing_usage_items,
     billing_usage_orders,
@@ -118,7 +123,7 @@ class OpenApiBillingRuntime:
     open_api_repository: SqlAlchemyOpenApiRepository
     mode: str
     budget_credits: int
-    default_max_output_tokens: int = 1024
+    default_max_output_tokens: int = 2048
     platform_max_output_tokens: int = 8192
 
     def execution(
@@ -241,8 +246,19 @@ class OpenApiBillingExecution:
         return dict(self.terminal_snapshot)
 
 
-def create_open_api_billing_runtime() -> OpenApiBillingRuntime:
+def create_open_api_billing_runtime(
+    *,
+    output_profile: OpenApiOutputProfile = "default",
+) -> OpenApiBillingRuntime:
     """Build explicit billing services over the configured durable engine."""
+    if output_profile == "super_expert":
+        output_token_env = "DCLAW_SUPER_EXPERT_DEFAULT_OUTPUT_TOKENS"
+        output_token_default = _DEFAULT_SUPER_EXPERT_OUTPUT_TOKENS
+    elif output_profile == "default":
+        output_token_env = "DCLAW_OPEN_API_DEFAULT_OUTPUT_TOKENS"
+        output_token_default = _DEFAULT_OPEN_API_OUTPUT_TOKENS
+    else:
+        raise ValueError("unknown OpenAPI output profile")
     engine = get_app_engine()
     repository = BillingRepository(engine)
     pricing = PriceCatalogService(PriceCatalogRepository(engine))
@@ -253,8 +269,8 @@ def create_open_api_billing_runtime() -> OpenApiBillingRuntime:
     )
     default_max_output_tokens = min(
         _non_negative_env(
-            "DCLAW_OPEN_API_DEFAULT_OUTPUT_TOKENS",
-            1024,
+            output_token_env,
+            output_token_default,
         ),
         platform_max_output_tokens,
     )

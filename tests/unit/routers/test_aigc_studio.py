@@ -28,6 +28,18 @@ from qwenpaw.app.storage.schema import create_all
 from qwenpaw.app.storage.settings import get_storage_settings
 
 
+@pytest.fixture(autouse=True)
+def execution_repository(tmp_path, monkeypatch):
+    from sqlalchemy import create_engine
+    from qwenpaw.app.storage.repos.aigc_execution_repo import AigcExecutionRepository
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'aigc-core.sqlite'}")
+    create_all(engine)
+    monkeypatch.setattr("qwenpaw.app.storage.engine.get_app_engine", lambda: engine)
+    yield AigcExecutionRepository(engine)
+    engine.dispose()
+
+
 @pytest.mark.asyncio
 async def test_resolve_owned_asset_for_agent_review_returns_bound_local_media(
     tmp_path,
@@ -48,10 +60,11 @@ async def test_resolve_owned_asset_for_agent_review_returns_bound_local_media(
     monkeypatch.setattr(aigc_studio, "_load_asset_for_request", lambda *_args: asset)
     monkeypatch.setattr(aigc_studio, "_signed_cloud_asset_url", lambda _asset: None)
 
-    async def local_path(*_args):
-        return media_path
+    async def artifact_root(*_args):
+        return tmp_path
 
-    monkeypatch.setattr(aigc_studio, "_asset_file_path_for_request", local_path)
+    monkeypatch.setattr(aigc_studio, "_artifact_root_for_request", artifact_root)
+    monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
     block = await aigc_studio.resolve_owned_asset_for_agent_review(
         SimpleNamespace(),
         "asset-review",
@@ -90,10 +103,18 @@ async def test_resolve_owned_asset_for_agent_review_rejects_binding_mismatch(
 
 
 @pytest.mark.asyncio
-async def test_validate_job_submission_rejects_workflow_model_mismatch(monkeypatch):
+async def test_validate_job_submission_rejects_workflow_model_mismatch(monkeypatch, execution_repository):
+    from qwenpaw.app.aigc.workflow_execution import WorkflowExecutionBinding
+
+    execution_repository.register_bindings([WorkflowExecutionBinding(
+        owner_user_id="user-a", canvas_id="canvas-1", workflow_id="workflow-1",
+        workflow_revision=1, node_id="video-1", logical_node_id="clip",
+        provider_id="provider-1", model_id="video-1", capability="image_to_video",
+    )], "test-workflow")
     canvas = aigc_studio.Canvas(
         id="canvas-1",
         name="Workflow",
+        meta={"owner_user_id": "user-a"},
         nodes=[
             aigc_studio.CanvasNode(
                 id="video-1",
@@ -138,7 +159,7 @@ async def test_validate_job_submission_rejects_workflow_model_mismatch(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_validate_job_submission_uses_authoritative_task_after_canvas_tamper(
+async def test_validate_job_submission_uses_core_binding_after_canvas_tamper(
     monkeypatch,
 ):
     canvas = aigc_studio.Canvas(
@@ -164,7 +185,11 @@ async def test_validate_job_submission_uses_authoritative_task_after_canvas_tamp
     monkeypatch.setattr(
         aigc_studio,
         "_authoritative_workflow_execution_binding",
-        lambda *_a: ("provider-1", "video-1", "image_to_video"),
+        lambda *_a: aigc_studio.WorkflowExecutionBinding(
+            owner_user_id="user-a", canvas_id="canvas-1", workflow_id="workflow-1",
+            workflow_revision=1, node_id="video-1", logical_node_id="clip",
+            provider_id="provider-1", model_id="video-1", capability="image_to_video",
+        ),
     )
 
     async def available(*_args):
@@ -891,6 +916,68 @@ async def test_configured_image_policy_filters_capabilities_and_returns_default(
         "fallback_reason": [],
     }
     engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "configured,published,disabled,api_key,tagged,expected",
+    [
+        (True, True, False, "configured", False, True),
+        (True, True, False, "configured", True, True),
+        (False, True, False, "configured", False, False),
+        (True, False, False, "configured", False, False),
+        (True, True, True, "configured", False, False),
+        (True, True, False, "", False, False),
+    ],
+)
+async def test_text_policy_inventory_preserves_availability_and_selection_gates(
+    tmp_path, monkeypatch, configured, published, disabled, api_key,
+    tagged, expected,
+):
+    from qwenpaw.app.storage.engine import get_app_engine
+
+    selected = {"provider_id": "text-provider", "model_id": "configured-llm"}
+    if configured:
+        AigcModelPolicyRepository(get_app_engine()).replace(
+            "text", None, [selected], selected, 7,
+        )
+    provider = ProviderInfo(
+        id="text-provider", name="Text Provider", api_key=api_key,
+        disabled=disabled,
+        models=[
+            ModelInfo(
+                id="configured-llm", name="Configured LLM",
+                aigc_capabilities=["storyboard"] if tagged else [],
+            ),
+            ModelInfo(id="not-selected", name="Unselected LLM"),
+        ],
+    )
+
+    class Manager:
+        async def list_provider_info(self):
+            return [provider]
+
+    monkeypatch.setattr(
+        ModelPublicationService, "effective_pairs",
+        lambda _self: (
+            {("text-provider", "configured-llm"),
+             ("text-provider", "not-selected")}
+            if published else set()
+        ),
+    )
+    app = make_app(tmp_path)
+    app.state.provider_manager = Manager()
+    request = SimpleNamespace(app=app)
+    inventory = await aigc_studio.list_capabilities(request)
+    projected = [
+        item.model_id for item in inventory.capabilities
+        if item.provider_id == "text-provider" and item.capability == "storyboard"
+    ]
+    assert projected == (["configured-llm"] if expected else [])
+    # Submission uses the same capability lookup, not just the visible menu.
+    found = await aigc_studio._find_capability(
+        request, "text-provider", "configured-llm", "storyboard",
+    )
+    assert (found is not None) == expected
 
 
 async def test_job_submission_rejects_model_removed_from_allowlist(
@@ -2220,6 +2307,70 @@ async def test_run_job_creates_workspace_artifact_and_asset(tmp_path):
             assert assets.json()["assets"][0]["id"] == job["outputs"][0]["id"]
 
 
+async def test_run_job_settles_aigc_billing_before_success_projection(
+    tmp_path,
+    monkeypatch,
+):
+    events = []
+
+    class Reservation:
+        def settle_success(self, *, outputs, supplier_reference):
+            events.append(("settled", len(outputs), supplier_reference))
+
+        def settle_failure(self, **_kwargs):
+            events.append(("released",))
+
+    def reserve(job, owner):
+        events.append(("reserved", job.id, owner))
+        return Reservation()
+
+    monkeypatch.setattr(
+        "qwenpaw.app.aigc.billing.reserve_aigc_job",
+        reserve,
+    )
+    app = make_app(tmp_path)
+    transport = ASGITransport(app=app)
+
+    with patch("qwenpaw.app.routers.aigc_studio.STUDIO_ROOT", tmp_path / "studio"):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            canvas = await client.post(
+                "/api/aigc-studio/canvases",
+                json={
+                    "name": "Billing board",
+                    "nodes": [
+                        {
+                            "id": "image-1",
+                            "type": "image_generate",
+                            "position": {"x": 0, "y": 0},
+                            "data": {},
+                        },
+                    ],
+                    "edges": [],
+                    "viewport": {"x": 0, "y": 0, "zoom": 1},
+                },
+            )
+            created = await client.post(
+                "/api/aigc-studio/jobs",
+                json={
+                    "canvas_id": canvas.json()["id"],
+                    "node_id": "image-1",
+                    "capability": "text_to_image",
+                    "provider_id": "stub-aigc",
+                    "model_id": "stub-image",
+                    "inputs": {"prompt": "Billing integration"},
+                },
+            )
+
+            ran = await client.post(
+                f"/api/aigc-studio/jobs/{created.json()['id']}/run",
+            )
+
+    assert ran.status_code == 200
+    assert ran.json()["status"] == "succeeded"
+    assert events[0] == ("reserved", created.json()["id"], "0")
+    assert events[1] == ("settled", 1, created.json()["id"])
+
+
 async def test_export_long_image_creates_full_image_and_upload_slices(tmp_path):
     """Long-image export should compose upstream text and image nodes into assets."""
     app = make_app(tmp_path)
@@ -2364,7 +2515,7 @@ async def test_run_job_background_mode_returns_before_provider_finishes(
     provider_started = asyncio.Event()
     provider_release = asyncio.Event()
 
-    async def slow_execute_job(request, job):
+    async def slow_execute_job(request, job, execution=None):
         provider_started.set()
         await provider_release.wait()
         return [
@@ -2433,11 +2584,31 @@ async def test_run_job_background_mode_returns_before_provider_finishes(
             assert finished.json()["outputs"][0]["id"] == "asset-background"
 
 
-async def test_run_storyboard_job_uses_chat_model_and_saves_text_meta(tmp_path):
+@pytest.mark.parametrize("configured_ordinary_llm", [False, True])
+async def test_run_storyboard_job_uses_chat_model_and_saves_text_meta(
+    tmp_path, configured_ordinary_llm,
+):
     """Text nodes should run through a chat model and keep text in asset metadata."""
     app = make_text_app(tmp_path)
     transport = ASGITransport(app=app)
     manager = app.state.provider_manager
+
+    if configured_ordinary_llm:
+        from qwenpaw.app.storage.engine import get_app_engine
+
+        manager.provider.models[0].aigc_capabilities = []
+        selected = {"provider_id": "text-provider", "model_id": "gvlm-3-1"}
+        AigcModelPolicyRepository(get_app_engine()).replace(
+            "text", None, [selected], selected, 7,
+        )
+
+    inventory = await aigc_studio.list_capabilities(SimpleNamespace(app=app))
+    text_models = [
+        item for item in inventory.capabilities if item.capability == "storyboard"
+    ]
+    assert [(item.provider_id, item.model_id) for item in text_models] == [
+        ("text-provider", "gvlm-3-1"),
+    ]
 
     with patch("qwenpaw.app.routers.aigc_studio.STUDIO_ROOT", tmp_path / "studio"):
         async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -2470,6 +2641,7 @@ async def test_run_storyboard_job_uses_chat_model_and_saves_text_meta(tmp_path):
                 },
             )
 
+            assert created.status_code == 202, created.text
             ran = await client.post(
                 f"/api/aigc-studio/jobs/{created.json()['id']}/run",
             )
@@ -4634,6 +4806,72 @@ def test_external_asset_reference_url_uses_long_ttl_signed_oss_without_public_ba
     assert signed_gets == [("aigc/generated/cloud-ref.png", 86400)]
 
 
+def test_external_asset_reference_url_falls_back_to_public_provider_source(
+    tmp_path,
+    monkeypatch,
+):
+    """Provider-generated media remains usable as a local reference without OSS."""
+    monkeypatch.delenv("AIGC_STUDIO_PUBLIC_BASE_URL", raising=False)
+    monkeypatch.delenv("QWENPAW_PUBLIC_BASE_URL", raising=False)
+    monkeypatch.delenv("PUBLIC_BASE_URL", raising=False)
+    request = SimpleNamespace(
+        state=SimpleNamespace(user_id="0", role="user"),
+    )
+    asset = aigc_studio.AigcAsset(
+        id="provider-ref",
+        kind="image",
+        name="provider-ref.png",
+        path="aigc_studio/provider-ref.png",
+        url="http://127.0.0.1:18088/api/user/aigc-studio/assets/provider-ref/file",
+        mime_type="image/png",
+        created_at="2026-09-08T00:00:00Z",
+        meta={
+            "owner_user_id": "0",
+            "source_url": "https://media.provider.example/generated/provider-ref.png",
+        },
+    )
+
+    with patch("qwenpaw.app.routers.aigc_studio.STUDIO_ROOT", tmp_path / "studio"):
+        aigc_studio._write_json(aigc_studio._json_path("assets", asset.id), asset)
+
+        url = aigc_studio._external_asset_reference_url(request, asset.id)
+
+    assert url == "https://media.provider.example/generated/provider-ref.png"
+
+
+def test_external_asset_reference_url_rejects_private_provider_source(
+    tmp_path,
+    monkeypatch,
+):
+    """Stored provider metadata cannot bypass the external-reference host check."""
+    monkeypatch.delenv("AIGC_STUDIO_PUBLIC_BASE_URL", raising=False)
+    monkeypatch.delenv("QWENPAW_PUBLIC_BASE_URL", raising=False)
+    monkeypatch.delenv("PUBLIC_BASE_URL", raising=False)
+    request = SimpleNamespace(
+        state=SimpleNamespace(user_id="0", role="user"),
+    )
+    asset = aigc_studio.AigcAsset(
+        id="private-provider-ref",
+        kind="image",
+        name="private-provider-ref.png",
+        path="aigc_studio/private-provider-ref.png",
+        url="/api/user/aigc-studio/assets/private-provider-ref/file",
+        mime_type="image/png",
+        created_at="2026-09-08T00:00:00Z",
+        meta={
+            "owner_user_id": "0",
+            "source_url": "http://127.0.0.1/internal/provider-ref.png",
+        },
+    )
+
+    with patch("qwenpaw.app.routers.aigc_studio.STUDIO_ROOT", tmp_path / "studio"):
+        aigc_studio._write_json(aigc_studio._json_path("assets", asset.id), asset)
+
+        url = aigc_studio._external_asset_reference_url(request, asset.id)
+
+    assert url is None
+
+
 async def test_run_mxapi_gpt_image_surfaces_submit_error_body(
     tmp_path,
     monkeypatch,
@@ -4920,7 +5158,7 @@ async def test_run_job_records_exception_class_when_message_is_empty(
     app = make_mxapi_app(tmp_path)
     transport = ASGITransport(app=app)
 
-    async def fail_with_empty_message(_request, _job):
+    async def fail_with_empty_message(_request, _job, _execution=None):
         raise httpx.ReadTimeout("")
 
     monkeypatch.setattr(aigc_studio, "_execute_job", fail_with_empty_message)

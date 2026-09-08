@@ -870,7 +870,7 @@ class PricingAdminRepository:
                     continue
                 verified_at = source.get("verified_at")
                 conditions = dict(source.get("conditions") or {})
-                if source.get("source_type") == "manual":
+                if source.get("unit_size"):
                     conditions.setdefault(
                         "unit_size", int(source.get("unit_size") or 1)
                     )
