@@ -105,7 +105,7 @@ def _fund(engine, owner: str, credits: int = 2_000):
     return repository, wallet
 
 
-def test_aigc_image_reserves_and_captures_published_price(engine):
+def test_aigc_image_admits_without_hold_and_captures_published_price(engine):
     repository, wallet = _fund(engine, "user-1")
     job = _job(
         "image-job-1",
@@ -118,7 +118,9 @@ def test_aigc_image_reserves_and_captures_published_price(engine):
 
     assert reservation is not None
     assert reservation.quoted_credits == 600
-    assert repository.balance(str(wallet["id"])).held == 600
+    balance = repository.balance(str(wallet["id"]))
+    assert balance.held == 0
+    assert balance.available == 2_000
 
     reservation.settle_success(
         outputs=[object(), object()], supplier_reference="task-1"
@@ -157,7 +159,7 @@ def test_aigc_image_to_video_uses_published_text_to_video_price(engine):
     assert repository.balance(str(wallet["id"])).available == 1_400
 
 
-def test_aigc_reservation_is_idempotent_and_fails_closed_on_low_balance(engine):
+def test_aigc_admission_is_idempotent_and_blocks_zero_balance(engine):
     repository, wallet = _fund(engine, "replay-user", credits=300)
     job = _job(
         "replay-image-job",
@@ -171,7 +173,9 @@ def test_aigc_reservation_is_idempotent_and_fails_closed_on_low_balance(engine):
 
     assert first is not None and replay is not None
     assert replay.usage_order_id == first.usage_order_id
-    assert repository.balance(str(wallet["id"])).held == 300
+    balance = repository.balance(str(wallet["id"]))
+    assert balance.held == 0
+    assert balance.available == 300
 
     insufficient = _job(
         "unfunded-image-job",
@@ -183,7 +187,7 @@ def test_aigc_reservation_is_idempotent_and_fails_closed_on_low_balance(engine):
         reserve_aigc_job(insufficient, "unfunded-user", engine=engine)
 
 
-def test_cancelled_unsubmitted_aigc_job_releases_existing_hold(
+def test_cancelled_unsubmitted_aigc_job_records_release_without_hold(
     engine,
     monkeypatch,
 ):
@@ -196,7 +200,9 @@ def test_cancelled_unsubmitted_aigc_job_releases_existing_hold(
     )
     reservation = reserve_aigc_job(job, "cancel-user", engine=engine)
     assert reservation is not None
-    assert repository.balance(str(wallet["id"])).held == 300
+    balance = repository.balance(str(wallet["id"]))
+    assert balance.held == 0
+    assert balance.available == 300
 
     # Cleanup must honor the enforced order even if an operator changes the
     # process-wide default after the reservation was created.
@@ -211,7 +217,7 @@ def test_cancelled_unsubmitted_aigc_job_releases_existing_hold(
     assert balance.available == 300
 
 
-def test_cancelled_accepted_aigc_job_keeps_hold_for_reconciliation(engine):
+def test_cancelled_accepted_aigc_job_reconciles_without_hold(engine):
     repository, wallet = _fund(engine, "accepted-user", credits=600)
     job = _job(
         "accepted-video-job",
@@ -233,5 +239,5 @@ def test_cancelled_accepted_aigc_job_keeps_hold_for_reconciliation(engine):
     assert recovered is not None
     assert recovered.item_status == "reconciling"
     balance = repository.balance(str(wallet["id"]))
-    assert balance.held == 600
-    assert balance.available == 0
+    assert balance.held == 0
+    assert balance.available == 600

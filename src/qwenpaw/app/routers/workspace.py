@@ -443,6 +443,18 @@ def _structured_media_files_from_state(
     result: list[str] = []
     seen: set[str] = set()
 
+    def is_bound_aigc_media(rel_path: str) -> bool:
+        path = Path(rel_path)
+        return bool(
+            path.parts
+            and path.parts[0] == "aigc_studio"
+            and path.suffix.lower()
+            in {
+                ".png", ".jpg", ".jpeg", ".webp", ".gif",
+                ".mp4", ".mov", ".webm", ".mp3", ".wav", ".m4a", ".aac",
+            }
+        )
+
     def add_candidate(value: object) -> None:
         if not isinstance(value, str):
             return
@@ -464,7 +476,7 @@ def _structured_media_files_from_state(
             return
         if (
             not rel_path
-            or is_internal_task_file(rel_path)
+            or (is_internal_task_file(rel_path) and not is_bound_aigc_media(rel_path))
             or not resolved.is_file()
             or rel_path in seen
         ):
