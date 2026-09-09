@@ -1,8 +1,28 @@
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
     Manager,
 };
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogResult};
+
+#[derive(Debug, PartialEq, Eq)]
+enum CloseAction {
+    HideToTray,
+    Quit,
+    KeepOpen,
+}
+
+fn close_action(result: &MessageDialogResult) -> CloseAction {
+    match result {
+        MessageDialogResult::Custom(label) if label == "后台运行" => CloseAction::HideToTray,
+        MessageDialogResult::Custom(label) if label == "退出程序" => CloseAction::Quit,
+        _ => CloseAction::KeepOpen,
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -10,6 +30,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -73,14 +94,39 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // ── Close to tray (macOS style) ──────────────────────────
+            // ── Ask whether to keep running or quit ─────────────────
             let main_window = app.get_webview_window("main").unwrap();
+            let close_window = main_window.clone();
+            let close_dialog_open = Arc::new(AtomicBool::new(false));
             main_window.on_window_event(move |event| {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    // Don't close the app, just hide to tray
                     api.prevent_close();
-                    // We need to get the window handle from the event
-                    // This is handled in the JS side via Tauri events
+                    if close_dialog_open.swap(true, Ordering::SeqCst) {
+                        return;
+                    }
+
+                    let dialog_window = close_window.clone();
+                    let dialog_open = close_dialog_open.clone();
+                    close_window
+                        .app_handle()
+                        .dialog()
+                        .message("是否让 AI超级专家 继续在后台运行？")
+                        .title("关闭 AI超级专家")
+                        .buttons(MessageDialogButtons::YesNoCancelCustom(
+                            "后台运行".into(),
+                            "退出程序".into(),
+                            "取消".into(),
+                        ))
+                        .show_with_result(move |result| {
+                            dialog_open.store(false, Ordering::SeqCst);
+                            match close_action(&result) {
+                                CloseAction::HideToTray => {
+                                    let _ = dialog_window.hide();
+                                }
+                                CloseAction::Quit => dialog_window.app_handle().exit(0),
+                                CloseAction::KeepOpen => {}
+                            }
+                        });
                 }
             });
 
@@ -100,4 +146,26 @@ fn get_app_status() -> serde_json::Value {
         "platform": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{close_action, CloseAction};
+    use tauri_plugin_dialog::MessageDialogResult;
+
+    #[test]
+    fn close_dialog_choice_maps_to_expected_action() {
+        assert_eq!(
+            close_action(&MessageDialogResult::Custom("后台运行".into())),
+            CloseAction::HideToTray
+        );
+        assert_eq!(
+            close_action(&MessageDialogResult::Custom("退出程序".into())),
+            CloseAction::Quit
+        );
+        assert_eq!(
+            close_action(&MessageDialogResult::Cancel),
+            CloseAction::KeepOpen
+        );
+    }
 }
