@@ -327,3 +327,78 @@ def test_expert_team_item_prefix_has_stable_call_sequence(general_meter):
     assert first is not None and second is not None
     assert first.item_key == "expert-team:run-1:member:lead:call:1"
     assert second.item_key == "expert-team:run-1:member:lead:call:2"
+
+
+def test_positive_balance_admits_large_quote_without_holding(general_meter):
+    meter, repo, _execution, session, fence = general_meter
+    repo.grant(session.wallet_id, credits=1, credit_type="purchased",
+               expires_at=None, idempotency_key="one-credit")
+    with billing_context(session, fence, meter):
+        call = meter.before_call(provider_id="provider", model_key="model",
+            messages=[{"role": "user", "content": "x" * 10000}],
+            max_output_tokens=10000, item_key="large-quote")
+    assert call is not None
+    with repo.engine.connect() as conn:
+        balance = repo.balance_in_connection(conn, session.wallet_id)
+    assert balance.available == 1
+    assert balance.held == 0
+
+
+def test_actual_usage_can_exceed_quote_then_blocks_next_call(general_meter):
+    from qwenpaw.app.billing.usage import SettleModelCall
+    meter, repo, _execution, session, fence = general_meter
+    repo.grant(session.wallet_id, credits=1, credit_type="purchased",
+               expires_at=None, idempotency_key="actual-only-credit")
+    with billing_context(session, fence, meter):
+        call = meter.before_call(provider_id="provider", model_key="model",
+            messages=[], max_output_tokens=1, item_key="settle-over")
+        command = SettleModelCall(usage_order_id=session.usage_order_id,
+            item_key="settle-over", billability="billable",
+            actual_input_tokens=0, actual_output_tokens=2000,
+            supplier_reference="synthetic-result", evidence={"usage": {"output_tokens": 2000}},
+            execution_guard=call.execution_guard)
+        result = meter.usage_service.settle_model_call(command)
+        assert result.captured_credits == 2
+        assert result.released_credits == 0
+        assert meter.usage_service.settle_model_call(command) == result
+        assert repo.balance(session.wallet_id).available == -1
+        assert repo.balance(session.wallet_id).held == 0
+        with pytest.raises(InsufficientUsageCreditsError):
+            meter.before_call(provider_id="provider", model_key="model",
+                messages=[], item_key="next-blocked")
+
+
+def test_actual_settlement_preserves_restricted_promotional_credit(general_meter):
+    from qwenpaw.app.billing.models import LedgerTransaction
+    from qwenpaw.app.billing.usage import SettleModelCall
+    from qwenpaw.app.storage.schema import billing_credit_lots
+
+    meter, repo, _execution, session, fence = general_meter
+    repo.append_transaction(LedgerTransaction(
+        wallet_id=session.wallet_id, event_type="promotion_grant", credits=10,
+        business_type="signup_trial", business_key="restricted-promo",
+        idempotency_key="restricted-promo", credit_type="promotional",
+        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        metadata={"grant_policy": "signup_trial", "allowed_capabilities": ["image"],
+                  "denied_capabilities": ["text"], "allowed_tiers": ["standard"]},
+    ))
+    repo.grant(session.wallet_id, credits=1, credit_type="purchased",
+               expires_at=None, idempotency_key="eligible-credit")
+    with billing_context(session, fence, meter):
+        call = meter.before_call(provider_id="provider", model_key="model",
+                                 messages=[], max_output_tokens=1, item_key="eligible-call")
+        result = meter.usage_service.settle_model_call(SettleModelCall(
+            usage_order_id=session.usage_order_id, item_key="eligible-call",
+            billability="billable", actual_input_tokens=0, actual_output_tokens=2000,
+            supplier_reference="restricted-credit-check", evidence={"usage": {"output_tokens": 2000}},
+            execution_guard=call.execution_guard,
+        ))
+        assert result.captured_credits == 2
+        with repo.engine.connect() as conn:
+            promo = conn.execute(select(billing_credit_lots).where(
+                billing_credit_lots.c.wallet_id == session.wallet_id,
+                billing_credit_lots.c.credit_type == "promotional",
+            )).mappings().one()
+        assert promo["available_credits"] == 10
+        with pytest.raises(InsufficientUsageCreditsError):
+            meter.before_call(provider_id="provider", model_key="model", messages=[], item_key="no-eligible-credit")

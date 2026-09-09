@@ -715,7 +715,7 @@ async def test_contacted_supplier_write_failure_stays_reconciling(
     item = service.list_items(session.usage_order_id)[0]
     assert item["billability"] == "unknown"
     assert item["status"] == "reconciling"
-    assert service.repository.balance(session.wallet_id).held == 2
+    assert service.repository.balance(session.wallet_id).held == 0
     evidence = json.loads(
         _stored_item(service, session.usage_order_id)["supplier_evidence_json"],
     )
@@ -977,7 +977,7 @@ async def test_financial_write_fallback_attempts_reconciliation_once(
     assert failing_service.settle_attempts == 2
     item = service.list_items(session.usage_order_id)[0]
     assert item["status"] == "reconciling"
-    assert service.repository.balance(session.wallet_id).held == 2
+    assert service.repository.balance(session.wallet_id).held == 0
 
 
 @pytest.mark.asyncio
@@ -1720,7 +1720,7 @@ async def test_open_api_8192_cap_reaches_provider_and_billing_reservation(
 
 
 @pytest.mark.asyncio
-async def test_open_api_8192_cap_still_fails_closed_before_supplier(
+async def test_open_api_positive_balance_ignores_estimated_budget(
     usage_service,
 ):
     service, session = usage_service
@@ -1738,13 +1738,12 @@ async def test_open_api_8192_cap_still_fails_closed_before_supplier(
     )
     token = _scope(session)
     try:
-        with pytest.raises(InsufficientUsageCreditsError):
-            await wrapper(messages=[], max_tokens=8192)
+        await wrapper(messages=[], max_tokens=8192)
     finally:
         reset_current_billing_context(token)
 
-    assert model.calls == 0
-    assert service.list_items(session.usage_order_id) == []
+    assert model.calls == 1
+    assert len(service.list_items(session.usage_order_id)) == 1
 
 
 def test_open_api_output_cap_is_configurable_and_clamps_fallback(

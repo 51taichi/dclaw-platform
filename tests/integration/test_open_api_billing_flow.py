@@ -1229,9 +1229,29 @@ def test_terminal_replay_is_immutable_after_wallet_balance_changes(
     assert _events(replay) == [first_terminal]
 
 
+def _exhaust_balance_before_second_call(monkeypatch):
+    from qwenpaw.app.billing.model_meter import BillingModelMeter
+    from qwenpaw.app.billing.usage import InsufficientUsageCreditsError
+
+    original = BillingModelMeter.before_call
+    calls = 0
+
+    def before_call(self, *args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            # A separate settled call can exhaust credit while this unknown
+            # call awaits reconciliation. Unknown usage itself holds nothing.
+            raise InsufficientUsageCreditsError(1, 0)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(BillingModelMeter, "before_call", before_call)
+
+
 def test_success_without_reference_counts_as_completed_before_insufficient(
-    billing_flow,
+    billing_flow, monkeypatch,
 ):
+    _exhaust_balance_before_second_call(monkeypatch)
     _fund(billing_flow, 2, "unknown-partial-funds")
     billing_flow.console.calls_per_run = 2
     billing_flow.console.omit_reference = True
@@ -1285,7 +1305,8 @@ class _TimeoutThenInsufficientConsole:
         )
 
 
-def test_timeout_unknown_does_not_count_as_completed_step(billing_flow):
+def test_timeout_unknown_does_not_count_as_completed_step(billing_flow, monkeypatch):
+    _exhaust_balance_before_second_call(monkeypatch)
     _fund(billing_flow, 2, "timeout-funds")
     console = _TimeoutThenInsufficientConsole()
     billing_flow.workspace.channel_manager = _Channels(console)

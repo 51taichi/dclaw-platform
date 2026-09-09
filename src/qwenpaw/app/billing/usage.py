@@ -483,7 +483,7 @@ class UsageService:
         self,
         command: ReserveModelCall,
     ) -> ReservedUsageItem:
-        """Atomically hold the locked retail quote before supplier contact."""
+        """Admit positive balances and record pricing without reserving credits."""
         normalized = _normalize_reserve_model_call(command)
         for attempt in range(3):
             try:
@@ -541,25 +541,20 @@ class UsageService:
             )
             quote = self._quote_for_order(order, request)
             economic_tier = _economic_tier(quote.snapshot)
-            budget = int(order["budget_credits"])
-            budget_blocked = bool(
-                budget
-                and int(order["captured_credits"])
-                + int(order["held_credits"])
-                + quote.credits
-                > budget,
-            )
             mode = self._order_mode(order)
-            if budget_blocked and mode == "enforced":
-                raise InsufficientUsageCreditsError(
-                    quote.credits,
-                    max(
-                        budget
-                        - int(order["captured_credits"])
-                        - int(order["held_credits"]),
-                        0,
-                    ),
-                )
+            balance = self.repository.balance_in_connection(conn, str(order["wallet_id"]))
+            # A one-credit dry run checks usable credit eligibility, never holds it.
+            admissible, admission_reason = self.repository.evaluate_hold_in_connection(
+                conn, str(order["wallet_id"]), 1,
+                capability=normalized.capability, tier=economic_tier,
+            )
+            unlimited = self.repository.overdraft_enabled_in_connection(
+                conn, str(order["wallet_id"]),
+            )
+            if balance.available <= 0 and not unlimited:
+                admissible, admission_reason = False, "insufficient_credits"
+            if mode == "enforced" and not admissible:
+                raise InsufficientUsageCreditsError(1, balance.available)
 
             source_type = str(order.get("source_type") or "")
             item_business_key = _item_business_key(
@@ -571,28 +566,16 @@ class UsageService:
             would_pass: bool | None = None
             would_block_reason: str | None = None
             if mode == "observe":
-                if budget_blocked:
-                    would_pass = False
-                    would_block_reason = "invocation_budget_exceeded"
-                else:
-                    (
-                        would_pass,
-                        would_block_reason,
-                    ) = self.repository.evaluate_hold_in_connection(
-                        conn,
-                        str(order["wallet_id"]),
-                        quote.credits,
-                        capability=normalized.capability,
-                        tier=economic_tier,
-                    )
-            if mode == "enforced" and quote.credits:
+                would_pass = admissible
+                would_block_reason = admission_reason
+            if mode == "enforced":
                 try:
                     self.repository.append_transaction_in_connection(
                         conn,
                         LedgerTransaction(
                             wallet_id=str(order["wallet_id"]),
                             event_type="usage_hold",
-                            credits=quote.credits,
+                            credits=0,
                             business_type="usage_item",
                             business_key=item_business_key,
                             idempotency_key=(
@@ -601,6 +584,8 @@ class UsageService:
                                 f"{normalized.item_key}:hold"
                             ),
                             metadata={
+                                "actual_usage_only": True,
+                                "positive_balance_admitted": True,
                                 "capability": normalized.capability,
                                 "tier": economic_tier,
                                 "source_type": source_type,
@@ -636,7 +621,7 @@ class UsageService:
                     quoted_credits=quote.credits,
                     charged_credits=0,
                     usage_snapshot_json=_dump_json(
-                        _reservation_snapshot(order, normalized),
+                        {**_reservation_snapshot(order, normalized), "balance_only_admission": True},
                     ),
                     price_snapshot_json=_dump_json(quote.to_jsonable()),
                     supplier_evidence_json="{}",
@@ -696,6 +681,7 @@ class UsageService:
                     f"cannot settle item in state {item['status']}",
                 )
             quoted = int(item["quoted_credits"])
+            balance_only = json.loads(item["usage_snapshot_json"] or "{}").get("balance_only_admission") is True
             actual_credits = 0
             if normalized.billability == "billable":
                 actual_quote = self._quote_for_order(
@@ -710,7 +696,7 @@ class UsageService:
                     ),
                 )
                 actual_credits = actual_quote.credits
-                if actual_credits > quoted:
+                if actual_credits > quoted and not balance_only:
                     raise UsageOrderStateError(
                         "actual retail credits exceed the maximum quote",
                     )
@@ -722,7 +708,7 @@ class UsageService:
                 normalized.item_key,
             )
             idempotency_namespace = _item_idempotency_namespace(source_type)
-            if self._order_mode(order) == "enforced" and quoted:
+            if self._order_mode(order) == "enforced" and (quoted or balance_only):
                 if normalized.billability == "billable" and actual_credits:
                     self.repository.append_transaction_in_connection(
                         conn,
@@ -1052,7 +1038,8 @@ class UsageService:
         )
         captured = sum(int(row["charged_credits"]) for row in rows)
         released = sum(
-            int(row["quoted_credits"]) - int(row["charged_credits"])
+            (0 if json.loads(row["usage_snapshot_json"] or "{}").get("balance_only_admission")
+             else max(0, int(row["quoted_credits"]) - int(row["charged_credits"])))
             for row in rows
             if str(row["status"]) in {"captured", "released"}
         )
@@ -1523,6 +1510,7 @@ def _reserved_item(item: Mapping[str, Any]) -> ReservedUsageItem:
 def _usage_item_result(item: Mapping[str, Any]) -> UsageItemResult:
     quoted = int(item["quoted_credits"])
     captured = int(item["charged_credits"])
+    balance_only = json.loads(item["usage_snapshot_json"] or "{}").get("balance_only_admission") is True
     status = str(item["status"])
     return UsageItemResult(
         usage_order_id=str(item["usage_order_id"]),
@@ -1531,9 +1519,9 @@ def _usage_item_result(item: Mapping[str, Any]) -> UsageItemResult:
         quoted_credits=quoted,
         captured_credits=captured,
         released_credits=(
-            quoted - captured if status in {"captured", "released"} else 0
+            max(0, quoted - captured) if not balance_only and status in {"captured", "released"} else 0
         ),
-        reconciling_credits=quoted if status == "reconciling" else 0,
+        reconciling_credits=quoted if not balance_only and status == "reconciling" else 0,
     )
 
 

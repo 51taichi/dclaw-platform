@@ -144,7 +144,7 @@ class BillingModelMeter:
         max_output_tokens: int | None = None,
         item_key: str | None = None,
     ) -> MeteredModelCall | None:
-        """Durably reserve before provider execution, when OpenAPI-scoped."""
+        """Check positive balance and record the call before provider execution."""
         context = get_current_billing_context()
         if isinstance(context, SystemBillingExemption):
             return None

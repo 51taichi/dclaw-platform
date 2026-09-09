@@ -640,7 +640,7 @@ def test_model_items_incrementally_hold_then_project_mixed_settlement(
     assert (
         first.usage_order_id == second.usage_order_id == third.usage_order_id
     )
-    assert coordinator.repository.balance(session.wallet_id).held == 6
+    assert coordinator.repository.balance(session.wallet_id).held == 0
     assert len(service.list_items(session.usage_order_id)) == 3
 
     captured = service.settle_model_call(
@@ -654,16 +654,16 @@ def test_model_items_incrementally_hold_then_project_mixed_settlement(
     )
 
     assert captured.captured_credits == 1
-    assert released.released_credits == 2
+    assert released.released_credits == 0
     assert reconciling.status == "reconciling"
     order = service.get_order(session.usage_order_id)
     assert order["captured_credits"] == 1
-    assert order["released_credits"] == 3
-    assert order["reconciling_credits"] == 2
-    assert coordinator.repository.balance(session.wallet_id).held == 2
+    assert order["released_credits"] == 0
+    assert order["reconciling_credits"] == 0
+    assert coordinator.repository.balance(session.wallet_id).held == 0
 
 
-def test_reservation_preflight_rejects_insufficient_increment(
+def test_admission_does_not_consume_balance(
     coordinator,
     monkeypatch,
 ):
@@ -682,11 +682,8 @@ def test_reservation_preflight_rejects_insufficient_increment(
         "balance",
         reject_cross_transaction_balance,
     )
-    with pytest.raises(InsufficientUsageCreditsError) as raised:
-        service.reserve_model_call(_reserve(session, "call-2"))
-
-    assert raised.value.required == 2
-    assert raised.value.available == 0
+    service.reserve_model_call(_reserve(session, "call-2"))
+    assert len(service.list_items(session.usage_order_id)) == 2
     assert not supplier_calls
     assert service.list_items(session.usage_order_id)[0]["status"] == "held"
 
@@ -719,7 +716,7 @@ def test_model_item_replay_is_idempotent_and_payload_drift_conflicts(
         )
 
 
-def test_invocation_budget_rejects_the_next_model_reservation(
+def test_estimated_budget_does_not_block_positive_balance(
     coordinator,
 ):
     session = coordinator.begin_invocation(
@@ -729,11 +726,8 @@ def test_invocation_budget_rejects_the_next_model_reservation(
     service = UsageService(coordinator.repository, coordinator.pricing)
 
     service.reserve_model_call(_reserve(session, "call-1"))
-    with pytest.raises(InsufficientUsageCreditsError) as raised:
-        service.reserve_model_call(_reserve(session, "call-2"))
-
-    assert raised.value.required == 2
-    assert raised.value.available == 0
+    service.reserve_model_call(_reserve(session, "call-2"))
+    assert coordinator.repository.balance(session.wallet_id).available == 20
 
 
 def test_model_call_uses_the_catalog_locked_by_its_invocation(
@@ -1055,7 +1049,7 @@ def test_billable_zero_actual_usage_releases_its_entire_hold(coordinator):
 
     assert settled.status == "captured"
     assert settled.captured_credits == 0
-    assert settled.released_credits == 2
+    assert settled.released_credits == 0
     assert coordinator.repository.balance(session.wallet_id).held == 0
 
 
@@ -1122,4 +1116,4 @@ def test_sqlite_concurrent_same_model_item_reservation_replays_once(
 
     assert first == second
     assert len(service.list_items(session.usage_order_id)) == 1
-    assert coordinator.repository.balance(session.wallet_id).held == 2
+    assert coordinator.repository.balance(session.wallet_id).held == 0

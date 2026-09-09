@@ -1308,19 +1308,23 @@ class BillingRepository:
     ) -> None:
         """Settle legacy zero-credit holds from older deployments.
 
-        New calls reserve their maximum quote before provider contact. This
-        compatibility path may create debt only for wallets whose owner is
-        explicitly allowed to overdraw.
+        Calls admitted with a positive balance settle actual usage, including
+        any resulting debt. Legacy records retain their overdraft policy.
         """
         now = self._clock()
-        allocations = self._allocate_any_available_lots(
-            conn,
-            command.wallet_id,
-            command.credits,
-        )
+        if hold_metadata.get("positive_balance_admitted") is True:
+            allocations = self._allocate_lots(
+                conn, command.wallet_id, command.credits,
+                capability=str(hold_metadata.get("capability") or ""),
+                tier=str(hold_metadata.get("tier") or ""),
+            )
+        else:
+            allocations = self._allocate_any_available_lots(
+                conn, command.wallet_id, command.credits,
+            )
         funded_credits = sum(amount for _, amount in allocations)
         debt_credits = command.credits - funded_credits
-        if debt_credits and not self.overdraft_enabled_in_connection(
+        if debt_credits and hold_metadata.get("positive_balance_admitted") is not True and not self.overdraft_enabled_in_connection(
             conn,
             command.wallet_id,
         ):
@@ -1478,7 +1482,7 @@ class BillingRepository:
                     wallet_id,
                     credits,
                     self._clock(),
-                ),
+                ).limit(None),
             ).mappings(),
         )
         remaining = credits
