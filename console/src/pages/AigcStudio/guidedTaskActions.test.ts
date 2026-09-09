@@ -72,3 +72,35 @@ describe("guided task actions", () => {
     },
   );
 });
+
+it("sends the complete bundle and changes submission identity when any asset changes", async () => {
+  const entries = [
+    { node_id: "copy", asset_id: "copy-1" },
+    { node_id: "image", asset_id: "image-1" },
+  ];
+  const command = vi.mocked(superExpertPlatformApi.command);
+  command.mockClear();
+  command.mockResolvedValue({
+    task: {
+      ...task,
+      status: "SUBMITTED",
+      asset_id: "copy-1",
+      review_assets: entries,
+    },
+  });
+  await submitGuidedTaskAsset(task, "copy-1", entries);
+  expect(command.mock.calls[0][1].arguments.review_assets).toEqual(entries);
+  const changed = [entries[0], { node_id: "image", asset_id: "image-2" }];
+  command.mockResolvedValue({
+    task: {
+      ...task,
+      status: "SUBMITTED",
+      asset_id: "copy-1",
+      review_assets: changed,
+    },
+  });
+  await submitGuidedTaskAsset(task, "copy-1", changed);
+  expect(command.mock.calls[0][1].idempotency_key).not.toBe(
+    command.mock.calls[1][1].idempotency_key,
+  );
+});

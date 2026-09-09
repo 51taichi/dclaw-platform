@@ -28,6 +28,7 @@ export interface BoundAigcTask {
   binding: AigcWorkflowBinding;
   status: string;
   asset_id?: string | null;
+  review_assets?: { node_id: string; asset_id: string }[];
   version?: number;
   events?: Record<string, unknown>[];
   workflow?: Record<string, unknown> | null;

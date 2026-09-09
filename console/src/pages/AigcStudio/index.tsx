@@ -211,7 +211,10 @@ import { getAigcGuideStepCompletion } from "./components/GuidePanel/guideStepCom
 import { useAigcGuideTask } from "./components/GuidePanel/useAigcGuideTask";
 import { focusPlatformControl } from "./components/GuidePanel/controlRegistry";
 import { superExpertPlatformApi } from "../../api/modules/superExpertPlatform";
-import { resolveWorkflowOutputAssetId } from "./workflowOutput";
+import {
+  resolveWorkflowOutputAssetId,
+  resolveWorkflowReviewAssets,
+} from "./workflowOutput";
 
 function connectCanvasNodes(source: string, target: string): AigcCanvasEdge {
   return {
@@ -2593,19 +2596,33 @@ export default function AigcStudioPage() {
     }
     const outputNodeId =
       currentTask.binding.output_node_id ?? currentTask.binding.node_id;
-    const assetId = activeCanvas
-      ? resolveWorkflowOutputAssetId(
-          activeCanvas.nodes,
-          activeCanvas.edges,
-          outputNodeId,
-        )
-      : "";
+    const blueprint = currentTask.workflow?.blueprint as
+      | { review_node_ids?: string[] }
+      | undefined;
+    const declared = blueprint?.review_node_ids ?? [];
+    const reviewAssets =
+      activeCanvas && declared.length
+        ? resolveWorkflowReviewAssets(
+            activeCanvas.nodes,
+            activeCanvas.edges,
+            declared.map((id) => currentTask.binding.node_bindings?.[id] ?? ""),
+          )
+        : undefined;
+    const assetId =
+      reviewAssets?.[0]?.asset_id ??
+      (activeCanvas
+        ? resolveWorkflowOutputAssetId(
+            activeCanvas.nodes,
+            activeCanvas.edges,
+            outputNodeId,
+          )
+        : "");
     if (!assetId) {
       antdMessage.error("当前绑定节点还没有可提交的成品");
       return false;
     }
     if (activeCanvas?.id !== currentTask.binding.canvas_id) return false;
-    await submitGuidedTaskAsset(currentTask, assetId);
+    await submitGuidedTaskAsset(currentTask, assetId, reviewAssets);
     // Submission already persisted; a projection refresh failure must not undo it.
     await guide.refresh().catch(() => undefined);
     antdMessage.success("素材已提交，专家将按当前业务阶段审核");
