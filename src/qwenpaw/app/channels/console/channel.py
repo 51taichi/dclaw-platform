@@ -252,6 +252,12 @@ class ConsoleChannel(BaseChannel):
                 if ".git" in parts or ".pytest_cache" in parts:
                     continue
 
+                # AIGC studio canvases are shared runtime internals. Their user-facing
+                # cards are projected from fully bound material-task receipts instead
+                # of generic workspace modification detection.
+                if "aigc_studio" in parts:
+                    continue
+
                 # Exclude sessions_data only if it belongs to other sessions
                 if "sessions_data" in parts:
                     try:

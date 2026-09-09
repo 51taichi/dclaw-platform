@@ -68,6 +68,19 @@ class TestConsoleChannelUnit:
         assert ch.enabled is False
         assert ch.bot_prefix == "[TEST] "
 
+    def test_workspace_scan_excludes_aigc_studio_runtime(self, channel, tmp_path):
+        old_output = tmp_path / "aigc_studio" / "canvas-old" / "output.png"
+        old_output.parent.mkdir(parents=True)
+        old_output.write_bytes(b"old-canvas")
+        current = tmp_path / "sessions_data" / "session-current" / "report.md"
+        current.parent.mkdir(parents=True)
+        current.write_text("current", encoding="utf-8")
+
+        snapshot = channel._scan_workspace_files(tmp_path, "session-current")
+
+        assert "aigc_studio/canvas-old/output.png" not in snapshot
+        assert "sessions_data/session-current/report.md" in snapshot
+
     @pytest.mark.asyncio
     async def test_send_prints_to_stdout(self, channel, capsys):
         """send() should print message to stdout when enabled."""

@@ -100,6 +100,8 @@ class WorkflowNodeCapability(BaseModel):
     output_type: str
     control_id: str | None
     customer_actions: tuple[str, ...]
+    input_schema: dict[str, Any]
+    parameter_schema: dict[str, Any]
 
 
 class WorkflowCapabilityCatalog(BaseModel):

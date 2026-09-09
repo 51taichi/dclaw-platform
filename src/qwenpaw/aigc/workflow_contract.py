@@ -41,6 +41,8 @@ class NodeRegistration:
     output_type: str
     control_id: str | None
     customer_actions: tuple[CustomerAction, ...]
+    input_schema: dict[str, Any]
+    parameter_schema: dict[str, Any]
     requires_model: bool = False
     provisioning_reason: str | None = None
 
@@ -100,6 +102,8 @@ def _registration(
     customer_actions: tuple[CustomerAction, ...] = ("NONE",),
     requires_model: bool = False,
     provisioning_reason: str | None = None,
+    input_schema: dict[str, Any] | None = None,
+    parameter_schema: dict[str, Any] | None = None,
 ) -> NodeRegistration:
     return NodeRegistration(
         kind=kind,
@@ -112,9 +116,42 @@ def _registration(
         output_type=output_type,
         control_id=control_id,
         customer_actions=customer_actions,
+        input_schema=input_schema or _closed_schema_for(input_keys, inputs=True),
+        parameter_schema=parameter_schema or _closed_schema_for(parameter_keys),
         requires_model=requires_model,
         provisioning_reason=provisioning_reason,
     )
+
+
+def _closed_schema_for(
+    keys: tuple[str, ...],
+    *,
+    inputs: bool = False,
+) -> dict[str, Any]:
+    properties: dict[str, Any] = {}
+    for key in keys:
+        if key == "reference_asset_ids":
+            properties[key] = {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+            }
+        elif key in {"count", "shot_count", "duration_seconds", "width", "slice_height"}:
+            properties[key] = {"type": "integer"}
+        elif key == "generate_audio":
+            properties[key] = {"type": "boolean"}
+        else:
+            properties[key] = {"type": "string", "minLength": 1} if inputs else {"type": "string"}
+    return {"type": "object", "properties": properties, "additionalProperties": False}
+
+
+_RESOLUTION_SCHEMA = {
+    "type": "string",
+    "enum": ["480P", "720P", "1080P", "1K", "2K", "4K"],
+}
+_ASPECT_RATIO_SCHEMA = {
+    "type": "string",
+    "enum": ["1:1", "16:9", "9:16", "4:3", "3:4", "21:9"],
+}
 
 
 _NODE_REGISTRY: dict[str, NodeRegistration] = {
@@ -152,6 +189,16 @@ _NODE_REGISTRY: dict[str, NodeRegistration] = {
         control_id="aigc.image.generate-submit",
         customer_actions=("CLICK_GENERATE",),
         requires_model=True,
+        parameter_schema={
+            "type": "object",
+            "properties": {
+                "aspect_ratio": {**_ASPECT_RATIO_SCHEMA, "default": "1:1"},
+                "resolution": {**_RESOLUTION_SCHEMA, "default": "1K"},
+                "count": {"type": "integer", "minimum": 1, "maximum": 8, "default": 1},
+                "image_mode": {"type": "string", "default": "blank"},
+            },
+            "additionalProperties": False,
+        },
     ),
     "video_generate": _registration(
         "video_generate",
@@ -186,6 +233,17 @@ _NODE_REGISTRY: dict[str, NodeRegistration] = {
         control_id="aigc.video.generate-submit",
         customer_actions=("CLICK_GENERATE",),
         requires_model=True,
+        parameter_schema={
+            "type": "object",
+            "properties": {
+                "aspect_ratio": {**_ASPECT_RATIO_SCHEMA, "default": "16:9"},
+                "resolution": {**_RESOLUTION_SCHEMA, "default": "720P"},
+                "duration_seconds": {"type": "integer", "minimum": 1, "maximum": 60, "default": 5},
+                "generate_audio": {"type": "boolean", "default": False},
+                "video_mode": {"type": "string", "default": "blank"},
+            },
+            "additionalProperties": False,
+        },
     ),
     "audio_generate": _registration(
         "audio_generate",

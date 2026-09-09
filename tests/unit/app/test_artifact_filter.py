@@ -79,6 +79,16 @@ def test_imagegen_only_task_keeps_generated_images() -> None:
     ]
 
 
+def test_aigc_studio_runtime_files_are_never_generic_task_artifacts() -> None:
+    assert filter_user_task_files(
+        [
+            "aigc_studio/canvas-old/jobs/job-old/output.png",
+            "aigc_studio/canvas-current/meta.json",
+            "sessions_data/current/report.md",
+        ],
+    ) == ["sessions_data/current/report.md"]
+
+
 def test_extracts_only_explicit_existing_user_artifacts_from_text(
     tmp_path: Path,
 ) -> None:

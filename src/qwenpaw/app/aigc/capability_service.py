@@ -596,6 +596,8 @@ def project_workflow_capability_catalog(
             output_type=registration.output_type,
             control_id=registration.control_id,
             customer_actions=registration.customer_actions,
+            input_schema=registration.input_schema,
+            parameter_schema=registration.parameter_schema,
         )
         for registration in registry.values()
     )

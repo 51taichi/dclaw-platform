@@ -57,6 +57,7 @@ INTERNAL_TASK_DIR_NAMES = frozenset(
         "tool_results",
         "_work",
         "attachments",
+        "aigc_studio",
         "input",
         "inputs",
         "source",

@@ -87,7 +87,20 @@ def test_capability_catalog_is_core_owned_and_route_is_compatibility_alias():
     )])
     catalog = core.project_workflow_capability_catalog(inventory)
     assert [(item.provider_id, item.model_id) for item in catalog.available_models] == [("published", "allowed")]
-    assert any(node.kind == "video_generate" for node in catalog.nodes)
+    video = next(node for node in catalog.nodes if node.kind == "video_generate")
+    assert video.parameter_schema["additionalProperties"] is False
+    assert video.parameter_schema["properties"]["resolution"]["enum"] == [
+        "480P", "720P", "1080P", "1K", "2K", "4K",
+    ]
+    assert video.parameter_schema["properties"]["duration_seconds"] == {
+        "type": "integer", "minimum": 1, "maximum": 60, "default": 5,
+    }
+    assert video.input_schema["additionalProperties"] is False
+    assert video.input_schema["properties"]["first_frame_asset_id"] == {
+        "type": "string", "minLength": 1,
+    }
+    reference = next(node for node in catalog.nodes if node.kind == "reference_asset")
+    assert reference.customer_actions == ("SELECT_ASSET", "INSPECT")
 
 
 @pytest.mark.asyncio

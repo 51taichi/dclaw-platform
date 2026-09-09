@@ -236,6 +236,41 @@ def test_compiler_rejects_invalid_video_parameter_values(field: str, value: obje
         _compile(payload)
 
 
+@pytest.mark.parametrize(
+    ("alias", "expected"),
+    [
+        ("1080x1920", "1080P"),
+        ("1920x1080", "1080P"),
+        (" 720x1280 ", "720P"),
+        ("1280X720", "720P"),
+        (" 1080p ", "1080P"),
+    ],
+)
+def test_compiler_canonicalizes_safe_resolution_aliases(alias: str, expected: str):
+    payload = _three_node_payload()
+    payload["nodes"][2]["parameters"]["resolution"] = alias
+
+    compiled = _compile(payload)
+
+    video = next(node for node in compiled.nodes if node.kind == "video_generate")
+    assert video.data["videoResolution"] == expected
+    assert video.data["composerText"] == "镜头缓慢推进"
+    assert video.data["providerId"] == "provider-1"
+    assert video.data["modelId"] == "video-1"
+    assert [(edge.source, edge.target, edge.target_slot) for edge in compiled.edges] == [
+        ("prompt-1", "image-1", "prompt"),
+        ("image-1", "video-1", "first_frame"),
+    ]
+
+
+def test_compiler_does_not_reinterpret_unsupported_resolution():
+    payload = _three_node_payload()
+    payload["nodes"][2]["parameters"]["resolution"] = "1024x1792"
+
+    with pytest.raises(WorkflowCompileError, match="PARAMETER_INVALID"):
+        _compile(payload)
+
+
 def test_compiler_reports_manual_only_node_without_partially_compiling():
     payload = _three_node_payload()
     payload["nodes"] = [

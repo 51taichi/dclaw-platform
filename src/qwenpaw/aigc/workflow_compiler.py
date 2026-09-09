@@ -118,6 +118,34 @@ def _raise(code: str, *, manual: bool = False) -> None:
     raise WorkflowCompileError(code, manual_fallback_allowed=manual)
 
 
+_RESOLUTION_ALIASES = {
+    "480p": "480P",
+    "720p": "720P",
+    "1080p": "1080P",
+    "1k": "1K",
+    "2k": "2K",
+    "4k": "4K",
+    "1080x1920": "1080P",
+    "1920x1080": "1080P",
+    "720x1280": "720P",
+    "1280x720": "720P",
+}
+
+
+def canonicalize_workflow_blueprint(blueprint: WorkflowBlueprint) -> WorkflowBlueprint:
+    """Normalize documented transport aliases without changing workflow intent."""
+    nodes: list[WorkflowNode] = []
+    for node in blueprint.nodes:
+        parameters = dict(node.parameters)
+        resolution = parameters.get("resolution")
+        if isinstance(resolution, str):
+            canonical = _RESOLUTION_ALIASES.get(resolution.strip().casefold())
+            if canonical is not None:
+                parameters["resolution"] = canonical
+        nodes.append(node.model_copy(update={"parameters": parameters}))
+    return blueprint.model_copy(update={"nodes": tuple(nodes)})
+
+
 def _validate_scalar_parameters(node: WorkflowNode) -> None:
     parameters = node.parameters
     if "duration_seconds" in parameters:
@@ -350,6 +378,7 @@ def plan_manual_workflow(
     asset_resolver: Callable[[str], Mapping[str, Any] | None],
 ) -> CompiledWorkflow:
     """Build an empty-canvas, user-clicked construction plan with stable IDs."""
+    blueprint = canonicalize_workflow_blueprint(blueprint)
     try:
         validate_workflow_blueprint(blueprint)
     except ValueError as exc:
@@ -484,6 +513,7 @@ def compile_workflow(
     asset_resolver: Callable[[str], Mapping[str, Any] | None],
 ) -> CompiledWorkflow:
     """Validate a complete DAG, then assign DClaw-owned physical IDs."""
+    blueprint = canonicalize_workflow_blueprint(blueprint)
     try:
         validate_workflow_blueprint(blueprint)
     except ValueError as exc:
