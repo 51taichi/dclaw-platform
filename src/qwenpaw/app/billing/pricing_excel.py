@@ -12,9 +12,12 @@ from typing import Any, Protocol
 from zipfile import BadZipFile
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.styles import PatternFill
+from openpyxl.comments import Comment
 from openpyxl.utils.exceptions import InvalidFileException
 
 from .pricing_draft import PricingDraftResult
+from .pricing_spec import normalize_spec, spec_key
 
 HEADERS = (
     "供应商",
@@ -72,16 +75,13 @@ class PricingExcelService:
         repository: ImportRepository,
         *,
         preview_builder: (
-            Callable[[str, list[dict[str, Any]] | None, str], dict[str, Any]]
-            | None
+            Callable[[str, list[dict[str, Any]] | None, str], dict[str, Any]] | None
         ) = None,
         confirmation_builder: (
-            Callable[[str, list[dict[str, Any]] | None, str], dict[str, Any]]
-            | None
+            Callable[[str, list[dict[str, Any]] | None, str], dict[str, Any]] | None
         ) = None,
         draft_builder: (
-            Callable[[str, list[dict[str, Any]] | None, str], dict[str, Any]]
-            | None
+            Callable[[str, list[dict[str, Any]] | None, str], dict[str, Any]] | None
         ) = None,
     ) -> None:
         self.repository = repository
@@ -181,9 +181,7 @@ class PricingExcelService:
         return {"id": stored["id"], **preview}
 
     @staticmethod
-    def _parse_row(
-        number: int, values: tuple[Any, ...], seen: set[tuple[str, ...]]
-    ):
+    def _parse_row(number: int, values: tuple[Any, ...], seen: set[tuple[str, ...]]):
         (
             provider,
             model,
@@ -199,9 +197,7 @@ class PricingExcelService:
             return {"row": number, "code": "duplicate_key"}, None
         seen.add(key)
         try:
-            cost_value, multiplier_value = Decimal(str(cost)), Decimal(
-                str(multiplier)
-            )
+            cost_value, multiplier_value = Decimal(str(cost)), Decimal(str(multiplier))
         except InvalidOperation:
             return {"row": number, "code": "invalid_decimal"}, None
         if cost_value < 0:
@@ -253,18 +249,22 @@ class PricingExcelService:
             parsed_conditions = json.loads(str(conditions or "{}"))
         except json.JSONDecodeError:
             return {"row": number, "code": "invalid_conditions"}, None
-        conditions_identity = json.dumps(
-            parsed_conditions,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        key = (
-            str(provider_id).strip(),
-            str(model_key).strip(),
-            str(unit_key or "").strip(),
-            conditions_identity,
-        )
+        try:
+            unit_size_value, parsed_conditions = normalize_spec(
+                str(unit_key or ""), unit_size, parsed_conditions
+            )
+            key = spec_key(
+                {
+                    "provider_id": str(provider_id).strip(),
+                    "model_key": str(model_key).strip(),
+                    "capability": str(capability or ""),
+                    "unit_key": str(unit_key or "").strip(),
+                    "unit_size": unit_size_value,
+                    "conditions": parsed_conditions,
+                }
+            )
+        except ValueError:
+            return {"row": number, "code": "invalid_specification"}, None
         if key in seen:
             return {"row": number, "code": "duplicate_key"}, None
         seen.add(key)
@@ -288,8 +288,8 @@ class PricingExcelService:
                 "official_model_id": str(official_model_id or ""),
                 "category": str(category or ""),
                 "capability": str(capability or ""),
-                "unit_key": key[2],
-                "unit_size": int(unit_size or 0),
+                "unit_key": key[3],
+                "unit_size": unit_size_value,
                 "conditions": parsed_conditions,
                 "excluded": True,
                 "exclusion_reason": reason,
@@ -304,31 +304,20 @@ class PricingExcelService:
         try:
             cost_value = Decimal(str(cost))
             multiplier_value = Decimal(str(multiplier))
-            unit_size_value = int(unit_size)
+            if not cost_value.is_finite() or not multiplier_value.is_finite():
+                raise ValueError("nonfinite price")
+            if cost_value < 0:
+                return {"row": number, "code": "negative_cost"}, None
             expected_sale = cost_value * multiplier_value
             expected_credits = int(
-                (expected_sale * 100).to_integral_value(
-                    rounding="ROUND_CEILING"
-                )
+                (expected_sale * 100).to_integral_value(rounding="ROUND_CEILING")
             )
         except (InvalidOperation, TypeError, ValueError):
             return {"row": number, "code": "invalid_decimal"}, None
         if multiplier_value < Decimal("1.3"):
             return {"row": number, "code": "below_safe_floor"}, None
-        derived_values_blank = sale_price in (None, "") and credits in (
-            None,
-            "",
-        )
-        if not derived_values_blank:
-            try:
-                derived_values_match = (
-                    Decimal(str(sale_price)) == expected_sale
-                    and int(credits) == expected_credits
-                )
-            except (InvalidOperation, TypeError, ValueError):
-                derived_values_match = False
-            if not derived_values_match:
-                return {"row": number, "code": "derived_price_mismatch"}, None
+        # These columns are display-only snapshots. Never trust stale Excel
+        # derived values after an administrator edits cost or multiplier.
         return None, {
             "provider_id": key[0],
             "model_key": key[1],
@@ -336,11 +325,13 @@ class PricingExcelService:
             "official_model_id": str(official_model_id or ""),
             "category": str(category or ""),
             "capability": str(capability or ""),
-            "unit_key": key[2],
+            "unit_key": key[3],
             "unit_size": unit_size_value,
             "conditions": parsed_conditions,
             "rmb_cost_decimal": str(cost_value),
             "multiplier_decimal": str(multiplier_value),
+            "rmb_sale_price": str(expected_sale),
+            "credits": expected_credits,
             "verification_status": str(verification_status),
             "registry_version": str(registry_version or ""),
             "source_type": str(source_type),
@@ -423,6 +414,21 @@ class PricingExcelService:
                     row.approval_reason,
                 )
             )
+        editable = {"人民币成本", "默认倍率", "是否纳入本次发布", "排除原因"}
+        derived = {"人民币销售价", "积分价格"}
+        for column in sheet.iter_cols():
+            title = column[0].value
+            color = "DDEEFF" if title in editable else "F2F2F2"
+            hint = "可编辑；成本按本行单位数量填写。" if title in editable else "规格和来源信息，无需修改。"
+            if title in derived:
+                hint = "参考值；导入时根据成本和倍率自动重新计算，无需手动修改。"
+            column[0].comment = Comment(hint, "DClaw")
+            for cell in column:
+                cell.fill = PatternFill("solid", fgColor=color)
+        sheet.column_dimensions["L"].width = 18
+        sheet.column_dimensions["M"].width = 16
+        sheet.column_dimensions["N"].width = 20
+        sheet.column_dimensions["O"].width = 18
         sheet.freeze_panes = "A2"
         sheet.auto_filter.ref = sheet.dimensions
 
@@ -441,6 +447,11 @@ class PricingExcelService:
 
         instructions = workbook.create_sheet("填写说明")
         instructions.append(("项目", "说明"))
+        instructions.append(("可编辑字段", "人民币成本、默认倍率（不低于1.3）、是否纳入本次发布、排除原因；成本按本行单位数量填写。"))
+        instructions.append(
+            ("只读规格", "平台、模型、能力、计价维度、单位数量、规格条件及内部来源信息无需修改；规格调整请重新生成报价单。")
+        )
+        instructions.append(("自动计算", "人民币销售价、积分价格仅供参考；修改成本或倍率后无需修改这两列，导入时服务端重新计算。"))
         instructions.append(("默认倍率", "人民币可信成本 × 1.5"))
         instructions.append(("积分换算", "1 元人民币 = 100 积分"))
         instructions.append(
@@ -453,7 +464,7 @@ class PricingExcelService:
         instructions.append(
             (
                 "人工补价",
-                "缺价文本模型已自动生成输入、输出两个计价维度；管理员只需填写人民币成本和HTTPS来源，销售价与积分由系统自动计算。",
+                "缺价文本模型已自动生成输入、输出两个计价维度；管理员只需填写人民币成本，来源信息无需修改；成本调整会标记为人工待确认，销售价与积分由系统重新计算。",
             )
         )
         instructions.append(
@@ -472,14 +483,10 @@ class PricingExcelService:
         actor_id: str,
         ip_address: str | None = None,
     ) -> dict[str, Any]:
-        stored = self.repository.get_import(  # type: ignore[attr-defined]
-            import_id
-        )
+        stored = self.repository.get_import(import_id)  # type: ignore[attr-defined]
         if stored is None:
             raise KeyError(import_id)
-        if stored["status"] == "confirmed" and stored["preview"].get(
-            "pricing_preview"
-        ):
+        if stored["status"] == "confirmed" and stored["preview"].get("pricing_preview"):
             return {
                 "id": import_id,
                 "status": "confirmed",

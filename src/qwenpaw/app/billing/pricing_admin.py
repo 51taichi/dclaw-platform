@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from decimal import ROUND_CEILING, Decimal
 from typing import Any
@@ -21,7 +21,8 @@ from .pricing_models import (
     PricingPolicy,
     TrustedCost,
 )
-from .pricing_policy import build_catalog_rules
+from .pricing_policy import build_catalog_rules, resolve_multiplier
+from .pricing_spec import spec_key
 
 
 class PricingAdminService:
@@ -56,6 +57,51 @@ class PricingAdminService:
             self.repository.latest_official_candidates(),
             self.repository.list_model_publication_decisions(draft_key),
         )
+        policies = self.repository.list_policies()
+        multipliers = tuple(
+            PricingPolicy(
+                row["scope_type"], row["scope_key"], Decimal(row["multiplier_decimal"])
+            )
+            for row in policies
+        )
+        model_settings = {
+            row["scope_key"]: json.loads(row.get("settings_json") or "{}")
+            for row in policies
+            if row["scope_type"] == "model"
+        }
+        updated_rows = []
+        for row in result.rows:
+            settings = model_settings.get(f"{row.provider_id}/{row.model_key}", {})
+            key = json.dumps(
+                spec_key(asdict(row)),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            configured = settings.get("dimension_multipliers", {}).get(key)
+            if configured is not None:
+                multiplier = Decimal(str(configured))
+            else:
+                try:
+                    multiplier = resolve_multiplier(
+                        multipliers,
+                        ModelIdentity(row.provider_id, row.model_key, row.category),
+                    ).value
+                except LookupError:
+                    multiplier = row.multiplier
+            multiplier = max(multiplier, PricingDefaults().minimum_multiplier)
+            sale = row.rmb_cost * multiplier if row.rmb_cost is not None else None
+            updated_rows.append(
+                replace(
+                    row,
+                    multiplier=multiplier,
+                    rmb_sale_price=sale,
+                    credits=int((sale * 100).to_integral_value(rounding=ROUND_CEILING))
+                    if sale is not None
+                    else None,
+                )
+            )
+        result = replace(result, rows=tuple(updated_rows))
         return {
             "draft_key": draft_key,
             "coverage": asdict(result.coverage),
@@ -121,8 +167,7 @@ class PricingAdminService:
             reason = str(decision.get("reason") or "").strip() or None
             include = bool(decision["include_in_publish"])
             if include and any(
-                row.get("evidence_level") != "official_verified"
-                for row in model_rows
+                row.get("evidence_level") != "official_verified" for row in model_rows
             ):
                 if reason is None:
                     raise ValueError(
@@ -183,16 +228,11 @@ class PricingAdminService:
                 continue
             if model_keys and row["model_key"] not in model_keys:
                 continue
-            if (
-                evidence_levels
-                and row.get("evidence_level") not in evidence_levels
-            ):
+            if evidence_levels and row.get("evidence_level") not in evidence_levels:
                 continue
             selected.add((row["provider_id"], row["model_key"]))
         if not selected:
-            raise ValueError(
-                "no pricing draft models matched the batch filter"
-            )
+            raise ValueError("no pricing draft models matched the batch filter")
         saved = self.set_model_decisions(
             draft_key,
             [
@@ -230,8 +270,7 @@ class PricingAdminService:
             (
                 row
                 for row in self.repository.list_model_mappings()
-                if (row["provider_id"], row["model_key"])
-                == (provider_id, model_key)
+                if (row["provider_id"], row["model_key"]) == (provider_id, model_key)
             ),
             {},
         )
@@ -308,8 +347,7 @@ class PricingAdminService:
         return {
             "enabled_models": len(models),
             "covered_models": sum(
-                (model.provider_id, model.model_key) in covered
-                for model in models
+                (model.provider_id, model.model_key) in covered for model in models
             ),
             "catalogs": self.pricing.list_catalogs(),
         }
@@ -324,8 +362,7 @@ class PricingAdminService:
     ) -> dict[str, Any]:
         models = self.inventory.list_enabled()
         if imported_rows and any(
-            "unit_size" in row or "official_model_id" in row
-            for row in imported_rows
+            "unit_size" in row or "official_model_id" in row for row in imported_rows
         ):
             self._validate_imported_draft_rows(models, imported_rows)
         excluded_models = {
@@ -352,9 +389,7 @@ class PricingAdminService:
                     "input_tokens",
                     "output_tokens",
                 } and row.get("unit_size"):
-                    amount = (
-                        amount * Decimal(1000) / Decimal(int(row["unit_size"]))
-                    )
+                    amount = amount * Decimal(1000) / Decimal(int(row["unit_size"]))
                 costs[
                     (
                         row["provider_id"],
@@ -371,14 +406,10 @@ class PricingAdminService:
             if (model.provider_id, model.model_key) in excluded_models:
                 continue
             identities.append(
-                ModelIdentity(
-                    model.provider_id, model.model_key, model.category
-                )
+                ModelIdentity(model.provider_id, model.model_key, model.category)
             )
             required = (
-                ("input_tokens", "output_tokens")
-                if model.category == "text"
-                else ()
+                ("input_tokens", "output_tokens") if model.category == "text" else ()
             )
             for unit in required:
                 if (model.provider_id, model.model_key, unit) not in costs:
@@ -391,8 +422,7 @@ class PricingAdminService:
                         }
                     )
             if not required and not any(
-                key[:2] == (model.provider_id, model.model_key)
-                for key in costs
+                key[:2] == (model.provider_id, model.model_key) for key in costs
             ):
                 blockers.append(
                     {
@@ -495,8 +525,7 @@ class PricingAdminService:
                     }
                 ),
                 "included_dimensions": sum(
-                    row.get("excluded") is not True
-                    for row in imported_rows or []
+                    row.get("excluded") is not True for row in imported_rows or []
                 ),
                 "excluded_models": len(excluded_models),
                 "manual_dimensions": sum(
@@ -544,17 +573,9 @@ class PricingAdminService:
         )
         allowed = {
             (
-                row.provider_id,
-                row.model_key,
+                *spec_key(asdict(row)),
                 row.official_provider_id or "",
                 row.official_model_id or "",
-                row.unit_key,
-                json.dumps(
-                    row.conditions,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ),
                 row.registry_version or "",
             ): {
                 "category": row.category,
@@ -582,19 +603,17 @@ class PricingAdminService:
         for row in imported_rows:
             model_identity = (str(row["provider_id"]), str(row["model_key"]))
             identity = (
-                *model_identity,
+                *spec_key(row),
                 str(row.get("official_provider_id") or ""),
                 str(row.get("official_model_id") or ""),
-                str(row.get("unit_key") or ""),
-                json.dumps(
-                    row.get("conditions") or {},
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ),
                 str(row.get("registry_version") or ""),
             )
             if identity not in allowed:
+                if any(
+                    identity[:5] == key[:5] and identity[6:] == key[6:]
+                    for key in allowed
+                ):
+                    raise ValueError("pricing draft read-only field changed: unit_size")
                 missing = missing_models.get(model_identity)
                 if missing and self._is_manual_completion(row, missing):
                     manual_models.add(model_identity)
@@ -636,19 +655,16 @@ class PricingAdminService:
                             f"{field} "
                             f"({model_identity[0]}/{model_identity[1]})"
                         )
-            elif not (
-                str(row.get("source_type") or "") == "manual"
-                and str(row.get("verification_status") or "")
-                == "manual_pending"
-                and str(row.get("source_url") or "").startswith("https://")
-            ):
-                raise ValueError(
-                    "modified cost requires manual_pending HTTPS evidence"
-                )
+            else:
+                # Editing cost is an administrative manual override, never new
+                # official evidence. Normalize before preview AND confirmation.
+                row["source_type"] = "manual"
+                row["verification_status"] = "manual_pending"
+                row["evidence_level"] = "manual"
+                row["candidate_digest"] = ""
+                row["approval_reason"] = "管理员通过报价单调整成本，待确认发布"
         expected = {
-            identity
-            for identity in allowed
-            if identity[:2] not in manual_models
+            identity for identity in allowed if identity[:2] not in manual_models
         }
         if supplied != expected:
             raise ValueError("pricing draft dimensions are incomplete")
@@ -658,9 +674,7 @@ class PricingAdminService:
                 (str(row["provider_id"]), str(row["model_key"])), set()
             ).add(row.get("excluded") is not True)
         if any(len(states) != 1 for states in inclusion_by_model.values()):
-            raise ValueError(
-                "all dimensions of a model must be included together"
-            )
+            raise ValueError("all dimensions of a model must be included together")
 
     @staticmethod
     def _is_manual_completion(row: dict[str, Any], missing: Any) -> bool:
@@ -719,8 +733,7 @@ class PricingAdminService:
                         row.get("unit_size")
                         or (
                             1000
-                            if str(row["unit_key"])
-                            in {"input_tokens", "output_tokens"}
+                            if str(row["unit_key"]) in {"input_tokens", "output_tokens"}
                             else 1
                         )
                     ),
@@ -745,9 +758,7 @@ class PricingAdminService:
                 )
             )
         if not rules:
-            raise ValueError(
-                "catalog must contain at least one eligible price"
-            )
+            raise ValueError("catalog must contain at least one eligible price")
         return tuple(rules)
 
     @staticmethod
@@ -756,9 +767,7 @@ class PricingAdminService:
         multiplier = Decimal(str(row["multiplier_decimal"]))
         if multiplier < PricingDefaults().minimum_multiplier:
             raise ValueError("multiplier is below the 1.3 safety floor")
-        return int(
-            (cost * multiplier * 100).to_integral_value(rounding=ROUND_CEILING)
-        )
+        return int((cost * multiplier * 100).to_integral_value(rounding=ROUND_CEILING))
 
     def publish_preview(
         self,
@@ -768,19 +777,14 @@ class PricingAdminService:
     ) -> dict[str, Any]:
         catalog = self.catalogs.get_catalog(catalog_id)
         expected_inventory = catalog["metadata"].get("inventory_binding")
-        current_inventory = self._draft_key(
-            tuple(self.inventory.list_enabled())
-        )
+        current_inventory = self._draft_key(tuple(self.inventory.list_enabled()))
         if expected_inventory != current_inventory:
             raise ValueError(
                 "enabled model inventory changed; generate and approve again"
             )
         import_id = catalog["metadata"].get("pricing_import_id")
-        if (
-            import_id is not None
-            and not self.repository.import_allows_publish(
-                str(import_id), catalog_id
-            )
+        if import_id is not None and not self.repository.import_allows_publish(
+            str(import_id), catalog_id
         ):
             raise ValueError("pricing import is not confirmed")
         published = self.pricing.publish_draft(catalog_id)

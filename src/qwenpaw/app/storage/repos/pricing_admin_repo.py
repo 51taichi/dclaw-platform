@@ -12,6 +12,8 @@ from sqlalchemy import insert, or_, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
+from ...billing.pricing_spec import spec_key
+
 from ..schema import (
     billing_cost_snapshots,
     billing_official_price_candidates,
@@ -463,8 +465,7 @@ class PricingAdminRepository:
                     winner = (
                         conn.execute(
                             select(billing_pricing_collection_items).where(
-                                billing_pricing_collection_items.c.job_id
-                                == job_id,
+                                billing_pricing_collection_items.c.job_id == job_id,
                                 billing_pricing_collection_items.c.provider_id
                                 == provider_id,
                                 billing_pricing_collection_items.c.model_key
@@ -479,9 +480,7 @@ class PricingAdminRepository:
                     row_id = str(winner["id"])
                     conn.execute(
                         update(billing_pricing_collection_items)
-                        .where(
-                            billing_pricing_collection_items.c.id == row_id
-                        )
+                        .where(billing_pricing_collection_items.c.id == row_id)
                         .values(**values)
                     )
             else:
@@ -589,9 +588,7 @@ class PricingAdminRepository:
                     value == "official_succeeded" for value in item_statuses
                 ),
                 "ai": sum(value.startswith("ai_") for value in item_statuses),
-                "manual": sum(
-                    value == "manual_required" for value in item_statuses
-                ),
+                "manual": sum(value == "manual_required" for value in item_statuses),
                 "failed": failed,
             }
             result = conn.execute(
@@ -906,6 +903,15 @@ class PricingAdminRepository:
                     .mappings()
                     .first()
                 )
+                settings = (
+                    json.loads(current["settings_json"] or "{}") if current else {}
+                )
+                if source.get("unit_size"):
+                    dimension_key = _json(spec_key(source))
+                    settings.setdefault("dimension_multipliers", {})[
+                        dimension_key
+                    ] = source["multiplier_decimal"]
+                settings_json = _json(settings)
                 expected = policy_revisions.get(
                     scope_key,
                     int(current["revision"]) if current else 0,
@@ -918,7 +924,7 @@ class PricingAdminRepository:
                             scope_type="model",
                             scope_key=scope_key,
                             multiplier_decimal=source["multiplier_decimal"],
-                            settings_json="{}",
+                            settings_json=settings_json,
                             revision=revision,
                             updated_by=actor_id,
                         )
@@ -932,7 +938,7 @@ class PricingAdminRepository:
                         )
                         .values(
                             multiplier_decimal=source["multiplier_decimal"],
-                            settings_json="{}",
+                            settings_json=settings_json,
                             revision=revision,
                             updated_by=actor_id,
                         )

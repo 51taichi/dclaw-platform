@@ -34,9 +34,7 @@ def test_builder_expands_verified_dimensions_with_default_multiplier():
 
 
 def test_builder_expands_unpriced_text_model_into_fillable_token_dimensions():
-    model = PriceableModel(
-        "custom-provider", "Custom", "alias", "Alias", "text"
-    )
+    model = PriceableModel("custom-provider", "Custom", "alias", "Alias", "text")
     draft = PricingDraftBuilder(OfficialPriceRegistry.load_bundled()).build(
         [model], costs=[], mappings=[], exclusions=[]
     )
@@ -51,18 +49,14 @@ def test_builder_expands_unpriced_text_model_into_fillable_token_dimensions():
     assert all(row.conditions == {} for row in draft.rows)
     assert all(row.rmb_cost is None for row in draft.rows)
     assert all(row.source_type == "manual" for row in draft.rows)
-    assert all(
-        row.verification_status == "manual_pending" for row in draft.rows
-    )
+    assert all(row.verification_status == "manual_pending" for row in draft.rows)
     assert all(row.include_in_publish is True for row in draft.rows)
     assert all(row.approval_reason == "管理员人工定价" for row in draft.rows)
     assert draft.risks[0].code == "official_model_unmatched"
 
 
 def test_explicit_mapping_and_verified_cost_override_are_used():
-    model = PriceableModel(
-        "custom-provider", "Custom", "alias", "Alias", "text"
-    )
+    model = PriceableModel("custom-provider", "Custom", "alias", "Alias", "text")
     costs = [
         {
             "provider_id": "custom-provider",
@@ -86,9 +80,7 @@ def test_explicit_mapping_and_verified_cost_override_are_used():
         [model], costs, mappings, exclusions=[]
     )
 
-    override = next(
-        row for row in draft.rows if row.unit_key == "input_tokens"
-    )
+    override = next(row for row in draft.rows if row.unit_key == "input_tokens")
     assert override.rmb_cost == Decimal("3")
     assert override.source_type == "trusted_cost"
 
@@ -308,9 +300,7 @@ def test_latest_collected_candidate_overrides_bundled_registry_price():
         "official_model_id": "qwen3-max",
         "capability": "chat",
         "unit_key": "input_tokens",
-        "conditions_json": json.dumps(
-            {"region": "cn-beijing", "unit_size": 1_000_000}
-        ),
+        "conditions_json": json.dumps({"region": "cn-beijing", "unit_size": 1_000_000}),
         "source_url": "https://help.aliyun.com/new-pricing",
         "rmb_cost_decimal": "4.0",
         "evidence_level": "official_verified",
@@ -324,3 +314,33 @@ def test_latest_collected_candidate_overrides_bundled_registry_price():
     assert len(result.rows) == 1
     assert result.rows[0].rmb_cost == Decimal("4.0")
     assert result.rows[0].registry_version == "new"
+
+
+def test_confirmed_cost_override_takes_precedence_over_collected_candidate():
+    model = PriceableModel(
+        "custom", "Custom", "model", "Model", "text", official_model_id="model"
+    )
+    candidate = dict(
+        provider_id="custom",
+        model_key="model",
+        official_model_id="model",
+        capability="chat",
+        unit_key="input_tokens",
+        conditions_json='{"unit_size":1000000}',
+        rmb_cost_decimal="2",
+        evidence_level="official_verified",
+        verification_status="candidate",
+        source_url="https://example.com/price",
+    )
+    trusted = {
+        **candidate,
+        "rmb_cost_decimal": "4",
+        "verification_status": "verified",
+        "source_type": "manual",
+    }
+    draft = PricingDraftBuilder(OfficialPriceRegistry.load_bundled()).build(
+        [model], [trusted], [], [], [candidate]
+    )
+    assert draft.rows[0].rmb_cost == Decimal("4")
+    assert draft.rows[0].source_type == "trusted_cost"
+    assert draft.rows[0].credits == 600

@@ -56,12 +56,8 @@ def _workbook(multiplier="1.5", cost="0.004"):
 
 def test_import_below_floor_is_blocked_and_idempotent():
     service = PricingExcelService(Repo())
-    first = service.preview_import(
-        _workbook(multiplier="1.1"), "prices.xlsx", "1"
-    )
-    second = service.preview_import(
-        _workbook(multiplier="1.1"), "copy.xlsx", "1"
-    )
+    first = service.preview_import(_workbook(multiplier="1.1"), "prices.xlsx", "1")
+    second = service.preview_import(_workbook(multiplier="1.1"), "copy.xlsx", "1")
     assert first["id"] == second["id"]
     assert first["status"] == "blocked"
     assert first["rows"][0]["code"] == "below_safe_floor"
@@ -69,9 +65,7 @@ def test_import_below_floor_is_blocked_and_idempotent():
 
 def test_formula_is_rejected_and_export_contains_no_foreign_currency():
     formula = _workbook(cost="=1+1")
-    preview = PricingExcelService(Repo()).preview_import(
-        formula, "prices.xlsx", "1"
-    )
+    preview = PricingExcelService(Repo()).preview_import(formula, "prices.xlsx", "1")
     assert preview["status"] == "blocked"
     assert preview["rows"][0]["code"] == "formula_not_allowed"
 
@@ -239,17 +233,13 @@ def test_draft_export_has_three_sheets_and_enabled_models_without_db_costs():
 
     assert workbook.sheetnames == ["价格草案", "缺失与风险", "填写说明"]
     draft_values = [
-        value
-        for row in workbook["价格草案"].iter_rows(values_only=True)
-        for value in row
+        value for row in workbook["价格草案"].iter_rows(values_only=True) for value in row
     ]
     assert "qwen3-max" in draft_values
     assert "missing-model" in draft_values
     assert "1.5" in {str(value) for value in draft_values}
     risk_values = [
-        value
-        for row in workbook["缺失与风险"].iter_rows(values_only=True)
-        for value in row
+        value for row in workbook["缺失与风险"].iter_rows(values_only=True) for value in row
     ]
     assert "official_price_missing" in risk_values
     instructions = " ".join(
@@ -336,7 +326,7 @@ def test_exported_missing_price_rows_have_a_round_trip_safe_exclusion_reason():
     assert {row["code"] for row in preview["rows"]} == {"trusted_cost_missing"}
 
 
-def test_import_rejects_supplied_derived_values_that_do_not_match_cost():
+def test_import_recalculates_stale_derived_values_from_editable_cost():
     model = PriceableModel(
         "custom-provider", "Custom", "missing-model", "Missing", "text"
     )
@@ -357,10 +347,9 @@ def test_import_rejects_supplied_derived_values_that_do_not_match_cost():
 
     preview = service.preview_import(output.getvalue(), "draft.xlsx", "1")
 
-    assert preview["status"] == "blocked"
-    assert {row["code"] for row in preview["rows"]} == {
-        "derived_price_mismatch"
-    }
+    assert preview["status"] == "ready"
+    assert all(row["rmb_sale_price"] == "15.0" for row in preview["valid_rows"])
+    assert all(row["credits"] == 1500 for row in preview["valid_rows"])
 
 
 def test_multitier_official_draft_round_trips_without_false_duplicates():
@@ -382,9 +371,61 @@ def test_multitier_official_draft_round_trips_without_false_duplicates():
     )
     service = PricingExcelService(Repo())
 
-    preview = service.preview_import(
-        service.export_draft(draft), "qwen3-max.xlsx", "1"
-    )
+    preview = service.preview_import(service.export_draft(draft), "qwen3-max.xlsx", "1")
 
     assert preview["status"] == "ready"
     assert len(preview["valid_rows"]) == 6
+
+
+def test_historical_unit_encodings_export_once_using_newest_cost():
+    model = PriceableModel("custom", "Custom", "model", "Model", "text")
+    costs = [
+        dict(
+            provider_id="custom",
+            model_key="model",
+            capability="text",
+            unit_key=unit,
+            conditions_json=conditions,
+            verification_status="verified",
+            rmb_cost_decimal=cost,
+        )
+        for unit in ("input_tokens", "output_tokens")
+        for conditions, cost in (('{"unit_size":1000000}', "4"), ("{}", "2"))
+    ]
+    draft = PricingDraftBuilder(OfficialPriceRegistry.load_bundled()).build(
+        [model], costs, [], []
+    )
+    assert len(draft.rows) == 2
+    assert all(str(row.rmb_cost) == "4" for row in draft.rows)
+    service = PricingExcelService(Repo())
+    preview = service.preview_import(service.export_draft(draft), "roundtrip.xlsx", "1")
+    assert preview["status"] == "ready"
+    assert all(row["unit_size"] == 1_000_000 for row in preview["valid_rows"])
+
+
+@pytest.mark.parametrize(
+    "column,value,code",
+    [
+        ("单位数量", 1000.5, "invalid_specification"),
+        ("单位数量", 0, "invalid_specification"),
+        ("规格条件", "[]", "invalid_specification"),
+        ("人民币成本", "NaN", "invalid_decimal"),
+        ("人民币成本", "-1", "negative_cost"),
+        ("默认倍率", "Infinity", "invalid_decimal"),
+    ],
+)
+def test_draft_invalid_numeric_and_spec_values_are_blocked(column, value, code):
+    draft = PricingDraftBuilder(OfficialPriceRegistry.load_bundled()).build(
+        [PriceableModel("custom", "Custom", "model", "Model", "text")], [], [], []
+    )
+    excel = PricingExcelService(Repo())
+    book = load_workbook(BytesIO(excel.export_draft(draft)))
+    headers = {cell.value: cell.column for cell in book.active[1]}
+    for row in (2, 3):
+        book.active.cell(row, headers["人民币成本"], "2")
+        book.active.cell(row, headers[column], value)
+    data = BytesIO()
+    book.save(data)
+    preview = excel.preview_import(data.getvalue(), "invalid.xlsx", "1")
+    assert preview["status"] == "blocked"
+    assert {row["code"] for row in preview["rows"]} == {code}

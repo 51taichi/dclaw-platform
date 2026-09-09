@@ -44,9 +44,7 @@ def service(tmp_path):
         (),
         {
             "list_enabled": lambda self: (
-                PriceableModel(
-                    "dashscope", "百炼", "qwen-plus", "Qwen Plus", "text"
-                ),
+                PriceableModel("dashscope", "百炼", "qwen-plus", "Qwen Plus", "text"),
             )
         },
     )()
@@ -165,9 +163,7 @@ def test_generate_draft_reads_persisted_ai_candidate(service):
         actor_id="admin-1",
     )
     assert batch["updated_models"] == 1
-    assert (
-        pricing.generate_draft("1")["rows"][0]["include_in_publish"] is False
-    )
+    assert pricing.generate_draft("1")["rows"][0]["include_in_publish"] is False
 
 
 def test_initial_preview_blocks_non_text_model_without_any_trusted_cost(
@@ -187,9 +183,7 @@ def test_initial_preview_blocks_non_text_model_without_any_trusted_cost(
         (),
         {
             "list_enabled": lambda self: (
-                PriceableModel(
-                    "volcengine", "火山引擎", "seedream", "Seedream", "image"
-                ),
+                PriceableModel("volcengine", "火山引擎", "seedream", "Seedream", "image"),
             )
         },
     )()
@@ -267,9 +261,7 @@ def test_import_draft_cannot_publish_until_import_is_confirmed(service):
     imported = repo.record_import(
         "digest", "prices.xlsx", "1", {"status": "ready", "valid_rows": rows}
     )
-    preview = pricing.preview_initial_catalog(
-        "1", rows, import_id=imported["id"]
-    )
+    preview = pricing.preview_initial_catalog("1", rows, import_id=imported["id"])
 
     with pytest.raises(ValueError, match="import is not confirmed"):
         pricing.publish_preview(preview["catalog_id"], "1")
@@ -495,8 +487,7 @@ def test_imported_multidimensional_token_prices_keep_official_tiers(service):
     assert low.credits == 12
     assert medium.credits == 24
     assert {
-        item["unit_size"]
-        for item in low.snapshot["rule"]["metadata"]["dimensions"]
+        item["unit_size"] for item in low.snapshot["rule"]["metadata"]["dimensions"]
     } == {1_000_000}
 
 
@@ -532,8 +523,11 @@ def test_imported_draft_rejects_missing_dimension_and_read_only_tampering(
 
     rows = _import_rows(pricing)
     rows[0]["rmb_cost_decimal"] = "0.000001"
-    with pytest.raises(ValueError, match="manual_pending HTTPS evidence"):
-        pricing.preview_initial_catalog("1", rows)
+    preview = pricing.preview_initial_catalog("1", rows, persist=False)
+    assert preview["publishable"] is True
+    assert preview["review"]["manual_dimensions"] == 1
+    assert rows[0]["source_type"] == "manual"
+    assert rows[0]["verification_status"] == "manual_pending"
 
     rows[0].update(
         source_type="manual",
@@ -559,9 +553,7 @@ def test_missing_text_model_accepts_exported_input_and_output_completion(
     }
     for row in rows:
         row.update(
-            rmb_cost_decimal=(
-                "10" if row["unit_key"] == "input_tokens" else "45"
-            ),
+            rmb_cost_decimal=("10" if row["unit_key"] == "input_tokens" else "45"),
             source_url="https://example.com/vendor-price",
         )
 
@@ -636,3 +628,45 @@ def test_publish_rejects_when_enabled_model_endpoint_region_changed(service):
 
     with pytest.raises(ValueError, match="inventory changed"):
         pricing.publish_preview(preview["catalog_id"], "1")
+
+
+def test_excel_cost_and_per_dimension_multiplier_survive_full_roundtrip(service):
+    from io import BytesIO
+    from decimal import Decimal
+    from openpyxl import load_workbook
+    from qwenpaw.app.billing.pricing_excel import PricingExcelService
+
+    pricing, repo = service
+    excel = PricingExcelService(
+        repo,
+        preview_builder=lambda actor, rows, iid: pricing.preview_initial_catalog(
+            actor, rows, iid, persist=False
+        ),
+        draft_builder=pricing.preview_initial_catalog,
+    )
+    book = load_workbook(
+        BytesIO(excel.export_draft(pricing.generate_draft("1")["result"]))
+    )
+    sheet = book.active
+    headers = {cell.value: cell.column for cell in sheet[1]}
+    for index, multiplier in ((2, "2"), (3, "3")):
+        sheet.cell(index, headers["人民币成本"], "4")
+        sheet.cell(index, headers["默认倍率"], multiplier)
+        sheet.cell(index, headers["人民币销售价"], "123")
+        sheet.cell(index, headers["积分价格"], 12300)
+    data = BytesIO()
+    book.save(data)
+    preview = excel.preview_import(data.getvalue(), "edited.xlsx", "1")
+    assert preview["status"] == "ready", preview
+    assert preview["pricing_preview"]["review"]["manual_dimensions"] == 2
+    confirmed = excel.confirm_import(preview["id"], "1")
+    published = pricing.publish_preview(confirmed["pricing_preview"]["catalog_id"], "1")
+    dimensions = published["rules"][0]["metadata"]["dimensions"]
+    assert [d["unit_size"] for d in dimensions] == [1_000_000, 1_000_000]
+    assert [d["credits_per_unit"] for d in dimensions] == [800, 1200]
+    exported = pricing.generate_draft("1")["result"]
+    assert [row.multiplier for row in exported.rows] == [Decimal("2"), Decimal("3")]
+    assert [row.credits for row in exported.rows] == [800, 1200]
+    again = excel.preview_import(excel.export_draft(exported), "again.xlsx", "1")
+    assert again["status"] == "ready", again
+    assert len(again["valid_rows"]) == 2

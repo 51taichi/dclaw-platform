@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from decimal import Decimal, ROUND_CEILING
 from typing import Any, Mapping, Sequence
 
+from .pricing_spec import normalize_spec, spec_key
 from .official_pricing import OfficialPriceRegistry
 from .pricing_inventory import PriceableModel
 
@@ -89,32 +90,37 @@ class PricingDraftBuilder:
         decisions: Sequence[Mapping[str, Any]] = (),
     ) -> PricingDraftResult:
         mapping_index = {
-            (str(row["provider_id"]), str(row["model_key"])): row
-            for row in mappings
+            (str(row["provider_id"]), str(row["model_key"])): row for row in mappings
         }
-        cost_index = {
-            (
-                str(row["provider_id"]),
-                str(row["model_key"]),
-                str(row.get("capability") or ""),
+        # The repository supplies newest snapshots first. Missing token units
+        # historically mean one million, matching the exported specification.
+        cost_index = {}
+        for row in costs:
+            if row.get("verification_status") != "verified":
+                continue
+            key = spec_key(row)
+            size, conditions = normalize_spec(
                 str(row["unit_key"]),
-                _conditions_key(row.get("conditions_json", "{}")),
-            ): row
-            for row in costs
-            if row.get("verification_status") == "verified"
-        }
+                row.get("unit_size"),
+                row.get("conditions_json", "{}"),
+            )
+            cost_index.setdefault(
+                key,
+                {
+                    **row,
+                    "unit_size": size,
+                    "conditions_json": _conditions_key(conditions),
+                },
+            )
         exclusion_index = {
             (str(row["provider_id"]), str(row["model_key"])): row
             for row in exclusions
             if row.get("excluded") is True
         }
         decision_index = {
-            (str(row["provider_id"]), str(row["model_key"])): row
-            for row in decisions
+            (str(row["provider_id"]), str(row["model_key"])): row for row in decisions
         }
-        candidate_index: dict[
-            tuple[str, str, str, str, str], Mapping[str, Any]
-        ] = {}
+        candidate_index: dict[tuple[str, str, str, str, str], Mapping[str, Any]] = {}
         for row in candidates:
             key = (
                 str(row["provider_id"]),
@@ -151,9 +157,7 @@ class PricingDraftBuilder:
                     for dimension in self.registry.dimensions(
                         official_provider_id, official_model_id
                     )
-                    if _region_matches(
-                        dimension.conditions, model.pricing_region
-                    )
+                    if _region_matches(dimension.conditions, model.pricing_region)
                 )
                 if official_provider_id and official_model_id
                 else ()
@@ -192,15 +196,25 @@ class PricingDraftBuilder:
                         evidence_level = str(
                             candidate.get("evidence_level") or "failed"
                         )
-                        multiplier_value = candidate.get(
-                            "default_multiplier_decimal"
-                        )
+                        multiplier_value = candidate.get("default_multiplier_decimal")
                         multiplier = (
                             Decimal(str(multiplier_value))
                             if multiplier_value is not None
                             else self.default_multiplier
                         )
-                        cost = Decimal(str(candidate["rmb_cost_decimal"]))
+                        override = cost_index.get(
+                            spec_key(
+                                {
+                                    "provider_id": model.provider_id,
+                                    "model_key": model.model_key,
+                                    "capability": candidate.get("capability"),
+                                    "unit_key": candidate["unit_key"],
+                                    "unit_size": unit_size,
+                                    "conditions": conditions,
+                                }
+                            )
+                        )
+                        cost = Decimal(str((override or candidate)["rmb_cost_decimal"]))
                         sale = cost * multiplier
                         include_default = evidence_level == "official_verified"
                         include = (
@@ -213,11 +227,7 @@ class PricingDraftBuilder:
                             if decision is not None
                             else exclusion_reason
                         )
-                        if (
-                            reason is None
-                            and decision is None
-                            and not include_default
-                        ):
+                        if reason is None and decision is None and not include_default:
                             reason = "价格证据待人工复核"
                         rows.append(
                             PricingDraftRow(
@@ -236,29 +246,29 @@ class PricingDraftBuilder:
                                 multiplier,
                                 sale,
                                 int(
-                                    (
-                                        sale * self.credits_per_yuan
-                                    ).to_integral_value(rounding=ROUND_CEILING)
+                                    (sale * self.credits_per_yuan).to_integral_value(
+                                        rounding=ROUND_CEILING
+                                    )
                                 ),
-                                f"candidate:{evidence_level}",
-                                str(candidate.get("source_url") or "") or None,
-                                str(
-                                    candidate.get("verification_status")
-                                    or "candidate"
+                                "trusted_cost"
+                                if override
+                                else f"candidate:{evidence_level}",
+                                (str(override.get("source_reference") or "") or None)
+                                if override
+                                else (str(candidate.get("source_url") or "") or None),
+                                "verified"
+                                if override
+                                else str(
+                                    candidate.get("verification_status") or "candidate"
                                 ),
                                 include,
                                 reason,
-                                str(candidate.get("registry_version") or "")
-                                or None,
+                                str(candidate.get("registry_version") or "") or None,
                                 evidence_level,
-                                str(candidate.get("evidence_excerpt") or "")
-                                or None,
+                                str(candidate.get("evidence_excerpt") or "") or None,
                                 (
-                                    Decimal(
-                                        str(candidate["confidence_decimal"])
-                                    )
-                                    if candidate.get("confidence_decimal")
-                                    is not None
+                                    Decimal(str(candidate["confidence_decimal"]))
+                                    if candidate.get("confidence_decimal") is not None
                                     else None
                                 ),
                                 str(candidate.get("ai_model") or "") or None,
@@ -273,9 +283,7 @@ class PricingDraftBuilder:
                         for key, row in cost_index.items()
                         if key[:2] == model_key
                         and _region_matches(
-                            json.loads(
-                                str(row.get("conditions_json") or "{}")
-                            ),
+                            json.loads(str(row.get("conditions_json") or "{}")),
                             model.pricing_region,
                         )
                     ),
@@ -309,9 +317,7 @@ class PricingDraftBuilder:
                                 ),
                             )
                         )
-                        source_reference = str(
-                            trusted.get("source_reference") or ""
-                        )
+                        source_reference = str(trusted.get("source_reference") or "")
                         rows.append(
                             PricingDraftRow(
                                 model.provider_id,
@@ -321,9 +327,7 @@ class PricingDraftBuilder:
                                 official_provider_id,
                                 official_model_id,
                                 model.category,
-                                str(
-                                    trusted.get("capability") or model.category
-                                ),
+                                str(trusted.get("capability") or model.category),
                                 str(trusted["unit_key"]),
                                 unit_size,
                                 conditions,
@@ -350,9 +354,7 @@ class PricingDraftBuilder:
                     if official_model_id is None
                     else "official_price_missing"
                 )
-                risks.append(
-                    PricingDraftRisk(code, model.provider_id, model.model_key)
-                )
+                risks.append(PricingDraftRisk(code, model.provider_id, model.model_key))
                 missing_dimensions = (
                     ("input_tokens", "output_tokens")
                     if model.category == "text"
@@ -392,13 +394,9 @@ class PricingDraftBuilder:
                             exclusion_reason,
                             None,
                             evidence_level=(
-                                "manual"
-                                if is_fillable_text
-                                else "official_verified"
+                                "manual" if is_fillable_text else "official_verified"
                             ),
-                            approval_reason=(
-                                "管理员人工定价" if is_fillable_text else None
-                            ),
+                            approval_reason=("管理员人工定价" if is_fillable_text else None),
                         )
                     )
                 continue
@@ -412,6 +410,7 @@ class PricingDraftBuilder:
                             dimension.capability,
                             dimension.unit_key,
                             _conditions_key(dimension.conditions),
+                            str(dimension.unit_size),
                         )
                     )
                     or cost_index.get(
@@ -421,6 +420,7 @@ class PricingDraftBuilder:
                             "",
                             dimension.unit_key,
                             _conditions_key(dimension.conditions),
+                            str(dimension.unit_size),
                         )
                     )
                     or cost_index.get(
@@ -430,6 +430,7 @@ class PricingDraftBuilder:
                             dimension.capability,
                             dimension.unit_key,
                             "{}",
+                            str(dimension.unit_size),
                         )
                     )
                     or cost_index.get(
@@ -439,6 +440,7 @@ class PricingDraftBuilder:
                             "",
                             dimension.unit_key,
                             "{}",
+                            str(dimension.unit_size),
                         )
                     )
                 )
@@ -447,9 +449,7 @@ class PricingDraftBuilder:
                     if override
                     else dimension.rmb_cost
                 )
-                source_type = (
-                    "trusted_cost" if override else "official_registry"
-                )
+                source_type = "trusted_cost" if override else "official_registry"
                 sale = rmb_cost * self.default_multiplier
                 credits = int(
                     (sale * self.credits_per_yuan).to_integral_value(
@@ -530,9 +530,7 @@ def _candidate_digest(candidate: Mapping[str, Any]) -> str:
     ).hexdigest()
 
 
-def _region_matches(
-    conditions: Mapping[str, Any], pricing_region: str | None
-) -> bool:
+def _region_matches(conditions: Mapping[str, Any], pricing_region: str | None) -> bool:
     official_region = conditions.get("region")
     if official_region is None:
         return True
