@@ -372,69 +372,90 @@ export default function SealedAgentsPage() {
             expandable={{
               expandedRowRender: (agent) => (
                 <div className={styles.expandedContent}>
-                  <Upload
-                    accept="image/png,image/jpeg,image/webp"
-                    showUploadList={false}
-                    beforeUpload={(file) => {
-                      if (file.size > 2 * 1024 * 1024) {
-                        message.error("头像不能超过 2 MB");
-                        return Upload.LIST_IGNORE;
-                      }
-                      return true;
-                    }}
-                    customRequest={async ({ file, onSuccess, onError }) => {
-                      try {
-                        const updated = await sealedAgentsApi.uploadAvatar(
-                          agent.agent_id,
-                          file as File,
-                        );
-                        setAgents((items) =>
-                          items.map((item) =>
-                            item.agent_id === updated.agent_id ? updated : item,
-                          ),
-                        );
-                        window.dispatchEvent(
-                          new Event("expert-avatar-updated"),
-                        );
-                        message.success("头像已保存，升级版本时会自动保留");
-                        onSuccess?.({});
-                      } catch (error) {
-                        onError?.(error as Error);
-                        message.error(
-                          error instanceof Error
-                            ? error.message
-                            : "头像上传失败",
-                        );
-                      }
-                    }}
+                  <div
+                    className={styles.expertProfile}
+                    data-testid="expert-profile"
                   >
-                    <button
-                      type="button"
-                      className={styles.avatarUpload}
-                      aria-label={`${agent.avatar ? "更换" : "上传"}${
-                        agent.name
-                      }头像`}
-                      title="点击上传头像（PNG、JPEG、WebP，最大 2 MB）"
-                    >
-                      <Avatar size={64} src={agent.avatar}>
-                        {agent.name.charAt(0)}
-                      </Avatar>
-                      <span>{agent.avatar ? "更换头像" : "上传头像"}</span>
-                    </button>
-                  </Upload>
-                  <div className={styles.expertDescription}>
-                    <Space>
-                      <Typography.Text strong>{agent.name}</Typography.Text>
-                      <SuperExpertBadge />
-                    </Space>
+                    <div data-testid="expert-name">
+                      <Space>
+                        <Typography.Text strong>{agent.name}</Typography.Text>
+                        <SuperExpertBadge />
+                      </Space>
+                    </div>
                     <Typography.Paragraph
+                      data-testid="expert-description"
                       style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}
                     >
                       {agent.description || "暂无专家介绍"}
                     </Typography.Paragraph>
+                    <div
+                      className={styles.expertAvatar}
+                      data-testid="expert-avatar"
+                    >
+                      <Avatar size={112} src={agent.avatar}>
+                        {agent.name.charAt(0)}
+                      </Avatar>
+                    </div>
+                    <Upload
+                      accept="image/png,image/jpeg,image/webp"
+                      showUploadList={false}
+                      beforeUpload={(file) => {
+                        if (file.size > 2 * 1024 * 1024) {
+                          message.error("头像不能超过 2 MB");
+                          return Upload.LIST_IGNORE;
+                        }
+                        return true;
+                      }}
+                      customRequest={async ({ file, onSuccess, onError }) => {
+                        try {
+                          const updated = await sealedAgentsApi.uploadAvatar(
+                            agent.agent_id,
+                            file as File,
+                          );
+                          setAgents((items) =>
+                            items.map((item) =>
+                              item.agent_id === updated.agent_id
+                                ? updated
+                                : item,
+                            ),
+                          );
+                          window.dispatchEvent(
+                            new Event("expert-avatar-updated"),
+                          );
+                          message.success(
+                            "头像已保存，升级版本时会自动保留",
+                          );
+                          onSuccess?.({});
+                        } catch (error) {
+                          onError?.(error as Error);
+                          message.error(
+                            error instanceof Error
+                              ? error.message
+                              : "头像上传失败",
+                          );
+                        }
+                      }}
+                    >
+                      <Button
+                        size="small"
+                        icon={<UploadCloud size={14} />}
+                        aria-label={`${agent.avatar ? "更换" : "上传"}${
+                          agent.name
+                        }头像`}
+                        title="点击上传头像（PNG、JPEG、WebP，最大 2 MB）"
+                      >
+                        {agent.avatar ? "更换头像" : "上传头像"}
+                      </Button>
+                    </Upload>
                   </div>
-                  <div className={styles.bannerSection}>
-                    <div className={styles.bannerFrame}>
+                  <div
+                    className={styles.bannerSection}
+                    data-testid="banner-layout"
+                  >
+                    <div
+                      className={styles.bannerFrame}
+                      data-testid="banner-preview"
+                    >
                       {agent.banner_image ? (
                         <img
                           src={agent.banner_image}
@@ -446,9 +467,12 @@ export default function SealedAgentsPage() {
                         </span>
                       )}
                     </div>
-                    <div className={styles.bannerActions}>
+                    <div
+                      className={styles.bannerActions}
+                      data-testid="banner-controls"
+                    >
                       <Typography.Text type="secondary">
-                        建议 12:1 · 1800 × 150 px · PNG / JPEG / WebP · 最大 5
+                        建议 3:1 · 2172 × 724 px · PNG / JPEG / WebP · 最大 5
                         MB
                       </Typography.Text>
                       <span data-testid="banner-upload">

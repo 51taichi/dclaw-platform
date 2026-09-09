@@ -239,7 +239,28 @@ it("uploads an independent avatar and shows it without replacing releases", asyn
   });
   const { container } = render(<SealedAgentsPage />);
   await user.click(await screen.findByRole("button", { name: /Expand row/ }));
-  await screen.findByRole("button", { name: "上传陆羽头像" });
+  const avatarButton = await screen.findByRole("button", {
+    name: "上传陆羽头像",
+  });
+  expect(avatarButton).toHaveClass("ant-btn");
+  const profileLayout = screen.getByTestId("expert-profile");
+  expect(profileLayout.children[0]).toHaveAttribute(
+    "data-testid",
+    "expert-name",
+  );
+  expect(profileLayout.children[1]).toHaveAttribute(
+    "data-testid",
+    "expert-description",
+  );
+  expect(profileLayout.children[2]).toHaveAttribute(
+    "data-testid",
+    "expert-avatar",
+  );
+  expect(profileLayout.children[3]).toContainElement(avatarButton);
+  expect(profileLayout.querySelector(".ant-avatar")).toHaveStyle({
+    width: "112px",
+    height: "112px",
+  });
   expect(screen.queryByText(/内容摘要：|Invoke-only/)).not.toBeInTheDocument();
   const input = container.querySelector(
     'input[accept="image/png,image/jpeg,image/webp"]',
@@ -284,7 +305,16 @@ it("uploads a promotional banner with a visible size hint", async () => {
   });
   const { container } = render(<SealedAgentsPage />);
   await user.click(await screen.findByRole("button", { name: /Expand row/ }));
-  expect(screen.getByText(/1800 × 150/)).toBeVisible();
+  expect(screen.getByText(/3:1 · 2172 × 724/)).toBeVisible();
+  const bannerLayout = screen.getByTestId("banner-layout");
+  expect(bannerLayout.firstElementChild).toHaveAttribute(
+    "data-testid",
+    "banner-preview",
+  );
+  expect(bannerLayout.lastElementChild).toHaveAttribute(
+    "data-testid",
+    "banner-controls",
+  );
   const input = container.querySelector(
     '[data-testid="banner-upload"] input[type="file"]',
   ) as HTMLInputElement;
