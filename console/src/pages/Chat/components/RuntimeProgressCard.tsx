@@ -30,7 +30,14 @@ interface RuntimeResponse {
   output?: RuntimeMessage[];
 }
 
+import SuperExpertBadge from "../../../components/SuperExpertBadge";
+import {
+  expertIdentity,
+  type ExpertIdentity,
+} from "../../../utils/expertIdentity";
+
 interface Props {
+  identity?: ExpertIdentity;
   data: RuntimeResponse;
   isLast?: boolean;
   chatId?: string | null;
@@ -62,7 +69,8 @@ function sanitizeGeneratedImagePathText(text: string) {
       imageReferenceIndex += 1;
       const bullet = line.match(/^(\s*[-*]\s*)/)?.[1] || "";
       const schemeLabel = line.match(/方案\s*([一二三四五六七八九十\d]+)/)?.[0];
-      const label = schemeLabel?.replace(/\s+/g, "") || `图片 ${imageReferenceIndex}`;
+      const label =
+        schemeLabel?.replace(/\s+/g, "") || `图片 ${imageReferenceIndex}`;
       return `${bullet}${label}：见下方图片 ${imageReferenceIndex}`;
     })
     .join("\n")
@@ -217,6 +225,7 @@ function extractCopyText(messages: RuntimeMessage[]) {
 }
 
 export default function RuntimeProgressCard(props: Props) {
+  const identity = props.identity || expertIdentity();
   const [previewImage, setPreviewImage] = useState<{
     url: string;
     alt: string;
@@ -244,8 +253,13 @@ export default function RuntimeProgressCard(props: Props) {
     return (
       <div className={styles.runtimeCard}>
         <div className={styles.agentHeader}>
-          <img className={styles.avatar} src="/mascot.png" alt="" />
-          <span>DClaw</span>
+          <img
+            className={styles.avatar}
+            src={identity.avatar}
+            alt={identity.name}
+          />
+          <span>{identity.name}</span>
+          {identity.isSuperExpert && <SuperExpertBadge />}
         </div>
         <div className={styles.activity}>
           <div className={styles.summary}>
@@ -262,8 +276,13 @@ export default function RuntimeProgressCard(props: Props) {
   return (
     <div className={styles.runtimeCard}>
       <div className={styles.agentHeader}>
-        <img className={styles.avatar} src="/mascot.png" alt="" />
-        <span>DClaw</span>
+        <img
+          className={styles.avatar}
+          src={identity.avatar}
+          alt={identity.name}
+        />
+        <span>{identity.name}</span>
+        {identity.isSuperExpert && <SuperExpertBadge />}
       </div>
 
       {visibleMessages.map((item, index) => (
@@ -294,7 +313,11 @@ export default function RuntimeProgressCard(props: Props) {
                   />
                 );
               }
-              const imageUrl = getImageUrl(content, props.chatId, props.agentId);
+              const imageUrl = getImageUrl(
+                content,
+                props.chatId,
+                props.agentId,
+              );
               if (!imageUrl) return null;
               imageOrdinal += 1;
               const imageLabel = imageLabels[messageImageIndex];
@@ -309,7 +332,9 @@ export default function RuntimeProgressCard(props: Props) {
                   title="点击查看大图"
                 >
                   {imageLabel && (
-                    <span className={styles.inlineImageLabel}>{imageLabel}</span>
+                    <span className={styles.inlineImageLabel}>
+                      {imageLabel}
+                    </span>
                   )}
                   <img src={imageUrl} alt={alt} />
                 </button>

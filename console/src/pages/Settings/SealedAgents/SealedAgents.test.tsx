@@ -9,6 +9,7 @@ vi.mock("../../../api/modules/sealedAgents", () => ({
   sealedAgentsApi: {
     list: vi.fn(),
     uploadRelease: vi.fn(),
+    uploadAvatar: vi.fn(),
     previewGrant: vi.fn(),
     acceptGrant: vi.fn(),
     cancelGrant: vi.fn(),
@@ -22,11 +23,10 @@ const { messageError, messageSuccess } = vi.hoisted(() => ({
   messageSuccess: vi.fn(),
 }));
 
-vi.mock("../../../hooks/useAppMessage", () => ({
-  useAppMessage: () => ({
-    message: { error: messageError, success: messageSuccess },
-  }),
-}));
+vi.mock("../../../hooks/useAppMessage", () => {
+  const message = { error: messageError, success: messageSuccess };
+  return { useAppMessage: () => ({ message }) };
+});
 
 describe("SealedAgentsPage", () => {
   beforeEach(() => {
@@ -176,11 +176,15 @@ describe("SealedAgentsPage", () => {
     vi.mocked(sealedAgentsApi.activate).mockResolvedValue({} as never);
 
     render(<SealedAgentsPage />);
-    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const input = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
     await user.upload(input, new File(["signed"], "expert.zip"));
 
     expect(await screen.findByText("官方超级专家签名")).toBeInTheDocument();
-    expect(screen.getByText("workspace.turn.orchestrate/1")).toBeInTheDocument();
+    expect(
+      screen.getByText("workspace.turn.orchestrate/1"),
+    ).toBeInTheDocument();
     expect(screen.getByText("card.create")).toBeInTheDocument();
     expect(screen.getByText("aigc.task.create")).toBeInTheDocument();
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
@@ -207,3 +211,48 @@ function release(releaseId: string, version: string) {
     installed_at: "2026-09-01T00:00:00Z",
   };
 }
+
+it("uploads an independent avatar and shows it without replacing releases", async () => {
+  const user = userEvent.setup();
+  const agent = {
+    agent_id: "luyu",
+    name: "陆羽",
+    description: "",
+    enabled: true,
+    availability: "available" as const,
+    releases: [],
+    capabilities: {
+      invoke: true,
+      inspect: false,
+      edit: false,
+      clone: false,
+      export: false,
+      download: false,
+      trace: false,
+    },
+  };
+  vi.mocked(sealedAgentsApi.list).mockResolvedValue([agent]);
+  vi.mocked(sealedAgentsApi.uploadAvatar).mockResolvedValue({
+    ...agent,
+    avatar: "data:image/png;base64,new",
+  });
+  const { container } = render(<SealedAgentsPage />);
+  await user.click(await screen.findByRole("button", { name: /Expand row/ }));
+  await screen.findByRole("button", { name: "上传陆羽头像" });
+  expect(screen.queryByText(/内容摘要：|Invoke-only/)).not.toBeInTheDocument();
+  const input = container.querySelector(
+    'input[accept="image/png,image/jpeg,image/webp"]',
+  ) as HTMLInputElement;
+  const file = new File(["image"], "portrait.png", { type: "image/png" });
+  await user.upload(input, file);
+  await waitFor(() =>
+    expect(sealedAgentsApi.uploadAvatar).toHaveBeenCalledWith(
+      "luyu",
+      expect.any(File),
+    ),
+  );
+  await screen.findByRole("button", { name: "更换陆羽头像" });
+  expect(
+    container.querySelector('img[src="data:image/png;base64,new"]'),
+  ).not.toBeNull();
+});

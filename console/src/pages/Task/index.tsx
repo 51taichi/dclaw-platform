@@ -1,3 +1,4 @@
+import { useExpertIdentity } from "../../hooks/useExpertIdentity";
 import {
   AgentScopeRuntimeWebUI,
   IAgentScopeRuntimeWebUIOptions,
@@ -586,6 +587,10 @@ export default function ChatPage() {
     setSelectedExpertTeam,
     setCurrentExpertTeamRun,
   } = useAgentStore();
+  const responseIdentity = useExpertIdentity(
+    selectedAgent,
+    !!selectedExpertTeam,
+  );
   const { toolRenderConfig } = usePlugins();
   const runtimeLoadingBridgeRef = useRef<RuntimeLoadingBridgeApi | null>(null);
   const { message } = useAppMessage();
@@ -1961,10 +1966,10 @@ export default function ChatPage() {
       },
       welcome: {
         ...i18nConfig.welcome,
-        nick: "DClaw",
+        nick: responseIdentity.name,
         greeting: t("workbench.slogan", "让 AI 为你高效工作"),
         description: t("workbench.subtitle", "随时触发，本地智能完成"),
-        avatar: "/mascot.png",
+        avatar: responseIdentity.avatar,
         prompts: [], // Claw 不需要建议按钮
       },
       sender: {
@@ -2067,6 +2072,7 @@ export default function ChatPage() {
             {...cardProps}
             chatId={chatId || window.currentSessionId || ""}
             agentId={selectedAgent}
+            identity={responseIdentity}
           />
         ),
       },
@@ -2098,6 +2104,7 @@ export default function ChatPage() {
     planEnabled,
     chatId,
     selectedAgent,
+    responseIdentity,
   ]);
 
   return (

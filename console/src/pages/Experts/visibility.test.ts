@@ -33,3 +33,15 @@ describe("clientVisibleAgents", () => {
     ]);
   });
 });
+
+it("keeps API-enabled super experts visible", () => {
+  const agent: AgentSummary = {
+    id: "luyu",
+    name: "陆羽",
+    description: "",
+    enabled: true,
+    agent_type: "sealed",
+    open_api_enabled: true,
+  };
+  expect(clientVisibleAgents([agent])).toEqual([agent]);
+});

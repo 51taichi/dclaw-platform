@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   Alert,
+  Avatar,
   Button,
   Card,
   Modal,
@@ -13,7 +14,6 @@ import {
 } from "antd";
 import type { UploadProps } from "antd";
 import {
-  LockKeyhole,
   PackageCheck,
   RefreshCw,
   ShieldCheck,
@@ -27,6 +27,7 @@ import {
   type SuperExpertGrantPreview,
 } from "../../../api/modules/sealedAgents";
 import { useAppMessage } from "../../../hooks/useAppMessage";
+import SuperExpertBadge from "../../../components/SuperExpertBadge";
 import styles from "./index.module.less";
 
 const versionCollator = new Intl.Collator(undefined, {
@@ -261,7 +262,8 @@ export default function SealedAgentsPage() {
                 title: "Agent",
                 render: (_, a) => (
                   <Space>
-                    <LockKeyhole size={16} />
+                    <Avatar src={a.avatar}>{a.name.charAt(0)}</Avatar>
+                    <SuperExpertBadge />
                     <span>{a.name}</span>
                     <Typography.Text type="secondary">
                       {a.agent_id}
@@ -370,16 +372,67 @@ export default function SealedAgentsPage() {
             expandable={{
               expandedRowRender: (agent) => (
                 <div className={styles.expandedContent}>
-                  <Typography.Text>
-                    {agent.description || "无公开描述"}
-                  </Typography.Text>
-                  <Typography.Text type="secondary">
-                    内容摘要：{agent.content_digest || "-"}
-                  </Typography.Text>
-                  <Typography.Text type="secondary">
-                    Invoke-only：允许会话与 OpenAPI
-                    调用，禁止查看、编辑、克隆、导出、下载和内部追踪。
-                  </Typography.Text>
+                  <Upload
+                    accept="image/png,image/jpeg,image/webp"
+                    showUploadList={false}
+                    beforeUpload={(file) => {
+                      if (file.size > 2 * 1024 * 1024) {
+                        message.error("头像不能超过 2 MB");
+                        return Upload.LIST_IGNORE;
+                      }
+                      return true;
+                    }}
+                    customRequest={async ({ file, onSuccess, onError }) => {
+                      try {
+                        const updated = await sealedAgentsApi.uploadAvatar(
+                          agent.agent_id,
+                          file as File,
+                        );
+                        setAgents((items) =>
+                          items.map((item) =>
+                            item.agent_id === updated.agent_id ? updated : item,
+                          ),
+                        );
+                        window.dispatchEvent(
+                          new Event("expert-avatar-updated"),
+                        );
+                        message.success("头像已保存，升级版本时会自动保留");
+                        onSuccess?.({});
+                      } catch (error) {
+                        onError?.(error as Error);
+                        message.error(
+                          error instanceof Error
+                            ? error.message
+                            : "头像上传失败",
+                        );
+                      }
+                    }}
+                  >
+                    <button
+                      type="button"
+                      className={styles.avatarUpload}
+                      aria-label={`${agent.avatar ? "更换" : "上传"}${
+                        agent.name
+                      }头像`}
+                      title="点击上传头像（PNG、JPEG、WebP，最大 2 MB）"
+                    >
+                      <Avatar size={64} src={agent.avatar}>
+                        {agent.name.charAt(0)}
+                      </Avatar>
+                      <span>{agent.avatar ? "更换头像" : "上传头像"}</span>
+                    </button>
+                  </Upload>
+                  <div className={styles.expertDescription}>
+                    <Space>
+                      <Typography.Text strong>{agent.name}</Typography.Text>
+                      <SuperExpertBadge />
+                    </Space>
+                    <Typography.Paragraph
+                      style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}
+                    >
+                      {agent.description || "暂无专家介绍"}
+                    </Typography.Paragraph>
+                  </div>
                 </div>
               ),
             }}

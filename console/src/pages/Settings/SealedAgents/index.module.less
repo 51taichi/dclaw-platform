@@ -49,9 +49,39 @@
 }
 
 .expandedContent {
-  display: grid;
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  padding: 12px 8px;
+}
+
+.avatarUpload {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   gap: 6px;
-  padding: 4px 8px;
+  padding: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary, #64748b);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+
+  &:hover {
+    color: #2563eb;
+  }
+  &:focus-visible {
+    outline: 2px solid #2563eb;
+    border-radius: 8px;
+  }
+}
+
+.expertDescription {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .grantPreview {

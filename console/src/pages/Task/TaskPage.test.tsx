@@ -4,6 +4,11 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { renderWithProviders } from "@/test/common_setup";
 import TaskPage from "./index";
 
+import { agentsApi } from "../../api/modules/agents";
+vi.mock("../../api/modules/agents", () => ({
+  agentsApi: { listAgents: vi.fn() },
+}));
+
 let capturedOptions: any = null;
 let currentPathname = "";
 
@@ -311,8 +316,46 @@ describe("TaskPage", () => {
     });
   }
 
+  it("passes the summoned super expert identity to task response cards", async () => {
+    const initialStore = mockUseAgentStore();
+    mockUseAgentStore.mockReturnValue({
+      ...initialStore,
+      selectedAgent: "luyu_traffic_operator",
+    });
+    vi.mocked(agentsApi.listAgents).mockResolvedValue({
+      agents: [
+        {
+          id: "luyu_traffic_operator",
+          name: "陆羽",
+          description: "",
+          enabled: true,
+          agent_type: "sealed",
+          avatar: "data:image/png;base64,portrait",
+          open_api_enabled: true,
+        },
+      ],
+    });
+    try {
+      renderWithProviders(<TaskPage />, {
+        initialEntries: ["/task/existing-chat"],
+      });
+      await waitFor(() => expect(capturedOptions?.welcome.nick).toBe("陆羽"));
+      const card = capturedOptions.cards.AgentScopeRuntimeResponseCard({
+        data: { status: "completed", output: [] },
+      });
+      expect(card.props.identity).toEqual({
+        name: "陆羽",
+        avatar: "data:image/png;base64,portrait",
+        isSuperExpert: true,
+      });
+    } finally {
+      mockUseAgentStore.mockReturnValue(initialStore);
+    }
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(agentsApi.listAgents).mockResolvedValue({ agents: [] });
     vi.useRealTimers();
     capturedOptions = null;
     mockListAigcCards.mockResolvedValue({ cards: [] });
@@ -368,6 +411,7 @@ describe("TaskPage", () => {
       delete (document as any).visibilityState;
     }
     vi.clearAllMocks();
+    vi.mocked(agentsApi.listAgents).mockResolvedValue({ agents: [] });
     sessionStorage.clear();
   });
 
@@ -399,9 +443,10 @@ describe("TaskPage", () => {
       initialEntries: ["/task/demo-chat"],
     });
     expect(await screen.findByText("生成主题图片和视频")).toBeVisible();
-    expect(
-      screen.getByRole("button", { name: "继续制作" }),
-    ).toHaveAttribute("data-deep-link", "/aigc-studio?task=material-1");
+    expect(screen.getByRole("button", { name: "继续制作" })).toHaveAttribute(
+      "data-deep-link",
+      "/aigc-studio?task=material-1",
+    );
     view.unmount();
     renderWithProviders(
       <>

@@ -57,10 +57,16 @@ function getSkillUIProps(name: string) {
 
 // ── Types ─────────────────────────────────────────────────────────
 
+import { clientVisibleAgents } from "../../Experts/visibility";
+import { expertAvatar } from "../../../utils/expertIdentity";
+import SuperExpertBadge from "../../../components/SuperExpertBadge";
+
 interface ExpertOption {
   id: string;
   name: string;
   description?: string;
+  avatar?: string | null;
+  agent_type?: "standard" | "sealed";
 }
 
 type SkillItem = ToolbarSkillItem;
@@ -375,29 +381,39 @@ export default function ChatToolbar({
   const skillRef = useRef<HTMLDivElement>(null);
   const connRef = useRef<HTMLDivElement>(null);
 
-  // Load ordinary agent list. Expert teams are selected from /experts.
+  // Load client-callable agents, including API-enabled super experts.
   useEffect(() => {
-    agentsApi
-      .listAgents()
-      .then((res: AgentListResponse) => {
-        const agentList: ExpertOption[] = [];
-        if (res?.agents && Array.isArray(res.agents)) {
-          res.agents.forEach((a) => {
-            if (a.enabled !== false) {
-              agentList.push({
-                id: a.id,
-                name: a.name || a.id,
-                description: a.description || "",
-              });
-            }
-          });
-        }
+    let cancelled = false;
+    const refresh = () =>
+      agentsApi
+        .listAgents({ excludeOpenApi: true })
+        .then((res: AgentListResponse) => {
+          const agentList: ExpertOption[] = [];
+          if (res?.agents && Array.isArray(res.agents)) {
+            clientVisibleAgents(res.agents).forEach((a) => {
+              if (a.enabled !== false) {
+                agentList.push({
+                  id: a.id,
+                  name: a.name || a.id,
+                  description: a.description || "",
+                  avatar: a.avatar,
+                  agent_type: a.agent_type,
+                });
+              }
+            });
+          }
 
-        setExperts(agentList);
-      })
-      .catch(() => {
-        setExperts(DEFAULT_MODES);
-      });
+          if (!cancelled) setExperts(agentList);
+        })
+        .catch(() => {
+          if (!cancelled) setExperts(DEFAULT_MODES);
+        });
+    void refresh();
+    window.addEventListener("expert-avatar-updated", refresh);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("expert-avatar-updated", refresh);
+    };
   }, []);
 
   // Load available models from authorized providers
@@ -465,7 +481,7 @@ export default function ChatToolbar({
   // Determine current display: if activeMode is a known mode, show that; otherwise show the agent
   const currentModeOption = DEFAULT_MODES.find((m) => m.id === activeMode);
   const currentExpertAgent = experts.find((e) => e.id === selectedAgent);
-  const currentExpert =
+  const currentExpert: ExpertOption =
     currentModeOption ||
     (selectedExpertTeam
       ? {
@@ -509,10 +525,15 @@ export default function ChatToolbar({
               currentExpert.id === selectedExpertTeam.id ? (
               <GraduationCap size={14} className={styles.expertAvatar} />
             ) : (
-              <img src="/dclaw.png" className={styles.expertAvatar} alt="" />
+              <img
+                src={expertAvatar(currentExpert)}
+                className={styles.expertAvatar}
+                alt=""
+              />
             )}
           </span>
           <span className={styles.expertName}>{currentExpert.name}</span>
+          {currentExpert.agent_type === "sealed" && <SuperExpertBadge />}
           <ChevronDown size={12} className={styles.toolbarChevron} />
         </button>
 
@@ -640,9 +661,13 @@ export default function ChatToolbar({
                         >
                           <img
                             src={
-                              expert.id === "default" || expert.id === "craft"
+                              expert.avatar ||
+                              (expert.agent_type === "sealed"
+                                ? expertAvatar(expert)
+                                : expert.id === "default" ||
+                                  expert.id === "craft"
                                 ? "/dclaw.png"
-                                : `/avatars/${expert.id}.png`
+                                : `/avatars/${expert.id}.png`)
                             }
                             onError={(e) => {
                               e.currentTarget.style.display = "none";
@@ -683,6 +708,13 @@ export default function ChatToolbar({
                             </div>
                           )}
                         </div>
+                        {expert.agent_type === "sealed" && (
+                          <span
+                            style={{ alignSelf: "flex-start", marginTop: 4 }}
+                          >
+                            <SuperExpertBadge />
+                          </span>
+                        )}
                         {currentExpert.id === expert.id && (
                           <Check
                             size={14}

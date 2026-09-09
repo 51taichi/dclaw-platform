@@ -233,3 +233,33 @@ describe("RuntimeProgressCard", () => {
     expect(screen.getAllByText("presentation_builder")).toHaveLength(1);
   });
 });
+
+it("shows the selected super expert identity while thinking and after replying", () => {
+  const identity = {
+    name: "陆羽",
+    avatar: "data:image/png;base64,test",
+    isSuperExpert: true,
+  };
+  const { rerender } = render(
+    <RuntimeProgressCard
+      identity={identity}
+      data={{ status: "in_progress", output: [] }}
+    />,
+  );
+  expect(screen.getByText("陆羽")).toBeInTheDocument();
+  expect(screen.getByLabelText("超级专家")).toBeInTheDocument();
+  expect(screen.getByAltText("陆羽")).toHaveAttribute("src", identity.avatar);
+  rerender(
+    <RuntimeProgressCard
+      identity={identity}
+      data={{
+        status: "completed",
+        output: [
+          { type: "message", content: [{ type: "text", text: "你好" }] },
+        ],
+      }}
+    />,
+  );
+  expect(screen.getByText("陆羽")).toBeInTheDocument();
+  expect(screen.queryByText("DClaw")).not.toBeInTheDocument();
+});

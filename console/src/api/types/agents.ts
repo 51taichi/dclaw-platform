@@ -13,6 +13,7 @@ export interface AgentSummary {
   version?: string | null;
   availability?: "available" | "unavailable";
   open_api_enabled?: boolean;
+  avatar?: string | null;
   capabilities?: AgentCapabilities;
   active_model?: ModelSlotConfig | null;
 }

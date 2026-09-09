@@ -21,6 +21,7 @@ import {
 import defaultConfig, { getDefaultConfig } from "./OptionsPanel/defaultConfig";
 import { chatApi } from "../../api/modules/chat";
 import { expertTeamsApi } from "../../api/modules/expertTeams";
+import { useExpertIdentity } from "../../hooks/useExpertIdentity";
 import { agentApi } from "../../api/modules/agent";
 import { getApiUrl } from "../../api/config";
 import { buildAuthHeaders } from "../../api/authHeaders";
@@ -552,6 +553,24 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
     setSelectedExpertTeam,
     setCurrentExpertTeamRun,
   } = useAgentStore();
+  const [taskMetadata, setTaskMetadata] = useState<{
+    chatId: string;
+    agentId?: string;
+    mode?: string;
+  } | null>(null);
+  const taskAgent =
+    taskMetadata && taskMetadata.chatId === chatId
+      ? taskMetadata.agentId
+      : undefined;
+  const taskMode =
+    taskMetadata && taskMetadata.chatId === chatId
+      ? taskMetadata.mode
+      : undefined;
+  const identityAgentId = taskAgent || selectedAgent;
+  const responseIdentity = useExpertIdentity(
+    identityAgentId,
+    !!selectedExpertTeam,
+  );
   const { toolRenderConfig } = usePlugins();
   const runtimeLoadingBridgeRef = useRef<RuntimeLoadingBridgeApi | null>(null);
   const { message } = useAppMessage();
@@ -585,9 +604,6 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
     useState<InsufficientCreditsFailure | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const persistedExpertTeamRef = useRef<string>("");
-
-  const [taskAgent, setTaskAgent] = useState<string>();
-  const [taskMode, setTaskMode] = useState<string>();
 
   useEffect(() => {
     const sessionId = chatId && !isDraftSessionId(chatId) ? chatId : null;
@@ -636,17 +652,32 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
   }, [location.state, setSelectedExpertTeam]);
 
   useEffect(() => {
+    let cancelled = false;
     if (chatId) {
-      sessionApi.getSession(chatId).then((session) => {
-        if (session && (session as any).meta) {
-          setTaskAgent((session as any).meta.agent_id);
-          setTaskMode((session as any).meta.active_mode);
-        }
-      });
+      sessionApi
+        .getSession(chatId)
+        .then((session) => {
+          if (cancelled) return;
+          const meta = (
+            session as {
+              meta?: { agent_id?: string; active_mode?: string };
+            } | null
+          )?.meta;
+          setTaskMetadata({
+            chatId,
+            agentId: meta?.agent_id,
+            mode: meta?.active_mode,
+          });
+        })
+        .catch(() => {
+          if (!cancelled) setTaskMetadata(null);
+        });
     } else {
-      setTaskAgent(undefined);
-      setTaskMode(undefined);
+      setTaskMetadata(null);
     }
+    return () => {
+      cancelled = true;
+    };
   }, [chatId]);
 
   const handleAgentOrModeChange = (agentId?: string, mode?: string) => {
@@ -1886,8 +1917,8 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
       },
       welcome: {
         ...i18nConfig.welcome,
-        nick: "DClaw",
-        avatar: "/mascot.png",
+        nick: responseIdentity.name,
+        avatar: responseIdentity.avatar,
       },
       sender: {
         ...(i18nConfig as any)?.sender,
@@ -1989,6 +2020,7 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
             {...cardProps}
             chatId={window.currentSessionId || chatId || ""}
             agentId={selectedAgent}
+            identity={responseIdentity}
           />
         ),
       },
@@ -2020,6 +2052,7 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
     planEnabled,
     chatId,
     selectedAgent,
+    responseIdentity,
   ]);
 
   return (
