@@ -10,6 +10,7 @@ vi.mock("../../../api/modules/sealedAgents", () => ({
     list: vi.fn(),
     uploadRelease: vi.fn(),
     uploadAvatar: vi.fn(),
+    uploadBanner: vi.fn(),
     previewGrant: vi.fn(),
     acceptGrant: vi.fn(),
     cancelGrant: vi.fn(),
@@ -255,4 +256,49 @@ it("uploads an independent avatar and shows it without replacing releases", asyn
   expect(
     container.querySelector('img[src="data:image/png;base64,new"]'),
   ).not.toBeNull();
+});
+
+it("uploads a promotional banner with a visible size hint", async () => {
+  const user = userEvent.setup();
+  const agent = {
+    agent_id: "luyu",
+    name: "陆羽",
+    description: "流量操盘手",
+    enabled: true,
+    availability: "available" as const,
+    releases: [],
+    capabilities: {
+      invoke: true,
+      inspect: false,
+      edit: false,
+      clone: false,
+      export: false,
+      download: false,
+      trace: false,
+    },
+  };
+  vi.mocked(sealedAgentsApi.list).mockResolvedValue([agent]);
+  vi.mocked(sealedAgentsApi.uploadBanner).mockResolvedValue({
+    ...agent,
+    banner_image: "data:image/webp;base64,banner",
+  });
+  const { container } = render(<SealedAgentsPage />);
+  await user.click(await screen.findByRole("button", { name: /Expand row/ }));
+  expect(screen.getByText(/1800 × 150/)).toBeVisible();
+  const input = container.querySelector(
+    '[data-testid="banner-upload"] input[type="file"]',
+  ) as HTMLInputElement;
+  await user.upload(
+    input,
+    new File(["image"], "banner.png", { type: "image/png" }),
+  );
+  expect(await screen.findByAltText("陆羽宣传图")).toHaveAttribute(
+    "src",
+    "data:image/webp;base64,banner",
+  );
+  expect(sealedAgentsApi.uploadBanner).toHaveBeenCalledWith(
+    "luyu",
+    expect.any(File),
+  );
+  expect(screen.getByText("更新宣传图")).toBeVisible();
 });

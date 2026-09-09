@@ -31,6 +31,10 @@ describe("sealedAgentsApi", () => {
       "agent/one",
       new File(["image"], "avatar.png"),
     );
+    await sealedAgentsApi.uploadBanner(
+      "agent/one",
+      new File(["banner"], "banner.png"),
+    );
     await sealedAgentsApi.activate("agent/one", "release/one");
     await sealedAgentsApi.setEnabled("agent/one", true);
     await sealedAgentsApi.setEnabled("agent/one", false);
@@ -40,6 +44,7 @@ describe("sealedAgentsApi", () => {
         "/api/admin/sealed-agents",
         "/api/admin/sealed-agents/releases",
         "/api/admin/sealed-agents/agent%2Fone/avatar",
+        "/api/admin/sealed-agents/agent%2Fone/banner",
         "/api/admin/sealed-agents/agent%2Fone/releases/release%2Fone/activate",
         "/api/admin/sealed-agents/agent%2Fone/enable",
         "/api/admin/sealed-agents/agent%2Fone/disable",

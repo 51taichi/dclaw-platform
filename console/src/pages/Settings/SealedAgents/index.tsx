@@ -433,6 +433,74 @@ export default function SealedAgentsPage() {
                       {agent.description || "暂无专家介绍"}
                     </Typography.Paragraph>
                   </div>
+                  <div className={styles.bannerSection}>
+                    <div className={styles.bannerFrame}>
+                      {agent.banner_image ? (
+                        <img
+                          src={agent.banner_image}
+                          alt={`${agent.name}宣传图`}
+                        />
+                      ) : (
+                        <span className={styles.bannerPlaceholder}>
+                          上传宣传图，展示专家特色与服务亮点
+                        </span>
+                      )}
+                    </div>
+                    <div className={styles.bannerActions}>
+                      <Typography.Text type="secondary">
+                        建议 12:1 · 1800 × 150 px · PNG / JPEG / WebP · 最大 5
+                        MB
+                      </Typography.Text>
+                      <span data-testid="banner-upload">
+                        <Upload
+                          accept="image/png,image/jpeg,image/webp"
+                          showUploadList={false}
+                          beforeUpload={(file) => {
+                            if (file.size > 5 * 1024 * 1024) {
+                              message.error("宣传图不能超过 5 MB");
+                              return Upload.LIST_IGNORE;
+                            }
+                            return true;
+                          }}
+                          customRequest={async ({
+                            file,
+                            onSuccess,
+                            onError,
+                          }) => {
+                            try {
+                              const updated =
+                                await sealedAgentsApi.uploadBanner(
+                                  agent.agent_id,
+                                  file as File,
+                                );
+                              setAgents((items) =>
+                                items.map((item) =>
+                                  item.agent_id === updated.agent_id
+                                    ? updated
+                                    : item,
+                                ),
+                              );
+                              message.success(
+                                "宣传图已保存，升级版本时会自动保留",
+                              );
+                              onSuccess?.({});
+                            } catch (error) {
+                              onError?.(error as Error);
+                              message.error(
+                                error instanceof Error
+                                  ? error.message
+                                  : "宣传图上传失败",
+                              );
+                            }
+                          }}
+                        >
+                          <Button size="small" icon={<UploadCloud size={14} />}>
+                            {agent.banner_image ? "更新宣传图" : "上传宣传图"}
+                          </Button>
+                        </Upload>
+                      </span>
+                    </div>
+                  </div>
                 </div>
               ),
             }}

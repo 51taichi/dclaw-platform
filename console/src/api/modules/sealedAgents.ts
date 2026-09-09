@@ -32,6 +32,7 @@ export interface SuperExpertGrantPreview {
 
 export interface SealedAgentOperational {
   avatar?: string | null;
+  banner_image?: string | null;
   agent_id: string;
   name: string;
   description: string;
@@ -66,6 +67,23 @@ export const sealedAgentsApi = {
     body.append("file", file);
     const response = await fetch(
       getApiUrl(`/admin/sealed-agents/${encodeURIComponent(agentId)}/avatar`),
+      {
+        method: "POST",
+        headers: buildAuthHeaders(),
+        body,
+      },
+    );
+    if (!response.ok) throw new Error(await response.text());
+    return response.json();
+  },
+  uploadBanner: async (
+    agentId: string,
+    file: File,
+  ): Promise<SealedAgentOperational> => {
+    const body = new FormData();
+    body.append("file", file);
+    const response = await fetch(
+      getApiUrl(`/admin/sealed-agents/${encodeURIComponent(agentId)}/banner`),
       {
         method: "POST",
         headers: buildAuthHeaders(),
