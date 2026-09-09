@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .models import (
     AigcMaterialTask,
+    AigcReviewAsset,
     AigcTaskBinding,
     AigcTaskEvent,
     AigcTaskStatus,
@@ -44,6 +45,7 @@ class AigcTaskCommand(BaseModel):
     event_id: str = Field(min_length=1)
     binding: AigcTaskBinding
     asset_id: str | None = Field(default=None, min_length=1)
+    review_assets: tuple[AigcReviewAsset, ...] = ()
     operation_id: str | None = Field(default=None, min_length=1)
     operation_version: str | None = Field(default=None, min_length=1)
     operation_arguments: dict[str, Any] = Field(default_factory=dict)
@@ -90,6 +92,10 @@ _TERMINAL = {
 
 def _command_digest(command: AigcTaskCommand) -> str:
     payload = command.model_dump(mode="json")
+    if not payload.get("review_assets"):
+        payload.pop("review_assets", None)
+    if payload.get("workflow") and not payload["workflow"]["blueprint"].get("review_node_ids"):
+        payload["workflow"]["blueprint"].pop("review_node_ids", None)
     # These timestamps are assigned by the trusted domain models when callers
     # omit them. They describe when DClaw accepted the object, not command
     # identity, so a retried semantic command must not receive a new digest.
@@ -231,6 +237,7 @@ class AigcTaskRepository:
             if target is None:
                 raise AigcTaskError("illegal task transition")
 
+        review_assets = current.review_assets
         asset_id = current.asset_id
         if (
             command.action == "resume"
@@ -239,6 +246,7 @@ class AigcTaskRepository:
             # A revision cycle deliberately opens a fresh asset slot while the
             # immutable event history retains the previously reviewed asset.
             asset_id = None
+            review_assets = ()
         elif command.action == "submit":
             if not command.asset_id:
                 raise AigcTaskError("submitted task requires an asset")
@@ -249,6 +257,7 @@ class AigcTaskRepository:
             ):
                 raise AigcTaskError("asset binding mismatch")
             asset_id = command.asset_id
+            review_assets = command.review_assets
         elif command.asset_id is not None:
             raise AigcTaskError("asset is not valid for this transition")
         event = AigcTaskEvent(
@@ -261,6 +270,7 @@ class AigcTaskRepository:
             update={
                 "status": target,
                 "asset_id": asset_id,
+                "review_assets": review_assets,
                 "version": current.version + 1,
                 "events": (*current.events, event),
                 "updated_at": event.occurred_at,

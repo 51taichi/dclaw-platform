@@ -91,7 +91,7 @@ async def resolve_owned_asset_for_agent_review(
                                      node_ids=node_ids, asset_kinds=asset_kinds)
 
 
-def _workflow_review_binding(task: Any) -> tuple[set[str], set[str]]:
+def _workflow_review_binding(task: Any, logical_node_id: str | None = None) -> tuple[set[str], set[str]]:
     """Return the exact physical producers and media kinds allowed for review."""
     binding = task.binding
     workflow = task.workflow
@@ -119,7 +119,7 @@ def _workflow_review_binding(task: Any) -> tuple[set[str], set[str]]:
             return
         producer_ids.add(logical_node_id)
 
-    collect(blueprint.output_node_id, set())
+    collect(logical_node_id or blueprint.output_node_id, set())
     physical_ids = {
         binding.node_bindings[logical_id]
         for logical_id in producer_ids
@@ -136,10 +136,41 @@ def _workflow_review_binding(task: Any) -> tuple[set[str], set[str]]:
         and logical.kind in registry
     }
     if not output_types or "asset" in output_types:
-        asset_kinds = {"image", "video", "audio"}
+        asset_kinds = {"image", "video", "audio", "text"}
     else:
-        asset_kinds = output_types & {"image", "video", "audio"}
+        asset_kinds = output_types & {"image", "video", "audio", "text"}
     return physical_ids, asset_kinds
+
+
+async def _resolve_review_bundle(request, task, entries, *, service):
+    """Resolve the declared, ordered submission; ownership stays platform-bound."""
+    expected = task.workflow.blueprint.review_node_ids if task.workflow else ()
+    physical = [task.binding.node_bindings[node] for node in expected]
+    if not isinstance(entries, list) or any(
+        not isinstance(entry, dict) or not isinstance(entry.get("node_id"), str)
+        or not isinstance(entry.get("asset_id"), str) or not entry["asset_id"]
+        for entry in entries
+    ):
+        raise HTTPException(status_code=400, detail="Review submission is invalid.")
+    groups = []
+    for entry in entries:
+        if not groups or groups[-1] != entry["node_id"]:
+            groups.append(entry["node_id"])
+    if not expected or groups != physical:
+        raise HTTPException(status_code=400, detail="Review submission does not match declared nodes.")
+    blocks = []
+    by_id = {node.node_id: node for node in task.workflow.blueprint.nodes}
+    logical_by_physical = dict(zip(physical, expected))
+    for entry in entries:
+        logical = logical_by_physical[entry["node_id"]]
+        nodes, kinds = _workflow_review_binding(task, logical)
+        block = await resolve_owned_asset_for_agent_review(
+            request, str(entry.get("asset_id") or ""), canvas_id=task.binding.canvas_id,
+            node_ids=nodes, asset_kinds=kinds, service=service,
+        )
+        blocks.append({"type": "text", "text": f"提交节点：{by_id[logical].title}；node_id={entry['node_id']}；asset_id={entry['asset_id']}"})
+        blocks.append(block)
+    return blocks
 
 
 def _workflow_review_node_ids(task: Any) -> set[str]:
@@ -312,6 +343,13 @@ async def execute_super_expert_command(
                 asset_id: str,
                 current_task: Any,
             ) -> None:
+                if current_task.workflow and current_task.workflow.blueprint.review_node_ids:
+                    entries = command.arguments.get("review_assets") or []
+                    if (not isinstance(entries, list) or not entries or not isinstance(entries[0], dict)
+                            or entries[0].get("asset_id") != asset_id):
+                        raise HTTPException(status_code=400, detail="Review submission is missing.")
+                    await _resolve_review_bundle(request, current_task, entries, service=service)
+                    return
                 node_ids, asset_kinds = _workflow_review_binding(current_task)
                 await resolve_owned_asset_for_agent_review(
                     request,
@@ -404,14 +442,18 @@ async def _dispatch_agent_asset_review(
             if current_task is not None
             else ({binding.node_id}, {"image", "video", "audio"})
         )
-        media_block = await resolve_owned_asset_for_agent_review(
-            request,
-            asset_id,
-            canvas_id=binding.canvas_id,
-            node_ids=node_ids,
-            asset_kinds=asset_kinds,
-            service=service,
-        )
+        review_assets = getattr(current_task, "review_assets", ())
+        if review_assets:
+            media_blocks = await _resolve_review_bundle(
+                request, current_task,
+                [entry.model_dump(mode="json") for entry in review_assets], service=service,
+            )
+        else:
+            media_blocks = [await resolve_owned_asset_for_agent_review(
+                request, asset_id, canvas_id=binding.canvas_id, node_ids=node_ids,
+                asset_kinds=asset_kinds, service=service,
+            )]
+        media_block = media_blocks[1] if review_assets else media_blocks[0]
         manager = request.app.state.multi_agent_manager
         workspace = await manager.get_agent(grant.agent_id)
     except HTTPException:
@@ -460,7 +502,7 @@ async def _dispatch_agent_asset_review(
                         "请在当前审核阶段读取附件并完成审核；只输出一个当前结论和一个下一步动作。"
                     ),
                 },
-                media_block,
+                *media_blocks,
             ],
         )
     ]
@@ -486,6 +528,8 @@ async def _dispatch_agent_asset_review(
     try:
         with prepared.activate(), bind_review_input(
             user_id=user_id, binding=binding, asset_id=asset_id, media_block=media_block,
+            review_assets=[entry.model_dump(mode="json") for entry in review_assets],
+            media_blocks=media_blocks,
         ):
             async for message, is_last in workspace.runner.query_handler(
                 messages,

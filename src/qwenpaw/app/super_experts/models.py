@@ -93,12 +93,20 @@ class AigcTaskEvent(BaseModel):
     occurred_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class AigcReviewAsset(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    node_id: str = Field(min_length=1)
+    asset_id: str = Field(min_length=1)
+
+
 class AigcMaterialTask(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     binding: AigcTaskBinding
     status: AigcTaskStatus
     asset_id: str | None = None
+    review_assets: tuple[AigcReviewAsset, ...] = ()
     version: int = Field(ge=1)
     events: tuple[AigcTaskEvent, ...]
     operation_id: str | None = Field(default=None, min_length=1)

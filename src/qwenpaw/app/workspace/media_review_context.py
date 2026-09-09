@@ -19,15 +19,28 @@ _REVIEW_INPUT: ContextVar[dict[str, Any] | None] = ContextVar('aigc_review_input
 
 @contextmanager
 def bind_review_input(*, user_id: str, binding: AigcTaskBinding,
-                      asset_id: str, media_block: dict[str, Any]):
+                      asset_id: str, media_block: dict[str, Any],
+                      review_assets: list[dict[str, Any]] | None = None,
+                      media_blocks: list[dict[str, Any]] | None = None):
     kind = media_block.get('type')
-    if kind not in {'image', 'video', 'audio'} or not asset_id:
+    if kind not in {'image', 'video', 'audio', 'text'} or not asset_id:
         raise ValueError('invalid review media input')
     digest = hashlib.sha256(json.dumps(media_block, sort_keys=True, ensure_ascii=False,
                                       separators=(',', ':'), allow_nan=False).encode()).hexdigest()
     value = {'user_id': str(user_id), 'binding': binding.model_dump(mode='json'),
              'schema_version': 'dclaw-aigc-review-input-v1', 'asset_id': asset_id,
              'media_kind': kind, 'block_digest': 'sha256:' + digest}
+    if review_assets:
+        value['review_assets'] = copy.deepcopy(review_assets)
+        def block_digest(block):
+            encoded = json.dumps(block, sort_keys=True, ensure_ascii=False,
+                                 separators=(',', ':'), allow_nan=False).encode()
+            return 'sha256:' + hashlib.sha256(encoded).hexdigest()
+        value['review_blocks'] = [
+            {'type': block.get('type'), 'digest': block_digest(block)}
+            for block in (media_blocks or [])
+        ]
+        value['blocks_digest'] = block_digest(media_blocks)
     token = _REVIEW_INPUT.set(value)
     try:
         yield

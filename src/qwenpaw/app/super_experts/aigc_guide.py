@@ -262,7 +262,8 @@ def project_aigc_guide(
                 AigcTaskStatus.ACCEPTED,
             }:
                 status: GuideStepStatus = "COMPLETED"
-            elif output_status in {"COMPLETED", "SKIPPED"}:
+            elif (all(logical_status.get(node) == "COMPLETED" for node in workflow.blueprint.review_node_ids)
+                  if workflow.blueprint.review_node_ids else output_status in {"COMPLETED", "SKIPPED"}):
                 status = "READY"
             else:
                 status = "LOCKED"

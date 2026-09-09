@@ -69,6 +69,17 @@ async def review_media_source(
         if not is_cloud:
             root = (await artifact_root_resolver(request) if artifact_root_resolver
                     else await artifact_root_for_request(request, service.store))
+        if asset.kind == "file" and (asset.mime_type or "").split(";")[0] in {"text/plain", "text/markdown", "application/json"}:
+            if asset_kinds is not None and "text" not in asset_kinds:
+                raise AigcResourceError("ASSET_TYPE_MISMATCH")
+            if is_cloud:
+                raw, _ = await client.download(service.cloud_storage_meta(asset)["object_key"])
+            else:
+                path = service.local_path(asset, artifact_root=root)
+                if not path.is_file():
+                    raise AigcResourceError("ASSET_FILE_NOT_FOUND")
+                raw = path.read_bytes()
+            return {"type": "text", "text": raw.decode("utf-8-sig")}
         return service.review_source(
             asset, canvas_id=canvas_id, node_ids=node_ids, asset_kinds=asset_kinds,
             artifact_root=root, storage_client=client,

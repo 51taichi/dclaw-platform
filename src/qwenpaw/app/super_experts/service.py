@@ -653,6 +653,7 @@ class SuperExpertPlatformService:
                 action=action,
                 event_id=event_id,
                 binding=binding,
+                review_assets=arguments.get("review_assets", ()) if capability == "aigc.asset.submit" else (),
                 asset_id=(
                     arguments.get("asset_id")
                     if capability == "aigc.asset.submit"
@@ -661,7 +662,10 @@ class SuperExpertPlatformService:
             ),
             idempotency_key=idempotency_key,
         )
-        return {"task": task, "payload": dict(arguments.get("payload") or {})}
+        payload = dict(arguments.get("payload") or {})
+        if task.review_assets:
+            payload["review_assets"] = [item.model_dump(mode="json") for item in task.review_assets]
+        return {"task": task, "payload": payload}
 
 
 def _operation_catalog_path() -> Path:
