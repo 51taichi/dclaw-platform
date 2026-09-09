@@ -155,6 +155,7 @@ class SealedAgentService:
                 name=manifest.name,
                 description=manifest.public_metadata.description,
                 icon=manifest.public_metadata.icon,
+                avatar=current.avatar if current else None,
                 enabled=current.enabled if current else True,
                 active_release_id=current.active_release_id if current else None,
                 releases=[*(current.releases if current else []), release],

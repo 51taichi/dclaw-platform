@@ -261,3 +261,21 @@ def test_agents_are_optional_and_failures_are_isolated(tmp_path):
     service.disable("luyu")
     assert service.get_agent("luyu").enabled is False
     assert service.get_agent("tea-master").enabled is True
+
+
+@pytest.mark.asyncio
+async def test_uploaded_avatar_survives_release_upgrade_and_registry_reload(tmp_path):
+    private = Ed25519PrivateKey.generate()
+    service = _service(tmp_path, private.public_key())
+    service.install(_package(private))
+    current = service.get_agent("luyu")
+    service.registry.upsert_agent(
+        current.model_copy(update={"avatar": "data:image/png;base64,test"})
+    )
+    release = service.install(_package(private, version="2.0.0"))
+    await service.validate_release_runtime("luyu", release.release_id)
+    service.activate("luyu", release.release_id)
+    assert (
+        SealedAgentRegistry(tmp_path).get_agent("luyu").avatar
+        == "data:image/png;base64,test"
+    )

@@ -114,6 +114,7 @@ class SealedAgentRecord(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: str = Field(default="", max_length=2000)
     icon: str | None = None
+    avatar: str | None = None
     agent_type: Literal["sealed"] = "sealed"
     scope: Literal["global"] = "global"
     enabled: bool = True

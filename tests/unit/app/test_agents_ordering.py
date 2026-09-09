@@ -302,3 +302,36 @@ async def test_delete_agent_removes_id_from_order(monkeypatch):
     )
 
     assert config.agents.agent_order == ["alpha", "default"]
+
+
+@pytest.mark.asyncio
+async def test_sealed_publication_remains_client_visible_with_api_marker(monkeypatch):
+    from types import SimpleNamespace
+
+    record = SealedAgentRecord(
+        agent_id="luyu", name="陆羽", avatar="data:image/png;base64,test"
+    )
+    monkeypatch.setattr(
+        agents_router, "load_config", lambda: _build_config(["default"])
+    )
+    monkeypatch.setattr(agents_router, "load_agent_config", _agent_config)
+    monkeypatch.setattr(
+        agents_router,
+        "get_sealed_agent_registry",
+        lambda: SimpleNamespace(
+            is_sealed=lambda agent_id: agent_id == "luyu", list_agents=lambda: [record]
+        ),
+    )
+    monkeypatch.setattr(
+        agents_router,
+        "get_open_api_repository",
+        lambda: SimpleNamespace(
+            list_publications=lambda **kwargs: [
+                {"target_type": "agent", "target_id": "luyu"}
+            ]
+        ),
+    )
+    response = await agents_router.list_agents(exclude_open_api=True)
+    sealed = next(agent for agent in response.agents if agent.id == "luyu")
+    assert sealed.open_api_enabled is True
+    assert sealed.avatar == record.avatar

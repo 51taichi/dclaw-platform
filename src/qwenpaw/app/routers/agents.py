@@ -87,6 +87,7 @@ class AgentSummary(BaseModel):
     version: str | None = None
     availability: str = "available"
     open_api_enabled: bool = False
+    avatar: str | None = None
     capabilities: AgentCapabilities = Field(
         default_factory=AgentCapabilities.for_standard,
     )
@@ -320,12 +321,17 @@ async def list_agents(exclude_open_api: bool = False) -> AgentListResponse:
                     else "unavailable"
                 ),
                 open_api_enabled=sealed.agent_id in open_api_agent_ids,
+                avatar=sealed.avatar,
                 capabilities=AgentCapabilities.for_sealed_global(),
             ),
         )
 
     if exclude_open_api:
-        agents = [agent for agent in agents if not agent.open_api_enabled]
+        agents = [
+            agent
+            for agent in agents
+            if agent.agent_type == "sealed" or not agent.open_api_enabled
+        ]
 
     return AgentListResponse(agents=agents)
 

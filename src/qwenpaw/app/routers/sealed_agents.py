@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -62,6 +64,7 @@ def _operational_dto(record: SealedAgentRecord) -> dict[str, Any]:
         "name": record.name,
         "description": record.description,
         "icon": record.icon,
+        "avatar": record.avatar,
         "agent_type": "sealed",
         "scope": "global",
         "enabled": record.enabled,
@@ -127,6 +130,49 @@ def _trusted_actor(request: Request) -> tuple[str, str]:
 def list_sealed_agents(request: Request) -> list[dict[str, Any]]:
     _require_admin(request)
     return [_operational_dto(item) for item in get_sealed_agent_service().list_agents()]
+
+
+@router.post("/{agent_id}/avatar")
+async def upload_sealed_agent_avatar(
+    agent_id: str,
+    request: Request,
+    file: UploadFile = File(...),
+) -> dict[str, Any]:
+    """Store public identity independently of immutable release assets."""
+    from PIL import Image, ImageOps, UnidentifiedImageError
+
+    _require_admin(request)
+    registry = get_sealed_agent_registry()
+    record = registry.get_agent(agent_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Expert not found")
+    data = await file.read(2 * 1024 * 1024 + 1)
+    if len(data) > 2 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Avatar must be at most 2 MB")
+    try:
+        with Image.open(BytesIO(data)) as source:
+            if source.format not in {"PNG", "JPEG", "WEBP"}:
+                raise ValueError("Unsupported image format")
+            if source.width * source.height > 16_000_000:
+                raise ValueError("Image dimensions exceed limit")
+            avatar = ImageOps.exif_transpose(source).convert("RGBA")
+            avatar.thumbnail((256, 256))
+            output = BytesIO()
+            avatar.save(output, format="PNG")
+    except (
+        OSError,
+        ValueError,
+        UnidentifiedImageError,
+        Image.DecompressionBombError,
+    ) as exc:
+        raise HTTPException(
+            status_code=400, detail="Upload a valid PNG, JPEG or WebP image"
+        ) from exc
+    value = "data:image/png;base64," + base64.b64encode(output.getvalue()).decode(
+        "ascii"
+    )
+    updated = registry.upsert_agent(record.model_copy(update={"avatar": value}))
+    return _operational_dto(updated)
 
 
 @router.post("/releases")

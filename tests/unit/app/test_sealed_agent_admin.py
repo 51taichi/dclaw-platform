@@ -458,3 +458,62 @@ async def test_disable_stops_loaded_runtime_and_config(monkeypatch):
     assert response["enabled"] is False
     assert config.agents.profiles["luyu"].enabled is False
     assert stopped == ["luyu"]
+
+
+@pytest.mark.asyncio
+async def test_avatar_upload_persists_normalized_image(monkeypatch, tmp_path):
+    from PIL import Image
+    from qwenpaw.app.sealed_agents.registry import SealedAgentRegistry
+
+    registry = SealedAgentRegistry(tmp_path)
+    registry.upsert_agent(_record())
+    monkeypatch.setattr(router_module, "get_sealed_agent_registry", lambda: registry)
+    data = BytesIO()
+    Image.new("RGB", (16, 16), "gold").save(data, format="PNG")
+    data.seek(0)
+    result = await router_module.upload_sealed_agent_avatar(
+        "luyu", _request(), UploadFile(data, filename="avatar.png")
+    )
+    assert result["avatar"].startswith("data:image/png;base64,")
+    assert registry.get_agent("luyu").avatar == result["avatar"]
+
+
+@pytest.mark.asyncio
+async def test_avatar_upload_rejects_non_admin_and_invalid_image(monkeypatch, tmp_path):
+    from qwenpaw.app.sealed_agents.registry import SealedAgentRegistry
+
+    registry = SealedAgentRegistry(tmp_path)
+    registry.upsert_agent(_record())
+    monkeypatch.setattr(router_module, "get_sealed_agent_registry", lambda: registry)
+    for role, status in [("user", 403), ("admin", 400)]:
+        with pytest.raises(HTTPException) as error:
+            await router_module.upload_sealed_agent_avatar(
+                "luyu", _request(role), UploadFile(BytesIO(b"not an image"))
+            )
+        assert error.value.status_code == status
+
+
+@pytest.mark.asyncio
+async def test_avatar_upload_rejects_missing_expert_and_oversized_upload(
+    monkeypatch, tmp_path
+):
+    from qwenpaw.app.sealed_agents.registry import SealedAgentRegistry
+
+    registry = SealedAgentRegistry(tmp_path)
+    monkeypatch.setattr(router_module, "get_sealed_agent_registry", lambda: registry)
+    with pytest.raises(HTTPException) as missing:
+        await router_module.upload_sealed_agent_avatar(
+            "unknown",
+            _request(),
+            UploadFile(BytesIO(b"image")),
+        )
+    assert missing.value.status_code == 404
+    registry.upsert_agent(_record())
+    with pytest.raises(HTTPException) as oversized:
+        await router_module.upload_sealed_agent_avatar(
+            "luyu",
+            _request(),
+            UploadFile(BytesIO(b"x" * (2 * 1024 * 1024 + 1))),
+        )
+    assert oversized.value.status_code == 400
+    assert registry.get_agent("luyu").avatar is None
