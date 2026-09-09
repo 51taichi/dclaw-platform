@@ -214,7 +214,7 @@ export default function SealedAgentsPage() {
       <div className={styles.content}>
         <div className={styles.summary}>
           <div className={styles.summaryItem}>
-            <p className={styles.summaryLabel}>密封 Agent</p>
+            <p className={styles.summaryLabel}>超级Agent</p>
             <div className={styles.summaryValue}>{agents.length}</div>
           </div>
           <div className={styles.summaryItem}>
