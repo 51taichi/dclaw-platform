@@ -65,6 +65,7 @@ def _operational_dto(record: SealedAgentRecord) -> dict[str, Any]:
         "description": record.description,
         "icon": record.icon,
         "avatar": record.avatar,
+        "banner_image": record.banner_image,
         "agent_type": "sealed",
         "scope": "global",
         "enabled": record.enabled,
@@ -132,13 +133,16 @@ def list_sealed_agents(request: Request) -> list[dict[str, Any]]:
     return [_operational_dto(item) for item in get_sealed_agent_service().list_agents()]
 
 
-@router.post("/{agent_id}/avatar")
-async def upload_sealed_agent_avatar(
+async def _upload_expert_image(
     agent_id: str,
     request: Request,
-    file: UploadFile = File(...),
+    file: UploadFile,
+    *,
+    field: str,
+    max_bytes: int,
+    dimensions: tuple[int, int],
+    image_format: str,
 ) -> dict[str, Any]:
-    """Store public identity independently of immutable release assets."""
     from PIL import Image, ImageOps, UnidentifiedImageError
 
     _require_admin(request)
@@ -146,19 +150,22 @@ async def upload_sealed_agent_avatar(
     record = registry.get_agent(agent_id)
     if record is None:
         raise HTTPException(status_code=404, detail="Expert not found")
-    data = await file.read(2 * 1024 * 1024 + 1)
-    if len(data) > 2 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="Avatar must be at most 2 MB")
+    data = await file.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Image must be at most {max_bytes // (1024 * 1024)} MB",
+        )
     try:
         with Image.open(BytesIO(data)) as source:
             if source.format not in {"PNG", "JPEG", "WEBP"}:
                 raise ValueError("Unsupported image format")
             if source.width * source.height > 16_000_000:
                 raise ValueError("Image dimensions exceed limit")
-            avatar = ImageOps.exif_transpose(source).convert("RGBA")
-            avatar.thumbnail((256, 256))
+            image = ImageOps.exif_transpose(source).convert("RGBA")
+            image.thumbnail(dimensions)
             output = BytesIO()
-            avatar.save(output, format="PNG")
+            image.save(output, format=image_format)
     except (
         OSError,
         ValueError,
@@ -168,11 +175,45 @@ async def upload_sealed_agent_avatar(
         raise HTTPException(
             status_code=400, detail="Upload a valid PNG, JPEG or WebP image"
         ) from exc
-    value = "data:image/png;base64," + base64.b64encode(output.getvalue()).decode(
-        "ascii"
-    )
-    updated = registry.upsert_agent(record.model_copy(update={"avatar": value}))
+    value = f"data:image/{image_format.lower()};base64," + base64.b64encode(
+        output.getvalue()
+    ).decode("ascii")
+    updated = registry.upsert_agent(record.model_copy(update={field: value}))
     return _operational_dto(updated)
+
+
+@router.post("/{agent_id}/avatar")
+async def upload_sealed_agent_avatar(
+    agent_id: str,
+    request: Request,
+    file: UploadFile = File(...),
+) -> dict[str, Any]:
+    return await _upload_expert_image(
+        agent_id,
+        request,
+        file,
+        field="avatar",
+        max_bytes=2 * 1024 * 1024,
+        dimensions=(256, 256),
+        image_format="PNG",
+    )
+
+
+@router.post("/{agent_id}/banner")
+async def upload_sealed_agent_banner(
+    agent_id: str,
+    request: Request,
+    file: UploadFile = File(...),
+) -> dict[str, Any]:
+    return await _upload_expert_image(
+        agent_id,
+        request,
+        file,
+        field="banner_image",
+        max_bytes=5 * 1024 * 1024,
+        dimensions=(2400, 1200),
+        image_format="WEBP",
+    )
 
 
 @router.post("/releases")

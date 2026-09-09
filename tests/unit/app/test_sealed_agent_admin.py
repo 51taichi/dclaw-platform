@@ -517,3 +517,59 @@ async def test_avatar_upload_rejects_missing_expert_and_oversized_upload(
         )
     assert oversized.value.status_code == 400
     assert registry.get_agent("luyu").avatar is None
+
+
+@pytest.mark.asyncio
+async def test_banner_upload_is_independent_and_keeps_image_proportions(
+    monkeypatch, tmp_path
+):
+    import base64
+    from PIL import Image
+    from qwenpaw.app.sealed_agents.registry import SealedAgentRegistry
+
+    registry = SealedAgentRegistry(tmp_path)
+    registry.upsert_agent(_record().model_copy(update={"avatar": "existing-avatar"}))
+    monkeypatch.setattr(router_module, "get_sealed_agent_registry", lambda: registry)
+    data = BytesIO()
+    Image.new("RGB", (1800, 150), "blue").save(data, format="PNG")
+    data.seek(0)
+    result = await router_module.upload_sealed_agent_banner(
+        "luyu", _request(), UploadFile(data)
+    )
+    assert result["avatar"] == "existing-avatar"
+    with Image.open(
+        BytesIO(base64.b64decode(result["banner_image"].split(",", 1)[1]))
+    ) as image:
+        assert image.size == (1800, 150)
+    assert registry.get_agent("luyu").banner_image == result["banner_image"]
+
+
+@pytest.mark.asyncio
+async def test_banner_upload_rejects_invalid_image_and_non_admin(monkeypatch, tmp_path):
+    from qwenpaw.app.sealed_agents.registry import SealedAgentRegistry
+
+    registry = SealedAgentRegistry(tmp_path)
+    registry.upsert_agent(_record())
+    monkeypatch.setattr(router_module, "get_sealed_agent_registry", lambda: registry)
+    for role, code in [("user", 403), ("admin", 400)]:
+        with pytest.raises(HTTPException) as error:
+            await router_module.upload_sealed_agent_banner(
+                "luyu", _request(role), UploadFile(BytesIO(b"bad"))
+            )
+        assert error.value.status_code == code
+
+
+@pytest.mark.asyncio
+async def test_banner_size_limit_preserves_existing_media(monkeypatch, tmp_path):
+    from qwenpaw.app.sealed_agents.registry import SealedAgentRegistry
+
+    registry = SealedAgentRegistry(tmp_path)
+    original = _record().model_copy(update={"avatar": "avatar", "banner_image": "banner"})
+    registry.upsert_agent(original)
+    monkeypatch.setattr(router_module, "get_sealed_agent_registry", lambda: registry)
+    with pytest.raises(HTTPException) as error:
+        await router_module.upload_sealed_agent_banner(
+            "luyu", _request(), UploadFile(BytesIO(b"x" * (5 * 1024 * 1024 + 1))),
+        )
+    assert error.value.status_code == 400
+    assert registry.get_agent("luyu") == original

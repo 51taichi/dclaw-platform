@@ -270,11 +270,20 @@ async def test_uploaded_avatar_survives_release_upgrade_and_registry_reload(tmp_
     service.install(_package(private))
     current = service.get_agent("luyu")
     service.registry.upsert_agent(
-        current.model_copy(update={"avatar": "data:image/png;base64,test"})
+        current.model_copy(
+            update={
+                "avatar": "data:image/png;base64,test",
+                "banner_image": "data:image/webp;base64,banner",
+            }
+        )
     )
     release = service.install(_package(private, version="2.0.0"))
     await service.validate_release_runtime("luyu", release.release_id)
     service.activate("luyu", release.release_id)
+    assert (
+        SealedAgentRegistry(tmp_path).get_agent("luyu").banner_image
+        == "data:image/webp;base64,banner"
+    )
     assert (
         SealedAgentRegistry(tmp_path).get_agent("luyu").avatar
         == "data:image/png;base64,test"
