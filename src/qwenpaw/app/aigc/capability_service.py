@@ -27,7 +27,6 @@ SUPPORTED_AIGC_CAPABILITIES = {
     "text_to_video",
     "image_to_video",
     "reference_video",
-    "text_to_audio",
     "storyboard",
 }
 TEXT_MODEL_CAPABILITY_ALIASES = {
@@ -43,7 +42,6 @@ OUTPUT_GENERATION_CAPABILITIES = {
     "mask_edit",
     "text_to_video",
     "image_to_video",
-    "text_to_audio",
 }
 
 _MXAPI_SEEDANCE_ENDPOINTS = {"seedance2", "seedance2-fast", "seedance2-mini"}
@@ -173,10 +171,6 @@ def _tool_capabilities(tool_name: str) -> list[str]:
         return ["image_to_video"]
     if name.startswith("reference_to_video"):
         return ["reference_video", "text_to_video"]
-    if name.startswith("text_to_audio") or name.startswith("generate_audio"):
-        return ["text_to_audio"]
-    if name.startswith("text_to_music") or name.startswith("generate_music"):
-        return ["text_to_audio"]
     return []
 
 
@@ -346,15 +340,6 @@ def _parameter_schema_for(
                     },
                 },
             )
-    elif "audio" in capability or "music" in capability:
-        common["properties"].update(
-            {
-                "duration": {"type": "number"},
-                "voice": {"type": "string"},
-                "speech_rate": {"type": "number"},
-                "audio_mode": {"type": "string"},
-            },
-        )
     else:
         common["properties"].update(
             {

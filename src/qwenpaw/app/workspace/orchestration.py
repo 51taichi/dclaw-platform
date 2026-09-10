@@ -469,6 +469,7 @@ async def run_workspace_orchestration_turn(
     config: OrchestrationConfig,
     authorization: AuthorizedWorkspaceRelease,
     business_call: Callable[[str, dict[str, Any]], Any] | None = None,
+    read_aigc_task: Callable[[str], dict[str, Any] | None] | None = None,
     safe_metadata: dict[str, Any] | None = None,
     timeout_seconds: float | None = None,
 ) -> WorkspaceTurnResult:
@@ -559,7 +560,20 @@ async def run_workspace_orchestration_turn(
         media_delivery: dict[str, Any] = {}
         try:
             if execution_mode == "agent_loop":
-                candidate = await agent(messages)
+                from .aigc_tools import build_aigc_tools, bind_aigc_tools, track_media_delivery
+                tools = build_aigc_tools(
+                    grants=authorization.granted_capabilities,
+                    installation_id=authorization.installation_id,
+                    conversation_id=turn_request.session_id,
+                    business_call=business_call, read_task=read_aigc_task,
+                    review_input=(safe_metadata or {}).get("aigcReviewInput"),
+                    media_delivery=media_delivery,
+                )
+                if tools:
+                    with bind_aigc_tools(agent, tools), track_media_delivery(agent, messages, media_delivery):
+                        candidate = await agent(messages)
+                else:
+                    candidate = await agent(messages)
             else:
                 candidate = await _execute_internal_candidate(
                     agent, messages, media_delivery=media_delivery,

@@ -105,7 +105,6 @@ _PHYSICAL_PREFIX = {
     "prompt": "prompt",
     "image_generate": "image",
     "video_generate": "video",
-    "audio_generate": "audio",
     "script_generate": "script",
     "long_image_export": "long-image",
     "reference_note": "reference-note",
@@ -323,15 +322,6 @@ def _node_data(
             "videoDuration": parameters.get("duration_seconds", 5),
             "videoAudio": parameters.get("generate_audio", False),
             "videoCount": 1,
-        }
-    if node.kind == "audio_generate":
-        return {
-            **common,
-            "text": prompt,
-            "composerText": prompt,
-            "audioDuration": parameters.get("duration_seconds"),
-            "voice": parameters.get("voice"),
-            "language": parameters.get("language"),
         }
     if node.kind == "script_generate":
         return {

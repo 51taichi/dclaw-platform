@@ -58,7 +58,7 @@ class _FakeTaskTracker:
     def __init__(self):
         self.calls: list[dict[str, object]] = []
 
-    async def attach_or_start(
+    async def start_new(
         self,
         chat_id: str,
         native_payload,
@@ -395,8 +395,8 @@ async def test_continue_message_resumes_paused_team_without_new_run(
     monkeypatch,
 ):
     class _StartingTracker(_FakeTaskTracker):
-        async def attach_or_start(self, *args, **kwargs):
-            queue, _ = await super().attach_or_start(*args, **kwargs)
+        async def start_new(self, *args, **kwargs):
+            queue, _ = await super().start_new(*args, **kwargs)
             return queue, True
 
     tracker = _StartingTracker()

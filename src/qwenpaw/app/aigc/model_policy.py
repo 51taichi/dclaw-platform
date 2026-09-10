@@ -7,12 +7,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
-AigcModelCategory = Literal["text", "image", "video", "audio"]
+AigcModelCategory = Literal["text", "image", "video"]
 AIGC_MODEL_CATEGORIES: tuple[AigcModelCategory, ...] = (
     "text",
     "image",
     "video",
-    "audio",
 )
 
 
@@ -23,12 +22,12 @@ def policy_enforcement_enabled(
     return value.strip().lower() not in {"0", "false", "off"}
 
 
-def category_for_capability(capability: str) -> AigcModelCategory:
+def category_for_capability(capability: str) -> AigcModelCategory | None:
     normalized = str(capability).strip().lower()
     if normalized == "storyboard":
         return "text"
     if "audio" in normalized or "music" in normalized:
-        return "audio"
+        return None
     if "video" in normalized:
         return "video"
     return "image"
@@ -45,6 +44,8 @@ def filter_capabilities(
             filtered.append(item)
             continue
         category = category_for_capability(str(getattr(item, "capability", "")))
+        if category is None:
+            continue
         allowed = allowed_by_category.get(category)
         if (
             allowed is None
@@ -122,9 +123,14 @@ def _model_categories(model: Any) -> tuple[AigcModelCategory, ...]:
         str(value).strip().lower()
         for value in (generate_kwargs.get("aigc_capabilities", ()) or ())
     )
+    removed_audio_generation = capabilities.intersection(
+        {"text_to_audio", "text_to_music", "generate_audio", "generate_music"}
+    )
 
     categories: list[AigcModelCategory] = []
-    if model_type == "llm":
+    if model_type == "llm" and (
+        not removed_audio_generation or "storyboard" in capabilities
+    ):
         categories.append("text")
     if model_type == "image" or capabilities.intersection(
         {"text_to_image", "image_edit", "image_to_image", "mask_edit"}
@@ -134,10 +140,6 @@ def _model_categories(model: Any) -> tuple[AigcModelCategory, ...]:
         {"text_to_video", "image_to_video", "reference_video"}
     ):
         categories.append("video")
-    if capabilities.intersection(
-        {"text_to_audio", "text_to_music", "generate_audio", "generate_music"}
-    ):
-        categories.append("audio")
     return tuple(dict.fromkeys(categories))
 
 

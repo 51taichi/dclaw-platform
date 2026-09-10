@@ -145,6 +145,15 @@ def _workflow_catalog():
                 AigcCapabilityInfo(
                     provider_id="provider-1",
                     provider_name="Provider",
+                    model_id="image-1",
+                    model_name="Image One",
+                    capability="text_to_image",
+                    source="model_registry",
+                    parameter_schema={"type": "object"},
+                ),
+                AigcCapabilityInfo(
+                    provider_id="provider-1",
+                    provider_name="Provider",
                     model_id="video-1",
                     model_name="Video One",
                     capability="text_to_video",
@@ -663,8 +672,9 @@ async def test_create_v2_rejects_agent_supplied_canvas_or_node_ids(tmp_path):
 def test_workflow_catalog_exposes_all_canvas_nodes_and_real_models():
     catalog = _workflow_catalog()
 
-    assert len(catalog.nodes) == 11
+    assert len(catalog.nodes) == 10
     by_kind = {node.kind: node for node in catalog.nodes}
+    assert "audio_generate" not in by_kind
     assert by_kind["video_generate"].provisioning == "AUTO_PROVISIONABLE"
     assert by_kind["video_compose"].provisioning == "UNAVAILABLE"
     assert by_kind["director_stage"].provisioning == "UNAVAILABLE"
@@ -673,6 +683,7 @@ def test_workflow_catalog_exposes_all_canvas_nodes_and_real_models():
         for model in catalog.available_models
         } == {
             ("provider-1", "text-1", "storyboard"),
+            ("provider-1", "image-1", "text_to_image"),
             ("provider-1", "video-1", "text_to_video"),
         ("provider-1", "video-1", "image_to_video"),
     }
@@ -727,6 +738,264 @@ async def test_authorized_workflow_create_provisions_all_nodes_and_bindings(
     assert len(bus.events) == 1
     event = bus.events[0].payload["envelope"]
     assert event["payload"]["workflow_binding"] == binding
+
+
+@pytest.mark.asyncio
+async def test_workflow_create_http_api_provisions_every_available_node_without_running_jobs(
+    tmp_path,
+    monkeypatch,
+):
+    from qwenpaw.app.aigc.models import AigcAsset
+    from qwenpaw.app.routers import aigc_studio
+
+    monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
+    aigc_studio._resource_store.cache_clear()
+    service, grant, _bus = _service(tmp_path)
+    service.aigc.assets.store.write(
+        "assets",
+        "reference-1",
+        AigcAsset(
+            id="reference-1",
+            kind="image",
+            name="参考图",
+            path="unused.jpg",
+            created_at="2026-09-09T00:00:00+00:00",
+            meta={"owner_user_id": "user-a"},
+        ).model_dump(mode="json"),
+    )
+
+    async def catalog():
+        return _workflow_catalog()
+
+    monkeypatch.setattr(router_module, "_load_workflow_capability_catalog", catalog)
+    monkeypatch.setattr(
+        router_module,
+        "get_super_expert_platform_service",
+        lambda: service,
+    )
+    monkeypatch.setattr(router_module, "ensure_chat_access", lambda *_args, **_kwargs: {})
+    app = FastAPI()
+    app.include_router(api_router, prefix="/api")
+
+    def authenticated(request: Request):
+        request.state.user_id = "user-a"
+        request.state.tenant_id = "tenant-a"
+
+    app.dependency_overrides[require_user] = authenticated
+    nodes = [
+        {
+            "node_id": "copy",
+            "kind": "prompt",
+            "title": "文案",
+            "capability": "storyboard",
+            "provider_id": "provider-1",
+            "model_id": "text-1",
+            "inputs": {"text": "产品卖点"},
+            "parameters": {},
+            "customer_action": "CLICK_GENERATE",
+            "optional": False,
+        },
+        {
+            "node_id": "image",
+            "kind": "image_generate",
+            "title": "主图",
+            "capability": "text_to_image",
+            "provider_id": "provider-1",
+            "model_id": "image-1",
+            "inputs": {"prompt": "产品主图"},
+            "parameters": {"aspect_ratio": "1:1", "count": 1},
+            "customer_action": "CLICK_GENERATE",
+            "optional": False,
+        },
+        {
+            "node_id": "video",
+            "kind": "video_generate",
+            "title": "视频",
+            "capability": "text_to_video",
+            "provider_id": "provider-1",
+            "model_id": "video-1",
+            "inputs": {"prompt": "产品短视频"},
+            "parameters": {"duration_seconds": 5, "generate_audio": True},
+            "customer_action": "CLICK_GENERATE",
+            "optional": False,
+        },
+        {
+            "node_id": "script",
+            "kind": "script_generate",
+            "title": "脚本",
+            "capability": "storyboard",
+            "provider_id": "provider-1",
+            "model_id": "text-1",
+            "inputs": {"prompt": "产品脚本"},
+            "parameters": {"shot_count": 3},
+            "customer_action": "CLICK_GENERATE",
+            "optional": False,
+        },
+        {
+            "node_id": "long-image",
+            "kind": "long_image_export",
+            "title": "长图",
+            "inputs": {"title": "产品长图"},
+            "parameters": {"width": 1080},
+            "customer_action": "CLICK_GENERATE",
+            "optional": False,
+        },
+        {
+            "node_id": "note",
+            "kind": "reference_note",
+            "title": "说明",
+            "inputs": {"text": "参考说明"},
+            "parameters": {},
+            "customer_action": "INSPECT",
+            "optional": False,
+        },
+        {
+            "node_id": "asset",
+            "kind": "reference_asset",
+            "title": "参考素材",
+            "inputs": {"asset_id": "reference-1"},
+            "parameters": {},
+            "customer_action": "SELECT_ASSET",
+            "optional": False,
+        },
+        {
+            "node_id": "result",
+            "kind": "output",
+            "title": "输出",
+            "inputs": {"label": "最终视频"},
+            "parameters": {},
+            "customer_action": "INSPECT",
+            "optional": False,
+        },
+    ]
+    payload = {
+        "installation_id": grant.installation_id,
+        "contract_version": "1",
+        "idempotency_key": "all-available-nodes",
+        "arguments": {
+            "scope": _scope(grant.installation_id),
+            "event_id": "all-available-nodes",
+            "workflow": {
+                "schema_version": 1,
+                "title": "全部可创建节点",
+                "execution_preference": "CUSTOMER_TRIGGERED",
+                "nodes": nodes,
+                "edges": [
+                    {"source": "copy", "target": "image", "target_slot": "prompt"},
+                    {"source": "image", "target": "video", "target_slot": "reference_image"},
+                    {"source": "video", "target": "result", "target_slot": "asset"},
+                ],
+                "output_node_id": "result",
+                "fallback_policy": "FAIL_CLOSED",
+            },
+        },
+    }
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/api/super-expert-platform/commands/aigc.workflow.create/1",
+            json=payload,
+        )
+
+    assert response.status_code == 200, response.text
+    binding = response.json()["task"]["binding"]
+    canvas = service.aigc.canvases.load(binding["canvas_id"])
+    assert {node.type for node in canvas.nodes} == {
+        "prompt",
+        "image_generate",
+        "video_generate",
+        "script_generate",
+        "long_image_export",
+        "reference_note",
+        "reference_asset",
+        "output",
+    }
+    assert service.aigc.canvases.jobs(canvas.id) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("node_kind", "expected_error"),
+    [
+        ("video_compose", "NODE_KIND_UNAVAILABLE"),
+        ("director_stage", "NODE_KIND_UNAVAILABLE"),
+        ("audio_generate", "WORKFLOW_SCHEMA_INVALID"),
+    ],
+)
+async def test_workflow_create_http_api_rejects_every_non_creatable_node_without_partial_canvas(
+    tmp_path,
+    monkeypatch,
+    node_kind,
+    expected_error,
+):
+    from qwenpaw.app.routers import aigc_studio
+
+    monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
+    aigc_studio._resource_store.cache_clear()
+    service, grant, _bus = _service(tmp_path)
+
+    async def catalog():
+        return _workflow_catalog()
+
+    monkeypatch.setattr(router_module, "_load_workflow_capability_catalog", catalog)
+    monkeypatch.setattr(
+        router_module,
+        "get_super_expert_platform_service",
+        lambda: service,
+    )
+    monkeypatch.setattr(router_module, "ensure_chat_access", lambda *_args, **_kwargs: {})
+    app = FastAPI()
+    app.include_router(api_router, prefix="/api")
+
+    def authenticated(request: Request):
+        request.state.user_id = "user-a"
+        request.state.tenant_id = "tenant-a"
+
+    app.dependency_overrides[require_user] = authenticated
+    payload = {
+        "installation_id": grant.installation_id,
+        "contract_version": "1",
+        "idempotency_key": f"reject-{node_kind}",
+        "arguments": {
+            "scope": _scope(grant.installation_id),
+            "event_id": f"reject-{node_kind}",
+            "workflow": {
+                "schema_version": 1,
+                "title": "不可创建节点",
+                "execution_preference": "CUSTOMER_TRIGGERED",
+                "nodes": [
+                    {
+                        "node_id": "candidate",
+                        "kind": node_kind,
+                        "title": "不可创建节点",
+                        "inputs": {},
+                        "parameters": {},
+                        "customer_action": "NONE",
+                        "optional": False,
+                    }
+                ],
+                "edges": [],
+                "output_node_id": "candidate",
+                "fallback_policy": "FAIL_CLOSED",
+            },
+        },
+    }
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/api/super-expert-platform/commands/aigc.workflow.create/1",
+            json=payload,
+        )
+
+    assert response.status_code == 403
+    assert expected_error in response.text
+    assert list((tmp_path / "studio" / "canvases").glob("*.json")) == []
 
 
 @pytest.mark.asyncio

@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from qwenpaw.app.aigc.model_policy import (
+    AIGC_MODEL_CATEGORIES,
     AigcModelPolicyService,
     filter_capabilities,
     policy_enforcement_enabled,
@@ -93,7 +94,7 @@ async def test_text_inventory_includes_ordinary_llms_without_storyboard_flag():
 
 
 @pytest.mark.asyncio
-async def test_inventory_classifies_video_audio_and_multi_capability_image():
+async def test_inventory_excludes_audio_generation_from_aigc_model_categories():
     models = [
         model("visual", capabilities=("text_to_image", "image_edit")),
         model("movie", model_type="video", capabilities=("text_to_video",)),
@@ -107,7 +108,8 @@ async def test_inventory_classifies_video_audio_and_multi_capability_image():
 
     assert inventory.find("image", "mxapi", "visual")
     assert inventory.find("video", "mxapi", "movie")
-    assert inventory.find("audio", "mxapi", "voice")
+    assert "audio" not in AIGC_MODEL_CATEGORIES
+    assert {item.model_id for item in inventory.uncategorized} == {"voice"}
 
 
 @pytest.mark.asyncio

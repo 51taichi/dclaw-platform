@@ -164,7 +164,6 @@ AigcCapability = Literal[
     "text_to_video",
     "image_to_video",
     "reference_video",
-    "text_to_audio",
     "storyboard",
 ]
 
@@ -1089,6 +1088,8 @@ async def _assert_job_model_policy_allowed(
     engine = get_app_engine()
     repository = AigcModelPolicyRepository(engine)
     category = category_for_capability(body.capability)
+    if category is None:
+        return
     try:
         policy = repository.get(category)
     except (OperationalError, ProgrammingError):

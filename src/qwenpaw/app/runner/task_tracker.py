@@ -300,6 +300,37 @@ class TaskTracker:
         stream_fn: Callable[..., Coroutine],
         on_finish: Callable[[], Awaitable[None]] | None = None,
     ) -> tuple[asyncio.Queue, bool]:
+        return await self._attach_or_start(run_key, payload, stream_fn, on_finish)
+
+    async def start_new(
+        self,
+        run_key: str,
+        payload: Any,
+        stream_fn: Callable[..., Coroutine],
+        on_finish: Callable[[], Awaitable[None]] | None = None,
+    ) -> tuple[asyncio.Queue, bool]:
+        """Serialize a new submission without replaying an earlier turn.
+
+        Waiting does not cancel the earlier run if this HTTP request disconnects.
+        Reconnects use attach(), independently of new submissions.
+        """
+        while True:
+            queue_or_task, started = await self._attach_or_start(
+                run_key, payload, stream_fn, on_finish, attach_existing=False,
+            )
+            if started:
+                return queue_or_task, True
+            await asyncio.wait({queue_or_task})
+
+    async def _attach_or_start(
+        self,
+        run_key: str,
+        payload: Any,
+        stream_fn: Callable[..., Coroutine],
+        on_finish: Callable[[], Awaitable[None]] | None = None,
+        *,
+        attach_existing: bool = True,
+    ) -> tuple[asyncio.Queue | asyncio.Future, bool]:
         """Attach to an existing run or start a new one.
 
         Returns ``(queue, is_new_run)``.
@@ -307,6 +338,8 @@ class TaskTracker:
         async with self._lock:
             state = self._runs.get(run_key)
             if state is not None and not state.task.done():
+                if not attach_existing:
+                    return state.task, False
                 q: asyncio.Queue = asyncio.Queue()
                 for sse in state.buffer:
                     q.put_nowait(sse)

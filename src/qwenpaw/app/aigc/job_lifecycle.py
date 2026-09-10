@@ -54,9 +54,6 @@ def _merge_node_output(canvas: Canvas, job: AigcJob) -> Canvas:
                 "aspectRatio",
                 job.parameters.get("aspect_ratio"),
             )
-        if node.type == "audio_generate" and job.status == "succeeded":
-            data["audioState"] = "generated"
-            data["audioProgress"] = None
         nodes.append(node.model_copy(update={"data": data}))
     return canvas.model_copy(update={"nodes": nodes, "updated_at": _now()})
 

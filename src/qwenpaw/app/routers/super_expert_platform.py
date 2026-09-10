@@ -290,7 +290,7 @@ async def get_workflow_capability_catalog(_request: Request) -> dict[str, Any]:
     return catalog.model_dump(mode="json")
 
 
-@frontend_read_router.post("/commands/{capability}")
+@frontend_read_router.post("/commands/{capability:path}")
 async def execute_frontend_super_expert_command(
     capability: str,
     command: PlatformCommandRequest,
@@ -314,7 +314,7 @@ async def execute_frontend_super_expert_command(
     return await execute_super_expert_command(capability, command, request)
 
 
-@router.post("/commands/{capability}")
+@router.post("/commands/{capability:path}")
 async def execute_super_expert_command(
     capability: str,
     command: PlatformCommandRequest,

@@ -2815,12 +2815,13 @@ async def test_run_image_to_prompt_fails_without_visual_text_model(tmp_path):
 
 
 async def test_run_text_media_jobs_use_configured_generic_adapter(tmp_path):
-    """Video and audio text jobs should use configured adapters and map asset kinds."""
+    """Video stays executable while removed independent audio jobs are rejected."""
     app = make_media_adapter_app(tmp_path)
     transport = ASGITransport(app=app)
 
     with patch("qwenpaw.app.routers.aigc_studio.STUDIO_ROOT", tmp_path / "studio"):
         async with AsyncClient(transport=transport, base_url="http://test") as client:
+            capabilities = await client.get("/api/aigc-studio/capabilities")
             canvas = await client.post(
                 "/api/aigc-studio/canvases",
                 json={
@@ -2870,19 +2871,19 @@ async def test_run_text_media_jobs_use_configured_generic_adapter(tmp_path):
             ran_video = await client.post(
                 f"/api/aigc-studio/jobs/{video.json()['id']}/run",
             )
-            ran_audio = await client.post(
-                f"/api/aigc-studio/jobs/{audio.json()['id']}/run",
-            )
 
     assert ran_video.status_code == 200
     assert ran_video.json()["status"] == "succeeded"
     assert ran_video.json()["outputs"][0]["kind"] == "video"
     assert ran_video.json()["outputs"][0]["meta"]["adapter"] == "artifact_stub"
 
-    assert ran_audio.status_code == 200
-    assert ran_audio.json()["status"] == "succeeded"
-    assert ran_audio.json()["outputs"][0]["kind"] == "audio"
-    assert ran_audio.json()["outputs"][0]["meta"]["adapter"] == "artifact_stub"
+    assert capabilities.status_code == 200
+    assert not any(
+        item["capability"] == "text_to_audio"
+        for item in capabilities.json()["capabilities"]
+    )
+    assert audio.status_code == 400
+    assert "Requested capability is not available" in audio.text
 
 
 async def test_run_job_uploads_generated_asset_to_object_storage_without_local_file(

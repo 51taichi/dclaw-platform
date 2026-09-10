@@ -245,18 +245,6 @@ _NODE_REGISTRY: dict[str, NodeRegistration] = {
             "additionalProperties": False,
         },
     ),
-    "audio_generate": _registration(
-        "audio_generate",
-        "音频生成",
-        capabilities=("text_to_audio",),
-        input_keys=("prompt",),
-        parameter_keys=("duration_seconds", "voice", "language"),
-        input_slots={"prompt": ("text",)},
-        output_type="audio",
-        control_id="aigc.audio.generate-submit",
-        customer_actions=("CLICK_GENERATE",),
-        requires_model=True,
-    ),
     "script_generate": _registration(
         "script_generate",
         "脚本生成",

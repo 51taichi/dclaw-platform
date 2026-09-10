@@ -526,12 +526,17 @@ async def post_console_chat(
                     await permit.release()
 
         try:
-            queue, is_new_run = await tracker.attach_or_start(
+            queue, is_new_run = await tracker.start_new(
                 chat.id,
                 stream_payload,
                 limited_stream_fn,
                 on_finish=permit.release if permit is not None else None,
             )
+        except asyncio.CancelledError:
+            # The request may disconnect while waiting for the previous turn.
+            if permit is not None:
+                await permit.release()
+            raise
         except Exception:
             if permit is not None:
                 await permit.release()

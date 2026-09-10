@@ -237,6 +237,15 @@ async def _run_standard_or_orchestrated_turn(
                 idempotency_key=idempotency_key,
             )
 
+        def read_aigc_task(material_task_id: str) -> dict[str, Any] | None:
+            task = platform_service.task_repository.get(material_task_id)
+            if task is None:
+                return None
+            if (task.binding.installation_id != authorization.installation_id
+                    or task.binding.conversation_id != str(request.session_id)):
+                return None
+            return task.model_dump(mode="json")
+
         from ..workspace.media_review_context import current_review_input
         review_input = current_review_input(
             user_id=str(request.user_id), installation_id=authorization.installation_id,
@@ -253,6 +262,7 @@ async def _run_standard_or_orchestrated_turn(
             config=orchestration,
             authorization=authorization,
             business_call=business_call,
+            read_aigc_task=read_aigc_task,
             safe_metadata={
                 "platformEvents": [
                     event.model_dump(mode="json") for event in platform_events

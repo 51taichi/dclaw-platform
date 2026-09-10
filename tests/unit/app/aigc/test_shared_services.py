@@ -103,6 +103,16 @@ def test_capability_catalog_is_core_owned_and_route_is_compatibility_alias():
     assert reference.customer_actions == ("SELECT_ASSET", "INSPECT")
 
 
+def test_independent_audio_and_music_tools_are_not_projected_as_aigc_capabilities():
+    core = importlib.import_module("qwenpaw.app.aigc.capability_service")
+
+    assert "text_to_audio" not in core.SUPPORTED_AIGC_CAPABILITIES
+    assert core._tool_capabilities("text_to_audio") == []
+    assert core._tool_capabilities("generate_audio") == []
+    assert core._tool_capabilities("text_to_music") == []
+    assert core._tool_capabilities("generate_music") == []
+
+
 @pytest.mark.asyncio
 async def test_both_capability_entrances_call_core_catalog(monkeypatch):
     core = importlib.import_module("qwenpaw.app.aigc.capability_service")
