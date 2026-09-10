@@ -7,6 +7,7 @@ import {
   Modal,
   Select,
   Space,
+  Switch,
   Table,
   Tag,
   Typography,
@@ -56,6 +57,35 @@ function activationErrorMessage(error: unknown) {
   } catch {
     return error.message;
   }
+}
+
+function HarnessStatusRow({
+  label,
+  description,
+  value,
+}: {
+  label: string;
+  description: string;
+  value: boolean | null;
+}) {
+  const status = value === null ? "未声明" : value ? "已开启" : "已关闭";
+  return (
+    <div className={styles.harnessStatusRow}>
+      <div className={styles.harnessStatusCopy}>
+        <Typography.Text strong>{label}</Typography.Text>
+        <Typography.Text type="secondary">{description}</Typography.Text>
+      </div>
+      <Space size={8}>
+        <Typography.Text type="secondary">{status}</Typography.Text>
+        <Switch
+          aria-label={label}
+          checked={value === true}
+          disabled
+          size="small"
+        />
+      </Space>
+    </div>
+  );
 }
 
 export default function SealedAgentsPage() {
@@ -422,9 +452,7 @@ export default function SealedAgentsPage() {
                           window.dispatchEvent(
                             new Event("expert-avatar-updated"),
                           );
-                          message.success(
-                            "头像已保存，升级版本时会自动保留",
-                          );
+                          message.success("头像已保存，升级版本时会自动保留");
                           onSuccess?.({});
                         } catch (error) {
                           onError?.(error as Error);
@@ -472,8 +500,7 @@ export default function SealedAgentsPage() {
                       data-testid="banner-controls"
                     >
                       <Typography.Text type="secondary">
-                        建议 3:1 · 2172 × 724 px · PNG / JPEG / WebP · 最大 5
-                        MB
+                        建议 3:1 · 2172 × 724 px · PNG / JPEG / WebP · 最大 5 MB
                       </Typography.Text>
                       <span data-testid="banner-upload">
                         <Upload
@@ -525,6 +552,31 @@ export default function SealedAgentsPage() {
                       </span>
                     </div>
                   </div>
+                  {agent.harness_status ? (
+                    <div
+                      className={styles.harnessPanel}
+                      data-testid="harness-status"
+                    >
+                      <div className={styles.harnessHeading}>
+                        <Typography.Text strong>Harness 能力</Typography.Text>
+                        <Typography.Text type="secondary">
+                          状态由当前激活版本配置决定，暂不支持在此调整
+                        </Typography.Text>
+                      </div>
+                      <div className={styles.harnessStatusGrid}>
+                        <HarnessStatusRow
+                          label="Skill 智能调用"
+                          description="按需读取当前超级专家已注册的 Skill"
+                          value={agent.harness_status.skill_reader_enabled}
+                        />
+                        <HarnessStatusRow
+                          label="完整 Agent 循环"
+                          description="允许当前超级专家运行完整 Agent 推理与工具循环"
+                          value={agent.harness_status.agent_loop_enabled}
+                        />
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ),
             }}
