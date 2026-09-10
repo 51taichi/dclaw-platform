@@ -120,9 +120,10 @@
 
   // Menu takes remaining space
   .sideMenu {
-    flex: 0 0 auto;
+    flex: 0 1 auto;
     min-height: 0;
-    overflow: visible;
+    overflow-x: hidden;
+    overflow-y: auto;
 
     // Hide scrollbar for menu too
     &::-webkit-scrollbar {
@@ -829,9 +830,9 @@
   padding: 0 4px;
   border-top: 1px solid rgba(0, 0, 0, 0.06);
   padding-top: 8px;
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: hidden;
+  flex: 0 0 auto;
+  min-height: 210px;
+  overflow: visible;
   display: flex;
   flex-direction: column;
 }
@@ -977,11 +978,9 @@
 
 .taskItemTitle {
   overflow: hidden;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  white-space: normal;
-  overflow-wrap: anywhere;
+  display: block;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .taskItemTime {
@@ -1126,22 +1125,25 @@
 }
 .earlierTasksButton {
   display: flex;
+  flex: 0 0 44px;
+  min-height: 44px;
   align-items: center;
   gap: 8px;
   width: 100%;
-  margin-top: 4px;
+  margin-top: 8px;
   padding: 9px 8px;
-  border: 0;
+  border: 1px solid rgba(45, 105, 255, 0.18);
   border-radius: 6px;
-  background: transparent;
-  color: #6380a8;
+  background: rgba(45, 105, 255, 0.09);
+  color: #467af5;
+  font-weight: 600;
   cursor: pointer;
   text-align: left;
   span {
     flex: 1;
   }
   &:hover {
-    background: rgba(45, 105, 255, 0.08);
+    background: rgba(45, 105, 255, 0.16);
   }
 }
 .earlierTaskList {
