@@ -41,7 +41,7 @@ import {
   SparkBarChartLine,
   SparkEmailLine,
   SparkHistoryLine,
-  SparkYoujiantouRightArrowLine,
+  SparkRightArrowLine,
 } from "@agentscope-ai/icons";
 import {
   Archive,
@@ -1170,7 +1170,7 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
                         >
                           <SparkHistoryLine />
                           <span>选择更早任务</span>
-                          <SparkYoujiantouRightArrowLine />
+                          <SparkRightArrowLine />
                         </button>
                       </Popover>
                     )}
