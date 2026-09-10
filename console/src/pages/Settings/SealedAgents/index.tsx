@@ -4,6 +4,7 @@ import {
   Avatar,
   Button,
   Card,
+  Divider,
   Modal,
   Select,
   Space,
@@ -67,12 +68,13 @@ function HarnessStatusRow({
   label: string;
   value: boolean | null;
 }) {
-  const status = value === null ? "未声明" : value ? "已开启" : "已关闭";
   return (
     <div className={styles.harnessStatusRow}>
       <Typography.Text strong>{label}</Typography.Text>
       <Space size={8}>
-        <Typography.Text type="secondary">{status}</Typography.Text>
+        {value === null ? (
+          <Typography.Text type="secondary">未声明</Typography.Text>
+        ) : null}
         <Switch
           aria-label={label}
           checked={value === true}
@@ -415,6 +417,11 @@ export default function SealedAgentsPage() {
                         <HarnessStatusRow
                           label="Skill 智能调用"
                           value={agent.harness_status.skill_reader_enabled}
+                        />
+                        <Divider
+                          className={styles.harnessDivider}
+                          data-testid="harness-control-divider"
+                          type="vertical"
                         />
                         <HarnessStatusRow
                           label="完整 Agent 循环"

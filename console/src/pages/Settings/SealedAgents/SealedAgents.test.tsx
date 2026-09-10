@@ -377,6 +377,9 @@ it("shows configured harness states as disabled switches", async () => {
   expect(skillReader).toBeDisabled();
   expect(agentLoop).not.toBeChecked();
   expect(agentLoop).toBeDisabled();
+  expect(screen.queryByText("已开启")).not.toBeInTheDocument();
+  expect(screen.queryByText("已关闭")).not.toBeInTheDocument();
+  expect(screen.getByTestId("harness-control-divider")).toBeVisible();
   expect(screen.getByTestId("harness-title-icon")).toBeVisible();
   const harnessPanel = screen.getByTestId("harness-status");
   expect(harnessPanel.parentElement?.firstElementChild).toBe(harnessPanel);
