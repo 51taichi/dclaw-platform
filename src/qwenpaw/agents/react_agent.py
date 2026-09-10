@@ -38,6 +38,7 @@ from .skill_system import (
     resolve_effective_skills,
 )
 from .tool_guard_mixin import ToolGuardMixin
+from .tools.agent_skill_reader import build_read_agent_skill_tool
 from .tools import (
     browser_use,
     computer_use,
@@ -99,6 +100,7 @@ SEALED_ALLOWED_BUILTIN_TOOLS = frozenset(
         "read_knowledge_doc",
         "search_wiki",
         "read_wiki_page",
+        "read_agent_skill",
     },
 )
 SEALED_DENIED_BUILTIN_TOOLS = frozenset(
@@ -294,6 +296,7 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
 
         # Load and register skills
         self._register_skills(toolkit)
+        self._register_skill_reader(toolkit)
 
         # Initialize memory_manager and context_manager for use
         # in _build_sys_prompt
@@ -586,6 +589,28 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
                         skill_name,
                         e,
                     )
+
+    def _register_skill_reader(self, toolkit: Toolkit) -> None:
+        """Register bounded Skill-file access only after explicit opt-in."""
+        tools_config = getattr(self._agent_config, "tools", None)
+        builtin_tools = getattr(tools_config, "builtin_tools", {}) or {}
+        reader_config = builtin_tools.get("read_agent_skill")
+        if reader_config is None or not bool(reader_config.enabled):
+            return
+        if not tool_allowed_for_runtime(
+            "read_agent_skill",
+            sealed=bool(getattr(self, "_sealed_runtime", False)),
+            plugin_tool=False,
+        ):
+            return
+        registered_skills = getattr(toolkit, "skills", {}) or {}
+        if not registered_skills:
+            return
+        toolkit.register_tool_function(
+            build_read_agent_skill_tool(registered_skills),
+            namesake_strategy=self._namesake_strategy,
+        )
+        logger.debug("Registered opt-in read_agent_skill tool")
 
     def _build_sys_prompt(self) -> str:
         """Build system prompt from working dir files and env context.

@@ -53,5 +53,8 @@ def test_sealed_runtime_denies_asset_exfiltration_and_plugin_tools():
         "web_search", sealed=True, plugin_tool=False
     )
     assert tool_allowed_for_runtime(
+        "read_agent_skill", sealed=True, plugin_tool=False
+    )
+    assert tool_allowed_for_runtime(
         "read_file", sealed=False, plugin_tool=False
     )

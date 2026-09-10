@@ -446,6 +446,17 @@ def _agent_execute_response_format(arguments: dict[str, Any]) -> str | None:
     return "json_object"
 
 
+def _agent_execute_mode(arguments: dict[str, Any]) -> str:
+    """Select the host execution path without truthy coercion."""
+    if not isinstance(arguments, dict):
+        raise WorkspaceOrchestrationError("orchestration_error")
+    if "execution_mode" not in arguments:
+        return "candidate"
+    if arguments["execution_mode"] != "agent_loop":
+        raise WorkspaceOrchestrationError("orchestration_error")
+    return "agent_loop"
+
+
 async def run_workspace_orchestration_turn(
     *,
     agent: Any,
@@ -509,6 +520,9 @@ async def run_workspace_orchestration_turn(
     async def execute_agent(arguments: dict[str, Any]) -> dict[str, Any]:
         nonlocal agent_execute_call_number
         response_format = _agent_execute_response_format(arguments)
+        execution_mode = _agent_execute_mode(arguments)
+        if execution_mode == "agent_loop" and response_format is not None:
+            raise WorkspaceOrchestrationError("orchestration_error")
         raw_messages = arguments.get("messages")
         if not isinstance(raw_messages, list) or not raw_messages:
             raise WorkspaceOrchestrationError("orchestration_error")
@@ -537,16 +551,20 @@ async def run_workspace_orchestration_turn(
                     "model_key": str(
                         getattr(getattr(agent, "model", None), "model_key", "")
                     ),
+                    "execution_mode": execution_mode,
                     "response_format": response_format,
                     "messages": [_message_dict(message) for message in messages],
                 },
             )
         media_delivery: dict[str, Any] = {}
         try:
-            candidate = await _execute_internal_candidate(
-                agent, messages, media_delivery=media_delivery,
-                response_format=response_format,
-            )
+            if execution_mode == "agent_loop":
+                candidate = await agent(messages)
+            else:
+                candidate = await _execute_internal_candidate(
+                    agent, messages, media_delivery=media_delivery,
+                    response_format=response_format,
+                )
         except Exception as exc:
             if trace_raw:
                 _append_runtime_trace(

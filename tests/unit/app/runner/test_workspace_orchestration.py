@@ -22,6 +22,7 @@ from qwenpaw.app.workspace.orchestration import (
     AuthorizedWorkspaceRelease,
     authorize_workspace_release,
     _candidate_execution_messages,
+    _agent_execute_mode,
     _agent_execute_response_format,
     _execute_internal_candidate,
     is_workspace_business_turn,
@@ -355,6 +356,18 @@ def test_agent_execute_response_format_is_closed_and_does_not_coerce_values():
         with pytest.raises(WorkspaceOrchestrationError):
             _agent_execute_response_format({
                 "messages": [], "response_format": invalid,
+            })
+
+
+def test_agent_execute_mode_is_closed_and_defaults_to_internal_candidate():
+    assert _agent_execute_mode({"messages": []}) == "candidate"
+    assert _agent_execute_mode({
+        "messages": [], "execution_mode": "agent_loop",
+    }) == "agent_loop"
+    for invalid in (None, False, True, "full", {}, 0):
+        with pytest.raises(WorkspaceOrchestrationError):
+            _agent_execute_mode({
+                "messages": [], "execution_mode": invalid,
             })
 
 
@@ -1318,6 +1331,80 @@ async def test_runner_adapter_executes_internal_candidate_without_streaming(tmp_
         "orchestration.completed",
     ]
     assert all(event["invocation_id"] for event in trace_events)
+
+
+@pytest.mark.asyncio
+async def test_runner_adapter_can_opt_into_the_standard_agent_loop(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _write_runtime(
+        workspace,
+        """
+        class Runtime:
+            async def handle(self, request, host):
+                candidate = await host.call("agent.execute", {
+                    "messages": request.normalized_input["messages"],
+                    "execution_mode": "agent_loop",
+                })
+                await host.call("runtime.complete", {
+                    "invocation_id": request.invocation_id,
+                    "message": candidate["message"],
+                })
+        def create_runtime(): return Runtime()
+        """,
+    )
+
+    class DirectModel:
+        model_key = "deepseek:test"
+
+        async def __call__(self, *_args, **_kwargs):
+            raise AssertionError("agent_loop must not bypass the Agent")
+
+    class Agent:
+        formatter = SimpleNamespace(format=lambda **_kwargs: None)
+        model = DirectModel()
+
+        def __init__(self):
+            self.calls = []
+
+        async def __call__(self, messages):
+            self.calls.append(messages)
+            return Msg(
+                name="assistant",
+                role="assistant",
+                content="full agent loop",
+            )
+
+    agent = Agent()
+    authorization = AuthorizedWorkspaceRelease(
+        installation_id="installation-1",
+        release_id="release-1",
+        release_digest=f"sha256:{'a' * 64}",
+        granted_capabilities={
+            capability: "1" for capability in HOST_CAPABILITIES_V1
+        },
+        signed_workspace_files=frozenset({"runtime.py"}),
+    )
+
+    result = await run_workspace_orchestration_turn(
+        agent=agent,
+        original_messages=[Msg(name="user", role="user", content="hello")],
+        request=SimpleNamespace(
+            session_id="session-1",
+            user_id="user-1",
+            channel="console",
+            channel_meta={},
+        ),
+        agent_id="generic-agent",
+        workspace_root=workspace,
+        state_storage_root=tmp_path / "state-store",
+        config=OrchestrationConfig.model_validate(_orchestration()),
+        authorization=authorization,
+    )
+
+    assert result.message["content"] == "full agent loop"
+    assert len(agent.calls) == 1
+    assert agent.calls[0][0].get_text_content() == "hello"
 
 
 @pytest.mark.asyncio

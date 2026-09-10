@@ -1084,6 +1084,12 @@ class OrchestrationConfig(BaseModel):
     contract_version: Literal["1"] = "1"
     entrypoint: str = ""
     required_host_capabilities: tuple[str, ...] = ()
+    agent_loop_enabled: bool | None = Field(
+        default=None,
+        description=(
+            "Whether this super expert declares full Agent Loop support"
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_declaration(self) -> "OrchestrationConfig":
@@ -1434,6 +1440,13 @@ def _default_builtin_tools() -> Dict[str, BuiltinToolConfig]:
             enabled=True,
             description="Read file contents",
             icon="📄",
+        ),
+        "read_agent_skill": BuiltinToolConfig(
+            name="read_agent_skill",
+            enabled=False,
+            description="Read instructions from registered Agent Skills",
+            display_to_user=False,
+            icon="📘",
         ),
         "write_file": BuiltinToolConfig(
             name="write_file",
