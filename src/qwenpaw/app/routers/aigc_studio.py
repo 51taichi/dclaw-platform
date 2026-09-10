@@ -3400,6 +3400,20 @@ def _mxapi_grok_error_message(payload: dict[str, Any]) -> str:
     )
 
 
+def _mxapi_grok_download_url(payload: dict[str, Any]) -> str | None:
+    # MXAPI may wrap its response in data. Prefer its CDN result over the
+    # upstream xAI URL, which may not be reachable from the deployment region.
+    for value in (payload.get("data"), payload):
+        if not isinstance(value, dict):
+            continue
+        raw = value.get("rawResponse")
+        video = raw.get("video") if isinstance(raw, dict) else None
+        cdn_url = video.get("cdn_video_url") if isinstance(video, dict) else None
+        if isinstance(cdn_url, str) and cdn_url.strip():
+            return cdn_url.strip()
+    return _mxapi_seedance_video_url_from_value(payload)
+
+
 async def _mxapi_grok_query_task(
     provider: Any,
     task_id: str,
@@ -3426,7 +3440,7 @@ async def _mxapi_grok_query_task(
     if payload.get("code") not in {None, 0, 200, "200"}:
         raise RuntimeError(_mxapi_grok_error_message(payload))
     status = _mxapi_seedance_status(payload)
-    video_url = _mxapi_seedance_video_url_from_value(payload)
+    video_url = _mxapi_grok_download_url(payload)
     if status in _MXAPI_SEEDANCE_SUCCESS_STATUSES or (not status and video_url):
         if video_url:
             return "completed", video_url, payload
