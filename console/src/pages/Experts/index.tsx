@@ -14,6 +14,8 @@ import { useEffect } from "react";
 import sessionApi from "../Chat/sessionApi";
 import { resolveExpertSummonTarget } from "./navigation";
 import { clientVisibleAgents } from "./visibility";
+import SuperExpertBadge from "../../components/SuperExpertBadge";
+import { expertAvatar } from "../../utils/expertIdentity";
 
 type ExpertCardItem = {
   id: string;
@@ -28,6 +30,7 @@ type ExpertCardItem = {
   badge?: "hot" | "new";
   kind: "agent" | "team";
   agentId: string;
+  isSuperExpert: boolean;
   team?: ExpertTeamTemplate;
 };
 
@@ -66,12 +69,21 @@ export default function ExpertsPage() {
 
   const agentCards: ExpertCardItem[] = agents.map((agent) => {
     const uiConf = EXPERT_UI_CONFIGS.find((item) => item.id === agent.id);
+    const isSuperExpert = agent.agent_type === "sealed";
     return {
       id: `agent:${agent.id}`,
       name: uiConf?.name || agent.name,
       description: agent.description || uiConf?.desc,
-      icon: uiConf?.icon || <Users size={22} />,
-      color: uiConf?.color || "#6b7280",
+      icon: isSuperExpert ? (
+        <img
+          alt={`${agent.name}头像`}
+          className={styles.superExpertAvatar}
+          src={expertAvatar(agent)}
+        />
+      ) : (
+        uiConf?.icon || <Users size={22} />
+      ),
+      color: isSuperExpert ? "#b7791f" : uiConf?.color || "#6b7280",
       members: uiConf?.members || [],
       tags: uiConf?.tags || [],
       usageCount: uiConf?.usageCount || 0,
@@ -79,6 +91,7 @@ export default function ExpertsPage() {
       badge: uiConf?.badge,
       kind: "agent",
       agentId: agent.id,
+      isSuperExpert,
     };
   });
 
@@ -100,6 +113,7 @@ export default function ExpertsPage() {
       badge: team.source === "builtin" ? "hot" : undefined,
       kind: "team",
       agentId: team.leader_agent_id || "default",
+      isSuperExpert: false,
       team,
     };
   });
@@ -107,15 +121,34 @@ export default function ExpertsPage() {
   const filteredTeamCards = teamCards.filter(
     (expert) => activeCategory === "all" || expert.category === activeCategory,
   );
-  const filteredAgentCards = agentCards.filter(
-    (expert) => activeCategory === "all" || expert.category === activeCategory,
+  const filteredSuperExpertCards = agentCards.filter(
+    (expert) =>
+      expert.isSuperExpert &&
+      (activeCategory === "all" || expert.category === activeCategory),
   );
+  const filteredAgentCards = agentCards
+    .filter(
+      (expert) =>
+        activeCategory === "all" || expert.category === activeCategory,
+    )
+    .filter((expert) => !expert.isSuperExpert);
   const hasAnyResult =
-    filteredTeamCards.length > 0 || filteredAgentCards.length > 0;
+    filteredSuperExpertCards.length > 0 ||
+    filteredTeamCards.length > 0 ||
+    filteredAgentCards.length > 0;
 
   const renderExpertCard = (expert: ExpertCardItem) => (
-    <div key={expert.id} className={styles.card}>
-      {expert.badge && (
+    <div
+      key={expert.id}
+      className={`${styles.card} ${
+        expert.isSuperExpert ? styles.superExpertCard : ""
+      }`}
+    >
+      {expert.isSuperExpert ? (
+        <span className={styles.superExpertMedal}>
+          <SuperExpertBadge />
+        </span>
+      ) : expert.badge ? (
         <span
           className={`${styles.badge} ${
             expert.badge === "hot" ? styles.badgeHot : styles.badgeNew
@@ -123,11 +156,13 @@ export default function ExpertsPage() {
         >
           {expert.badge === "hot" ? "🔥 热门" : "✨ 新上"}
         </span>
-      )}
+      ) : null}
 
       <div className={styles.cardHeader}>
         <div
-          className={styles.cardIcon}
+          className={`${styles.cardIcon} ${
+            expert.isSuperExpert ? styles.superExpertAvatarFrame : ""
+          }`}
           style={{ background: `${expert.color}15`, color: expert.color }}
         >
           {expert.icon}
@@ -137,6 +172,8 @@ export default function ExpertsPage() {
           <div className={styles.cardMeta}>
             {expert.kind === "team"
               ? `${expert.members.length} 位协作成员`
+              : expert.isSuperExpert
+              ? "超级专家"
               : "智能体专家"}
           </div>
         </div>
@@ -176,7 +213,9 @@ export default function ExpertsPage() {
         </span>
         <div style={{ display: "flex", gap: "8px" }}>
           <button
-            className={`${styles.cardAction} ${styles.cardActionPrimary}`}
+            className={`${styles.cardAction} ${styles.cardActionPrimary} ${
+              expert.isSuperExpert ? styles.superExpertAction : ""
+            }`}
             onClick={() => {
               const currentAgent = useAgentStore.getState().selectedAgent;
               const rawFrom =
@@ -278,7 +317,31 @@ export default function ExpertsPage() {
           <div className={styles.inlineEmpty}>暂无专家</div>
         ) : (
           <>
-            <section className={styles.expertSection}>
+            <section
+              aria-label="超级专家"
+              className={`${styles.expertSection} ${styles.superExpertSection}`}
+            >
+              <div className={styles.sectionHeader}>
+                <div>
+                  <div className={styles.sectionTitle}>超级专家</div>
+                  <div className={styles.sectionSubtitle}>
+                    单个智能体超级专家，可以调用平台授权的互动能力。
+                  </div>
+                </div>
+                <span className={styles.sectionCount}>
+                  {filteredSuperExpertCards.length} 个
+                </span>
+              </div>
+              {filteredSuperExpertCards.length > 0 ? (
+                <div className={styles.cardGrid}>
+                  {filteredSuperExpertCards.map(renderExpertCard)}
+                </div>
+              ) : (
+                <div className={styles.sectionEmpty}>当前分类暂无超级专家</div>
+              )}
+            </section>
+
+            <section aria-label="专家团" className={styles.expertSection}>
               <div className={styles.sectionHeader}>
                 <div>
                   <div className={styles.sectionTitle}>专家团</div>
@@ -299,7 +362,7 @@ export default function ExpertsPage() {
               )}
             </section>
 
-            <section className={styles.expertSection}>
+            <section aria-label="专家" className={styles.expertSection}>
               <div className={styles.sectionHeader}>
                 <div>
                   <div className={styles.sectionTitle}>专家</div>
