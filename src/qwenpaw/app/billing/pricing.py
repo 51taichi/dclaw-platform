@@ -568,7 +568,7 @@ class PriceCatalogService:
                     raise ValueError("invalid metered price dimension key")
                 if not _is_integer(unit_size) or int(unit_size) <= 0:
                     raise ValueError("invalid metered price dimension unit")
-                if not _is_integer(credits) or int(credits) <= 0:
+                if not _is_integer(credits) or int(credits) < 0:
                     raise ValueError("invalid metered price dimension credits")
                 seen_dimensions.add(unit_key)
         elif rule.credits_per_unit <= 0:

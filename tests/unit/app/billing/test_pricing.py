@@ -296,6 +296,30 @@ def test_fixed_workflow_price_is_one_published_invocation_price(
     assert quote.unit_breakdown == {"workflow_invocation": 900}
 
 
+@pytest.mark.parametrize("credits", [0, -1, True, 0.5])
+def test_metered_free_price_validation(service, clock, credits):
+    rule = replace(
+        _rule("free", "metered_dimensions"),
+        metadata={
+            "dimensions": [{
+                "unit_key": "input_tokens",
+                "unit_size": 1000000,
+                "credits_per_unit": credits,
+            }],
+        },
+    )
+    if credits == 0 and not isinstance(credits, bool):
+        service.create_draft(_catalog("free-price", clock, rule))
+        service.publish(_catalog("free-published", clock, rule))
+        quote = service.quote(QuoteRequest(
+            "aliyun", "model-1", "generate", {}, input_tokens=1000000,
+        ))
+        assert quote.credits == 0
+    else:
+        with pytest.raises(ValueError, match="dimension credits"):
+            service.create_draft(_catalog("invalid-price", clock, rule))
+
+
 def test_metered_dimensions_add_tokens_cache_and_audio_quantities(
     service, clock
 ):
