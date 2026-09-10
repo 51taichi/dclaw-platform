@@ -23,6 +23,7 @@ from .pricing_models import (
 )
 from .pricing_policy import build_catalog_rules, resolve_multiplier
 from .pricing_spec import spec_key
+from .pricing_inventory import PriceableModel
 
 
 class PricingAdminService:
@@ -361,9 +362,15 @@ class PricingAdminService:
         persist: bool = True,
     ) -> dict[str, Any]:
         models = self.inventory.list_enabled()
-        if imported_rows and any(
+        if imported_rows is not None:
+            enabled = {(model.provider_id, model.model_key) for model in models}
+            imported_rows[:] = [
+                row for row in imported_rows
+                if (str(row["provider_id"]), str(row["model_key"])) in enabled
+            ]
+        if imported_rows is not None and (not imported_rows or any(
             "unit_size" in row or "official_model_id" in row for row in imported_rows
-        ):
+        )):
             self._validate_imported_draft_rows(models, imported_rows)
         excluded_models = {
             (str(row["provider_id"]), str(row["model_key"]))
@@ -484,6 +491,7 @@ class PricingAdminService:
         metadata = {
             "source": "pricing_admin",
             "inventory_binding": self._draft_key(tuple(models)),
+            "inventory_models": [asdict(model) for model in models],
             "exclusions": [
                 {
                     "provider_id": row["provider_id"],
@@ -600,8 +608,11 @@ class PricingAdminService:
         }
         manual_models: set[tuple[str, str]] = set()
         supplied: set[tuple[str, ...]] = set()
+        enabled = {(model.provider_id, model.model_key) for model in models}
         for row in imported_rows:
             model_identity = (str(row["provider_id"]), str(row["model_key"]))
+            if model_identity not in enabled:
+                continue
             identity = (
                 *spec_key(row),
                 str(row.get("official_provider_id") or ""),
@@ -777,7 +788,15 @@ class PricingAdminService:
     ) -> dict[str, Any]:
         catalog = self.catalogs.get_catalog(catalog_id)
         expected_inventory = catalog["metadata"].get("inventory_binding")
-        current_inventory = self._draft_key(tuple(self.inventory.list_enabled()))
+        models = tuple(self.inventory.list_enabled())
+        enabled = {(model.provider_id, model.model_key) for model in models}
+        current_inventory = self._draft_key(models)
+        snapshot = catalog["metadata"].get("inventory_models")
+        if snapshot is not None:
+            expected_inventory = self._draft_key(tuple(
+                PriceableModel(**row) for row in snapshot
+                if (row["provider_id"], row["model_key"]) in enabled
+            ))
         if expected_inventory != current_inventory:
             raise ValueError(
                 "enabled model inventory changed; generate and approve again"
@@ -787,6 +806,16 @@ class PricingAdminService:
             str(import_id), catalog_id
         ):
             raise ValueError("pricing import is not confirmed")
+        if catalog["status"] == "draft":
+            retained = [row for row in catalog["rules"]
+                        if (row["provider_id"], row["model_key"]) in enabled]
+            if len(retained) != len(catalog["rules"]):
+                if not retained:
+                    raise ValueError("no enabled models remain in pricing draft")
+                self.catalogs.replace_draft_rules(catalog_id, tuple(
+                    PriceRule(**{key: row[key] for key in PriceRule.__dataclass_fields__})
+                    for row in retained
+                ))
         published = self.pricing.publish_draft(catalog_id)
         self.repository.append_audit(
             "catalog.published",

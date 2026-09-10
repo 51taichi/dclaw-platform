@@ -15,6 +15,42 @@ from qwenpaw.app.storage.settings import get_storage_settings
 NOW = datetime(2026, 8, 30, tzinfo=timezone.utc)
 
 
+@pytest.mark.parametrize("change", ["delete", "add"])
+def test_publication_checks_inventory_coverage(service, change):
+    pricing, repo = service
+    models = [PriceableModel("dashscope", "百炼", key, key, "text")
+              for key in ("qwen-plus", "qwen-turbo")]
+    pricing.inventory = type("Inventory", (), {"list_enabled": lambda self: tuple(models)})()
+    for model in models:
+        for unit in ("input_tokens", "output_tokens"):
+            repo.append_cost_snapshot({
+                "provider_id": model.provider_id, "model_key": model.model_key,
+                "capability": "chat", "unit_key": unit, "source_type": "manual",
+                "source_reference": "official", "original_currency": "CNY",
+                "original_price_decimal": "0.01", "fx_rate_decimal": "1",
+                "rmb_cost_decimal": "0.01", "conditions": {},
+                "verification_status": "verified", "verified_at": NOW,
+            })
+    preview = pricing.preview_initial_catalog("1")
+    if change == "delete":
+        models.pop()
+        result = pricing.publish_preview(preview["catalog_id"], "1")
+        assert result["status"] == "published"
+        assert {r["model_key"] for r in result["rules"]} == {"qwen-plus"}
+    else:
+        models.append(PriceableModel("dashscope", "百炼", "new", "new", "text"))
+        with pytest.raises(ValueError, match="inventory changed"):
+            pricing.publish_preview(preview["catalog_id"], "1")
+
+
+def test_import_ignores_rows_for_removed_models(service):
+    pricing, _ = service
+    rows = _import_rows(pricing)
+    extra = {**rows[0], "model_key": "deleted-model"}
+    rows.append(extra)
+    pricing._validate_imported_draft_rows(pricing.inventory.list_enabled(), rows)
+
+
 def _import_rows(pricing):
     return [
         {
