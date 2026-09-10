@@ -45,3 +45,28 @@ it("keeps API-enabled super experts visible", () => {
   };
   expect(clientVisibleAgents([agent])).toEqual([agent]);
 });
+
+it("hides disabled experts even when they are sealed", () => {
+  const agents: AgentSummary[] = [
+    {
+      id: "disabled-luyu",
+      name: "停用陆羽",
+      description: "",
+      enabled: false,
+      agent_type: "sealed",
+      open_api_enabled: false,
+    },
+    {
+      id: "enabled-luyu",
+      name: "陆羽",
+      description: "",
+      enabled: true,
+      agent_type: "sealed",
+      open_api_enabled: false,
+    },
+  ];
+
+  expect(clientVisibleAgents(agents).map((agent) => agent.id)).toEqual([
+    "enabled-luyu",
+  ]);
+});
