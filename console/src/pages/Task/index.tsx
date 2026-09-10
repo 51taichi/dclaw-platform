@@ -1,3 +1,4 @@
+import { ExpertIdentityContext } from "../../contexts/ExpertIdentityContext";
 import { useExpertIdentity } from "../../hooks/useExpertIdentity";
 import {
   AgentScopeRuntimeWebUI,
@@ -2108,194 +2109,201 @@ export default function ChatPage() {
   ]);
 
   return (
-    <div
-      className={styles.taskView}
-      style={{
-        height: "100%",
-        width: "100%",
-        display: "flex",
-        flexDirection: "row",
-        position: "relative",
-      }}
-    >
-      {/* Main chat area */}
+    <ExpertIdentityContext.Provider value={responseIdentity}>
       <div
+        className={styles.taskView}
         style={{
-          flex: 1,
+          height: "100%",
+          width: "100%",
           display: "flex",
-          flexDirection: "column",
-          minWidth: 0,
+          flexDirection: "row",
           position: "relative",
         }}
       >
-        {isPreparing && <PreparingOverlay />}
-        <div className={styles.chatMessagesArea}>
-          <div className={styles.runtimeViewport}>
-            <AgentScopeRuntimeWebUI
-              key={`${selectedAgent}:${runtimeReloadKey}`}
-              options={options}
-              ref={chatRef}
-            />
-          </div>
-          <WorkbenchInput
-            inFlow
-            isGenerating={isGenerating}
-            topAccessory={
-              <>
-                {chatId && !isDraftSessionId(chatId) && (
-                  <SuperExpertAigcCards
-                    key={chatId}
-                    conversationId={chatId}
-                    watchForNewCards={isGenerating}
-                  />
-                )}
-                <RunningSessionNotice
-                  visible={
-                    isGenerating && !!chatId && !isDraftSessionId(chatId)
-                  }
-                  variant="inline"
-                />
-                {(selectedExpertTeam || currentExpertTeamRun) && (
-                  <ExpertTeamStatusStrip
-                    chatId={chatId}
-                    visible
-                    variant="composer"
-                  />
-                )}
-              </>
-            }
-            onStop={() => {
-              const currentSession = window.currentSessionId || chatId || "";
-              const resolvedChatId =
-                sessionApi.getRealIdForSession(currentSession) ??
-                currentSession;
-              if (resolvedChatId) {
-                chatApi.stopChat(resolvedChatId).catch(console.error);
-                setIsGenerating(false);
-              }
-            }}
-            onSubmit={(text) => {
-              (chatRef.current?.input.submit as any)({ query: text });
-            }}
-          />
-        </div>
-      </div>
-
-      {/* Right-side artifact panel */}
-      <ArtifactPanel
-        visible={showArtifactPanel}
-        onToggle={() => setShowArtifactPanel(!showArtifactPanel)}
-        chatId={chatId}
-      />
-
-      {/* Render approval cards as overlays */}
-      {Array.from(approvalRequests.values()).map((request) => (
+        {/* Main chat area */}
         <div
-          key={request.requestId}
-          data-approval-id={request.requestId}
           style={{
-            position: "fixed",
-            bottom: 80,
-            right: 24,
-            zIndex: 1000,
-            maxWidth: 480,
-            width: "calc(100vw - 48px)",
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            minWidth: 0,
+            position: "relative",
           }}
         >
-          <ApprovalCard
-            requestId={request.requestId}
-            agentId={request.agentId}
-            toolName={request.toolName}
-            severity={request.severity}
-            findingsCount={request.findingsCount}
-            findingsSummary={request.findingsSummary}
-            toolParams={request.toolParams}
-            createdAt={request.createdAt}
-            timeoutSeconds={request.timeoutSeconds}
-            sessionId={request.sessionId}
-            rootSessionId={request.rootSessionId}
-            onApprove={handleApprove}
-            onDeny={handleDeny}
-            onCancel={() => {
-              const sessionId =
-                request.rootSessionId ||
-                chatId ||
-                window.currentSessionId ||
-                "";
-              const resolvedChatId =
-                sessionApi.getRealIdForSession(sessionId) ??
-                chatIdRef.current ??
-                sessionId;
-
-              if (resolvedChatId) {
-                console.log("[Chat] Calling stopChat with:", resolvedChatId);
-                chatApi
-                  .stopChat(resolvedChatId)
-                  .then(() => {
-                    console.log("[Chat] stopChat succeeded");
-                    setApprovals((prev) =>
-                      prev.filter(
-                        (item) =>
-                          item.root_session_id !== request.rootSessionId,
-                      ),
-                    );
-                  })
-                  .catch((err) => {
-                    console.error("[Chat] stopChat failed:", err);
-                  });
-              } else {
-                console.warn("[Chat] No chat_id resolved, cannot cancel task");
+          {isPreparing && <PreparingOverlay />}
+          <div className={styles.chatMessagesArea}>
+            <div className={styles.runtimeViewport}>
+              <AgentScopeRuntimeWebUI
+                key={`${selectedAgent}:${runtimeReloadKey}`}
+                options={options}
+                ref={chatRef}
+              />
+            </div>
+            <WorkbenchInput
+              inFlow
+              isGenerating={isGenerating}
+              topAccessory={
+                <>
+                  {chatId && !isDraftSessionId(chatId) && (
+                    <SuperExpertAigcCards
+                      key={chatId}
+                      conversationId={chatId}
+                      watchForNewCards={isGenerating}
+                    />
+                  )}
+                  <RunningSessionNotice
+                    visible={
+                      isGenerating && !!chatId && !isDraftSessionId(chatId)
+                    }
+                    variant="inline"
+                  />
+                  {(selectedExpertTeam || currentExpertTeamRun) && (
+                    <ExpertTeamStatusStrip
+                      chatId={chatId}
+                      visible
+                      variant="composer"
+                    />
+                  )}
+                </>
               }
-            }}
-          />
-        </div>
-      ))}
-
-      <Modal
-        open={showModelPrompt}
-        closable={false}
-        footer={null}
-        width={480}
-        styles={{
-          content: isDark
-            ? { background: "#1f1f1f", boxShadow: "0 8px 32px rgba(0,0,0,0.5)" }
-            : undefined,
-        }}
-      >
-        <Result
-          icon={<ExclamationCircleOutlined style={{ color: "#faad14" }} />}
-          title={
-            <span
-              style={{ color: isDark ? "rgba(255,255,255,0.88)" : undefined }}
-            >
-              {t("modelConfig.promptTitle")}
-            </span>
-          }
-          subTitle={
-            <span
-              style={{ color: isDark ? "rgba(255,255,255,0.55)" : undefined }}
-            >
-              {t("modelConfig.promptMessage")}
-            </span>
-          }
-          extra={[
-            <Button key="skip" onClick={() => setShowModelPrompt(false)}>
-              {t("modelConfig.skipButton")}
-            </Button>,
-            <Button
-              key="configure"
-              type="primary"
-              icon={<SettingOutlined />}
-              onClick={() => {
-                setShowModelPrompt(false);
-                navigate("/models");
+              onStop={() => {
+                const currentSession = window.currentSessionId || chatId || "";
+                const resolvedChatId =
+                  sessionApi.getRealIdForSession(currentSession) ??
+                  currentSession;
+                if (resolvedChatId) {
+                  chatApi.stopChat(resolvedChatId).catch(console.error);
+                  setIsGenerating(false);
+                }
               }}
-            >
-              {t("modelConfig.configureButton")}
-            </Button>,
-          ]}
+              onSubmit={(text) => {
+                (chatRef.current?.input.submit as any)({ query: text });
+              }}
+            />
+          </div>
+        </div>
+
+        {/* Right-side artifact panel */}
+        <ArtifactPanel
+          visible={showArtifactPanel}
+          onToggle={() => setShowArtifactPanel(!showArtifactPanel)}
+          chatId={chatId}
         />
-      </Modal>
-    </div>
+
+        {/* Render approval cards as overlays */}
+        {Array.from(approvalRequests.values()).map((request) => (
+          <div
+            key={request.requestId}
+            data-approval-id={request.requestId}
+            style={{
+              position: "fixed",
+              bottom: 80,
+              right: 24,
+              zIndex: 1000,
+              maxWidth: 480,
+              width: "calc(100vw - 48px)",
+            }}
+          >
+            <ApprovalCard
+              requestId={request.requestId}
+              agentId={request.agentId}
+              toolName={request.toolName}
+              severity={request.severity}
+              findingsCount={request.findingsCount}
+              findingsSummary={request.findingsSummary}
+              toolParams={request.toolParams}
+              createdAt={request.createdAt}
+              timeoutSeconds={request.timeoutSeconds}
+              sessionId={request.sessionId}
+              rootSessionId={request.rootSessionId}
+              onApprove={handleApprove}
+              onDeny={handleDeny}
+              onCancel={() => {
+                const sessionId =
+                  request.rootSessionId ||
+                  chatId ||
+                  window.currentSessionId ||
+                  "";
+                const resolvedChatId =
+                  sessionApi.getRealIdForSession(sessionId) ??
+                  chatIdRef.current ??
+                  sessionId;
+
+                if (resolvedChatId) {
+                  console.log("[Chat] Calling stopChat with:", resolvedChatId);
+                  chatApi
+                    .stopChat(resolvedChatId)
+                    .then(() => {
+                      console.log("[Chat] stopChat succeeded");
+                      setApprovals((prev) =>
+                        prev.filter(
+                          (item) =>
+                            item.root_session_id !== request.rootSessionId,
+                        ),
+                      );
+                    })
+                    .catch((err) => {
+                      console.error("[Chat] stopChat failed:", err);
+                    });
+                } else {
+                  console.warn(
+                    "[Chat] No chat_id resolved, cannot cancel task",
+                  );
+                }
+              }}
+            />
+          </div>
+        ))}
+
+        <Modal
+          open={showModelPrompt}
+          closable={false}
+          footer={null}
+          width={480}
+          styles={{
+            content: isDark
+              ? {
+                  background: "#1f1f1f",
+                  boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+                }
+              : undefined,
+          }}
+        >
+          <Result
+            icon={<ExclamationCircleOutlined style={{ color: "#faad14" }} />}
+            title={
+              <span
+                style={{ color: isDark ? "rgba(255,255,255,0.88)" : undefined }}
+              >
+                {t("modelConfig.promptTitle")}
+              </span>
+            }
+            subTitle={
+              <span
+                style={{ color: isDark ? "rgba(255,255,255,0.55)" : undefined }}
+              >
+                {t("modelConfig.promptMessage")}
+              </span>
+            }
+            extra={[
+              <Button key="skip" onClick={() => setShowModelPrompt(false)}>
+                {t("modelConfig.skipButton")}
+              </Button>,
+              <Button
+                key="configure"
+                type="primary"
+                icon={<SettingOutlined />}
+                onClick={() => {
+                  setShowModelPrompt(false);
+                  navigate("/models");
+                }}
+              >
+                {t("modelConfig.configureButton")}
+              </Button>,
+            ]}
+          />
+        </Modal>
+      </div>
+    </ExpertIdentityContext.Provider>
   );
 }

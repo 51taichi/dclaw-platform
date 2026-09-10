@@ -1,3 +1,4 @@
+import { ExpertIdentityContext } from "../../contexts/ExpertIdentityContext";
 import {
   AgentScopeRuntimeWebUI,
   IAgentScopeRuntimeWebUIOptions,
@@ -2056,283 +2057,298 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
   ]);
 
   return (
-    <div
-      style={{
-        height: "100%",
-        width: "100%",
-        display: "flex",
-        flexDirection: "row",
-        position: "relative",
-      }}
-    >
-      {/* Main chat area */}
+    <ExpertIdentityContext.Provider value={responseIdentity}>
       <div
         style={{
-          flex: 1,
+          height: "100%",
+          width: "100%",
           display: "flex",
-          flexDirection: "column",
-          minWidth: 0,
+          flexDirection: "row",
           position: "relative",
         }}
       >
-        <canvas ref={canvasRef} className={styles.confettiCanvas} />
-
-        <div className={styles.chatMessagesArea}>
-          <AgentScopeRuntimeWebUI
-            key={`${selectedAgent}:${runtimeReloadKey}`}
-            ref={chatRef}
-            options={options}
-          />
-          {superExpertCards.length > 0 ? (
-            <div className={styles.superExpertCards}>
-              {superExpertCards.map((projection) => (
-                <SuperExpertAigcTaskCard
-                  key={projection.materialTaskId}
-                  projection={projection}
-                  onCommand={async (_, materialTaskId) => {
-                    if (!projection.installationId || !projection.binding) {
-                      throw new Error("AIGC task binding is unavailable");
-                    }
-                    if (projection.status !== "IN_PROGRESS") {
-                      const eventId = crypto.randomUUID();
-                      await superExpertPlatformApi.command("aigc.task.resume", {
-                        installation_id: projection.installationId,
-                        contract_version: "1",
-                        idempotency_key: eventId,
-                        arguments: {
-                          event_id: eventId,
-                          binding: projection.binding,
-                        },
-                      });
-                    }
-                    navigate(buildAigcTaskRoute(materialTaskId));
-                  }}
-                />
-              ))}
-            </div>
-          ) : null}
-          {billingFailure && (
-            <BillingFailureAlert
-              failure={billingFailure}
-              pausedRunId={
-                currentExpertTeamRun?.state === "paused_insufficient_balance"
-                  ? currentExpertTeamRun.id
-                  : null
-              }
-              onContinue={async (runId) => {
-                const resumed = await expertTeamsApi.continueRun(runId);
-                setCurrentExpertTeamRun(resumed);
-                setBillingFailure(null);
-              }}
-            />
-          )}
-          <WorkbenchInput
-            isClawMode={isClawMode}
-            isGenerating={isGenerating}
-            topAccessory={
-              (isGenerating && !!chatId && !isDraftSessionId(chatId)) ||
-              (!isClawMode && (selectedExpertTeam || currentExpertTeamRun)) ? (
-                <>
-                  <RunningSessionNotice
-                    visible={
-                      isGenerating && !!chatId && !isDraftSessionId(chatId)
-                    }
-                    variant="inline"
-                  />
-                  {!isClawMode &&
-                    (selectedExpertTeam || currentExpertTeamRun) && (
-                      <ExpertTeamStatusStrip
-                        chatId={chatId}
-                        visible
-                        variant="composer"
-                      />
-                    )}
-                </>
-              ) : null
-            }
-            onStop={() => {
-              const currentSession = window.currentSessionId || chatId || "";
-              const resolvedChatId =
-                sessionApi.getRealIdForSession(currentSession) ??
-                currentSession;
-              if (resolvedChatId) {
-                chatApi.stopChat(resolvedChatId).catch(console.error);
-                setIsGenerating(false);
-              }
-            }}
-            onSubmit={(text) => {
-              (chatRef.current?.input.submit as any)({ query: text });
-            }}
-            overrideSelectedAgent={taskAgent}
-            overrideActiveMode={taskMode}
-            onAgentChange={(agent) => handleAgentOrModeChange(agent, undefined)}
-            onModeChange={(mode) => handleAgentOrModeChange(undefined, mode)}
-          />
-        </div>
-
-        {showMagicImport && detectedSkill && (
-          <div className={styles.magicImportCard}>
-            <div className={styles.magicImportLeft}>
-              {importStatus === "success" ? (
-                <span className={styles.magicImportSuccessIcon}>🎉</span>
-              ) : importStatus === "loading" ? (
-                <span
-                  className="animate-spin"
-                  style={{ display: "inline-block" }}
-                >
-                  🔮
-                </span>
-              ) : (
-                <span>✨</span>
-              )}
-            </div>
-            <div className={styles.magicImportContent}>
-              <div className={styles.magicImportTitle}>
-                <span>【AI 技能创作就绪】</span>
-                {detectedSkill.name}
-              </div>
-              <div className={styles.magicImportDesc}>
-                {detectedSkill.description}
-              </div>
-            </div>
-            <div className={styles.magicImportAction}>
-              <Button
-                className={styles.magicImportBtn}
-                onClick={handleMagicImport}
-                loading={importStatus === "loading"}
-                disabled={importStatus === "success"}
-              >
-                {importStatus === "success"
-                  ? "已成功导入"
-                  : importStatus === "loading"
-                  ? "导入中..."
-                  : "导入并启用到我的技能"}
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {/* Render approval cards as overlays */}
-        {Array.from(approvalRequests.values()).map((request) => (
-          <div
-            key={request.requestId}
-            data-approval-id={request.requestId}
-            style={{
-              position: "fixed",
-              bottom: 80,
-              right: 24,
-              zIndex: 1000,
-              maxWidth: 480,
-              width: "calc(100vw - 48px)",
-            }}
-          >
-            <ApprovalCard
-              requestId={request.requestId}
-              agentId={request.agentId}
-              toolName={request.toolName}
-              severity={request.severity}
-              findingsCount={request.findingsCount}
-              findingsSummary={request.findingsSummary}
-              toolParams={request.toolParams}
-              createdAt={request.createdAt}
-              timeoutSeconds={request.timeoutSeconds}
-              sessionId={request.sessionId}
-              rootSessionId={request.rootSessionId}
-              onApprove={handleApprove}
-              onDeny={handleDeny}
-              onCancel={() => {
-                const sessionId =
-                  request.rootSessionId || window.currentSessionId || "";
-                const resolvedChatId =
-                  sessionApi.getRealIdForSession(sessionId) ??
-                  chatIdRef.current ??
-                  sessionId;
-
-                if (resolvedChatId) {
-                  console.log("[Chat] Calling stopChat with:", resolvedChatId);
-                  chatApi
-                    .stopChat(resolvedChatId)
-                    .then(() => {
-                      console.log("[Chat] stopChat succeeded");
-                      setApprovals((prev) =>
-                        prev.filter(
-                          (item) =>
-                            item.root_session_id !== request.rootSessionId,
-                        ),
-                      );
-                    })
-                    .catch((err) => {
-                      console.error("[Chat] stopChat failed:", err);
-                    });
-                } else {
-                  console.warn(
-                    "[Chat] No chat_id resolved, cannot cancel task",
-                  );
-                }
-              }}
-            />
-          </div>
-        ))}
-
-        <Modal
-          open={showModelPrompt}
-          closable={false}
-          footer={null}
-          width={480}
-          styles={{
-            content: isDark
-              ? {
-                  background: "#1f1f1f",
-                  boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
-                }
-              : undefined,
+        {/* Main chat area */}
+        <div
+          style={{
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            minWidth: 0,
+            position: "relative",
           }}
         >
-          <Result
-            icon={<ExclamationCircleOutlined style={{ color: "#faad14" }} />}
-            title={
-              <span
-                style={{ color: isDark ? "rgba(255,255,255,0.88)" : undefined }}
-              >
-                {t("modelConfig.promptTitle")}
-              </span>
-            }
-            subTitle={
-              <span
-                style={{ color: isDark ? "rgba(255,255,255,0.55)" : undefined }}
-              >
-                {t("modelConfig.promptMessage")}
-              </span>
-            }
-            extra={[
-              <Button key="skip" onClick={() => setShowModelPrompt(false)}>
-                {t("modelConfig.skipButton")}
-              </Button>,
-              <Button
-                key="configure"
-                type="primary"
-                icon={<SettingOutlined />}
-                onClick={() => {
-                  setShowModelPrompt(false);
-                  navigate("/models");
-                }}
-              >
-                {t("modelConfig.configureButton")}
-              </Button>,
-            ]}
-          />
-        </Modal>
-      </div>
+          <canvas ref={canvasRef} className={styles.confettiCanvas} />
 
-      {/* Right-side artifact panel */}
-      {!isClawMode && (
-        <ArtifactPanel
-          visible={showArtifactPanel}
-          onToggle={() => setShowArtifactPanel(!showArtifactPanel)}
-          isClawMode={isClawMode}
-          chatId={chatId}
-        />
-      )}
-    </div>
+          <div className={styles.chatMessagesArea}>
+            <AgentScopeRuntimeWebUI
+              key={`${selectedAgent}:${runtimeReloadKey}`}
+              ref={chatRef}
+              options={options}
+            />
+            {superExpertCards.length > 0 ? (
+              <div className={styles.superExpertCards}>
+                {superExpertCards.map((projection) => (
+                  <SuperExpertAigcTaskCard
+                    key={projection.materialTaskId}
+                    projection={projection}
+                    onCommand={async (_, materialTaskId) => {
+                      if (!projection.installationId || !projection.binding) {
+                        throw new Error("AIGC task binding is unavailable");
+                      }
+                      if (projection.status !== "IN_PROGRESS") {
+                        const eventId = crypto.randomUUID();
+                        await superExpertPlatformApi.command(
+                          "aigc.task.resume",
+                          {
+                            installation_id: projection.installationId,
+                            contract_version: "1",
+                            idempotency_key: eventId,
+                            arguments: {
+                              event_id: eventId,
+                              binding: projection.binding,
+                            },
+                          },
+                        );
+                      }
+                      navigate(buildAigcTaskRoute(materialTaskId));
+                    }}
+                  />
+                ))}
+              </div>
+            ) : null}
+            {billingFailure && (
+              <BillingFailureAlert
+                failure={billingFailure}
+                pausedRunId={
+                  currentExpertTeamRun?.state === "paused_insufficient_balance"
+                    ? currentExpertTeamRun.id
+                    : null
+                }
+                onContinue={async (runId) => {
+                  const resumed = await expertTeamsApi.continueRun(runId);
+                  setCurrentExpertTeamRun(resumed);
+                  setBillingFailure(null);
+                }}
+              />
+            )}
+            <WorkbenchInput
+              isClawMode={isClawMode}
+              isGenerating={isGenerating}
+              topAccessory={
+                (isGenerating && !!chatId && !isDraftSessionId(chatId)) ||
+                (!isClawMode &&
+                  (selectedExpertTeam || currentExpertTeamRun)) ? (
+                  <>
+                    <RunningSessionNotice
+                      visible={
+                        isGenerating && !!chatId && !isDraftSessionId(chatId)
+                      }
+                      variant="inline"
+                    />
+                    {!isClawMode &&
+                      (selectedExpertTeam || currentExpertTeamRun) && (
+                        <ExpertTeamStatusStrip
+                          chatId={chatId}
+                          visible
+                          variant="composer"
+                        />
+                      )}
+                  </>
+                ) : null
+              }
+              onStop={() => {
+                const currentSession = window.currentSessionId || chatId || "";
+                const resolvedChatId =
+                  sessionApi.getRealIdForSession(currentSession) ??
+                  currentSession;
+                if (resolvedChatId) {
+                  chatApi.stopChat(resolvedChatId).catch(console.error);
+                  setIsGenerating(false);
+                }
+              }}
+              onSubmit={(text) => {
+                (chatRef.current?.input.submit as any)({ query: text });
+              }}
+              overrideSelectedAgent={taskAgent}
+              overrideActiveMode={taskMode}
+              onAgentChange={(agent) =>
+                handleAgentOrModeChange(agent, undefined)
+              }
+              onModeChange={(mode) => handleAgentOrModeChange(undefined, mode)}
+            />
+          </div>
+
+          {showMagicImport && detectedSkill && (
+            <div className={styles.magicImportCard}>
+              <div className={styles.magicImportLeft}>
+                {importStatus === "success" ? (
+                  <span className={styles.magicImportSuccessIcon}>🎉</span>
+                ) : importStatus === "loading" ? (
+                  <span
+                    className="animate-spin"
+                    style={{ display: "inline-block" }}
+                  >
+                    🔮
+                  </span>
+                ) : (
+                  <span>✨</span>
+                )}
+              </div>
+              <div className={styles.magicImportContent}>
+                <div className={styles.magicImportTitle}>
+                  <span>【AI 技能创作就绪】</span>
+                  {detectedSkill.name}
+                </div>
+                <div className={styles.magicImportDesc}>
+                  {detectedSkill.description}
+                </div>
+              </div>
+              <div className={styles.magicImportAction}>
+                <Button
+                  className={styles.magicImportBtn}
+                  onClick={handleMagicImport}
+                  loading={importStatus === "loading"}
+                  disabled={importStatus === "success"}
+                >
+                  {importStatus === "success"
+                    ? "已成功导入"
+                    : importStatus === "loading"
+                    ? "导入中..."
+                    : "导入并启用到我的技能"}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Render approval cards as overlays */}
+          {Array.from(approvalRequests.values()).map((request) => (
+            <div
+              key={request.requestId}
+              data-approval-id={request.requestId}
+              style={{
+                position: "fixed",
+                bottom: 80,
+                right: 24,
+                zIndex: 1000,
+                maxWidth: 480,
+                width: "calc(100vw - 48px)",
+              }}
+            >
+              <ApprovalCard
+                requestId={request.requestId}
+                agentId={request.agentId}
+                toolName={request.toolName}
+                severity={request.severity}
+                findingsCount={request.findingsCount}
+                findingsSummary={request.findingsSummary}
+                toolParams={request.toolParams}
+                createdAt={request.createdAt}
+                timeoutSeconds={request.timeoutSeconds}
+                sessionId={request.sessionId}
+                rootSessionId={request.rootSessionId}
+                onApprove={handleApprove}
+                onDeny={handleDeny}
+                onCancel={() => {
+                  const sessionId =
+                    request.rootSessionId || window.currentSessionId || "";
+                  const resolvedChatId =
+                    sessionApi.getRealIdForSession(sessionId) ??
+                    chatIdRef.current ??
+                    sessionId;
+
+                  if (resolvedChatId) {
+                    console.log(
+                      "[Chat] Calling stopChat with:",
+                      resolvedChatId,
+                    );
+                    chatApi
+                      .stopChat(resolvedChatId)
+                      .then(() => {
+                        console.log("[Chat] stopChat succeeded");
+                        setApprovals((prev) =>
+                          prev.filter(
+                            (item) =>
+                              item.root_session_id !== request.rootSessionId,
+                          ),
+                        );
+                      })
+                      .catch((err) => {
+                        console.error("[Chat] stopChat failed:", err);
+                      });
+                  } else {
+                    console.warn(
+                      "[Chat] No chat_id resolved, cannot cancel task",
+                    );
+                  }
+                }}
+              />
+            </div>
+          ))}
+
+          <Modal
+            open={showModelPrompt}
+            closable={false}
+            footer={null}
+            width={480}
+            styles={{
+              content: isDark
+                ? {
+                    background: "#1f1f1f",
+                    boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+                  }
+                : undefined,
+            }}
+          >
+            <Result
+              icon={<ExclamationCircleOutlined style={{ color: "#faad14" }} />}
+              title={
+                <span
+                  style={{
+                    color: isDark ? "rgba(255,255,255,0.88)" : undefined,
+                  }}
+                >
+                  {t("modelConfig.promptTitle")}
+                </span>
+              }
+              subTitle={
+                <span
+                  style={{
+                    color: isDark ? "rgba(255,255,255,0.55)" : undefined,
+                  }}
+                >
+                  {t("modelConfig.promptMessage")}
+                </span>
+              }
+              extra={[
+                <Button key="skip" onClick={() => setShowModelPrompt(false)}>
+                  {t("modelConfig.skipButton")}
+                </Button>,
+                <Button
+                  key="configure"
+                  type="primary"
+                  icon={<SettingOutlined />}
+                  onClick={() => {
+                    setShowModelPrompt(false);
+                    navigate("/models");
+                  }}
+                >
+                  {t("modelConfig.configureButton")}
+                </Button>,
+              ]}
+            />
+          </Modal>
+        </div>
+
+        {/* Right-side artifact panel */}
+        {!isClawMode && (
+          <ArtifactPanel
+            visible={showArtifactPanel}
+            onToggle={() => setShowArtifactPanel(!showArtifactPanel)}
+            isClawMode={isClawMode}
+            chatId={chatId}
+          />
+        )}
+      </div>
+    </ExpertIdentityContext.Provider>
   );
 }

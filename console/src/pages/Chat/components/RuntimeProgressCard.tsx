@@ -1,5 +1,6 @@
 import { Markdown } from "@agentscope-ai/chat";
-import { useMemo, useState } from "react";
+import { useContext, useMemo, useState } from "react";
+import { ExpertIdentityContext } from "../../../contexts/ExpertIdentityContext";
 import { message } from "antd";
 import { toDisplayUrl } from "../utils";
 import styles from "./RuntimeProgressCard.module.less";
@@ -225,7 +226,8 @@ function extractCopyText(messages: RuntimeMessage[]) {
 }
 
 export default function RuntimeProgressCard(props: Props) {
-  const identity = props.identity || expertIdentity();
+  const currentIdentity = useContext(ExpertIdentityContext);
+  const identity = currentIdentity || props.identity || expertIdentity();
   const [previewImage, setPreviewImage] = useState<{
     url: string;
     alt: string;

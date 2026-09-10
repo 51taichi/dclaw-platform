@@ -1,6 +1,31 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import RuntimeProgressCard from "./RuntimeProgressCard";
+import { ExpertIdentityContext } from "../../../contexts/ExpertIdentityContext";
+
+it("updates a cached card when a new expert identity arrives", () => {
+  const card = (
+    <RuntimeProgressCard
+      identity={{ name: "DClaw", avatar: "/mascot.png", isSuperExpert: false }}
+      data={{ status: "completed", output: [] }}
+    />
+  );
+  const { rerender } = render(
+    <ExpertIdentityContext.Provider value={null}>
+      {card}
+    </ExpertIdentityContext.Provider>,
+  );
+  rerender(
+    <ExpertIdentityContext.Provider
+      value={{ name: "新版专家", avatar: "/new.png", isSuperExpert: true }}
+    >
+      {card}
+    </ExpertIdentityContext.Provider>,
+  );
+  expect(screen.getByText("新版专家")).toBeInTheDocument();
+  expect(screen.getByAltText("新版专家")).toHaveAttribute("src", "/new.png");
+  expect(screen.queryByText("DClaw")).not.toBeInTheDocument();
+});
 
 vi.mock("@agentscope-ai/chat", () => ({
   Markdown: ({ content }: { content: string }) => <div>{content}</div>,
