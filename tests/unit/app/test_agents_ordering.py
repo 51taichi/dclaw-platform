@@ -193,6 +193,46 @@ async def test_list_agents_merges_sealed_agents_without_exposing_workspace(
 
 
 @pytest.mark.asyncio
+async def test_client_agent_list_excludes_disabled_sealed_agents(monkeypatch):
+    config = _build_config(["default"], agent_order=["default"])
+
+    class Registry:
+        @staticmethod
+        def is_sealed(agent_id):
+            return agent_id in {"enabled-luyu", "disabled-luyu"}
+
+        @staticmethod
+        def list_agents():
+            return [
+                SealedAgentRecord(
+                    agent_id="enabled-luyu",
+                    name="启用陆羽",
+                    enabled=True,
+                ),
+                SealedAgentRecord(
+                    agent_id="disabled-luyu",
+                    name="停用陆羽",
+                    enabled=False,
+                ),
+            ]
+
+    monkeypatch.setattr(agents_router, "load_config", lambda: config)
+    monkeypatch.setattr(agents_router, "load_agent_config", _agent_config)
+    monkeypatch.setattr(
+        agents_router,
+        "get_sealed_agent_registry",
+        lambda: Registry(),
+    )
+
+    response = await agents_router.list_agents(exclude_open_api=True)
+
+    assert [agent.id for agent in response.agents] == [
+        "default",
+        "enabled-luyu",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_reorder_agents_rejects_incomplete_payload(monkeypatch):
     """Reorder should reject lists that omit configured agents."""
     config = _build_config(

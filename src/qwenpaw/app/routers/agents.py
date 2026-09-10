@@ -330,7 +330,8 @@ async def list_agents(exclude_open_api: bool = False) -> AgentListResponse:
         agents = [
             agent
             for agent in agents
-            if agent.agent_type == "sealed" or not agent.open_api_enabled
+            if agent.enabled
+            and (agent.agent_type == "sealed" or not agent.open_api_enabled)
         ]
 
     return AgentListResponse(agents=agents)
