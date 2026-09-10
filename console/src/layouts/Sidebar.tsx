@@ -40,10 +40,10 @@ import {
   SparkOtherLine,
   SparkBarChartLine,
   SparkEmailLine,
+  SparkHistoryLine,
+  SparkYoujiantouRightArrowLine,
 } from "@agentscope-ai/icons";
 import {
-  History,
-  ChevronRight,
   Archive,
   ArchiveRestore,
   Package,
@@ -895,7 +895,7 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
             style={{ position: "relative" }}
           >
             <span className={styles.taskNumberBadge}>
-              {numbered ? index + 1 : <History size={13} />}
+              {numbered ? index + 1 : <SparkHistoryLine />}
               {(isGenerating || task.task_status === "failed") && (
                 <span
                   className={`${styles.taskStateDot} ${
@@ -1174,9 +1174,9 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
                           className={styles.earlierTasksButton}
                           aria-expanded={earlierTasksOpen}
                         >
-                          <History size={15} />
+                          <SparkHistoryLine />
                           <span>选择更早任务</span>
-                          <ChevronRight size={14} />
+                          <SparkYoujiantouRightArrowLine />
                         </button>
                       </Popover>
                     )}
