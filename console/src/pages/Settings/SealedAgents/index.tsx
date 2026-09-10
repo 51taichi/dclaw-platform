@@ -15,6 +15,7 @@ import {
 } from "antd";
 import type { UploadProps } from "antd";
 import {
+  Cpu,
   PackageCheck,
   RefreshCw,
   ShieldCheck,
@@ -61,20 +62,15 @@ function activationErrorMessage(error: unknown) {
 
 function HarnessStatusRow({
   label,
-  description,
   value,
 }: {
   label: string;
-  description: string;
   value: boolean | null;
 }) {
   const status = value === null ? "未声明" : value ? "已开启" : "已关闭";
   return (
     <div className={styles.harnessStatusRow}>
-      <div className={styles.harnessStatusCopy}>
-        <Typography.Text strong>{label}</Typography.Text>
-        <Typography.Text type="secondary">{description}</Typography.Text>
-      </div>
+      <Typography.Text strong>{label}</Typography.Text>
       <Space size={8}>
         <Typography.Text type="secondary">{status}</Typography.Text>
         <Switch
@@ -402,6 +398,31 @@ export default function SealedAgentsPage() {
             expandable={{
               expandedRowRender: (agent) => (
                 <div className={styles.expandedContent}>
+                  {agent.harness_status ? (
+                    <div
+                      className={styles.harnessPanel}
+                      data-testid="harness-status"
+                    >
+                      <div className={styles.harnessTitle}>
+                        <Cpu
+                          aria-hidden="true"
+                          data-testid="harness-title-icon"
+                          size={18}
+                        />
+                        <Typography.Text strong>Harness 能力</Typography.Text>
+                      </div>
+                      <div className={styles.harnessControls}>
+                        <HarnessStatusRow
+                          label="Skill 智能调用"
+                          value={agent.harness_status.skill_reader_enabled}
+                        />
+                        <HarnessStatusRow
+                          label="完整 Agent 循环"
+                          value={agent.harness_status.agent_loop_enabled}
+                        />
+                      </div>
+                    </div>
+                  ) : null}
                   <div
                     className={styles.expertProfile}
                     data-testid="expert-profile"
@@ -500,7 +521,9 @@ export default function SealedAgentsPage() {
                       data-testid="banner-controls"
                     >
                       <Typography.Text type="secondary">
-                        建议 3:1 · 2172 × 724 px · PNG / JPEG / WebP · 最大 5 MB
+                        <span>2172 × 724 px</span>
+                        <br />
+                        <span>最大 5 MB</span>
                       </Typography.Text>
                       <span data-testid="banner-upload">
                         <Upload
@@ -552,31 +575,6 @@ export default function SealedAgentsPage() {
                       </span>
                     </div>
                   </div>
-                  {agent.harness_status ? (
-                    <div
-                      className={styles.harnessPanel}
-                      data-testid="harness-status"
-                    >
-                      <div className={styles.harnessHeading}>
-                        <Typography.Text strong>Harness 能力</Typography.Text>
-                        <Typography.Text type="secondary">
-                          状态由当前激活版本配置决定，暂不支持在此调整
-                        </Typography.Text>
-                      </div>
-                      <div className={styles.harnessStatusGrid}>
-                        <HarnessStatusRow
-                          label="Skill 智能调用"
-                          description="按需读取当前超级专家已注册的 Skill"
-                          value={agent.harness_status.skill_reader_enabled}
-                        />
-                        <HarnessStatusRow
-                          label="完整 Agent 循环"
-                          description="允许当前超级专家运行完整 Agent 推理与工具循环"
-                          value={agent.harness_status.agent_loop_enabled}
-                        />
-                      </div>
-                    </div>
-                  ) : null}
                 </div>
               ),
             }}

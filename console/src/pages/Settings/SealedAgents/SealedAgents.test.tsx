@@ -305,7 +305,11 @@ it("uploads a promotional banner with a visible size hint", async () => {
   });
   const { container } = render(<SealedAgentsPage />);
   await user.click(await screen.findByRole("button", { name: /Expand row/ }));
-  expect(screen.getByText(/3:1 · 2172 × 724/)).toBeVisible();
+  expect(screen.getByText("2172 × 724 px")).toBeVisible();
+  expect(screen.getByText("最大 5 MB")).toBeVisible();
+  expect(
+    screen.queryByText(/建议 3:1|PNG \/ JPEG \/ WebP/),
+  ).not.toBeInTheDocument();
   const bannerLayout = screen.getByTestId("banner-layout");
   expect(bannerLayout.firstElementChild).toHaveAttribute(
     "data-testid",
@@ -373,9 +377,18 @@ it("shows configured harness states as disabled switches", async () => {
   expect(skillReader).toBeDisabled();
   expect(agentLoop).not.toBeChecked();
   expect(agentLoop).toBeDisabled();
+  expect(screen.getByTestId("harness-title-icon")).toBeVisible();
+  const harnessPanel = screen.getByTestId("harness-status");
+  expect(harnessPanel.parentElement?.firstElementChild).toBe(harnessPanel);
   expect(
-    screen.getByText("状态由当前激活版本配置决定，暂不支持在此调整"),
-  ).toBeVisible();
+    screen.queryByText("状态由当前激活版本配置决定，暂不支持在此调整"),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByText("按需读取当前超级专家已注册的 Skill"),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByText("允许当前超级专家运行完整 Agent 推理与工具循环"),
+  ).not.toBeInTheDocument();
 });
 
 it("marks missing harness declarations without inventing a state", async () => {

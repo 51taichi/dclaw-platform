@@ -146,8 +146,10 @@
   display: flex;
   flex-direction: column;
   justify-content: center;
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
+  width: 100%;
+  text-align: center;
   :global(.ant-typography) {
     font-size: 12px;
   }
@@ -155,42 +157,37 @@
 
 .harnessPanel {
   grid-column: 1 / -1;
-  display: grid;
-  gap: 12px;
-  padding: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  min-width: 0;
+  padding: 14px 16px;
   border: 1px solid var(--ant-color-border-secondary, rgba(5, 5, 5, 0.06));
   border-radius: 10px;
   background: var(--ant-color-bg-container, #fff);
 }
 
-.harnessHeading {
+.harnessTitle {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 16px;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
 }
 
-.harnessStatusGrid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+.harnessControls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 24px;
+  margin-left: auto;
 }
 
 .harnessStatusRow {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  min-width: 0;
-  padding: 12px 14px;
-  border-radius: 8px;
-  background: var(--ant-color-fill-quaternary, rgba(0, 0, 0, 0.02));
-}
-
-.harnessStatusCopy {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
+  gap: 10px;
+  white-space: nowrap;
 }
 
 @media (max-width: 1200px) {
@@ -209,12 +206,7 @@
   .bannerSection {
     grid-template-columns: 1fr;
   }
-  .harnessHeading {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 4px;
-  }
-  .harnessStatusGrid {
-    grid-template-columns: 1fr;
+  .harnessPanel {
+    overflow-x: auto;
   }
 }
