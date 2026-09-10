@@ -42,6 +42,8 @@ import {
   SparkEmailLine,
 } from "@agentscope-ai/icons";
 import {
+  History,
+  ChevronRight,
   Archive,
   ArchiveRestore,
   Package,
@@ -132,6 +134,7 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
   const [isMobile, setIsMobile] = useState(isMobileSidebarViewport);
   const [hasInboxUnread, setHasInboxUnread] = useState(false);
   const [taskList, setTaskList] = useState<TaskListChat[]>([]);
+  const [earlierTasksOpen, setEarlierTasksOpen] = useState(false);
   const [taskListLoading, setTaskListLoading] = useState(false);
   const [renamingTaskId, setRenamingTaskId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -742,6 +745,210 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
     return title.toLowerCase().includes(taskSearchQuery.toLowerCase());
   });
 
+  const renderTasks = (tasks: TaskListChat[], numbered = false) =>
+    tasks.map((task, index) => {
+      const title = task.name || task.session_id || "Untitled";
+      const timeAgo = task.created_at ? getTimeAgo(task.created_at) : "";
+      const isActive = selectedKey === `task-${task.id}`;
+      const isRenaming = renamingTaskId === task.id;
+      const isGenerating = isTaskGenerating(task);
+      const isArchived = isArchivedTaskChat(task);
+
+      const menuItems = [
+        {
+          key: "open-folder",
+          icon: <FolderOpen size={14} />,
+          label: t("nav.openFolder", "打开文件夹"),
+          onClick: ({ domEvent }: any) => {
+            domEvent.stopPropagation();
+            message.info(t("common.comingSoon", "功能开发中"));
+          },
+        },
+        {
+          key: "rename",
+          icon: <Edit2 size={14} />,
+          label: t("nav.rename", "重命名"),
+          onClick: ({ domEvent }: any) => {
+            domEvent.stopPropagation();
+            setRenamingTaskId(task.id);
+            setRenameValue(title);
+          },
+        },
+        {
+          key: "change-status",
+          icon: <SlidersHorizontal size={14} />,
+          label: t("nav.changeStatus", "修改状态"),
+          children: [
+            {
+              key: "status-in_progress",
+              label: "进行中",
+              onClick: ({ domEvent }: any) => {
+                domEvent.stopPropagation();
+                handleChangeStatus(task, "in_progress");
+              },
+            },
+            {
+              key: "status-completed",
+              label: "已完成",
+              onClick: ({ domEvent }: any) => {
+                domEvent.stopPropagation();
+                handleChangeStatus(task, "completed");
+              },
+            },
+            {
+              key: "status-failed",
+              label: "失败",
+              onClick: ({ domEvent }: any) => {
+                domEvent.stopPropagation();
+                handleChangeStatus(task, "failed");
+              },
+            },
+            {
+              key: "status-pending",
+              label: "待处理",
+              onClick: ({ domEvent }: any) => {
+                domEvent.stopPropagation();
+                handleChangeStatus(task, "pending");
+              },
+            },
+            {
+              key: "status-planning",
+              label: "规划中",
+              onClick: ({ domEvent }: any) => {
+                domEvent.stopPropagation();
+                handleChangeStatus(task, "planning");
+              },
+            },
+          ],
+        },
+        {
+          key: "save-workspace",
+          icon: <Save size={14} />,
+          label: t("nav.saveToWorkspace", "保存到工作空间"),
+          onClick: ({ domEvent }: any) => {
+            domEvent.stopPropagation();
+            message.info(t("common.comingSoon", "功能开发中"));
+          },
+        },
+        isArchived
+          ? {
+              key: "restore",
+              icon: <ArchiveRestore size={14} />,
+              label: t("nav.restoreTask", "恢复任务"),
+              onClick: ({ domEvent }: any) => {
+                domEvent.stopPropagation();
+                void handleRestoreTask(task);
+              },
+            }
+          : {
+              key: "archive",
+              icon: <Archive size={14} />,
+              label: isGenerating
+                ? t("nav.archiveRunningTaskBlocked", "运行中的任务不能归档")
+                : t("nav.archiveTask", "归档任务"),
+              disabled: isGenerating,
+              onClick: ({ domEvent }: any) => {
+                domEvent.stopPropagation();
+                void handleArchiveTask(task);
+              },
+            },
+        {
+          key: "delete",
+          icon: <Trash2 size={14} />,
+          label: t("nav.deleteTask", "删除任务"),
+          danger: true,
+          onClick: ({ domEvent }: any) => {
+            domEvent.stopPropagation();
+            handleDeleteTask(task);
+          },
+        },
+      ];
+
+      return (
+        <Dropdown
+          key={task.id}
+          menu={{ items: menuItems }}
+          trigger={["contextMenu"]}
+          placement="bottomRight"
+        >
+          <button
+            className={`${styles.taskItem}${
+              isActive ? ` ${styles.taskItemActive}` : ""
+            }${isGenerating ? ` ${styles.taskItemGenerating}` : ""}`}
+            onClick={() => {
+              if (!isRenaming) {
+                setEarlierTasksOpen(false);
+                const taskAgentId = task.meta?.agent_id;
+                if (taskAgentId && (taskAgentId as string) !== selectedAgent) {
+                  setSelectedAgent(taskAgentId as string);
+                }
+                const taskMode = task.meta?.active_mode;
+                if (
+                  typeof taskMode === "string" &&
+                  taskMode !== useAgentStore.getState().activeMode
+                ) {
+                  useAgentStore.getState().setActiveMode(taskMode as any);
+                }
+                navigate(`/task/${task.id}`);
+              }
+            }}
+            style={{ position: "relative" }}
+          >
+            <span className={styles.taskNumberBadge}>
+              {numbered ? index + 1 : <History size={13} />}
+              {(isGenerating || task.task_status === "failed") && (
+                <span
+                  className={`${styles.taskStateDot} ${
+                    isGenerating
+                      ? styles.taskStateRunning
+                      : styles.taskStateFailed
+                  }`}
+                  aria-label={isGenerating ? "生成中" : "失败"}
+                />
+              )}
+            </span>
+            <span className={styles.taskItemContent}>
+              {isRenaming ? (
+                <Input
+                  size="small"
+                  value={renameValue}
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  onPressEnter={() => handleRenameSubmit(task)}
+                  onBlur={() => handleRenameSubmit(task)}
+                  autoFocus
+                  onClick={(e) => e.stopPropagation()}
+                />
+              ) : (
+                <>
+                  <span className={styles.taskItemTitle}>{title}</span>
+                  {timeAgo && (
+                    <span className={styles.taskItemTime}>{timeAgo}</span>
+                  )}
+                </>
+              )}
+            </span>
+
+            {!isRenaming && (
+              <span
+                className={styles.taskItemMoreBtn}
+                onClick={(e) => {
+                  e.stopPropagation();
+                }}
+              >
+                <Dropdown
+                  menu={{ items: menuItems }}
+                  trigger={["click"]}
+                  placement="bottomRight"
+                >
+                  <MoreHorizontal size={14} />
+                </Dropdown>
+              </span>
+            )}
+          </button>
+        </Dropdown>
+      );
+    });
+
   const filterContent = (
     <div
       style={{
@@ -943,236 +1150,36 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
                       </div>
                     )}
                     <div className={styles.taskListItems}>
-                      {filteredTaskList.slice(0, 20).map((task) => {
-                        const title =
-                          task.name || task.session_id || "Untitled";
-                        const timeAgo = task.created_at
-                          ? getTimeAgo(task.created_at)
-                          : "";
-                        const isActive = selectedKey === `task-${task.id}`;
-                        const isRenaming = renamingTaskId === task.id;
-                        const isGenerating = isTaskGenerating(task);
-                        const isArchived = isArchivedTaskChat(task);
-
-                        const menuItems = [
-                          {
-                            key: "open-folder",
-                            icon: <FolderOpen size={14} />,
-                            label: t("nav.openFolder", "打开文件夹"),
-                            onClick: ({ domEvent }: any) => {
-                              domEvent.stopPropagation();
-                              message.info(
-                                t("common.comingSoon", "功能开发中"),
-                              );
-                            },
-                          },
-                          {
-                            key: "rename",
-                            icon: <Edit2 size={14} />,
-                            label: t("nav.rename", "重命名"),
-                            onClick: ({ domEvent }: any) => {
-                              domEvent.stopPropagation();
-                              setRenamingTaskId(task.id);
-                              setRenameValue(title);
-                            },
-                          },
-                          {
-                            key: "change-status",
-                            icon: <SlidersHorizontal size={14} />,
-                            label: t("nav.changeStatus", "修改状态"),
-                            children: [
-                              {
-                                key: "status-in_progress",
-                                label: "进行中",
-                                onClick: ({ domEvent }: any) => {
-                                  domEvent.stopPropagation();
-                                  handleChangeStatus(task, "in_progress");
-                                },
-                              },
-                              {
-                                key: "status-completed",
-                                label: "已完成",
-                                onClick: ({ domEvent }: any) => {
-                                  domEvent.stopPropagation();
-                                  handleChangeStatus(task, "completed");
-                                },
-                              },
-                              {
-                                key: "status-failed",
-                                label: "失败",
-                                onClick: ({ domEvent }: any) => {
-                                  domEvent.stopPropagation();
-                                  handleChangeStatus(task, "failed");
-                                },
-                              },
-                              {
-                                key: "status-pending",
-                                label: "待处理",
-                                onClick: ({ domEvent }: any) => {
-                                  domEvent.stopPropagation();
-                                  handleChangeStatus(task, "pending");
-                                },
-                              },
-                              {
-                                key: "status-planning",
-                                label: "规划中",
-                                onClick: ({ domEvent }: any) => {
-                                  domEvent.stopPropagation();
-                                  handleChangeStatus(task, "planning");
-                                },
-                              },
-                            ],
-                          },
-                          {
-                            key: "save-workspace",
-                            icon: <Save size={14} />,
-                            label: t("nav.saveToWorkspace", "保存到工作空间"),
-                            onClick: ({ domEvent }: any) => {
-                              domEvent.stopPropagation();
-                              message.info(
-                                t("common.comingSoon", "功能开发中"),
-                              );
-                            },
-                          },
-                          isArchived
-                            ? {
-                                key: "restore",
-                                icon: <ArchiveRestore size={14} />,
-                                label: t("nav.restoreTask", "恢复任务"),
-                                onClick: ({ domEvent }: any) => {
-                                  domEvent.stopPropagation();
-                                  void handleRestoreTask(task);
-                                },
-                              }
-                            : {
-                                key: "archive",
-                                icon: <Archive size={14} />,
-                                label: isGenerating
-                                  ? t(
-                                      "nav.archiveRunningTaskBlocked",
-                                      "运行中的任务不能归档",
-                                    )
-                                  : t("nav.archiveTask", "归档任务"),
-                                disabled: isGenerating,
-                                onClick: ({ domEvent }: any) => {
-                                  domEvent.stopPropagation();
-                                  void handleArchiveTask(task);
-                                },
-                              },
-                          {
-                            key: "delete",
-                            icon: <Trash2 size={14} />,
-                            label: t("nav.deleteTask", "删除任务"),
-                            danger: true,
-                            onClick: ({ domEvent }: any) => {
-                              domEvent.stopPropagation();
-                              handleDeleteTask(task);
-                            },
-                          },
-                        ];
-
-                        return (
-                          <Dropdown
-                            key={task.id}
-                            menu={{ items: menuItems }}
-                            trigger={["contextMenu"]}
-                            placement="bottomRight"
-                          >
-                            <button
-                              className={`${styles.taskItem}${
-                                isActive ? ` ${styles.taskItemActive}` : ""
-                              }${
-                                isGenerating
-                                  ? ` ${styles.taskItemGenerating}`
-                                  : ""
-                              }`}
-                              onClick={() => {
-                                if (!isRenaming) {
-                                  const taskAgentId = task.meta?.agent_id;
-                                  if (
-                                    taskAgentId &&
-                                    (taskAgentId as string) !== selectedAgent
-                                  ) {
-                                    setSelectedAgent(taskAgentId as string);
-                                  }
-                                  const taskMode = task.meta?.active_mode;
-                                  if (
-                                    typeof taskMode === "string" &&
-                                    taskMode !==
-                                      useAgentStore.getState().activeMode
-                                  ) {
-                                    useAgentStore
-                                      .getState()
-                                      .setActiveMode(taskMode as any);
-                                  }
-                                  navigate(`/task/${task.id}`);
-                                }
-                              }}
-                              style={{ position: "relative" }}
-                            >
-                              <span className={styles.taskItemIcon}>
-                                {isGenerating ? (
-                                  <span
-                                    className={styles.taskGeneratingSpinner}
-                                    aria-label={t(
-                                      "nav.taskGenerating",
-                                      "生成中",
-                                    )}
-                                  />
-                                ) : (
-                                  "✓"
-                                )}
-                              </span>
-                              <span className={styles.taskItemContent}>
-                                {isRenaming ? (
-                                  <Input
-                                    size="small"
-                                    value={renameValue}
-                                    onChange={(e) =>
-                                      setRenameValue(e.target.value)
-                                    }
-                                    onPressEnter={() =>
-                                      handleRenameSubmit(task)
-                                    }
-                                    onBlur={() => handleRenameSubmit(task)}
-                                    autoFocus
-                                    onClick={(e) => e.stopPropagation()}
-                                  />
-                                ) : (
-                                  <>
-                                    <span className={styles.taskItemTitle}>
-                                      {title}
-                                    </span>
-                                    {timeAgo && (
-                                      <span className={styles.taskItemTime}>
-                                        {timeAgo}
-                                      </span>
-                                    )}
-                                  </>
-                                )}
-                              </span>
-
-                              {!isRenaming && (
-                                <span
-                                  className={styles.taskItemMoreBtn}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                  }}
-                                >
-                                  <Dropdown
-                                    menu={{ items: menuItems }}
-                                    trigger={["click"]}
-                                    placement="bottomRight"
-                                  >
-                                    <MoreHorizontal size={14} />
-                                  </Dropdown>
-                                </span>
-                              )}
-                            </button>
-                          </Dropdown>
-                        );
-                      })}
+                      {renderTasks(filteredTaskList.slice(0, 3), true)}
                     </div>
+                    {filteredTaskList.length > 3 && (
+                      <Popover
+                        trigger="click"
+                        placement="rightBottom"
+                        open={earlierTasksOpen}
+                        onOpenChange={setEarlierTasksOpen}
+                        title="选择更早任务"
+                        content={
+                          <div
+                            className={styles.earlierTaskList}
+                            role="region"
+                            aria-label="更早任务"
+                          >
+                            {renderTasks(filteredTaskList.slice(3))}
+                          </div>
+                        }
+                      >
+                        <button
+                          type="button"
+                          className={styles.earlierTasksButton}
+                          aria-expanded={earlierTasksOpen}
+                        >
+                          <History size={15} />
+                          <span>选择更早任务</span>
+                          <ChevronRight size={14} />
+                        </button>
+                      </Popover>
+                    )}
                   </div>
                 )}
               </div>

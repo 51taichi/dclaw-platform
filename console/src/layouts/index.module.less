@@ -837,9 +837,9 @@
 }
 
 .taskListItems {
-  flex: 1;
+  flex: 0 0 auto;
   min-height: 0;
-  overflow-y: auto;
+  overflow-y: visible;
   padding-right: 2px;
 
   &::-webkit-scrollbar {
@@ -1094,4 +1094,59 @@
       color: rgba(255, 255, 255, 0.88);
     }
   }
+}
+
+.taskNumberBadge {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  border-radius: 6px;
+  background: rgba(45, 105, 255, 0.12);
+  color: #467af5;
+  font-size: 12px;
+  font-weight: 600;
+}
+.taskStateDot {
+  position: absolute;
+  right: -2px;
+  top: -2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.taskStateRunning {
+  background: #3275ff;
+}
+.taskStateFailed {
+  background: #f05252;
+}
+.earlierTasksButton {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 4px;
+  padding: 9px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #6380a8;
+  cursor: pointer;
+  text-align: left;
+  span {
+    flex: 1;
+  }
+  &:hover {
+    background: rgba(45, 105, 255, 0.08);
+  }
+}
+.earlierTaskList {
+  width: min(300px, calc(100vw - 64px));
+  max-height: min(420px, 60vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
