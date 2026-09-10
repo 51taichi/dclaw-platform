@@ -512,15 +512,9 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
       icon: <SparkMcpMcpLine size={16} />,
     },
     {
-      key: "agent-group",
-      label: collapsed ? null : t("nav.library"),
-      children: [
-        {
-          key: "tencent-doc",
-          label: collapsed ? null : t("nav.tencentDoc", "云文档"),
-          icon: <SparkLocalFileLine size={16} />,
-        },
-      ],
+      key: "tencent-doc",
+      label: collapsed ? null : t("nav.tencentDoc", "云文档"),
+      icon: <SparkLocalFileLine size={16} />,
     },
     {
       key: "automations",
