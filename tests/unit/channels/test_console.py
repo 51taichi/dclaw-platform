@@ -898,3 +898,168 @@ class TestConsoleMediaHandling:
         result = media_channel.media_dir
 
         assert isinstance(result, Path)
+
+    def test_uploaded_image_markdown_becomes_typed_image_content(
+        self,
+        tmp_path,
+    ):
+        """A console-upload link should deliver image bytes to the model."""
+        from qwenpaw.app.channels.base import ContentType, TextContent
+
+        media_dir = tmp_path / "media"
+        media_dir.mkdir()
+        image_path = media_dir / "uuid_reference.jpg"
+        image_path.write_bytes(b"jpeg fixture")
+        channel = ConsoleChannel(
+            process=AsyncMock(),
+            enabled=True,
+            bot_prefix="",
+            media_dir=str(media_dir),
+        )
+
+        result = channel._resolve_console_upload_refs(
+            [
+                TextContent(
+                    type=ContentType.TEXT,
+                    text=(
+                        "请参考这张图片\n\n"
+                        f"📎 [reference.jpg]({image_path})"
+                    ),
+                ),
+            ],
+        )
+
+        assert [part.type for part in result] == [
+            ContentType.TEXT,
+            ContentType.IMAGE,
+        ]
+        assert result[0].text == (
+            "请参考这张图片\n\n已上传附件：reference.jpg"
+        )
+        assert result[1].image_url == str(image_path.resolve())
+
+    def test_uploaded_document_markdown_becomes_typed_file_content(
+        self,
+        tmp_path,
+    ):
+        """A non-image console upload should remain a typed attachment."""
+        from qwenpaw.app.channels.base import ContentType, TextContent
+
+        media_dir = tmp_path / "media"
+        media_dir.mkdir()
+        document_path = media_dir / "uuid_brief.pdf"
+        document_path.write_bytes(b"pdf fixture")
+        channel = ConsoleChannel(
+            process=AsyncMock(),
+            enabled=True,
+            bot_prefix="",
+            media_dir=str(media_dir),
+        )
+
+        result = channel._resolve_console_upload_refs(
+            [
+                TextContent(
+                    type=ContentType.TEXT,
+                    text=f"📎 [brief.pdf]({document_path})",
+                ),
+            ],
+        )
+
+        assert [part.type for part in result] == [
+            ContentType.TEXT,
+            ContentType.FILE,
+        ]
+        assert result[0].text == "已上传附件：brief.pdf"
+        assert result[1].filename == "brief.pdf"
+        assert result[1].file_url == str(document_path.resolve())
+
+    def test_attachment_converter_rejects_files_outside_media_directory(
+        self,
+        tmp_path,
+    ):
+        """User-authored links must not promote arbitrary local files."""
+        from qwenpaw.app.channels.base import ContentType, TextContent
+
+        media_dir = tmp_path / "media"
+        media_dir.mkdir()
+        outside_path = tmp_path / "private.jpg"
+        outside_path.write_bytes(b"private fixture")
+        original = f"📎 [private.jpg]({outside_path})"
+        channel = ConsoleChannel(
+            process=AsyncMock(),
+            enabled=True,
+            bot_prefix="",
+            media_dir=str(media_dir),
+        )
+
+        result = channel._resolve_console_upload_refs(
+            [TextContent(type=ContentType.TEXT, text=original)],
+        )
+
+        assert len(result) == 1
+        assert result[0].type == ContentType.TEXT
+        assert result[0].text == original
+
+    def test_attachment_converter_preserves_multiple_image_order(
+        self,
+        tmp_path,
+    ):
+        """Multiple uploads should arrive as separate ordered image blocks."""
+        from qwenpaw.app.channels.base import ContentType, TextContent
+
+        media_dir = tmp_path / "media"
+        media_dir.mkdir()
+        first = media_dir / "uuid_first.jpg"
+        second = media_dir / "uuid_second.png"
+        first.write_bytes(b"first fixture")
+        second.write_bytes(b"second fixture")
+        channel = ConsoleChannel(
+            process=AsyncMock(),
+            enabled=True,
+            bot_prefix="",
+            media_dir=str(media_dir),
+        )
+
+        result = channel._resolve_console_upload_refs(
+            [
+                TextContent(
+                    type=ContentType.TEXT,
+                    text=(
+                        f"📎 [first.jpg]({first})\n"
+                        f"📎 [second.png]({second})"
+                    ),
+                ),
+            ],
+        )
+
+        assert result[0].text == "已上传附件：first.jpg、second.png"
+        assert [part.type for part in result[1:]] == [
+            ContentType.IMAGE,
+            ContentType.IMAGE,
+        ]
+        assert [part.image_url for part in result[1:]] == [
+            str(first.resolve()),
+            str(second.resolve()),
+        ]
+
+    def test_attachment_converter_keeps_web_links_as_text(self, tmp_path):
+        """A Markdown link that was not a local console upload stays text."""
+        from qwenpaw.app.channels.base import ContentType, TextContent
+
+        media_dir = tmp_path / "media"
+        media_dir.mkdir()
+        original = "📎 [reference.jpg](https://example.com/reference.jpg)"
+        channel = ConsoleChannel(
+            process=AsyncMock(),
+            enabled=True,
+            bot_prefix="",
+            media_dir=str(media_dir),
+        )
+
+        result = channel._resolve_console_upload_refs(
+            [TextContent(type=ContentType.TEXT, text=original)],
+        )
+
+        assert len(result) == 1
+        assert result[0].type == ContentType.TEXT
+        assert result[0].text == original

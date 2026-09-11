@@ -57,6 +57,13 @@ _RED = "\033[31m" if _USE_COLOR else ""
 _BOLD = "\033[1m" if _USE_COLOR else ""
 _RESET = "\033[0m" if _USE_COLOR else ""
 
+_CONSOLE_ATTACHMENT_LINE = re.compile(
+    r"^📎 \[(?P<name>[^\]\r\n]+)\]\((?P<ref>[^)\r\n]+)\)$",
+)
+_IMAGE_ATTACHMENT_SUFFIXES = frozenset(
+    {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"},
+)
+
 
 class _ConsoleStreamError(RuntimeError):
     """Raised after an error has already been printed for this stream."""
@@ -64,6 +71,59 @@ class _ConsoleStreamError(RuntimeError):
 
 def _ts() -> str:
     return datetime.now().strftime("%H:%M:%S")
+
+
+def _convert_console_attachment_links(
+    text: str,
+    media_dir: Path,
+) -> list[OutgoingContentPart] | None:
+    """Promote trusted console-upload Markdown links to typed content."""
+    kept_lines: list[str] = []
+    attachments: list[OutgoingContentPart] = []
+    attachment_names: list[str] = []
+    media_root = media_dir.resolve()
+    for line in text.splitlines():
+        match = _CONSOLE_ATTACHMENT_LINE.fullmatch(line.strip())
+        local_ref = (
+            file_url_to_local_path(match.group("ref")) if match else None
+        )
+        if local_ref:
+            candidate = Path(local_ref).expanduser().resolve()
+            if candidate.is_relative_to(media_root) and candidate.is_file():
+                name = match.group("name")
+                attachment_names.append(name)
+                if candidate.suffix.lower() in _IMAGE_ATTACHMENT_SUFFIXES:
+                    attachments.append(
+                        ImageContent(
+                            type=ContentType.IMAGE,
+                            image_url=str(candidate),
+                        ),
+                    )
+                else:
+                    attachments.append(
+                        FileContent(
+                            type=ContentType.FILE,
+                            filename=name,
+                            file_url=str(candidate),
+                        ),
+                    )
+                continue
+        kept_lines.append(line)
+    if not attachments:
+        return None
+    remaining_text = "\n".join(kept_lines).strip()
+    label = "已上传附件：" + "、".join(attachment_names)
+    return [
+        TextContent(
+            type=ContentType.TEXT,
+            text=(
+                f"{remaining_text}\n\n{label}"
+                if remaining_text
+                else label
+            ),
+        ),
+        *attachments,
+    ]
 
 
 class ConsoleChannel(BaseChannel):
@@ -396,7 +456,9 @@ class ConsoleChannel(BaseChannel):
         if not self._media_dir:
             return content_parts
 
-        def resolve_one(part: Any) -> Optional[OutgoingContentPart]:
+        def resolve_one(
+            part: Any,
+        ) -> Optional[OutgoingContentPart | list[OutgoingContentPart]]:
             content_type = getattr(part, "type", None)
             if content_type == ContentType.IMAGE:
                 url = getattr(part, "image_url", None)
@@ -428,13 +490,22 @@ class ConsoleChannel(BaseChannel):
                         file_url=url,
                     )
             elif content_type == ContentType.TEXT:
-                return TextContent(type=ContentType.TEXT, text=part.text)
+                attachments = _convert_console_attachment_links(
+                    part.text,
+                    self._media_dir,
+                )
+                return attachments or TextContent(
+                    type=ContentType.TEXT,
+                    text=part.text,
+                )
             return part
 
         input_content_parts = []
         for content in content_parts:
             part = resolve_one(content)
-            if part is not None:
+            if isinstance(part, list):
+                input_content_parts.extend(part)
+            elif part is not None:
                 input_content_parts.append(part)
         return input_content_parts
 
