@@ -184,6 +184,7 @@ async def _run_standard_or_orchestrated_turn(
         ):
             yield msg, last, True
         return
+    last_stream_id = None
     try:
         authorization = resolve_active_workspace_authorization(
             agent_id=agent_id,
@@ -251,7 +252,9 @@ async def _run_standard_or_orchestrated_turn(
             user_id=str(request.user_id), installation_id=authorization.installation_id,
             conversation_id=str(request.session_id),
         )
-        result = await run_workspace_orchestration_turn(
+        from ..workspace.public_stream import stream_workspace_turn
+        async for completed, value in stream_workspace_turn(
+            run_turn=run_workspace_orchestration_turn,
             agent=agent,
             original_messages=messages,
             conversation_history=conversation_history,
@@ -269,7 +272,13 @@ async def _run_standard_or_orchestrated_turn(
                 ],
                 **({"aigcReviewInput": review_input} if review_input is not None else {}),
             },
-        )
+        ):
+            if completed:
+                result = value
+            else:
+                last_stream_id = value.id
+                yield value, False, True
+
     except WorkspaceOrchestrationError:
         logger.exception(
             "Workspace orchestration failed closed for agent %s",
@@ -277,6 +286,8 @@ async def _run_standard_or_orchestrated_turn(
         )
         result = WorkspaceTurnResult(error_code="orchestration_error")
     response_message = workspace_result_to_message(result, agent_name=agent_name)
+    if last_stream_id is not None:
+        response_message.id = last_stream_id
     if result.error_code is None:
         memory = getattr(agent, "memory", None)
         add_to_memory = getattr(memory, "add", None)

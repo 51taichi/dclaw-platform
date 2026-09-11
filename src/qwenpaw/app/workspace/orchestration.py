@@ -470,6 +470,7 @@ async def run_workspace_orchestration_turn(
     authorization: AuthorizedWorkspaceRelease,
     business_call: Callable[[str, dict[str, Any]], Any] | None = None,
     read_aigc_task: Callable[[str], dict[str, Any] | None] | None = None,
+    on_public_message: Callable | None = None,
     safe_metadata: dict[str, Any] | None = None,
     timeout_seconds: float | None = None,
 ) -> WorkspaceTurnResult:
@@ -522,7 +523,12 @@ async def run_workspace_orchestration_turn(
         nonlocal agent_execute_call_number
         response_format = _agent_execute_response_format(arguments)
         execution_mode = _agent_execute_mode(arguments)
+        public_stream = arguments.get("public_stream", False)
+        if type(public_stream) is not bool or (public_stream and execution_mode != "agent_loop"):
+            raise WorkspaceOrchestrationError("orchestration_error")
         if execution_mode == "agent_loop" and response_format is not None:
+            raise WorkspaceOrchestrationError("orchestration_error")
+        if type(arguments.get("recover_empty_reply", False)) is not bool:
             raise WorkspaceOrchestrationError("orchestration_error")
         raw_messages = arguments.get("messages")
         if not isinstance(raw_messages, list) or not raw_messages:
@@ -558,6 +564,12 @@ async def run_workspace_orchestration_turn(
                 },
             )
         media_delivery: dict[str, Any] = {}
+        async def run_agent():
+            if public_stream and on_public_message is not None:
+                from .public_stream import execute_public_agent
+                return await execute_public_agent(agent, messages, on_public_message)
+            return await agent(messages)
+
         try:
             if execution_mode == "agent_loop":
                 from .aigc_tools import build_aigc_tools, bind_aigc_tools, track_media_delivery
@@ -571,9 +583,9 @@ async def run_workspace_orchestration_turn(
                 )
                 if tools:
                     with bind_aigc_tools(agent, tools), track_media_delivery(agent, messages, media_delivery):
-                        candidate = await agent(messages)
+                        candidate = await run_agent()
                 else:
-                    candidate = await agent(messages)
+                    candidate = await run_agent()
             else:
                 candidate = await _execute_internal_candidate(
                     agent, messages, media_delivery=media_delivery,
@@ -599,6 +611,33 @@ async def run_workspace_orchestration_turn(
                 )
             logger.exception("Internal candidate execution failed")
             raise
+        from .empty_reply import public_text, reply_shape, recover_empty_reply
+        if execution_mode == "agent_loop" and not public_text(candidate).strip():
+            shape = reply_shape(candidate)
+            logger.warning("Empty Agent reply shape=%s", shape)
+            _append_runtime_trace(
+                state_storage_root, installation_id=authorization.installation_id,
+                session_id=turn_request.session_id, invocation_id=invocation_id,
+                event_type="agent.execute.empty_reply", payload=shape,
+            )
+            # Opt-in only. The direct formatter/model path explicitly disables tools;
+            # never fall back to invoking Agent again if that path is unavailable.
+            can_generate_text = (
+                callable(getattr(getattr(agent, "formatter", None), "format", None))
+                and callable(getattr(agent, "model", None))
+            )
+            if arguments.get("recover_empty_reply") is True and can_generate_text:
+                try:
+                    candidate = await recover_empty_reply(
+                        agent, messages, candidate, _execute_internal_candidate,
+                    )
+                except Exception:
+                    logger.exception("Text-only reply recovery failed")
+                _append_runtime_trace(
+                    state_storage_root, installation_id=authorization.installation_id,
+                    session_id=turn_request.session_id, invocation_id=invocation_id,
+                    event_type="agent.execute.reply_recovery", payload=reply_shape(candidate),
+                )
         serialized = _message_dict(candidate)
         text = (
             candidate.get_text_content()
@@ -606,6 +645,9 @@ async def run_workspace_orchestration_turn(
             else str(serialized.get("content", ""))
         )
         result = {"message": serialized, "text": text}
+        if public_stream:
+            serialized["content"] = [{"type": "text", "text": text}]
+            serialized["metadata"] = None
         if media_delivery:
             result["media_delivery"] = media_delivery
         if trace_raw:

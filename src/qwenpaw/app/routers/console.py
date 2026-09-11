@@ -44,6 +44,49 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/console", tags=["console"])
 
+_title_tasks: dict[tuple[str, str], asyncio.Task] = {}
+
+
+def _schedule_chat_title(*, workspace, chat_id, user_message, placeholder_name,
+                         payer_user_id, source, request_key):
+    """Title work must not keep the conversation run or its billing open."""
+    key = (workspace.agent_id, chat_id)
+    existing = _title_tasks.get(key)
+    if existing is not None and not existing.done():
+        return existing
+
+    async def generate():
+        prepared = None
+        try:
+            prepared = prepare_user_billing_execution(
+                payer_user_id, source, request_key + ":title",
+                {"chat_id": chat_id, "message_sha256": sha256(user_message.encode()).hexdigest()},
+            )
+            with prepared.activate():
+                await generate_and_update_title(
+                    workspace=workspace, chat_id=chat_id,
+                    user_message=user_message, placeholder_name=placeholder_name,
+                )
+            prepared.finalize_completed()
+        except asyncio.CancelledError:
+            if prepared is not None:
+                prepared.finalize("cancelled", error_code="CANCELLED")
+            raise
+        except Exception:
+            if prepared is not None:
+                prepared.finalize("failed", error_code="TITLE_GENERATION_FAILED")
+            logger.exception("Background title generation failed")
+
+    task = asyncio.create_task(generate())
+    _title_tasks[key] = task
+
+    def finished(completed):
+        if _title_tasks.get(key) is completed:
+            _title_tasks.pop(key, None)
+
+    task.add_done_callback(finished)
+    return task
+
 
 class MarkInboxReadRequest(BaseModel):
     event_ids: list[str] = []
@@ -437,19 +480,15 @@ async def post_console_chat(
                         async for item in stream_fn(payload):
                             yield item
                         if first_text and chat.name == name:
-                            try:
-                                await generate_and_update_title(
-                                    workspace=workspace,
-                                    chat_id=chat.id,
-                                    user_message=first_text,
-                                    placeholder_name=name,
-                                )
-                            except InsufficientUsageCreditsError:
-                                raise
-                            except Exception:
-                                logger.exception(
-                                    "Console title generation failed",
-                                )
+                            _schedule_chat_title(
+                                workspace=workspace, chat_id=chat.id,
+                                user_message=first_text, placeholder_name=name,
+                                payer_user_id=payer_user_id,
+                                source=BillingSource(type=source_type, id=chat.id,
+                                    expert_id=workspace.agent_id,
+                                    expert_team_run_id=expert_team_run_id),
+                                request_key=request_key,
+                            )
                     except InsufficientUsageCreditsError as exc:
                         if expert_team_run_id:
                             current_run = get_latest_expert_team_run_by_chat(
