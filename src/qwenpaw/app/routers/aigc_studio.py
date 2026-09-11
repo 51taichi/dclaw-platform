@@ -1046,6 +1046,7 @@ def _validate_job_resource_binding(request: Request, body: AigcJobCreate) -> Non
 
 async def _validate_job_submission(request: Request, body: AigcJobCreate) -> None:
     _validate_job_resource_binding(request, body)
+    _resolve_job_prompt_binding(request, body)
     await _assert_job_model_policy_allowed(request, body)
     capability = await _find_capability(
         request,
@@ -1061,6 +1062,24 @@ async def _validate_job_submission(request: Request, body: AigcJobCreate) -> Non
                 f"'{body.provider_id}' model '{body.model_id}'."
             ),
         )
+
+
+def _resolve_job_prompt_binding(request: Request, body: AigcJobCreate) -> None:
+    from ..aigc.prompt_binding import PromptBindingError, resolve_prompt
+
+    prompt = str(body.inputs.get("prompt_template") or body.inputs.get("prompt")
+                 or body.parameters.get("prompt") or body.parameters.get("lastRunPrompt") or "")
+    if "${" not in prompt:
+        return
+    canvas = _load_canvas_for_request(request, body.canvas_id)
+    try:
+        resolved = resolve_prompt(canvas.model_dump(), body.node_id, prompt)
+    except PromptBindingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    body.inputs = {**body.inputs, "prompt_template": prompt, "prompt": resolved}
+    body.parameters = {**body.parameters, "lastRunPrompt": resolved}
+    if "prompt" in body.parameters:
+        body.parameters["prompt"] = resolved
 
 
 async def _assert_job_model_policy_allowed(
@@ -5422,6 +5441,12 @@ async def run_job(
     else:
         # Queued/new submissions still require the current policy and catalog.
         await _validate_job_submission(request, body)
+        # Keep a concrete execution snapshot. Existing accepted provider tasks
+        # above are query-only and must never have their command rewritten.
+        if job.inputs != body.inputs or job.parameters != body.parameters:
+            job.inputs = body.inputs
+            job.parameters = body.parameters
+            _write_json(_json_path("jobs", job.id), job)
 
     if background:
         if job.status != "running":
