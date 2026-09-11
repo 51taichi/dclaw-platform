@@ -4,6 +4,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import TencentDocPage from "./index";
 
+vi.mock("../../../api/authHeaders", () => ({
+  buildAuthHeaders: () => ({
+    Authorization: "Bearer test",
+    "X-Agent-Id": "sealed-expert",
+  }),
+}));
+
 const { mockRequest } = vi.hoisted(() => ({
   mockRequest: vi.fn(),
 }));
@@ -36,6 +43,52 @@ describe("TencentDocPage", () => {
       }
       return Promise.resolve({});
     });
+  });
+
+  it("loads user knowledge without inheriting the selected expert", async () => {
+    render(<TencentDocPage />);
+    await waitFor(() => {
+      expect(mockRequest).toHaveBeenCalledWith(
+        "/workspace/knowledge/docs?scope=personal",
+        expect.objectContaining({ includeSelectedAgent: false }),
+      );
+    });
+    for (const [, options] of mockRequest.mock.calls) {
+      expect(options).toMatchObject({ includeSelectedAgent: false });
+    }
+  });
+
+  it("uploads personal documents without a sealed expert header", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: "doc-1",
+        name: "notes.txt",
+        type: "txt",
+        status: "ready",
+        slices: 0,
+        size: "5 B",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const user = userEvent.setup();
+      const { container } = render(<TencentDocPage />);
+      await user.upload(
+        container.querySelector('input[type="file"]') as HTMLInputElement,
+        new File(["notes"], "notes.txt", { type: "text/plain" }),
+      );
+      await user.click(
+        await screen.findByRole("button", { name: "上传并后台索引" }),
+      );
+      await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+      const [, options] = fetchMock.mock.calls[0];
+      expect(options.headers.get("Authorization")).toBe("Bearer test");
+      expect(options.headers.has("X-Agent-Id")).toBe(false);
+      expect(options.body).toBeInstanceOf(FormData);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("shows the shared library under 我的Agent经验库 without legacy controls", async () => {

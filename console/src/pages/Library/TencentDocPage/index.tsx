@@ -26,10 +26,16 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import styles from "./TencentDocPage.module.less";
-import { request } from "../../../api";
+import { request as apiRequest } from "../../../api";
+import type { ApiRequestOptions } from "../../../api/request";
 import { getApiUrl } from "../../../api/config";
 import { buildAuthHeaders } from "../../../api/authHeaders";
 import { AgentExperienceLibrary } from "@/components/AgentExperienceLibrary";
+
+// This page manages the signed-in user's library, not selected Agent assets.
+function request<T = unknown>(path: string, options: ApiRequestOptions = {}) {
+  return apiRequest<T>(path, { ...options, includeSelectedAgent: false });
+}
 
 interface DocItem {
   id: string;
@@ -447,7 +453,7 @@ export default function TencentDocPage() {
       );
       const headers = new Headers();
       for (const [key, value] of Object.entries(buildAuthHeaders())) {
-        headers.set(key, value);
+        if (key.toLowerCase() !== "x-agent-id") headers.set(key, value);
       }
 
       const response = await fetch(uploadUrl, {
