@@ -4,7 +4,7 @@
 
 | 模型工具 | 所需 v1 能力 | 行为 |
 | --- | --- | --- |
-| aigc_workflow_catalog | aigc.workflow.capabilities.list/1 | 返回实时目录及蓝图 schema |
+| aigc_workflow_catalog | aigc.workflow.capabilities.list/1 | 按 `node_kinds` 返回相关实时目录、蓝图 schema 和使用实时模型标识的最小工作流实例；省略筛选时不附加实例 |
 | aigc_workflow_create | aigc.workflow.create/1 + 目录能力 | 创建当前会话的真实工作流与物料任务 |
 | aigc_task_status | workflow.create、task.resume、review.complete 任一 | 读取当前安装、当前会话的任务；省略 ID 时只解析宿主当前审核任务 |
 | aigc_task_resume | aigc.task.resume + aigc.task.create | 恢复真实绑定的任务状态 |
@@ -12,7 +12,7 @@
 
 `aigc.asset.submit` 仍由现有任务卡提交入口使用，不提供模型代提交工具。创建任务不启动生成；生成、计费、素材归属与事件均复用现有平台服务。RPA、MCP 不在本次工具集合内。Skill reader 和完整 Agent 循环沿用现有配置，不因 AIGC 授权自动打开。
 
-创建参数只含稳定 `task_key`、正整数 `content_revision` 和 `workflow`。安装与会话由宿主绑定；同任务同修订生成相同物料 ID 和幂等键。实质变更蓝图需新修订。异常返回 `PLATFORM_OPERATION_UNCONFIRMED` 与可查询的物料 ID；该 ID 不证明创建成功。平台执行异常不返回原始内部错误。
+创建参数只含稳定 `task_key`、正整数 `content_revision` 和对象类型的 `workflow`。安装与会话由宿主绑定；同任务同修订生成相同物料 ID 和幂等键。实质变更蓝图需新修订。连接层会把可解析为对象的字符串化 workflow 规范化为对象；其他错误类型返回包含 field、expected、received 与 guidance 的 `INVALID_WORKFLOW_REQUEST`，且不会进入创建服务。平台执行异常返回 `PLATFORM_OPERATION_UNCONFIRMED` 与可查询的物料 ID；该 ID 不证明创建成功，也不返回原始内部错误。
 
 审核只接受宿主解析过的当前素材身份和集合；`ACCEPTED` 还要求每个非文本模态的真实格式化输入传入模型。此证据证明传输，不保证模型的专业判断正确。任务通过也不表示全部业务内容通过或允许账号发布。
 

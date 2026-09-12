@@ -23,6 +23,13 @@ CREATE = "aigc.workflow.create/1"
 RESUME = "aigc.task.resume"
 REVIEW = "aigc.review.complete"
 
+_STANDALONE_EXAMPLE_CAPABILITIES = {
+    "prompt": ("storyboard",),
+    "script_generate": ("storyboard",),
+    "image_generate": ("text_to_image",),
+    "video_generate": ("text_to_video",),
+}
+
 
 def _response(value: Any) -> ToolResponse:
     return ToolResponse(content=[TextBlock(
@@ -32,6 +39,117 @@ def _response(value: Any) -> ToolResponse:
 
 def _identity(*parts: Any) -> str:
     return hashlib.sha256(json.dumps(parts, ensure_ascii=False).encode()).hexdigest()
+
+
+def _json_type(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    return type(value).__name__
+
+
+def _default_parameters(node: dict[str, Any]) -> dict[str, Any]:
+    properties = (node.get("parameter_schema") or {}).get("properties") or {}
+    return {
+        key: deepcopy(schema["default"])
+        for key, schema in properties.items()
+        if isinstance(schema, dict) and "default" in schema
+    }
+
+
+def _example_inputs(node: dict[str, Any]) -> dict[str, Any]:
+    keys = set(node.get("input_keys") or [])
+    if "prompt" in keys:
+        return {"prompt": "根据当前任务生成清晰、完整且可审核的内容。"}
+    if "text" in keys:
+        return {"text": "请将当前业务目标整理为可直接制作的内容。"}
+    return {}
+
+
+def _workflow_examples(catalog: dict[str, Any]) -> list[dict[str, Any]]:
+    models = catalog.get("available_models") or []
+    examples = []
+    for node in catalog.get("nodes") or []:
+        if not isinstance(node, dict) or node.get("provisioning") != "AUTO_PROVISIONABLE":
+            continue
+        kind = node.get("kind")
+        if not isinstance(kind, str) or not kind:
+            continue
+        capabilities = set(node.get("capabilities") or [])
+        preferred = _STANDALONE_EXAMPLE_CAPABILITIES.get(kind, ())
+        model = next((
+            item
+            for capability in preferred
+            for item in models
+            if (isinstance(item, dict)
+                and item.get("capability") == capability
+                and capability in capabilities)
+        ), None)
+        if model is None:
+            continue
+        node_id = f"{kind}_1"
+        workflow_node = {
+            "node_id": node_id,
+            "kind": kind,
+            "title": node.get("title") or kind,
+            "inputs": _example_inputs(node),
+            "parameters": _default_parameters(node),
+            "customer_action": (node.get("customer_actions") or ["NONE"])[0],
+            "optional": False,
+        }
+        workflow_node.update({
+            "capability": model["capability"],
+            "provider_id": model["provider_id"],
+            "model_id": model["model_id"],
+        })
+        examples.append({
+            "schema_version": 1,
+            "title": f"{node.get('title') or kind}示例任务",
+            "execution_preference": "CUSTOMER_TRIGGERED",
+            "nodes": [workflow_node],
+            "edges": [],
+            "output_node_id": node_id,
+            "review_node_ids": [node_id],
+            "fallback_policy": "FAIL_CLOSED",
+        })
+    return examples
+
+
+def _filter_catalog(catalog: Any, node_kinds: list[str]) -> dict[str, Any] | None:
+    if hasattr(catalog, "model_dump"):
+        catalog = catalog.model_dump(mode="python")
+    if not isinstance(catalog, dict):
+        return None
+    projected = deepcopy(catalog)
+    if not node_kinds:
+        return projected
+    requested = set(node_kinds)
+    nodes = [
+        node for node in projected.get("nodes") or []
+        if isinstance(node, dict) and node.get("kind") in requested
+    ]
+    capabilities = {
+        capability
+        for node in nodes
+        for capability in (node.get("capabilities") or [])
+    }
+    projected["nodes"] = nodes
+    projected["available_models"] = [
+        model for model in projected.get("available_models") or []
+        if isinstance(model, dict) and model.get("capability") in capabilities
+    ]
+    return projected
 
 
 def build_aigc_tools(
@@ -71,15 +189,34 @@ def build_aigc_tools(
                 "guidance": "Check the same task before retrying; keep its task key and revision. Do not claim success.",
             })
 
-    async def aigc_workflow_catalog() -> ToolResponse:
+    async def aigc_workflow_catalog(node_kinds: list[str] = []) -> ToolResponse:
         """Read current AIGC models, workflow node parameters and blueprint schema.
 
-        Use live node schemas and one matching provider/model/capability record.
+        Request only the node kinds needed for the current production plan. The
+        response includes compact live models plus executable examples using
+        real provider/model/capability tuples. An empty list returns all kinds.
         Model availability is not evidence that generation has completed.
+
+        Args:
+            node_kinds: Exact catalog node kinds needed, such as ["image_generate"].
         """
+        if (not isinstance(node_kinds, list)
+                or any(not isinstance(kind, str) or not kind.strip() for kind in node_kinds)):
+            return _response({
+                "error": "INVALID_CATALOG_REQUEST",
+                "field": "node_kinds",
+                "expected": "array of non-empty strings",
+                "received": _json_type(node_kinds),
+            })
         try:
-            catalog = await business_call(CATALOG, {})
-            return _response({"catalog": catalog, "workflow_schema": WorkflowBlueprint.model_json_schema()})
+            catalog = _filter_catalog(await business_call(CATALOG, {}), node_kinds)
+            if catalog is None:
+                return _response({"error": "CATALOG_UNAVAILABLE"})
+            return _response({
+                "workflow_examples": _workflow_examples(catalog) if node_kinds else [],
+                "catalog": catalog,
+                "workflow_schema": WorkflowBlueprint.model_json_schema(),
+            })
         except Exception:
             return _response({"error": "CATALOG_UNAVAILABLE"})
 
@@ -99,9 +236,22 @@ def build_aigc_tools(
             workflow: Complete blueprint matching aigc_workflow_catalog, with real dependencies and review_node_ids.
         """
         if (not isinstance(task_key, str) or not task_key.strip() or len(task_key) > 160
-                or type(content_revision) is not int or content_revision < 1
-                or not isinstance(workflow, dict)):
+                or type(content_revision) is not int or content_revision < 1):
             return _response({"error": "INVALID_WORKFLOW_REQUEST"})
+        if isinstance(workflow, str):
+            try:
+                workflow = json.loads(workflow)
+            except (TypeError, ValueError):
+                pass
+        if not isinstance(workflow, dict):
+            return _response({
+                "error": "INVALID_WORKFLOW_REQUEST",
+                "field": "workflow",
+                "expected": "object",
+                "received": _json_type(workflow),
+                "retryable": True,
+                "guidance": "Pass workflow as a nested JSON object, not a serialized JSON string.",
+            })
         task_id = "content-" + _identity(installation_id, conversation_id, task_key)
         material_id = "material-" + _identity(task_id, content_revision)
         operation = "create-" + _identity(material_id)

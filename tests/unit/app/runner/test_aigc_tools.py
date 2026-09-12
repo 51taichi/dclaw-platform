@@ -11,11 +11,13 @@ CATALOG = 'aigc.workflow.capabilities.list/1'
 CREATE = 'aigc.workflow.create/1'
 
 
-def harness(grants=None, session='session-a', tasks=None):
+def harness(grants=None, session='session-a', tasks=None, catalog=None):
     calls = []
     async def call(capability, arguments):
         calls.append((capability, arguments))
-        return {'nodes': [], 'available_models': []} if capability == CATALOG else {'task': arguments}
+        if capability == CATALOG:
+            return catalog if catalog is not None else {'nodes': [], 'available_models': []}
+        return {'task': arguments}
     tools = build_aigc_tools(
         grants=grants or {}, installation_id='installation-a',
         conversation_id=session, business_call=call,
@@ -37,6 +39,111 @@ def test_only_granted_supported_capabilities_are_exposed():
 
 
 @pytest.mark.asyncio
+async def test_catalog_filters_to_requested_kind_and_returns_live_executable_example():
+    catalog = {
+        'schema_version': 1,
+        'nodes': [
+            {
+                'kind': 'image_generate', 'title': '图片生成',
+                'provisioning': 'AUTO_PROVISIONABLE',
+                'capabilities': ['text_to_image', 'reference_image'],
+                'input_keys': ['prompt', 'reference_asset_ids'],
+                'parameter_keys': ['aspect_ratio', 'count'],
+                'input_slots': {'prompt': ['text']}, 'output_type': 'image',
+                'control_id': 'aigc.image.generate-submit',
+                'customer_actions': ['CLICK_GENERATE'],
+                'input_schema': {'type': 'object'},
+                'parameter_schema': {
+                    'type': 'object',
+                    'properties': {
+                        'aspect_ratio': {'type': 'string', 'default': '1:1'},
+                        'count': {'type': 'integer', 'default': 1},
+                    },
+                },
+            },
+            {
+                'kind': 'video_generate', 'title': '视频生成',
+                'provisioning': 'AUTO_PROVISIONABLE',
+                'capabilities': ['text_to_video'],
+                'input_keys': ['prompt'], 'parameter_keys': ['duration_seconds'],
+                'input_slots': {'prompt': ['text']}, 'output_type': 'video',
+                'control_id': 'aigc.video.generate-submit',
+                'customer_actions': ['CLICK_GENERATE'],
+                'input_schema': {'type': 'object'},
+                'parameter_schema': {'type': 'object'},
+            },
+        ],
+        'available_models': [
+            {
+                'provider_id': 'vision-provider', 'provider_name': 'Vision',
+                'model_id': 'vision-v1', 'model_name': 'Vision V1',
+                'capability': 'reference_image', 'source': 'model_registry',
+                'parameter_schema': {'type': 'object'},
+            },
+            {
+                'provider_id': 'image-provider', 'provider_name': 'Images',
+                'model_id': 'image-v1', 'model_name': 'Image V1',
+                'capability': 'text_to_image', 'source': 'model_registry',
+                'parameter_schema': {'type': 'object'},
+            },
+            {
+                'provider_id': 'video-provider', 'provider_name': 'Videos',
+                'model_id': 'video-v1', 'model_name': 'Video V1',
+                'capability': 'text_to_video', 'source': 'model_registry',
+                'parameter_schema': {'type': 'object'},
+            },
+        ],
+    }
+    tools, calls = harness({CATALOG: '1'}, catalog=catalog)
+
+    reply = result(await tools['aigc_workflow_catalog'](['image_generate']))
+
+    assert calls == [(CATALOG, {})]
+    assert [node['kind'] for node in reply['catalog']['nodes']] == ['image_generate']
+    assert [model['model_id'] for model in reply['catalog']['available_models']] == ['vision-v1', 'image-v1']
+    example = reply['workflow_examples'][0]
+    assert example['nodes'][0]['provider_id'] == 'image-provider'
+    assert example['nodes'][0]['model_id'] == 'image-v1'
+    assert example['nodes'][0]['capability'] == 'text_to_image'
+    assert example['nodes'][0]['parameters'] == {'aspect_ratio': '1:1', 'count': 1}
+    assert example['review_node_ids'] == ['image_generate_1']
+    assert isinstance(reply['workflow_schema'], dict)
+
+
+@pytest.mark.asyncio
+async def test_unfiltered_catalog_does_not_expand_output_with_examples():
+    catalog = {
+        'schema_version': 1,
+        'nodes': [{
+            'kind': 'image_generate', 'title': '图片生成',
+            'provisioning': 'AUTO_PROVISIONABLE',
+            'capabilities': ['text_to_image'], 'input_keys': ['prompt'],
+            'parameter_schema': {'type': 'object'},
+            'customer_actions': ['CLICK_GENERATE'],
+        }],
+        'available_models': [{
+            'provider_id': 'provider', 'model_id': 'model',
+            'capability': 'text_to_image',
+        }],
+    }
+    tools, _ = harness({CATALOG: '1'}, catalog=catalog)
+
+    reply = result(await tools['aigc_workflow_catalog']())
+
+    assert reply['workflow_examples'] == []
+
+
+def test_catalog_tool_schema_keeps_workflow_as_object_and_exposes_kind_filter():
+    tools, _ = harness({CATALOG: '1', CREATE: '1'})
+    agent = SimpleNamespace(toolkit=Toolkit())
+    with bind_aigc_tools(agent, tools):
+        schemas = {item['function']['name']: item['function'] for item in agent.toolkit.get_json_schemas()}
+        assert schemas['aigc_workflow_create']['parameters']['properties']['workflow']['type'] == 'object'
+        kinds = schemas['aigc_workflow_catalog']['parameters']['properties']['node_kinds']
+        assert kinds['type'] == 'array'
+
+
+@pytest.mark.asyncio
 async def test_create_uses_host_scope_and_stable_identity_across_turns():
     grants = {CATALOG: '1', CREATE: '1'}
     tools, calls = harness(grants)
@@ -53,6 +160,39 @@ async def test_create_uses_host_scope_and_stable_identity_across_turns():
     again, again_calls = harness(grants)
     await again['aigc_workflow_create']('campaign', 1, workflow)
     assert first == again_calls[0][1]
+
+
+@pytest.mark.asyncio
+async def test_create_normalizes_serialized_workflow_object_before_dispatch():
+    tools, calls = harness({CATALOG: '1', CREATE: '1'})
+    serialized = json.dumps({'name': 'test', 'nodes': [], 'edges': []})
+
+    reply = result(await tools['aigc_workflow_create']('campaign', 1, serialized))
+
+    assert 'error' not in reply
+    assert calls[0][0] == CREATE
+    assert calls[0][1]['workflow'] == {'name': 'test', 'nodes': [], 'edges': []}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('workflow', 'received'),
+    [('not-json', 'string'), ('[]', 'array'), ([], 'array')],
+)
+async def test_create_rejects_unusable_workflow_with_actionable_field_error(workflow, received):
+    tools, calls = harness({CATALOG: '1', CREATE: '1'})
+
+    reply = result(await tools['aigc_workflow_create']('campaign', 1, workflow))
+
+    assert reply == {
+        'error': 'INVALID_WORKFLOW_REQUEST',
+        'field': 'workflow',
+        'expected': 'object',
+        'received': received,
+        'retryable': True,
+        'guidance': 'Pass workflow as a nested JSON object, not a serialized JSON string.',
+    }
+    assert calls == []
 
 
 @pytest.mark.asyncio
