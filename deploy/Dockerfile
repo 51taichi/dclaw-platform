@@ -86,13 +86,17 @@ RUN set -eux; \
     fi; \
     apt-get update && apt-get install -y --no-install-recommends --fix-missing \
       libreoffice-impress \
-      antiword \
       poppler-utils \
       tesseract-ocr \
       tesseract-ocr-chi-sim \
       tesseract-ocr-eng; \
     rm -rf /var/lib/apt/lists/*; \
     apt-get clean
+
+RUN apt-get update && apt-get install -y --no-install-recommends --fix-missing \
+      antiword \
+  && rm -rf /var/lib/apt/lists/* \
+  && apt-get clean
 
 RUN set -eux; \
     if [ -f /etc/apt/sources.list ]; then \
