@@ -21,4 +21,12 @@ describe("skillApi global pool requests", () => {
       includeSelectedAgent: false,
     });
   });
+
+  it("lists broadcast workspaces without selected Agent context", async () => {
+    await skillApi.listSkillWorkspaces();
+
+    expect(request).toHaveBeenCalledWith("/skills/workspaces", {
+      includeSelectedAgent: false,
+    });
+  });
 });

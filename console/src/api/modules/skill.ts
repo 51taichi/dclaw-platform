@@ -132,7 +132,9 @@ export const skillApi = {
     const cached = getCached<WorkspaceSkillSummary[]>(cacheKey);
     if (cached) return cached;
 
-    const data = await request<WorkspaceSkillSummary[]>("/skills/workspaces");
+    const data = await request<WorkspaceSkillSummary[]>("/skills/workspaces", {
+      includeSelectedAgent: false,
+    });
     setCache(cacheKey, data);
     return data;
   },
