@@ -31,6 +31,30 @@ def result(response):
     return json.loads(response.content[0]['text'])
 
 
+def valid_image_workflow():
+    return {
+        'schema_version': 1,
+        'title': 'Image task',
+        'execution_preference': 'CUSTOMER_TRIGGERED',
+        'nodes': [{
+            'node_id': 'image',
+            'kind': 'image_generate',
+            'title': 'Image',
+            'capability': 'text_to_image',
+            'provider_id': 'image-provider',
+            'model_id': 'image-v1',
+            'inputs': {'prompt': 'A classroom'},
+            'parameters': {'aspect_ratio': '9:16', 'count': 1},
+            'customer_action': 'CLICK_GENERATE',
+            'optional': False,
+        }],
+        'edges': [],
+        'output_node_id': 'image',
+        'review_node_ids': ['image'],
+        'fallback_policy': 'FAIL_CLOSED',
+    }
+
+
 def test_only_granted_supported_capabilities_are_exposed():
     assert harness()[0] == {}
     assert harness({'mcp.execute': '1', CATALOG: '2'})[0] == {}
@@ -133,21 +157,146 @@ async def test_unfiltered_catalog_does_not_expand_output_with_examples():
     assert reply['workflow_examples'] == []
 
 
-def test_catalog_tool_schema_keeps_workflow_as_object_and_exposes_kind_filter():
+@pytest.mark.asyncio
+async def test_catalog_preserves_deterministic_platform_rejection():
+    from qwenpaw.app.super_experts.service import SuperExpertPlatformError
+
+    async def reject(*_args):
+        raise SuperExpertPlatformError('capability is not authorized')
+
+    tools = build_aigc_tools(
+        grants={CATALOG: '1'}, installation_id='i', conversation_id='s',
+        business_call=reject, read_task=None, review_input=None,
+        media_delivery={},
+    )
+
+    reply = result(await tools['aigc_workflow_catalog']())
+
+    assert reply == {
+        'error': 'CAPABILITY_NOT_AUTHORIZED',
+        'retryable': True,
+        'guidance': (
+            'Refresh the expert installation grants before retrying this capability.'
+        ),
+    }
+
+
+def test_catalog_tool_schema_exposes_complete_workflow_contract_and_kind_filter():
     tools, _ = harness({CATALOG: '1', CREATE: '1'})
     agent = SimpleNamespace(toolkit=Toolkit())
     with bind_aigc_tools(agent, tools):
         schemas = {item['function']['name']: item['function'] for item in agent.toolkit.get_json_schemas()}
-        assert schemas['aigc_workflow_create']['parameters']['properties']['workflow']['type'] == 'object'
+        workflow = schemas['aigc_workflow_create']['parameters']['properties']['workflow']
+        assert workflow['type'] == 'object'
+        assert set(workflow['required']) == {
+            'schema_version', 'title', 'execution_preference', 'nodes',
+            'output_node_id', 'fallback_policy',
+        }
+        node = workflow['properties']['nodes']['items']
+        assert set(node['required']) == {
+            'node_id', 'kind', 'title', 'customer_action',
+        }
+        assert set(node['properties']) >= {
+            'capability', 'provider_id', 'model_id', 'inputs', 'parameters',
+        }
+        assert '$ref' not in json.dumps(workflow)
+        assert '$defs' not in json.dumps(workflow)
+        assert 'const' not in json.dumps(workflow)
+        schema_version = workflow['properties']['schema_version']
+        assert schema_version['type'] == 'integer'
+        assert schema_version['default'] == 1
+        assert 'Must equal 1.' in schema_version['description']
         kinds = schemas['aigc_workflow_catalog']['parameters']['properties']['node_kinds']
         assert kinds['type'] == 'array'
+
+
+def test_create_tool_schema_is_accepted_by_native_gemini_types():
+    from google.genai import types
+
+    tools, _ = harness({CATALOG: '1', CREATE: '1'})
+    agent = SimpleNamespace(toolkit=Toolkit())
+    with bind_aigc_tools(agent, tools):
+        create = next(
+            item['function'] for item in agent.toolkit.get_json_schemas()
+            if item['function']['name'] == 'aigc_workflow_create'
+        )
+
+    config = types.GenerateContentConfig(tools=[types.Tool(
+        function_declarations=[types.FunctionDeclaration(
+            name=create['name'],
+            description=create['description'],
+            parameters=create['parameters'],
+        )],
+    )])
+
+    assert config.tools[0].function_declarations[0].name == 'aigc_workflow_create'
+
+
+async def call_create_through_toolkit(arguments):
+    tools, calls = harness({CATALOG: '1', CREATE: '1'})
+    agent = SimpleNamespace(toolkit=Toolkit())
+    with bind_aigc_tools(agent, tools):
+        stream = await agent.toolkit.call_tool_function({
+            'type': 'tool_use', 'id': 'create-call',
+            'name': 'aigc_workflow_create', 'input': arguments,
+        })
+        responses = [response async for response in stream]
+    return result(responses[-1]), calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('arguments', 'issues'),
+    [
+        (
+            {},
+            [
+                {'field': 'task_key', 'code': 'FIELD_REQUIRED'},
+                {'field': 'content_revision', 'code': 'FIELD_REQUIRED'},
+                {'field': 'workflow', 'code': 'FIELD_REQUIRED'},
+            ],
+        ),
+        (
+            {
+                'task_key': 'campaign', 'content_revision': 1,
+                'workflow': valid_image_workflow(), 'unknown': True,
+            },
+            [{'field': 'unknown', 'code': 'FIELD_NOT_ALLOWED'}],
+        ),
+        (
+            {
+                'task_key': '', 'content_revision': 0,
+                'workflow': valid_image_workflow(),
+            },
+            [
+                {'field': 'task_key', 'code': 'INVALID_VALUE'},
+                {'field': 'content_revision', 'code': 'INVALID_VALUE'},
+            ],
+        ),
+    ],
+)
+async def test_create_toolkit_boundary_returns_structured_top_level_errors(
+    arguments, issues,
+):
+    reply, calls = await call_create_through_toolkit(arguments)
+
+    assert reply == {
+        'error': 'INVALID_WORKFLOW_REQUEST',
+        'retryable': True,
+        'issues': issues,
+        'guidance': (
+            'Correct the listed request fields, then retry with the same task '
+            'key and content revision.'
+        ),
+    }
+    assert calls == []
 
 
 @pytest.mark.asyncio
 async def test_create_uses_host_scope_and_stable_identity_across_turns():
     grants = {CATALOG: '1', CREATE: '1'}
     tools, calls = harness(grants)
-    workflow = {'name': 'test', 'nodes': [], 'edges': []}
+    workflow = valid_image_workflow()
     await tools['aigc_workflow_create']('campaign', 1, workflow)
     await tools['aigc_workflow_create']('campaign', 1, workflow)
     first = calls[0][1]
@@ -165,13 +314,181 @@ async def test_create_uses_host_scope_and_stable_identity_across_turns():
 @pytest.mark.asyncio
 async def test_create_normalizes_serialized_workflow_object_before_dispatch():
     tools, calls = harness({CATALOG: '1', CREATE: '1'})
-    serialized = json.dumps({'name': 'test', 'nodes': [], 'edges': []})
+    workflow = valid_image_workflow()
+    serialized = json.dumps(workflow)
 
     reply = result(await tools['aigc_workflow_create']('campaign', 1, serialized))
 
     assert 'error' not in reply
     assert calls[0][0] == CREATE
-    assert calls[0][1]['workflow'] == {'name': 'test', 'nodes': [], 'edges': []}
+    assert calls[0][1]['workflow'] == workflow
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_incomplete_workflow_before_platform_dispatch():
+    tools, calls = harness({CATALOG: '1', CREATE: '1'})
+    workflow = {
+        'nodes': [{
+            'node_id': 'hook_card', 'kind': 'image_generate',
+            'title': 'Hook', 'inputs': {'prompt': 'Create a hook card'},
+            'parameters': {'aspect_ratio': '9:16', 'count': 1},
+            'customer_action': 'CLICK_GENERATE', 'optional': False,
+        }],
+        'edges': [], 'output_node_id': 'hook_card',
+        'review_node_ids': ['hook_card'],
+    }
+
+    reply = result(await tools['aigc_workflow_create']('campaign', 1, workflow))
+
+    assert reply == {
+        'error': 'INVALID_WORKFLOW_REQUEST',
+        'retryable': True,
+        'issues': [
+            {'field': 'workflow.schema_version', 'code': 'FIELD_REQUIRED'},
+            {'field': 'workflow.title', 'code': 'FIELD_REQUIRED'},
+            {'field': 'workflow.execution_preference', 'code': 'FIELD_REQUIRED'},
+            {'field': 'workflow.fallback_policy', 'code': 'FIELD_REQUIRED'},
+            {'field': 'workflow.nodes.0.capability', 'code': 'FIELD_REQUIRED'},
+            {'field': 'workflow.nodes.0.provider_id', 'code': 'FIELD_REQUIRED'},
+            {'field': 'workflow.nodes.0.model_id', 'code': 'FIELD_REQUIRED'},
+        ],
+        'guidance': (
+            'Correct the listed fields using the latest catalog example, '
+            'then retry with the same task key and content revision.'
+        ),
+    }
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_create_requires_model_binding_for_generated_nodes_before_dispatch():
+    tools, calls = harness({CATALOG: '1', CREATE: '1'})
+    workflow = valid_image_workflow()
+    for field in ('capability', 'provider_id', 'model_id'):
+        workflow['nodes'][0].pop(field)
+
+    reply = result(await tools['aigc_workflow_create']('campaign', 1, workflow))
+
+    assert reply['error'] == 'INVALID_WORKFLOW_REQUEST'
+    assert reply['issues'] == [
+        {'field': 'workflow.nodes.0.capability', 'code': 'FIELD_REQUIRED'},
+        {'field': 'workflow.nodes.0.provider_id', 'code': 'FIELD_REQUIRED'},
+        {'field': 'workflow.nodes.0.model_id', 'code': 'FIELD_REQUIRED'},
+    ]
+    assert calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('platform_message', 'platform_code', 'guidance'),
+    [
+        (
+            'MODEL_UNAVAILABLE',
+            'MODEL_UNAVAILABLE',
+            'Refresh the catalog and copy provider_id, model_id and capability '
+            'from one compatible available model entry.',
+        ),
+        (
+            'IDEMPOTENCY_CONFLICT',
+            'IDEMPOTENCY_CONFLICT',
+            'Reuse a content revision only for an identical workflow; increment '
+            'content_revision when the production plan changes.',
+        ),
+        (
+            'AIGC service is unavailable',
+            'AIGC_SERVICE_UNAVAILABLE',
+            'The AIGC service is temporarily unavailable. Retry the same task key '
+            'and content revision later.',
+        ),
+        (
+            'capability is not authorized',
+            'CAPABILITY_NOT_AUTHORIZED',
+            'Refresh the expert installation grants before retrying this capability.',
+        ),
+        (
+            'illegal task transition',
+            'TASK_STATE_INVALID',
+            'Read the current task status and choose an action allowed from that state.',
+        ),
+    ],
+)
+async def test_create_preserves_actionable_platform_rejections(
+    platform_message, platform_code, guidance,
+):
+    from qwenpaw.app.super_experts.service import SuperExpertPlatformError
+
+    async def reject(*_args):
+        raise SuperExpertPlatformError(platform_message)
+
+    tools = build_aigc_tools(
+        grants={CATALOG: '1', CREATE: '1'},
+        installation_id='i', conversation_id='s', business_call=reject,
+        read_task=None, review_input=None, media_delivery={},
+    )
+
+    reply = result(await tools['aigc_workflow_create'](
+        'campaign', 1, valid_image_workflow(),
+    ))
+
+    assert reply == {
+        'error': platform_code,
+        'retryable': True,
+        'guidance': guidance,
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_treats_unknown_wrapped_platform_error_as_unconfirmed():
+    from qwenpaw.app.super_experts.service import SuperExpertPlatformError
+
+    async def reject(*_args):
+        raise SuperExpertPlatformError('unexpected validation after persistence')
+
+    tools = build_aigc_tools(
+        grants={CATALOG: '1', CREATE: '1'},
+        installation_id='i', conversation_id='s', business_call=reject,
+        read_task=None, review_input=None, media_delivery={},
+    )
+
+    reply = result(await tools['aigc_workflow_create'](
+        'campaign', 1, valid_image_workflow(),
+    ))
+
+    assert reply['error'] == 'PLATFORM_OPERATION_UNCONFIRMED'
+    assert reply['material_task_id'].startswith('material-')
+    assert 'unexpected validation' not in str(reply)
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_registered_node_schema_errors_before_dispatch():
+    tools, calls = harness({CATALOG: '1', CREATE: '1'})
+    workflow = {
+        'schema_version': 1,
+        'title': 'Long image task',
+        'execution_preference': 'CUSTOMER_TRIGGERED',
+        'nodes': [{
+            'node_id': 'long_image',
+            'kind': 'long_image_export',
+            'title': 'Long image',
+            'inputs': {'title': 'Course introduction'},
+            'parameters': {'width': 'wide', 'slice_height': False},
+            'customer_action': 'CLICK_GENERATE',
+            'optional': False,
+        }],
+        'edges': [],
+        'output_node_id': 'long_image',
+        'review_node_ids': ['long_image'],
+        'fallback_policy': 'FAIL_CLOSED',
+    }
+
+    reply = result(await tools['aigc_workflow_create']('campaign', 1, workflow))
+
+    assert reply['error'] == 'INVALID_WORKFLOW_REQUEST'
+    assert reply['issues'] == [
+        {'field': 'workflow.nodes.0.parameters.slice_height', 'code': 'INVALID_VALUE'},
+        {'field': 'workflow.nodes.0.parameters.width', 'code': 'INVALID_VALUE'},
+    ]
+    assert calls == []
 
 
 @pytest.mark.asyncio
@@ -296,7 +613,9 @@ async def test_uncertain_creation_returns_identity_for_status_recovery():
     tools = build_aigc_tools(grants={CATALOG: '1', CREATE: '1'},
         installation_id='i', conversation_id='s', business_call=fail,
         read_task=None, review_input=None, media_delivery={})
-    reply = result(await tools['aigc_workflow_create']('campaign', 1, {}))
+    reply = result(await tools['aigc_workflow_create'](
+        'campaign', 1, valid_image_workflow(),
+    ))
     assert reply['error'] == 'PLATFORM_OPERATION_UNCONFIRMED'
     assert reply['material_task_id'].startswith('material-')
     assert 'private-provider-details' not in str(reply)
@@ -406,7 +725,8 @@ async def test_bridge_creates_real_owned_canvas_idempotently_without_generation(
     assert not list(store.directory('jobs').glob('*.json'))
     changed = {**workflow, 'title': 'Changed plan'}
     rejected = result(await tools['aigc_workflow_create']('lesson', 1, changed))
-    assert rejected['error'] == 'PLATFORM_OPERATION_UNCONFIRMED'
+    assert rejected['error'] == 'IDEMPOTENCY_CONFLICT'
+    assert rejected['retryable'] is True
     assert len(list(store.directory('canvases').glob('*.json'))) == 1
 
 

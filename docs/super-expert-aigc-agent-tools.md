@@ -12,7 +12,9 @@
 
 `aigc.asset.submit` 仍由现有任务卡提交入口使用，不提供模型代提交工具。创建任务不启动生成；生成、计费、素材归属与事件均复用现有平台服务。RPA、MCP 不在本次工具集合内。Skill reader 和完整 Agent 循环沿用现有配置，不因 AIGC 授权自动打开。
 
-创建参数只含稳定 `task_key`、正整数 `content_revision` 和对象类型的 `workflow`。安装与会话由宿主绑定；同任务同修订生成相同物料 ID 和幂等键。实质变更蓝图需新修订。连接层会把可解析为对象的字符串化 workflow 规范化为对象；其他错误类型返回包含 field、expected、received 与 guidance 的 `INVALID_WORKFLOW_REQUEST`，且不会进入创建服务。平台执行异常返回 `PLATFORM_OPERATION_UNCONFIRMED` 与可查询的物料 ID；该 ID 不证明创建成功，也不返回原始内部错误。
+创建参数只含稳定 `task_key`、正整数 `content_revision` 和完整 `WorkflowBlueprint` 对象。工具注册时向模型暴露蓝图的全部嵌套字段、必填项与枚举，并移除 Gemini 不接受的 `$ref`、`$defs`、`const` 关键字；数值常量仍在执行前严格校验。安装与会话仍由宿主绑定。同任务同修订生成相同物料 ID 和幂等键，实质变更蓝图需新修订。
+
+连接层会把可解析为对象的字符串化 workflow 规范化为对象，并在进入平台服务前执行完整蓝图校验以及各节点注册的 `input_schema`、`parameter_schema` 校验。结构错误返回包含字段路径与稳定错误码的 `INVALID_WORKFLOW_REQUEST`，不会创建任务或画布。平台明确拒绝的授权、模型、节点、参数、边、任务状态和幂等错误保留稳定错误码及修正指引；只有无法确定是否已产生副作用的异常才返回 `PLATFORM_OPERATION_UNCONFIRMED` 与可查询的物料 ID。该 ID 不证明创建成功，也不返回原始内部错误。
 
 审核只接受宿主解析过的当前素材身份和集合；`ACCEPTED` 还要求每个非文本模态的真实格式化输入传入模型。此证据证明传输，不保证模型的专业判断正确。任务通过也不表示全部业务内容通过或允许账号发布。
 

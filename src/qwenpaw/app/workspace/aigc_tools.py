@@ -9,13 +9,18 @@ through the platform dispatcher and its live grant validation.
 from contextlib import contextmanager
 from copy import copy, deepcopy
 import hashlib
+import inspect
 import json
+import re
 from typing import Any, Callable, Literal
 
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
+from jsonschema import Draft202012Validator
+from pydantic import ValidationError
 
-from qwenpaw.aigc.workflow_contract import WorkflowBlueprint
+from qwenpaw.aigc.workflow_contract import WorkflowBlueprint, workflow_node_registry
+from qwenpaw.app.super_experts.service import SuperExpertPlatformError
 
 
 CATALOG = "aigc.workflow.capabilities.list/1"
@@ -29,6 +34,71 @@ _STANDALONE_EXAMPLE_CAPABILITIES = {
     "image_generate": ("text_to_image",),
     "video_generate": ("text_to_video",),
 }
+
+_PLATFORM_ERROR_GUIDANCE = {
+    "AIGC_SERVICE_UNAVAILABLE": (
+        "The AIGC service is temporarily unavailable. Retry the same task key "
+        "and content revision later."
+    ),
+    "CAPABILITY_NOT_AUTHORIZED": (
+        "Refresh the expert installation grants before retrying this capability."
+    ),
+    "CAPABILITY_NOT_SUPPORTED": (
+        "Use a capability declared by the current platform contract."
+    ),
+    "ASSET_UNAVAILABLE": (
+        "Use an asset ID returned by the current user's asset flow, or add a "
+        "catalog-supported upload/select node before retrying."
+    ),
+    "EDGE_INCOMPATIBLE": (
+        "Refresh the catalog and connect nodes only through a listed compatible "
+        "input slot."
+    ),
+    "IDEMPOTENCY_CONFLICT": (
+        "Reuse a content revision only for an identical workflow; increment "
+        "content_revision when the production plan changes."
+    ),
+    "MODEL_UNAVAILABLE": (
+        "Refresh the catalog and copy provider_id, model_id and capability from "
+        "one compatible available model entry."
+    ),
+    "NODE_KIND_UNAVAILABLE": (
+        "Refresh the catalog and use a currently available node kind."
+    ),
+    "NODE_KIND_UNSUPPORTED": (
+        "Use a catalog-supported node kind or follow the returned manual fallback "
+        "policy."
+    ),
+    "OUTPUT_NODE_INVALID": (
+        "Choose an output-producing terminal node listed in the workflow."
+    ),
+    "PARAMETER_INVALID": (
+        "Refresh the catalog and correct node parameters to match its current "
+        "parameter schema."
+    ),
+    "PROVISIONING_FAILED": (
+        "Retry the same task key and content revision; do not change the workflow "
+        "unless the production plan changes."
+    ),
+    "TASK_STATE_INVALID": (
+        "Read the current task status and choose an action allowed from that state."
+    ),
+    "WORKFLOW_CYCLE": "Remove cyclic dependencies from the workflow edges.",
+    "WORKFLOW_SCHEMA_INVALID": (
+        "Correct the workflow to match the current workflow schema and retry with "
+        "the same task key and content revision."
+    ),
+}
+_PLATFORM_ERROR_ALIASES = {
+    "AIGC service is unavailable": "AIGC_SERVICE_UNAVAILABLE",
+    "capability is not authorized": "CAPABILITY_NOT_AUTHORIZED",
+    "capability is not supported": "CAPABILITY_NOT_SUPPORTED",
+    "event id is required": "EVENT_ID_REQUIRED",
+    "illegal task transition": "TASK_STATE_INVALID",
+    "illegal task transition from terminal state": "TASK_STATE_INVALID",
+    "task transition requires an existing task": "TASK_UNAVAILABLE",
+}
+_STABLE_PLATFORM_ERROR = re.compile(r"^[A-Z][A-Z0-9_]{2,80}$")
 
 
 def _response(value: Any) -> ToolResponse:
@@ -57,6 +127,191 @@ def _json_type(value: Any) -> str:
     if isinstance(value, float):
         return "number"
     return type(value).__name__
+
+
+def _inline_schema_refs(value: Any, definitions: dict[str, Any]) -> Any:
+    """Inline local Pydantic references for provider-compatible tool schemas."""
+    if isinstance(value, list):
+        return [_inline_schema_refs(item, definitions) for item in value]
+    if not isinstance(value, dict):
+        return value
+    reference = value.get("$ref")
+    if isinstance(reference, str) and reference.startswith("#/$defs/"):
+        name = reference.removeprefix("#/$defs/")
+        target = deepcopy(definitions[name])
+        target.update({key: item for key, item in value.items() if key != "$ref"})
+        return _inline_schema_refs(target, definitions)
+    result = {
+        key: _inline_schema_refs(item, definitions)
+        for key, item in value.items()
+        if key not in {"$defs", "const"}
+    }
+    if "const" in value:
+        constant = _inline_schema_refs(value["const"], definitions)
+        if isinstance(constant, str):
+            result["enum"] = [constant]
+        else:
+            result["default"] = constant
+            requirement = f"Must equal {json.dumps(constant, ensure_ascii=False)}."
+            description = str(result.get("description") or "").strip()
+            result["description"] = f"{description} {requirement}".strip()
+    return result
+
+
+def _workflow_tool_schema(tool: Callable) -> dict[str, Any]:
+    workflow_schema = WorkflowBlueprint.model_json_schema()
+    definitions = workflow_schema.get("$defs", {})
+    workflow_schema = _inline_schema_refs(workflow_schema, definitions)
+    return {
+        "type": "function",
+        "function": {
+            "name": tool.__name__,
+            "description": inspect.getdoc(tool) or "",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_key": {
+                        "type": "string", "minLength": 1, "maxLength": 160,
+                        "description": "Stable logical task name retained across retries.",
+                    },
+                    "content_revision": {
+                        "type": "integer", "minimum": 1,
+                        "description": "Increment only when the production plan changes.",
+                    },
+                    "workflow": workflow_schema,
+                },
+                "required": ["task_key", "content_revision", "workflow"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+def _validation_issue(error: dict[str, Any]) -> dict[str, str]:
+    field = ".".join(("workflow", *(str(part) for part in error.get("loc", ()))))
+    error_type = str(error.get("type") or "")
+    if error_type == "missing":
+        code = "FIELD_REQUIRED"
+    elif error_type == "extra_forbidden":
+        code = "FIELD_NOT_ALLOWED"
+    else:
+        code = "INVALID_VALUE"
+    return {"field": field, "code": code}
+
+
+def _model_binding_issues(workflow: dict[str, Any]) -> list[dict[str, str]]:
+    issues = []
+    registry = workflow_node_registry()
+    nodes = workflow.get("nodes")
+    if not isinstance(nodes, (list, tuple)):
+        return issues
+    for index, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            continue
+        registration = registry.get(node.get("kind"))
+        if (
+            registration is None
+            or not registration.requires_model
+            or node.get("customer_action") != "CLICK_GENERATE"
+        ):
+            continue
+        for field in ("capability", "provider_id", "model_id"):
+            if not isinstance(node.get(field), str) or not node[field].strip():
+                issues.append({
+                    "field": f"workflow.nodes.{index}.{field}",
+                    "code": "FIELD_REQUIRED",
+                })
+    return issues
+
+
+def _registered_node_schema_issues(
+    workflow: dict[str, Any],
+) -> list[dict[str, str]]:
+    issues = []
+    registry = workflow_node_registry()
+    nodes = workflow.get("nodes")
+    if not isinstance(nodes, (list, tuple)):
+        return issues
+    for index, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            continue
+        registration = registry.get(node.get("kind"))
+        if registration is None:
+            continue
+        for field, schema in (
+            ("inputs", registration.input_schema),
+            ("parameters", registration.parameter_schema),
+        ):
+            value = node.get(field)
+            if not isinstance(value, dict):
+                continue
+            errors = Draft202012Validator(schema).iter_errors(value)
+            for error in errors:
+                path = ".".join(str(part) for part in error.absolute_path)
+                target = f"workflow.nodes.{index}.{field}"
+                if path:
+                    target = f"{target}.{path}"
+                if error.validator == "required":
+                    code = "FIELD_REQUIRED"
+                elif error.validator == "additionalProperties":
+                    code = "FIELD_NOT_ALLOWED"
+                else:
+                    code = "INVALID_VALUE"
+                issues.append({"field": target, "code": code})
+    return sorted(issues, key=lambda issue: (issue["field"], issue["code"]))
+
+
+def _invalid_workflow_response(
+    *,
+    workflow: dict[str, Any],
+    validation_error: ValidationError | None = None,
+) -> ToolResponse:
+    issues = (
+        [_validation_issue(error) for error in validation_error.errors(include_url=False)]
+        if validation_error is not None
+        else []
+    )
+    issues.extend(_model_binding_issues(workflow))
+    issues.extend(_registered_node_schema_issues(workflow))
+    return _response({
+        "error": "INVALID_WORKFLOW_REQUEST",
+        "retryable": True,
+        "issues": issues,
+        "guidance": (
+            "Correct the listed fields using the latest catalog example, then "
+            "retry with the same task key and content revision."
+        ),
+    })
+
+
+def _invalid_create_request_response(
+    issues: list[dict[str, str]],
+) -> ToolResponse:
+    return _response({
+        "error": "INVALID_WORKFLOW_REQUEST",
+        "retryable": True,
+        "issues": issues,
+        "guidance": (
+            "Correct the listed request fields, then retry with the same task "
+            "key and content revision."
+        ),
+    })
+
+
+def _platform_rejection_response(
+    exc: SuperExpertPlatformError,
+) -> ToolResponse | None:
+    message = str(exc)
+    code = _PLATFORM_ERROR_ALIASES.get(message)
+    if code is None and _STABLE_PLATFORM_ERROR.fullmatch(message):
+        code = message
+    if code is None:
+        return None
+    guidance = _PLATFORM_ERROR_GUIDANCE.get(
+        code,
+        "Correct the request using the latest capability catalog before retrying.",
+    )
+    return _response({"error": code, "retryable": True, "guidance": guidance})
 
 
 def _default_parameters(node: dict[str, Any]) -> dict[str, Any]:
@@ -180,14 +435,19 @@ def build_aigc_tools(
             return _response({"error": "CAPABILITY_UNAVAILABLE"})
         try:
             return _response(await business_call(capability, arguments))
+        except SuperExpertPlatformError as exc:
+            rejection = _platform_rejection_response(exc)
+            if rejection is not None:
+                return rejection
         except Exception:
-            # Do not leak database paths, provider credentials, or raw errors.
-            # No implicit retry: uncertain operations must retain their key.
-            return _response({
-                **(recovery or {}),
-                "error": "PLATFORM_OPERATION_UNCONFIRMED",
-                "guidance": "Check the same task before retrying; keep its task key and revision. Do not claim success.",
-            })
+            pass
+        # Do not leak database paths, provider credentials, or raw errors.
+        # No implicit retry: uncertain operations must retain their key.
+        return _response({
+            **(recovery or {}),
+            "error": "PLATFORM_OPERATION_UNCONFIRMED",
+            "guidance": "Check the same task before retrying; keep its task key and revision. Do not claim success.",
+        })
 
     async def aigc_workflow_catalog(node_kinds: list[str] = []) -> ToolResponse:
         """Read current AIGC models, workflow node parameters and blueprint schema.
@@ -217,11 +477,19 @@ def build_aigc_tools(
                 "catalog": catalog,
                 "workflow_schema": WorkflowBlueprint.model_json_schema(),
             })
+        except SuperExpertPlatformError as exc:
+            rejection = _platform_rejection_response(exc)
+            if rejection is not None:
+                return rejection
+            return _response({"error": "CATALOG_UNAVAILABLE"})
         except Exception:
             return _response({"error": "CATALOG_UNAVAILABLE"})
 
     async def aigc_workflow_create(
-        task_key: str, content_revision: int, workflow: dict,
+        task_key: Any = None,
+        content_revision: Any = None,
+        workflow: Any = None,
+        **unexpected: Any,
     ) -> ToolResponse:
         """Create a real workflow canvas and material task using the live catalog.
 
@@ -235,9 +503,27 @@ def build_aigc_tools(
             content_revision: Positive version of the production plan.
             workflow: Complete blueprint matching aigc_workflow_catalog, with real dependencies and review_node_ids.
         """
-        if (not isinstance(task_key, str) or not task_key.strip() or len(task_key) > 160
-                or type(content_revision) is not int or content_revision < 1):
-            return _response({"error": "INVALID_WORKFLOW_REQUEST"})
+        request_issues = []
+        if task_key is None:
+            request_issues.append({"field": "task_key", "code": "FIELD_REQUIRED"})
+        elif not isinstance(task_key, str) or not task_key.strip() or len(task_key) > 160:
+            request_issues.append({"field": "task_key", "code": "INVALID_VALUE"})
+        if content_revision is None:
+            request_issues.append({
+                "field": "content_revision", "code": "FIELD_REQUIRED",
+            })
+        elif type(content_revision) is not int or content_revision < 1:
+            request_issues.append({
+                "field": "content_revision", "code": "INVALID_VALUE",
+            })
+        if workflow is None:
+            request_issues.append({"field": "workflow", "code": "FIELD_REQUIRED"})
+        request_issues.extend(
+            {"field": field, "code": "FIELD_NOT_ALLOWED"}
+            for field in sorted(unexpected)
+        )
+        if request_issues:
+            return _invalid_create_request_response(request_issues)
         if isinstance(workflow, str):
             try:
                 workflow = json.loads(workflow)
@@ -252,6 +538,19 @@ def build_aigc_tools(
                 "retryable": True,
                 "guidance": "Pass workflow as a nested JSON object, not a serialized JSON string.",
             })
+        raw_workflow = workflow
+        try:
+            workflow = WorkflowBlueprint.model_validate(raw_workflow).model_dump(mode="json")
+        except ValidationError as exc:
+            return _invalid_workflow_response(
+                workflow=raw_workflow,
+                validation_error=exc,
+            )
+        if (
+            _model_binding_issues(workflow)
+            or _registered_node_schema_issues(workflow)
+        ):
+            return _invalid_workflow_response(workflow=workflow)
         task_id = "content-" + _identity(installation_id, conversation_id, task_key)
         material_id = "material-" + _identity(task_id, content_revision)
         operation = "create-" + _identity(material_id)
@@ -360,7 +659,12 @@ def bind_aigc_tools(agent: Any, tools: dict[str, Callable]):
     scoped = copy(original)
     scoped.tools = dict(original.tools)
     for tool in tools.values():
-        scoped.register_tool_function(tool, namesake_strategy="raise")
+        schema = _workflow_tool_schema(tool) if tool.__name__ == "aigc_workflow_create" else None
+        scoped.register_tool_function(
+            tool,
+            json_schema=schema,
+            namesake_strategy="raise",
+        )
     agent.toolkit = scoped
     try:
         yield
