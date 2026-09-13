@@ -24,6 +24,7 @@ from qwenpaw.app.routers.aigc_studio import (
     CapabilityList,
     project_workflow_capability_catalog,
 )
+from qwenpaw.providers.provider import ModelInfo
 
 
 CAPABILITIES = (
@@ -39,6 +40,115 @@ CAPABILITIES = (
     ("card.create", "1"),
     ("card.update", "1"),
 )
+
+
+def _review_provider(
+    provider_id: str,
+    *models: ModelInfo,
+    configured: bool = True,
+):
+    return SimpleNamespace(
+        id=provider_id,
+        models=list(models),
+        extra_models=[],
+        disabled=False,
+        is_local=False,
+        is_custom=False,
+        require_api_key=True,
+        api_key="configured-key" if configured else "",
+    )
+
+
+def test_review_model_selection_keeps_a_compatible_current_model():
+    vision = ModelInfo(
+        id="vision",
+        name="Vision",
+        supports_image=True,
+        supports_video=True,
+    )
+    provider = _review_provider("provider", vision)
+    manager = SimpleNamespace(
+        builtin_providers={"provider": provider},
+        custom_providers={},
+        plugin_providers={},
+        get_active_model=lambda: None,
+    )
+
+    selected = router_module._select_review_chat_model(
+        manager,
+        {"provider_id": "provider", "model": "vision"},
+        {"image", "video"},
+    )
+
+    assert selected == {"provider_id": "provider", "model": "vision"}
+
+
+def test_review_model_selection_routes_away_from_text_only_current_model():
+    text = ModelInfo(
+        id="text",
+        name="Text",
+        supports_image=False,
+        supports_video=False,
+    )
+    vision = ModelInfo(
+        id="vision",
+        name="Vision",
+        supports_image=True,
+        supports_video=True,
+    )
+    provider = _review_provider("provider", text, vision)
+    manager = SimpleNamespace(
+        builtin_providers={"provider": provider},
+        custom_providers={},
+        plugin_providers={},
+        get_active_model=lambda: None,
+    )
+
+    selected = router_module._select_review_chat_model(
+        manager,
+        {"provider_id": "provider", "model": "text"},
+        {"image"},
+    )
+
+    assert selected == {"provider_id": "provider", "model": "vision"}
+
+
+def test_review_model_selection_rejects_unknown_or_partially_compatible_models():
+    unknown = ModelInfo(id="unknown", name="Unknown")
+    image_only = ModelInfo(
+        id="image-only",
+        name="Image only",
+        supports_image=True,
+        supports_video=False,
+    )
+    unavailable = _review_provider(
+        "unavailable",
+        ModelInfo(
+            id="both",
+            name="Both",
+            supports_image=True,
+            supports_video=True,
+        ),
+        configured=False,
+    )
+    provider = _review_provider("provider", unknown, image_only)
+    manager = SimpleNamespace(
+        builtin_providers={
+            "provider": provider,
+            "unavailable": unavailable,
+        },
+        custom_providers={},
+        plugin_providers={},
+        get_active_model=lambda: None,
+    )
+
+    selected = router_module._select_review_chat_model(
+        manager,
+        {"provider_id": "provider", "model": "unknown"},
+        {"image", "video"},
+    )
+
+    assert selected is None
 
 
 @pytest.mark.asyncio
@@ -1714,6 +1824,195 @@ async def test_asset_review_dispatch_uses_bound_session_and_media(monkeypatch, l
 
 
 @pytest.mark.asyncio
+async def test_asset_review_dispatch_temporarily_routes_media_to_a_compatible_model(
+    monkeypatch,
+):
+    from qwenpaw.app.agent_context import get_current_chat_model
+
+    captured = {}
+
+    class Chats:
+        async def get_chat(self, _chat_id):
+            return SimpleNamespace(
+                id="conversation-1",
+                user_id="user-1",
+                channel="console",
+                meta={
+                    "active_model": {
+                        "provider_id": "provider",
+                        "model": "text",
+                    },
+                },
+            )
+
+    class Runner:
+        async def query_handler(self, _messages, _request):
+            captured["model"] = get_current_chat_model()
+            yield SimpleNamespace(get_text_content=lambda: "审核完成。"), True
+
+    class AgentManager:
+        async def get_agent(self, _agent_id):
+            return SimpleNamespace(runner=Runner(), chat_manager=Chats())
+
+    async def resolve(*_args, **_kwargs):
+        return {
+            "type": "image",
+            "source": {"type": "url", "url": "file:///tmp/result.png"},
+        }
+
+    monkeypatch.setattr(
+        router_module,
+        "resolve_owned_asset_for_agent_review",
+        resolve,
+    )
+    monkeypatch.setattr(
+        router_module,
+        "prepare_user_billing_execution",
+        lambda *_a, **_k: SimpleNamespace(
+            activate=lambda: __import__("contextlib").nullcontext(),
+            finalize_completed=lambda: True,
+            finalize=lambda *_a, **_k: True,
+        ),
+    )
+    provider = _review_provider(
+        "provider",
+        ModelInfo(
+            id="text",
+            name="Text",
+            supports_image=False,
+            supports_video=False,
+        ),
+        ModelInfo(
+            id="vision",
+            name="Vision",
+            supports_image=True,
+            supports_video=True,
+        ),
+    )
+    request = SimpleNamespace(
+        state=SimpleNamespace(user_id="user-1"),
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                multi_agent_manager=AgentManager(),
+                provider_manager=SimpleNamespace(
+                    builtin_providers={"provider": provider},
+                    custom_providers={},
+                    plugin_providers={},
+                    get_active_model=lambda: None,
+                ),
+            ),
+        ),
+    )
+    service = SimpleNamespace(
+        grant_repository=SimpleNamespace(
+            get=lambda _id: SimpleNamespace(
+                agent_id="agent-1",
+                tenant_id="tenant-a",
+            ),
+        ),
+    )
+
+    await router_module._dispatch_agent_asset_review(
+        request,
+        service=service,
+        installation_id="installation-1",
+        binding=router_module.AigcTaskBinding.model_validate(
+            {**_binding(), "installation_id": "installation-1"},
+        ),
+        asset_id="asset-1",
+        request_key="submit-1:agent-review",
+    )
+
+    assert captured["model"] == {
+        "provider_id": "provider",
+        "model": "vision",
+    }
+
+
+@pytest.mark.asyncio
+async def test_asset_review_does_not_report_success_until_platform_state_is_terminal(
+    monkeypatch,
+):
+    from agentscope.message import Msg
+
+    final = Msg(name="agent-1", role="assistant", content="✅ 审核通过！")
+    task = SimpleNamespace(
+        status=router_module.AigcTaskStatus.SUBMITTED,
+        workflow=None,
+        review_assets=(),
+        binding=SimpleNamespace(node_id="node-1"),
+    )
+
+    class Chats:
+        async def get_chat(self, _chat_id):
+            return SimpleNamespace(
+                id="conversation-1",
+                user_id="user-1",
+                channel="console",
+                meta={},
+            )
+
+    class Runner:
+        async def query_handler(self, _messages, _request):
+            yield final, True
+
+    class AgentManager:
+        async def get_agent(self, _agent_id):
+            return SimpleNamespace(runner=Runner(), chat_manager=Chats())
+
+    async def resolve(*_args, **_kwargs):
+        return {
+            "type": "image",
+            "source": {"type": "url", "url": "file:///tmp/result.png"},
+        }
+
+    monkeypatch.setattr(
+        router_module,
+        "resolve_owned_asset_for_agent_review",
+        resolve,
+    )
+    monkeypatch.setattr(
+        router_module,
+        "prepare_user_billing_execution",
+        lambda *_a, **_k: SimpleNamespace(
+            activate=lambda: __import__("contextlib").nullcontext(),
+            finalize_completed=lambda: True,
+            finalize=lambda *_a, **_k: True,
+        ),
+    )
+    request = SimpleNamespace(
+        state=SimpleNamespace(user_id="user-1"),
+        app=SimpleNamespace(
+            state=SimpleNamespace(multi_agent_manager=AgentManager()),
+        ),
+    )
+    service = SimpleNamespace(
+        grant_repository=SimpleNamespace(
+            get=lambda _id: SimpleNamespace(
+                agent_id="agent-1",
+                tenant_id="tenant-a",
+            ),
+        ),
+        get_task=lambda _id: task,
+    )
+
+    result = await router_module._dispatch_agent_asset_review(
+        request,
+        service=service,
+        installation_id="installation-1",
+        binding=router_module.AigcTaskBinding.model_validate(
+            {**_binding(), "installation_id": "installation-1"},
+        ),
+        asset_id="asset-1",
+        request_key="submit-1:agent-review",
+    )
+
+    assert result["status"] == "review_incomplete"
+    assert "审核通过" not in result["reply"]
+    assert final.get_text_content() == result["reply"]
+
+
+@pytest.mark.asyncio
 async def test_duplicate_asset_submit_replays_the_durable_agent_review(
     tmp_path,
     monkeypatch,
@@ -1788,6 +2087,76 @@ async def test_duplicate_asset_submit_replays_the_durable_agent_review(
 
     assert dispatches == 1
     assert replay["agent_review"] == first["agent_review"]
+
+
+@pytest.mark.asyncio
+async def test_nonterminal_review_is_not_cached_and_can_be_retried(monkeypatch):
+    dispatches = 0
+    saved = []
+
+    class Service:
+        async def execute(self, **_kwargs):
+            return {"task": {"status": "SUBMITTED"}, "event": {}}
+
+        def review_lock(self, _event_id):
+            return __import__("asyncio").Lock()
+
+        def get_review_receipt(self, _event_id):
+            return None
+
+        def save_review_receipt(self, event_id, receipt):
+            saved.append((event_id, receipt))
+            return receipt
+
+        def get_task(self, _material_task_id):
+            return SimpleNamespace(status=router_module.AigcTaskStatus.SUBMITTED)
+
+    async def dispatch(*_args, **_kwargs):
+        nonlocal dispatches
+        dispatches += 1
+        return {
+            "status": "model_required",
+            "reply": "需要支持图片识别的模型。",
+            "required_modalities": ["image"],
+        }
+
+    monkeypatch.setattr(
+        router_module,
+        "get_super_expert_platform_service",
+        lambda: Service(),
+    )
+    monkeypatch.setattr(router_module, "ensure_chat_access", lambda *_a, **_k: None)
+    monkeypatch.setattr(router_module, "_dispatch_agent_asset_review", dispatch)
+    binding = {**_binding(), "installation_id": "installation-1"}
+    command = PlatformCommandRequest(
+        installation_id="installation-1",
+        contract_version="1",
+        idempotency_key="submit",
+        arguments={
+            "binding": binding,
+            "event_id": "submit",
+            "asset_id": "asset",
+        },
+    )
+    request = SimpleNamespace(
+        state=SimpleNamespace(tenant_id="tenant-a", user_id="user-1"),
+    )
+
+    first = await router_module.execute_super_expert_command(
+        "aigc.asset.submit",
+        command,
+        request,
+    )
+    second = await router_module.execute_super_expert_command(
+        "aigc.asset.submit",
+        command,
+        request,
+    )
+
+    assert first["agent_review"]["status"] == "model_required"
+    assert second["agent_review"]["status"] == "model_required"
+    assert dispatches == 2
+    assert saved == []
 
 
 @pytest.mark.asyncio

@@ -96,7 +96,12 @@ async def test_bundle_dispatch_delivers_real_text_and_both_images(tmp_path, monk
             created_at='2026-01-01', meta={'canvas_id': 'canvas', 'node_id': 'p-' + key, 'owner_user_id': 'user'})
         store.write('assets', asset.id, asset.model_dump())
         entries.append(AigcReviewAsset(node_id='p-' + key, asset_id=asset.id))
-    task = SimpleNamespace(binding=binding, workflow=SimpleNamespace(blueprint=plan), review_assets=entries)
+    task = SimpleNamespace(
+        binding=binding,
+        workflow=SimpleNamespace(blueprint=plan),
+        review_assets=entries,
+        status=router.AigcTaskStatus.ACCEPTED,
+    )
     captured = {}
     class Runner:
         async def query_handler(self, messages, request):

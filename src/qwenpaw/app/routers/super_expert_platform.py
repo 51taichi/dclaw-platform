@@ -51,6 +51,121 @@ from ..super_experts.models import (
     AigcWorkflowGuideEvent,
 )
 
+
+def _review_provider_is_configured(provider: Any) -> bool:
+    if bool(getattr(provider, "disabled", False)):
+        return False
+    if bool(getattr(provider, "is_local", False)):
+        return True
+    if bool(getattr(provider, "is_custom", False)):
+        return bool(str(getattr(provider, "base_url", "") or "").strip())
+    if getattr(provider, "require_api_key", True) is False:
+        return bool(str(getattr(provider, "base_url", "") or "").strip())
+    return bool(str(getattr(provider, "api_key", "") or "").strip())
+
+
+def _review_provider_inventory(manager: Any) -> list[Any]:
+    providers: list[Any] = []
+    seen: set[str] = set()
+    for collection_name in ("builtin_providers", "custom_providers"):
+        for provider in getattr(manager, collection_name, {}).values():
+            provider_id = str(getattr(provider, "id", "") or "")
+            if provider_id and provider_id not in seen:
+                providers.append(provider)
+                seen.add(provider_id)
+    get_provider = getattr(manager, "get_provider", None)
+    for provider_id, entry in getattr(manager, "plugin_providers", {}).items():
+        provider = (
+            get_provider(provider_id)
+            if callable(get_provider)
+            else (entry.get("provider") if isinstance(entry, dict) else entry)
+        )
+        resolved_id = str(getattr(provider, "id", "") or provider_id)
+        if provider is not None and resolved_id not in seen:
+            providers.append(provider)
+            seen.add(resolved_id)
+    return providers
+
+
+def _model_slot_values(slot: Any) -> tuple[str, str]:
+    if isinstance(slot, dict):
+        return (
+            str(slot.get("provider_id") or "").strip(),
+            str(slot.get("model") or "").strip(),
+        )
+    return (
+        str(getattr(slot, "provider_id", "") or "").strip(),
+        str(getattr(slot, "model", "") or "").strip(),
+    )
+
+
+def _select_review_chat_model(
+    manager: Any,
+    current_slot: Any,
+    required_modalities: set[str],
+) -> dict[str, str] | None:
+    """Select a configured chat model with confirmed media capabilities."""
+    providers = _review_provider_inventory(manager)
+    provider_by_id = {
+        str(getattr(provider, "id", "") or ""): provider
+        for provider in providers
+    }
+    ordered_slots = [current_slot]
+    get_active_model = getattr(manager, "get_active_model", None)
+    if callable(get_active_model):
+        ordered_slots.append(get_active_model())
+    ordered_slots.extend(
+        {"provider_id": provider_id, "model": model.id}
+        for provider_id, provider in provider_by_id.items()
+        for model in (
+            list(getattr(provider, "models", ()) or ())
+            + list(getattr(provider, "extra_models", ()) or ())
+        )
+    )
+
+    seen: set[tuple[str, str]] = set()
+    for slot in ordered_slots:
+        provider_id, model_id = _model_slot_values(slot)
+        key = (provider_id, model_id)
+        if not all(key) or key in seen:
+            continue
+        seen.add(key)
+        provider = provider_by_id.get(provider_id)
+        if provider is None or not _review_provider_is_configured(provider):
+            continue
+        model = next(
+            (
+                item
+                for item in (
+                    list(getattr(provider, "models", ()) or ())
+                    + list(getattr(provider, "extra_models", ()) or ())
+                )
+                if str(getattr(item, "id", "") or "") == model_id
+            ),
+            None,
+        )
+        if model is None or getattr(model, "model_type", "llm") != "llm":
+            continue
+        if "image" in required_modalities and getattr(
+            model,
+            "supports_image",
+            None,
+        ) is not True:
+            continue
+        if "video" in required_modalities and getattr(
+            model,
+            "supports_video",
+            None,
+        ) is not True:
+            continue
+        return {"provider_id": provider_id, "model": model_id}
+    return None
+
+
+def _replace_review_message_text(message: Any, text: str) -> None:
+    if hasattr(message, "content"):
+        message.content = text
+
 router = APIRouter(
     prefix="/super-expert-platform",
     tags=["super-expert-platform"],
@@ -400,7 +515,8 @@ async def execute_super_expert_command(
                             asset_id=str(command.arguments.get("asset_id") or ""),
                             request_key=f"{command.idempotency_key}:agent-review",
                         )
-                    review = service.save_review_receipt(submit_event_id, review)
+                    if review.get("status") == "completed":
+                        review = service.save_review_receipt(submit_event_id, review)
                 result["agent_review"] = review
             reviewed_task = service.get_task(
                 AigcTaskBinding.model_validate(binding).material_task_id,
@@ -462,8 +578,8 @@ async def _dispatch_agent_asset_review(
         raise SuperExpertPlatformError("agent review dispatch is unavailable") from exc
 
     user_id = str(getattr(request.state, "user_id", "platform-user") or "platform-user")
-    # Review is a continuation of the bound conversation, not a new model
-    # selection. Resolve without creating a second platform-channel chat.
+    # Review continues the bound conversation. Resolve that chat first so its
+    # selected model remains the preferred candidate for the review turn.
     resolved_chat_id = binding.conversation_id
     chat = await workspace.chat_manager.get_chat(binding.conversation_id)
     if chat is None:
@@ -478,6 +594,29 @@ async def _dispatch_agent_asset_review(
         if chat is not None and str(chat.user_id) == user_id and isinstance(chat.meta, dict)
         else None
     )
+    required_modalities = {
+        str(block.get("type") or "")
+        for block in media_blocks
+        if isinstance(block, dict) and block.get("type") in {"image", "video"}
+    }
+    provider_manager = getattr(request.app.state, "provider_manager", None)
+    review_model = chat_model
+    if provider_manager is not None and required_modalities:
+        review_model = _select_review_chat_model(
+            provider_manager,
+            chat_model,
+            required_modalities,
+        )
+        if review_model is None:
+            names = "、".join(
+                "图片" if item == "image" else "视频"
+                for item in sorted(required_modalities)
+            )
+            return {
+                "status": "model_required",
+                "reply": f"素材已提交，但当前没有已配置且支持{names}识别的模型，暂未完成审核。",
+                "required_modalities": sorted(required_modalities),
+            }
     turn_request = SimpleNamespace(
         # Continue the exact bound chat on its original channel. Supplying the
         # conversation id with a synthetic platform channel used to create a
@@ -499,7 +638,9 @@ async def _dispatch_agent_asset_review(
                     "type": "text",
                     "text": (
                         "当前绑定的 DClaw AIGC 素材已由客户明确提交。"
-                        "请在当前审核阶段读取附件并完成审核；只输出一个当前结论和一个下一步动作。"
+                        "请在当前审核阶段读取附件并完成审核，并在本轮调用 aigc_task_review。"
+                        "只有该工具成功返回且任务状态已经变为 ACCEPTED 或 REVISION_REQUIRED，"
+                        "才可以向客户表示审核已经完成；只输出一个当前结论和一个下一步动作。"
                     ),
                 },
                 *media_blocks,
@@ -523,8 +664,9 @@ async def _dispatch_agent_asset_review(
         },
     )
     previous_model = get_current_chat_model()
-    set_current_chat_model(chat_model)
+    set_current_chat_model(review_model)
     from ..workspace.media_review_context import bind_review_input
+    review_status = "completed"
     try:
         with prepared.activate(), bind_review_input(
             user_id=user_id, binding=binding, asset_id=asset_id, media_block=media_block,
@@ -536,6 +678,25 @@ async def _dispatch_agent_asset_review(
                 turn_request,
             ):
                 if is_last:
+                    task_getter = getattr(service, "get_task", None)
+                    reviewed_task = (
+                        task_getter(binding.material_task_id)
+                        if callable(task_getter)
+                        else None
+                    )
+                    if callable(task_getter) and (
+                        reviewed_task is None
+                        or reviewed_task.status
+                        not in {
+                            AigcTaskStatus.ACCEPTED,
+                            AigcTaskStatus.REVISION_REQUIRED,
+                        }
+                    ):
+                        review_status = "review_incomplete"
+                        _replace_review_message_text(
+                            message,
+                            "素材已收到，但审核结果尚未成功写入任务，请重新发起审核。",
+                        )
                     final_message = message
     except InsufficientUsageCreditsError:
         prepared.finalize("failed", error_code="INSUFFICIENT_CREDITS")
@@ -556,4 +717,4 @@ async def _dispatch_agent_asset_review(
         prepared.finalize("failed", error_code="INVALID_COMPLETION")
         raise SuperExpertPlatformError("agent review result is invalid")
     prepared.finalize_completed()
-    return {"status": "completed", "reply": reply}
+    return {"status": review_status, "reply": reply}
