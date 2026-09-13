@@ -7,6 +7,9 @@ import csv
 import html
 import io
 import re
+import shutil
+import subprocess
+import tempfile
 import zlib
 import zipfile
 from dataclasses import dataclass
@@ -27,7 +30,7 @@ class ParsedDocument:
 
 
 TEXT_TYPES = {"txt", "md", "markdown", "csv"}
-OFFICE_TYPES = {"docx", "pptx", "xlsx"}
+OFFICE_TYPES = {"doc", "docx", "pptx", "xlsx"}
 IMAGE_TYPES = {"png", "jpg", "jpeg", "webp", "bmp", "gif", "tiff", "tif"}
 
 
@@ -39,6 +42,7 @@ def source_type_from_name(name: str, fallback: str = "txt") -> str:
         "txt",
         "md",
         "pdf",
+        "doc",
         "docx",
         "pptx",
         "xlsx",
@@ -85,6 +89,9 @@ def parse_document_bytes(
 
     if normalized_type == "docx":
         return _require_text(_extract_docx_text(content), normalized_type)
+
+    if normalized_type == "doc":
+        return _require_text(_extract_legacy_doc_text(content), normalized_type)
 
     if normalized_type == "pptx":
         return _require_text(_extract_pptx_text(content), normalized_type)
@@ -141,6 +148,37 @@ def _extract_docx_text(content: bytes) -> str:
             if name in docx.namelist():
                 parts.append(_xml_text(docx.read(name)))
         return "\n\n".join(part for part in parts if part.strip())
+
+
+def _extract_legacy_doc_text(content: bytes) -> str:
+    """Extract text from the legacy OLE Word format with antiword."""
+    executable = shutil.which("antiword")
+    if not executable:
+        raise DocumentParseError(
+            "DOC text extraction requires the antiword runtime."
+        )
+
+    with tempfile.TemporaryDirectory(prefix="dclaw-doc-") as temp_dir:
+        source = Path(temp_dir) / "upload.doc"
+        source.write_bytes(content)
+        try:
+            completed = subprocess.run(
+                [executable, "-m", "UTF-8.txt", str(source)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=20,
+                check=True,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            detail = (getattr(exc, "stderr", b"") or b"").decode(
+                "utf-8",
+                errors="replace",
+            )
+            raise DocumentParseError(
+                f"DOC text extraction failed: {detail[:300] or type(exc).__name__}."
+            ) from exc
+
+    return _decode_text(completed.stdout)
 
 
 def _extract_pptx_text(content: bytes) -> str:

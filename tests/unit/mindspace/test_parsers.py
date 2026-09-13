@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import io
+import subprocess
 import zipfile
 
 import pytest
@@ -52,6 +53,32 @@ def test_parse_docx_text_from_openxml():
     parsed = parse_document_bytes(name="handbook.docx", source_type="docx", content=content)
 
     assert "Enterprise handbook" in parsed.text
+
+
+def test_parse_legacy_doc_text_with_antiword(monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/antiword")
+
+    def fake_run(command, **kwargs):
+        assert command[:3] == ["/usr/bin/antiword", "-m", "UTF-8.txt"]
+        assert kwargs["check"] is True
+        assert kwargs["timeout"] == 20
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="私域常见问答".encode("utf-8"),
+            stderr=b"",
+        )
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    parsed = parse_document_bytes(
+        name="faq.doc",
+        source_type="doc",
+        content=b"legacy word fixture",
+    )
+
+    assert parsed.source_type == "doc"
+    assert parsed.text == "私域常见问答"
 
 
 def test_parse_pptx_text_from_slides():

@@ -16,9 +16,82 @@ from typing import Optional
 from agentscope.message import Msg
 
 from ...config import load_config
+from ...mindspace.parsers import (
+    DocumentParseError,
+    parse_document_bytes,
+    source_type_from_name,
+)
 from .file_handling import download_file_from_base64, download_file_from_url
 
 logger = logging.getLogger(__name__)
+
+_EXTRACTABLE_DOCUMENT_TYPES = frozenset(
+    {"txt", "md", "csv", "pdf", "doc", "docx", "pptx", "xlsx"},
+)
+_MAX_DOCUMENT_BYTES = 20 * 1024 * 1024
+_MAX_EXTRACTED_DOCUMENT_CHARS = 60_000
+
+
+def _safe_attachment_name(name: Optional[str], local_path: str) -> str:
+    raw = name or os.path.basename(local_path) or "attachment"
+    return Path(raw.replace("\\", "/")).name.replace("\n", " ").replace(
+        "\r",
+        " ",
+    )
+
+
+def _extract_document_text(local_path: str, filename: Optional[str]) -> str | None:
+    """Return bounded text for a supported uploaded document."""
+    display_name = _safe_attachment_name(filename, local_path)
+    source_type = source_type_from_name(display_name, fallback="")
+    if source_type not in _EXTRACTABLE_DOCUMENT_TYPES:
+        return None
+
+    path = Path(local_path)
+    try:
+        if path.stat().st_size > _MAX_DOCUMENT_BYTES:
+            logger.info(
+                "Skipping automatic text extraction for oversized attachment %s",
+                display_name,
+            )
+            return None
+        parsed = parse_document_bytes(
+            name=display_name,
+            source_type=source_type,
+            content=path.read_bytes(),
+        )
+    except (DocumentParseError, OSError, ValueError) as exc:
+        logger.info(
+            "Automatic text extraction failed for attachment %s: %s",
+            display_name,
+            exc,
+        )
+        return None
+
+    text = parsed.text
+    if len(text) > _MAX_EXTRACTED_DOCUMENT_CHARS:
+        text = (
+            text[:_MAX_EXTRACTED_DOCUMENT_CHARS]
+            + "\n[附件正文过长，已截取前 60000 个字符]"
+        )
+    return text
+
+
+def _document_text_block(
+    *,
+    text: str,
+    filename: Optional[str],
+    local_path: str,
+) -> dict:
+    display_name = _safe_attachment_name(filename, local_path)
+    return {
+        "type": "text",
+        "text": (
+            f"[附件正文开始：{display_name}]\n"
+            f"{text}\n"
+            f"[附件正文结束：{display_name}]"
+        ),
+    }
 
 
 async def _process_single_file_block(
@@ -409,11 +482,31 @@ async def process_file_and_media_blocks_in_message(msg) -> None:
 
             local_path = await _process_single_block(message.content, i, block)
             if local_path:
-                downloaded_files.append((i, local_path))
+                downloaded_files.append(
+                    (i, local_path, block_type, block.get("filename")),
+                )
 
         if downloaded_files:
             lang = load_config().agents.language
-            for i, local_path in reversed(downloaded_files):
+            for i, local_path, block_type, filename in reversed(
+                downloaded_files,
+            ):
+                if block_type == "file":
+                    extracted = await asyncio.to_thread(
+                        _extract_document_text,
+                        local_path,
+                        filename,
+                    )
+                    if extracted:
+                        message.content.insert(
+                            i + 1,
+                            _document_text_block(
+                                text=extracted,
+                                filename=filename,
+                                local_path=local_path,
+                            ),
+                        )
+                        continue
                 text = (
                     f"用户上传文件，已经下载到 {local_path}"
                     if lang == "zh"

@@ -86,6 +86,7 @@ RUN set -eux; \
     fi; \
     apt-get update && apt-get install -y --no-install-recommends --fix-missing \
       libreoffice-impress \
+      antiword \
       poppler-utils \
       tesseract-ocr \
       tesseract-ocr-chi-sim \

@@ -6,11 +6,15 @@ Covers:
 - prepend_to_message_content
 """
 # pylint: disable=redefined-outer-name
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from agentscope.message import Msg
 
 from qwenpaw.agents.utils.message_processing import (
     is_first_user_interaction,
     prepend_to_message_content,
+    process_file_and_media_blocks_in_message,
 )
 
 
@@ -143,3 +147,45 @@ class TestPrependToMessageContent:
         prepend_to_message_content(msg, "guidance")
         assert len(msg.content) == 2
         assert msg.content[1]["type"] == "image"
+
+
+@pytest.mark.asyncio
+async def test_uploaded_document_text_is_injected_before_model_call(
+    monkeypatch,
+    tmp_path,
+):
+    document = tmp_path / "faq.doc"
+    document.write_bytes(b"legacy word fixture")
+    monkeypatch.setattr(
+        "qwenpaw.agents.utils.message_processing._process_single_file_block",
+        AsyncMock(return_value=str(document)),
+    )
+    monkeypatch.setattr(
+        "qwenpaw.agents.utils.message_processing._extract_document_text",
+        lambda path, name: "第一问：如何获取客户线索？",
+        raising=False,
+    )
+    message = Msg(
+        "user",
+        [
+            {
+                "type": "file",
+                "filename": "私域常见Q&A.doc",
+                "source": {"type": "url", "url": str(document)},
+            },
+        ],
+        "user",
+    )
+
+    await process_file_and_media_blocks_in_message(message)
+
+    assert message.content[0]["type"] == "file"
+    assert message.content[1] == {
+        "type": "text",
+        "text": (
+            "[附件正文开始：私域常见Q&A.doc]\n"
+            "第一问：如何获取客户线索？\n"
+            "[附件正文结束：私域常见Q&A.doc]"
+        ),
+    }
+    assert all("已经下载到" not in str(block) for block in message.content)
