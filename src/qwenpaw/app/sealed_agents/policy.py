@@ -66,6 +66,8 @@ def deny_sealed_skill_asset_access(request: Request) -> None:
     Agent workspace, so they retain the normal sealed-asset guard.
     """
     path = str(getattr(getattr(request, "url", None), "path", "")).rstrip("/")
+    if path.endswith("/skills/workspaces"):
+        return
     pool_marker = "/skills/pool"
     _prefix, marker, pool_suffix = path.partition(pool_marker)
     if marker and (not pool_suffix or pool_suffix.startswith("/")):

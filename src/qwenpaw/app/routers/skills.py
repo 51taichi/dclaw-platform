@@ -64,6 +64,7 @@ from ...agents.skill_system.store import (
 from ...security.skill_scanner import SkillScanError
 from ..chat_access import current_user_id, is_admin_request
 from ..runtime.event_bus import RuntimeEvent, get_runtime_event_bus
+from ..sealed_agents.registry import get_sealed_agent_registry
 from ..utils import schedule_agent_reload
 from ..task_limits import get_task_limiter
 
@@ -982,7 +983,10 @@ async def list_workspace_skill_sources(
 ) -> list[WorkspaceSkillSummary]:
     summaries: list[WorkspaceSkillSummary] = []
     workspaces = list_workspaces()
+    sealed_registry = get_sealed_agent_registry()
     for workspace in workspaces:
+        if sealed_registry.is_sealed(workspace["agent_id"]):
+            continue
         workspace_dir = Path(workspace["workspace_dir"])
         summaries.append(
             WorkspaceSkillSummary(
