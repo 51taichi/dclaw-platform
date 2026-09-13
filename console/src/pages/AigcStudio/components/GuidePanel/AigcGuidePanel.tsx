@@ -193,6 +193,28 @@ export function AigcGuidePanel({
     }
   };
 
+  const submitAndReturn = () => {
+    setReviewReply("");
+    void run(async () => {
+      try {
+        const submitted = await onSubmit?.();
+        if (submitted !== true) {
+          setReviewReply("尚未提交审核，请确认绑定节点已有成品后再试。");
+          return;
+        }
+        try {
+          await onReturnToChat?.();
+        } catch {
+          setReviewReply(
+            "素材已提交，但暂时无法返回会话。请点击返回任务会话重试。",
+          );
+        }
+      } catch {
+        setReviewReply("提交未能完成，素材和制作进度已保留，请重试。");
+      }
+    });
+  };
+
   return (
     <aside className={styles.panel} aria-label="AIGC 执行向导">
       <div
@@ -365,7 +387,16 @@ export function AigcGuidePanel({
           <ArrowLeft size={14} />
           返回任务会话
         </button>
-        {!["ACCEPTED", "SUBMITTED"].includes(task.status) ? (
+        {task.status === "SUBMITTED" ? (
+          <button
+            type="button"
+            disabled={pending || wrongCanvas || !onSubmit || !onReturnToChat}
+            onClick={submitAndReturn}
+          >
+            <RotateCcw size={14} />
+            {pending ? "正在审核…" : "重新审核并返回会话"}
+          </button>
+        ) : task.status !== "ACCEPTED" ? (
           <>
             <button type="button" onClick={() => setPaused((value) => !value)}>
               {paused ? <Play size={14} /> : <Pause size={14} />}
@@ -382,31 +413,7 @@ export function AigcGuidePanel({
                   !onSubmit ||
                   !onReturnToChat
                 }
-                onClick={() => {
-                  setReviewReply("");
-                  void run(async () => {
-                    try {
-                      const submitted = await onSubmit?.();
-                      if (submitted !== true) {
-                        setReviewReply(
-                          "尚未提交审核，请确认绑定节点已有成品后再试。",
-                        );
-                        return;
-                      }
-                      try {
-                        await onReturnToChat?.();
-                      } catch {
-                        setReviewReply(
-                          "素材已提交，但暂时无法返回会话。请点击返回任务会话重试。",
-                        );
-                      }
-                    } catch {
-                      setReviewReply(
-                        "提交未能完成，素材和制作进度已保留，请重试。",
-                      );
-                    }
-                  });
-                }}
+                onClick={submitAndReturn}
               >
                 <Check size={14} />
                 {pending ? "正在提交…" : "提交审核并返回会话"}

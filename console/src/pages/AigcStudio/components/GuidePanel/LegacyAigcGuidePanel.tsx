@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Check, LocateFixed, Pause, Play } from "lucide-react";
+import {
+  ArrowLeft,
+  Check,
+  LocateFixed,
+  Pause,
+  Play,
+  RotateCcw,
+} from "lucide-react";
 
 import type {
   AigcOperationContract,
@@ -60,6 +67,31 @@ export function LegacyAigcGuidePanel({
   const complete = stepCompletion[step.step_id] === true;
   const finalStep = safeIndex === operation.human_guide.length - 1;
 
+  const submitAndReturn = () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setPending(true);
+    setError("");
+    void (async () => {
+      try {
+        if ((await onSubmit?.()) !== true) {
+          setError("尚未提交审核，请确认绑定节点已有成品后再试。");
+          return;
+        }
+        try {
+          await onReturnToChat?.();
+        } catch {
+          setError("素材已提交，但暂时无法返回会话。请点击返回任务会话重试。");
+        }
+      } catch {
+        setError("提交未能完成，素材和制作进度已保留，请重试。");
+      } finally {
+        inFlight.current = false;
+        setPending(false);
+      }
+    })();
+  };
+
   return (
     <aside className={styles.panel} aria-label="旧版 AIGC 执行向导">
       <div
@@ -119,7 +151,16 @@ export function LegacyAigcGuidePanel({
           <ArrowLeft size={14} />
           返回任务会话
         </button>
-        {!["ACCEPTED", "SUBMITTED"].includes(task.status) ? (
+        {task.status === "SUBMITTED" ? (
+          <button
+            type="button"
+            disabled={pending || wrongCanvas || !onSubmit || !onReturnToChat}
+            onClick={submitAndReturn}
+          >
+            <RotateCcw size={14} />
+            {pending ? "正在审核…" : "重新审核并返回会话"}
+          </button>
+        ) : task.status !== "ACCEPTED" ? (
           <>
             <button type="button" onClick={() => setPaused((value) => !value)}>
               {paused ? <Play size={14} /> : <Pause size={14} />}
@@ -137,30 +178,7 @@ export function LegacyAigcGuidePanel({
               }
               onClick={() => {
                 if (!finalStep) return setStepIndex((value) => value + 1);
-                if (inFlight.current) return;
-                inFlight.current = true;
-                setPending(true);
-                setError("");
-                void (async () => {
-                  try {
-                    if ((await onSubmit?.()) !== true) {
-                      setError("尚未提交审核，请确认绑定节点已有成品后再试。");
-                      return;
-                    }
-                    try {
-                      await onReturnToChat?.();
-                    } catch {
-                      setError(
-                        "素材已提交，但暂时无法返回会话。请点击返回任务会话重试。",
-                      );
-                    }
-                  } catch {
-                    setError("提交未能完成，素材和制作进度已保留，请重试。");
-                  } finally {
-                    inFlight.current = false;
-                    setPending(false);
-                  }
-                })();
+                submitAndReturn();
               }}
             >
               <Check size={14} />

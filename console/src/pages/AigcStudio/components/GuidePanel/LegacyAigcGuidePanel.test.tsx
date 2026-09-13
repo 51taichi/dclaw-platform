@@ -82,3 +82,22 @@ it.each([true, false])(
     }
   },
 );
+it("lets a submitted legacy task retry review", async () => {
+  const submit = vi.fn().mockResolvedValue(true);
+  const back = vi.fn();
+  render(
+    <LegacyAigcGuidePanel
+      taskId="m1"
+      task={{ ...task, status: "SUBMITTED" }}
+      operation={operation}
+      stepCompletion={{ submit: true }}
+      onSubmit={submit}
+      onReturnToChat={back}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "重新审核并返回会话" }));
+
+  await waitFor(() => expect(submit).toHaveBeenCalledOnce());
+  expect(back).toHaveBeenCalledOnce();
+});

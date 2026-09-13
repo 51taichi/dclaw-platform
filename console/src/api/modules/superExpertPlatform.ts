@@ -108,8 +108,9 @@ export interface SuperExpertPlatformCommandResult {
   task?: BoundAigcTask;
   card?: Record<string, unknown>;
   agent_review?: {
-    status: "completed";
+    status: "completed" | "model_required" | "review_incomplete";
     reply: string;
+    required_modalities?: Array<"image" | "video">;
   };
 }
 

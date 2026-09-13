@@ -1,7 +1,13 @@
 import {
   superExpertPlatformApi,
   type BoundAigcTask,
+  type SuperExpertPlatformCommandResult,
 } from "../../api/modules/superExpertPlatform";
+
+export interface GuidedTaskSubmission {
+  submitted: true;
+  agentReview: SuperExpertPlatformCommandResult["agent_review"];
+}
 
 export async function getGuidedConversationRoute(
   task: BoundAigcTask,
@@ -22,7 +28,7 @@ export async function submitGuidedTaskAsset(
   task: BoundAigcTask,
   assetId: string,
   reviewAssets?: { node_id: string; asset_id: string }[],
-): Promise<boolean> {
+): Promise<GuidedTaskSubmission> {
   if (!assetId) throw new Error("当前绑定节点还没有可提交的成品");
   const selection = reviewAssets?.length
     ? JSON.stringify(reviewAssets)
@@ -53,5 +59,8 @@ export async function submitGuidedTaskAsset(
   ) {
     throw new Error("未取得有效的素材提交回执，请刷新任务状态后重试");
   }
-  return true;
+  return {
+    submitted: true,
+    agentReview: result.agent_review,
+  };
 }

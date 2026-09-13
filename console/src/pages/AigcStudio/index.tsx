@@ -2622,11 +2622,24 @@ export default function AigcStudioPage() {
       return false;
     }
     if (activeCanvas?.id !== currentTask.binding.canvas_id) return false;
-    await submitGuidedTaskAsset(currentTask, assetId, reviewAssets);
+    const submission = await submitGuidedTaskAsset(
+      currentTask,
+      assetId,
+      reviewAssets,
+    );
     // Submission already persisted; a projection refresh failure must not undo it.
     await guide.refresh().catch(() => undefined);
-    antdMessage.success("素材已提交，专家将按当前业务阶段审核");
-    return true;
+    if (
+      submission.agentReview?.status !== "completed" &&
+      submission.agentReview
+    ) {
+      antdMessage.warning(submission.agentReview.reply);
+    } else if (submission.agentReview) {
+      antdMessage.success("素材已提交，专家已按当前业务阶段完成审核");
+    } else {
+      antdMessage.success("素材已提交，专家将按当前业务阶段审核");
+    }
+    return submission.submitted;
   };
 
   const performManualGuideStep = async (

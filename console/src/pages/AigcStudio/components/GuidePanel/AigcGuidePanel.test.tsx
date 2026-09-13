@@ -126,6 +126,23 @@ describe("AigcGuidePanel", () => {
     finish(true);
     await waitFor(() => expect(back).toHaveBeenCalledOnce());
   });
+  it("lets a submitted task retry review after a nonterminal review result", async () => {
+    const submit = vi.fn().mockResolvedValue(true);
+    const back = vi.fn();
+    render(
+      <AigcGuidePanel
+        task={{ ...task, status: "SUBMITTED" }}
+        guide={readyGuide}
+        onSubmit={submit}
+        onReturnToChat={back}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "重新审核并返回会话" }));
+
+    await waitFor(() => expect(submit).toHaveBeenCalledOnce());
+    expect(back).toHaveBeenCalledOnce();
+  });
   it.each(["rejected", "not-submitted"])(
     "keeps the guide on %s",
     async (failure) => {

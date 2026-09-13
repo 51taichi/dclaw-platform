@@ -47,8 +47,14 @@ describe("guided task actions", () => {
     vi.mocked(superExpertPlatformApi.command).mockResolvedValue({
       task: { ...task, status: "SUBMITTED", asset_id: "asset-1" },
     });
-    expect(await submitGuidedTaskAsset(task, "asset-1")).toBe(true);
-    expect(await submitGuidedTaskAsset(task, "asset-1")).toBe(true);
+    expect(await submitGuidedTaskAsset(task, "asset-1")).toEqual({
+      submitted: true,
+      agentReview: undefined,
+    });
+    expect(await submitGuidedTaskAsset(task, "asset-1")).toEqual({
+      submitted: true,
+      agentReview: undefined,
+    });
     const calls = vi.mocked(superExpertPlatformApi.command).mock.calls;
     expect(calls[0][0]).toBe("aigc.asset.submit");
     expect(calls[0][1].idempotency_key).toBe(calls[1][1].idempotency_key);
@@ -71,6 +77,26 @@ describe("guided task actions", () => {
       await expect(submitGuidedTaskAsset(task, "asset-1")).rejects.toThrow();
     },
   );
+});
+
+it("returns a nonterminal review explanation without treating submission as lost", async () => {
+  vi.mocked(superExpertPlatformApi.command).mockResolvedValue({
+    task: { ...task, status: "SUBMITTED", asset_id: "asset-1" },
+    agent_review: {
+      status: "model_required",
+      reply: "需要支持图片识别的模型。",
+      required_modalities: ["image"],
+    },
+  });
+
+  expect(await submitGuidedTaskAsset(task, "asset-1")).toEqual({
+    submitted: true,
+    agentReview: {
+      status: "model_required",
+      reply: "需要支持图片识别的模型。",
+      required_modalities: ["image"],
+    },
+  });
 });
 
 it("sends the complete bundle and changes submission identity when any asset changes", async () => {
