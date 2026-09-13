@@ -26,7 +26,7 @@ from .file_handling import download_file_from_base64, download_file_from_url
 logger = logging.getLogger(__name__)
 
 _EXTRACTABLE_DOCUMENT_TYPES = frozenset(
-    {"txt", "md", "csv", "pdf", "doc", "docx", "pptx", "xlsx"},
+    {"txt", "md", "csv", "pdf", "docx", "pptx", "xlsx"},
 )
 _MAX_DOCUMENT_BYTES = 20 * 1024 * 1024
 _MAX_EXTRACTED_DOCUMENT_CHARS = 60_000

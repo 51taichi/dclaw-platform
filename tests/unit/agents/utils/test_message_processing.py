@@ -154,8 +154,8 @@ async def test_uploaded_document_text_is_injected_before_model_call(
     monkeypatch,
     tmp_path,
 ):
-    document = tmp_path / "faq.doc"
-    document.write_bytes(b"legacy word fixture")
+    document = tmp_path / "faq.docx"
+    document.write_bytes(b"openxml word fixture")
     monkeypatch.setattr(
         "qwenpaw.agents.utils.message_processing._process_single_file_block",
         AsyncMock(return_value=str(document)),
@@ -170,7 +170,7 @@ async def test_uploaded_document_text_is_injected_before_model_call(
         [
             {
                 "type": "file",
-                "filename": "私域常见Q&A.doc",
+                "filename": "私域常见Q&A.docx",
                 "source": {"type": "url", "url": str(document)},
             },
         ],
@@ -183,9 +183,9 @@ async def test_uploaded_document_text_is_injected_before_model_call(
     assert message.content[1] == {
         "type": "text",
         "text": (
-            "[附件正文开始：私域常见Q&A.doc]\n"
+            "[附件正文开始：私域常见Q&A.docx]\n"
             "第一问：如何获取客户线索？\n"
-            "[附件正文结束：私域常见Q&A.doc]"
+            "[附件正文结束：私域常见Q&A.docx]"
         ),
     }
     assert all("已经下载到" not in str(block) for block in message.content)
