@@ -6,6 +6,7 @@ file generation, and computation tasks. Supports dynamic dependency installation
 and returns execution results including generated files.
 """
 
+import importlib.machinery
 import json
 import os
 import re
@@ -15,7 +16,7 @@ import tempfile
 import time
 import traceback
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
@@ -86,7 +87,13 @@ def _looks_like_pptx_generation(code: str, description: str = "") -> bool:
     return python_pptx_imported and ".save(" in haystack
 
 
-def _install_packages(packages: list[str]) -> tuple[bool, str]:
+def _install_packages(
+    packages: list[str],
+    *,
+    target_dir: Path | None = None,
+    workspace_dir: Path | None = None,
+    preexec_fn: Callable[[], None] | None = None,
+) -> tuple[bool, str]:
     """Install Python packages using pip.
 
     Returns (success, message) tuple.
@@ -94,27 +101,64 @@ def _install_packages(packages: list[str]) -> tuple[bool, str]:
     if not packages:
         return True, ""
 
-    # Filter out already installed packages
+    # Filter out already installed packages. A session-local target is checked
+    # without importing its code into the DClaw server process.
     to_install = []
     for pkg in packages:
         # Normalize package name for import check
         import_name = pkg.split("==")[0].split(">=")[0].split("<=")[0].strip()
         import_name = import_name.replace("-", "_").lower()
-        try:
-            __import__(import_name)
-        except ImportError:
-            to_install.append(pkg)
+        if target_dir is not None:
+            is_import_name = bool(
+                re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", import_name),
+            )
+            if not is_import_name or importlib.machinery.PathFinder.find_spec(
+                import_name,
+                [str(target_dir)],
+            ) is None:
+                to_install.append(pkg)
+        else:
+            try:
+                __import__(import_name)
+            except ImportError:
+                to_install.append(pkg)
 
     if not to_install:
         return True, "All packages already installed"
 
     try:
+        command = [sys.executable, "-m", "pip", "install", "--quiet"]
+        run_env = os.environ.copy()
+        run_cwd = None
+        if target_dir is not None:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            command.extend(["--no-cache-dir", "--target", str(target_dir)])
+        if workspace_dir is not None:
+            runtime_dir = workspace_dir / ".python_runtime"
+            temp_dir = runtime_dir / "tmp"
+            home_dir = runtime_dir / "home"
+            cache_dir = runtime_dir / "cache"
+            for directory in (temp_dir, home_dir, cache_dir):
+                directory.mkdir(parents=True, exist_ok=True)
+            run_cwd = str(workspace_dir)
+            run_env.update(
+                {
+                    "HOME": str(home_dir),
+                    "TMPDIR": str(temp_dir),
+                    "PIP_CACHE_DIR": str(cache_dir),
+                    "XDG_CACHE_HOME": str(cache_dir),
+                },
+            )
+        command.extend(to_install)
         result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--quiet", *to_install],
+            command,
             capture_output=True,
             text=True,
             timeout=120,
             check=False,
+            cwd=run_cwd,
+            env=run_env,
+            preexec_fn=preexec_fn,
         )
         if result.returncode != 0:
             return False, f"pip install failed: {result.stderr}"
@@ -179,6 +223,7 @@ async def python_sandbox(
 
     filesystem_root = get_current_tool_filesystem_root()
     preexec_fn = None
+    package_dir = None
     if filesystem_root is not None:
         filesystem_root = Path(filesystem_root).resolve()
         try:
@@ -187,15 +232,12 @@ async def python_sandbox(
             return _tool_error(
                 "Python workspace is outside the Agent session workspace",
             )
-        if install_packages:
-            return _tool_error(
-                "Dynamic package installation is disabled in sealed runtimes",
-            )
         try:
             ensure_landlock_available()
         except RuntimeError as exc:
             return _tool_error(str(exc))
         preexec_fn = landlock_preexec(filesystem_root)
+        package_dir = workspace_dir / ".python_packages"
 
     # ── Install dependencies ──────────────────────────────────────────
     if install_packages:
@@ -204,7 +246,15 @@ async def python_sandbox(
             for p in install_packages.split(",")
             if p.strip()
         ]
-        success, msg = _install_packages(packages)
+        if package_dir is None:
+            success, msg = _install_packages(packages)
+        else:
+            success, msg = _install_packages(
+                packages,
+                target_dir=package_dir,
+                workspace_dir=workspace_dir,
+                preexec_fn=preexec_fn,
+            )
         if not success:
             return _tool_error(f"Failed to install dependencies: {msg}")
 
@@ -214,6 +264,7 @@ async def python_sandbox(
 import os, sys
 WORKSPACE_DIR = r"{workspace_dir}"
 os.chdir(WORKSPACE_DIR)
+{f'sys.path.insert(0, {str(package_dir)!r})' if package_dir else ''}
 # Configure matplotlib for non-interactive backend
 try:
     import matplotlib
@@ -261,7 +312,11 @@ except (ImportError, Exception):
             env={
                 **os.environ,
                 "PYTHONIOENCODING": "utf-8",
-                "PYTHONPATH": str(workspace_dir),
+                "PYTHONPATH": os.pathsep.join(
+                    str(path)
+                    for path in (package_dir, workspace_dir)
+                    if path is not None
+                ),
             },
             preexec_fn=preexec_fn,
         )

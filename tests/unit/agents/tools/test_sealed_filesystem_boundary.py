@@ -14,7 +14,10 @@ from qwenpaw.agents.tools.browser_control import (
 from qwenpaw.agents.tools.presentation_builder import (
     _resolve_path as resolve_presentation_path,
 )
-from qwenpaw.agents.tools.python_sandbox import python_sandbox
+from qwenpaw.agents.tools.python_sandbox import (
+    _install_packages,
+    python_sandbox,
+)
 from qwenpaw.agents.tools.shell import execute_shell_command
 from qwenpaw.agents.tools.view_media import _validate_media_path
 from qwenpaw.config.context import (
@@ -120,7 +123,7 @@ async def test_shell_rejects_cwd_outside_boundary(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_python_sandbox_disables_dynamic_install_for_sealed_runtime(
+async def test_python_sandbox_installs_dependencies_inside_sealed_workspace(
     tmp_path,
     monkeypatch,
 ):
@@ -132,8 +135,10 @@ async def test_python_sandbox_disables_dynamic_install_for_sealed_runtime(
         "qwenpaw.agents.tools.python_sandbox",
         fromlist=["_install_packages"],
     )
-    install = MagicMock(wraps=module._install_packages)
+    install = MagicMock(return_value=(True, "installed"))
     monkeypatch.setattr(module, "_install_packages", install)
+    monkeypatch.setattr(module, "ensure_landlock_available", lambda: None)
+    monkeypatch.setattr(module, "landlock_preexec", lambda _root: None)
 
     response = await python_sandbox(
         code="print('ok')",
@@ -141,9 +146,54 @@ async def test_python_sandbox_disables_dynamic_install_for_sealed_runtime(
     )
 
     payload = json.loads(_response_text(response))
-    assert payload["ok"] is False
-    assert "disabled in sealed runtimes" in payload["error"]
-    assert install.call_count == 0
+    assert payload["ok"] is True
+    install.assert_called_once_with(
+        ["requests"],
+        target_dir=workspace / ".python_packages",
+        workspace_dir=workspace,
+        preexec_fn=None,
+    )
+
+
+def test_sealed_dependency_install_uses_session_paths_and_sandbox(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = tmp_path / "session"
+    target = workspace / ".python_packages"
+    workspace.mkdir()
+    sandbox_hook = MagicMock()
+    module = __import__(
+        "qwenpaw.agents.tools.python_sandbox",
+        fromlist=["subprocess"],
+    )
+    run = MagicMock(return_value=MagicMock(returncode=0, stderr=""))
+    monkeypatch.setattr(module.subprocess, "run", run)
+
+    success, _message = _install_packages(
+        ["example-package==1.0"],
+        target_dir=target,
+        workspace_dir=workspace,
+        preexec_fn=sandbox_hook,
+    )
+
+    assert success is True
+    call = run.call_args
+    command = call.args[0]
+    assert command[:5] == [
+        module.sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--quiet",
+    ]
+    assert command[5:8] == ["--no-cache-dir", "--target", str(target)]
+    assert command[-1] == "example-package==1.0"
+    assert call.kwargs["cwd"] == str(workspace)
+    assert call.kwargs["preexec_fn"] is sandbox_hook
+    assert call.kwargs["env"]["TMPDIR"].startswith(str(workspace))
+    assert call.kwargs["env"]["HOME"].startswith(str(workspace))
+    assert call.kwargs["env"]["PIP_CACHE_DIR"].startswith(str(workspace))
 
 
 @pytest.mark.skipif(
