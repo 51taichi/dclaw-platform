@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import json
+import logging
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -21,9 +23,11 @@ from ..sealed_agents.service import SealedAgentReleaseError, SealedAgentService
 from ..sealed_agents.signing import load_trusted_signers
 
 router = APIRouter(prefix="/sealed-agents", tags=["sealed-agents"])
+logger = logging.getLogger(__name__)
 
 _MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 _service: SealedAgentService | None = None
+_activation_locks: dict[str, asyncio.Lock] = {}
 
 
 def _require_admin(request: Request) -> None:
@@ -367,6 +371,21 @@ async def activate_sealed_agent_release(
     request: Request,
 ) -> dict[str, Any]:
     _require_admin(request)
+    activation_lock = _activation_locks.setdefault(agent_id, asyncio.Lock())
+    async with activation_lock:
+        return await _activate_sealed_agent_release_locked(
+            agent_id,
+            release_id,
+            request,
+        )
+
+
+async def _activate_sealed_agent_release_locked(
+    agent_id: str,
+    release_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    """Activate one release while its Agent lifecycle lock is held."""
     service = get_sealed_agent_service()
     validation = await service.validate_release_runtime(agent_id, release_id)
     if validation.status != "valid":
@@ -388,13 +407,21 @@ async def activate_sealed_agent_release(
         )
     config = load_config()
     previous = config.agents.profiles.get(agent_id)
-    config.agents.profiles[agent_id] = AgentProfileRef(
-        id=agent_id,
-        workspace_dir=str(runtime_root),
-        enabled=True,
-    )
-    save_config(config)
+    previous_record = service.get_agent(agent_id)
+    activated_record = None
     try:
+        tenant_id, _ = _trusted_actor(request)
+        activated_record = service.activate(
+            agent_id,
+            release_id,
+            tenant_id=tenant_id,
+        )
+        config.agents.profiles[agent_id] = AgentProfileRef(
+            id=agent_id,
+            workspace_dir=str(runtime_root),
+            enabled=True,
+        )
+        save_config(config)
         manager = getattr(request.app.state, "multi_agent_manager", None)
         if manager is None:
             raise SealedAgentReleaseError("sealed agent runtime is unavailable")
@@ -404,11 +431,15 @@ async def activate_sealed_agent_release(
             loaded = await manager.preload_agent(agent_id)
         if not loaded:
             raise SealedAgentReleaseError("sealed agent runtime validation failed")
-        tenant_id, _ = _trusted_actor(request)
-        return _operational_dto(
-            service.activate(agent_id, release_id, tenant_id=tenant_id),
-        )
+        return _operational_dto(activated_record)
     except Exception as exc:
+        if activated_record is not None and previous_record is not None:
+            try:
+                service.restore_agent_record(previous_record)
+            except Exception:
+                logger.exception(
+                    "Failed to restore sealed Agent registry after activation",
+                )
         if previous is None:
             config.agents.profiles.pop(agent_id, None)
         else:

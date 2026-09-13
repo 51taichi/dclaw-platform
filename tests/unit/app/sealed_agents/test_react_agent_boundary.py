@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from qwenpaw.agents.react_agent import (
     SEALED_DENIED_BUILTIN_TOOLS,
     resolve_agent_runtime_boundary,
@@ -41,20 +43,107 @@ def test_standard_runtime_keeps_existing_session_layout(tmp_path):
 def test_sealed_runtime_denies_asset_exfiltration_and_plugin_tools():
     assert "execute_shell_command" in SEALED_DENIED_BUILTIN_TOOLS
     assert not tool_allowed_for_runtime(
-        "read_file", sealed=True, plugin_tool=False
+        "read_file", sealed=True, super_expert=False, plugin_tool=False
     )
     assert not tool_allowed_for_runtime(
-        "send_file_to_user", sealed=True, plugin_tool=False
+        "send_file_to_user", sealed=True, super_expert=False, plugin_tool=False
     )
     assert not tool_allowed_for_runtime(
-        "custom_plugin", sealed=True, plugin_tool=True
+        "custom_plugin", sealed=True, super_expert=False, plugin_tool=True
     )
     assert tool_allowed_for_runtime(
-        "web_search", sealed=True, plugin_tool=False
+        "web_search", sealed=True, super_expert=False, plugin_tool=False
     )
     assert tool_allowed_for_runtime(
-        "read_agent_skill", sealed=True, plugin_tool=False
+        "read_agent_skill", sealed=True, super_expert=False, plugin_tool=False
     )
     assert tool_allowed_for_runtime(
-        "read_file", sealed=False, plugin_tool=False
+        "read_file", sealed=False, super_expert=False, plugin_tool=False
     )
+
+
+def test_super_expert_inherits_ordinary_builtin_and_plugin_tools():
+    assert tool_allowed_for_runtime(
+        "execute_shell_command",
+        sealed=True,
+        super_expert=True,
+        plugin_tool=False,
+    )
+    assert tool_allowed_for_runtime(
+        "custom_plugin",
+        sealed=True,
+        super_expert=True,
+        plugin_tool=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_super_expert_registers_configured_mcp_clients():
+    class Toolkit:
+        def __init__(self):
+            self.registered = []
+
+        async def register_mcp_client(self, client, **kwargs):
+            self.registered.append((client, kwargs))
+
+    class Client:
+        name = "platform"
+        read_timeout_seconds = 15
+
+    from qwenpaw.agents.react_agent import QwenPawAgent
+
+    agent = QwenPawAgent.__new__(QwenPawAgent)
+    agent._sealed_runtime = True
+    agent._super_expert_runtime = True
+    agent._mcp_clients = [Client()]
+    agent.toolkit = Toolkit()
+
+    await agent.register_mcp_clients()
+
+    assert [client.name for client, _kwargs in agent.toolkit.registered] == [
+        "platform",
+    ]
+
+
+def test_super_expert_registers_packaged_and_platform_skills(
+    monkeypatch,
+    tmp_path,
+):
+    from qwenpaw.agents import react_agent
+
+    packaged = tmp_path / "release"
+    overlay = tmp_path / "overlay"
+    monkeypatch.setattr(react_agent, "ensure_skills_initialized", lambda root: None)
+    monkeypatch.setattr(
+        react_agent,
+        "resolve_effective_skills",
+        lambda root, *_args, **_kwargs: [
+            "core" if Path(root) == packaged else "pdf",
+        ],
+    )
+    monkeypatch.setattr(
+        react_agent,
+        "get_workspace_skills_dir",
+        lambda root: Path(root) / "skills",
+    )
+    for root, name in ((packaged, "core"), (overlay, "pdf")):
+        (root / "skills" / name).mkdir(parents=True)
+
+    class Toolkit:
+        def __init__(self):
+            self.paths = []
+
+        def register_agent_skill(self, path):
+            self.paths.append(Path(path))
+
+    agent = react_agent.QwenPawAgent.__new__(react_agent.QwenPawAgent)
+    agent._request_context = {"channel": "console"}
+    agent._skill_workspace_dirs = [packaged, overlay]
+    toolkit = Toolkit()
+
+    agent._register_skills(toolkit)
+
+    assert toolkit.paths == [
+        packaged / "skills" / "core",
+        overlay / "skills" / "pdf",
+    ]

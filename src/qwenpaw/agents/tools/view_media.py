@@ -12,6 +12,8 @@ from typing import Optional
 from agentscope.message import ImageBlock, TextBlock, VideoBlock
 from agentscope.tool import ToolResponse
 
+from .file_io import _resolve_file_path
+
 logger = logging.getLogger(__name__)
 
 _IMAGE_EXTENSIONS = {
@@ -85,7 +87,12 @@ def _validate_media_path(
         "NFC",
         os.path.expanduser(file_path),
     )
-    resolved = Path(file_path).resolve()
+    try:
+        resolved = Path(_resolve_file_path(file_path))
+    except ValueError as exc:
+        return Path(file_path), ToolResponse(
+            content=[TextBlock(type="text", text=f"Error: {exc}")],
+        )
 
     if not resolved.exists() or not resolved.is_file():
         return resolved, ToolResponse(

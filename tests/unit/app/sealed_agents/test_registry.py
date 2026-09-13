@@ -5,6 +5,7 @@ import json
 from qwenpaw.app.sealed_agents.models import (
     AgentCapabilities,
     SealedAgentRecord,
+    SealedReleaseRecord,
 )
 from qwenpaw.app.sealed_agents.registry import SealedAgentRegistry
 
@@ -59,6 +60,70 @@ def test_registry_rejects_non_sealed_records(tmp_path):
     )
 
     assert SealedAgentRegistry(tmp_path).list_agents() == []
+
+
+def test_registry_classifies_only_active_super_expert_release(tmp_path):
+    registry = SealedAgentRegistry(tmp_path)
+    release = SealedReleaseRecord(
+        release_id="release-1",
+        version="1.0.0",
+        content_digest="sha256:" + "a" * 64,
+        signer_id="publisher",
+        package_type="super_expert",
+        state="active",
+    )
+    registry.upsert_agent(
+        SealedAgentRecord(
+            agent_id="luyu",
+            name="陆羽",
+            active_release_id=release.release_id,
+            releases=[release],
+        ),
+    )
+
+    assert registry.is_super_expert("luyu")
+    assert not registry.is_super_expert("missing")
+
+
+def test_registry_classifies_package_type_from_pinned_workspace(tmp_path):
+    registry = SealedAgentRegistry(tmp_path)
+    super_release = SealedReleaseRecord(
+        release_id="super-release",
+        version="1.0.0",
+        content_digest="sha256:" + "a" * 64,
+        signer_id="publisher",
+        package_type="super_expert",
+        state="superseded",
+    )
+    sealed_release = super_release.model_copy(
+        update={
+            "release_id": "sealed-release",
+            "package_type": "sealed_agent",
+            "state": "active",
+        },
+    )
+    registry.upsert_agent(
+        SealedAgentRecord(
+            agent_id="luyu",
+            name="陆羽",
+            active_release_id=sealed_release.release_id,
+            releases=[super_release, sealed_release],
+        ),
+    )
+
+    super_workspace = (
+        tmp_path / "runtime_workspaces" / "luyu" / "super-release" / "agent"
+    )
+    sealed_workspace = (
+        tmp_path / "runtime_workspaces" / "luyu" / "sealed-release" / "agent"
+    )
+
+    assert not registry.is_super_expert_workspace("luyu", super_workspace)
+    assert not registry.is_super_expert_workspace("luyu", sealed_workspace)
+    assert not registry.is_super_expert_workspace(
+        "luyu",
+        tmp_path / "unknown-release" / "agent",
+    )
 
 
 def test_sealed_capabilities_are_invoke_only():

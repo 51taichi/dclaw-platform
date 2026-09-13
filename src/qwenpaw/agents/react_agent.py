@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List, Literal, Optional, Type, TYPE_CHECKING
@@ -159,9 +160,10 @@ def tool_allowed_for_runtime(
     tool_name: str,
     *,
     sealed: bool,
+    super_expert: bool = False,
     plugin_tool: bool,
 ) -> bool:
-    if not sealed:
+    if not sealed or super_expert:
         return True
     if plugin_tool:
         return False
@@ -251,10 +253,18 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
         try:
             from ..app.sealed_agents.registry import get_sealed_agent_registry
 
-            self._sealed_runtime = get_sealed_agent_registry().is_sealed(agent_id)
+            sealed_registry = get_sealed_agent_registry()
+            self._sealed_runtime = sealed_registry.is_sealed(agent_id)
+            self._super_expert_runtime = (
+                sealed_registry.is_super_expert_workspace(
+                    agent_id,
+                    original_workspace_dir,
+                )
+            )
         except Exception:
             logger.exception("Failed to resolve sealed agent runtime policy")
             self._sealed_runtime = False
+            self._super_expert_runtime = False
         # Identity/system prompt markdown belongs to the agent profile. Session
         # isolation is for task files, not for replacing the agent persona with
         # default template markdown.
@@ -267,6 +277,15 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
             sealed=self._sealed_runtime,
         )
         self._skills_workspace_dir = boundary.skills_root
+        self._skill_workspace_dirs = [boundary.skills_root]
+        if self._super_expert_runtime:
+            from ..app.sealed_agents.skill_overlay import (
+                super_expert_skill_overlay_root,
+            )
+
+            self._skill_workspace_dirs.append(
+                super_expert_skill_overlay_root(agent_id),
+            )
         self._prompt_workspace_dir = boundary.prompt_root
         self._workspace_dir = boundary.session_root
 
@@ -474,6 +493,9 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
             if not tool_allowed_for_runtime(
                 tool_name,
                 sealed=bool(getattr(self, "_sealed_runtime", False)),
+                super_expert=bool(
+                    getattr(self, "_super_expert_runtime", False),
+                ),
                 plugin_tool=tool_name in plugin_tools,
             ):
                 logger.debug("Skipped tool denied by sealed runtime: %s", tool_name)
@@ -555,40 +577,38 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
         Args:
             toolkit: Toolkit to register skills to
         """
-        workspace_dir = getattr(
-            self,
-            "_skills_workspace_dir",
-            None,
-        ) or self._workspace_dir or WORKING_DIR
-
-        ensure_skills_initialized(workspace_dir)
-
         request_context = getattr(self, "_request_context", {})
         channel_name = request_context.get("channel", "console")
         request_user_id = str(request_context.get("user_id") or "") or None
         request_is_admin = str(request_context.get("role") or "") == "admin"
+        workspace_dirs = getattr(self, "_skill_workspace_dirs", None) or [
+            getattr(self, "_skills_workspace_dir", None)
+            or self._workspace_dir
+            or WORKING_DIR,
+        ]
 
-        effective_skills = resolve_effective_skills(
-            workspace_dir,
-            channel_name,
-            user_id=request_user_id,
-            is_admin=request_is_admin,
-        )
+        for workspace_dir in workspace_dirs:
+            ensure_skills_initialized(Path(workspace_dir))
+            effective_skills = resolve_effective_skills(
+                Path(workspace_dir),
+                channel_name,
+                user_id=request_user_id,
+                is_admin=request_is_admin,
+            )
+            working_skills_dir = get_workspace_skills_dir(Path(workspace_dir))
 
-        working_skills_dir = get_workspace_skills_dir(Path(workspace_dir))
-
-        for skill_name in effective_skills:
-            skill_dir = working_skills_dir / skill_name
-            if skill_dir.exists():
-                try:
-                    toolkit.register_agent_skill(str(skill_dir))
-                    logger.debug("Registered skill: %s", skill_name)
-                except Exception as e:
-                    logger.error(
-                        "Failed to register skill '%s': %s",
-                        skill_name,
-                        e,
-                    )
+            for skill_name in effective_skills:
+                skill_dir = working_skills_dir / skill_name
+                if skill_dir.exists():
+                    try:
+                        toolkit.register_agent_skill(str(skill_dir))
+                        logger.debug("Registered skill: %s", skill_name)
+                    except Exception as e:
+                        logger.error(
+                            "Failed to register skill '%s': %s",
+                            skill_name,
+                            e,
+                        )
 
     def _register_skill_reader(self, toolkit: Toolkit) -> None:
         """Register bounded Skill-file access only after explicit opt-in."""
@@ -600,6 +620,9 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
         if not tool_allowed_for_runtime(
             "read_agent_skill",
             sealed=bool(getattr(self, "_sealed_runtime", False)),
+            super_expert=bool(
+                getattr(self, "_super_expert_runtime", False),
+            ),
             plugin_tool=False,
         ):
             return
@@ -744,7 +767,9 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
                 Options: "override", "skip", "raise", "rename"
                 (default: "skip")
         """
-        if bool(getattr(self, "_sealed_runtime", False)):
+        if bool(getattr(self, "_sealed_runtime", False)) and not bool(
+            getattr(self, "_super_expert_runtime", False),
+        ):
             logger.info("Skipped MCP tools for sealed agent runtime")
             return
         for i, client in enumerate(self._mcp_clients):
@@ -1654,6 +1679,7 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
         """
         # Set workspace_dir and recent_max_bytes in context for tool functions
         from ..config.context import (
+            set_current_tool_filesystem_root,
             set_current_workspace_dir,
             set_current_recent_max_bytes,
             set_current_shell_command_timeout,
@@ -1661,6 +1687,9 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
         )
 
         set_current_workspace_dir(self._workspace_dir)
+        set_current_tool_filesystem_root(
+            self._workspace_dir if self._sealed_runtime else None,
+        )
         light_ctx = self._agent_config.running.light_context_config
         pruning_config = light_ctx.tool_result_pruning_config
         set_current_recent_max_bytes(
@@ -1699,7 +1728,17 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
         # Scan files before executing reply
         old_files = self._scan_workspace_files(workspace_dir)
 
-        with apply_skill_config_env_overrides(workspace_dir, channel_name):
+        skill_workspace_dirs = getattr(self, "_skill_workspace_dirs", None) or [
+            getattr(self, "_skills_workspace_dir", workspace_dir),
+        ]
+        with ExitStack() as skill_env_stack:
+            for skill_workspace_dir in skill_workspace_dirs:
+                skill_env_stack.enter_context(
+                    apply_skill_config_env_overrides(
+                        Path(skill_workspace_dir),
+                        channel_name,
+                    ),
+                )
             response_msg = await super().reply(
                 msg=msg,
                 structured_model=structured_model,

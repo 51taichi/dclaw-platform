@@ -21,7 +21,12 @@ from ...constant import WORKING_DIR
 from ...config.context import (
     get_current_shell_command_executable,
     get_current_shell_command_timeout,
+    get_current_tool_filesystem_root,
     get_current_workspace_dir,
+)
+from .filesystem_sandbox import (
+    ensure_landlock_available,
+    landlock_preexec,
 )
 
 
@@ -399,9 +404,36 @@ async def execute_shell_command(
 
     # Use current workspace_dir from context, fallback to WORKING_DIR
     if cwd is not None:
-        working_dir = cwd
+        working_dir = Path(cwd)
     else:
-        working_dir = get_current_workspace_dir() or WORKING_DIR
+        working_dir = Path(get_current_workspace_dir() or WORKING_DIR)
+    working_dir = working_dir.resolve()
+
+    filesystem_root = get_current_tool_filesystem_root()
+    preexec_fn = None
+    if filesystem_root is not None:
+        filesystem_root = Path(filesystem_root).resolve()
+        try:
+            working_dir.relative_to(filesystem_root)
+        except ValueError:
+            return ToolResponse(
+                content=[
+                    TextBlock(
+                        type="text",
+                        text=(
+                            "Error: Shell working directory is outside the "
+                            "Agent session workspace."
+                        ),
+                    ),
+                ],
+            )
+        try:
+            ensure_landlock_available()
+        except RuntimeError as exc:
+            return ToolResponse(
+                content=[TextBlock(type="text", text=f"Error: {exc}")],
+            )
+        preexec_fn = landlock_preexec(filesystem_root)
 
     # Ensure the venv Python is on PATH for subprocesses
     env = os.environ.copy()
@@ -439,6 +471,7 @@ async def execute_shell_command(
                 env=env,
                 start_new_session=True,
                 executable=shell_executable,
+                preexec_fn=preexec_fn,
             )
 
             try:

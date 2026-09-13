@@ -24,18 +24,23 @@ import subprocess
 import sys
 import time
 from typing import Any, Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 from urllib import request as urllib_request
 
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
+
+from .file_io import _resolve_file_path
 
 from ...config import (
     get_playwright_chromium_executable_path,
     get_system_default_browser,
     is_running_in_container,
 )
-from ...config.context import get_current_workspace_dir
+from ...config.context import (
+    get_current_tool_filesystem_root,
+    get_current_workspace_dir,
+)
 from ...constant import WORKING_DIR, EnvVarLoader
 
 from .browser_snapshot import build_role_snapshot_from_aria
@@ -84,10 +89,19 @@ def _validate_executable_path(executable_path: str) -> None:
 def _resolve_output_path(path: str) -> str:
     """Resolve relative output paths under workspace_dir/browser/."""
     if Path(path).is_absolute():
-        return path
+        return _resolve_file_path(path)
     base_dir = (get_current_workspace_dir() or WORKING_DIR) / "browser"
     base_dir.mkdir(parents=True, exist_ok=True)
-    return str(base_dir / path)
+    return _resolve_file_path(str(base_dir / path))
+
+
+def _reject_local_navigation(url: str) -> None:
+    """Prevent browser actions from turning local files into web content."""
+    if (
+        get_current_tool_filesystem_root() is not None
+        and urlparse((url or "").strip()).scheme.lower() == "file"
+    ):
+        raise ValueError("Local file URLs are unavailable in sealed runtimes")
 
 
 def _safe_download_filename(filename: Any, default: str = "download") -> str:
@@ -1307,6 +1321,7 @@ async def _action_open(state: dict, url: str, page_id: str) -> ToolResponse:
                 indent=2,
             ),
         )
+    _reject_local_navigation(url)
     if not await _ensure_browser(state):
         err = state.get("_last_browser_error") or "Browser not started"
         return _tool_response(
@@ -1379,6 +1394,7 @@ async def _action_navigate(
                 indent=2,
             ),
         )
+    _reject_local_navigation(url)
     page = _get_page(state, page_id)
     if not page:
         return _tool_response(
@@ -2286,6 +2302,7 @@ async def _action_file_upload(
     paths = _parse_json_param(paths_json, [])
     if not isinstance(paths, list):
         paths = []
+    paths = [_resolve_file_path(str(path)) for path in paths]
     try:
         choosers = state["pending_file_choosers"].get(page_id, [])
         if not choosers:
@@ -2473,6 +2490,7 @@ async def _action_file_download(  # pylint: disable=too-many-branches,too-many-r
         # the browser context, so cookies/session state are preserved.
         if url:
             source_url = urljoin(getattr(page, "url", ""), url)
+            _reject_local_navigation(source_url)
             try:
                 status, content_type = await _download_context_url(
                     page,

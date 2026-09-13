@@ -49,6 +49,41 @@ class SealedAgentRegistry:
     def is_sealed(self, agent_id: str) -> bool:
         return self.get_agent(agent_id) is not None
 
+    def is_super_expert(self, agent_id: str) -> bool:
+        """Return whether the enabled Agent has an active super-expert release."""
+        record = self.get_agent(agent_id)
+        if record is None or not record.enabled:
+            return False
+        release = record.active_release
+        return bool(release and release.package_type == "super_expert")
+
+    def is_super_expert_workspace(
+        self,
+        agent_id: str,
+        workspace_dir: Path,
+    ) -> bool:
+        """Classify a pinned runtime workspace without an activation race."""
+        record = self.get_agent(agent_id)
+        if record is None or not record.enabled:
+            return False
+        candidate = Path(workspace_dir).resolve()
+        for release in record.releases:
+            if (
+                release.release_id != record.active_release_id
+                or release.state != "active"
+            ):
+                continue
+            expected = (
+                self.root
+                / "runtime_workspaces"
+                / agent_id
+                / release.release_id
+                / "agent"
+            ).resolve()
+            if candidate == expected:
+                return release.package_type == "super_expert"
+        return False
+
     def upsert_agent(self, record: SealedAgentRecord) -> SealedAgentRecord:
         with self._lock:
             agents = self._read().agents

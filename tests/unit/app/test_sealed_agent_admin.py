@@ -354,6 +354,9 @@ async def test_activation_registers_private_runtime_only_after_preload_succeeds(
         def prepare_runtime_workspace(self, agent_id, release_id):
             return release_root / "agent"
 
+        def get_agent(self, agent_id):
+            return record
+
         def activate(self, agent_id, release_id, *, tenant_id="local"):
             assert tenant_id == "local"
             return record
@@ -398,6 +401,8 @@ async def test_activation_failure_restores_previous_profile_and_runtime(
         '{"id":"luyu","name":"陆羽"}',
     )
     activated = []
+    restored = []
+    previous_record = _record()
 
     class Service:
         async def validate_release_runtime(self, agent_id, release_id):
@@ -413,10 +418,17 @@ async def test_activation_failure_restores_previous_profile_and_runtime(
         def prepare_runtime_workspace(self, agent_id, release_id):
             return release_root / "agent"
 
+        def get_agent(self, agent_id):
+            return previous_record
+
         def activate(self, agent_id, release_id, *, tenant_id="local"):
             assert tenant_id == "local"
             activated.append((agent_id, release_id))
             return _record()
+
+        def restore_agent_record(self, record):
+            restored.append(record)
+            return record
 
     class Manager:
         def __init__(self):
@@ -457,7 +469,8 @@ async def test_activation_failure_restores_previous_profile_and_runtime(
     assert exc_info.value.status_code == 400
     assert config.agents.profiles["luyu"] == previous
     assert manager.reload_calls == ["luyu", "luyu"]
-    assert activated == []
+    assert activated == [("luyu", "rel-1")]
+    assert restored == [previous_record]
 
 
 @pytest.mark.asyncio
@@ -470,6 +483,9 @@ async def test_first_activation_failure_stops_partially_loaded_runtime(
     (release_root / "agent/agent.json").write_text(
         '{"id":"luyu","name":"陆羽"}',
     )
+
+    previous_record = _record()
+    restored = []
 
     class Service:
         async def validate_release_runtime(self, agent_id, release_id):
@@ -484,6 +500,16 @@ async def test_first_activation_failure_stops_partially_loaded_runtime(
 
         def prepare_runtime_workspace(self, agent_id, release_id):
             return release_root / "agent"
+
+        def get_agent(self, agent_id):
+            return previous_record
+
+        def activate(self, agent_id, release_id, *, tenant_id="local"):
+            return _record()
+
+        def restore_agent_record(self, record):
+            restored.append(record)
+            return record
 
     class Manager:
         def __init__(self):
@@ -519,6 +545,37 @@ async def test_first_activation_failure_stops_partially_loaded_runtime(
 
     assert "luyu" not in config.agents.profiles
     assert manager.stopped == ["luyu"]
+    assert restored == [previous_record]
+
+
+@pytest.mark.asyncio
+async def test_activation_requests_for_same_agent_are_serialized(monkeypatch):
+    active = 0
+    max_active = 0
+
+    async def activate_locked(agent_id, release_id, request):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await __import__("asyncio").sleep(0)
+        active -= 1
+        return {"release_id": release_id}
+
+    monkeypatch.setattr(
+        router_module,
+        "_activate_sealed_agent_release_locked",
+        activate_locked,
+    )
+    router_module._activation_locks.clear()
+    request = _request()
+
+    results = await __import__("asyncio").gather(
+        router_module.activate_sealed_agent_release("luyu", "one", request),
+        router_module.activate_sealed_agent_release("luyu", "two", request),
+    )
+
+    assert max_active == 1
+    assert results == [{"release_id": "one"}, {"release_id": "two"}]
 
 
 @pytest.mark.asyncio

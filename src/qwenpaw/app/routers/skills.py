@@ -65,6 +65,7 @@ from ...security.skill_scanner import SkillScanError
 from ..chat_access import current_user_id, is_admin_request
 from ..runtime.event_bus import RuntimeEvent, get_runtime_event_bus
 from ..sealed_agents.registry import get_sealed_agent_registry
+from ..sealed_agents.skill_overlay import super_expert_skill_overlay_root
 from ..utils import schedule_agent_reload
 from ..task_limits import get_task_limiter
 
@@ -351,24 +352,37 @@ def _apply_pool_skill_governance(
     )
 
 
-def _sync_default_skill_to_all_workspaces(skill_name: str) -> None:
+def _sync_default_skill_to_all_workspaces(
+    skill_name: str,
+    request: Request | None = None,
+) -> None:
     service = SkillPoolService()
     for workspace in list_workspaces():
         workspace_dir_text = str(workspace.get("workspace_dir") or "").strip()
         if not workspace_dir_text:
             continue
-        workspace_dir = Path(workspace_dir_text)
         try:
-            service.download_to_workspace(
+            if not _can_receive_platform_skill(workspace["agent_id"]):
+                continue
+            workspace_dir = _skill_workspace_dir(
+                workspace["agent_id"],
+                workspace_dir_text,
+            )
+            result = service.download_to_workspace(
                 skill_name=skill_name,
                 workspace_dir=workspace_dir,
                 overwrite=True,
             )
+            if (
+                request is not None
+                and result.get("success", True)
+            ):
+                schedule_agent_reload(request, workspace["agent_id"])
         except Exception:
             logger.warning(
-                "Failed to install default skill '%s' into %s",
+                "Failed to install default skill '%s' for Agent '%s'",
                 skill_name,
-                workspace_dir,
+                workspace.get("agent_id", ""),
                 exc_info=True,
             )
 
@@ -558,14 +572,53 @@ _ALLOWED_ZIP_TYPES = {
 _MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # 100 MB
 
 
+def _skill_workspace_dir(
+    agent_id: str,
+    configured_workspace_dir: str | Path | None = None,
+) -> Path:
+    """Resolve the only Skill storage exposed for this Agent type."""
+    registry = get_sealed_agent_registry()
+    if registry.is_sealed(agent_id):
+        if not registry.is_super_expert(agent_id):
+            raise ValueError(
+                f"Sealed Agent '{agent_id}' is not a super expert Skill target",
+            )
+        overlay_root = super_expert_skill_overlay_root(agent_id)
+        overlay_root.mkdir(parents=True, exist_ok=True)
+        return overlay_root
+    if configured_workspace_dir is None:
+        raise ValueError(f"Workspace for agent '{agent_id}' not found")
+    return Path(configured_workspace_dir)
+
+
 async def _workspace_dir_for_agent(agent_id: str, request: Request) -> Path:
+    registry = get_sealed_agent_registry()
+    if registry.is_sealed(agent_id):
+        return _skill_workspace_dir(agent_id)
     manager = request.app.state.multi_agent_manager
     user_id = getattr(request.state, "user_id", "default")
     try:
         workspace = await manager.get_agent(agent_id, user_id=user_id)
-        return Path(workspace.workspace_dir)
+        return _skill_workspace_dir(agent_id, workspace.workspace_dir)
     except Exception as exc:
         raise ValueError(f"Workspace for agent '{agent_id}' not found: {exc}")
+
+
+def _can_receive_platform_skill(agent_id: str) -> bool:
+    """Allow ordinary Agents and active super experts as Skill targets."""
+    registry = get_sealed_agent_registry()
+    return not registry.is_sealed(agent_id) or registry.is_super_expert(agent_id)
+
+
+async def _workspace_dir_for_skill_download_target(
+    agent_id: str,
+    request: Request,
+) -> Path:
+    if not _can_receive_platform_skill(agent_id):
+        raise ValueError(
+            f"Sealed Agent '{agent_id}' is not a super expert Skill target",
+        )
+    return await _workspace_dir_for_agent(agent_id, request)
 
 
 def _snapshot_workspace_skill(
@@ -623,7 +676,7 @@ async def _request_workspace_dir(request: Request) -> Path:
     from ..agent_context import get_agent_for_request
 
     workspace = await get_agent_for_request(request)
-    return Path(workspace.workspace_dir)
+    return _skill_workspace_dir(workspace.agent_id, workspace.workspace_dir)
 
 
 async def _hub_task_set_status(
@@ -724,6 +777,8 @@ async def _run_hub_install_task(
     body: HubInstallRequest,
     cancel_event: threading.Event,
     permit: Any | None = None,
+    request: Request | None = None,
+    agent_id: str = "",
 ) -> None:
     await _hub_task_set_status(task_id, HubInstallTaskStatus.IMPORTING)
     imported_skill_name: str | None = None
@@ -764,6 +819,8 @@ async def _run_hub_install_task(
                 "source_url": result.source_url,
             },
         )
+        if result.enabled and request is not None and agent_id:
+            schedule_agent_reload(request, agent_id)
     except SkillImportCancelled:
         if imported_skill_name:
             _cleanup_imported_skill(workspace_dir, imported_skill_name)
@@ -985,14 +1042,23 @@ async def list_workspace_skill_sources(
     workspaces = list_workspaces()
     sealed_registry = get_sealed_agent_registry()
     for workspace in workspaces:
-        if sealed_registry.is_sealed(workspace["agent_id"]):
+        agent_id = workspace["agent_id"]
+        is_sealed = sealed_registry.is_sealed(agent_id)
+        is_super_expert = sealed_registry.is_super_expert(agent_id)
+        if is_sealed and not is_super_expert:
             continue
-        workspace_dir = Path(workspace["workspace_dir"])
+        workspace_dir = (
+            super_expert_skill_overlay_root(agent_id)
+            if is_super_expert
+            else Path(workspace["workspace_dir"])
+        )
         summaries.append(
             WorkspaceSkillSummary(
-                agent_id=workspace["agent_id"],
+                agent_id=agent_id,
                 agent_name=workspace.get("agent_name", ""),
                 workspace_dir=str(workspace_dir),
+                # Super experts expose only their separate platform overlay;
+                # packaged Skills remain outside this path and stay sealed.
                 skills=_build_workspace_skill_specs(workspace_dir, request),
             ),
         )
@@ -1007,7 +1073,10 @@ async def start_install_from_hub(
     from ..agent_context import get_agent_for_request
 
     workspace = await get_agent_for_request(request)
-    workspace_dir = Path(workspace.workspace_dir)
+    workspace_dir = _skill_workspace_dir(
+        workspace.agent_id,
+        workspace.workspace_dir,
+    )
     user_id = str(getattr(request.state, "user_id", None) or "default")
     permit = await get_task_limiter(request.app).try_acquire(
         agent_id=str(getattr(workspace, "agent_id", "") or "default"),
@@ -1038,6 +1107,8 @@ async def start_install_from_hub(
             body=request_body,
             cancel_event=cancel_event,
             permit=permit,
+            request=request,
+            agent_id=workspace.agent_id,
         ),
         name=f"skill-hub-install-{task.task_id}",
     )
@@ -1134,7 +1205,10 @@ async def create_skill(
     from ..agent_context import get_agent_for_request
 
     workspace = await get_agent_for_request(request)
-    workspace_dir = Path(workspace.workspace_dir)
+    workspace_dir = _skill_workspace_dir(
+        workspace.agent_id,
+        workspace.workspace_dir,
+    )
     visibility = PRIVATE_VISIBILITY
     owner_user_id = current_user_id(request)
     try:
@@ -1176,7 +1250,10 @@ async def upload_skill_zip(
     from ..agent_context import get_agent_for_request
 
     workspace = await get_agent_for_request(request)
-    workspace_dir = Path(workspace.workspace_dir)
+    workspace_dir = _skill_workspace_dir(
+        workspace.agent_id,
+        workspace.workspace_dir,
+    )
     data = await _read_validated_zip_upload(file)
     parsed_rename: dict[str, str] | None = None
     if rename_map.strip():
@@ -1256,7 +1333,7 @@ async def create_pool_skill(
         owner_user_id=owner_user_id,
     )
     if (body.config or {}).get("is_default") is True:
-        _sync_default_skill_to_all_workspaces(created)
+        _sync_default_skill_to_all_workspaces(created, request)
     return {"created": True, "name": created}
 
 
@@ -1312,7 +1389,7 @@ async def save_pool_skill(
     if not governance_updated:
         raise HTTPException(status_code=404, detail="Pool skill not found")
     if (body.config or {}).get("is_default") is True:
-        _sync_default_skill_to_all_workspaces(saved_name)
+        _sync_default_skill_to_all_workspaces(saved_name, request)
     return result
 
 
@@ -1412,7 +1489,10 @@ async def _preflight_download_conflicts(
     """Check all targets for conflicts before downloading."""
     conflicts: list[dict[str, Any]] = []
     for target in targets:
-        workspace_dir = await _workspace_dir_for_agent(target.workspace_id, request)
+        workspace_dir = await _workspace_dir_for_skill_download_target(
+            target.workspace_id,
+            request,
+        )
         result = hub_service.preflight_download_to_workspace(
             skill_name=skill_name,
             workspace_dir=workspace_dir,
@@ -1434,12 +1514,16 @@ async def _resolve_and_preflight(
         targets = [
             PoolDownloadTarget(workspace_id=workspace["agent_id"])
             for workspace in list_workspaces()
+            if _can_receive_platform_skill(workspace["agent_id"])
         ]
         
         # Ensure the current request's agent is always included, even if not in global config
         from ..agent_context import get_agent_for_request
         current_agent = await get_agent_for_request(request)
-        if not any(t.workspace_id == current_agent.agent_id for t in targets):
+        if (
+            _can_receive_platform_skill(current_agent.agent_id)
+            and not any(t.workspace_id == current_agent.agent_id for t in targets)
+        ):
             targets.append(PoolDownloadTarget(workspace_id=current_agent.agent_id))
             
     if not targets:
@@ -1480,7 +1564,10 @@ async def _build_download_plan(
     """Build execution plan with rollback snapshots."""
     plan: list[dict[str, Any]] = []
     for target in targets:
-        workspace_dir = await _workspace_dir_for_agent(target.workspace_id, request)
+        workspace_dir = await _workspace_dir_for_skill_download_target(
+            target.workspace_id,
+            request,
+        )
         snapshot = _snapshot_workspace_skill(
             workspace_dir,
             str(skill_name),
@@ -1553,6 +1640,8 @@ async def download_pool_skill_to_workspaces(
             if backup_dir is not None:
                 shutil.rmtree(Path(backup_dir).parent, ignore_errors=True)
 
+    for item in downloaded:
+        schedule_agent_reload(request, item["workspace_id"])
     return {"downloaded": downloaded}
 
 
@@ -1629,11 +1718,25 @@ async def delete_pool_skill(
     # Global sync: remove from all workspaces as well
     for ws in list_workspaces():
         try:
-            ws_service = SkillService(Path(ws["workspace_dir"]))
+            if not _can_receive_platform_skill(ws["agent_id"]):
+                continue
+            ws_service = SkillService(
+                _skill_workspace_dir(
+                    ws["agent_id"],
+                    ws["workspace_dir"],
+                ),
+            )
             ws_service.disable_skill(skill_name)
-            ws_service.delete_skill(skill_name)
+            removed = ws_service.delete_skill(skill_name)
+            if removed:
+                schedule_agent_reload(request, ws["agent_id"])
         except Exception:
-            pass
+            logger.warning(
+                "Failed to delete pool skill '%s' from Agent '%s'",
+                skill_name,
+                ws.get("agent_id", ""),
+                exc_info=True,
+            )
     return {"deleted": True}
 
 
@@ -1667,7 +1770,7 @@ async def update_pool_skill_config(
         raise HTTPException(status_code=404, detail="Pool skill not found")
     _apply_pool_skill_governance(skill_name)
     if body.config.get("is_default") is True:
-        _sync_default_skill_to_all_workspaces(skill_name)
+        _sync_default_skill_to_all_workspaces(skill_name, request)
     return {"updated": True}
 
 
@@ -1729,7 +1832,13 @@ async def batch_delete_skills(
     skills: list[str],
 ) -> dict[str, Any]:
     """Auto-disable then delete each skill. Per-skill results."""
-    workspace_dir = await _request_workspace_dir(request)
+    from ..agent_context import get_agent_for_request
+
+    workspace = await get_agent_for_request(request)
+    workspace_dir = _skill_workspace_dir(
+        workspace.agent_id,
+        workspace.workspace_dir,
+    )
     service = SkillService(workspace_dir)
     results: dict[str, Any] = {}
     for skill_name in skills:
@@ -1751,6 +1860,8 @@ async def batch_delete_skills(
                 "success": False,
                 "reason": str(exc),
             }
+    if any(result.get("success") for result in results.values()):
+        schedule_agent_reload(request, workspace.agent_id)
     return {"results": results}
 
 
@@ -1762,6 +1873,7 @@ async def batch_delete_pool_skills(
     """Delete multiple pool skills. Per-skill results."""
     service = SkillPoolService()
     results: dict[str, Any] = {}
+    reload_agent_ids: set[str] = set()
     for skill_name in skills:
         try:
             _require_pool_skill_access(request, skill_name)
@@ -1770,9 +1882,20 @@ async def batch_delete_pool_skills(
                 # Global sync: remove from all workspaces as well
                 for ws in list_workspaces():
                     try:
-                        ws_service = SkillService(Path(ws["workspace_dir"]))
+                        if not _can_receive_platform_skill(ws["agent_id"]):
+                            continue
+                        workspace_dir = (
+                            super_expert_skill_overlay_root(ws["agent_id"])
+                            if get_sealed_agent_registry().is_super_expert(
+                                ws["agent_id"],
+                            )
+                            else Path(ws["workspace_dir"])
+                        )
+                        ws_service = SkillService(workspace_dir)
                         ws_service.disable_skill(skill_name)
-                        ws_service.delete_skill(skill_name)
+                        removed = ws_service.delete_skill(skill_name)
+                        if removed:
+                            reload_agent_ids.add(ws["agent_id"])
                     except Exception:
                         pass
             results[skill_name] = {
@@ -1789,6 +1912,8 @@ async def batch_delete_pool_skills(
                 "success": False,
                 "reason": str(exc),
             }
+    for agent_id in reload_agent_ids:
+        schedule_agent_reload(request, agent_id)
     return {"results": results}
 
 
@@ -1800,7 +1925,10 @@ async def batch_disable_skills(
     from ..agent_context import get_agent_for_request
 
     workspace = await get_agent_for_request(request)
-    workspace_dir = Path(workspace.workspace_dir)
+    workspace_dir = _skill_workspace_dir(
+        workspace.agent_id,
+        workspace.workspace_dir,
+    )
     service = SkillService(workspace_dir)
     results: dict[str, Any] = {}
     for skill in skills:
@@ -1829,7 +1957,10 @@ async def batch_enable_skills(
     from ..agent_context import get_agent_for_request
 
     workspace = await get_agent_for_request(request)
-    workspace_dir = Path(workspace.workspace_dir)
+    workspace_dir = _skill_workspace_dir(
+        workspace.agent_id,
+        workspace.workspace_dir,
+    )
     service = SkillService(workspace_dir)
     results: dict[str, Any] = {}
     for skill in skills:
@@ -1860,7 +1991,10 @@ async def disable_skill(
     from ..agent_context import get_agent_for_request
 
     workspace = await get_agent_for_request(request)
-    workspace_dir = Path(workspace.workspace_dir)
+    workspace_dir = _skill_workspace_dir(
+        workspace.agent_id,
+        workspace.workspace_dir,
+    )
     _require_workspace_skill_access(request, workspace_dir, skill_name)
     result = SkillService(workspace_dir).disable_skill(skill_name)
     if not result.get("success"):
@@ -1878,7 +2012,10 @@ async def enable_skill(
     from ..agent_context import get_agent_for_request
 
     workspace = await get_agent_for_request(request)
-    workspace_dir = Path(workspace.workspace_dir)
+    workspace_dir = _skill_workspace_dir(
+        workspace.agent_id,
+        workspace.workspace_dir,
+    )
     _require_workspace_skill_access(request, workspace_dir, skill_name)
     try:
         result = SkillService(workspace_dir).enable_skill(skill_name)
@@ -1898,7 +2035,13 @@ async def delete_skill(
     request: Request,
     skill_name: str,
 ) -> dict[str, Any]:
-    workspace_dir = await _request_workspace_dir(request)
+    from ..agent_context import get_agent_for_request
+
+    workspace = await get_agent_for_request(request)
+    workspace_dir = _skill_workspace_dir(
+        workspace.agent_id,
+        workspace.workspace_dir,
+    )
     _require_workspace_skill_access(request, workspace_dir, skill_name)
     service = SkillService(workspace_dir)
     service.disable_skill(skill_name)
@@ -1908,6 +2051,7 @@ async def delete_skill(
             status_code=409,
             detail="Only disabled workspace skills can be deleted",
         )
+    schedule_agent_reload(request, workspace.agent_id)
     return {"deleted": True}
 
 
@@ -1936,7 +2080,10 @@ async def save_workspace_skill(
     from ..agent_context import get_agent_for_request
 
     workspace = await get_agent_for_request(request)
-    workspace_dir = Path(workspace.workspace_dir)
+    workspace_dir = _skill_workspace_dir(
+        workspace.agent_id,
+        workspace.workspace_dir,
+    )
     source_name = body.source_name or body.name
     _require_workspace_skill_access(request, workspace_dir, source_name)
     if body.source_name and body.name != body.source_name:
@@ -1979,7 +2126,10 @@ async def update_skill_channels_endpoint(
     from ..agent_context import get_agent_for_request
 
     workspace = await get_agent_for_request(request)
-    workspace_dir = Path(workspace.workspace_dir)
+    workspace_dir = _skill_workspace_dir(
+        workspace.agent_id,
+        workspace.workspace_dir,
+    )
     _require_workspace_skill_access(request, workspace_dir, skill_name)
     updated = SkillService(workspace_dir).set_skill_channels(
         skill_name,
@@ -2001,7 +2151,10 @@ async def update_skill_tags(
 
     tags = _validate_tags(tags)
     workspace = await get_agent_for_request(request)
-    workspace_dir = Path(workspace.workspace_dir)
+    workspace_dir = _skill_workspace_dir(
+        workspace.agent_id,
+        workspace.workspace_dir,
+    )
     _require_workspace_skill_access(request, workspace_dir, skill_name)
     updated = SkillService(workspace_dir).set_skill_tags(
         skill_name,

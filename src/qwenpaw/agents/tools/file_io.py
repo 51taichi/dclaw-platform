@@ -14,6 +14,7 @@ from .utils import (
     DEFAULT_MAX_BYTES,
 )
 from ...config.context import (
+    get_current_tool_filesystem_root,
     get_current_workspace_dir,
     get_current_recent_max_bytes,
 )
@@ -31,12 +32,22 @@ def _resolve_file_path(file_path: str) -> str:
         The resolved absolute file path as string.
     """
     path = Path(file_path).expanduser()
-    if path.is_absolute():
-        return str(path)
-    else:
-        # Use current workspace_dir from context, fallback to WORKING_DIR
+    if not path.is_absolute():
         workspace_dir = get_current_workspace_dir() or WORKING_DIR
-        return str(workspace_dir / file_path)
+        path = workspace_dir / path
+    resolved = path.resolve()
+
+    filesystem_root = get_current_tool_filesystem_root()
+    if filesystem_root is not None:
+        root = Path(filesystem_root).resolve()
+        try:
+            resolved.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(
+                "File path is outside the Agent session workspace",
+            ) from exc
+
+    return str(resolved)
 
 
 def _get_encoding_for_file(file_path: str) -> str:

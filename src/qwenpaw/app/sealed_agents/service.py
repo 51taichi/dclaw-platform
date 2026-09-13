@@ -59,6 +59,13 @@ class SealedAgentService:
     def get_agent(self, agent_id: str) -> SealedAgentRecord | None:
         return self.registry.get_agent(agent_id)
 
+    def restore_agent_record(
+        self,
+        record: SealedAgentRecord,
+    ) -> SealedAgentRecord:
+        """Restore registry metadata after a failed runtime activation."""
+        return self.registry.upsert_agent(record)
+
     def release_root(self, agent_id: str, release_id: str) -> Path:
         return self.root / "releases" / agent_id / release_id
 

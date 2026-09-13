@@ -80,7 +80,10 @@ def create_agent_scoped_router() -> APIRouter:
     from .console import router as console_router
     from .plugins import router as plugins_router
     from .plan import router as plan_router
-    from ..sealed_agents.policy import deny_sealed_asset_access
+    from ..sealed_agents.policy import (
+        deny_sealed_asset_access,
+        deny_sealed_skill_asset_access,
+    )
 
     router = APIRouter(prefix="/agents/{agentId}", tags=["agent-scoped"])
 
@@ -99,7 +102,10 @@ def create_agent_scoped_router() -> APIRouter:
     router.include_router(config_router, dependencies=asset_deps)
     router.include_router(cron_router, dependencies=asset_deps)
     router.include_router(mcp_router, dependencies=asset_deps)
-    router.include_router(skills_router, dependencies=asset_deps)
+    router.include_router(
+        skills_router,
+        dependencies=[Depends(deny_sealed_skill_asset_access)],
+    )
     router.include_router(tools_router, dependencies=asset_deps)
     router.include_router(workspace_router, dependencies=asset_deps)
     router.include_router(console_router)

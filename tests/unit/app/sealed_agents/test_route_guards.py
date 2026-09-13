@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from qwenpaw.app.sealed_agents import policy
+from qwenpaw.app.routers.agent_scoped import create_agent_scoped_router
 from qwenpaw.app.routers import agents as agents_router
 
 
@@ -101,6 +102,64 @@ def test_skill_asset_guard_still_denies_sealed_workspace_download(monkeypatch):
         )
 
     assert exc_info.value.status_code == 403
+
+
+def test_skill_asset_guard_allows_super_expert_pool_download(monkeypatch):
+    registry = SimpleNamespace(
+        is_sealed=lambda agent_id: agent_id == "luyu",
+        is_super_expert=lambda agent_id: agent_id == "luyu",
+    )
+    monkeypatch.setattr(
+        policy,
+        "get_sealed_agent_registry",
+        lambda: registry,
+    )
+
+    policy.deny_sealed_skill_asset_access(
+        Request(
+            header_agent="luyu",
+            method="POST",
+            url_path="/api/user/skills/pool/download",
+        ),
+    )
+
+
+def test_skill_asset_guard_allows_super_expert_overlay_management(monkeypatch):
+    registry = SimpleNamespace(
+        is_sealed=lambda agent_id: agent_id == "luyu",
+        is_super_expert=lambda agent_id: agent_id == "luyu",
+    )
+    monkeypatch.setattr(
+        policy,
+        "get_sealed_agent_registry",
+        lambda: registry,
+    )
+
+    policy.deny_sealed_skill_asset_access(
+        Request(
+            header_agent="luyu",
+            method="GET",
+            url_path="/api/user/skills",
+        ),
+    )
+
+
+def test_agent_scoped_skill_routes_use_skill_specific_guard():
+    scoped_router = create_agent_scoped_router()
+    skill_routes = [
+        route
+        for route in scoped_router.routes
+        if route.original_router.prefix == "/skills"
+    ]
+
+    assert skill_routes
+    assert all(
+        any(
+            dependency.dependency is policy.deny_sealed_skill_asset_access
+            for dependency in route.include_context.dependencies
+        )
+        for route in skill_routes
+    )
 
 
 @pytest.mark.parametrize(

@@ -20,8 +20,15 @@ from typing import Optional
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
 
-from ...config.context import get_current_workspace_dir
+from ...config.context import (
+    get_current_tool_filesystem_root,
+    get_current_workspace_dir,
+)
 from ...constant import WORKING_DIR
+from .filesystem_sandbox import (
+    ensure_landlock_available,
+    landlock_preexec,
+)
 
 
 def _tool_error(msg: str) -> ToolResponse:
@@ -167,8 +174,28 @@ async def python_sandbox(
         )
 
     workspace_dir = get_current_workspace_dir() or WORKING_DIR
-    workspace_dir = Path(workspace_dir)
+    workspace_dir = Path(workspace_dir).resolve()
     workspace_dir.mkdir(parents=True, exist_ok=True)
+
+    filesystem_root = get_current_tool_filesystem_root()
+    preexec_fn = None
+    if filesystem_root is not None:
+        filesystem_root = Path(filesystem_root).resolve()
+        try:
+            workspace_dir.relative_to(filesystem_root)
+        except ValueError:
+            return _tool_error(
+                "Python workspace is outside the Agent session workspace",
+            )
+        if install_packages:
+            return _tool_error(
+                "Dynamic package installation is disabled in sealed runtimes",
+            )
+        try:
+            ensure_landlock_available()
+        except RuntimeError as exc:
+            return _tool_error(str(exc))
+        preexec_fn = landlock_preexec(filesystem_root)
 
     # ── Install dependencies ──────────────────────────────────────────
     if install_packages:
@@ -236,6 +263,7 @@ except (ImportError, Exception):
                 "PYTHONIOENCODING": "utf-8",
                 "PYTHONPATH": str(workspace_dir),
             },
+            preexec_fn=preexec_fn,
         )
 
         elapsed = round(time.time() - start_time, 2)

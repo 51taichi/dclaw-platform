@@ -36,6 +36,7 @@ class MultiAgentManager:
         self.agents: Dict[str, Workspace] = {}
         self._lock = asyncio.Lock()
         self._pending_starts: Dict[str, asyncio.Event] = {}
+        self._reload_locks: Dict[str, asyncio.Lock] = {}
         self._cleanup_tasks: Set[asyncio.Task] = set()
         logger.debug("MultiAgentManager initialized")
 
@@ -275,6 +276,16 @@ class MultiAgentManager:
         Returns:
             bool: True if agent was reloaded, False if not running
         """
+        async with self._lock:
+            reload_lock = self._reload_locks.setdefault(
+                agent_id,
+                asyncio.Lock(),
+            )
+        async with reload_lock:
+            return await self._reload_agent_serialized(agent_id)
+
+    async def _reload_agent_serialized(self, agent_id: str) -> bool:
+        """Perform one reload while the per-Agent reload lock is held."""
         async with self._lock:
             target_keys = [k for k in self.agents if k == agent_id]
             if not target_keys:

@@ -30,6 +30,7 @@ from PIL import Image, ImageDraw, UnidentifiedImageError
 from ..schema import FileBlock
 from ...config.context import get_current_workspace_dir
 from ...constant import WORKING_DIR
+from .file_io import _resolve_file_path
 from .send_file import _path_to_file_url
 
 EMU_PER_INCH = 914400
@@ -803,11 +804,7 @@ def _items_from_bullets(bullets: list[str], limit: int | None = None) -> list[di
 
 
 def _resolve_path(path: str | Path) -> Path:
-    resolved = Path(path).expanduser()
-    if resolved.is_absolute():
-        return resolved.resolve()
-    workspace_dir = get_current_workspace_dir() or WORKING_DIR
-    return (Path(workspace_dir) / resolved).resolve()
+    return Path(_resolve_file_path(str(path)))
 
 
 def _resolve_output_path(output_path: str) -> Path:

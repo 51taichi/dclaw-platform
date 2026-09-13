@@ -951,14 +951,27 @@ class SkillPoolService:
         overwrite: bool = False,
     ) -> list[dict[str, Any]]:
         """Install every default pool skill into all configured workspaces."""
+        from ...app.sealed_agents.registry import get_sealed_agent_registry
+        from ...app.sealed_agents.skill_overlay import (
+            super_expert_skill_overlay_root,
+        )
         from .registry import list_workspaces
 
         results: list[dict[str, Any]] = []
+        sealed_registry = get_sealed_agent_registry()
         for workspace in list_workspaces():
-            workspace_dir_text = str(workspace.get("workspace_dir") or "").strip()
-            if not workspace_dir_text:
-                continue
-            workspace_dir = Path(workspace_dir_text)
+            agent_id = str(workspace.get("agent_id") or "")
+            if sealed_registry.is_sealed(agent_id):
+                if not sealed_registry.is_super_expert(agent_id):
+                    continue
+                workspace_dir = super_expert_skill_overlay_root(agent_id)
+            else:
+                workspace_dir_text = str(
+                    workspace.get("workspace_dir") or "",
+                ).strip()
+                if not workspace_dir_text:
+                    continue
+                workspace_dir = Path(workspace_dir_text)
             results.extend(
                 self.install_default_skills_to_workspace(
                     workspace_dir,

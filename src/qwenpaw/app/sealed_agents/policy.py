@@ -65,6 +65,13 @@ def deny_sealed_skill_asset_access(request: Request) -> None:
     into sealed-Agent asset requests.  Pool transfers still resolve a concrete
     Agent workspace, so they retain the normal sealed-asset guard.
     """
+    agent_id = requested_agent_id(request)
+    registry = get_sealed_agent_registry()
+    if agent_id:
+        is_super_expert = getattr(registry, "is_super_expert", None)
+        if callable(is_super_expert) and is_super_expert(agent_id):
+            return
+
     path = str(getattr(getattr(request, "url", None), "path", "")).rstrip("/")
     if path.endswith("/skills/workspaces"):
         return
