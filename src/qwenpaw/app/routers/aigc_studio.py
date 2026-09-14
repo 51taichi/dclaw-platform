@@ -39,7 +39,10 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from ...aigc.workflow_compiler import CompiledWorkflow
-from ..aigc.workflow_execution import WorkflowExecutionBinding, validate_execution
+from ..aigc.workflow_execution import (
+    WorkflowExecutionBinding,
+    validate_execution_capability,
+)
 from ..aigc.job_lifecycle import AigcJobLifecycle, _merge_node_output
 from ..aigc.provider_execution import ProviderExecution, execution_command
 from ..aigc.provider_errors import ProviderSubmissionRejected, ProviderTaskFailed
@@ -1035,8 +1038,10 @@ def _validate_job_resource_binding(request: Request, body: AigcJobCreate) -> Non
         )
     if authoritative is not None:
         try:
-            validate_execution(authoritative, provider_id=body.provider_id,
-                               model_id=body.model_id, capability=body.capability)
+            validate_execution_capability(
+                authoritative,
+                capability=body.capability,
+            )
         except ValueError as exc:
             raise HTTPException(
                 status_code=409,

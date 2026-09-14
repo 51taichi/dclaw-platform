@@ -12,7 +12,7 @@ from typing import Callable, Any
 
 from ..aigc.events import AigcDomainEvent, AigcDeliveryOutcome, AigcEventConsumer
 from ..aigc.resource_store import AigcResourceError
-from ..aigc.workflow_execution import validate_execution
+from ..aigc.workflow_execution import validate_execution_capability
 from ..runtime.event_bus import RuntimeEvent
 from ..storage.repos.aigc_execution_repo import AigcExecutionRepository, job_creation_timestamp
 from ..storage.json_file_lock import JsonFileLock
@@ -150,7 +150,10 @@ class AigcEventAdapter:
                         or binding.node_bindings.get(core.logical_node_id) != core.node_id
                         or task.workflow.workflow_revision != binding.workflow_revision):
                     return self._blocked("WORKFLOW_REVISION_MISMATCH")
-                validate_execution(core, provider_id=job["provider_id"], model_id=job["model_id"], capability=job["capability"])
+                validate_execution_capability(
+                    core,
+                    capability=job["capability"],
+                )
             for output in job["outputs"]:
                 asset = adapter.assets.resolve_owned(event.owner_user_id, output["id"])
                 adapter.assets.validate_review_binding(asset, canvas_id=binding.canvas_id, node_ids={job["node_id"]})

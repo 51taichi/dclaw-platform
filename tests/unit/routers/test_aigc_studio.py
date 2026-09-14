@@ -103,7 +103,9 @@ async def test_resolve_owned_asset_for_agent_review_rejects_binding_mismatch(
 
 
 @pytest.mark.asyncio
-async def test_validate_job_submission_rejects_workflow_model_mismatch(monkeypatch, execution_repository):
+async def test_validate_job_submission_allows_authorized_workflow_model_override(
+    monkeypatch, execution_repository
+):
     from qwenpaw.app.aigc.workflow_execution import WorkflowExecutionBinding
 
     execution_repository.register_bindings([WorkflowExecutionBinding(
@@ -141,25 +143,16 @@ async def test_validate_job_submission_rejects_workflow_model_mismatch(monkeypat
     body = aigc_studio.AigcJobCreate(
         canvas_id="canvas-1",
         node_id="video-1",
-        capability="text_to_video",
-        provider_id="provider-1",
-        model_id="video-1",
+        capability="image_to_video",
+        provider_id="provider-2",
+        model_id="video-2",
     )
 
-    with pytest.raises(HTTPException) as exc_info:
-        await aigc_studio._validate_job_submission(SimpleNamespace(), body)
-
-    assert exc_info.value.status_code == 409
-    assert "workflow-bound" in str(exc_info.value.detail).lower()
-
-    await aigc_studio._validate_job_submission(
-        SimpleNamespace(),
-        body.model_copy(update={"capability": "image_to_video"}),
-    )
+    await aigc_studio._validate_job_submission(SimpleNamespace(), body)
 
 
 @pytest.mark.asyncio
-async def test_validate_job_submission_uses_core_binding_after_canvas_tamper(
+async def test_validate_job_submission_keeps_workflow_capability_binding_after_canvas_tamper(
     monkeypatch,
 ):
     canvas = aigc_studio.Canvas(
@@ -212,8 +205,6 @@ async def test_validate_job_submission_uses_core_binding_after_canvas_tamper(
         SimpleNamespace(),
         tampered.model_copy(
             update={
-                "provider_id": "provider-1",
-                "model_id": "video-1",
                 "capability": "image_to_video",
             }
         ),

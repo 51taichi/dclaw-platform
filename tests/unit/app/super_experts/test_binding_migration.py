@@ -138,8 +138,13 @@ async def test_migrated_submission_uses_core_with_deleted_markers(legacy, monkey
         provider_id="provider-1", model_id="video-1", capability="image_to_video",
     )
     await aigc_studio._validate_job_submission(SimpleNamespace(), body)
+    await aigc_studio._validate_job_submission(
+        SimpleNamespace(), body.model_copy(update={"model_id": "other"})
+    )
     with pytest.raises(HTTPException) as failure:
-        await aigc_studio._validate_job_submission(SimpleNamespace(), body.model_copy(update={"model_id": "other"}))
+        await aigc_studio._validate_job_submission(
+            SimpleNamespace(), body.model_copy(update={"capability": "text_to_video"})
+        )
     assert failure.value.status_code == 409
 
 
@@ -243,9 +248,18 @@ async def test_previously_queued_job_is_checked_again_before_execution(legacy, m
     monkeypatch.setattr(aigc_studio, "_run_job_to_completion", execute)
     monkeypatch.setattr(aigc_studio, "_mark_job_running", execute)
     monkeypatch.setattr(aigc_studio, "_start_background_job_run", lambda *_: calls.append("background"))
+
+    async def reject_unconfigured_model(*_):
+        raise HTTPException(status_code=422, detail={"code": "aigc_model_not_allowed"})
+
+    monkeypatch.setattr(
+        aigc_studio,
+        "_assert_job_model_policy_allowed",
+        reject_unconfigured_model,
+    )
     with pytest.raises(HTTPException) as failure:
         await aigc_studio.run_job(SimpleNamespace(), job.id, background=background)
-    assert failure.value.status_code == 409
+    assert failure.value.status_code == 422
     assert calls == []
 
 

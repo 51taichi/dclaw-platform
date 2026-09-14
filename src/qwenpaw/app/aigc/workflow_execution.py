@@ -48,6 +48,14 @@ def validate_execution(
         raise ValueError("EXECUTION_BINDING_MISMATCH")
 
 
+def validate_execution_capability(
+    binding: WorkflowExecutionBinding, *, capability: str,
+) -> None:
+    """Keep the workflow operation fixed while allowing an authorized model choice."""
+    if capability != binding.capability:
+        raise ValueError("EXECUTION_BINDING_MISMATCH")
+
+
 class AigcWorkflowExecutionService:
     def __init__(self, store: AigcResourceStore, repository: AigcExecutionRepository):
         self.store = store
