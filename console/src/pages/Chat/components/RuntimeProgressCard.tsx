@@ -1,5 +1,5 @@
 import { Markdown } from "@agentscope-ai/chat";
-import { useContext, useMemo, useState } from "react";
+import { useContext, useMemo, useRef, useState } from "react";
 import { ExpertIdentityContext } from "../../../contexts/ExpertIdentityContext";
 import { message } from "antd";
 import { toDisplayUrl } from "../utils";
@@ -27,6 +27,7 @@ interface RuntimeMessage {
 }
 
 interface RuntimeResponse {
+  id?: string;
   status?: string;
   output?: RuntimeMessage[];
 }
@@ -232,7 +233,38 @@ export default function RuntimeProgressCard(props: Props) {
     url: string;
     alt: string;
   } | null>(null);
-  const output = props.data.output || [];
+  const outputOrderRef = useRef<{
+    responseId?: string;
+    messageIds: string[];
+  }>({ responseId: props.data.id, messageIds: [] });
+  if (outputOrderRef.current.responseId !== props.data.id) {
+    outputOrderRef.current = { responseId: props.data.id, messageIds: [] };
+  }
+
+  const incomingOutput = props.data.output || [];
+  for (const item of incomingOutput) {
+    if (item.id && !outputOrderRef.current.messageIds.includes(item.id)) {
+      outputOrderRef.current.messageIds.push(item.id);
+    }
+  }
+  const positionById = new Map(
+    outputOrderRef.current.messageIds.map((id, index) => [id, index]),
+  );
+  const output = incomingOutput
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => {
+      const leftPosition = left.item.id
+        ? positionById.get(left.item.id)
+        : undefined;
+      const rightPosition = right.item.id
+        ? positionById.get(right.item.id)
+        : undefined;
+      if (leftPosition === undefined || rightPosition === undefined) {
+        return left.index - right.index;
+      }
+      return leftPosition - rightPosition;
+    })
+    .map(({ item }) => item);
   const visibleMessages = output.filter((item) => {
     if (item.type !== "message" && item.type !== "error") return false;
     return hasVisibleMessageContent(item);

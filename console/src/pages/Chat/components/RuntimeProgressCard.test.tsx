@@ -32,6 +32,61 @@ vi.mock("@agentscope-ai/chat", () => ({
 }));
 
 describe("RuntimeProgressCard", () => {
+  it("keeps streamed messages in arrival order when the final response is merged", () => {
+    const { rerender } = render(
+      <RuntimeProgressCard
+        data={{
+          id: "response-1",
+          status: "in_progress",
+          output: [
+            {
+              id: "explanation",
+              type: "message",
+              status: "completed",
+              content: [{ type: "text", text: "先解释上一个选择" }],
+            },
+            {
+              id: "next-question",
+              type: "message",
+              status: "in_progress",
+              content: [{ type: "text", text: "再询问下一个问题" }],
+            },
+          ],
+        }}
+      />,
+    );
+
+    rerender(
+      <RuntimeProgressCard
+        data={{
+          id: "response-1",
+          status: "completed",
+          output: [
+            {
+              id: "next-question",
+              type: "message",
+              status: "completed",
+              content: [{ type: "text", text: "再询问下一个问题" }],
+            },
+            {
+              id: "explanation",
+              type: "message",
+              status: "completed",
+              content: [{ type: "text", text: "先解释上一个选择" }],
+            },
+          ],
+        }}
+      />,
+    );
+
+    const explanation = screen.getByText("先解释上一个选择");
+    const nextQuestion = screen.getByText("再询问下一个问题");
+    expect(
+      explanation.compareDocumentPosition(nextQuestion) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it("collapses repeated tool and reasoning events into a progress summary", () => {
     render(
       <RuntimeProgressCard
