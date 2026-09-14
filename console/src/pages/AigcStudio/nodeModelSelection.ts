@@ -154,19 +154,22 @@ export function modelSelectionState(
   capability: string,
   effectiveDefault?: AigcModelRef | null,
 ) {
-  const options = modelOptionsForCapability(capabilities, capability);
+  const categoryOptions = modelOptionsForCapability(capabilities, capability);
   const snapshot = modelSnapshotFromNode(node, capability);
   const currentKey = nodeModelKey(node);
   const boundCapability = textValue(node.data.modelCapability);
+  const workflowBound = Boolean(textValue(node.data.workflowLogicalNodeId));
+  const options = workflowBound
+    ? categoryOptions.filter((model) => model.capability === capability)
+    : categoryOptions;
   const matched = options.find(
     (model) =>
       modelKey(model) === currentKey &&
       (!boundCapability || model.capability === boundCapability),
   );
-  const workflowBound = Boolean(textValue(node.data.workflowLogicalNodeId));
   const fallback = modelForNewNode(options, effectiveDefault);
   return {
-    selected: matched ?? (workflowBound ? null : snapshot ?? fallback),
+    selected: matched ?? (workflowBound ? fallback : snapshot ?? fallback),
     fallback,
     invalidSavedModel: Boolean(
       snapshot && options.length > 0 && !matched && !workflowBound,
@@ -189,18 +192,13 @@ export function modelOptionsForNode(
   node: AigcCanvasNode,
   capability: string,
 ) {
-  const options = modelOptionsForCapability(capabilities, capability);
+  const categoryOptions = modelOptionsForCapability(capabilities, capability);
   const snapshot = modelSnapshotFromNode(node, capability);
   const workflowBound = Boolean(textValue(node.data.workflowLogicalNodeId));
   if (workflowBound) {
-    if (!snapshot) return [];
-    return options.filter(
-      (model) =>
-        model.provider_id === snapshot.provider_id &&
-        model.model_id === snapshot.model_id &&
-        model.capability === snapshot.capability,
-    );
+    return categoryOptions.filter((model) => model.capability === capability);
   }
+  const options = categoryOptions;
   if (
     !snapshot ||
     options.some((model) => modelKey(model) === modelKey(snapshot))

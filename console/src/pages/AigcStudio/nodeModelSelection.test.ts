@@ -111,7 +111,18 @@ describe("nodeModelSelection", () => {
     );
   });
 
-  it("never substitutes another provider or capability for a workflow-bound node", () => {
+  it("offers every compatible configured model for a workflow-bound node", () => {
+    const bound = model("image_to_video", "seedance2", "Seedance 2.0");
+    const alternative = model(
+      "image_to_video",
+      "grok-imagine-video-1.5",
+      "Grok Imagine Video 1.5",
+    );
+    const wrongOperation = model(
+      "text_to_video",
+      "text-only-video-model",
+      "Text Only Video Model",
+    );
     const node: AigcCanvasNode = {
       id: "video-1",
       type: "video_generate",
@@ -125,45 +136,44 @@ describe("nodeModelSelection", () => {
     };
 
     expect(
-      modelForNode(
-        [
-          model("text_to_video", "seedance2"),
-          model("image_to_video", "other-model"),
-        ],
+      modelOptionsForNode(
+        [bound, alternative, wrongOperation],
         node,
-        "text_to_video",
+        "image_to_video",
       ),
-    ).toBeNull();
+    ).toEqual([bound, alternative]);
+    expect(modelForNode([bound, alternative], node, "image_to_video")).toEqual(
+      bound,
+    );
   });
 
-  it("locks a workflow-bound reference-video node to its exact model triple", () => {
-    const exact = model("reference_video", "kimi-k2.5", "Kimi K2.5");
+  it("falls back to the configured default when a workflow model was removed", () => {
+    const configured = model(
+      "image_to_video",
+      "grok-imagine-video-1.5",
+      "Grok Imagine Video 1.5",
+    );
     const node: AigcCanvasNode = {
       id: "video-1",
       type: "video_generate",
       position: { x: 0, y: 0 },
       data: {
-        workflowLogicalNodeId: "reference-review",
+        workflowLogicalNodeId: "clip",
         providerId: "mxapi",
-        modelId: "kimi-k2.5",
-        modelCapability: "reference_video",
+        modelId: "removed-video-model",
+        modelCapability: "image_to_video",
       },
     };
 
     expect(
-      modelForNode(
-        [exact, model("reference_video", "qwen3.5-122b-a10b")],
-        node,
-        "reference_video",
-      ),
-    ).toEqual(exact);
-    expect(
-      modelOptionsForNode(
-        [exact, model("reference_video", "qwen3.5-122b-a10b")],
-        node,
-        "reference_video",
-      ),
-    ).toEqual([exact]);
+      modelForNode([configured], node, "image_to_video", {
+        provider_id: configured.provider_id,
+        model_id: configured.model_id,
+      }),
+    ).toEqual(configured);
+    expect(modelOptionsForNode([configured], node, "image_to_video")).toEqual([
+      configured,
+    ]);
   });
 });
 
