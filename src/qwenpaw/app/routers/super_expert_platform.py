@@ -370,7 +370,8 @@ def get_super_expert_task(
     material_task_id: str,
     request: Request,
 ) -> dict[str, Any]:
-    task = get_super_expert_platform_service().get_task(material_task_id)
+    service = get_super_expert_platform_service()
+    task = service.get_task(material_task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="AIGC task not found")
     ensure_chat_access(
@@ -378,7 +379,9 @@ def get_super_expert_task(
         task.binding.conversation_id,
         allow_admin=True,
     )
-    return task.model_dump(mode="json")
+    payload = task.model_dump(mode="json")
+    payload["latest_review"] = service.latest_task_review(material_task_id)
+    return payload
 
 
 @frontend_read_router.get("/tasks/{material_task_id}/guide")

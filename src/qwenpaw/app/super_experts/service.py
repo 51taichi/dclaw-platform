@@ -94,6 +94,30 @@ class SuperExpertPlatformService:
     def get_task(self, material_task_id: str):
         return self.task_repository.get(material_task_id)
 
+    def latest_task_review(self, material_task_id: str) -> dict[str, str] | None:
+        """Return the latest persisted review attached to a task transition."""
+        task = self.task_repository.get(material_task_id)
+        if task is None:
+            return None
+        for transition in reversed(task.events):
+            if transition.action not in {"accept", "request_revision"}:
+                continue
+            event = self.event_repository.get(transition.event_id)
+            if event is None or event.event_type != "aigc.review.completed":
+                continue
+            assessment = event.payload.get("assessment")
+            if not isinstance(assessment, str) or not assessment.strip():
+                continue
+            return {
+                "decision": (
+                    "ACCEPTED"
+                    if transition.action == "accept"
+                    else "REVISION_REQUIRED"
+                ),
+                "assessment": assessment.strip(),
+            }
+        return None
+
     def workflow_node_execution_binding(
         self,
         *,

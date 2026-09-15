@@ -1599,6 +1599,73 @@ async def test_bound_task_and_operation_contract_can_be_resumed_after_refresh(
 
 
 @pytest.mark.asyncio
+async def test_bound_task_read_keeps_latest_revision_feedback_after_resume(
+    tmp_path,
+    monkeypatch,
+):
+    service, grant, _bus = _service(tmp_path)
+    binding = {**_binding(), "installation_id": grant.installation_id}
+    commands = (
+        (
+            "aigc.task.create",
+            {"binding": binding, "event_id": "create"},
+        ),
+        (
+            "aigc.task.resume",
+            {"binding": binding, "event_id": "start"},
+        ),
+        (
+            "aigc.asset.submit",
+            {"binding": binding, "event_id": "submit", "asset_id": "asset-1"},
+        ),
+        (
+            "aigc.review.complete",
+            {
+                "binding": binding,
+                "event_id": "review",
+                "asset_id": "asset-1",
+                "decision": "REVISION_REQUIRED",
+                "payload": {"assessment": "封面列出的三项与内容页不一致。"},
+            },
+        ),
+        (
+            "aigc.task.resume",
+            {"binding": binding, "event_id": "resume-after-review"},
+        ),
+    )
+    for capability, arguments in commands:
+        await service.execute(
+            tenant_id="tenant-a",
+            installation_id=grant.installation_id,
+            capability=capability,
+            contract_version="1",
+            arguments=arguments,
+            idempotency_key=arguments["event_id"],
+        )
+    monkeypatch.setattr(
+        router_module,
+        "get_super_expert_platform_service",
+        lambda: service,
+    )
+    monkeypatch.setattr(
+        router_module,
+        "ensure_chat_access",
+        lambda *_args, **_kwargs: None,
+    )
+
+    payload = router_module.get_super_expert_task(
+        "material-1",
+        SimpleNamespace(state=SimpleNamespace(tenant_id="tenant-a")),
+    )
+
+    assert payload["status"] == "IN_PROGRESS"
+    assert payload["latest_review"] == {
+        "decision": "REVISION_REQUIRED",
+        "assessment": "封面列出的三项与内容页不一致。",
+    }
+
+
+@pytest.mark.asyncio
 async def test_route_uses_trusted_tenant_and_has_no_ordinary_agent_bypass(
     monkeypatch,
 ):
