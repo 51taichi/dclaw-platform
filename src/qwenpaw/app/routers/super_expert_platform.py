@@ -299,12 +299,21 @@ async def _resolve_review_bundle(request, task, entries, *, service):
     logical_by_physical = dict(zip(physical, expected))
     for entry in entries:
         logical = logical_by_physical[entry["node_id"]]
+        node = by_id[logical]
         nodes, kinds = _workflow_review_binding(task, logical)
         block = await resolve_owned_asset_for_agent_review(
             request, str(entry.get("asset_id") or ""), canvas_id=task.binding.canvas_id,
             node_ids=nodes, asset_kinds=kinds, service=service,
         )
-        blocks.append({"type": "text", "text": f"提交节点：{by_id[logical].title}；node_id={entry['node_id']}；asset_id={entry['asset_id']}"})
+        prompt = str((node.inputs or {}).get("prompt") or "").strip()
+        requirement = f"；制作要求：{prompt}" if prompt else ""
+        blocks.append({
+            "type": "text",
+            "text": (
+                f"提交节点：{node.title}；node_id={entry['node_id']}；"
+                f"asset_id={entry['asset_id']}{requirement}"
+            ),
+        })
         blocks.append(block)
     return blocks
 
@@ -662,6 +671,7 @@ async def _dispatch_agent_asset_review(
                     "type": "text",
                     "text": (
                         "当前绑定的 DClaw AIGC 素材已由客户明确提交。"
+                        f"任务ID：{binding.material_task_id}。"
                         "请在当前审核阶段读取附件并完成审核，并在本轮调用 aigc_task_review。"
                         "只有该工具成功返回且任务状态已经变为 ACCEPTED 或 REVISION_REQUIRED，"
                         "才可以向客户表示审核已经完成；只输出一个当前结论和一个下一步动作。"

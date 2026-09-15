@@ -581,8 +581,20 @@ async def run_workspace_orchestration_turn(
                     review_input=(safe_metadata or {}).get("aigcReviewInput"),
                     media_delivery=media_delivery,
                 )
+                review_only = bool(
+                    (safe_metadata or {}).get("aigcReviewInput")
+                )
                 if tools:
-                    with bind_aigc_tools(agent, tools), track_media_delivery(agent, messages, media_delivery):
+                    with bind_aigc_tools(
+                        agent,
+                        tools,
+                        base_tool_names=(
+                            {"read_agent_skill"} if review_only else None
+                        ),
+                        added_tool_names=(
+                            {"aigc_task_review"} if review_only else None
+                        ),
+                    ), track_media_delivery(agent, messages, media_delivery):
                         candidate = await run_agent()
                 else:
                     candidate = await run_agent()

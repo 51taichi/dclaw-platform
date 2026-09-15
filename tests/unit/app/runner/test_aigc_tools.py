@@ -607,6 +607,103 @@ def create_runtime(): return Runtime()
 
 
 @pytest.mark.asyncio
+async def test_review_agent_loop_exposes_only_skill_reader_and_review_tool(tmp_path):
+    from agentscope.message import Msg
+    from qwenpaw.app.workspace.orchestration import (
+        AuthorizedWorkspaceRelease,
+        run_workspace_orchestration_turn,
+    )
+    from qwenpaw.app.workspace.orchestration_contract import (
+        HOST_CAPABILITIES_V1,
+        OrchestrationConfig,
+    )
+
+    root = tmp_path / 'workspace'
+    root.mkdir()
+    (root / 'runtime.py').write_text('''
+class Runtime:
+    async def handle(self, request, host):
+        value = await host.call('agent.execute', {'messages': request.normalized_input['messages'], 'execution_mode': 'agent_loop'})
+        await host.call('runtime.complete', {'invocation_id': request.invocation_id, 'message': value['message']})
+def create_runtime(): return Runtime()
+''')
+
+    async def read_agent_skill(skill_name: str):
+        return skill_name
+
+    async def execute_shell_command(command: str):
+        return command
+
+    class Agent:
+        def __init__(self):
+            self.toolkit = Toolkit()
+            self.toolkit.register_tool_function(read_agent_skill)
+            self.toolkit.register_tool_function(execute_shell_command)
+
+        async def __call__(self, _messages):
+            assert set(self.toolkit.tools) == {
+                'read_agent_skill',
+                'aigc_task_review',
+            }
+            return Msg('assistant', 'reviewed', 'assistant')
+
+    binding = {
+        'installation_id': 'expert',
+        'conversation_id': 'session',
+        'agent_task_id': 'content',
+        'content_revision': 1,
+        'material_task_id': 'material',
+        'canvas_id': 'canvas',
+        'node_id': 'image',
+    }
+    task = {
+        'binding': binding,
+        'asset_id': 'asset',
+        'status': 'SUBMITTED',
+        'review_assets': [{'node_id': 'image', 'asset_id': 'asset'}],
+    }
+    authorization = AuthorizedWorkspaceRelease(
+        installation_id='expert', release_id='release',
+        release_digest='sha256:' + 'a' * 64,
+        granted_capabilities={
+            **{key: '1' for key in HOST_CAPABILITIES_V1},
+            'aigc.task.create': '1',
+            'aigc.review.complete': '1',
+        },
+        signed_workspace_files=frozenset({'runtime.py'}),
+    )
+    response = await run_workspace_orchestration_turn(
+        agent=Agent(),
+        original_messages=[Msg('user', 'review image', 'user')],
+        request=SimpleNamespace(
+            session_id='session', user_id='user', channel='console',
+            channel_meta={},
+        ),
+        agent_id='expert', workspace_root=root,
+        state_storage_root=tmp_path / 'states',
+        config=OrchestrationConfig(
+            enabled=True,
+            entrypoint='runtime.py:create_runtime',
+            required_host_capabilities=HOST_CAPABILITIES_V1,
+        ),
+        authorization=authorization,
+        business_call=lambda *_args: {},
+        read_aigc_task=lambda key: task if key == 'material' else None,
+        safe_metadata={
+            'aigcReviewInput': {
+                'binding': binding,
+                'asset_id': 'asset',
+                'review_assets': task['review_assets'],
+                'media_kind': 'image',
+                'block_digest': 'sha256:block',
+            },
+        },
+    )
+
+    assert response.error_code is None
+
+
+@pytest.mark.asyncio
 async def test_uncertain_creation_returns_identity_for_status_recovery():
     async def fail(*args):
         raise RuntimeError('private-provider-details')
@@ -770,3 +867,43 @@ def test_all_granted_aigc_tools_register_with_valid_review_schema():
         review = next(item['function'] for item in schemas if item['function']['name'] == 'aigc_task_review')
         assert review['parameters']['properties']['decision']['enum'] == ['ACCEPTED', 'REVISION_REQUIRED']
         assert len(schemas) == 5
+
+
+def test_review_binding_can_hide_unrelated_base_and_aigc_tools():
+    async def read_agent_skill(skill_name: str):
+        return skill_name
+
+    async def execute_shell_command(command: str):
+        return command
+
+    async def aigc_task_review(
+        material_task_id: str,
+        decision: str,
+        assessment: str,
+    ):
+        return material_task_id, decision, assessment
+
+    async def aigc_workflow_create(task_key: str):
+        return task_key
+
+    toolkit = Toolkit()
+    toolkit.register_tool_function(read_agent_skill)
+    toolkit.register_tool_function(execute_shell_command)
+    agent = SimpleNamespace(toolkit=toolkit)
+    original = agent.toolkit
+
+    with bind_aigc_tools(
+        agent,
+        {
+            'aigc_task_review': aigc_task_review,
+            'aigc_workflow_create': aigc_workflow_create,
+        },
+        base_tool_names={'read_agent_skill'},
+        added_tool_names={'aigc_task_review'},
+    ):
+        assert set(agent.toolkit.tools) == {
+            'read_agent_skill',
+            'aigc_task_review',
+        }
+
+    assert agent.toolkit is original

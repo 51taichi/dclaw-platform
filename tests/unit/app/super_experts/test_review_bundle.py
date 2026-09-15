@@ -1,6 +1,9 @@
+from pathlib import Path
+from io import BytesIO
 from types import SimpleNamespace
 
 import pytest
+from PIL import Image
 
 from qwenpaw.aigc.workflow_contract import WorkflowBlueprint, validate_workflow_blueprint
 from qwenpaw.app.aigc.asset_service import AigcAssetService
@@ -40,8 +43,156 @@ async def test_plain_text_asset_is_read_as_text(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_image_review_uses_small_cached_proxy_without_changing_original(tmp_path):
+    from qwenpaw.app.runtime.aigc_media import review_media_source
+
+    original = tmp_path / 'large.png'
+    Image.new('RGB', (1440, 2560), '#f5ead7').save(original, format='PNG')
+    original_bytes = original.read_bytes()
+    asset = AigcAsset(
+        id='large-image', kind='image', name='large.png', path=str(original),
+        mime_type='image/png', created_at='2026-01-01',
+        meta={'canvas_id': 'canvas', 'node_id': 'image'},
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(aigc_artifact_root=tmp_path)),
+    )
+    service = AigcAssetService(AigcResourceStore(tmp_path / 'store'))
+
+    first = await review_media_source(
+        request, service, asset, canvas_id='canvas', node_ids={'image'},
+        asset_kinds={'image'},
+    )
+    second = await review_media_source(
+        request, service, asset, canvas_id='canvas', node_ids={'image'},
+        asset_kinds={'image'},
+    )
+
+    proxy = Path(first['source']['url'].removeprefix('file://'))
+    assert first == second
+    assert proxy != original
+    assert proxy.suffix == '.jpg'
+    assert proxy.is_file()
+    assert proxy.stat().st_size < len(original_bytes)
+    with Image.open(proxy) as image:
+        assert image.size == (1080, 1920)
+    assert original.read_bytes() == original_bytes
+
+
+@pytest.mark.asyncio
+async def test_generated_image_saves_original_and_review_copy(tmp_path, monkeypatch):
+    from qwenpaw.app.aigc.models import AigcJob
+    from qwenpaw.app.routers import aigc_studio
+
+    original_buffer = BytesIO()
+    Image.new('RGB', (1440, 2560), '#f5ead7').save(
+        original_buffer,
+        format='PNG',
+    )
+    original = original_buffer.getvalue()
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+
+    async def artifact_root(_request):
+        return workspace
+
+    monkeypatch.setattr(aigc_studio, 'STUDIO_ROOT', tmp_path / 'studio')
+    monkeypatch.setattr(aigc_studio, '_artifact_root_for_request', artifact_root)
+    monkeypatch.setattr(
+        aigc_studio,
+        'get_object_storage_client',
+        lambda **_kwargs: None,
+    )
+    job = AigcJob(
+        id='job', canvas_id='canvas', node_id='image',
+        capability='text_to_image', provider_id='provider', model_id='model',
+        status='running', created_at='2026-01-01',
+        updated_at='2026-01-01',
+    )
+
+    asset = await aigc_studio._save_generated_asset(
+        SimpleNamespace(state=SimpleNamespace(user_id='user')),
+        job,
+        original,
+        kind='image',
+        filename='result.png',
+        mime_type='image/png',
+        adapter='test',
+    )
+
+    original_path = workspace / asset.path
+    proxy_path = workspace / asset.meta['review_proxy']['path']
+    assert original_path.read_bytes() == original
+    assert proxy_path.is_file()
+    assert proxy_path.suffix == '.jpg'
+    assert proxy_path.stat().st_size < original_path.stat().st_size
+    assert asset.meta['review_proxy']['source_sha256'].startswith('sha256:')
+
+
+@pytest.mark.asyncio
+async def test_generated_cloud_image_uploads_original_and_review_copy(
+    tmp_path,
+    monkeypatch,
+):
+    from qwenpaw.app.aigc.models import AigcJob
+    from qwenpaw.app.routers import aigc_studio
+
+    original_buffer = BytesIO()
+    Image.new('RGB', (1440, 2560), '#f5ead7').save(
+        original_buffer,
+        format='PNG',
+    )
+    uploads = []
+
+    async def upload(_client, *, relative_path, content, mime_type):
+        uploads.append((relative_path, content, mime_type))
+        return {
+            'provider': 'aliyun_oss',
+            'bucket': 'bucket',
+            'endpoint': 'endpoint',
+            'object_key': 'objects/' + relative_path,
+            'size': len(content),
+        }
+
+    monkeypatch.setattr(aigc_studio, 'STUDIO_ROOT', tmp_path / 'studio')
+    monkeypatch.setattr(
+        aigc_studio,
+        'get_object_storage_client',
+        lambda **_kwargs: object(),
+    )
+    monkeypatch.setattr(aigc_studio, '_upload_generated_asset', upload)
+    job = AigcJob(
+        id='job', canvas_id='canvas', node_id='image',
+        capability='text_to_image', provider_id='provider', model_id='model',
+        status='running', created_at='2026-01-01',
+        updated_at='2026-01-01',
+    )
+
+    asset = await aigc_studio._save_generated_asset(
+        SimpleNamespace(state=SimpleNamespace(user_id='user')),
+        job,
+        original_buffer.getvalue(),
+        kind='image',
+        filename='result.png',
+        mime_type='image/png',
+        adapter='test',
+    )
+
+    assert [item[2] for item in uploads] == ['image/png', 'image/jpeg']
+    assert uploads[1][0].endswith('result.review.jpg')
+    assert len(uploads[1][1]) < len(uploads[0][1])
+    assert asset.meta['storage']['object_key'] == 'objects/' + uploads[0][0]
+    assert asset.meta['review_proxy']['storage']['object_key'].endswith(
+        'result.review.jpg',
+    )
+
+
+@pytest.mark.asyncio
 async def test_bundle_resolves_every_declared_node_in_order(monkeypatch):
-    task = SimpleNamespace(workflow=SimpleNamespace(blueprint=blueprint()),
+    data = blueprint().model_dump(mode='json')
+    data['nodes'][1]['inputs'] = {'prompt': '画面必须突出第一项内容'}
+    plan = WorkflowBlueprint.model_validate(data)
+    task = SimpleNamespace(workflow=SimpleNamespace(blueprint=plan),
         binding=SimpleNamespace(canvas_id='canvas', node_bindings={'copy': 'p-copy', 'first': 'p-first', 'second': 'p-second'}))
     seen = []
     async def resolve(request, asset_id, **kwargs):
@@ -53,6 +204,7 @@ async def test_bundle_resolves_every_declared_node_in_order(monkeypatch):
     assert [item[0] for item in seen] == ['a-copy', 'a-first', 'a-second']
     assert all(item[1] == {'p-' + key} for item, key in zip(seen, ['copy', 'first', 'second']))
     assert [block['text'] for block in blocks if block['text'].startswith('a-')] == ['a-copy', 'a-first', 'a-second']
+    assert any('制作要求：画面必须突出第一项内容' in block.get('text', '') for block in blocks)
 
 
 def test_bundle_submission_is_persisted_and_replayed(tmp_path):

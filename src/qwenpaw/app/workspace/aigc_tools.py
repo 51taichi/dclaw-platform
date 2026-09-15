@@ -650,15 +650,30 @@ def build_aigc_tools(
 
 
 @contextmanager
-def bind_aigc_tools(agent: Any, tools: dict[str, Callable]):
+def bind_aigc_tools(
+    agent: Any,
+    tools: dict[str, Callable],
+    *,
+    base_tool_names: set[str] | None = None,
+    added_tool_names: set[str] | None = None,
+):
     """Temporarily extend a request-owned Agent; never mutate its base toolkit."""
-    if not tools:
+    if not tools and base_tool_names is None:
         yield
         return
     original = agent.toolkit
     scoped = copy(original)
-    scoped.tools = dict(original.tools)
-    for tool in tools.values():
+    scoped.tools = {
+        name: tool
+        for name, tool in original.tools.items()
+        if base_tool_names is None or name in base_tool_names
+    }
+    selected_tools = (
+        tools.values()
+        if added_tool_names is None
+        else (tool for name, tool in tools.items() if name in added_tool_names)
+    )
+    for tool in selected_tools:
         schema = _workflow_tool_schema(tool) if tool.__name__ == "aigc_workflow_create" else None
         scoped.register_tool_function(
             tool,

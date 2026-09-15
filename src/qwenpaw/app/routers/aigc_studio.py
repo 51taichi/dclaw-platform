@@ -106,6 +106,7 @@ from ..runtime.event_bus import RuntimeEvent, get_runtime_event_bus
 from ..runtime.aigc_media import (
     resource_http_error as _resource_http_error,
     artifact_root_for_request as _shared_artifact_root_for_request,
+    build_review_image_proxy,
     review_media_source,
 )
 
@@ -1452,7 +1453,14 @@ async def _save_generated_asset(
 
     asset_id = str(uuid.uuid4())
     storage_meta: dict[str, Any] | None = None
+    review_proxy_meta: dict[str, Any] | None = None
     asset_path = relative_path
+    review_proxy: bytes | None = None
+    if kind == "image" and isinstance(content, bytes):
+        try:
+            review_proxy, review_proxy_meta = build_review_image_proxy(content)
+        except (OSError, ValueError):
+            logger.warning("Unable to create review proxy for generated image %s", filename)
     if storage_client is not None:
         storage_meta = await _upload_generated_asset(
             storage_client,
@@ -1461,6 +1469,33 @@ async def _save_generated_asset(
             mime_type=mime_type,
         )
         asset_path = f"oss://{storage_meta['bucket']}/{storage_meta['object_key']}"
+        if review_proxy is not None and review_proxy_meta is not None:
+            proxy_relative_path = (
+                rel_dir / f"{Path(filename).stem}.review.jpg"
+            ).as_posix()
+            try:
+                proxy_storage = await _upload_generated_asset(
+                    storage_client,
+                    relative_path=proxy_relative_path,
+                    content=review_proxy,
+                    mime_type="image/jpeg",
+                )
+                review_proxy_meta.update(
+                    {
+                        "path": (
+                            f"oss://{proxy_storage['bucket']}/"
+                            f"{proxy_storage['object_key']}"
+                        ),
+                        "storage": proxy_storage,
+                    },
+                )
+            except (httpx.HTTPError, RuntimeError):
+                logger.warning(
+                    "Unable to upload review proxy for generated image %s",
+                    filename,
+                    exc_info=True,
+                )
+                review_proxy_meta = None
     else:
         root = await _artifact_root_for_request(request)
         target_dir = root / rel_dir
@@ -1470,6 +1505,13 @@ async def _save_generated_asset(
             target.write_bytes(content)
         else:
             target.write_text(content, encoding="utf-8")
+        if review_proxy is not None and review_proxy_meta is not None:
+            proxy_relative_path = (
+                rel_dir / f"{Path(filename).stem}.review.jpg"
+            ).as_posix()
+            proxy_target = root / proxy_relative_path
+            proxy_target.write_bytes(review_proxy)
+            review_proxy_meta["path"] = proxy_relative_path
 
     asset = AigcAsset(
         id=asset_id,
@@ -1492,6 +1534,8 @@ async def _save_generated_asset(
     )
     if storage_meta is not None:
         asset.meta["storage"] = storage_meta
+    if review_proxy_meta is not None:
+        asset.meta["review_proxy"] = review_proxy_meta
     _write_json(_json_path("assets", asset.id), asset)
     return asset
 
