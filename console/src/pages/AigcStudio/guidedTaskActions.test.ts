@@ -49,6 +49,24 @@ describe("guided task actions", () => {
     const calls = vi.mocked(superExpertPlatformApi.command).mock.calls;
     expect(calls[0][1].idempotency_key).not.toBe(calls[1][1].idempotency_key);
   });
+  it("reuses the original submission identity when retrying an incomplete review", async () => {
+    vi.mocked(superExpertPlatformApi.command)
+      .mockResolvedValueOnce({
+        task: { ...task, status: "SUBMITTED", version: 3, asset_id: "asset-1" },
+      })
+      .mockResolvedValueOnce({
+        task: { ...task, status: "ACCEPTED", version: 4, asset_id: "asset-1" },
+      });
+
+    await submitGuidedTaskAsset(task, "asset-1");
+    await submitGuidedTaskAsset(
+      { ...task, status: "SUBMITTED", version: 3 },
+      "asset-1",
+    );
+
+    const calls = vi.mocked(superExpertPlatformApi.command).mock.calls;
+    expect(calls[0][1].idempotency_key).toBe(calls[1][1].idempotency_key);
+  });
   it("returns the owned public task route, not the internal session or old claw route", async () => {
     vi.mocked(superExpertPlatformApi.getConversationRoute).mockResolvedValue({
       conversation_id: "internal",
