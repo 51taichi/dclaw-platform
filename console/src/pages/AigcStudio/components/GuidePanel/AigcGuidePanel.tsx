@@ -180,6 +180,10 @@ export function AigcGuidePanel({
   const taskArguments = task.operation_arguments ?? {};
   const projectName = String(taskArguments.project_name ?? "").trim();
   const parameterGroups = useMemo(() => buildTaskParameterGroups(task), [task]);
+  const revisionFeedback =
+    task.latest_review?.decision === "REVISION_REQUIRED"
+      ? task.latest_review.assessment.trim()
+      : "";
 
   const run = async (operation: () => Promise<unknown> | void) => {
     if (inFlight.current) return;
@@ -236,6 +240,13 @@ export function AigcGuidePanel({
           <div className={styles.blocked}>
             当前画布不属于此任务。请返回任务绑定画布，其他画布不会推进向导。
           </div>
+        ) : null}
+
+        {revisionFeedback ? (
+          <section className={styles.reviewFeedback} aria-label="上次审核意见">
+            <h3>上次审核意见</h3>
+            <p>{revisionFeedback}</p>
+          </section>
         ) : null}
 
         {current ? (

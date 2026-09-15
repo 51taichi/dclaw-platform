@@ -49,6 +49,10 @@ export function LegacyAigcGuidePanel({
   const wrongCanvas = Boolean(
     activeCanvasId && task.binding.canvas_id !== activeCanvasId,
   );
+  const revisionFeedback =
+    task.latest_review?.decision === "REVISION_REQUIRED"
+      ? task.latest_review.assessment.trim()
+      : "";
 
   useEffect(
     () => localStorage.setItem(storageKey, String(stepIndex)),
@@ -107,6 +111,12 @@ export function LegacyAigcGuidePanel({
             {safeIndex + 1} / {operation.human_guide.length}
           </small>
         </header>
+        {revisionFeedback ? (
+          <section className={styles.reviewFeedback} aria-label="上次审核意见">
+            <h3>上次审核意见</h3>
+            <p>{revisionFeedback}</p>
+          </section>
+        ) : null}
         <section className={styles.currentStep} aria-label="当前步骤">
           <div className={styles.stepEyebrow}>
             <span>现在只做这一步</span>

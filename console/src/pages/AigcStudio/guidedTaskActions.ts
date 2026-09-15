@@ -33,7 +33,8 @@ export async function submitGuidedTaskAsset(
   const selection = reviewAssets?.length
     ? JSON.stringify(reviewAssets)
     : assetId;
-  const storageKey = `dclaw:aigc-submit:${task.binding.material_task_id}:${selection}`;
+  const taskVersion = Number.isInteger(task.version) ? task.version : "unknown";
+  const storageKey = `dclaw:aigc-submit:${task.binding.material_task_id}:${taskVersion}:${selection}`;
   const eventId = localStorage.getItem(storageKey) || crypto.randomUUID();
   localStorage.setItem(storageKey, eventId);
   const result = await superExpertPlatformApi.command("aigc.asset.submit", {

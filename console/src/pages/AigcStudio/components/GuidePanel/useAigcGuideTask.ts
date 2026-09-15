@@ -33,6 +33,7 @@ export function useAigcGuideTask(search: string) {
       ) {
         const eventId = crypto.randomUUID();
         try {
+          const latestReview = nextTask.latest_review;
           const resumed = await superExpertPlatformApi.command(
             "aigc.task.resume",
             {
@@ -44,6 +45,9 @@ export function useAigcGuideTask(search: string) {
           );
           nextTask =
             resumed.task ?? (await superExpertPlatformApi.getTask(taskId));
+          if (latestReview && !nextTask.latest_review) {
+            nextTask = { ...nextTask, latest_review: latestReview };
+          }
         } catch (reason) {
           // Another tab may already have started this task. Verify, never assume success.
           const latest = await superExpertPlatformApi.getTask(taskId);

@@ -88,6 +88,31 @@ describe("useAigcGuideTask", () => {
     );
   });
 
+  it("keeps the latest revision feedback after automatically resuming the task", async () => {
+    const reviewedTask = {
+      ...workflowTask,
+      status: "REVISION_REQUIRED",
+      latest_review: {
+        decision: "REVISION_REQUIRED",
+        assessment: "请修改封面列出的三项内容。",
+      },
+    };
+    api.getTask.mockResolvedValue(reviewedTask);
+    api.getGuide.mockResolvedValue(guide("copy.generate"));
+    api.command.mockResolvedValue({
+      task: { ...workflowTask, status: "IN_PROGRESS" },
+    });
+
+    const { result } = renderHook(() => useAigcGuideTask("?task=task-1"));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.task?.status).toBe("IN_PROGRESS");
+    expect(result.current.task?.latest_review?.assessment).toBe(
+      "请修改封面列出的三项内容。",
+    );
+    expect(api.getTask).toHaveBeenCalledTimes(1);
+  });
+
   it("loads the task and instance guide without requesting a static operation", async () => {
     api.getTask.mockResolvedValue(workflowTask);
     api.getGuide.mockResolvedValue(guide("copy.generate"));

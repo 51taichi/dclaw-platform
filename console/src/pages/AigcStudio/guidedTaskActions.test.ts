@@ -10,6 +10,7 @@ vi.mock("../../api/modules/superExpertPlatform", () => ({
 }));
 const task = {
   status: "IN_PROGRESS",
+  version: 2,
   binding: {
     installation_id: "i1",
     conversation_id: "internal",
@@ -22,6 +23,31 @@ describe("guided task actions", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     localStorage.clear();
+  });
+
+  it("uses a new submission identity after a revision cycle changes the task version", async () => {
+    vi.mocked(superExpertPlatformApi.command)
+      .mockResolvedValueOnce({
+        task: {
+          ...task,
+          status: "REVISION_REQUIRED",
+          asset_id: "asset-1",
+        },
+      })
+      .mockResolvedValueOnce({
+        task: {
+          ...task,
+          version: 6,
+          status: "REVISION_REQUIRED",
+          asset_id: "asset-1",
+        },
+      });
+
+    await submitGuidedTaskAsset(task, "asset-1");
+    await submitGuidedTaskAsset({ ...task, version: 6 }, "asset-1");
+
+    const calls = vi.mocked(superExpertPlatformApi.command).mock.calls;
+    expect(calls[0][1].idempotency_key).not.toBe(calls[1][1].idempotency_key);
   });
   it("returns the owned public task route, not the internal session or old claw route", async () => {
     vi.mocked(superExpertPlatformApi.getConversationRoute).mockResolvedValue({

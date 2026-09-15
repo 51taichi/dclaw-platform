@@ -192,6 +192,29 @@ describe("AigcGuidePanel", () => {
     expect(screen.getByText(fullPrompt)).not.toBeVisible();
   });
 
+  it("shows the latest revision feedback while the customer edits the task", () => {
+    render(
+      <AigcGuidePanel
+        task={{
+          ...task,
+          status: "IN_PROGRESS",
+          latest_review: {
+            decision: "REVISION_REQUIRED",
+            assessment: "封面列出的三项与后面的内容页不一致。",
+          },
+        }}
+        guide={readyGuide}
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "上次审核意见" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("封面列出的三项与后面的内容页不一致。"),
+    ).toBeInTheDocument();
+  });
+
   it("reads every prebuilt workflow node parameter and keeps them collapsed", () => {
     render(
       <AigcGuidePanel

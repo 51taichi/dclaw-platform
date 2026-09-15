@@ -36,6 +36,10 @@ export interface BoundAigcTask {
   operation_id?: string | null;
   operation_version?: string | null;
   operation_arguments?: Record<string, unknown>;
+  latest_review?: {
+    decision: "ACCEPTED" | "REVISION_REQUIRED";
+    assessment: string;
+  } | null;
 }
 
 export interface AigcWorkflowBinding {
