@@ -592,6 +592,37 @@ async def test_media_tracker_records_agentscope_local_image_delivery(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_media_tracker_keeps_delivery_across_later_agent_model_calls():
+    from agentscope.message import Msg
+    from qwenpaw.app.workspace.aigc_tools import track_media_delivery
+
+    url = "https://example.test/review.jpg"
+    media = {"type": "image", "source": {"type": "url", "url": url}}
+    messages = [Msg("user", [media], "user")]
+
+    class Model:
+        async def __call__(self, messages):
+            return SimpleNamespace(id="response")
+
+    agent = SimpleNamespace(model=Model())
+    delivery = {}
+    with track_media_delivery(agent, messages, delivery):
+        await agent.model(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": url}},
+                    ],
+                },
+            ],
+        )
+        await agent.model(messages=[{"role": "user", "content": "continue"}])
+
+    assert delivery["delivered_modalities"] == ["image"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('expert', ['traffic-expert', 'product-expert'])
 async def test_authorized_agent_loop_has_tools_without_expert_specific_configuration(tmp_path, expert):
     from agentscope.message import Msg

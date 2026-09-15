@@ -699,13 +699,25 @@ def track_media_delivery(agent: Any, messages: list, delivery: dict):
         return
     identities = media_input_identities(messages)
     original = agent.model
+    delivery.clear()
+
+    def record(evidence: dict[str, Any]) -> None:
+        """Keep proof from any successful model call in this review turn."""
+        if not delivery:
+            delivery.update(evidence)
+            return
+        delivered = set(delivery.get("delivered_modalities", []))
+        delivered.update(evidence.get("delivered_modalities", []))
+        delivery.update(evidence)
+        delivery["delivered_modalities"] = sorted(delivered)
+        kinds = {item["kind"] for item in manifest}
+        delivery["unavailable_modalities"] = sorted(kinds - delivered)
 
     class TrackedModel:
         def __getattr__(self, key):
             return getattr(original, key)
 
         async def __call__(self, *args, **kwargs):
-            delivery.clear()
             prompt = kwargs.get("messages", args[0] if args else None)
             # Snapshot before the model/provider can mutate its input.
             evidence = build_media_delivery(manifest, prompt, "", input_identities=identities)
@@ -718,12 +730,10 @@ def track_media_delivery(agent: Any, messages: list, delivery: dict):
                         yield chunk
                     if last is not None:
                         evidence["model_response_id"] = str(getattr(last, "id", ""))[:200]
-                        delivery.clear()
-                        delivery.update(evidence)
+                        record(evidence)
                 return stream()
             evidence["model_response_id"] = str(getattr(response, "id", ""))[:200]
-            delivery.clear()
-            delivery.update(evidence)
+            record(evidence)
             return response
 
     agent.model = TrackedModel()
