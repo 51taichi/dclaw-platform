@@ -113,6 +113,60 @@ def test_review_model_selection_routes_away_from_text_only_current_model():
     assert selected == {"provider_id": "provider", "model": "vision"}
 
 
+def test_review_model_selection_prefers_active_provider_chat_vision_model():
+    unrelated = _review_provider(
+        "unrelated",
+        ModelInfo(
+            id="vision-first",
+            name="Vision first",
+            supports_image=True,
+            supports_video=True,
+        ),
+    )
+    active = _review_provider(
+        "active",
+        ModelInfo(
+            id="image-generator",
+            name="Image generator",
+            supports_image=True,
+            supports_video=False,
+            aigc_capabilities=["text_to_image"],
+        ),
+        ModelInfo(
+            id="text",
+            name="Text",
+            supports_image=False,
+            supports_video=False,
+        ),
+        ModelInfo(
+            id="vision-chat",
+            name="Vision chat",
+            supports_image=True,
+            supports_video=True,
+        ),
+    )
+    manager = SimpleNamespace(
+        builtin_providers={
+            "unrelated": unrelated,
+            "active": active,
+        },
+        custom_providers={},
+        plugin_providers={},
+        get_active_model=lambda: SimpleNamespace(
+            provider_id="active",
+            model="text",
+        ),
+    )
+
+    selected = router_module._select_review_chat_model(
+        manager,
+        None,
+        {"image"},
+    )
+
+    assert selected == {"provider_id": "active", "model": "vision-chat"}
+
+
 def test_review_model_selection_rejects_unknown_or_partially_compatible_models():
     unknown = ModelInfo(id="unknown", name="Unknown")
     image_only = ModelInfo(
@@ -2093,6 +2147,7 @@ async def test_duplicate_asset_submit_replays_the_durable_agent_review(
 async def test_nonterminal_review_is_not_cached_and_can_be_retried(monkeypatch):
     dispatches = 0
     saved = []
+    request_keys = []
 
     class Service:
         async def execute(self, **_kwargs):
@@ -2114,6 +2169,7 @@ async def test_nonterminal_review_is_not_cached_and_can_be_retried(monkeypatch):
     async def dispatch(*_args, **_kwargs):
         nonlocal dispatches
         dispatches += 1
+        request_keys.append(_kwargs["request_key"])
         return {
             "status": "model_required",
             "reply": "需要支持图片识别的模型。",
@@ -2157,6 +2213,9 @@ async def test_nonterminal_review_is_not_cached_and_can_be_retried(monkeypatch):
     assert second["agent_review"]["status"] == "model_required"
     assert dispatches == 2
     assert saved == []
+    assert request_keys[0].startswith("submit:agent-review:")
+    assert request_keys[1].startswith("submit:agent-review:")
+    assert request_keys[0] != request_keys[1]
 
 
 @pytest.mark.asyncio

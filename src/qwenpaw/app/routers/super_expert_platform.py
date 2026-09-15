@@ -110,10 +110,29 @@ def _select_review_chat_model(
         str(getattr(provider, "id", "") or ""): provider
         for provider in providers
     }
-    ordered_slots = [current_slot]
+    ordered_slots: list[Any] = []
+
+    def append_slot_and_provider_models(slot: Any) -> None:
+        provider_id, model_id = _model_slot_values(slot)
+        if not provider_id:
+            return
+        if model_id:
+            ordered_slots.append({"provider_id": provider_id, "model": model_id})
+        provider = provider_by_id.get(provider_id)
+        if provider is None:
+            return
+        ordered_slots.extend(
+            {"provider_id": provider_id, "model": model.id}
+            for model in (
+                list(getattr(provider, "models", ()) or ())
+                + list(getattr(provider, "extra_models", ()) or ())
+            )
+        )
+
+    append_slot_and_provider_models(current_slot)
     get_active_model = getattr(manager, "get_active_model", None)
     if callable(get_active_model):
-        ordered_slots.append(get_active_model())
+        append_slot_and_provider_models(get_active_model())
     ordered_slots.extend(
         {"provider_id": provider_id, "model": model.id}
         for provider_id, provider in provider_by_id.items()
@@ -145,6 +164,8 @@ def _select_review_chat_model(
             None,
         )
         if model is None or getattr(model, "model_type", "llm") != "llm":
+            continue
+        if list(getattr(model, "aigc_capabilities", ()) or ()):
             continue
         if "image" in required_modalities and getattr(
             model,
@@ -513,7 +534,10 @@ async def execute_super_expert_command(
                             installation_id=command.installation_id,
                             binding=AigcTaskBinding.model_validate(binding),
                             asset_id=str(command.arguments.get("asset_id") or ""),
-                            request_key=f"{command.idempotency_key}:agent-review",
+                            request_key=(
+                                f"{command.idempotency_key}:agent-review:"
+                                f"{uuid.uuid4().hex}"
+                            ),
                         )
                     if review.get("status") == "completed":
                         review = service.save_review_receipt(submit_event_id, review)
