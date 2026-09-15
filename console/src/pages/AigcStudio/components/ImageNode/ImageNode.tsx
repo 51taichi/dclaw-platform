@@ -131,6 +131,11 @@ const friendlyImageErrorMessage = (raw: unknown, fallback: string) => {
       summary: "当前模型服务请求过多或额度不足，请稍后再试，或切换其他模型。",
     },
     {
+      test: /451|legal[_ ]error/,
+      summary:
+        "提示词被模型服务的内容审核拒绝，请调整可能引发误判的文案后重试。",
+    },
+    {
       test: /safety policy|content policy|filtered|moderation|安全策略|安全审核|内容审核/,
       summary: "生成内容未通过模型安全策略，请调整提示词或参考图后重试。",
     },

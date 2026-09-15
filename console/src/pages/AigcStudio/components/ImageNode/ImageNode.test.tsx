@@ -255,6 +255,37 @@ describe("ImageNode", () => {
     ).toBeInTheDocument();
   });
 
+  it("identifies MXAPI legal errors as content-review failures before generic 400 errors", () => {
+    render(
+      <ImageNode
+        node={{
+          ...generatedImageNode,
+          data: {
+            title: "图片节点",
+            imageState: "failed",
+            job_status: "failed",
+            job_error:
+              'GPT Image 请求失败: 400: submit failed: 451 {"error_code":"legal_error","message":"{}"}',
+          },
+        }}
+        selected={false}
+        t={t}
+        workflow={workflow}
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        "提示词被模型服务的内容审核拒绝，请调整可能引发误判的文案后重试。",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "请求参数没有通过模型服务校验，请检查提示词、比例或参考图后重试。",
+      ),
+    ).not.toBeInTheDocument();
+  });
+
   it("shows the selected primary image in compact multi-output results", () => {
     const generatedOutputs = Array.isArray(generatedImageNode.data.outputs)
       ? generatedImageNode.data.outputs
