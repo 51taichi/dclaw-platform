@@ -102,9 +102,11 @@ def _native_counts(prompt: Any) -> Counter:
                 identity = None
                 if typ in {'image_url', 'video_url'}:
                     value = block.get(typ)
-                    if isinstance(value, dict) and value.get('url'):
+                    if isinstance(value, dict):
+                        value = value.get('url')
+                    if isinstance(value, str) and value:
                         kind = typ.removesuffix('_url')
-                        identity = _identity(value['url'])
+                        identity = _identity(value, local=True)
                 elif typ == 'input_audio':
                     value = block.get('input_audio')
                     if isinstance(value, dict) and value.get('data'):
@@ -115,13 +117,33 @@ def _native_counts(prompt: Any) -> Counter:
                     if isinstance(source, dict) and (source.get('data') or source.get('url')):
                         kind = str(source.get('media_type', '')).partition('/')[0] or typ
                         identity = _source_identity(source, local=True)
+                    else:
+                        # Some provider adapters keep the media type and put
+                        # the encoded value directly under `image`, `video`,
+                        # or `audio` instead of using an OpenAI-style source.
+                        value = block.get(typ, block.get(f'{typ}_url'))
+                        if isinstance(value, dict):
+                            value = value.get('url')
+                        if isinstance(value, str) and value:
+                            kind = typ
+                            identity = _identity(value, local=True)
                 else:
-                    # Gemini formatter emits native parts.
-                    value = block.get('inline_data', block.get('file_data'))
-                    if isinstance(value, dict) and (value.get('data') or value.get('file_uri')):
-                        kind = str(value.get('mime_type', '')).partition('/')[0]
-                        identity = (_identity('data:application/octet-stream;base64,' + value['data'])
-                                    if isinstance(value.get('data'), str) else _identity(value.get('file_uri')))
+                    # DashScope emits provider-native blocks such as
+                    # {"image": "data:image/jpeg;base64,..."} without a
+                    # separate `type` field.
+                    for media_kind in MEDIA_TYPES:
+                        value = block.get(media_kind)
+                        if isinstance(value, str) and value:
+                            kind = media_kind
+                            identity = _identity(value, local=True)
+                            break
+                    if kind is None:
+                        # Gemini formatter emits native parts.
+                        value = block.get('inline_data', block.get('file_data'))
+                        if isinstance(value, dict) and (value.get('data') or value.get('file_uri')):
+                            kind = str(value.get('mime_type', '')).partition('/')[0]
+                            identity = (_identity('data:application/octet-stream;base64,' + value['data'])
+                                        if isinstance(value.get('data'), str) else _identity(value.get('file_uri')))
                 if kind in MEDIA_TYPES and identity is not None:
                     counts[kind, identity] += 1
     return counts
