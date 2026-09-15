@@ -82,6 +82,13 @@ def _native_counts(prompt: Any) -> Counter:
         for message in prompt:
             if hasattr(message, 'model_dump'):
                 message = message.model_dump(exclude_none=True)
+            elif not isinstance(message, dict) and isinstance(
+                getattr(message, 'content', None), list
+            ):
+                # AgentScope calls the selected chat model with native Msg
+                # objects.  This is the model transport boundary for that
+                # adapter, before it encodes local files for the provider.
+                message = {'content': message.content}
             if not isinstance(message, dict):
                 continue
             blocks = message.get('content', message.get('parts', []))
@@ -107,7 +114,7 @@ def _native_counts(prompt: Any) -> Counter:
                     source = block.get('source')
                     if isinstance(source, dict) and (source.get('data') or source.get('url')):
                         kind = str(source.get('media_type', '')).partition('/')[0] or typ
-                        identity = _source_identity(source)
+                        identity = _source_identity(source, local=True)
                 else:
                     # Gemini formatter emits native parts.
                     value = block.get('inline_data', block.get('file_data'))
