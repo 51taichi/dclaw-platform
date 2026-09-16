@@ -324,3 +324,134 @@ async def test_declared_turn_passes_loaded_conversation_history_to_runtime(
     assert agent.memory.added[:1] == current_messages
     assert agent.memory.added[1].role == "assistant"
     assert agent.memory.added[1].content == "继续"
+
+
+@pytest.mark.asyncio
+async def test_active_release_can_review_a_task_bound_to_its_previous_installation(
+    monkeypatch,
+    tmp_path,
+):
+    from qwenpaw.app.super_experts.models import AigcTaskBinding
+    from qwenpaw.app.workspace.media_review_context import bind_review_input
+
+    old_binding = AigcTaskBinding(
+        installation_id="old-installation",
+        conversation_id="session-1",
+        agent_task_id="content-1",
+        content_revision=1,
+        material_task_id="material-1",
+        canvas_id="canvas-1",
+        node_id="image-1",
+    )
+    task = SimpleNamespace(
+        binding=old_binding,
+        asset_id="asset-1",
+        status=SimpleNamespace(value="SUBMITTED"),
+        model_dump=lambda **_kwargs: {
+            "binding": old_binding.model_dump(mode="json"),
+            "asset_id": "asset-1",
+            "status": "SUBMITTED",
+            "review_assets": [],
+        },
+    )
+    authorization = SimpleNamespace(
+        installation_id="active-installation",
+        granted_capabilities={"aigc.review.complete": "1"},
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "resolve_active_workspace_authorization",
+        lambda **_kwargs: authorization,
+        raising=False,
+    )
+    calls = []
+
+    class Tasks:
+        def get(self, material_task_id):
+            return task if material_task_id == "material-1" else None
+
+    class PlatformService:
+        task_repository = Tasks()
+
+        def list_session_events(self, **_kwargs):
+            return []
+
+        async def execute(self, **kwargs):
+            calls.append(kwargs)
+            return {"task": task}
+
+    from qwenpaw.app.super_experts import composition as platform_module
+
+    monkeypatch.setattr(
+        platform_module,
+        "get_super_expert_platform_service",
+        lambda: PlatformService(),
+    )
+
+    async def exercise_review_bridge(**kwargs):
+        review_input = kwargs["safe_metadata"].get("aigcReviewInput")
+        assert review_input["binding"]["installation_id"] == "old-installation"
+        assert kwargs["read_aigc_task"]("material-1")["asset_id"] == "asset-1"
+        await kwargs["business_call"](
+            "aigc.review.complete",
+            {
+                "idempotency_key": "review-1",
+                "event_id": "review-1",
+                "binding": old_binding.model_dump(mode="json"),
+                "asset_id": "asset-1",
+                "decision": "ACCEPTED",
+                "payload": {"assessment": "可用"},
+            },
+        )
+        return WorkspaceTurnResult(
+            message={"name": "assistant", "role": "assistant", "content": "审核完成"},
+        )
+
+    monkeypatch.setattr(
+        runner_module,
+        "run_workspace_orchestration_turn",
+        exercise_review_bridge,
+        raising=False,
+    )
+    config = OrchestrationConfig(
+        enabled=True,
+        contract_version="1",
+        entrypoint="runtime.py:create_runtime",
+        required_host_capabilities=(
+            "agent.execute",
+            "session.context",
+            "runtime.trace",
+            "runtime.complete",
+            "runtime.fail",
+        ),
+    )
+    request = _request()
+    request.tenant_id = "local"
+
+    with bind_review_input(
+        user_id="user-1",
+        binding=old_binding,
+        asset_id="asset-1",
+        media_block={
+            "type": "image",
+            "source": {"type": "url", "url": "https://example.test/review.png"},
+        },
+        runtime_installation_id="active-installation",
+    ):
+        actual = [
+            item
+            async for item in runner_module._run_standard_or_orchestrated_turn(
+                agent=SimpleNamespace(memory=None),
+                messages=[Msg(name="user", role="user", content="审核")],
+                request=request,
+                query="审核",
+                mission_info=None,
+                agent_id="expert",
+                agent_name="Expert",
+                workspace_root=tmp_path,
+                orchestration=config,
+            )
+        ]
+
+    assert actual[0][0].content == "审核完成"
+    assert calls[0]["installation_id"] == "old-installation"

@@ -205,6 +205,39 @@ def test_review_model_selection_rejects_unknown_or_partially_compatible_models()
     assert selected is None
 
 
+def test_review_dispatch_targets_the_active_installation_after_an_upgrade(monkeypatch):
+    active_release = SimpleNamespace(release_id="release-2")
+    monkeypatch.setattr(
+        "qwenpaw.app.sealed_agents.registry.get_sealed_agent_registry",
+        lambda: SimpleNamespace(
+            get_agent=lambda agent_id: SimpleNamespace(
+                agent_id=agent_id,
+                enabled=True,
+                active_release=active_release,
+            ),
+        ),
+    )
+    active_grant = SimpleNamespace(installation_id="installation-2")
+    repository = SimpleNamespace(
+        find_release_grant=lambda agent_id, release, tenant_id: (
+            active_grant
+            if (agent_id, release, tenant_id)
+            == ("agent-1", active_release, "tenant-a")
+            else None
+        ),
+    )
+    historical_grant = SimpleNamespace(
+        installation_id="installation-1",
+        agent_id="agent-1",
+        tenant_id="tenant-a",
+    )
+
+    assert router_module._review_runtime_installation_id(
+        SimpleNamespace(grant_repository=repository),
+        historical_grant,
+    ) == "installation-2"
+
+
 @pytest.mark.asyncio
 async def test_conversation_route_resolves_owned_chat_without_selected_agent(monkeypatch):
     from qwenpaw.app import chat_access

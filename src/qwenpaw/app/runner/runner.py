@@ -201,6 +201,12 @@ async def _run_standard_or_orchestrated_turn(
             installation_id=authorization.installation_id,
             conversation_id=str(request.session_id),
         )
+        from ..workspace.media_review_context import current_review_input
+        review_input = current_review_input(
+            user_id=str(request.user_id),
+            installation_id=authorization.installation_id,
+            conversation_id=str(request.session_id),
+        )
         conversation_history: list[Any] = []
         memory = getattr(agent, "memory", None)
         get_memory = getattr(memory, "get_memory", None)
@@ -228,10 +234,20 @@ async def _run_standard_or_orchestrated_turn(
             idempotency_key = str(payload.pop("idempotency_key", ""))
             if not idempotency_key:
                 raise WorkspaceOrchestrationError("orchestration_error")
+            target_installation_id = authorization.installation_id
+            if capability == "aigc.review.complete" and review_input is not None:
+                trusted_binding = review_input.get("binding")
+                if payload.get("binding") != trusted_binding:
+                    raise WorkspaceOrchestrationError("unauthorized_capability")
+                target_installation_id = str(
+                    (trusted_binding or {}).get("installation_id") or ""
+                )
+                if not target_installation_id:
+                    raise WorkspaceOrchestrationError("unauthorized_capability")
             return await platform_service.execute(
                 tenant_id=tenant_id,
                 user_id=str(getattr(request, "user_id", "") or ""),
-                installation_id=authorization.installation_id,
+                installation_id=target_installation_id,
                 capability=capability,
                 contract_version=contract_version,
                 arguments=payload,
@@ -242,16 +258,18 @@ async def _run_standard_or_orchestrated_turn(
             task = platform_service.task_repository.get(material_task_id)
             if task is None:
                 return None
-            if (task.binding.installation_id != authorization.installation_id
+            task_binding = task.binding.model_dump(mode="json")
+            trusted_review_binding = (
+                review_input.get("binding") if review_input is not None else None
+            )
+            installation_matches = (
+                task.binding.installation_id == authorization.installation_id
+                or task_binding == trusted_review_binding
+            )
+            if (not installation_matches
                     or task.binding.conversation_id != str(request.session_id)):
                 return None
             return task.model_dump(mode="json")
-
-        from ..workspace.media_review_context import current_review_input
-        review_input = current_review_input(
-            user_id=str(request.user_id), installation_id=authorization.installation_id,
-            conversation_id=str(request.session_id),
-        )
         from ..workspace.public_stream import stream_workspace_turn
         async for completed, value in stream_workspace_turn(
             run_turn=run_workspace_orchestration_turn,

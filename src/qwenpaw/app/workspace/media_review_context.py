@@ -21,7 +21,8 @@ _REVIEW_INPUT: ContextVar[dict[str, Any] | None] = ContextVar('aigc_review_input
 def bind_review_input(*, user_id: str, binding: AigcTaskBinding,
                       asset_id: str, media_block: dict[str, Any],
                       review_assets: list[dict[str, Any]] | None = None,
-                      media_blocks: list[dict[str, Any]] | None = None):
+                      media_blocks: list[dict[str, Any]] | None = None,
+                      runtime_installation_id: str | None = None):
     kind = media_block.get('type')
     if kind not in {'image', 'video', 'audio', 'text'} or not asset_id:
         raise ValueError('invalid review media input')
@@ -29,7 +30,10 @@ def bind_review_input(*, user_id: str, binding: AigcTaskBinding,
                                       separators=(',', ':'), allow_nan=False).encode()).hexdigest()
     value = {'user_id': str(user_id), 'binding': binding.model_dump(mode='json'),
              'schema_version': 'dclaw-aigc-review-input-v1', 'asset_id': asset_id,
-             'media_kind': kind, 'block_digest': 'sha256:' + digest}
+             'media_kind': kind, 'block_digest': 'sha256:' + digest,
+             'runtime_installation_id': (
+                 str(runtime_installation_id or binding.installation_id)
+             )}
     if review_assets:
         value['review_assets'] = copy.deepcopy(review_assets)
         def block_digest(block):
@@ -54,7 +58,7 @@ def current_review_input(*, user_id: str, installation_id: str,
     if value is None or value['user_id'] != str(user_id):
         return None
     binding = value['binding']
-    if (binding['installation_id'] != installation_id or
+    if (value['runtime_installation_id'] != installation_id or
             binding['conversation_id'] != conversation_id):
         return None
     return copy.deepcopy({key: item for key, item in value.items() if key != 'user_id'})

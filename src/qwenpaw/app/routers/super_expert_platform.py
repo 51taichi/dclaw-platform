@@ -187,6 +187,37 @@ def _replace_review_message_text(message: Any, text: str) -> None:
     if hasattr(message, "content"):
         message.content = text
 
+
+def _review_runtime_installation_id(
+    service: SuperExpertPlatformService,
+    historical_grant: Any,
+    historical_installation_id: str | None = None,
+) -> str:
+    """Resolve the active grant used by the runtime for a durable older task."""
+    from ..sealed_agents.registry import get_sealed_agent_registry
+
+    record = get_sealed_agent_registry().get_agent(historical_grant.agent_id)
+    release = record.active_release if record is not None and record.enabled else None
+    if release is None:
+        return str(
+            historical_installation_id
+            or getattr(historical_grant, "installation_id", "")
+        )
+    finder = getattr(service.grant_repository, "find_release_grant", None)
+    if not callable(finder):
+        return str(
+            historical_installation_id
+            or getattr(historical_grant, "installation_id", "")
+        )
+    active_grant = finder(
+        historical_grant.agent_id,
+        release,
+        tenant_id=historical_grant.tenant_id,
+    )
+    if active_grant is None:
+        raise SuperExpertPlatformError("active installation grant is unavailable")
+    return active_grant.installation_id
+
 router = APIRouter(
     prefix="/super-expert-platform",
     tags=["super-expert-platform"],
@@ -614,6 +645,11 @@ async def _dispatch_agent_asset_review(
         raise SuperExpertPlatformError("agent review dispatch is unavailable") from exc
 
     user_id = str(getattr(request.state, "user_id", "platform-user") or "platform-user")
+    runtime_installation_id = _review_runtime_installation_id(
+        service,
+        grant,
+        installation_id,
+    )
     # Review continues the bound conversation. Resolve that chat first so its
     # selected model remains the preferred candidate for the review turn.
     resolved_chat_id = binding.conversation_id
@@ -709,6 +745,7 @@ async def _dispatch_agent_asset_review(
             user_id=user_id, binding=binding, asset_id=asset_id, media_block=media_block,
             review_assets=[entry.model_dump(mode="json") for entry in review_assets],
             media_blocks=media_blocks,
+            runtime_installation_id=runtime_installation_id,
         ):
             async for message, is_last in workspace.runner.query_handler(
                 messages,

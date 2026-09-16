@@ -37,6 +37,43 @@ async def test_concurrent_review_contexts_never_share_asset_bindings():
     await asyncio.wait_for(asyncio.gather(task(1), task(2)), timeout=2)
 
 
+def test_review_context_can_target_the_active_installation_after_an_upgrade():
+    from qwenpaw.app.workspace.media_review_context import bind_review_input, current_review_input
+    from qwenpaw.app.super_experts.models import AigcTaskBinding
+
+    binding = AigcTaskBinding(
+        installation_id='historical-installation',
+        conversation_id='conversation',
+        agent_task_id='task',
+        content_revision=1,
+        material_task_id='material',
+        canvas_id='canvas',
+        node_id='node',
+    )
+    with bind_review_input(
+        user_id='user',
+        binding=binding,
+        asset_id='asset',
+        media_block={
+            'type': 'image',
+            'source': {'type': 'url', 'url': 'https://example.test/review.png'},
+        },
+        runtime_installation_id='active-installation',
+    ):
+        current = current_review_input(
+            user_id='user',
+            installation_id='active-installation',
+            conversation_id='conversation',
+        )
+        assert current is not None
+        assert current['binding']['installation_id'] == 'historical-installation'
+        assert current_review_input(
+            user_id='user',
+            installation_id='historical-installation',
+            conversation_id='conversation',
+        ) is None
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize('supported', [True, False])
 async def test_actual_formatter_media_delivery_not_model_claim(monkeypatch, supported):
