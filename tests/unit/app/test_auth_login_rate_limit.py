@@ -8,6 +8,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from qwenpaw.app import auth, db
+from qwenpaw.app.storage.engine import get_app_engine, reset_app_engine_cache
+from qwenpaw.app.storage.schema import create_all
 from qwenpaw.app.routers.auth import router as auth_router
 
 
@@ -32,7 +34,10 @@ def isolated_auth_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         conn.close()
         delattr(db._local, "conn")
 
+    monkeypatch.setenv("QWENPAW_SQLITE_PATH", str(tmp_path / "qwenpaw.db"))
+    reset_app_engine_cache()
     db.init_db()
+    create_all(get_app_engine())
     auth.register_user("admin", "correct-password")
 
     app = FastAPI()
@@ -40,6 +45,7 @@ def isolated_auth_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     try:
         yield TestClient(app)
     finally:
+        reset_app_engine_cache()
         conn = getattr(db._local, "conn", None)
         if conn is not None:
             conn.close()

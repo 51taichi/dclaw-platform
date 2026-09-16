@@ -296,3 +296,62 @@ async def test_preview_subresource_can_reuse_referer_token(
     response = await middleware.dispatch(request, call_next)
 
     assert response.status_code == 200
+
+@pytest.mark.asyncio
+async def test_profile_updates_only_token_owner(isolated_auth_store):
+    from qwenpaw.app.routers.auth import UpdateProfileRequest, update_profile
+    admin_token = auth.register_user("admin", "admin-pass")
+    pw, salt = auth._hash_password("customer-pass")
+    repo = auth.get_user_repository()
+    before = repo.create_user(username="customer", password_hash=pw, password_salt=salt, role="user")
+    customer_token = auth.authenticate("customer", "customer-pass")
+    request = Request({"type": "http", "headers": [(b"authorization", f"Bearer {customer_token}".encode())]})
+    result = await update_profile(UpdateProfileRequest(current_password="customer-pass", new_password="new-pass"), request)
+    assert result.username == "customer"
+    assert auth.authenticate("customer", "customer-pass") is None
+    assert auth.authenticate("customer", "new-pass")
+    assert repo.get_user_by_username("customer")["id"] == before["id"]
+    assert repo.get_user_by_username("customer")["role"] == "user"
+    assert auth.verify_token(customer_token) is None
+    assert auth.verify_token(admin_token) == "admin"
+    assert auth.verify_token(result.token) == "customer"
+
+@pytest.mark.asyncio
+async def test_profile_cannot_use_admin_password_for_customer(isolated_auth_store):
+    from fastapi import HTTPException
+    from qwenpaw.app.routers.auth import UpdateProfileRequest, update_profile
+    auth.register_user("admin", "admin-pass")
+    pw, salt = auth._hash_password("customer-pass")
+    auth.get_user_repository().create_user(username="customer", password_hash=pw, password_salt=salt, role="user")
+    token = auth.authenticate("customer", "customer-pass")
+    request = Request({"type": "http", "headers": [(b"authorization", f"Bearer {token}".encode())]})
+    with pytest.raises(HTTPException) as exc:
+        await update_profile(UpdateProfileRequest(current_password="admin-pass", new_password="new-pass"), request)
+    assert exc.value.status_code == 401
+    assert auth.authenticate("admin", "admin-pass")
+    assert auth.authenticate("customer", "customer-pass")
+
+@pytest.mark.asyncio
+async def test_profile_admin_rename_and_collision(isolated_auth_store):
+    from fastapi import HTTPException
+    from qwenpaw.app.routers.auth import UpdateProfileRequest, update_profile
+    token = auth.register_user("admin", "admin-pass")
+    repo = auth.get_user_repository()
+    original_id = repo.get_user_by_username("admin")["id"]
+    pw, salt = auth._hash_password("customer-pass")
+    repo.create_user(username="customer", password_hash=pw, password_salt=salt, role="user")
+    customer_token = auth.authenticate("customer", "customer-pass")
+    request = Request({"type": "http", "headers": [(b"authorization", f"Bearer {token}".encode())]})
+    with pytest.raises(HTTPException) as exc:
+        await update_profile(UpdateProfileRequest(current_password="admin-pass", new_username="customer"), request)
+    assert exc.value.status_code == 409
+    result = await update_profile(UpdateProfileRequest(current_password="admin-pass", new_username="renamed", new_password="new-admin-pass"), request)
+    assert result.username == "renamed"
+    assert repo.get_user_by_username("renamed")["id"] == original_id
+    assert repo.get_user_by_username("renamed")["role"] == "admin"
+    assert auth._load_auth_data()["user"]["username"] == "renamed"
+    assert auth.authenticate("renamed", "new-admin-pass")
+    assert auth.authenticate("admin", "admin-pass") is None
+    assert auth.verify_token(token) is None
+    assert auth.verify_token(customer_token) == "customer"
+    assert auth.verify_token(result.token) == "renamed"

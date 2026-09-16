@@ -355,6 +355,7 @@ def create_token(username: str, expiry_seconds: Optional[int] = None) -> str:
     payload = json.dumps(
         {
             "sub": username,
+            "credential_version": _load_auth_data().get("credential_versions", {}).get(username, 0),
             "exp": int(time.time()) + expiry_seconds,
             "iat": int(time.time()),
             "jti": token_id,  # JWT ID for individual revocation
@@ -398,7 +399,11 @@ def verify_token(token: str) -> Optional[str]:
         if jti and _is_token_revoked(jti):
             return None
 
-        return payload.get("sub")
+        username = payload.get("sub")
+        version = _load_auth_data().get("credential_versions", {}).get(username, 0)
+        if payload.get("credential_version", 0) != version:
+            return None
+        return username
     except (json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
         logger.debug("Token verification failed: %s", exc)
         return None
@@ -755,51 +760,52 @@ def update_credentials(
     new_username: Optional[str] = None,
     new_password: Optional[str] = None,
     expiry_seconds: Optional[int] = None,
+    *,
+    username: str,
 ) -> Optional[str]:
-    """Update the registered user's username and/or password.
-
-    Requires the current password for verification.  Returns a new
-    token on success (because the username may have changed), or
-    ``None`` if verification fails.
-
-    Args:
-        current_password: The current password for verification.
-        new_username: The new username (optional).
-        new_password: The new password (optional).
-        expiry_seconds: Custom token expiry time in seconds.
-    """
+    """Update only the verified token subject, preserving its identity and role."""
     data = _load_auth_data()
-    user = data.get("user")
-    if not user:
+    if data.get("_auth_load_error"):
+        raise RuntimeError("Authentication storage unavailable")
+    legacy = data.get("user") or {}
+    is_legacy = legacy.get("username") == username
+    repo = get_user_repository()
+    user = repo.get_user_by_username(username)
+    credentials = repo.get_user_credentials(username)
+    # Match the legacy login path, but only for that exact token subject.
+    if is_legacy and verify_password(
+        current_password, legacy.get("password_hash", ""), legacy.get("password_salt", ""),
+    ):
+        credentials = legacy
+    elif not credentials or not verify_password(
+        current_password, credentials["password_hash"], credentials["password_salt"],
+    ):
         return None
-
-    stored_hash = user.get("password_hash", "")
-    stored_salt = user.get("password_salt", "")
-    if not verify_password(current_password, stored_hash, stored_salt):
-        return None
-
-    old_username = user.get("username", "")
-    if new_username and new_username.strip():
-        user["username"] = new_username.strip()
-
+    target = new_username.strip() if new_username else username
+    if target != username and (
+        repo.get_user_by_username(target) or legacy.get("username") == target
+    ):
+        raise ValueError("Username already exists")
+    pw_hash, salt = credentials["password_hash"], credentials["password_salt"]
     if new_password:
         pw_hash, salt = _hash_password(new_password)
-        user["password_hash"] = pw_hash
-        user["password_salt"] = salt
-        # Rotate JWT secret to invalidate all existing sessions
-        data["jwt_secret"] = secrets.token_hex(32)
-
-    data["user"] = user
-    _save_auth_data(data)
-    _update_db_user_credentials(
-        old_username,
-        user["username"],
-        user.get("password_hash", ""),
-        user.get("password_salt", ""),
-        "admin",
+    updated = repo.update_user_credentials(
+        old_username=username, username=target,
+        password_hash=pw_hash, password_salt=salt,
+        role=user["role"] if user else "admin",
     )
-    logger.info("Credentials updated for user '%s'", user["username"])
-    return create_token(user["username"], expiry_seconds)
+    if not updated:
+        raise RuntimeError("Failed to update user credentials")
+    if is_legacy:
+        data["user"] = {**legacy, "username": target,
+                        "password_hash": pw_hash, "password_salt": salt}
+    # Invalidate this user's sessions without signing out every other user.
+    versions = data.setdefault("credential_versions", {})
+    versions[username] = secrets.token_hex(16)
+    versions[target] = secrets.token_hex(16)
+    _save_auth_data(data)
+    logger.info("Credentials updated for user '%s'", target)
+    return create_token(target, expiry_seconds)
 
 
 # ---------------------------------------------------------------------------
