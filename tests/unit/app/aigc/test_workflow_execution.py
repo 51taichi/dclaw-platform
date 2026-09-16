@@ -43,6 +43,30 @@ def test_binding_rejects_each_execution_mismatch(field, value):
     module.validate_execution(target, **values)
 
 
+def test_workflow_image_capability_uses_the_authoritative_bound_mode():
+    module = importlib.import_module("qwenpaw.app.aigc.workflow_execution")
+    target = binding(capability="image_edit")
+
+    assert module.canonical_execution_capability(
+        target,
+        capability="text_to_image",
+    ) == "image_edit"
+    assert module.canonical_execution_capability(
+        target,
+        capability="image_to_image",
+    ) == "image_edit"
+
+
+def test_workflow_capability_rejects_a_different_media_family():
+    module = importlib.import_module("qwenpaw.app.aigc.workflow_execution")
+
+    with pytest.raises(ValueError, match="EXECUTION_BINDING_MISMATCH"):
+        module.canonical_execution_capability(
+            binding(capability="text_to_video"),
+            capability="text_to_image",
+        )
+
+
 def test_bindings_survive_repository_restart_and_replay(engine):
     first = repository(engine)
     first.register_bindings([binding()], "operation")

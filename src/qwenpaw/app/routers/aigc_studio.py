@@ -41,7 +41,7 @@ from pydantic import BaseModel, Field
 from ...aigc.workflow_compiler import CompiledWorkflow
 from ..aigc.workflow_execution import (
     WorkflowExecutionBinding,
-    validate_execution_capability,
+    canonical_execution_capability,
 )
 from ..aigc.job_lifecycle import AigcJobLifecycle, _merge_node_output
 from ..aigc.provider_execution import ProviderExecution, execution_command
@@ -1039,7 +1039,7 @@ def _validate_job_resource_binding(request: Request, body: AigcJobCreate) -> Non
         )
     if authoritative is not None:
         try:
-            validate_execution_capability(
+            body.capability = canonical_execution_capability(
                 authoritative,
                 capability=body.capability,
             )

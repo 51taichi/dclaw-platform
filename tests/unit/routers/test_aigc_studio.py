@@ -211,6 +211,72 @@ async def test_validate_job_submission_keeps_workflow_capability_binding_after_c
     )
 
 
+@pytest.mark.asyncio
+async def test_validate_job_submission_restores_workflow_image_edit_mode(
+    monkeypatch,
+):
+    canvas = aigc_studio.Canvas(
+        id="canvas-1",
+        name="Workflow image edit",
+        nodes=[
+            aigc_studio.CanvasNode(
+                id="image-1",
+                type="image_generate",
+                position={"x": 0, "y": 0},
+                data={
+                    "workflowLogicalNodeId": "repair_image",
+                    "providerId": "mxapi",
+                    "modelId": "gpt-image-2",
+                    "modelCapability": "text_to_image",
+                },
+            ),
+        ],
+        edges=[],
+        created_at="2026-09-04T00:00:00Z",
+        updated_at="2026-09-04T00:00:00Z",
+    )
+    monkeypatch.setattr(
+        aigc_studio,
+        "_load_canvas_for_request",
+        lambda *_args: canvas,
+    )
+    monkeypatch.setattr(
+        aigc_studio,
+        "_authoritative_workflow_execution_binding",
+        lambda *_args: aigc_studio.WorkflowExecutionBinding(
+            owner_user_id="user-a",
+            canvas_id="canvas-1",
+            workflow_id="workflow-1",
+            workflow_revision=1,
+            node_id="image-1",
+            logical_node_id="repair_image",
+            provider_id="mxapi",
+            model_id="gpt-image-2",
+            capability="image_edit",
+        ),
+    )
+    observed = []
+
+    async def available(_request, _provider_id, _model_id, capability):
+        observed.append(capability)
+        return object()
+
+    monkeypatch.setattr(aigc_studio, "_find_capability", available)
+    body = aigc_studio.AigcJobCreate(
+        canvas_id="canvas-1",
+        node_id="image-1",
+        capability="text_to_image",
+        provider_id="mxapi",
+        model_id="gpt-image-2",
+        inputs={"reference_nodes": [{"asset_id": "reference"}]},
+    )
+
+    await aigc_studio._validate_job_submission(SimpleNamespace(), body)
+
+    assert body.capability == "image_edit"
+    assert observed == ["image_edit"]
+
+
 class _AllPublished(set):
     def __bool__(self):
         return True

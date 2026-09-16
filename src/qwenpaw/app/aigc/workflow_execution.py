@@ -56,6 +56,36 @@ def validate_execution_capability(
         raise ValueError("EXECUTION_BINDING_MISMATCH")
 
 
+_IMAGE_GENERATION_CAPABILITIES = frozenset({
+    "text_to_image",
+    "image_to_image",
+    "image_edit",
+    "mask_edit",
+})
+
+
+def canonical_execution_capability(
+    binding: WorkflowExecutionBinding,
+    *,
+    capability: str,
+) -> str:
+    """Resolve UI image-mode aliases to the signed workflow capability.
+
+    Image nodes expose one model under several request modes. Canvas editing
+    can therefore persist a sibling mode such as ``text_to_image`` even when
+    the workflow contract requires ``image_edit``. Keep the signed workflow
+    semantics authoritative while rejecting changes across media families.
+    """
+    if capability == binding.capability:
+        return binding.capability
+    if {
+        capability,
+        binding.capability,
+    }.issubset(_IMAGE_GENERATION_CAPABILITIES):
+        return binding.capability
+    raise ValueError("EXECUTION_BINDING_MISMATCH")
+
+
 class AigcWorkflowExecutionService:
     def __init__(self, store: AigcResourceStore, repository: AigcExecutionRepository):
         self.store = store
