@@ -424,7 +424,14 @@ def build_aigc_tools(
     def owned_task(key):
         task = read_task(key) if read_task else None
         binding = task.get("binding", {}) if isinstance(task, dict) else {}
-        if (binding.get("installation_id") != installation_id
+        trusted_review_binding = (
+            review_input.get("binding") if isinstance(review_input, dict) else None
+        )
+        installation_matches = (
+            binding.get("installation_id") == installation_id
+            or binding == trusted_review_binding
+        )
+        if (not installation_matches
                 or binding.get("conversation_id") != conversation_id
                 or binding.get("material_task_id") != key):
             return None

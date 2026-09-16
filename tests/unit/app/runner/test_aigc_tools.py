@@ -836,6 +836,56 @@ async def test_review_accepts_only_current_native_media(delivery_kind, expected)
 
 
 @pytest.mark.asyncio
+async def test_review_tool_accepts_a_trusted_task_from_the_previous_installation():
+    binding = {
+        'installation_id': 'historical-installation',
+        'conversation_id': 'conversation',
+        'material_task_id': 'material',
+    }
+    task = {
+        'binding': binding,
+        'asset_id': 'asset',
+        'status': 'SUBMITTED',
+        'review_assets': [],
+    }
+    review_input = {
+        'binding': binding,
+        'asset_id': 'asset',
+        'review_assets': [],
+        'media_kind': 'image',
+        'block_digest': 'sha256:block',
+    }
+    calls = []
+
+    async def call(capability, arguments):
+        calls.append((capability, arguments))
+        return {'task': {'status': 'REVISION_REQUIRED'}}
+
+    tools = build_aigc_tools(
+        grants={
+            'aigc.task.create': '1',
+            'aigc.review.complete': '1',
+        },
+        installation_id='active-installation',
+        conversation_id='conversation',
+        business_call=call,
+        read_task=lambda key: task if key == 'material' else None,
+        review_input=review_input,
+        media_delivery={},
+    )
+
+    reply = result(await tools['aigc_task_review'](
+        'material',
+        'REVISION_REQUIRED',
+        '第一张图的手部结构需要修正。',
+    ))
+
+    assert 'error' not in reply
+    assert calls[0][0] == 'aigc.review.complete'
+    assert calls[0][1]['binding']['installation_id'] == 'historical-installation'
+
+
+@pytest.mark.asyncio
 async def test_failed_media_request_clears_previous_delivery():
     from agentscope.message import Msg
     from qwenpaw.app.workspace.aigc_tools import track_media_delivery
