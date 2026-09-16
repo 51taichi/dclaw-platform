@@ -215,6 +215,32 @@ describe("useImageNodeWorkflow", () => {
     ).toEqual([selectedModel]);
   });
 
+  it("preserves the bound capability for a workflow image model", () => {
+    const textCapability = {
+      ...mxapiImageModel,
+      capability: "text_to_image",
+    };
+    const workflowNode: AigcCanvasNode = {
+      ...imageNode,
+      data: {
+        ...imageNode.data,
+        workflowLogicalNodeId: "repair_image",
+        providerId: mxapiImageModel.provider_id,
+        modelId: mxapiImageModel.model_id,
+        modelLabel: mxapiImageModel.model_name,
+        modelCapability: "image_edit",
+        imageMode: "image_to_image",
+      },
+    };
+
+    expect(
+      imageModelForNode(workflowNode, null, [
+        textCapability,
+        mxapiImageModel,
+      ]),
+    ).toBe(mxapiImageModel);
+  });
+
   it("does not treat an untyped saved video model as the image node model", () => {
     expect(
       imageModelForNode(

@@ -119,12 +119,19 @@ export const imageModelForNode = (
   modelOptions: AigcCapabilityInfo[] = [],
 ) => {
   if (isImageCapabilityModel(currentModel)) return currentModel;
-  const imageModelOptions = imageModelOptionsFrom(modelOptions);
   const nodeProviderId = stringValue(node.data.providerId);
   const nodeModelId = stringValue(node.data.modelId);
   const nodeModelCapability = stringValue(node.data.modelCapability);
   const nodeModelKey =
     nodeProviderId && nodeModelId ? `${nodeProviderId}:${nodeModelId}` : "";
+  const exactNodeModel = modelOptions.find(
+    (model) =>
+      isImageCapabilityModel(model) &&
+      imageModelKey(model) === nodeModelKey &&
+      (!nodeModelCapability || model.capability === nodeModelCapability),
+  );
+  if (exactNodeModel) return exactNodeModel;
+  const imageModelOptions = imageModelOptionsFrom(modelOptions);
   const matchedNodeModel = imageModelOptions.find(
     (model) => imageModelKey(model) === nodeModelKey,
   );
