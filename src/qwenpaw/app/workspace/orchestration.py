@@ -48,6 +48,42 @@ _DEFAULT_ORCHESTRATION_TIMEOUT_SECONDS = 180.0
 _MIN_ORCHESTRATION_TIMEOUT_SECONDS = 30.0
 _MAX_ORCHESTRATION_TIMEOUT_SECONDS = 900.0
 _MAX_AUTOMATIC_CONTINUATION_PASSES = 8
+_PLATFORM_REVIEW_PREFIX = (
+    "当前绑定的 DClaw AIGC 素材已由客户明确提交。任务ID："
+)
+
+
+def _drop_prior_platform_review_attempts(memory: Any) -> int:
+    """Remove stale platform-generated review turns from Agent context."""
+    content = getattr(memory, "content", None)
+    if not isinstance(content, list):
+        return 0
+    kept = []
+    dropping = False
+    removed = 0
+    for item in content:
+        message = item[0] if isinstance(item, (tuple, list)) and item else item
+        role = str(getattr(message, "role", "") or "")
+        text = ""
+        get_text = getattr(message, "get_text_content", None)
+        if callable(get_text):
+            text = str(get_text() or "")
+        is_review_start = role == "user" and text.startswith(
+            _PLATFORM_REVIEW_PREFIX,
+        )
+        if is_review_start:
+            dropping = True
+            removed += 1
+            continue
+        if dropping and role == "user":
+            dropping = False
+        if dropping:
+            removed += 1
+            continue
+        kept.append(item)
+    if removed:
+        memory.content = kept
+    return removed
 
 
 def workspace_orchestration_timeout_seconds() -> float:
@@ -585,6 +621,15 @@ async def run_workspace_orchestration_turn(
                     (safe_metadata or {}).get("aigcReviewInput")
                 )
                 if tools:
+                    if review_only:
+                        removed = _drop_prior_platform_review_attempts(
+                            getattr(agent, "memory", None),
+                        )
+                        if removed:
+                            logger.info(
+                                "Removed %d stale platform review messages",
+                                removed,
+                            )
                     with bind_aigc_tools(
                         agent,
                         tools,
@@ -593,9 +638,6 @@ async def run_workspace_orchestration_turn(
                         ),
                         added_tool_names=(
                             {"aigc_task_review"} if review_only else None
-                        ),
-                        required_tool_name=(
-                            "aigc_task_review" if review_only else None
                         ),
                     ), track_media_delivery(agent, messages, media_delivery):
                         candidate = await run_agent()

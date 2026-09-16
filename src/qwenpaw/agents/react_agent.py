@@ -182,19 +182,6 @@ KNOWLEDGE_RETRIEVAL_POLICY = """## Knowledge-base retrieval policy
 """
 
 
-def _required_tool_choice(
-    agent: Any,
-    requested: Literal["auto", "none", "required"] | None,
-) -> Literal["auto", "none", "required"] | None:
-    """Require a request-scoped tool until the Agent attempts it."""
-    required_name = getattr(agent, "_dclaw_required_tool_name", None)
-    toolkit = getattr(agent, "toolkit", None)
-    tools = getattr(toolkit, "tools", {})
-    if requested != "none" and required_name and required_name in tools:
-        return "required"
-    return requested
-
-
 class QwenPawAgent(ToolGuardMixin, ReActAgent):
     """DClaw agent with integrated tools, skills, and memory management.
 
@@ -1007,9 +994,6 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
 
         tool_name = str(tool_call.get("name", ""))
 
-        if tool_name == getattr(self, "_dclaw_required_tool_name", None):
-            self._dclaw_required_tool_name = None
-
         if tool_name in self._PLAN_TOOLS_WITH_JSON_ARGS:
             self._fix_stringified_json_args(tool_call)
 
@@ -1260,8 +1244,6 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
             # pylint: disable=protected-access
             nb._plan_text_only_after_mutation = False
             tool_choice = "none"
-
-        tool_choice = _required_tool_choice(self, tool_choice)
 
         # --- Proactive filtering layer ---
         should_strip = (

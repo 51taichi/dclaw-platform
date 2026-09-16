@@ -711,7 +711,10 @@ async def _dispatch_agent_asset_review(
                     "text": (
                         "当前绑定的 DClaw AIGC 素材已由客户明确提交。"
                         f"任务ID：{binding.material_task_id}。"
-                        "请在当前审核阶段读取附件并完成审核，并在本轮调用 aigc_task_review。"
+                        "历史自动审核消息和历史工具错误已经失效，不得据此跳过本次审核。"
+                        "请以当前附件、当前任务绑定和当前签名 Agent 规则为准完成审核；"
+                        "需要审核细则时先读取当前 Agent 的审核 Skill，并在本轮调用 "
+                        "aigc_task_review。"
                         "只有该工具成功返回且任务状态已经变为 ACCEPTED 或 REVISION_REQUIRED，"
                         "才可以向客户表示审核已经完成；只输出一个当前结论和一个下一步动作。"
                     ),

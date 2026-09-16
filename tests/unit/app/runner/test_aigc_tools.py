@@ -740,7 +740,6 @@ def create_runtime(): return Runtime()
                 'read_agent_skill',
                 'aigc_task_review',
             }
-            assert self._dclaw_required_tool_name == 'aigc_task_review'
             return Msg('assistant', 'reviewed', 'assistant')
 
     binding = {
@@ -799,22 +798,30 @@ def create_runtime(): return Runtime()
     assert response.error_code is None
 
 
-def test_review_binding_requires_the_review_tool_until_it_is_attempted():
-    from qwenpaw.agents.react_agent import _required_tool_choice
-
-    agent = SimpleNamespace(
-        _dclaw_required_tool_name='aigc_task_review',
-        toolkit=SimpleNamespace(
-            tools={
-                'read_agent_skill': object(),
-                'aigc_task_review': object(),
-            },
-        ),
+def test_prior_platform_review_attempts_are_removed_from_agent_memory():
+    from agentscope.message import Msg
+    from qwenpaw.app.workspace.orchestration import (
+        _drop_prior_platform_review_attempts,
     )
 
-    assert _required_tool_choice(agent, 'auto') == 'required'
-    agent._dclaw_required_tool_name = None
-    assert _required_tool_choice(agent, 'auto') == 'auto'
+    marker = '当前绑定的 DClaw AIGC 素材已由客户明确提交。任务ID：material-1。'
+    memory = SimpleNamespace(content=[
+        (Msg('user', 'ordinary context', 'user'), []),
+        (Msg('user', marker, 'user'), []),
+        (Msg('assistant', 'stale refusal', 'assistant'), []),
+        (Msg('system', 'TASK_UNAVAILABLE', 'system'), []),
+        (Msg('user', 'customer correction', 'user'), []),
+        (Msg('assistant', 'normal answer', 'assistant'), []),
+        (Msg('user', marker, 'user'), []),
+        (Msg('assistant', 'another stale refusal', 'assistant'), []),
+    ])
+
+    assert _drop_prior_platform_review_attempts(memory) == 5
+    assert [item[0].get_text_content() for item in memory.content] == [
+        'ordinary context',
+        'customer correction',
+        'normal answer',
+    ]
 
 
 @pytest.mark.asyncio
@@ -1064,13 +1071,10 @@ def test_review_binding_can_hide_unrelated_base_and_aigc_tools():
         },
         base_tool_names={'read_agent_skill'},
         added_tool_names={'aigc_task_review'},
-        required_tool_name='aigc_task_review',
     ):
         assert set(agent.toolkit.tools) == {
             'read_agent_skill',
             'aigc_task_review',
         }
-        assert agent._dclaw_required_tool_name == 'aigc_task_review'
 
     assert agent.toolkit is original
-    assert not hasattr(agent, '_dclaw_required_tool_name')
