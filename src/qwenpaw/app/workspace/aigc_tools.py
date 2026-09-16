@@ -663,12 +663,15 @@ def bind_aigc_tools(
     *,
     base_tool_names: set[str] | None = None,
     added_tool_names: set[str] | None = None,
+    required_tool_name: str | None = None,
 ):
     """Temporarily extend a request-owned Agent; never mutate its base toolkit."""
     if not tools and base_tool_names is None:
         yield
         return
     original = agent.toolkit
+    required_tool_was_set = hasattr(agent, "_dclaw_required_tool_name")
+    original_required_tool = getattr(agent, "_dclaw_required_tool_name", None)
     scoped = copy(original)
     scoped.tools = {
         name: tool
@@ -688,10 +691,15 @@ def bind_aigc_tools(
             namesake_strategy="raise",
         )
     agent.toolkit = scoped
+    agent._dclaw_required_tool_name = required_tool_name
     try:
         yield
     finally:
         agent.toolkit = original
+        if required_tool_was_set:
+            agent._dclaw_required_tool_name = original_required_tool
+        else:
+            delattr(agent, "_dclaw_required_tool_name")
 
 
 @contextmanager

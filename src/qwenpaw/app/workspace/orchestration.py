@@ -594,6 +594,9 @@ async def run_workspace_orchestration_turn(
                         added_tool_names=(
                             {"aigc_task_review"} if review_only else None
                         ),
+                        required_tool_name=(
+                            "aigc_task_review" if review_only else None
+                        ),
                     ), track_media_delivery(agent, messages, media_delivery):
                         candidate = await run_agent()
                 else:
