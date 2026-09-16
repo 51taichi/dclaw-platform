@@ -100,6 +100,47 @@ async def test_actual_formatter_media_delivery_not_model_claim(monkeypatch, supp
 
 
 @pytest.mark.asyncio
+async def test_actual_formatter_preserves_base64_media_identity(monkeypatch):
+    import base64
+
+    monkeypatch.setattr(
+        model_factory,
+        '_supports_multimodal_for_current_model',
+        lambda: True,
+    )
+    formatter = model_factory._create_file_block_support_formatter(OpenAIChatFormatter)()
+    sent = []
+
+    async def model(prompt, **kwargs):
+        sent.extend(prompt)
+        return SimpleNamespace(
+            id='base64-response',
+            content=[{'type': 'text', 'text': '审核完成'}],
+        )
+
+    encoded = base64.b64encode(b'trusted-review-proxy').decode('ascii')
+    messages = [Msg(name='user', role='user', content=[{
+        'type': 'image',
+        'source': {
+            'type': 'base64',
+            'media_type': 'image/jpeg',
+            'data': encoded,
+        },
+    }])]
+    delivery = {}
+
+    await _execute_internal_candidate(
+        SimpleNamespace(formatter=formatter, model=model),
+        messages,
+        media_delivery=delivery,
+    )
+
+    assert sent
+    assert delivery['delivered_modalities'] == ['image']
+    assert delivery['unavailable_modalities'] == []
+
+
+@pytest.mark.asyncio
 async def test_failed_model_call_cannot_reuse_previous_media_delivery(monkeypatch):
     monkeypatch.setattr(model_factory, '_supports_multimodal_for_current_model', lambda: True)
     formatter = model_factory._create_file_block_support_formatter(OpenAIChatFormatter)()

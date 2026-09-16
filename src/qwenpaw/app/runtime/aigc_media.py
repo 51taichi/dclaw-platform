@@ -1,5 +1,6 @@
 """Application media-source composition shared by both HTTP entrances."""
 
+import base64
 from hashlib import sha256
 from io import BytesIO
 from pathlib import Path
@@ -73,7 +74,7 @@ def _cached_review_image_proxy(
     return {"type": "image", "source": {"type": "url", "url": target.as_uri()}}
 
 
-def _stored_review_image_proxy(
+async def _stored_review_image_proxy(
     asset: Any,
     *,
     artifact_root: Path | None,
@@ -86,11 +87,13 @@ def _stored_review_image_proxy(
     if isinstance(storage, dict) and storage.get("provider") == "aliyun_oss":
         object_key = str(storage.get("object_key") or "").strip()
         if object_key and storage_client is not None:
+            content, _ = await storage_client.download(object_key)
             return {
                 "type": "image",
                 "source": {
-                    "type": "url",
-                    "url": storage_client.signed_get_url(object_key),
+                    "type": "base64",
+                    "media_type": str(proxy.get("mime_type") or "image/jpeg"),
+                    "data": base64.b64encode(content).decode("ascii"),
                 },
             }
         return None
@@ -177,7 +180,7 @@ async def review_media_source(
         if asset.kind == "image":
             if asset_kinds is not None and "image" not in asset_kinds:
                 raise AigcResourceError("ASSET_TYPE_MISMATCH")
-            stored_proxy = _stored_review_image_proxy(
+            stored_proxy = await _stored_review_image_proxy(
                 asset,
                 artifact_root=root,
                 storage_client=client,

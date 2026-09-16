@@ -1,5 +1,6 @@
-from pathlib import Path
+import base64
 from io import BytesIO
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -77,6 +78,71 @@ async def test_image_review_uses_small_cached_proxy_without_changing_original(tm
     with Image.open(proxy) as image:
         assert image.size == (1080, 1920)
     assert original.read_bytes() == original_bytes
+
+
+@pytest.mark.asyncio
+async def test_cloud_review_proxy_is_bound_as_downloaded_bytes(tmp_path):
+    """Cloud review media must retain a byte identity through formatting.
+
+    A signed OSS URL can be downloaded and re-encoded by a provider adapter,
+    which makes URL-identity delivery receipts fail even when the model saw
+    the image.  Bind the trusted, already-small proxy bytes instead.
+    """
+    from qwenpaw.app.runtime.aigc_media import review_media_source
+
+    proxy = b"trusted-review-proxy"
+
+    class Storage:
+        async def download(self, object_key):
+            assert object_key == "review/result.review.jpg"
+            return proxy, "image/jpeg"
+
+        def signed_get_url(self, _object_key):
+            raise AssertionError("review must not be bound through a signed URL")
+
+    asset = AigcAsset(
+        id="cloud-image",
+        kind="image",
+        name="result.png",
+        path="oss://bucket/original/result.png",
+        mime_type="image/png",
+        created_at="2026-01-01",
+        meta={
+            "canvas_id": "canvas",
+            "node_id": "image",
+            "storage": {
+                "provider": "aliyun_oss",
+                "object_key": "original/result.png",
+            },
+            "review_proxy": {
+                "mime_type": "image/jpeg",
+                "storage": {
+                    "provider": "aliyun_oss",
+                    "object_key": "review/result.review.jpg",
+                },
+            },
+        },
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
+
+    result = await review_media_source(
+        request,
+        AigcAssetService(AigcResourceStore(tmp_path / "store")),
+        asset,
+        canvas_id="canvas",
+        node_ids={"image"},
+        asset_kinds={"image"},
+        storage_client_factory=Storage,
+    )
+
+    assert result == {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/jpeg",
+            "data": base64.b64encode(proxy).decode("ascii"),
+        },
+    }
 
 
 @pytest.mark.asyncio
