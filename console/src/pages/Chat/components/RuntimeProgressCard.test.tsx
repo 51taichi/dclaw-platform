@@ -57,6 +57,40 @@ describe("RuntimeProgressCard", () => {
         '[data-super-expert-interaction-slot="interaction-s0-1"]',
       ),
     ).toBeInTheDocument();
+    expect(screen.getByText("请按下方卡片填写。")).toBeInTheDocument();
+  });
+
+  it("restores the fixed-runtime card anchor from nested history metadata", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "persisted-fixed-runtime-reply",
+              type: "message",
+              status: "completed",
+              metadata: {
+                original_id: "source-message",
+                metadata: {
+                  super_expert_interaction_id: "interaction-s0-1",
+                },
+              },
+              content: [{ type: "text", text: "请按下方卡片填写。" }],
+            },
+          ],
+        }}
+      />,
+    );
+
+    const text = screen.getByText("请按下方卡片填写。");
+    const anchor = document.querySelector(
+      '[data-super-expert-interaction-slot="interaction-s0-1"]',
+    );
+    expect(anchor).toBeInTheDocument();
+    expect(
+      text.compareDocumentPosition(anchor!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it("places a successful interaction card anchor between surrounding reply text", () => {

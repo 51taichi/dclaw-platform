@@ -213,8 +213,12 @@ function findInteractionId(value: unknown, depth = 0): string | null {
 }
 
 function getCreatedInteractionId(messageItem: RuntimeMessage) {
+  const nestedMetadata = messageItem.metadata?.metadata;
   const metadataInteractionId =
-    messageItem.metadata?.super_expert_interaction_id;
+    messageItem.metadata?.super_expert_interaction_id ||
+    (nestedMetadata && typeof nestedMetadata === "object"
+      ? (nestedMetadata as Record<string, any>).super_expert_interaction_id
+      : null);
   if (
     typeof metadataInteractionId === "string" &&
     metadataInteractionId.trim()
@@ -375,7 +379,7 @@ export default function RuntimeProgressCard(props: Props) {
 
       {output.map((item, index) => {
         const interactionId = getCreatedInteractionId(item);
-        if (interactionId) {
+        if (interactionId && isToolOutput(item.type)) {
           return (
             <div
               key={`interaction-${interactionId}`}
@@ -451,6 +455,9 @@ export default function RuntimeProgressCard(props: Props) {
                 );
               });
             })()}
+            {interactionId ? (
+              <div data-super-expert-interaction-slot={interactionId} />
+            ) : null}
           </div>
         );
       })}
