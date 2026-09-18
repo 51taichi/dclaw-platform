@@ -9,6 +9,7 @@ import inspect
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 import time
@@ -50,6 +51,18 @@ _MAX_ORCHESTRATION_TIMEOUT_SECONDS = 900.0
 _MAX_AUTOMATIC_CONTINUATION_PASSES = 8
 _PLATFORM_REVIEW_PREFIX = (
     "当前绑定的 DClaw AIGC 素材已由客户明确提交。任务ID："
+)
+_INTERACTION_DELIVERY_PREFIX = re.compile(
+    r"^\s*"
+    r"(?:(?:好(?:了|的)?|可以|行)[，,。.!！；;：:]?\s*)?"
+    r"(?:(?:这张|这个|该|交互)?卡片)"
+    r"(?:已经|已)?"
+    r"(?:"
+    r"发(?:送)?(?:给你|过去|出去|出)?"
+    r"|发送成功"
+    r"|创建(?:好|完成|成功)"
+    r")"
+    r"了?(?:\s*[，,。.!！；;：:]\s*|\s*$)"
 )
 
 
@@ -117,6 +130,7 @@ class WorkspaceTurnResult(BaseModel):
 
     message: dict[str, Any] | None = None
     diagnostics: dict[str, Any] | None = None
+    verified_interaction_ids: tuple[str, ...] = ()
     error_code: str | None = None
     diagnostic_ref: str | None = Field(default=None, max_length=200)
 
@@ -237,32 +251,83 @@ def workspace_result_to_message(
             content="本轮处理未能安全完成，请稍后重试。",
         )
     message = result.message
+    verified_interaction_ids = tuple(
+        interaction_id.strip()
+        for interaction_id in result.verified_interaction_ids
+        if isinstance(interaction_id, str) and interaction_id.strip()
+    )
+    verified_interaction_id = (
+        verified_interaction_ids[-1] if verified_interaction_ids else None
+    )
+
+    def interaction_metadata() -> dict[str, Any] | None:
+        if verified_interaction_id is None:
+            return None
+        metadata: dict[str, Any] = {
+            "super_expert_interaction_id": verified_interaction_id,
+        }
+        if len(verified_interaction_ids) > 1:
+            metadata["super_expert_interaction_ids"] = list(
+                verified_interaction_ids,
+            )
+        return metadata
     if {"name", "role", "content"}.issubset(message):
         try:
-            return Msg.from_dict(message)
+            rendered = Msg.from_dict(message)
         except Exception as exc:
             raise WorkspaceOrchestrationError("invalid_completion") from exc
+        if verified_interaction_id is not None:
+            rendered.content = _sanitize_interaction_delivery_content(
+                rendered.content,
+            )
+            rendered.metadata = {
+                **(rendered.metadata if isinstance(rendered.metadata, dict) else {}),
+                **(interaction_metadata() or {}),
+            }
+        return rendered
     if isinstance(message.get("reply"), str):
         content = message["reply"]
+        if verified_interaction_id is not None:
+            content = _sanitize_interaction_delivery_text(content)
         display_text = (result.diagnostics or {}).get("display_text")
         if isinstance(display_text, str) and display_text:
             content = [
-                {"type": "text", "text": message["reply"]},
+                {"type": "text", "text": content},
                 {"type": "text", "text": "\n\n---\n\n" + display_text},
             ]
-        interaction_id = (result.diagnostics or {}).get("interaction_id")
-        metadata = (
-            {"super_expert_interaction_id": interaction_id}
-            if isinstance(interaction_id, str) and interaction_id.strip()
-            else None
-        )
         return Msg(
             name=agent_name,
             role="assistant",
             content=content,
-            metadata=metadata,
+            metadata=interaction_metadata(),
         )
     raise WorkspaceOrchestrationError("invalid_completion")
+
+
+def _sanitize_interaction_delivery_text(text: str) -> str:
+    return _INTERACTION_DELIVERY_PREFIX.sub("", text, count=1)
+
+
+def _sanitize_interaction_delivery_content(content: Any) -> Any:
+    if isinstance(content, str):
+        return _sanitize_interaction_delivery_text(content)
+    if not isinstance(content, list):
+        return content
+    sanitized = []
+    pending_prefix = True
+    for block in content:
+        if not isinstance(block, dict):
+            sanitized.append(block)
+            continue
+        rendered = dict(block)
+        if pending_prefix and rendered.get("type") == "text":
+            text = rendered.get("text")
+            if isinstance(text, str):
+                cleaned = _sanitize_interaction_delivery_text(text)
+                rendered["text"] = cleaned
+                pending_prefix = not cleaned.strip()
+        sanitized.append(rendered)
+    return sanitized
 
 
 def _validate_render_bound_message(message: dict[str, Any]) -> None:
@@ -634,6 +699,50 @@ async def run_workspace_orchestration_turn(
         event_type="orchestration.started",
     )
     agent_execute_call_number = 0
+    created_interaction_ids: list[str] = []
+
+    async def tracked_business_call(
+        capability: str,
+        arguments: dict[str, Any],
+    ) -> Any:
+        if business_call is None:
+            raise WorkspaceOrchestrationError("unauthorized_capability")
+        value = await _maybe_await(business_call(capability, arguments))
+        if capability == "interaction.card.create/1" and isinstance(value, dict):
+            interaction = value.get("interaction")
+            interaction_id = (
+                interaction.get("interaction_id")
+                if isinstance(interaction, dict)
+                else None
+            )
+            status = (
+                interaction.get("status")
+                if isinstance(interaction, dict)
+                else None
+            )
+            if (
+                status == "PENDING"
+                and isinstance(interaction_id, str)
+                and interaction_id.strip()
+                and interaction_id.strip() not in created_interaction_ids
+            ):
+                created_interaction_ids.append(interaction_id.strip())
+        return value
+
+    effective_business_call = (
+        tracked_business_call if business_call is not None else None
+    )
+
+    def attach_created_interactions(
+        turn_result: WorkspaceTurnResult,
+    ) -> WorkspaceTurnResult:
+        diagnostics = dict(turn_result.diagnostics or {})
+        diagnostics.pop("interaction_id", None)
+        diagnostics.pop("interaction_ids", None)
+        updates: dict[str, Any] = {"diagnostics": diagnostics}
+        if turn_result.error_code is None and created_interaction_ids:
+            updates["verified_interaction_ids"] = tuple(created_interaction_ids)
+        return turn_result.model_copy(update=updates)
 
     async def execute_agent(arguments: dict[str, Any]) -> dict[str, Any]:
         nonlocal agent_execute_call_number
@@ -727,7 +836,7 @@ async def run_workspace_orchestration_turn(
                     grants=authorization.granted_capabilities,
                     installation_id=authorization.installation_id,
                     conversation_id=turn_request.session_id,
-                    business_call=business_call, read_task=read_aigc_task,
+                    business_call=effective_business_call, read_task=read_aigc_task,
                     review_input=(safe_metadata or {}).get("aigcReviewInput"),
                     media_delivery=media_delivery,
                 )
@@ -741,7 +850,7 @@ async def run_workspace_orchestration_turn(
                         grants=authorization.granted_capabilities,
                         installation_id=authorization.installation_id,
                         conversation_id=turn_request.session_id,
-                        business_call=business_call,
+                        business_call=effective_business_call,
                         read_card=read_interaction_card,
                     )
                 )
@@ -867,7 +976,7 @@ async def run_workspace_orchestration_turn(
             workspace_root=workspace_root, config=config,
             signed_files=authorization.signed_workspace_files,
             execute_agent=execute_agent, session_context=lambda: trusted_context,
-            business_call=business_call,
+            business_call=effective_business_call,
             trace_sink=lambda trace: _append_runtime_trace(
                 state_storage_root, installation_id=authorization.installation_id,
                 session_id=turn_request.session_id,
@@ -877,7 +986,9 @@ async def run_workspace_orchestration_turn(
 
     orchestrator = build_orchestrator(invocation_id)
     try:
-        result = await orchestrator.invoke(turn_request, transaction)
+        result = attach_created_interactions(
+            await orchestrator.invoke(turn_request, transaction),
+        )
     except asyncio.CancelledError:
         _append_runtime_trace(
             state_storage_root,
@@ -944,8 +1055,10 @@ async def run_workspace_orchestration_turn(
             payload={"pass": continuation_pass},
         )
         try:
-            continued = await build_orchestrator(continuation_invocation_id).invoke(
-                continuation_request, continuation_transaction,
+            continued = attach_created_interactions(
+                await build_orchestrator(continuation_invocation_id).invoke(
+                    continuation_request, continuation_transaction,
+                ),
             )
         except asyncio.CancelledError:
             _append_runtime_trace(
@@ -981,7 +1094,7 @@ async def run_workspace_orchestration_turn(
             event_type="orchestration.continuation.limit_reached",
             payload={"max_passes": _MAX_AUTOMATIC_CONTINUATION_PASSES},
         )
-    return result
+    return attach_created_interactions(result)
 
 
 class WorkspaceStateTransaction:

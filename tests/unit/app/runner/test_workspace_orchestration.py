@@ -468,10 +468,8 @@ def test_interaction_completion_exposes_only_the_card_anchor_in_message_metadata
     message = workspace_result_to_message(
         WorkspaceTurnResult(
             message={"reply": "请按下方卡片填写。"},
-            diagnostics={
-                "adapter": "fixed_initial_interaction",
-                "interaction_id": "interaction-s0-1",
-            },
+            diagnostics={"adapter": "fixed_initial_interaction"},
+            verified_interaction_ids=("interaction-s0-1",),
         ),
         agent_name="陆羽",
     )
@@ -479,6 +477,254 @@ def test_interaction_completion_exposes_only_the_card_anchor_in_message_metadata
     assert message.metadata == {
         "super_expert_interaction_id": "interaction-s0-1",
     }
+
+
+def test_native_interaction_completion_exposes_anchor_and_removes_delivery_status():
+    message = workspace_result_to_message(
+        WorkspaceTurnResult(
+            message={
+                "name": "陆羽",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "好了，卡片已经发给你了。按上面的问题填一下。",
+                    },
+                ],
+            },
+            diagnostics={"adapter": "transparent"},
+            verified_interaction_ids=("interaction-1",),
+        ),
+        agent_name="陆羽",
+    )
+
+    assert message.metadata == {
+        "super_expert_interaction_id": "interaction-1",
+    }
+    assert message.get_text_content() == "按上面的问题填一下。"
+
+
+def test_delivery_status_text_is_unchanged_without_verified_interaction():
+    message = workspace_result_to_message(
+        WorkspaceTurnResult(
+            message={
+                "name": "陆羽",
+                "role": "assistant",
+                "content": "卡片已经发过去了。我从你的业务情况出发继续判断。",
+            },
+            diagnostics={"adapter": "transparent"},
+        ),
+        agent_name="陆羽",
+    )
+
+    assert message.get_text_content() == (
+        "卡片已经发过去了。我从你的业务情况出发继续判断。"
+    )
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "卡片发送成功率达到 95%。",
+        "卡片创建成功率偏低，需要继续排查。",
+        "卡片发过去的时间是下午三点。",
+    ],
+)
+def test_verified_interaction_does_not_strip_ordinary_card_sentences(content):
+    message = workspace_result_to_message(
+        WorkspaceTurnResult(
+            message={"reply": content},
+            verified_interaction_ids=("interaction-1",),
+        ),
+        agent_name="陆羽",
+    )
+
+    assert message.get_text_content() == content
+
+
+def test_runtime_reported_interaction_id_is_not_trusted_as_creation_evidence():
+    result = WorkspaceTurnResult(
+        message={"reply": "卡片已经发给你了。这句话没有真实创建回执。"},
+        diagnostics={
+            "adapter": "transparent",
+            "interaction_id": "runtime-invented-id",
+        },
+    )
+
+    message = workspace_result_to_message(result, agent_name="陆羽")
+
+    assert not message.metadata
+    assert message.get_text_content() == (
+        "卡片已经发给你了。这句话没有真实创建回执。"
+    )
+
+
+@pytest.mark.asyncio
+async def test_successful_created_interaction_is_attached_to_native_completion(
+    tmp_path,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _write_runtime(
+        workspace,
+        """
+        class Runtime:
+            async def handle(self, request, host):
+                await host.call("interaction.card.create/1", {"request": {}})
+                await host.call("runtime.complete", {
+                    "invocation_id": request.invocation_id,
+                    "message": {
+                        "name": "assistant",
+                        "role": "assistant",
+                        "content": "卡片已经发过去了。请按实际情况选择。",
+                    },
+                    "diagnostics": {"adapter": "transparent"},
+                })
+        def create_runtime(): return Runtime()
+        """,
+    )
+
+    async def business_call(capability, arguments):
+        assert capability == "interaction.card.create/1"
+        assert arguments == {"request": {}}
+        return {
+            "interaction": {
+                "interaction_id": "interaction-created-1",
+                "status": "PENDING",
+            },
+        }
+
+    authorization = AuthorizedWorkspaceRelease(
+        installation_id="installation-1",
+        release_id="release-1",
+        release_digest=f"sha256:{'a' * 64}",
+        granted_capabilities={
+            **{capability: "1" for capability in HOST_CAPABILITIES_V1},
+            "interaction.card.create/1": "1",
+        },
+        signed_workspace_files=frozenset({"runtime.py"}),
+    )
+
+    result = await run_workspace_orchestration_turn(
+        agent=object(),
+        original_messages=[Msg(name="user", role="user", content="开始")],
+        request=SimpleNamespace(
+            session_id="session-1",
+            user_id="user-1",
+            channel="console",
+            channel_meta={},
+        ),
+        agent_id="generic-agent",
+        workspace_root=workspace,
+        state_storage_root=tmp_path / "state-store",
+        config=OrchestrationConfig.model_validate(_orchestration()),
+        authorization=authorization,
+        business_call=business_call,
+    )
+
+    assert result.diagnostics == {"adapter": "transparent"}
+    assert result.verified_interaction_ids == ("interaction-created-1",)
+    message = workspace_result_to_message(result, agent_name="陆羽")
+    assert message.metadata == {
+        "super_expert_interaction_id": "interaction-created-1",
+    }
+    assert message.get_text_content() == "请按实际情况选择。"
+
+
+@pytest.mark.asyncio
+async def test_only_pending_created_interactions_are_attached_and_all_are_preserved(
+    tmp_path,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _write_runtime(
+        workspace,
+        """
+        class Runtime:
+            async def handle(self, request, host):
+                await host.call("interaction.card.create/1", {"request": {"n": 1}})
+                await host.call("interaction.card.create/1", {"request": {"n": 2}})
+                await host.call("interaction.card.create/1", {"request": {"n": 3}})
+                await host.call("runtime.complete", {
+                    "invocation_id": request.invocation_id,
+                    "message": {"reply": "卡片已经发给你了。请选择。"},
+                    "diagnostics": {
+                        "interaction_id": "runtime-invented-id",
+                        "interaction_ids": ["runtime-invented-id"],
+                    },
+                })
+        def create_runtime(): return Runtime()
+        """,
+    )
+    responses = iter(
+        [
+            {
+                "interaction": {
+                    "interaction_id": "interaction-pending-1",
+                    "status": "PENDING",
+                },
+            },
+            {
+                "interaction": {
+                    "interaction_id": "interaction-submitted",
+                    "status": "SUBMITTED",
+                },
+            },
+            {
+                "interaction": {
+                    "interaction_id": "interaction-pending-2",
+                    "status": "PENDING",
+                },
+            },
+        ],
+    )
+
+    async def business_call(capability, arguments):
+        assert capability == "interaction.card.create/1"
+        return next(responses)
+
+    authorization = AuthorizedWorkspaceRelease(
+        installation_id="installation-1",
+        release_id="release-1",
+        release_digest=f"sha256:{'a' * 64}",
+        granted_capabilities={
+            **{capability: "1" for capability in HOST_CAPABILITIES_V1},
+            "interaction.card.create/1": "1",
+        },
+        signed_workspace_files=frozenset({"runtime.py"}),
+    )
+
+    result = await run_workspace_orchestration_turn(
+        agent=object(),
+        original_messages=[Msg(name="user", role="user", content="开始")],
+        request=SimpleNamespace(
+            session_id="session-1",
+            user_id="user-1",
+            channel="console",
+            channel_meta={},
+        ),
+        agent_id="generic-agent",
+        workspace_root=workspace,
+        state_storage_root=tmp_path / "state-store",
+        config=OrchestrationConfig.model_validate(_orchestration()),
+        authorization=authorization,
+        business_call=business_call,
+    )
+
+    assert result.diagnostics == {}
+    assert result.verified_interaction_ids == (
+        "interaction-pending-1",
+        "interaction-pending-2",
+    )
+    message = workspace_result_to_message(result, agent_name="陆羽")
+    assert message.metadata == {
+        "super_expert_interaction_id": "interaction-pending-2",
+        "super_expert_interaction_ids": [
+            "interaction-pending-1",
+            "interaction-pending-2",
+        ],
+    }
+    assert message.get_text_content() == "请选择。"
 
 
 def test_state_paths_must_be_absolute_and_distinct(tmp_path):
