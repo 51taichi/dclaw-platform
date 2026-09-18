@@ -231,9 +231,31 @@ async def _run_standard_or_orchestrated_turn(
                 if payload:
                     raise WorkspaceOrchestrationError("orchestration_error")
                 return await _list_aigc_workflow_capabilities_for_workspace(request)
+            if capability == "interaction.capabilities.list/1":
+                from ..super_experts.interaction_contract import (
+                    build_interaction_catalog,
+                )
+                if set(payload) - {"component_types"}:
+                    raise WorkspaceOrchestrationError("orchestration_error")
+                return build_interaction_catalog(
+                    payload.get("component_types", []),
+                )
             idempotency_key = str(payload.pop("idempotency_key", ""))
             if not idempotency_key:
                 raise WorkspaceOrchestrationError("orchestration_error")
+            if capability in {
+                "interaction.card.create/1",
+                "interaction.card.cancel/1",
+            }:
+                return await platform_service.execute_interaction(
+                    tenant_id=tenant_id,
+                    installation_id=authorization.installation_id,
+                    conversation_id=str(request.session_id),
+                    capability=capability,
+                    contract_version=contract_version,
+                    arguments=payload,
+                    idempotency_key=idempotency_key,
+                )
             target_installation_id = authorization.installation_id
             if capability == "aigc.review.complete" and review_input is not None:
                 trusted_binding = review_input.get("binding")
@@ -270,6 +292,37 @@ async def _run_standard_or_orchestrated_turn(
                     or task.binding.conversation_id != str(request.session_id)):
                 return None
             return task.model_dump(mode="json")
+
+        def read_interaction_card(interaction_id: str) -> dict[str, Any] | None:
+            interactions = platform_service.interactions
+            if interactions is None:
+                return None
+            try:
+                if interaction_id:
+                    card = interactions.get_owned(
+                        interaction_id,
+                        installation_id=authorization.installation_id,
+                        conversation_id=str(request.session_id),
+                    )
+                else:
+                    cards = interactions.list_owned(
+                        installation_id=authorization.installation_id,
+                        conversation_ids={str(request.session_id)},
+                    )
+                    card = next(
+                        (
+                            item
+                            for item in reversed(cards)
+                            if item.status.value == "PENDING"
+                            and item.input_policy.value == "card_only"
+                        ),
+                        None,
+                    )
+                    if card is None:
+                        return None
+            except Exception:
+                return None
+            return card.model_dump(mode="json")
         from ..workspace.public_stream import stream_workspace_turn
         async for completed, value in stream_workspace_turn(
             run_turn=run_workspace_orchestration_turn,
@@ -284,6 +337,7 @@ async def _run_standard_or_orchestrated_turn(
             authorization=authorization,
             business_call=business_call,
             read_aigc_task=read_aigc_task,
+            read_interaction_card=read_interaction_card,
             safe_metadata={
                 "platformEvents": [
                     event.model_dump(mode="json") for event in platform_events

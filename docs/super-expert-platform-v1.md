@@ -52,6 +52,7 @@ evidence of live video generation or real expert approval.
 - Card: `card.create`, `card.update`.
 - Human-guided AIGC: `aigc.task.create`, `aigc.task.resume`, `aigc.task.cancel`, `aigc.guide.update`, `aigc.asset.submit`, `aigc.review.complete`.
 - Workflow AIGC: `aigc.workflow.capabilities.list/1`, `aigc.workflow.create/1`.
+- Basic interaction: `interaction.capabilities.list/1`, `interaction.card.create/1`, `interaction.card.cancel/1`, with additive `single_select`, `multi_select`, and `question_form` components. The detailed immutable Agent contract is [DClaw Basic Interaction Capabilities v1](super-expert-interaction-agent-tools.md).
 - Runtime orchestration and host capabilities are documented in [Workspace Turn Orchestration v1](workspace-turn-orchestration-v1.md).
 
 Every command uses contract version `1`, an installation-bound grant, an idempotency key, a unique event ID, and the exact binding:

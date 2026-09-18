@@ -20,6 +20,9 @@ from ..runtime.event_bus import RuntimeEvent
 from .aigc_adapter import AigcServiceAdapter
 from .aigc_tasks import AigcTaskCommand, AigcTaskError, AigcTaskRepository
 from .events import SuperExpertEventEnvelope, SuperExpertEventRepository
+from .interaction_cards import InteractionError, InteractionService
+from .interaction_contract import InteractionCreateRequest
+from .interaction_events import InteractionEventEnvelope
 if TYPE_CHECKING:
     from .grants import SuperExpertGrantRepository
 from .models import (
@@ -81,6 +84,7 @@ class SuperExpertPlatformService:
         event_session_resolver: Callable[[str], str] | None = None,
         workflow_execution_service: AigcWorkflowExecutionService | None = None,
         aigc_adapter: AigcServiceAdapter | None = None,
+        interaction_service: InteractionService | None = None,
     ) -> None:
         self.grant_repository = grant_repository
         self.task_repository = task_repository
@@ -89,7 +93,9 @@ class SuperExpertPlatformService:
         self.event_session_resolver = event_session_resolver or (lambda value: value)
         self.workflow_execution_service = workflow_execution_service
         self.aigc = aigc_adapter
+        self.interactions = interaction_service
         self._review_locks: dict[str, asyncio.Lock] = {}
+        self._interaction_locks: dict[str, asyncio.Lock] = {}
 
     def get_task(self, material_task_id: str):
         return self.task_repository.get(material_task_id)
@@ -167,6 +173,92 @@ class SuperExpertPlatformService:
 
     def review_lock(self, event_id: str) -> asyncio.Lock:
         return self._review_locks.setdefault(event_id, asyncio.Lock())
+
+    def interaction_lock(self, interaction_id: str) -> asyncio.Lock:
+        return self._interaction_locks.setdefault(interaction_id, asyncio.Lock())
+
+    async def execute_interaction(
+        self,
+        *,
+        tenant_id: str,
+        installation_id: str,
+        conversation_id: str,
+        capability: str,
+        contract_version: str,
+        arguments: dict[str, Any],
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Authorize and execute an Agent-originated interaction operation."""
+        decision = self.grant_repository.authorize_capability(
+            installation_id,
+            capability,
+            contract_version,
+            tenant_id=tenant_id,
+        )
+        if not decision.allowed:
+            raise SuperExpertPlatformError("capability is not authorized")
+        if self.interactions is None:
+            raise SuperExpertPlatformError("interaction service is unavailable")
+        try:
+            if capability == "interaction.card.create/1":
+                if set(arguments) != {"request"}:
+                    raise InteractionError("INVALID_INTERACTION_REQUEST")
+                request = InteractionCreateRequest.model_validate(arguments["request"])
+                card = self.interactions.create(
+                    installation_id=installation_id,
+                    conversation_id=conversation_id,
+                    request=request,
+                    idempotency_key=idempotency_key,
+                )
+                event_type = "interaction.card.created"
+            elif capability == "interaction.card.cancel/1":
+                if set(arguments) != {"interaction_id"}:
+                    raise InteractionError("INVALID_INTERACTION_REQUEST")
+                card = self.interactions.cancel(
+                    interaction_id=str(arguments["interaction_id"]),
+                    installation_id=installation_id,
+                    conversation_id=conversation_id,
+                    operation_key=idempotency_key,
+                )
+                event_type = "interaction.card.cancelled"
+            else:
+                raise SuperExpertPlatformError("capability is not supported")
+        except InteractionError:
+            raise
+        except Exception as exc:
+            raise SuperExpertPlatformError("interaction request is invalid") from exc
+        await self.publish_interaction_event(card, event_type=event_type)
+        return {"interaction": card.model_dump(mode="json")}
+
+    async def publish_interaction_event(
+        self,
+        card: Any,
+        *,
+        event_type: str,
+    ) -> InteractionEventEnvelope:
+        transition = card.transitions[-1]
+        envelope = InteractionEventEnvelope(
+            event_id=transition.event_id,
+            installation_id=card.binding.installation_id,
+            conversation_id=card.binding.conversation_id,
+            interaction_id=card.interaction_id,
+            event_type=event_type,
+            interaction=card,
+        )
+        await self.event_bus.publish(
+            RuntimeEvent(
+                id=envelope.event_id,
+                type="super_expert_interaction",
+                scope="session",
+                session_id=self.event_session_resolver(
+                    card.binding.conversation_id,
+                ),
+                job_id=card.interaction_id,
+                status=card.status.value,
+                payload={"envelope": envelope.model_dump(mode="json")},
+            ),
+        )
+        return envelope
 
     def get_review_receipt(self, event_id: str) -> dict[str, Any] | None:
         return self.event_repository.get_review_receipt(event_id)

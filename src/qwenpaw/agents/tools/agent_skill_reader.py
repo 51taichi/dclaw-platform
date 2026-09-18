@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import unicodedata
 from pathlib import Path, PurePosixPath
@@ -46,6 +47,7 @@ def build_read_agent_skill_tool(
         for name, metadata in registered_skills.items()
         if isinstance(metadata, Mapping) and metadata.get("dir")
     }
+    loaded_versions: dict[tuple[str, str], str] = {}
 
     async def read_agent_skill(
         skill_name: str,
@@ -103,6 +105,14 @@ def build_read_agent_skill_tool(
                 text = data.decode("utf-8")
             except UnicodeDecodeError:
                 return _response("Error: skill file is not valid UTF-8 text.")
+            digest = hashlib.sha256(data).hexdigest()
+            cache_key = (skill_name, relative.as_posix())
+            if loaded_versions.get(cache_key) == digest:
+                return _response(
+                    "已复用当前会话中读取过的同版本资料："
+                    f"{skill_name}/{relative.as_posix()}（sha256:{digest}）。",
+                )
+            loaded_versions[cache_key] = digest
             return _response(text)
         except (FileNotFoundError, NotADirectoryError, PermissionError, OSError):
             return _response("Error: skill file is unavailable.")

@@ -38,6 +38,22 @@ def test_workflow_capabilities_require_discovery_before_creation():
     assert creation.dependencies == ("aigc.workflow.capabilities.list/1",)
 
 
+def test_interaction_capabilities_require_discovery_and_create_before_mutation():
+    discovery = PLATFORM_CAPABILITY_CATALOG_V1[
+        "interaction.capabilities.list/1"
+    ]
+    creation = PLATFORM_CAPABILITY_CATALOG_V1["interaction.card.create/1"]
+    cancellation = PLATFORM_CAPABILITY_CATALOG_V1["interaction.card.cancel/1"]
+
+    assert discovery.contract_version == "1"
+    assert discovery.group == "interaction"
+    assert discovery.dependencies == ()
+    assert creation.group == "interaction"
+    assert creation.dependencies == ("interaction.capabilities.list/1",)
+    assert cancellation.group == "interaction"
+    assert cancellation.dependencies == ("interaction.card.create/1",)
+
+
 HOST_CAPABILITIES = (
     {"capability_id": "agent.execute", "contract_version": "1"},
     {"capability_id": "session.context", "contract_version": "1"},

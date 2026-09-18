@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 from agentscope.message import Msg
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from qwenpaw.constant import WORKING_DIR
 from qwenpaw.aigc.operation_contract import load_operation_catalog
@@ -50,6 +50,25 @@ from ..super_experts.models import (
     AigcWorkflowDefinition,
     AigcWorkflowGuideEvent,
 )
+from ..super_experts.interaction_cards import InteractionError
+
+
+class InteractionSubmitRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    selected: list[dict[str, Any]] | None = None
+    supplement: str | None = None
+    answers: list[dict[str, Any]] | None = None
+    idempotency_key: str = Field(min_length=1, max_length=160)
+
+    @model_validator(mode="after")
+    def require_exact_submission_branch(self) -> "InteractionSubmitRequest":
+        if (self.selected is None) == (self.answers is None):
+            raise ValueError("exactly one of selected or answers is required")
+        if self.answers is not None and self.supplement is not None:
+            raise ValueError("supplement is not valid for question answers")
+        return self
 
 
 def _review_provider_is_configured(provider: Any) -> bool:
@@ -393,6 +412,115 @@ def list_super_expert_cards(conversation_id: str, request: Request) -> dict[str,
             "href": "/aigc-studio?task=" + quote(task.binding.material_task_id, safe=""),
         })
     return {"cards": cards}
+
+
+@frontend_read_router.get("/interactions")
+@router.get("/interactions")
+def list_super_expert_interactions(
+    conversation_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    """Restore persisted interaction cards; SSE is only a refresh channel."""
+    row = ensure_chat_access(request, conversation_id, allow_admin=True)
+    aliases = {conversation_id}
+    if isinstance(row, dict):
+        aliases.update(
+            str(row[key]) for key in ("id", "session_id") if row.get(key)
+        )
+    service = get_super_expert_platform_service()
+    if service.interactions is None:
+        return {"interactions": []}
+    tenant_id = str(getattr(request.state, "tenant_id", "local") or "local")
+    by_id = {}
+    for grant in service.grant_repository.list_grants():
+        if grant.tenant_id != tenant_id:
+            continue
+        for card in service.interactions.list_owned(
+            installation_id=grant.installation_id,
+            conversation_ids=aliases,
+        ):
+            by_id[card.interaction_id] = card
+    cards = sorted(by_id.values(), key=lambda item: item.created_at)
+    return {
+        "interactions": [item.model_dump(mode="json") for item in cards],
+    }
+
+
+def _interaction_http_error(error: InteractionError) -> HTTPException:
+    status = {
+        "INTERACTION_NOT_FOUND": 404,
+        "INTERACTION_NOT_PENDING": 409,
+        "INTERACTION_VERSION_CONFLICT": 409,
+        "IDEMPOTENCY_CONFLICT": 409,
+        "SUPPLEMENT_REQUIRED": 422,
+        "INVALID_SELECTION": 422,
+        "REQUIRED_ANSWER_MISSING": 422,
+        "ANSWER_TOO_LONG": 422,
+        "INVALID_ANSWER_REFERENCE": 422,
+        "INVALID_INTERACTION_REQUEST": 422,
+    }.get(error.code, 400)
+    detail: dict[str, Any] = {
+        "error": error.code,
+        "retryable": error.retryable,
+    }
+    if error.field:
+        detail["field"] = error.field
+    if error.guidance:
+        detail["guidance"] = error.guidance
+    return HTTPException(status_code=status, detail=detail)
+
+
+@frontend_read_router.post("/interactions/{interaction_id}/submit")
+@router.post("/interactions/{interaction_id}/submit")
+async def submit_super_expert_interaction(
+    interaction_id: str,
+    submission: InteractionSubmitRequest,
+    request: Request,
+) -> dict[str, Any]:
+    service = get_super_expert_platform_service()
+    if service.interactions is None:
+        raise HTTPException(status_code=503, detail="Interaction service unavailable")
+    try:
+        bound = service.interactions.resolve_for_authorization(interaction_id)
+        grant = service.grant_repository.get(bound.binding.installation_id)
+        tenant_id = str(getattr(request.state, "tenant_id", "local") or "local")
+        if grant is None or grant.tenant_id != tenant_id:
+            raise InteractionError("INTERACTION_NOT_FOUND")
+        ensure_chat_access(
+            request,
+            bound.binding.conversation_id,
+            allow_admin=True,
+        )
+        async with service.interaction_lock(interaction_id):
+            current = service.interactions.get_owned(
+                interaction_id,
+                installation_id=bound.binding.installation_id,
+                conversation_id=bound.binding.conversation_id,
+            )
+            was_pending = current.status.value == "PENDING"
+            card = service.interactions.submit(
+                interaction_id=interaction_id,
+                installation_id=bound.binding.installation_id,
+                conversation_id=bound.binding.conversation_id,
+                version=submission.version,
+                selected=submission.selected,
+                supplement=submission.supplement,
+                answers=submission.answers,
+                idempotency_key=submission.idempotency_key,
+            )
+            if was_pending:
+                await service.publish_interaction_event(
+                    card,
+                    event_type="interaction.card.submitted",
+                )
+            return {
+                "interaction": card.model_dump(mode="json"),
+                "user_input": _interaction_submission_summary(card),
+            }
+    except InteractionError as exc:
+        raise _interaction_http_error(exc) from exc
+    except SuperExpertPlatformError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @frontend_read_router.get("/tasks/{material_task_id}")
@@ -795,3 +923,20 @@ async def _dispatch_agent_asset_review(
         raise SuperExpertPlatformError("agent review result is invalid")
     prepared.finalize_completed()
     return {"status": review_status, "reply": reply}
+
+
+def _interaction_submission_summary(card: Any) -> str:
+    """Render the trusted persisted answer as customer-readable conversation text."""
+    answer = card.answer
+    if answer is None:
+        raise SuperExpertPlatformError("submitted interaction answer is unavailable")
+    component_type = getattr(card.component_type, "value", card.component_type)
+    if component_type == "question_form":
+        return "\n".join(
+            item.value for item in answer.answers if item.value
+        )
+
+    lines = [item.text for item in answer.selected]
+    if answer.supplement:
+        lines.append(answer.supplement)
+    return "\n".join(lines)

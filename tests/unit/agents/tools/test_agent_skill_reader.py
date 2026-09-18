@@ -40,6 +40,24 @@ def test_reads_only_a_registered_skill_text_file(tmp_path):
     assert _text(nested) == "# M01\nEvidence first."
 
 
+def test_reuses_an_unchanged_skill_file_without_returning_the_full_text_again(
+    tmp_path,
+):
+    skill, reader = _reader(tmp_path)
+
+    first = asyncio.run(reader("demo"))
+    second = asyncio.run(reader("demo"))
+
+    assert _text(first) == "# Demo\n\nDo the work."
+    assert _text(second).startswith("已复用当前会话中读取过的同版本资料：demo/SKILL.md")
+    assert "Do the work." not in _text(second)
+
+    (skill / "SKILL.md").write_text("# Demo\n\nUpdated rules.", encoding="utf-8")
+    changed = asyncio.run(reader("demo"))
+
+    assert _text(changed) == "# Demo\n\nUpdated rules."
+
+
 @pytest.mark.parametrize(
     "skill_name,relative_path",
     [

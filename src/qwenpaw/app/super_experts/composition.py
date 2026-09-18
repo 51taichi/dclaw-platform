@@ -11,6 +11,7 @@ from .aigc_adapter import AigcServiceAdapter
 from .aigc_tasks import AigcTaskRepository
 from .events import SuperExpertEventRepository
 from .grants import SuperExpertGrantRepository
+from .interaction_cards import InteractionCardRepository, InteractionService
 from .service import SuperExpertPlatformService
 
 _service: SuperExpertPlatformService | None = None
@@ -66,6 +67,9 @@ def get_super_expert_platform_service() -> SuperExpertPlatformService:
             event_repository=SuperExpertEventRepository(root / "platform"),
             event_bus=get_runtime_event_bus(),
             event_session_resolver=_resolve_runtime_session_id,
+            interaction_service=InteractionService(
+                InteractionCardRepository(root / "platform"),
+            ),
             aigc_adapter=AigcServiceAdapter(
                 AigcCanvasService(AigcResourceStore(Path(WORKING_DIR) / "aigc_studio")),
                 AigcAssetService(AigcResourceStore(Path(WORKING_DIR) / "aigc_studio")),

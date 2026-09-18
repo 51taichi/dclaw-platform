@@ -22,7 +22,9 @@ from qwenpaw.app.workspace.orchestration import (
     AuthorizedWorkspaceRelease,
     authorize_workspace_release,
     _candidate_execution_messages,
+    _agent_execute_instruction,
     _agent_execute_mode,
+    _agent_execute_require_interaction,
     _agent_execute_response_format,
     _execute_internal_candidate,
     is_workspace_business_turn,
@@ -33,6 +35,8 @@ from qwenpaw.app.workspace.orchestration import (
     WorkspaceStateTransaction,
     WorkspaceOrchestrationError,
     WorkspaceTurnOrchestrator,
+    WorkspaceTurnResult,
+    workspace_result_to_message,
 )
 from qwenpaw.app.runner.runner import (
     _list_aigc_capabilities_for_workspace,
@@ -371,6 +375,33 @@ def test_agent_execute_mode_is_closed_and_defaults_to_internal_candidate():
             })
 
 
+def test_agent_execute_instruction_is_optional_stripped_and_closed():
+    assert _agent_execute_instruction({"messages": []}) is None
+    assert _agent_execute_instruction({
+        "messages": [], "instruction": "  keep the card  ",
+    }) == "keep the card"
+    for invalid in (None, "", "   ", 1, True, []):
+        with pytest.raises(WorkspaceOrchestrationError):
+            _agent_execute_instruction({
+                "messages": [], "instruction": invalid,
+            })
+
+
+def test_agent_execute_require_interaction_is_optional_boolean_and_closed():
+    assert _agent_execute_require_interaction({"messages": []}) is False
+    assert _agent_execute_require_interaction({
+        "messages": [], "require_interaction": True,
+    }) is True
+    assert _agent_execute_require_interaction({
+        "messages": [], "require_interaction": False,
+    }) is False
+    for invalid in (None, 0, 1, "true", []):
+        with pytest.raises(WorkspaceOrchestrationError):
+            _agent_execute_require_interaction({
+                "messages": [], "require_interaction": invalid,
+            })
+
+
 @pytest.mark.parametrize(
     "orchestration",
     [
@@ -431,6 +462,23 @@ def test_completion_contract_is_render_bound_and_strict():
             message={"reply": "done"},
             raw_model_output="leak",
         )
+
+
+def test_interaction_completion_exposes_only_the_card_anchor_in_message_metadata():
+    message = workspace_result_to_message(
+        WorkspaceTurnResult(
+            message={"reply": "请按下方卡片填写。"},
+            diagnostics={
+                "adapter": "fixed_initial_interaction",
+                "interaction_id": "interaction-s0-1",
+            },
+        ),
+        agent_name="陆羽",
+    )
+
+    assert message.metadata == {
+        "super_expert_interaction_id": "interaction-s0-1",
+    }
 
 
 def test_state_paths_must_be_absolute_and_distinct(tmp_path):
@@ -1405,6 +1453,164 @@ async def test_runner_adapter_can_opt_into_the_standard_agent_loop(tmp_path):
     assert result.message["content"] == "full agent loop"
     assert len(agent.calls) == 1
     assert agent.calls[0][0].get_text_content() == "hello"
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_applies_runtime_instruction_at_system_authority_and_restores_it(
+    tmp_path,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _write_runtime(
+        workspace,
+        """
+        class Runtime:
+            async def handle(self, request, host):
+                candidate = await host.call("agent.execute", {
+                    "messages": request.normalized_input["messages"],
+                    "execution_mode": "agent_loop",
+                    "instruction": "KEEP THE EXISTING CARD",
+                })
+                await host.call("runtime.complete", {
+                    "invocation_id": request.invocation_id,
+                    "message": candidate["message"],
+                })
+        def create_runtime(): return Runtime()
+        """,
+    )
+    system = Msg(name="agent", role="system", content="ORIGINAL")
+
+    class Agent:
+        formatter = SimpleNamespace(format=lambda **_kwargs: None)
+        model = SimpleNamespace(model_key="deepseek:test")
+
+        def __init__(self):
+            self._sys_prompt = "ORIGINAL"
+            self.memory = SimpleNamespace(content=[(system, None)])
+            self.calls = []
+
+        def _build_sys_prompt(self):
+            return "ORIGINAL"
+
+        async def __call__(self, messages):
+            self._sys_prompt = self._build_sys_prompt()
+            assert "KEEP THE EXISTING CARD" in self._sys_prompt
+            assert "KEEP THE EXISTING CARD" in system.get_text_content()
+            self.calls.append(messages)
+            return Msg(name="assistant", role="assistant", content="done")
+
+    agent = Agent()
+    authorization = AuthorizedWorkspaceRelease(
+        installation_id="installation-1",
+        release_id="release-1",
+        release_digest=f"sha256:{'a' * 64}",
+        granted_capabilities={
+            capability: "1" for capability in HOST_CAPABILITIES_V1
+        },
+        signed_workspace_files=frozenset({"runtime.py"}),
+    )
+
+    result = await run_workspace_orchestration_turn(
+        agent=agent,
+        original_messages=[Msg(name="user", role="user", content="hello")],
+        request=SimpleNamespace(
+            session_id="session-1",
+            user_id="user-1",
+            channel="console",
+            channel_meta={},
+        ),
+        agent_id="generic-agent",
+        workspace_root=workspace,
+        state_storage_root=tmp_path / "state-store",
+        config=OrchestrationConfig.model_validate(_orchestration()),
+        authorization=authorization,
+    )
+
+    assert result.message["content"] == "done"
+    assert agent._sys_prompt == "ORIGINAL"
+    assert system.get_text_content() == "ORIGINAL"
+    assert len(agent.calls) == 1
+    assert [message.role for message in agent.calls[0]] == ["user"]
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_can_require_a_real_interaction_before_text(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _write_runtime(
+        workspace,
+        """
+        class Runtime:
+            async def handle(self, request, host):
+                candidate = await host.call("agent.execute", {
+                    "messages": request.normalized_input["messages"],
+                    "execution_mode": "agent_loop",
+                    "require_interaction": True,
+                })
+                await host.call("runtime.complete", {
+                    "invocation_id": request.invocation_id,
+                    "message": candidate["message"],
+                })
+        def create_runtime(): return Runtime()
+        """,
+    )
+    active_card = None
+
+    class Agent:
+        formatter = SimpleNamespace(format=lambda **_kwargs: None)
+        model = SimpleNamespace(model_key="deepseek:test")
+
+        def __init__(self):
+            self._sys_prompt = "ORIGINAL"
+            self.memory = SimpleNamespace(content=[])
+            self.reasoning_choices = []
+
+        def _build_sys_prompt(self):
+            return "ORIGINAL"
+
+        async def _reasoning(self, tool_choice=None):
+            nonlocal active_card
+            self.reasoning_choices.append(tool_choice)
+            if len(self.reasoning_choices) == 1:
+                active_card = {"interaction_id": "interaction-1", "status": "PENDING"}
+            return None
+
+        async def __call__(self, _messages):
+            await self._reasoning()
+            await self._reasoning()
+            return Msg(name="assistant", role="assistant", content="card ready")
+
+    agent = Agent()
+    authorization = AuthorizedWorkspaceRelease(
+        installation_id="installation-1",
+        release_id="release-1",
+        release_digest=f"sha256:{'a' * 64}",
+        granted_capabilities={
+            capability: "1" for capability in HOST_CAPABILITIES_V1
+        },
+        signed_workspace_files=frozenset({"runtime.py"}),
+    )
+
+    result = await run_workspace_orchestration_turn(
+        agent=agent,
+        original_messages=[Msg(name="user", role="user", content="开始")],
+        request=SimpleNamespace(
+            session_id="session-1",
+            user_id="user-1",
+            channel="console",
+            channel_meta={},
+        ),
+        agent_id="generic-agent",
+        workspace_root=workspace,
+        state_storage_root=tmp_path / "state-store",
+        config=OrchestrationConfig.model_validate(_orchestration()),
+        authorization=authorization,
+        read_interaction_card=lambda _interaction_id: active_card,
+    )
+
+    assert result.message["content"] == "card ready"
+    assert agent.reasoning_choices == ["required", None]
+    assert agent._reasoning.__func__ is Agent._reasoning
 
 
 @pytest.mark.asyncio

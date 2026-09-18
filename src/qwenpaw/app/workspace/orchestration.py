@@ -250,7 +250,18 @@ def workspace_result_to_message(
                 {"type": "text", "text": message["reply"]},
                 {"type": "text", "text": "\n\n---\n\n" + display_text},
             ]
-        return Msg(name=agent_name, role="assistant", content=content)
+        interaction_id = (result.diagnostics or {}).get("interaction_id")
+        metadata = (
+            {"super_expert_interaction_id": interaction_id}
+            if isinstance(interaction_id, str) and interaction_id.strip()
+            else None
+        )
+        return Msg(
+            name=agent_name,
+            role="assistant",
+            content=content,
+            metadata=metadata,
+        )
     raise WorkspaceOrchestrationError("invalid_completion")
 
 
@@ -435,8 +446,27 @@ async def _execute_internal_candidate(
         if message.role == "system" and message.get_text_content().strip()
     ]
     projected = _candidate_execution_messages(messages)
-    if not instructions or not hasattr(agent, "_sys_prompt"):
-        return await agent(projected)
+    return await _execute_with_runtime_system_instruction(
+        agent,
+        "\n\n".join(instructions) if instructions else None,
+        lambda: agent(projected),
+    )
+
+
+async def _execute_with_runtime_system_instruction(
+    agent: Any,
+    instruction: str | None,
+    invoke: Callable[[], Awaitable[Any]],
+    *,
+    required: bool = False,
+) -> Any:
+    """Temporarily add trusted runtime policy without polluting chat history."""
+    if instruction is None:
+        return await invoke()
+    if not hasattr(agent, "_sys_prompt"):
+        if required:
+            raise WorkspaceOrchestrationError("orchestration_error")
+        return await invoke()
     lock = _CANDIDATE_AGENT_LOCKS.setdefault(id(agent), asyncio.Lock())
     async with lock:
         original_prompt = agent._sys_prompt
@@ -444,7 +474,7 @@ async def _execute_internal_candidate(
         runtime_prompt = (
             f"{original_prompt}\n\n"
             "===== TRUSTED WORKSPACE RUNTIME INSTRUCTION =====\n"
-            + "\n\n".join(instructions)
+            + instruction
             + "\n===== END TRUSTED WORKSPACE RUNTIME INSTRUCTION ====="
         )
         system_message = None
@@ -462,13 +492,40 @@ async def _execute_internal_candidate(
         if system_message is not None:
             system_message.content = runtime_prompt
         try:
-            return await agent(projected)
+            return await invoke()
         finally:
             agent._sys_prompt = original_prompt
             if callable(original_prompt_builder):
                 agent._build_sys_prompt = original_prompt_builder
             if system_message is not None:
                 system_message.content = original_memory_content
+
+
+@contextmanager
+def _require_active_interaction_before_text(
+    agent: Any,
+    read_card: Callable[[str], dict[str, Any] | None] | None,
+    *,
+    enabled: bool,
+):
+    """Force tool use until the platform confirms an active interaction."""
+    if not enabled:
+        yield
+        return
+    if read_card is None or not callable(getattr(agent, "_reasoning", None)):
+        raise WorkspaceOrchestrationError("orchestration_error")
+    original_reasoning = agent._reasoning
+
+    async def guarded_reasoning(tool_choice=None):
+        if read_card("") is None:
+            tool_choice = "required"
+        return await original_reasoning(tool_choice=tool_choice)
+
+    agent._reasoning = guarded_reasoning
+    try:
+        yield
+    finally:
+        agent._reasoning = original_reasoning
 
 
 def _agent_execute_response_format(arguments: dict[str, Any]) -> str | None:
@@ -480,6 +537,28 @@ def _agent_execute_response_format(arguments: dict[str, Any]) -> str | None:
     if arguments["response_format"] != "json_object":
         raise WorkspaceOrchestrationError("orchestration_error")
     return "json_object"
+
+
+def _agent_execute_instruction(arguments: dict[str, Any]) -> str | None:
+    """Validate an optional trusted instruction for the standard Agent loop."""
+    if not isinstance(arguments, dict):
+        raise WorkspaceOrchestrationError("orchestration_error")
+    if "instruction" not in arguments:
+        return None
+    instruction = arguments["instruction"]
+    if not isinstance(instruction, str) or not instruction.strip():
+        raise WorkspaceOrchestrationError("orchestration_error")
+    return instruction.strip()
+
+
+def _agent_execute_require_interaction(arguments: dict[str, Any]) -> bool:
+    """Validate the optional active-interaction postcondition."""
+    if not isinstance(arguments, dict):
+        raise WorkspaceOrchestrationError("orchestration_error")
+    value = arguments.get("require_interaction", False)
+    if type(value) is not bool:
+        raise WorkspaceOrchestrationError("orchestration_error")
+    return value
 
 
 def _agent_execute_mode(arguments: dict[str, Any]) -> str:
@@ -506,6 +585,7 @@ async def run_workspace_orchestration_turn(
     authorization: AuthorizedWorkspaceRelease,
     business_call: Callable[[str, dict[str, Any]], Any] | None = None,
     read_aigc_task: Callable[[str], dict[str, Any] | None] | None = None,
+    read_interaction_card: Callable[[str], dict[str, Any] | None] | None = None,
     on_public_message: Callable | None = None,
     safe_metadata: dict[str, Any] | None = None,
     timeout_seconds: float | None = None,
@@ -559,6 +639,12 @@ async def run_workspace_orchestration_turn(
         nonlocal agent_execute_call_number
         response_format = _agent_execute_response_format(arguments)
         execution_mode = _agent_execute_mode(arguments)
+        instruction = _agent_execute_instruction(arguments)
+        require_interaction = _agent_execute_require_interaction(arguments)
+        if instruction is not None and execution_mode != "agent_loop":
+            raise WorkspaceOrchestrationError("orchestration_error")
+        if require_interaction and execution_mode != "agent_loop":
+            raise WorkspaceOrchestrationError("orchestration_error")
         public_stream = arguments.get("public_stream", False)
         if type(public_stream) is not bool or (public_stream and execution_mode != "agent_loop"):
             raise WorkspaceOrchestrationError("orchestration_error")
@@ -601,15 +687,43 @@ async def run_workspace_orchestration_turn(
             )
         media_delivery: dict[str, Any] = {}
         async def run_agent():
-            if public_stream and on_public_message is not None:
-                from .public_stream import execute_public_agent
-                return await execute_public_agent(agent, messages, on_public_message)
-            return await agent(messages)
+            async def invoke():
+                if public_stream and on_public_message is not None:
+                    from .public_stream import execute_public_agent
+                    return await execute_public_agent(
+                        agent, messages, on_public_message,
+                    )
+                return await agent(messages)
+
+            with _require_active_interaction_before_text(
+                agent,
+                read_interaction_card,
+                enabled=require_interaction,
+            ):
+                result = await _execute_with_runtime_system_instruction(
+                    agent,
+                    instruction,
+                    invoke,
+                    required=instruction is not None,
+                )
+            if (
+                require_interaction
+                and (
+                    read_interaction_card is None
+                    or read_interaction_card("") is None
+                )
+            ):
+                raise WorkspaceOrchestrationError("orchestration_error")
+            return result
 
         try:
             if execution_mode == "agent_loop":
                 from .aigc_tools import build_aigc_tools, bind_aigc_tools, track_media_delivery
-                tools = build_aigc_tools(
+                from .interaction_tools import (
+                    bind_interaction_tools,
+                    build_interaction_tools,
+                )
+                aigc_tools = build_aigc_tools(
                     grants=authorization.granted_capabilities,
                     installation_id=authorization.installation_id,
                     conversation_id=turn_request.session_id,
@@ -620,7 +734,18 @@ async def run_workspace_orchestration_turn(
                 review_only = bool(
                     (safe_metadata or {}).get("aigcReviewInput")
                 )
-                if tools:
+                interaction_tools = (
+                    {}
+                    if review_only
+                    else build_interaction_tools(
+                        grants=authorization.granted_capabilities,
+                        installation_id=authorization.installation_id,
+                        conversation_id=turn_request.session_id,
+                        business_call=business_call,
+                        read_card=read_interaction_card,
+                    )
+                )
+                if aigc_tools or interaction_tools:
                     if review_only:
                         removed = _drop_prior_platform_review_attempts(
                             getattr(agent, "memory", None),
@@ -632,13 +757,16 @@ async def run_workspace_orchestration_turn(
                             )
                     with bind_aigc_tools(
                         agent,
-                        tools,
+                        aigc_tools,
                         base_tool_names=(
                             {"read_agent_skill"} if review_only else None
                         ),
                         added_tool_names=(
                             {"aigc_task_review"} if review_only else None
                         ),
+                    ), bind_interaction_tools(
+                        agent,
+                        interaction_tools,
                     ), track_media_delivery(agent, messages, media_delivery):
                         candidate = await run_agent()
                 else:

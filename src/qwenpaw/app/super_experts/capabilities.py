@@ -59,6 +59,17 @@ PLATFORM_CAPABILITY_CATALOG_V1 = {
         _definition("card.create", "card"),
         _definition("card.update", "card", dependencies=("card.create",)),
         _definition("aigc.capabilities.list/1", "aigc"),
+        _definition("interaction.capabilities.list/1", "interaction"),
+        _definition(
+            "interaction.card.create/1",
+            "interaction",
+            dependencies=("interaction.capabilities.list/1",),
+        ),
+        _definition(
+            "interaction.card.cancel/1",
+            "interaction",
+            dependencies=("interaction.card.create/1",),
+        ),
         _definition("aigc.workflow.capabilities.list/1", "aigc"),
         _definition(
             "aigc.workflow.create/1",
