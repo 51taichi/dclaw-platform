@@ -2,6 +2,7 @@ import base64
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
+import zipfile
 
 import pytest
 from PIL import Image
@@ -324,6 +325,7 @@ async def test_bundle_dispatch_delivers_real_text_and_both_images(tmp_path, monk
     class Runner:
         async def query_handler(self, messages, request):
             captured['content'] = messages[0].content
+            captured['message_metadata'] = messages[0].metadata
             captured['metadata'] = current_review_input(user_id='user', installation_id='install', conversation_id='chat')
             yield SimpleNamespace(get_text_content=lambda: '模型给出的整组审核结果'), True
     class Chats:
@@ -347,6 +349,57 @@ async def test_bundle_dispatch_delivers_real_text_and_both_images(tmp_path, monk
     assert any(block.get('text') == '完整作品正文' for block in captured['content'])
     assert [entry['asset_id'] for entry in captured['metadata']['review_assets']] == ['a-copy', 'a-first', 'a-second']
     assert len(captured['metadata']['review_blocks']) == 6
+    assert captured['message_metadata']['dclaw_aigc_review_bundle'] == {
+        'material_task_id': 'material',
+        'assets': [
+            {'asset_id': 'a-first'},
+            {'asset_id': 'a-second'},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_review_bundle_archive_contains_only_bound_images(tmp_path, monkeypatch):
+    from qwenpaw.app.super_experts.models import AigcTaskBinding, AigcReviewAsset
+
+    binding = AigcTaskBinding(
+        installation_id='install', conversation_id='chat', agent_task_id='content',
+        content_revision=1, material_task_id='material', canvas_id='canvas',
+        node_id='p-second',
+    )
+    store = AigcResourceStore(tmp_path / 'store')
+    entries = []
+    for index, name in enumerate(('first.png', 'second.png'), start=1):
+        path = tmp_path / name
+        path.write_bytes(f'image-{index}'.encode())
+        asset = AigcAsset(
+            id=f'asset-{index}', kind='image', name=name, path=str(path),
+            mime_type='image/png', created_at='2026-01-01',
+            meta={
+                'canvas_id': 'canvas', 'node_id': f'image-{index}',
+                'owner_user_id': 'user',
+            },
+        )
+        store.write('assets', asset.id, asset.model_dump())
+        entries.append(AigcReviewAsset(node_id=f'image-{index}', asset_id=asset.id))
+    task = SimpleNamespace(binding=binding, review_assets=entries)
+    service = SimpleNamespace(
+        aigc=SimpleNamespace(assets=AigcAssetService(store)),
+        get_task=lambda _: task,
+    )
+    request = SimpleNamespace(
+        state=SimpleNamespace(user_id='user'),
+        app=SimpleNamespace(state=SimpleNamespace(aigc_artifact_root=tmp_path)),
+    )
+    monkeypatch.setattr(router, 'get_super_expert_platform_service', lambda: service)
+    monkeypatch.setattr(router, 'ensure_chat_access', lambda *_args, **_kwargs: {})
+
+    response = await router.download_review_assets_archive('material', request)
+    body = b''.join([chunk async for chunk in response.body_iterator])
+    with zipfile.ZipFile(BytesIO(body)) as archive:
+        assert archive.namelist() == ['first.png', 'second.png']
+        assert archive.read('first.png') == b'image-1'
+        assert archive.read('second.png') == b'image-2'
 
 
 @pytest.mark.asyncio

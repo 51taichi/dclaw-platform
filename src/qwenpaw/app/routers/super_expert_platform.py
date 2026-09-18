@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from tempfile import SpooledTemporaryFile
 from types import SimpleNamespace
 from typing import Any, Awaitable, Callable
 import uuid
+import zipfile
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from agentscope.message import Msg
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
@@ -32,6 +35,7 @@ from ..billing.usage import InsufficientUsageCreditsError
 from ..chat_access import ensure_chat_access
 from ..aigc.resource_store import AigcResourceError
 from ..runtime.aigc_media import review_media_source, resource_http_error
+from ..runtime.aigc_media import artifact_root_for_request, cloud_storage_client_or_error
 from ..runtime.event_bus import RuntimeEvent, get_runtime_event_bus
 from ..super_experts.aigc_tasks import (
     AigcTaskCommand,
@@ -543,6 +547,96 @@ def get_super_expert_task(
     return payload
 
 
+def _unique_archive_name(name: str, asset_id: str, used: set[str]) -> str:
+    candidate = Path(name).name.strip() or f"{asset_id}.png"
+    stem = Path(candidate).stem or asset_id
+    suffix = Path(candidate).suffix or ".png"
+    resolved = candidate
+    counter = 2
+    while resolved.casefold() in used:
+        resolved = f"{stem}-{counter}{suffix}"
+        counter += 1
+    used.add(resolved.casefold())
+    return resolved
+
+
+async def _review_image_bytes(request: Request, assets: Any, asset: Any) -> bytes:
+    storage = assets.cloud_storage_meta(asset)
+    if storage is not None:
+        client = cloud_storage_client_or_error()
+        content, _media_type = await client.download(str(storage["object_key"]))
+        return content
+    artifact_root = await artifact_root_for_request(request, assets.store)
+    target = assets.local_path(asset, artifact_root=artifact_root)
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="Asset file not found.")
+    return target.read_bytes()
+
+
+@frontend_read_router.get("/tasks/{material_task_id}/review-assets/archive")
+@router.get("/tasks/{material_task_id}/review-assets/archive")
+async def download_review_assets_archive(
+    material_task_id: str,
+    request: Request,
+) -> StreamingResponse:
+    service = get_super_expert_platform_service()
+    task = service.get_task(material_task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="AIGC task not found")
+    ensure_chat_access(request, task.binding.conversation_id, allow_admin=True)
+    if service.aigc is None:
+        raise HTTPException(status_code=503, detail="AIGC service is unavailable")
+
+    assets = service.aigc.assets
+    owner_user_id = str(getattr(request.state, "user_id", "") or "")
+    archive = SpooledTemporaryFile(max_size=64 * 1024 * 1024, mode="w+b")
+    used_names: set[str] = set()
+    image_count = 0
+    try:
+        with zipfile.ZipFile(archive, mode="w", compression=zipfile.ZIP_DEFLATED) as bundle:
+            for entry in task.review_assets:
+                try:
+                    asset = assets.resolve_owned(owner_user_id, entry.asset_id)
+                    assets.validate_review_binding(
+                        asset,
+                        canvas_id=task.binding.canvas_id,
+                        node_ids={entry.node_id},
+                    )
+                except AigcResourceError as exc:
+                    raise resource_http_error(exc) from exc
+                if asset.kind != "image":
+                    continue
+                content = await _review_image_bytes(request, assets, asset)
+                bundle.writestr(
+                    _unique_archive_name(asset.name, asset.id, used_names),
+                    content,
+                )
+                image_count += 1
+        if image_count == 0:
+            raise HTTPException(status_code=409, detail="No review images are available.")
+        archive.seek(0)
+    except Exception:
+        archive.close()
+        raise
+
+    async def stream_archive():
+        try:
+            while chunk := archive.read(1024 * 1024):
+                yield chunk
+        finally:
+            archive.close()
+
+    return StreamingResponse(
+        stream_archive(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="review-assets-{material_task_id}.zip"'
+            ),
+        },
+    )
+
+
 @frontend_read_router.get("/tasks/{material_task_id}/guide")
 @router.get("/tasks/{material_task_id}/guide")
 def get_super_expert_task_guide(
@@ -829,6 +923,16 @@ async def _dispatch_agent_asset_review(
         request_context={"platform_event": "aigc.asset.submitted"},
         root_session_id=str(getattr(chat, "id", None) or resolved_chat_id),
     )
+    review_bundle_assets = []
+    if review_assets:
+        review_bundle_assets = [
+            {"asset_id": entry.asset_id}
+            for entry, block in zip(review_assets, media_blocks[1::2])
+            if isinstance(block, dict) and block.get("type") == "image"
+        ]
+    elif isinstance(media_block, dict) and media_block.get("type") == "image":
+        review_bundle_assets = [{"asset_id": asset_id}]
+
     messages = [
         Msg(
             name="user",
@@ -849,6 +953,16 @@ async def _dispatch_agent_asset_review(
                 },
                 *media_blocks,
             ],
+            metadata=(
+                {
+                    "dclaw_aigc_review_bundle": {
+                        "material_task_id": binding.material_task_id,
+                        "assets": review_bundle_assets,
+                    },
+                }
+                if review_bundle_assets
+                else {}
+            ),
         )
     ]
     final_message: Msg | None = None
