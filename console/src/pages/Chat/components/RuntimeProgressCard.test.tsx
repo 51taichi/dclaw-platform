@@ -3,6 +3,16 @@ import { describe, expect, it, vi } from "vitest";
 import RuntimeProgressCard from "./RuntimeProgressCard";
 import { ExpertIdentityContext } from "../../../contexts/ExpertIdentityContext";
 
+const { downloadReviewAssets } = vi.hoisted(() => ({
+  downloadReviewAssets: vi.fn(),
+}));
+
+vi.mock("../../../api/modules/superExpertPlatform", () => ({
+  superExpertPlatformApi: {
+    downloadReviewAssets,
+  },
+}));
+
 it("updates a cached card when a new expert identity arrives", () => {
   const card = (
     <RuntimeProgressCard
@@ -32,6 +42,96 @@ vi.mock("@agentscope-ai/chat", () => ({
 }));
 
 describe("RuntimeProgressCard", () => {
+  it("renders a marked review bundle as one image-only card", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "review-bundle",
+              type: "message",
+              status: "completed",
+              metadata: {
+                original_id: "source-review-message",
+                metadata: {
+                  dclaw_aigc_review_bundle: {
+                    material_task_id: "task-1",
+                    assets: [{ asset_id: "asset-1" }, { asset_id: "asset-2" }],
+                  },
+                },
+              },
+              content: [
+                {
+                  type: "text",
+                  text: "提交节点：误区一；node_id=image-1；asset_id=asset-1；制作要求：内部提示词",
+                },
+                {
+                  type: "image",
+                  source: { type: "url", url: "/image-1.png" },
+                },
+                {
+                  type: "text",
+                  text: "用户上传文件，已经下载到 /app/working/secret/image-2.png",
+                },
+                {
+                  type: "image",
+                  source: { type: "url", url: "/image-2.png" },
+                },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    const card = screen.getByRole("region", { name: "审核素材" });
+    expect(card).toHaveAttribute("data-review-assets-card", "task-1");
+    expect(screen.getAllByRole("img", { name: /审核图片/ })).toHaveLength(2);
+    expect(
+      screen.getByRole("button", { name: "批量下载" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/提交节点/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/用户上传文件/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/内部提示词/)).not.toBeInTheDocument();
+  });
+
+  it("starts one archive download immediately from the review card", () => {
+    downloadReviewAssets.mockReturnValueOnce(new Promise(() => undefined));
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "review-bundle",
+              type: "message",
+              status: "completed",
+              metadata: {
+                dclaw_aigc_review_bundle: {
+                  material_task_id: "task-1",
+                  assets: [{ asset_id: "asset-1" }],
+                },
+              },
+              content: [
+                {
+                  type: "image",
+                  source: { type: "url", url: "/image-1.png" },
+                },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "批量下载" }));
+
+    expect(downloadReviewAssets).toHaveBeenCalledTimes(1);
+    expect(downloadReviewAssets).toHaveBeenCalledWith("task-1");
+    expect(screen.getByRole("button", { name: "正在打包" })).toBeDisabled();
+  });
+
   it("creates an exact card anchor from fixed-runtime reply metadata", () => {
     render(
       <RuntimeProgressCard

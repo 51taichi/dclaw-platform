@@ -279,6 +279,21 @@ export const superExpertPlatformApi = {
     request<BoundAigcTask>(
       `/super-expert-platform/tasks/${encodeURIComponent(materialTaskId)}`,
     ),
+  downloadReviewAssets: async (materialTaskId: string) => {
+    const blob = await request<Blob>(
+      `/super-expert-platform/tasks/${encodeURIComponent(
+        materialTaskId,
+      )}/review-assets/archive`,
+    );
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `审核素材-${materialTaskId}.zip`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  },
   getOperation: (operationId: string) =>
     request<AigcOperationContract>(
       `/super-expert-platform/operations/${encodeURIComponent(operationId)}`,

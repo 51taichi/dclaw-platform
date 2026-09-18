@@ -2,6 +2,7 @@ import { Markdown } from "@agentscope-ai/chat";
 import { useContext, useMemo, useRef, useState, type ReactNode } from "react";
 import { ExpertIdentityContext } from "../../../contexts/ExpertIdentityContext";
 import { message } from "antd";
+import { superExpertPlatformApi } from "../../../api/modules/superExpertPlatform";
 import { toDisplayUrl } from "../utils";
 import styles from "./RuntimeProgressCard.module.less";
 
@@ -31,6 +32,11 @@ interface RuntimeResponse {
   id?: string;
   status?: string;
   output?: RuntimeMessage[];
+}
+
+interface ReviewBundleMetadata {
+  material_task_id: string;
+  assets: Array<{ asset_id: string }>;
 }
 
 import SuperExpertBadge from "../../../components/SuperExpertBadge";
@@ -257,6 +263,40 @@ function getCreatedInteractionIds(messageItem: RuntimeMessage) {
   return interactionIds;
 }
 
+function getReviewBundleMetadata(
+  messageItem: RuntimeMessage,
+): ReviewBundleMetadata | null {
+  const candidates = [messageItem.metadata, messageItem.metadata?.metadata];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const bundle = (candidate as Record<string, unknown>)
+      .dclaw_aigc_review_bundle;
+    if (!bundle || typeof bundle !== "object") continue;
+    const record = bundle as Record<string, unknown>;
+    if (
+      typeof record.material_task_id !== "string" ||
+      !record.material_task_id.trim() ||
+      !Array.isArray(record.assets)
+    ) {
+      continue;
+    }
+    const assets = record.assets.filter((item): item is { asset_id: string } =>
+      Boolean(
+        item &&
+          typeof item === "object" &&
+          typeof (item as Record<string, unknown>).asset_id === "string" &&
+          String((item as Record<string, unknown>).asset_id).trim(),
+      ),
+    );
+    if (!assets.length) continue;
+    return {
+      material_task_id: record.material_task_id,
+      assets,
+    };
+  }
+  return null;
+}
+
 function interactionDeliveryMessages(output: RuntimeMessage[]) {
   const messages = new Set<RuntimeMessage>();
   let awaitingReplyAfterCreate = false;
@@ -328,6 +368,7 @@ function extractCopyText(
   interactionDeliveryItems: Set<RuntimeMessage>,
 ) {
   return messages
+    .filter((item) => !getReviewBundleMetadata(item))
     .map((item) => {
       const text = getText(item);
       return interactionDeliveryItems.has(item)
@@ -345,6 +386,9 @@ export default function RuntimeProgressCard(props: Props) {
     url: string;
     alt: string;
   } | null>(null);
+  const [downloadingReviewTaskId, setDownloadingReviewTaskId] = useState<
+    string | null
+  >(null);
   const outputOrderRef = useRef<{
     responseId?: string;
     messageIds: string[];
@@ -451,6 +495,66 @@ export default function RuntimeProgressCard(props: Props) {
           !hasVisibleMessageContent(item)
         ) {
           return null;
+        }
+        const reviewBundle = getReviewBundleMetadata(item);
+        if (reviewBundle) {
+          const reviewImages = (item.content || [])
+            .map((content) => getImageUrl(content, props.chatId, props.agentId))
+            .filter(Boolean);
+          if (!reviewImages.length) return null;
+          const downloading =
+            downloadingReviewTaskId === reviewBundle.material_task_id;
+          return (
+            <section
+              key={item.id || index}
+              className={styles.reviewAssetsCard}
+              role="region"
+              aria-label="审核素材"
+              data-review-assets-card={reviewBundle.material_task_id}
+            >
+              <div className={styles.reviewAssetsRow}>
+                {reviewImages.map((imageUrl, imageIndex) => (
+                  <button
+                    key={`${imageUrl}-${imageIndex}`}
+                    type="button"
+                    className={styles.reviewAssetButton}
+                    onClick={() =>
+                      setPreviewImage({
+                        url: imageUrl,
+                        alt: `审核图片 ${imageIndex + 1}`,
+                      })
+                    }
+                    title="点击查看大图"
+                  >
+                    <img src={imageUrl} alt={`审核图片 ${imageIndex + 1}`} />
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                className={styles.reviewAssetsDownload}
+                disabled={downloading}
+                onClick={() => {
+                  setDownloadingReviewTaskId(reviewBundle.material_task_id);
+                  void superExpertPlatformApi
+                    .downloadReviewAssets(reviewBundle.material_task_id)
+                    .catch(() => {
+                      message.error("批量下载失败，请稍后重试");
+                    })
+                    .finally(() => setDownloadingReviewTaskId(null));
+                }}
+              >
+                {downloading ? (
+                  <>
+                    <span className={styles.downloadSpinner} aria-hidden />
+                    正在打包
+                  </>
+                ) : (
+                  "批量下载"
+                )}
+              </button>
+            </section>
+          );
         }
         return (
           <div key={item.id || index} className={styles.messageContent}>

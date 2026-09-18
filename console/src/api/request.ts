@@ -118,7 +118,10 @@ export async function request<T = unknown>(
   }
 
   const contentType = response.headers.get("content-type") || "";
-  if (contentType.includes("application/vnd.openxmlformats-officedocument")) {
+  if (
+    contentType.includes("application/vnd.openxmlformats-officedocument") ||
+    contentType.includes("application/zip")
+  ) {
     return (await response.blob()) as unknown as T;
   }
   if (!contentType.includes("application/json")) {
