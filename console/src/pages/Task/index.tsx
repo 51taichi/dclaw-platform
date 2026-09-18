@@ -58,6 +58,7 @@ import { planApi } from "../../api/modules/plan";
 import PreparingOverlay from "../Chat/components/PreparingOverlay";
 import { TaskArtifactCard } from "../Chat/components/TaskArtifactCard";
 import { SuperExpertAigcCards } from "../Chat/components/SuperExpertAigcCards";
+import { InlineSuperExpertInteractionCards } from "../Chat/components/SuperExpertInteractionCards";
 import { scheduleArtifactCardScans } from "../Chat/utils/artifactCardScanScheduler";
 import { createRoot } from "react-dom/client";
 import { shouldRedirectAfterAgentChange } from "./agentRoutePolicy";
@@ -580,6 +581,7 @@ export default function ChatPage() {
   const [isPreparing, setIsPreparing] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [runtimeReloadKey, setRuntimeReloadKey] = useState(0);
+  const [interactionBlocked, setInteractionBlocked] = useState(false);
   const persistedExpertTeamRef = useRef<string>("");
   const {
     selectedAgent,
@@ -604,6 +606,7 @@ export default function ChatPage() {
 
   useEffect(() => {
     const sessionId = chatId && !isDraftSessionId(chatId) ? chatId : null;
+    setInteractionBlocked(false);
     setActiveSessionId(sessionId);
     return () => setActiveSessionId(null);
   }, [chatId, setActiveSessionId]);
@@ -2139,7 +2142,18 @@ export default function ChatPage() {
                 ref={chatRef}
               />
             </div>
+            {chatId && !isDraftSessionId(chatId) ? (
+              <InlineSuperExpertInteractionCards
+                conversationId={chatId}
+                responseRevision={runtimeReloadKey}
+                onBlockingChange={setInteractionBlocked}
+                onSubmitAsUserInput={(text) => {
+                  (chatRef.current?.input.submit as any)({ query: text });
+                }}
+              />
+            ) : null}
             <WorkbenchInput
+              disabled={interactionBlocked}
               inFlow
               isGenerating={isGenerating}
               topAccessory={

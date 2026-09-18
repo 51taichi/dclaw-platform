@@ -118,6 +118,119 @@ export interface SuperExpertPlatformCommandResult {
   };
 }
 
+export type InteractionStatus =
+  | "PENDING"
+  | "SUBMITTED"
+  | "CANCELLED"
+  | "REPLACED"
+  | "EXPIRED";
+export type InteractionInputPolicy =
+  | "card_only"
+  | "card_or_text"
+  | "concurrent";
+
+export interface InteractionOption {
+  id: string | null;
+  text: string;
+  description: string | null;
+  recommended: boolean;
+  default_selected: boolean;
+}
+
+export interface InteractionSupplement {
+  enabled: boolean;
+  label: string;
+  placeholder: string;
+  required: boolean;
+  max_length: number;
+}
+
+export interface ChoiceInteractionAnswer {
+  selected: Array<{ id: string | null; text: string }>;
+  supplement: string | null;
+  answers?: never;
+}
+
+export interface QuestionFormInteractionAnswer {
+  answers: Array<{
+    id: string | null;
+    question: string;
+    value: string | null;
+  }>;
+  selected?: never;
+  supplement?: never;
+}
+
+interface InteractionCardRecordBase {
+  interaction_id: string;
+  task_key: string;
+  interaction_revision: number;
+  input_policy: InteractionInputPolicy;
+  status: InteractionStatus;
+  version: number;
+  binding: {
+    installation_id: string;
+    conversation_id: string;
+    agent_task_id: string;
+  };
+  expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChoiceInteractionCardRecord extends InteractionCardRecordBase {
+  component_type: "single_select" | "multi_select";
+  card: {
+    title: string;
+    description: string | null;
+    options: InteractionOption[];
+    supplement: InteractionSupplement;
+    layout: "auto" | "list" | "grid";
+    min_selections?: number;
+    max_selections?: number | null;
+  };
+  answer: ChoiceInteractionAnswer | null;
+}
+
+export interface QuestionFormInteractionCardRecord
+  extends InteractionCardRecordBase {
+  component_type: "question_form";
+  card: {
+    title: string;
+    description: string | null;
+    items: Array<{
+      id: string | null;
+      question: string;
+      description: string | null;
+      placeholder: string;
+      required: boolean;
+      max_length: number;
+    }>;
+  };
+  answer: QuestionFormInteractionAnswer | null;
+}
+
+export type InteractionCardRecord =
+  | ChoiceInteractionCardRecord
+  | QuestionFormInteractionCardRecord;
+
+interface InteractionSubmitPayloadBase {
+  version: number;
+  idempotency_key: string;
+}
+
+export type InteractionSubmitPayload =
+  | (InteractionSubmitPayloadBase & {
+      selected: Array<{ id?: string; text?: string }>;
+      supplement: string | null;
+      answers?: never;
+    })
+  | (InteractionSubmitPayloadBase & {
+      answers: Array<{ id?: string; question?: string; value: string | null }>;
+      selected?: never;
+      supplement?: never;
+    });
+
 export const superExpertPlatformApi = {
   getConversationRoute: (conversationId: string) =>
     request<{ conversation_id: string; agent_id: string; chat_id: string }>(
@@ -139,6 +252,28 @@ export const superExpertPlatformApi = {
       `/super-expert-platform/cards?conversation_id=${encodeURIComponent(
         conversationId,
       )}`,
+    ),
+  listInteractions: (conversationId: string) =>
+    request<{ interactions: InteractionCardRecord[] }>(
+      `/super-expert-platform/interactions?conversation_id=${encodeURIComponent(
+        conversationId,
+      )}`,
+    ),
+  submitInteraction: (
+    interactionId: string,
+    submission: InteractionSubmitPayload,
+  ) =>
+    request<{
+      interaction: InteractionCardRecord;
+      user_input: string;
+    }>(
+      `/super-expert-platform/interactions/${encodeURIComponent(
+        interactionId,
+      )}/submit`,
+      {
+        method: "POST",
+        body: JSON.stringify(submission),
+      },
     ),
   getTask: (materialTaskId: string) =>
     request<BoundAigcTask>(

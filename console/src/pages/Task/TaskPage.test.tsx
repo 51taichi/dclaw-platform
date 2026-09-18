@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { renderWithProviders } from "@/test/common_setup";
 import TaskPage from "./index";
@@ -33,6 +39,8 @@ const {
   mockChatSubmit,
   mockListAigcCards,
   mockGetAigcTask,
+  mockListInteractions,
+  mockSubmitInteraction,
 } = vi.hoisted(() => {
   const store = vi.fn(() => ({
     selectedAgent: "default",
@@ -66,6 +74,8 @@ const {
     mockChatSubmit: vi.fn(),
     mockListAigcCards: vi.fn(),
     mockGetAigcTask: vi.fn(),
+    mockListInteractions: vi.fn(),
+    mockSubmitInteraction: vi.fn(),
   };
 });
 
@@ -74,6 +84,8 @@ vi.mock("../../api/modules/superExpertPlatform", () => ({
     listCards: mockListAigcCards,
     getTask: mockGetAigcTask,
     command: vi.fn(),
+    listInteractions: mockListInteractions,
+    submitInteraction: mockSubmitInteraction,
   },
 }));
 
@@ -93,10 +105,38 @@ vi.mock("@agentscope-ai/chat", async () => {
       input: { submit: mockChatSubmit },
       messages: { getMessages: vi.fn(() => []) },
     }));
-    return <div data-testid="task-chat-ui" />;
+    const responseCard = (props.options as any)?.cards
+      ?.AgentScopeRuntimeResponseCard;
+    return (
+      <>
+        <div data-testid="task-chat-ui" />
+        <article data-testid="assistant-response">
+          {typeof responseCard === "function"
+            ? responseCard({
+                data: {
+                  id: "response-1",
+                  status: "completed",
+                  output: [
+                    {
+                      id: "message-1",
+                      type: "message",
+                      status: "completed",
+                      content: [{ type: "text", text: "请填写以下信息。" }],
+                    },
+                  ],
+                },
+                // The chat library renders messages in descending DOM order,
+                // so the newest response is not marked as `isLast`.
+                isLast: false,
+              })
+            : null}
+        </article>
+      </>
+    );
   });
   return {
     AgentScopeRuntimeWebUI: MockAgentScopeRuntimeWebUI,
+    Markdown: ({ content }: { content: string }) => <div>{content}</div>,
     useChatAnywhereSessionsState: vi.fn(() => ({
       currentSessionId: undefined,
       sessions: [],
@@ -227,8 +267,16 @@ vi.mock("../../contexts/RuntimeEventContext", () => ({
 }));
 
 vi.mock("../../components/WorkbenchInput", () => ({
-  default: ({ topAccessory }: { topAccessory?: React.ReactNode }) => (
-    <div data-testid="workbench-input">{topAccessory}</div>
+  default: ({
+    disabled,
+    topAccessory,
+  }: {
+    disabled?: boolean;
+    topAccessory?: React.ReactNode;
+  }) => (
+    <div data-testid="workbench-input" data-disabled={disabled || undefined}>
+      {topAccessory}
+    </div>
   ),
 }));
 
@@ -254,10 +302,6 @@ vi.mock("../Chat/components/RunningSessionNotice", () => ({
 
 vi.mock("../Chat/components/ExpertTeamStatusStrip", () => ({
   default: () => <div data-testid="expert-team-status" />,
-}));
-
-vi.mock("../Chat/components/RuntimeProgressCard", () => ({
-  default: () => <div data-testid="runtime-progress" />,
 }));
 
 vi.mock("../Chat/components/PreparingOverlay", () => ({
@@ -359,6 +403,7 @@ describe("TaskPage", () => {
     vi.useRealTimers();
     capturedOptions = null;
     mockListAigcCards.mockResolvedValue({ cards: [] });
+    mockListInteractions.mockResolvedValue({ interactions: [] });
     currentPathname = "";
     sessionStorage.clear();
     setDocumentVisibilityState("visible");
@@ -458,6 +503,148 @@ describe("TaskPage", () => {
     expect(await screen.findByText("生成主题图片和视频")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "继续制作" }));
     await waitFor(() => expect(currentPathname).toBe("/aigc-studio"));
+  });
+
+  it("restores a pending question card and blocks text input on /task", async () => {
+    mockListInteractions.mockResolvedValue({
+      interactions: [
+        {
+          interaction_id: "interaction-question-1",
+          binding: {
+            installation_id: "install-1",
+            conversation_id: "demo-chat",
+            agent_task_id: "interaction-task-1",
+          },
+          task_key: "business-foundation",
+          interaction_revision: 1,
+          component_type: "question_form",
+          input_policy: "card_only",
+          card: {
+            title: "你的业务基本情况",
+            description: "请逐项填写",
+            items: [
+              {
+                id: "business-description",
+                question: "你现在做什么业务？",
+                description: null,
+                placeholder: "请输入业务信息",
+                required: true,
+                max_length: 1000,
+              },
+              {
+                id: "product-or-service",
+                question: "具体提供什么产品或服务？",
+                description: null,
+                placeholder: "请输入产品或服务",
+                required: true,
+                max_length: 1000,
+              },
+            ],
+          },
+          status: "PENDING",
+          version: 1,
+          transitions: [],
+          answer: null,
+          expires_at: null,
+          created_at: "2026-09-17T06:27:24.586093Z",
+          updated_at: "2026-09-17T06:27:24.586093Z",
+        },
+      ],
+    });
+
+    renderWithProviders(<TaskPage />, {
+      initialEntries: ["/task/demo-chat"],
+    });
+
+    expect(
+      screen.queryByRole("heading", { name: "你的业务基本情况" }),
+    ).not.toBeInTheDocument();
+    expect(
+      await screen.findByRole("textbox", { name: "你现在做什么业务？" }),
+    ).toBeVisible();
+    expect(
+      within(screen.getByTestId("assistant-response")).getByRole("region", {
+        name: "基础交互",
+      }),
+    ).toBeVisible();
+    expect(screen.getAllByTestId("question-item")).toHaveLength(2);
+    expect(mockListInteractions).toHaveBeenCalledWith("demo-chat");
+    await waitFor(() =>
+      expect(screen.getByTestId("workbench-input")).toHaveAttribute(
+        "data-disabled",
+        "true",
+      ),
+    );
+  });
+
+  it("sends the server-resolved card output through the ordinary chat submitter", async () => {
+    const pending = {
+      interaction_id: "interaction-choice-1",
+      binding: {
+        installation_id: "install-1",
+        conversation_id: "demo-chat",
+        agent_task_id: "interaction-task-1",
+      },
+      task_key: "goal",
+      interaction_revision: 1,
+      component_type: "single_select",
+      input_policy: "card_only",
+      card: {
+        title: "选择目标",
+        description: null,
+        options: [
+          {
+            id: "growth",
+            text: "扩大增长",
+            description: null,
+            recommended: true,
+            default_selected: false,
+          },
+        ],
+        supplement: {
+          enabled: false,
+          label: "补充信息",
+          placeholder: "",
+          required: false,
+          max_length: 2000,
+        },
+        layout: "auto",
+      },
+      status: "PENDING",
+      version: 1,
+      transitions: [],
+      answer: null,
+      expires_at: null,
+      created_at: "2026-09-17T06:27:24.586093Z",
+      updated_at: "2026-09-17T06:27:24.586093Z",
+    };
+    mockListInteractions.mockResolvedValue({ interactions: [pending] });
+    mockSubmitInteraction.mockResolvedValue({
+      interaction: {
+        ...pending,
+        status: "SUBMITTED",
+        version: 2,
+        answer: {
+          selected: [{ id: "growth", text: "扩大增长" }],
+          supplement: null,
+        },
+      },
+      user_input: "扩大增长",
+    });
+
+    renderWithProviders(<TaskPage />, {
+      initialEntries: ["/task/demo-chat"],
+    });
+
+    fireEvent.click(
+      await screen.findByRole("radio", { name: /扩大增长/ }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "提交选择" }));
+
+    await waitFor(() =>
+      expect(mockChatSubmit).toHaveBeenCalledWith({ query: "扩大增长" }),
+    );
+    expect(mockChatSubmit).toHaveBeenCalledTimes(1);
   });
 
   it("does not open the previous chat's material when a pending click finishes after switching", async () => {

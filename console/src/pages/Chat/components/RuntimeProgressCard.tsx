@@ -1,5 +1,5 @@
 import { Markdown } from "@agentscope-ai/chat";
-import { useContext, useMemo, useRef, useState } from "react";
+import { useContext, useMemo, useRef, useState, type ReactNode } from "react";
 import { ExpertIdentityContext } from "../../../contexts/ExpertIdentityContext";
 import { message } from "antd";
 import { toDisplayUrl } from "../utils";
@@ -24,6 +24,7 @@ interface RuntimeMessage {
   type?: string;
   status?: string;
   content?: RuntimeContent[];
+  metadata?: Record<string, any> | null;
 }
 
 interface RuntimeResponse {
@@ -44,6 +45,7 @@ interface Props {
   isLast?: boolean;
   chatId?: string | null;
   agentId?: string | null;
+  interactionContent?: ReactNode;
 }
 
 const TOOL_LABELS: Record<string, string> = {
@@ -177,6 +179,58 @@ function isToolOutput(type?: string) {
   ].includes(type || "");
 }
 
+function findInteractionId(value: unknown, depth = 0): string | null {
+  if (depth > 5 || value == null) return null;
+  if (typeof value === "string") {
+    try {
+      return findInteractionId(JSON.parse(value), depth + 1);
+    } catch {
+      return null;
+    }
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const interactionId = findInteractionId(item, depth + 1);
+      if (interactionId) return interactionId;
+    }
+    return null;
+  }
+  if (typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const interaction = record.interaction;
+  if (interaction && typeof interaction === "object") {
+    const interactionId = (interaction as Record<string, unknown>)
+      .interaction_id;
+    if (typeof interactionId === "string" && interactionId.trim()) {
+      return interactionId;
+    }
+  }
+  for (const key of ["text", "output", "result", "content"]) {
+    const interactionId = findInteractionId(record[key], depth + 1);
+    if (interactionId) return interactionId;
+  }
+  return null;
+}
+
+function getCreatedInteractionId(messageItem: RuntimeMessage) {
+  const metadataInteractionId =
+    messageItem.metadata?.super_expert_interaction_id;
+  if (
+    typeof metadataInteractionId === "string" &&
+    metadataInteractionId.trim()
+  ) {
+    return metadataInteractionId;
+  }
+  if (!isToolOutput(messageItem.type)) return null;
+  for (const content of messageItem.content || []) {
+    const data = content.data;
+    if (data?.name !== "interaction_card_create") continue;
+    const interactionId = findInteractionId(data.output);
+    if (interactionId) return interactionId;
+  }
+  return null;
+}
+
 function targetOf(args: Record<string, any> = {}) {
   const target =
     args.file_path ||
@@ -285,7 +339,7 @@ export default function RuntimeProgressCard(props: Props) {
 
   if (!visibleMessages.length && !hasActivity && running) {
     return (
-      <div className={styles.runtimeCard}>
+      <div className={styles.runtimeCard} data-runtime-progress-card>
         <div className={styles.agentHeader}>
           <img
             className={styles.avatar}
@@ -308,7 +362,7 @@ export default function RuntimeProgressCard(props: Props) {
   let imageOrdinal = 0;
 
   return (
-    <div className={styles.runtimeCard}>
+    <div className={styles.runtimeCard} data-runtime-progress-card>
       <div className={styles.agentHeader}>
         <img
           className={styles.avatar}
@@ -319,64 +373,90 @@ export default function RuntimeProgressCard(props: Props) {
         {identity.isSuperExpert && <SuperExpertBadge />}
       </div>
 
-      {visibleMessages.map((item, index) => (
-        <div key={item.id || index} className={styles.messageContent}>
-          {(() => {
-            const itemText = (item.content || [])
-              .map((content) => content.text || content.refusal || "")
-              .join("\n");
-            const imageLabels = extractVisualSchemeNames(itemText);
-            let messageImageIndex = 0;
+      {output.map((item, index) => {
+        const interactionId = getCreatedInteractionId(item);
+        if (interactionId) {
+          return (
+            <div
+              key={`interaction-${interactionId}`}
+              data-super-expert-interaction-slot={interactionId}
+            />
+          );
+        }
+        if (
+          (item.type !== "message" && item.type !== "error") ||
+          !hasVisibleMessageContent(item)
+        ) {
+          return null;
+        }
+        return (
+          <div key={item.id || index} className={styles.messageContent}>
+            {(() => {
+              const itemText = (item.content || [])
+                .map((content) => content.text || content.refusal || "")
+                .join("\n");
+              const imageLabels = extractVisualSchemeNames(itemText);
+              let messageImageIndex = 0;
 
-            return (item.content || []).map((content, contentIndex) => {
-              if (content.type === "text" && content.text) {
-                return (
-                  <Markdown
-                    key={`text-${contentIndex}`}
-                    content={sanitizeGeneratedImagePathText(content.text)}
-                    cursor={running && index === visibleMessages.length - 1}
-                  />
+              return (item.content || []).map((content, contentIndex) => {
+                if (content.type === "text" && content.text) {
+                  return (
+                    <Markdown
+                      key={`text-${contentIndex}`}
+                      content={sanitizeGeneratedImagePathText(content.text)}
+                      cursor={
+                        running &&
+                        item === visibleMessages[visibleMessages.length - 1]
+                      }
+                    />
+                  );
+                }
+                if (content.type === "refusal" && content.refusal) {
+                  return (
+                    <Markdown
+                      key={`refusal-${contentIndex}`}
+                      content={sanitizeGeneratedImagePathText(content.refusal)}
+                      cursor={
+                        running &&
+                        item === visibleMessages[visibleMessages.length - 1]
+                      }
+                    />
+                  );
+                }
+                const imageUrl = getImageUrl(
+                  content,
+                  props.chatId,
+                  props.agentId,
                 );
-              }
-              if (content.type === "refusal" && content.refusal) {
+                if (!imageUrl) return null;
+                imageOrdinal += 1;
+                const imageLabel = imageLabels[messageImageIndex];
+                messageImageIndex += 1;
+                const alt = imageLabel || `对话图片 ${imageOrdinal}`;
                 return (
-                  <Markdown
-                    key={`refusal-${contentIndex}`}
-                    content={sanitizeGeneratedImagePathText(content.refusal)}
-                    cursor={running && index === visibleMessages.length - 1}
-                  />
+                  <button
+                    key={`image-${contentIndex}`}
+                    type="button"
+                    className={styles.inlineImageButton}
+                    onClick={() => setPreviewImage({ url: imageUrl, alt })}
+                    title="点击查看大图"
+                  >
+                    {imageLabel && (
+                      <span className={styles.inlineImageLabel}>
+                        {imageLabel}
+                      </span>
+                    )}
+                    <img src={imageUrl} alt={alt} />
+                  </button>
                 );
-              }
-              const imageUrl = getImageUrl(
-                content,
-                props.chatId,
-                props.agentId,
-              );
-              if (!imageUrl) return null;
-              imageOrdinal += 1;
-              const imageLabel = imageLabels[messageImageIndex];
-              messageImageIndex += 1;
-              const alt = imageLabel || `对话图片 ${imageOrdinal}`;
-              return (
-                <button
-                  key={`image-${contentIndex}`}
-                  type="button"
-                  className={styles.inlineImageButton}
-                  onClick={() => setPreviewImage({ url: imageUrl, alt })}
-                  title="点击查看大图"
-                >
-                  {imageLabel && (
-                    <span className={styles.inlineImageLabel}>
-                      {imageLabel}
-                    </span>
-                  )}
-                  <img src={imageUrl} alt={alt} />
-                </button>
-              );
-            });
-          })()}
-        </div>
-      ))}
+              });
+            })()}
+          </div>
+        );
+      })}
+
+      <div data-super-expert-interaction-fallback-slot />
+      {props.interactionContent}
 
       {hasActivity && (
         <div className={styles.activity}>

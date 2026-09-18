@@ -32,6 +32,181 @@ vi.mock("@agentscope-ai/chat", () => ({
 }));
 
 describe("RuntimeProgressCard", () => {
+  it("creates an exact card anchor from fixed-runtime reply metadata", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "fixed-runtime-reply",
+              type: "message",
+              status: "completed",
+              metadata: {
+                super_expert_interaction_id: "interaction-s0-1",
+              },
+              content: [{ type: "text", text: "请按下方卡片填写。" }],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(
+      document.querySelector(
+        '[data-super-expert-interaction-slot="interaction-s0-1"]',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("places a successful interaction card anchor between surrounding reply text", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "message-before",
+              type: "message",
+              status: "completed",
+              content: [{ type: "text", text: "保留的前文" }],
+            },
+            {
+              id: "create-call",
+              type: "plugin_call",
+              status: "completed",
+              content: [
+                {
+                  type: "data",
+                  data: { name: "interaction_card_create" },
+                },
+              ],
+            },
+            {
+              id: "create-result",
+              type: "plugin_call_output",
+              status: "completed",
+              content: [
+                {
+                  type: "data",
+                  data: {
+                    name: "interaction_card_create",
+                    output:
+                      '[{"type":"text","text":"{\\"interaction\\":{\\"interaction_id\\":\\"interaction-1\\"}}"}]',
+                  },
+                },
+              ],
+            },
+            {
+              id: "message-after",
+              type: "message",
+              status: "completed",
+              content: [{ type: "text", text: "保留的后文" }],
+            },
+          ],
+        }}
+      />,
+    );
+
+    const before = screen.getByText("保留的前文");
+    const anchor = document.querySelector(
+      '[data-super-expert-interaction-slot="interaction-1"]',
+    );
+    const after = screen.getByText("保留的后文");
+    const copy = screen.getByRole("button", { name: "复制回复" });
+
+    expect(anchor).not.toBeNull();
+    expect(
+      before.compareDocumentPosition(anchor!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      anchor!.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      after.compareDocumentPosition(copy) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("does not create an exact card anchor for a failed interaction request", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "failed-result",
+              type: "plugin_call_output",
+              status: "completed",
+              content: [
+                {
+                  type: "data",
+                  data: {
+                    name: "interaction_card_create",
+                    output:
+                      '[{"type":"text","text":"{\\"error\\":\\"INVALID_INTERACTION_REQUEST\\"}"}]',
+                  },
+                },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(
+      document.querySelector(
+        '[data-super-expert-interaction-slot="interaction-1"]',
+      ),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders processing details after interaction content", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "msg-1",
+              type: "message",
+              status: "completed",
+              content: [{ type: "text", text: "请填写以下业务信息。" }],
+            },
+            {
+              id: "reasoning-1",
+              type: "reasoning",
+              status: "completed",
+              content: [],
+            },
+          ],
+        }}
+        interactionContent={
+          <section aria-label="基础交互">
+            <button type="button">提交回答</button>
+          </section>
+        }
+      />,
+    );
+
+    const response = screen.getByText("请填写以下业务信息。");
+    const interaction = screen.getByRole("region", { name: "基础交互" });
+    const activity = screen.getByText("已完成 1 项处理");
+    const copy = screen.getByRole("button", { name: "复制回复" });
+
+    expect(
+      response.compareDocumentPosition(interaction) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      interaction.compareDocumentPosition(activity) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      activity.compareDocumentPosition(copy) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it("keeps streamed messages in arrival order when the final response is merged", () => {
     const { rerender } = render(
       <RuntimeProgressCard

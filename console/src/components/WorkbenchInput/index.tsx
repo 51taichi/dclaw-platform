@@ -598,10 +598,17 @@ export default function WorkbenchInput({
   };
 
   return (
-    <div className={`${styles.chatToolbarWrapper} ${inFlow ? styles.inFlow : ""}`}>
+    <div
+      className={`${styles.chatToolbarWrapper} ${inFlow ? styles.inFlow : ""}`}
+    >
       {topAccessory && (
         <div className={styles.inputTopAccessory}>{topAccessory}</div>
       )}
+      {disabled ? (
+        <div className={styles.disabledNotice} role="status">
+          请先完成上方交互卡片，提交后即可继续输入
+        </div>
+      ) : null}
       <div
         className={`${styles.inputArea} ${
           isDraggingFiles ? styles.inputAreaDragging : ""
@@ -621,7 +628,9 @@ export default function WorkbenchInput({
           <button
             className={styles.toolbarBtn}
             title="添加文件作为回答背景"
+            disabled={disabled}
             onClick={(e) => {
+              if (disabled) return;
               e.preventDefault();
               setMentionQuery("");
               if (workspaceFiles.length === 0 && !isFetchingFiles) {
@@ -664,6 +673,7 @@ export default function WorkbenchInput({
           <button
             className={styles.toolbarBtn}
             title={t("workbench.input.attachFile", "添加附件")}
+            disabled={disabled}
             onClick={handleAttachClick}
           >
             <Paperclip size={16} />
@@ -672,6 +682,7 @@ export default function WorkbenchInput({
             type="file"
             ref={fileInputRef}
             multiple
+            disabled={disabled}
             style={{ display: "none" }}
             onChange={handleFileChange}
           />
@@ -802,6 +813,7 @@ export default function WorkbenchInput({
         <div className={styles.inputFooter}>
           <div className={styles.footerLeftWrapper}>
             <ChatToolbar
+              disabled={disabled}
               isClawMode={isClawMode}
               onSkillSelect={(skill) => {
                 setSelectedSkill(skill);
@@ -852,7 +864,7 @@ export default function WorkbenchInput({
                   : !customInputValue.trim() &&
                     uploadedFiles.length === 0 &&
                     mentionedFiles.length === 0) ||
-                disabled ||
+                (!isGenerating && disabled) ||
                 isInjectingContext ||
                 speechState !== "idle"
               }

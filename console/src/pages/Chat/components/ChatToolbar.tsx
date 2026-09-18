@@ -239,6 +239,7 @@ const renderModePopover = (modeId: string) => {
 };
 
 export default function ChatToolbar({
+  disabled = false,
   isClawMode = false,
   onSkillSelect,
   overrideSelectedAgent,
@@ -246,6 +247,7 @@ export default function ChatToolbar({
   onAgentChange,
   onModeChange,
 }: {
+  disabled?: boolean;
   isClawMode?: boolean;
   onSkillSelect?: (skill: SkillItem) => void;
   overrideSelectedAgent?: string;
@@ -256,6 +258,14 @@ export default function ChatToolbar({
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
+
+  useEffect(() => {
+    if (!disabled) return;
+    setShowExpertMenu(false);
+    setShowModelMenu(false);
+    setShowSkills(false);
+    setShowConnectors(false);
+  }, [disabled]);
 
   const store = useAgentStore();
   const selectedExpertTeam = !isClawMode ? store.selectedExpertTeam : null;
@@ -506,7 +516,28 @@ export default function ChatToolbar({
     : "";
 
   return (
-    <div className={`${styles.chatToolbar} qwenpaw-chat-toolbar`}>
+    <div
+      className={`${styles.chatToolbar} qwenpaw-chat-toolbar ${
+        disabled ? styles.chatToolbarDisabled : ""
+      }`}
+      aria-disabled={disabled}
+      onClickCapture={
+        disabled
+          ? (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+          : undefined
+      }
+      onKeyDownCapture={
+        disabled
+          ? (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+          : undefined
+      }
+    >
       {/* ── Expert / Mode Selector (default: Craft) ── */}
       <div ref={expertRef} style={{ position: "relative" }}>
         <button

@@ -112,4 +112,19 @@ describe("WorkbenchInput realtime speech", () => {
     expect(mockSpeechStart).toHaveBeenCalledTimes(2);
     expect(mockTranscribeAudio).not.toHaveBeenCalled();
   });
+
+  it("disables every message-producing input while a card_only interaction is active", async () => {
+    renderWithProviders(<WorkbenchInput onSubmit={vi.fn()} disabled />, {
+      initialEntries: ["/task/test-chat"],
+    });
+
+    expect(
+      screen.getByText("请先完成上方交互卡片，提交后即可继续输入"),
+    ).toBeVisible();
+    expect(screen.getByRole("textbox")).toBeDisabled();
+    expect(screen.getByTitle("添加文件作为回答背景")).toBeDisabled();
+    expect(screen.getByTitle("添加附件")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "开始语音输入" })).toBeDisabled();
+    expect(screen.getByTitle("发送")).toBeDisabled();
+  });
 });

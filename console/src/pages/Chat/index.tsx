@@ -62,6 +62,7 @@ import {
   SuperExpertAigcTaskCard,
 } from "./components/SuperExpertAigcTaskCard";
 import { superExpertPlatformApi } from "../../api/modules/superExpertPlatform";
+import { InlineSuperExpertInteractionCards } from "./components/SuperExpertInteractionCards";
 
 interface ApprovalMessageData {
   requestId: string;
@@ -601,6 +602,7 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
   >("idle");
   const [isGenerating, setIsGenerating] = useState(false);
   const [runtimeReloadKey, setRuntimeReloadKey] = useState(0);
+  const [interactionBlocked, setInteractionBlocked] = useState(false);
   const [billingFailure, setBillingFailure] =
     useState<InsufficientCreditsFailure | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -608,6 +610,7 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
 
   useEffect(() => {
     const sessionId = chatId && !isDraftSessionId(chatId) ? chatId : null;
+    setInteractionBlocked(false);
     setActiveSessionId(sessionId);
     return () => setActiveSessionId(null);
   }, [chatId, setActiveSessionId]);
@@ -2131,7 +2134,18 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
                 }}
               />
             )}
+            {chatId && !isDraftSessionId(chatId) ? (
+              <InlineSuperExpertInteractionCards
+                conversationId={chatId}
+                responseRevision={runtimeReloadKey}
+                onBlockingChange={setInteractionBlocked}
+                onSubmitAsUserInput={(text) => {
+                  (chatRef.current?.input.submit as any)({ query: text });
+                }}
+              />
+            ) : null}
             <WorkbenchInput
+              disabled={interactionBlocked}
               isClawMode={isClawMode}
               isGenerating={isGenerating}
               topAccessory={

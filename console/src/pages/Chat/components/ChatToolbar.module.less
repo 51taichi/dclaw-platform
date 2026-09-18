@@ -102,7 +102,9 @@
   overflow-y: auto;
   background: #fff;
   border-radius: 14px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.12),
+    0 2px 8px rgba(0, 0, 0, 0.06);
   border: 1px solid rgba(0, 0, 0, 0.06);
   padding: 8px;
   z-index: 1000;
@@ -223,7 +225,9 @@
   overflow-y: auto;
   background: #fff;
   border-radius: 14px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.12),
+    0 2px 8px rgba(0, 0, 0, 0.06);
   border: 1px solid rgba(0, 0, 0, 0.06);
   padding: 8px;
   z-index: 1000;
@@ -362,7 +366,9 @@
   min-width: 220px;
   background: #fff;
   border-radius: 12px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.12),
+    0 2px 8px rgba(0, 0, 0, 0.06);
   border: 1px solid rgba(0, 0, 0, 0.06);
   padding: 6px;
   z-index: 1001;
@@ -371,7 +377,7 @@
 
 /* Hover bridge to prevent losing hover when moving mouse from parent to submenu */
 .summonSubMenu::after {
-  content: '';
+  content: "";
   position: absolute;
   top: 0;
   bottom: 0;
@@ -390,6 +396,11 @@
   height: 1px;
   background: rgba(0, 0, 0, 0.06);
   margin: 4px 0;
+}
+
+.chatToolbarDisabled {
+  pointer-events: none;
+  opacity: 0.48;
 }
 
 :global(.dark) .dropdownDivider {

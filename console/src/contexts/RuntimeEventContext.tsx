@@ -59,41 +59,58 @@ export function RuntimeEventProvider({ children }: { children: ReactNode }) {
 
     const controller = new AbortController();
     let disposed = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     const sessionId = activeSessionId;
-    const sinceId = lastEventIdsRef.current[sessionId] ?? null;
     setConnected(false);
     setFallbackPolling(false);
 
-    streamRuntimeEvents({
-      sessionId,
-      sinceId,
-      signal: controller.signal,
-      onOpen: () => {
-        if (!disposed) {
-          setConnected(true);
-          setFallbackPolling(false);
-        }
-      },
-      onEvent: (event) => {
-        if (disposed) return;
-        if (event.id) {
-          lastEventIdsRef.current[sessionId] = event.id;
-          setLastEventId(event.id);
-        }
-        setEvents((current) => [...current.slice(-99), event]);
-      },
-    }).catch((error) => {
-      if (controller.signal.aborted || disposed) return;
-      console.warn(
-        "Runtime event stream unavailable, falling back to polling",
-        error,
-      );
+    const scheduleReconnect = () => {
+      if (disposed || controller.signal.aborted) return;
       setConnected(false);
       setFallbackPolling(true);
-    });
+      reconnectTimer = setTimeout(connect, 1_000);
+    };
+
+    const connect = () => {
+      if (disposed || controller.signal.aborted) return;
+      const sinceId = lastEventIdsRef.current[sessionId] ?? null;
+      void streamRuntimeEvents({
+        sessionId,
+        sinceId,
+        signal: controller.signal,
+        onOpen: () => {
+          if (!disposed) {
+            setConnected(true);
+            setFallbackPolling(false);
+          }
+        },
+        onEvent: (event) => {
+          if (disposed) return;
+          if (event.id) {
+            lastEventIdsRef.current[sessionId] = event.id;
+            setLastEventId(event.id);
+          }
+          setEvents((current) => [...current.slice(-99), event]);
+        },
+      })
+        .then(() => {
+          scheduleReconnect();
+        })
+        .catch((error) => {
+          if (controller.signal.aborted || disposed) return;
+          console.warn(
+            "Runtime event stream unavailable, falling back to polling",
+            error,
+          );
+          scheduleReconnect();
+        });
+    };
+
+    connect();
 
     return () => {
       disposed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       controller.abort();
     };
   }, [activeSessionId, pageVisible]);
