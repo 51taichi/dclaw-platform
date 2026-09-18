@@ -126,7 +126,7 @@ describe("RuntimeProgressCard", () => {
                   data: {
                     name: "interaction_card_create",
                     output:
-                      '[{"type":"text","text":"{\\"interaction\\":{\\"interaction_id\\":\\"interaction-1\\"}}"}]',
+                      '[{"type":"text","text":"{\\"interaction\\":{\\"interaction_id\\":\\"interaction-1\\",\\"status\\":\\"PENDING\\"}}"}]',
                   },
                 },
               ],
@@ -193,6 +193,296 @@ describe("RuntimeProgressCard", () => {
         '[data-super-expert-interaction-slot="interaction-1"]',
       ),
     ).not.toBeInTheDocument();
+  });
+
+  it("removes legacy delivery status from a reply with verified card creation", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "create-result",
+              type: "plugin_call_output",
+              status: "completed",
+              content: [
+                {
+                  type: "data",
+                  data: {
+                    name: "interaction_card_create",
+                    output:
+                      '[{"type":"text","text":"{\\"interaction\\":{\\"interaction_id\\":\\"interaction-1\\",\\"status\\":\\"PENDING\\"}}"}]',
+                  },
+                },
+              ],
+            },
+            {
+              id: "message-after",
+              type: "message",
+              status: "completed",
+              content: [
+                {
+                  type: "text",
+                  text: "好了，卡片已经发给你了。按上面的问题填一下。",
+                },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("按上面的问题填一下。")).toBeInTheDocument();
+    expect(
+      screen.queryByText("好了，卡片已经发给你了。按上面的问题填一下。"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("sanitizes only the first visible reply after verified card creation", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "message-before",
+              type: "message",
+              status: "completed",
+              content: [
+                {
+                  type: "text",
+                  text: "卡片已经发给你了。这是创建前的历史说明。",
+                },
+              ],
+            },
+            {
+              id: "create-result",
+              type: "plugin_call_output",
+              status: "completed",
+              content: [
+                {
+                  type: "data",
+                  data: {
+                    name: "interaction_card_create",
+                    output:
+                      '[{"type":"text","text":"{\\"interaction\\":{\\"interaction_id\\":\\"interaction-1\\",\\"status\\":\\"PENDING\\"}}"}]',
+                  },
+                },
+              ],
+            },
+            {
+              id: "message-after",
+              type: "message",
+              status: "completed",
+              content: [
+                {
+                  type: "text",
+                  text: "卡片已经发给你了。请选择。",
+                },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByText("卡片已经发给你了。这是创建前的历史说明。"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("请选择。")).toBeInTheDocument();
+  });
+
+  it("does not anchor or sanitize a submitted interaction replay", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "submitted-replay",
+              type: "plugin_call_output",
+              status: "completed",
+              content: [
+                {
+                  type: "data",
+                  data: {
+                    name: "interaction_card_create",
+                    output:
+                      '[{"type":"text","text":"{\\"interaction\\":{\\"interaction_id\\":\\"interaction-old\\",\\"status\\":\\"SUBMITTED\\"}}"}]',
+                  },
+                },
+              ],
+            },
+            {
+              id: "message-after-replay",
+              type: "message",
+              status: "completed",
+              content: [
+                {
+                  type: "text",
+                  text: "卡片已经发给你了。这是普通回复。",
+                },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(
+      document.querySelector(
+        '[data-super-expert-interaction-slot="interaction-old"]',
+      ),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText("卡片已经发给你了。这是普通回复。"),
+    ).toBeInTheDocument();
+  });
+
+  it("only sanitizes the first non-empty text block in an associated reply", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "message-with-anchor",
+              type: "message",
+              status: "completed",
+              metadata: {
+                super_expert_interaction_id: "interaction-1",
+              },
+              content: [
+                { type: "text", text: "这里是有效业务说明。" },
+                { type: "text", text: "卡片已经发给你了。这是第二段原文。" },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("这里是有效业务说明。")).toBeInTheDocument();
+    expect(
+      screen.getByText("卡片已经发给你了。这是第二段原文。"),
+    ).toBeInTheDocument();
+  });
+
+  it("skips whitespace blocks before sanitizing the first real text block", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "message-with-anchor",
+              type: "message",
+              status: "completed",
+              metadata: {
+                super_expert_interaction_id: "interaction-1",
+              },
+              content: [
+                { type: "text", text: "   " },
+                { type: "text", text: "卡片已经发给你了。请选择。" },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("请选择。")).toBeInTheDocument();
+    expect(screen.queryByText(/卡片已经发给你了/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    "卡片发送成功率达到 95%。",
+    "卡片创建成功率偏低，需要继续排查。",
+    "卡片发过去的时间是下午三点。",
+  ])("keeps ordinary card wording after verified creation: %s", (text) => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "message-with-anchor",
+              type: "message",
+              status: "completed",
+              metadata: {
+                super_expert_interaction_id: "interaction-1",
+              },
+              content: [{ type: "text", text }],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText(text)).toBeInTheDocument();
+  });
+
+  it("renders every host-verified interaction anchor on the associated reply", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "message-with-anchors",
+              type: "message",
+              status: "completed",
+              metadata: {
+                super_expert_interaction_id: "interaction-2",
+                super_expert_interaction_ids: [
+                  "interaction-1",
+                  "interaction-2",
+                ],
+              },
+              content: [{ type: "text", text: "请选择。" }],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(
+      document.querySelector(
+        '[data-super-expert-interaction-slot="interaction-1"]',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      document.querySelector(
+        '[data-super-expert-interaction-slot="interaction-2"]',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps delivery wording when the response has no verified card creation", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "ordinary-message",
+              type: "message",
+              status: "completed",
+              content: [
+                {
+                  type: "text",
+                  text: "卡片已经发过去了。这是普通文本记录。",
+                },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByText("卡片已经发过去了。这是普通文本记录。"),
+    ).toBeInTheDocument();
   });
 
   it("renders processing details after interaction content", () => {

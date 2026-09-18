@@ -63,6 +63,8 @@ function isRunning(status?: string) {
 
 const IMAGEGEN_PATH_PATTERN =
   /(?:`?)(?:\/app\/working\/(?:workspaces\/[^/\s`]+\/)?sessions_data\/(?:<session_id>|[^/\s`]+)\/)?media\/imagegen\/imagegen_[\w.-]+\.(?:png|jpe?g|webp|gif)(?:`?)/i;
+const INTERACTION_DELIVERY_PREFIX =
+  /^\s*(?:(?:好(?:了|的)?|可以|行)[，,。.!！；;：:]?\s*)?(?:(?:这张|这个|该|交互)?卡片)(?:已经|已)?(?:发(?:送)?(?:给你|过去|出去|出)?|发送成功|创建(?:好|完成|成功))了?(?:\s*[，,。.!！；;：:]\s*|\s*$)/;
 
 function sanitizeGeneratedImagePathText(text: string) {
   let imageReferenceIndex = 0;
@@ -79,6 +81,10 @@ function sanitizeGeneratedImagePathText(text: string) {
     })
     .join("\n")
     .replace(/\n{3,}/g, "\n\n");
+}
+
+function sanitizeInteractionDeliveryStatusText(text: string) {
+  return text.replace(INTERACTION_DELIVERY_PREFIX, "");
 }
 
 function getText(messageItem: RuntimeMessage) {
@@ -179,18 +185,18 @@ function isToolOutput(type?: string) {
   ].includes(type || "");
 }
 
-function findInteractionId(value: unknown, depth = 0): string | null {
+function findPendingInteractionId(value: unknown, depth = 0): string | null {
   if (depth > 5 || value == null) return null;
   if (typeof value === "string") {
     try {
-      return findInteractionId(JSON.parse(value), depth + 1);
+      return findPendingInteractionId(JSON.parse(value), depth + 1);
     } catch {
       return null;
     }
   }
   if (Array.isArray(value)) {
     for (const item of value) {
-      const interactionId = findInteractionId(item, depth + 1);
+      const interactionId = findPendingInteractionId(item, depth + 1);
       if (interactionId) return interactionId;
     }
     return null;
@@ -201,38 +207,75 @@ function findInteractionId(value: unknown, depth = 0): string | null {
   if (interaction && typeof interaction === "object") {
     const interactionId = (interaction as Record<string, unknown>)
       .interaction_id;
-    if (typeof interactionId === "string" && interactionId.trim()) {
+    const interactionStatus = (interaction as Record<string, unknown>).status;
+    if (
+      interactionStatus === "PENDING" &&
+      typeof interactionId === "string" &&
+      interactionId.trim()
+    ) {
       return interactionId;
     }
   }
   for (const key of ["text", "output", "result", "content"]) {
-    const interactionId = findInteractionId(record[key], depth + 1);
+    const interactionId = findPendingInteractionId(record[key], depth + 1);
     if (interactionId) return interactionId;
   }
   return null;
 }
 
-function getCreatedInteractionId(messageItem: RuntimeMessage) {
-  const nestedMetadata = messageItem.metadata?.metadata;
-  const metadataInteractionId =
-    messageItem.metadata?.super_expert_interaction_id ||
-    (nestedMetadata && typeof nestedMetadata === "object"
-      ? (nestedMetadata as Record<string, any>).super_expert_interaction_id
-      : null);
-  if (
-    typeof metadataInteractionId === "string" &&
-    metadataInteractionId.trim()
-  ) {
-    return metadataInteractionId;
-  }
-  if (!isToolOutput(messageItem.type)) return null;
+function getCreatedInteractionIds(messageItem: RuntimeMessage) {
+  const interactionIds: string[] = [];
+  const addInteractionId = (value: unknown) => {
+    if (
+      typeof value === "string" &&
+      value.trim() &&
+      !interactionIds.includes(value.trim())
+    ) {
+      interactionIds.push(value.trim());
+    }
+  };
+  const addMetadataInteractionIds = (value: unknown) => {
+    if (!value || typeof value !== "object") return;
+    const metadata = value as Record<string, unknown>;
+    const listedIds = metadata.super_expert_interaction_ids;
+    if (Array.isArray(listedIds)) {
+      listedIds.forEach(addInteractionId);
+    }
+    addInteractionId(metadata.super_expert_interaction_id);
+  };
+
+  addMetadataInteractionIds(messageItem.metadata);
+  addMetadataInteractionIds(messageItem.metadata?.metadata);
+  if (interactionIds.length) return interactionIds;
+  if (!isToolOutput(messageItem.type)) return interactionIds;
   for (const content of messageItem.content || []) {
     const data = content.data;
     if (data?.name !== "interaction_card_create") continue;
-    const interactionId = findInteractionId(data.output);
-    if (interactionId) return interactionId;
+    const interactionId = findPendingInteractionId(data.output);
+    if (interactionId) addInteractionId(interactionId);
   }
-  return null;
+  return interactionIds;
+}
+
+function interactionDeliveryMessages(output: RuntimeMessage[]) {
+  const messages = new Set<RuntimeMessage>();
+  let awaitingReplyAfterCreate = false;
+  for (const item of output) {
+    const interactionIds = getCreatedInteractionIds(item);
+    if (interactionIds.length && isToolOutput(item.type)) {
+      awaitingReplyAfterCreate = true;
+    }
+    if (
+      (item.type === "message" || item.type === "error") &&
+      hasVisibleMessageContent(item)
+    ) {
+      if (interactionIds.length || awaitingReplyAfterCreate) {
+        messages.add(item);
+        awaitingReplyAfterCreate = false;
+      }
+    }
+  }
+  return messages;
 }
 
 function targetOf(args: Record<string, any> = {}) {
@@ -280,8 +323,19 @@ function summarizeTools(messages: RuntimeMessage[]) {
   };
 }
 
-function extractCopyText(messages: RuntimeMessage[]) {
-  return messages.map(getText).filter(Boolean).join("\n\n");
+function extractCopyText(
+  messages: RuntimeMessage[],
+  interactionDeliveryItems: Set<RuntimeMessage>,
+) {
+  return messages
+    .map((item) => {
+      const text = getText(item);
+      return interactionDeliveryItems.has(item)
+        ? sanitizeInteractionDeliveryStatusText(text)
+        : text;
+    })
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 export default function RuntimeProgressCard(props: Props) {
@@ -337,7 +391,8 @@ export default function RuntimeProgressCard(props: Props) {
     () => summarizeTools(output),
     [output],
   );
-  const copyText = extractCopyText(visibleMessages);
+  const interactionDeliveryItems = interactionDeliveryMessages(output);
+  const copyText = extractCopyText(visibleMessages, interactionDeliveryItems);
   const running = isRunning(props.data.status);
   const hasActivity = tools.length > 0 || reasoningCount > 0;
 
@@ -378,13 +433,17 @@ export default function RuntimeProgressCard(props: Props) {
       </div>
 
       {output.map((item, index) => {
-        const interactionId = getCreatedInteractionId(item);
-        if (interactionId && isToolOutput(item.type)) {
+        const interactionIds = getCreatedInteractionIds(item);
+        if (interactionIds.length && isToolOutput(item.type)) {
           return (
-            <div
-              key={`interaction-${interactionId}`}
-              data-super-expert-interaction-slot={interactionId}
-            />
+            <div key={`interactions-${item.id || index}`}>
+              {interactionIds.map((interactionId) => (
+                <div
+                  key={`interaction-${interactionId}`}
+                  data-super-expert-interaction-slot={interactionId}
+                />
+              ))}
+            </div>
           );
         }
         if (
@@ -401,13 +460,23 @@ export default function RuntimeProgressCard(props: Props) {
                 .join("\n");
               const imageLabels = extractVisualSchemeNames(itemText);
               let messageImageIndex = 0;
+              let shouldSanitizeInteractionPrefix =
+                interactionDeliveryItems.has(item);
 
               return (item.content || []).map((content, contentIndex) => {
                 if (content.type === "text" && content.text) {
+                  const text = sanitizeGeneratedImagePathText(content.text);
+                  const sanitizeThisBlock =
+                    shouldSanitizeInteractionPrefix && Boolean(text.trim());
+                  if (text.trim()) shouldSanitizeInteractionPrefix = false;
                   return (
                     <Markdown
                       key={`text-${contentIndex}`}
-                      content={sanitizeGeneratedImagePathText(content.text)}
+                      content={
+                        sanitizeThisBlock
+                          ? sanitizeInteractionDeliveryStatusText(text)
+                          : text
+                      }
                       cursor={
                         running &&
                         item === visibleMessages[visibleMessages.length - 1]
@@ -416,10 +485,20 @@ export default function RuntimeProgressCard(props: Props) {
                   );
                 }
                 if (content.type === "refusal" && content.refusal) {
+                  const refusal = sanitizeGeneratedImagePathText(
+                    content.refusal,
+                  );
+                  const sanitizeThisBlock =
+                    shouldSanitizeInteractionPrefix && Boolean(refusal.trim());
+                  if (refusal.trim()) shouldSanitizeInteractionPrefix = false;
                   return (
                     <Markdown
                       key={`refusal-${contentIndex}`}
-                      content={sanitizeGeneratedImagePathText(content.refusal)}
+                      content={
+                        sanitizeThisBlock
+                          ? sanitizeInteractionDeliveryStatusText(refusal)
+                          : refusal
+                      }
                       cursor={
                         running &&
                         item === visibleMessages[visibleMessages.length - 1]
@@ -455,9 +534,12 @@ export default function RuntimeProgressCard(props: Props) {
                 );
               });
             })()}
-            {interactionId ? (
-              <div data-super-expert-interaction-slot={interactionId} />
-            ) : null}
+            {interactionIds.map((interactionId) => (
+              <div
+                key={`interaction-${interactionId}`}
+                data-super-expert-interaction-slot={interactionId}
+              />
+            ))}
           </div>
         );
       })}
