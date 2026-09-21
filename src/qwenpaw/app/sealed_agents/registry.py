@@ -31,16 +31,16 @@ class SealedAgentRegistry:
         self.path = self.root / "registry.json"
         self._lock = threading.RLock()
 
-    def list_agents(self) -> list[SealedAgentRecord]:
+    def list_agents(self, *, include_deleted: bool = False) -> list[SealedAgentRecord]:
         with self._lock:
             document = self._read()
-        return list(document.agents)
+        return [agent for agent in document.agents if include_deleted or agent.deleted_at is None]
 
     def get_agent(self, agent_id: str) -> SealedAgentRecord | None:
         return next(
             (
                 agent
-                for agent in self.list_agents()
+                for agent in self.list_agents(include_deleted=True)
                 if agent.agent_id == agent_id
             ),
             None,

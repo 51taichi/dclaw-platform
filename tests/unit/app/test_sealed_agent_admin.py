@@ -727,3 +727,33 @@ async def test_banner_size_limit_preserves_existing_media(monkeypatch, tmp_path)
         )
     assert error.value.status_code == 400
     assert registry.get_agent("luyu") == original
+
+
+@pytest.mark.asyncio
+async def test_delete_requires_admin():
+    with pytest.raises(HTTPException) as error:
+        await router_module.delete_sealed_agent('luyu', _request('user'))
+    assert error.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_delete_removes_profile_and_stops_runtime(monkeypatch):
+    from unittest.mock import AsyncMock, Mock
+    from qwenpaw.config.config import AgentProfileRef
+
+    config = Config()
+    config.agents.profiles['luyu'] = AgentProfileRef(id='luyu', workspace_dir='/tmp/luyu', enabled=False)
+    service = Mock()
+    monkeypatch.setattr(router_module, 'get_sealed_agent_service', lambda: service)
+    monkeypatch.setattr(router_module, 'load_config', lambda: config)
+    save = Mock()
+    monkeypatch.setattr(router_module, 'save_config', save)
+    manager = SimpleNamespace(is_agent_loaded=lambda _: True, stop_agent=AsyncMock())
+    request = _request()
+    request.app = SimpleNamespace(state=SimpleNamespace(multi_agent_manager=manager))
+    result = await router_module.delete_sealed_agent('luyu', request)
+    assert result['deleted']
+    assert 'luyu' not in config.agents.profiles
+    service.delete.assert_called_once_with('luyu', actor='1')
+    manager.stop_agent.assert_awaited_once_with('luyu')
+    save.assert_called_once_with(config)

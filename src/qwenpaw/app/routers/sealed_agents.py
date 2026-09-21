@@ -501,3 +501,23 @@ async def enable_sealed_agent(agent_id: str, request: Request) -> dict[str, Any]
         return _operational_dto(record)
     except SealedAgentReleaseError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/{agent_id}")
+async def delete_sealed_agent(agent_id: str, request: Request) -> dict[str, Any]:
+    _require_admin(request)
+    async with _activation_locks.setdefault(agent_id, asyncio.Lock()):
+        try:
+            get_sealed_agent_service().delete(
+                agent_id, actor=str(getattr(request.state, "user_id", "admin")),
+            )
+        except SealedAgentReleaseError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        config = load_config()
+        config.agents.profiles.pop(agent_id, None)
+        save_config(config)
+        manager = getattr(request.app.state, "multi_agent_manager", None)
+        if manager is not None and manager.is_agent_loaded(agent_id):
+            await manager.stop_agent(agent_id)
+        logger.info("Deleted sealed agent %s (metadata and releases retained)", agent_id)
+        return {"agent_id": agent_id, "deleted": True}

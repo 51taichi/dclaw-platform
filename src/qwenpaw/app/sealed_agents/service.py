@@ -96,6 +96,9 @@ class SealedAgentService:
                 shutil.rmtree(validated.extracted_root, ignore_errors=True)
                 raise SealedAgentReleaseError(str(exc)) from exc
         current = self.registry.get_agent(manifest.agent_id)
+        if current is not None and current.deleted_at is not None:
+            shutil.rmtree(validated.extracted_root, ignore_errors=True)
+            raise SealedAgentReleaseError("sealed agent has been deleted")
         try:
             incoming_version = Version(manifest.version)
             existing_versions = [
@@ -317,6 +320,24 @@ class SealedAgentService:
         self.registry.upsert_agent(current.model_copy(update={"releases": releases}))
         return validation
 
+    def delete(self, agent_id: str, *, actor: str) -> SealedAgentRecord:
+        from datetime import datetime, timezone
+
+        current = self.registry.get_agent(agent_id)
+        if current is None:
+            raise SealedAgentReleaseError("sealed agent not found")
+        if current.deleted_at is not None:
+            return current
+        if current.enabled:
+            raise SealedAgentReleaseError("请先停用超级专家，再删除")
+        return self.registry.upsert_agent(
+            current.model_copy(update={
+                "enabled": False,
+                "deleted_at": datetime.now(timezone.utc),
+                "deleted_by": actor,
+            }),
+        )
+
     def disable(self, agent_id: str) -> SealedAgentRecord:
         current = self._required_agent(agent_id)
         return self.registry.upsert_agent(
@@ -333,7 +354,7 @@ class SealedAgentService:
 
     def _required_agent(self, agent_id: str) -> SealedAgentRecord:
         current = self.registry.get_agent(agent_id)
-        if current is None:
+        if current is None or current.deleted_at is not None:
             raise SealedAgentReleaseError("sealed agent not found")
         return current
 

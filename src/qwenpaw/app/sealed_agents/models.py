@@ -119,6 +119,8 @@ class SealedAgentRecord(BaseModel):
     agent_type: Literal["sealed"] = "sealed"
     scope: Literal["global"] = "global"
     enabled: bool = True
+    deleted_at: datetime | None = None
+    deleted_by: str | None = None
     active_release_id: str | None = None
     releases: list[SealedReleaseRecord] = Field(default_factory=list)
 
