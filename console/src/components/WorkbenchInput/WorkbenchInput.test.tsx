@@ -3,6 +3,40 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "@/test/common_setup";
 import WorkbenchInput from "./index";
+import { chatApi } from "../../api/modules/chat";
+
+describe("WorkbenchInput file drop", () => {
+  it("clears the file hint on cancellation and ignores text drags", () => {
+    const { container } = renderWithProviders(
+      <WorkbenchInput onSubmit={vi.fn()} />,
+    );
+    const area = container.querySelector('[class*="inputArea"]')!;
+    fireEvent.dragEnter(area, { dataTransfer: { types: ["text/plain"] } });
+    expect(screen.queryByText("松开即可上传附件")).not.toBeInTheDocument();
+    fireEvent.dragEnter(area, { dataTransfer: { types: ["Files"] } });
+    expect(screen.getByText("松开即可上传附件")).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByText("松开即可上传附件")).not.toBeInTheDocument();
+  });
+
+  it("uploads dropped files once without sending or clearing the draft", async () => {
+    const onSubmit = vi.fn();
+    vi.mocked(chatApi.uploadFile).mockResolvedValue({
+      url: "/attachment",
+    } as never);
+    const { container } = renderWithProviders(
+      <WorkbenchInput onSubmit={onSubmit} />,
+    );
+    const area = container.querySelector('[class*="inputArea"]')!;
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "保留草稿" } });
+    const files = [new File(["a"], "a.txt"), new File(["b"], "b.txt")];
+    fireEvent.drop(area, { dataTransfer: { types: ["Files"], files } });
+    await waitFor(() => expect(chatApi.uploadFile).toHaveBeenCalledTimes(2));
+    expect(input).toHaveValue("保留草稿");
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+});
 
 const {
   mockSpeechStart,

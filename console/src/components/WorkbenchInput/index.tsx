@@ -184,6 +184,26 @@ export default function WorkbenchInput({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragDepthRef = useRef(0);
 
+  useEffect(() => {
+    const resetDrag = () => {
+      dragDepthRef.current = 0;
+      setIsDraggingFiles(false);
+    };
+    const cancelDrag = (event: KeyboardEvent) => {
+      if (event.key === "Escape") resetDrag();
+    };
+    window.addEventListener("dragend", resetDrag);
+    window.addEventListener("drop", resetDrag);
+    window.addEventListener("blur", resetDrag);
+    window.addEventListener("keydown", cancelDrag);
+    return () => {
+      window.removeEventListener("dragend", resetDrag);
+      window.removeEventListener("drop", resetDrag);
+      window.removeEventListener("blur", resetDrag);
+      window.removeEventListener("keydown", cancelDrag);
+    };
+  }, []);
+
   // ── States for @ File Mentions ───────────────────────────────
   const [workspaceFiles, setWorkspaceFiles] = useState<
     { name: string; path: string }[]
@@ -618,10 +638,10 @@ export default function WorkbenchInput({
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
-        {isDraggingFiles && (
-          <div className={styles.dropOverlay}>
+        {isDraggingFiles && !disabled && (
+          <div className={styles.dropOverlay} role="status" aria-live="polite">
             <Paperclip size={18} />
-            <span>{t("workbench.input.dropFiles", "松开以上传文件")}</span>
+            <span>{t("workbench.input.dropFiles", "松开即可上传附件")}</span>
           </div>
         )}
         <div className={styles.inputToolbar}>

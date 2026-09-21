@@ -230,6 +230,18 @@ describe("WorkbenchPage", () => {
     ) as HTMLElement | null;
     expect(inputArea).not.toBeNull();
 
+    const drag = { dataTransfer: { types: ["Files"] } };
+    fireEvent.dragEnter(inputArea!, drag);
+    expect(screen.getByText("松开即可上传附件")).toBeInTheDocument();
+    fireEvent.dragEnter(screen.getByRole("textbox"), drag);
+    fireEvent.dragLeave(screen.getByRole("textbox"), drag);
+    expect(screen.getByText("松开即可上传附件")).toBeInTheDocument();
+    fireEvent.dragLeave(inputArea!, drag);
+    expect(screen.queryByText("松开即可上传附件")).not.toBeInTheDocument();
+    fireEvent.dragEnter(inputArea!, drag);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByText("松开即可上传附件")).not.toBeInTheDocument();
+
     const file = new File(["hello"], "dragged.txt", {
       type: "text/plain",
     });
@@ -243,6 +255,7 @@ describe("WorkbenchPage", () => {
 
     await waitFor(() => expect(mockUploadFile).toHaveBeenCalledWith(file));
     expect(await screen.findByText("dragged.txt")).toBeInTheDocument();
+    expect(mockCreateChat).not.toHaveBeenCalled();
   });
 
   it("starts and stops dictation without sending the task", async () => {
