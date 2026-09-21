@@ -124,6 +124,10 @@ export const sealedAgentsApi = {
       )}/releases/${encodeURIComponent(releaseId)}/activate`,
       { method: "POST" },
     ),
+  delete: (agentId: string) =>
+    request(`/admin/sealed-agents/${encodeURIComponent(agentId)}`, {
+      method: "DELETE",
+    }),
   setEnabled: (agentId: string, enabled: boolean) =>
     request<SealedAgentOperational>(
       `/admin/sealed-agents/${encodeURIComponent(agentId)}/${

@@ -392,6 +392,40 @@ export default function SealedAgentsPage() {
                       >
                         {agent.enabled ? "停用" : "启用"}
                       </Button>
+                      <Button
+                        size="small"
+                        danger
+                        disabled={agent.enabled}
+                        title={
+                          agent.enabled ? "请先停用，再删除" : "删除超级专家"
+                        }
+                        onClick={() =>
+                          Modal.confirm({
+                            title: `删除“${agent.name}”？`,
+                            content:
+                              "删除后将从列表移除并停止接受新调用。历史会话、消费记录及内部发布包保留。",
+                            okText: "删除",
+                            cancelText: "取消",
+                            okButtonProps: { danger: true },
+                            onOk: async () => {
+                              try {
+                                await sealedAgentsApi.delete(agent.agent_id);
+                                message.success("超级专家已删除");
+                                await load();
+                              } catch (error) {
+                                message.error(
+                                  error instanceof Error
+                                    ? error.message
+                                    : "删除失败",
+                                );
+                                throw error;
+                              }
+                            },
+                          })
+                        }
+                      >
+                        删除
+                      </Button>
                     </Space>
                   );
                 },
