@@ -8,6 +8,7 @@ import {
   Select,
   Radio,
 } from "@agentscope-ai/design";
+import { AutoComplete } from "antd";
 import { useAppMessage } from "../../../../../hooks/useAppMessage";
 import {
   ApiOutlined,
@@ -311,7 +312,7 @@ export function ProviderConfigModal({
   const baseUrlOptions = useMemo<BaseUrlOption[]>(() => {
     const raw = provider.meta?.base_url_options;
     if (!Array.isArray(raw)) return [];
-    return raw.flatMap((item) => {
+    const options = raw.flatMap((item) => {
       if (
         item &&
         typeof item === "object" &&
@@ -322,7 +323,12 @@ export function ProviderConfigModal({
       }
       return [];
     });
-  }, [provider.meta]);
+    const current = provider.base_url?.trim();
+    if (current && !options.some((option) => option.value === current)) {
+      options.unshift({ label: current, value: current });
+    }
+    return options;
+  }, [provider.meta, provider.base_url]);
 
   const useBaseUrlSelect = canEditBaseUrl && baseUrlOptions.length > 0;
 
@@ -729,9 +735,18 @@ export function ProviderConfigModal({
           extra={baseUrlExtra}
         >
           {useBaseUrlSelect ? (
-            <Select
+            <AutoComplete
+              style={{ width: "100%" }}
+              filterOption={(input, option) =>
+                String(option?.label ?? "")
+                  .toLowerCase()
+                  .includes(input.toLowerCase())
+              }
               options={baseUrlOptions.map((option) => ({
-                label: `${option.label} — ${option.value}`,
+                label:
+                  option.label === option.value
+                    ? option.value
+                    : `${option.label} — ${option.value}`,
                 value: option.value,
               }))}
               placeholder={t("models.selectBaseURL")}
