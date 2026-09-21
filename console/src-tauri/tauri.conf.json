@@ -14,6 +14,7 @@
       {
         "title": "AI超级专家",
         "label": "main",
+        "dragDropEnabled": false,
         "width": 1280,
         "height": 860,
         "minWidth": 960,
