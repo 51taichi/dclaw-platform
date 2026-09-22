@@ -37,7 +37,7 @@ export default function PricingRules({
           items={[
             { key: "credits", label: "积分兑换", children: "¥1 = 100积分" },
             { key: "buffer", label: "汇率风险缓冲", children: "5%" },
-            { key: "floor", label: "最低销售倍数", children: "1.3倍" },
+            { key: "floor", label: "最低销售倍数", children: "1倍" },
           ]}
         />
       </Card>
@@ -107,8 +107,8 @@ export default function PricingRules({
               { required: true },
               {
                 validator: async (_, value) => {
-                  if (Number(value) < 1.3)
-                    throw new Error("不得低于1.3倍安全底价");
+                  if (Number(value) < 1)
+                    throw new Error("不得低于1倍安全底价");
                 },
               },
             ]}
