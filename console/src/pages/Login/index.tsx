@@ -7,10 +7,6 @@ import { authApi } from "../../api/modules/auth";
 import { setAuthToken } from "../../api/config";
 import { useAuth } from "../../contexts/AuthContext";
 import loginMascotAsset from "../../assets/login/login-mascot.png";
-import loginGreetingAsset from "../../assets/login/login-greeting.png";
-import loginUsernameAsset from "../../assets/login/login-username.png";
-import loginPasswordAsset from "../../assets/login/login-password.png";
-import loginButtonAsset from "../../assets/login/login-button.png";
 import styles from "./index.module.less";
 
 export default function LoginPage() {
@@ -21,7 +17,6 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [isRegister, setIsRegister] = useState(false);
   const [hasUsers, setHasUsers] = useState(true);
-  const [isLoginButtonImageReady, setIsLoginButtonImageReady] = useState(false);
   const { message } = useAppMessage();
 
   useEffect(() => {
@@ -37,29 +32,6 @@ export default function LoginPage() {
       })
       .catch(() => {});
   }, [navigate]);
-
-  useEffect(() => {
-    let isActive = true;
-    const image = new Image();
-
-    image.onload = () => {
-      if (isActive) {
-        setIsLoginButtonImageReady(true);
-      }
-    };
-    image.onerror = () => {
-      if (isActive) {
-        setIsLoginButtonImageReady(false);
-      }
-    };
-    image.src = loginButtonAsset;
-
-    return () => {
-      isActive = false;
-      image.onload = null;
-      image.onerror = null;
-    };
-  }, []);
 
   const onFinish = async (values: { username: string; password: string }) => {
     setLoading(true);
@@ -105,10 +77,9 @@ export default function LoginPage() {
 
   const pageTitle = isRegister ? t("login.registerTitle") : t("login.title");
   const submitText = isRegister ? t("login.register") : t("login.submit");
-  const shouldUseLoginButtonImage = !isRegister && isLoginButtonImageReady;
 
   return (
-    <main className={styles.loginPage} data-design-ratio="8000:4500">
+    <main className={styles.loginPage}>
       <div className={styles.shell}>
         <section className={styles.hero} aria-label="DClaw">
           <div className={styles.mascotStage} aria-hidden="true">
@@ -123,14 +94,8 @@ export default function LoginPage() {
         </section>
 
         <section className={styles.card} aria-labelledby="login-title">
-          <div className={styles.cardInner}>
-            <img
-              className={styles.greeting}
-              src={loginGreetingAsset}
-              alt={pageTitle}
-              draggable={false}
-            />
-            <h1 id="login-title" className={styles.srOnly}>
+          <div>
+            <h1 id="login-title" className={styles.title}>
               {pageTitle}
             </h1>
 
@@ -139,24 +104,15 @@ export default function LoginPage() {
             )}
 
             <Form
-              className={styles.form}
               layout="vertical"
               onFinish={onFinish}
-              autoComplete="off"
+              requiredMark={false}
               size="large"
             >
               <Form.Item
-                className={`${styles.formItem} ${styles.usernameItem}`}
+                className={styles.formItem}
                 name="username"
-                label={
-                  <span className={styles.imageLabel}>
-                    <img
-                      src={loginUsernameAsset}
-                      alt={t("login.usernamePlaceholder")}
-                      draggable={false}
-                    />
-                  </span>
-                }
+                label={t("login.usernamePlaceholder")}
                 rules={[
                   { required: true, message: t("login.usernameRequired") },
                 ]}
@@ -170,17 +126,9 @@ export default function LoginPage() {
               </Form.Item>
 
               <Form.Item
-                className={`${styles.formItem} ${styles.passwordItem}`}
+                className={styles.formItem}
                 name="password"
-                label={
-                  <span className={styles.imageLabel}>
-                    <img
-                      src={loginPasswordAsset}
-                      alt={t("login.passwordPlaceholder")}
-                      draggable={false}
-                    />
-                  </span>
-                }
+                label={t("login.passwordPlaceholder")}
                 rules={[
                   { required: true, message: t("login.passwordRequired") },
                 ]}
@@ -200,9 +148,7 @@ export default function LoginPage() {
                   htmlType="submit"
                   loading={loading}
                   block
-                  className={`${styles.submitButton} ${
-                    shouldUseLoginButtonImage ? styles.loginButtonImage : ""
-                  }`}
+                  className={styles.submitButton}
                 >
                   {submitText}
                 </Button>
