@@ -75,6 +75,7 @@ describe("AgentTable", () => {
       />,
     );
 
+    expect(screen.getByText("SUPER")).toBeInTheDocument();
     expect(screen.getByText("密封")).toBeInTheDocument();
     expect(screen.getByText("内部资产已密封")).toBeInTheDocument();
     expect(screen.queryByText("/private/sealed/luyu")).not.toBeInTheDocument();

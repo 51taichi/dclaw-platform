@@ -113,7 +113,10 @@ export function AgentTable({
             {getAgentDisplayName(record, t)}
           </span>
           {record.agent_type === "sealed" && (
-            <Tag color="blue">{t("agent.sealed")}</Tag>
+            <>
+              <Tag color="gold">SUPER</Tag>
+              <Tag color="blue">{t("agent.sealed")}</Tag>
+            </>
           )}
           {record.open_api_enabled && (
             <Tooltip title="已开放 OpenAPI 接口">
