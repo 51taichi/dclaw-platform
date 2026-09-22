@@ -393,9 +393,19 @@ async def post_open_message(
 
         permit = None
         if owns_execution:
+            publication_limit = _positive_int_env(
+                "DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_PUBLICATION",
+                12,
+            )
+            api_key_limit = _positive_int_env(
+                "DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_API_KEY",
+                5,
+            )
             permit = await get_task_limiter(request.app).try_acquire(
-                agent_id=prepared.agent_id,
-                user_id=bound_user_id,
+                agent_id=f"openapi-publication:{billing_session.publication_id}",
+                user_id=f"openapi-api-key:{billing_session.api_key_id}",
+                max_per_agent=publication_limit,
+                max_per_user=api_key_limit,
             )
             if permit is None:
                 raise HTTPException(
@@ -985,6 +995,14 @@ def _positive_seconds_env(name: str, default: float) -> float:
     except ValueError:
         return default
     return max(0.01, value)
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        return default
+    return max(1, value)
 
 
 async def _attach_tracker_queue(tracker: Any, run_key: str) -> Any | None:

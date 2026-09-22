@@ -21,6 +21,12 @@ def _int_env(name: str, default: int) -> int:
     return max(value, 1)
 
 
+def _bounded_limit(configured: int, requested: int | None) -> int:
+    if requested is None:
+        return configured
+    return max(1, min(configured, int(requested)))
+
+
 @dataclass
 class TaskPermit:
     """A held task slot."""
@@ -69,17 +75,21 @@ class TaskConcurrencyLimiter:
         *,
         agent_id: str,
         user_id: str,
+        max_per_agent: int | None = None,
+        max_per_user: int | None = None,
     ) -> Optional[TaskPermit]:
         agent_key = agent_id or "default"
         user_key = user_id or "default"
+        agent_limit = _bounded_limit(self.max_per_agent, max_per_agent)
+        user_limit = _bounded_limit(self.max_per_user, max_per_user)
         async with self._lock:
             if self._global >= self.max_global:
                 self._rejected_acquire_count += 1
                 return None
-            if self._by_agent.get(agent_key, 0) >= self.max_per_agent:
+            if self._by_agent.get(agent_key, 0) >= agent_limit:
                 self._rejected_acquire_count += 1
                 return None
-            if self._by_user.get(user_key, 0) >= self.max_per_user:
+            if self._by_user.get(user_key, 0) >= user_limit:
                 self._rejected_acquire_count += 1
                 return None
 
@@ -197,9 +207,13 @@ class RedisTaskConcurrencyLimiter:
         *,
         agent_id: str,
         user_id: str,
+        max_per_agent: int | None = None,
+        max_per_user: int | None = None,
     ) -> Optional[RedisTaskPermit]:
         agent_key = agent_id or "default"
         user_key = user_id or "default"
+        agent_limit = _bounded_limit(self.max_per_agent, max_per_agent)
+        user_limit = _bounded_limit(self.max_per_user, max_per_user)
         permit_id = str(uuid.uuid4())
 
         for _ in range(10):
@@ -218,11 +232,11 @@ class RedisTaskConcurrencyLimiter:
                         await pipe.unwatch()
                         await self._increment_rejected()
                         return None
-                    if agent_count >= self.max_per_agent:
+                    if agent_count >= agent_limit:
                         await pipe.unwatch()
                         await self._increment_rejected()
                         return None
-                    if user_count >= self.max_per_user:
+                    if user_count >= user_limit:
                         await pipe.unwatch()
                         await self._increment_rejected()
                         return None

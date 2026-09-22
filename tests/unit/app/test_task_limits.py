@@ -50,6 +50,48 @@ async def test_task_limiter_enforces_agent_and_user_limits():
 
 
 @pytest.mark.asyncio
+async def test_task_limiter_applies_request_specific_scope_limits():
+    limiter = TaskConcurrencyLimiter(
+        max_global=20,
+        max_per_agent=20,
+        max_per_user=20,
+    )
+
+    permits = []
+    for _ in range(5):
+        permit = await limiter.try_acquire(
+            agent_id="publication-1",
+            user_id="api-key-1",
+            max_per_agent=12,
+            max_per_user=5,
+        )
+        assert permit is not None
+        permits.append(permit)
+
+    assert (
+        await limiter.try_acquire(
+            agent_id="publication-1",
+            user_id="api-key-1",
+            max_per_agent=12,
+            max_per_user=5,
+        )
+        is None
+    )
+
+    other_key = await limiter.try_acquire(
+        agent_id="publication-1",
+        user_id="api-key-2",
+        max_per_agent=12,
+        max_per_user=5,
+    )
+    assert other_key is not None
+
+    for permit in permits:
+        await permit.release()
+    await other_key.release()
+
+
+@pytest.mark.asyncio
 async def test_task_tracker_finish_callback_releases_limit_slot():
     limiter = TaskConcurrencyLimiter(max_global=1, max_per_agent=1, max_per_user=1)
     permit = await limiter.try_acquire(agent_id="agent-a", user_id="user-a")
@@ -190,6 +232,43 @@ async def test_redis_task_limiter_enforces_agent_and_user_limits():
     assert await limiter.try_acquire(agent_id="agent-a", user_id="user-c") is None
     await first.release()
     await second.release()
+
+
+@pytest.mark.asyncio
+async def test_redis_task_limiter_applies_request_specific_scope_limits():
+    fakeredis = pytest.importorskip("fakeredis.aioredis")
+    limiter = RedisTaskConcurrencyLimiter(
+        fakeredis.FakeRedis(decode_responses=True),
+        namespace="testtasksoverrides",
+        max_global=20,
+        max_per_agent=20,
+        max_per_user=20,
+        permit_ttl_seconds=30,
+    )
+
+    permits = []
+    for _ in range(5):
+        permit = await limiter.try_acquire(
+            agent_id="publication-1",
+            user_id="api-key-1",
+            max_per_agent=12,
+            max_per_user=5,
+        )
+        assert permit is not None
+        permits.append(permit)
+
+    assert (
+        await limiter.try_acquire(
+            agent_id="publication-1",
+            user_id="api-key-1",
+            max_per_agent=12,
+            max_per_user=5,
+        )
+        is None
+    )
+
+    for permit in permits:
+        await permit.release()
 
 
 @pytest.mark.asyncio

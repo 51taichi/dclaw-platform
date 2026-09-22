@@ -944,6 +944,114 @@ async def test_post_open_message_agent_publication_creates_invocation_from_reque
 
 
 @pytest.mark.asyncio
+async def test_open_api_concurrency_is_independent_from_bound_wallet(monkeypatch):
+    workspace = _workspace(agent_id="agent-published")
+    repo = FakeOpenApiRepository(publication=_publication())
+    monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
+    limiter = TaskConcurrencyLimiter(
+        max_global=20,
+        max_per_agent=12,
+        max_per_user=5,
+    )
+    held = []
+    for index in range(5):
+        permit = await limiter.try_acquire(
+            agent_id=f"other-agent-{index}",
+            user_id="owner-1",
+        )
+        assert permit is not None
+        held.append(permit)
+
+    try:
+        response = await open_api.post_open_message(
+            "public-agent",
+            OpenMessageRequest(
+                external_user_id="ext-user",
+                external_session_id="ext-session",
+                message="hello",
+            ),
+            _request(workspace=workspace, limiter=limiter),
+        )
+        assert response.status_code == 200
+        await _consume_streaming_response(response)
+    finally:
+        for permit in held:
+            await permit.release()
+
+
+@pytest.mark.asyncio
+async def test_open_api_concurrency_rejects_sixth_request_for_api_key(monkeypatch):
+    workspace = _workspace(agent_id="agent-published")
+    repo = FakeOpenApiRepository(publication=_publication())
+    monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
+    limiter = TaskConcurrencyLimiter(
+        max_global=20,
+        max_per_agent=12,
+        max_per_user=20,
+    )
+    held = []
+    for _ in range(5):
+        permit = await limiter.try_acquire(
+            agent_id="openapi-publication:pub-db-1",
+            user_id="openapi-api-key:key-1",
+        )
+        assert permit is not None
+        held.append(permit)
+
+    try:
+        response = await open_api.post_open_message(
+            "public-agent",
+            OpenMessageRequest(
+                external_user_id="ext-user",
+                external_session_id="ext-session",
+                message="hello",
+            ),
+            _request(workspace=workspace, limiter=limiter),
+        )
+        assert response.status_code == 429
+    finally:
+        for permit in held:
+            await permit.release()
+
+
+@pytest.mark.asyncio
+async def test_open_api_concurrency_rejects_thirteenth_publication_request(
+    monkeypatch,
+):
+    workspace = _workspace(agent_id="agent-published")
+    repo = FakeOpenApiRepository(publication=_publication())
+    monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
+    limiter = TaskConcurrencyLimiter(
+        max_global=20,
+        max_per_agent=20,
+        max_per_user=20,
+    )
+    held = []
+    for index in range(12):
+        permit = await limiter.try_acquire(
+            agent_id="openapi-publication:pub-db-1",
+            user_id=f"openapi-api-key:other-key-{index}",
+        )
+        assert permit is not None
+        held.append(permit)
+
+    try:
+        response = await open_api.post_open_message(
+            "public-agent",
+            OpenMessageRequest(
+                external_user_id="ext-user",
+                external_session_id="ext-session",
+                message="hello",
+            ),
+            _request(workspace=workspace, limiter=limiter),
+        )
+        assert response.status_code == 429
+    finally:
+        for permit in held:
+            await permit.release()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("explicit", [False, True])
 async def test_persistent_mode_keeps_legacy_billing_payload_shape(
     monkeypatch,
