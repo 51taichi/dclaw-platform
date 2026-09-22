@@ -202,7 +202,7 @@ class PricingExcelService:
             return {"row": number, "code": "invalid_decimal"}, None
         if cost_value < 0:
             return {"row": number, "code": "negative_cost"}, None
-        if multiplier_value < Decimal("1.3"):
+        if multiplier_value < Decimal("1"):
             return {"row": number, "code": "below_safe_floor"}, None
         return None, {
             "provider_id": key[0],
@@ -314,7 +314,7 @@ class PricingExcelService:
             )
         except (InvalidOperation, TypeError, ValueError):
             return {"row": number, "code": "invalid_decimal"}, None
-        if multiplier_value < Decimal("1.3"):
+        if multiplier_value < Decimal("1"):
             return {"row": number, "code": "below_safe_floor"}, None
         # These columns are display-only snapshots. Never trust stale Excel
         # derived values after an administrator edits cost or multiplier.
@@ -447,7 +447,7 @@ class PricingExcelService:
 
         instructions = workbook.create_sheet("填写说明")
         instructions.append(("项目", "说明"))
-        instructions.append(("可编辑字段", "人民币成本、默认倍率（不低于1.3）、是否纳入本次发布、排除原因；成本按本行单位数量填写。"))
+        instructions.append(("可编辑字段", "人民币成本、默认倍率（不低于1）、是否纳入本次发布、排除原因；成本按本行单位数量填写。"))
         instructions.append(
             ("只读规格", "平台、模型、能力、计价维度、单位数量、规格条件及内部来源信息无需修改；规格调整请重新生成报价单。")
         )

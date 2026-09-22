@@ -18,11 +18,11 @@ DEFAULTS = PricingDefaults()
 def test_price_cost_applies_buffer_floor_and_ceiling_rounding():
     result = price_cost(
         TrustedCost(rmb_cost=Decimal("0.0100"), unit_key="input_tokens"),
-        Decimal("1.1"),
+        Decimal("0.9"),
         DEFAULTS,
     )
-    assert result.applied_multiplier == Decimal("1.3")
-    assert result.rmb_sale_price == Decimal("0.0136500")
+    assert result.applied_multiplier == Decimal("1")
+    assert result.rmb_sale_price == Decimal("0.0105000")
     assert result.credits == 2
 
 

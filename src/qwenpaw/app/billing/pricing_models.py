@@ -7,7 +7,7 @@ from decimal import Decimal
 class PricingDefaults:
     credits_per_yuan: int = 100
     risk_buffer: Decimal = Decimal("0.05")
-    minimum_multiplier: Decimal = Decimal("1.3")
+    minimum_multiplier: Decimal = Decimal("1")
 
 
 @dataclass(frozen=True)

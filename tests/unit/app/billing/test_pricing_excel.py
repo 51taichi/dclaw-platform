@@ -56,8 +56,8 @@ def _workbook(multiplier="1.5", cost="0.004"):
 
 def test_import_below_floor_is_blocked_and_idempotent():
     service = PricingExcelService(Repo())
-    first = service.preview_import(_workbook(multiplier="1.1"), "prices.xlsx", "1")
-    second = service.preview_import(_workbook(multiplier="1.1"), "copy.xlsx", "1")
+    first = service.preview_import(_workbook(multiplier="0.9"), "prices.xlsx", "1")
+    second = service.preview_import(_workbook(multiplier="0.9"), "copy.xlsx", "1")
     assert first["id"] == second["id"]
     assert first["status"] == "blocked"
     assert first["rows"][0]["code"] == "below_safe_floor"
@@ -429,3 +429,8 @@ def test_draft_invalid_numeric_and_spec_values_are_blocked(column, value, code):
     preview = excel.preview_import(data.getvalue(), "invalid.xlsx", "1")
     assert preview["status"] == "blocked"
     assert {row["code"] for row in preview["rows"]} == {code}
+
+
+def test_import_accepts_cost_price_multiplier_one():
+    result = PricingExcelService(Repo()).preview_import(_workbook(multiplier="1"), "cost.xlsx", "1")
+    assert result["status"] == "ready"

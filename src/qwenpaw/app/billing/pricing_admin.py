@@ -323,7 +323,7 @@ class PricingAdminService:
         ip_address: str | None = None,
     ) -> dict[str, Any]:
         if Decimal(multiplier_decimal) < PricingDefaults().minimum_multiplier:
-            raise ValueError("multiplier is below the 1.3 safety floor")
+            raise ValueError("multiplier is below the 1.0 safety floor")
         saved = self.repository.replace_policy(
             scope_type=scope_type,
             scope_key=scope_key,
@@ -777,7 +777,7 @@ class PricingAdminService:
         cost = Decimal(str(row["rmb_cost_decimal"]))
         multiplier = Decimal(str(row["multiplier_decimal"]))
         if multiplier < PricingDefaults().minimum_multiplier:
-            raise ValueError("multiplier is below the 1.3 safety floor")
+            raise ValueError("multiplier is below the 1.0 safety floor")
         return int((cost * multiplier * 100).to_integral_value(rounding=ROUND_CEILING))
 
     def publish_preview(
