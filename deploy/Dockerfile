@@ -163,6 +163,7 @@ ENV PATH="/app/venv/bin:$PATH"
 
 COPY pyproject.toml uv.lock setup.py README.md ./
 COPY scripts/db ./scripts/db
+COPY deploy/pricing ./deploy/pricing
 COPY scripts/perf ./scripts/perf
 COPY src ./src
 COPY website/public/docs/ ./src/qwenpaw/docs/
