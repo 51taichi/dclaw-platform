@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "change_reason": "AIGC retail price adjustment approved on 2026-09-23",
+  "prices": [
+    {
+      "provider_id": "mxapi",
+      "model_key": "gpt-image-2",
+      "capability": "text_to_image",
+      "unit_key": "image_count",
+      "credits_per_unit": 40
+    },
+    {
+      "provider_id": "mxapi",
+      "model_key": "seedance2",
+      "capability": "text_to_video",
+      "unit_key": "video_duration_seconds",
+      "credits_per_unit": 300
+    },
+    {
+      "provider_id": "mxapi",
+      "model_key": "seedance2-fast",
+      "capability": "text_to_video",
+      "unit_key": "video_duration_seconds",
+      "credits_per_unit": 100
+    },
+    {
+      "provider_id": "mxapi",
+      "model_key": "grok-imagine-video-1.5",
+      "capability": "text_to_video",
+      "unit_key": "video_duration_seconds",
+      "credits_per_unit": 120
+    }
+  ]
+}
