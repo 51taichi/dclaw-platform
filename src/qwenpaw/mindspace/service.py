@@ -827,6 +827,28 @@ class MindspaceService:
         chunks = [chunk.to_dict() for chunk in self._load_chunks(doc.scope, doc_id=doc.id)]
         return {"doc": doc.to_api_dict(), "chunks": chunks}
 
+    def read_raw_document_asset(
+        self,
+        doc_id: str,
+        scope: MindspaceScope | str | None = None,
+    ) -> dict[str, object] | None:
+        """Return metadata and bytes for a readable document's latest raw asset."""
+        doc = self.get_document(doc_id, scope)
+        if not doc:
+            return None
+        asset = self._first_asset(doc.id, kind="raw")
+        if not asset:
+            return None
+        path = Path(str(asset["storage_path"]))
+        if not path.is_file():
+            return None
+        return {
+            "doc": doc.to_api_dict(),
+            "content": path.read_bytes(),
+            "sha256": str(asset.get("sha256") or ""),
+            "mime_type": asset.get("mime_type"),
+        }
+
     def list_wiki(self, scope: MindspaceScope | str | None = None) -> list[dict[str, str]]:
         resolved_scope = normalize_mindspace_scope(scope)
         stmt = select(knowledge_wiki)

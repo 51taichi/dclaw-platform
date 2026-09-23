@@ -3,7 +3,12 @@
 
 from __future__ import annotations
 
+from io import BytesIO
+import json
 from pathlib import Path
+import re
+
+from openpyxl import load_workbook
 
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
@@ -177,3 +182,173 @@ def read_knowledge_doc(
         start_chunk=start_chunk,
         max_chunks=max_chunks,
     )
+
+
+_TABLE_HEADER_ALIASES = {
+    "招聘单位": {"招聘单位", "单位", "用人单位", "企业名称", "公司名称"},
+    "岗位": {"岗位", "招聘岗位", "职位", "岗位名称"},
+    "岗位要求": {
+        "岗位要求",
+        "招聘要求",
+        "招聘条件",
+        "任职要求",
+        "报名条件",
+        "要求",
+    },
+    "入职地点": {"入职地点", "工作地点", "工作城市", "地点"},
+    "薪资待遇": {"薪资待遇", "薪酬待遇", "工资待遇", "待遇", "薪资"},
+    "入职流程": {"入职流程", "招聘流程", "报名流程", "服务流程", "流程"},
+    "合同性质": {"合同性质", "用工性质", "合同", "编制性质"},
+    "备注": {"备注", "说明", "其他"},
+}
+
+
+def _normalized_table_header(value: object) -> str:
+    return re.sub(r"[\s\n：:（）()]+", "", str(value or "").strip())
+
+
+def _canonical_table_header(value: object) -> str | None:
+    normalized = _normalized_table_header(value)
+    for canonical, aliases in _TABLE_HEADER_ALIASES.items():
+        if normalized in {_normalized_table_header(alias) for alias in aliases}:
+            return canonical
+    return None
+
+
+def _workbook_rows(content: bytes) -> list[dict[str, object]]:
+    workbook = load_workbook(BytesIO(content), data_only=True, read_only=True)
+    rows: list[dict[str, object]] = []
+    for sheet in workbook.worksheets:
+        header_row = 0
+        mapping: dict[int, str] = {}
+        for row_number in range(1, min(sheet.max_row, 30) + 1):
+            candidate = {
+                column: canonical
+                for column in range(1, sheet.max_column + 1)
+                if (canonical := _canonical_table_header(sheet.cell(row_number, column).value))
+            }
+            if "招聘单位" in candidate.values() and "岗位" in candidate.values():
+                header_row, mapping = row_number, candidate
+                break
+        if not mapping:
+            continue
+        for row_number in range(header_row + 1, sheet.max_row + 1):
+            row = {
+                field: str(sheet.cell(row_number, column).value or "").strip()
+                for column, field in mapping.items()
+            }
+            if not row.get("招聘单位") and not row.get("岗位"):
+                continue
+            row["source_sheet"] = sheet.title
+            row["source_row"] = row_number
+            rows.append(row)
+    return rows
+
+
+def _table_query_terms(query: str) -> list[str]:
+    return [
+        term.casefold()
+        for term in re.split(r"[\s,，、;；|/]+", query.strip())
+        if len(term.strip()) >= 1
+    ]
+
+
+def _rank_table_rows(
+    rows: list[dict[str, object]],
+    query: str,
+    first_choice: str,
+    limit: int,
+) -> list[dict[str, object]]:
+    terms = _table_query_terms(query)
+
+    def searchable(row: dict[str, object]) -> str:
+        return " ".join(str(value) for value in row.values()).casefold()
+
+    ranked = sorted(
+        rows,
+        key=lambda row: (
+            sum(1 for term in terms if term in searchable(row)),
+            -int(row.get("source_row") or 0),
+        ),
+        reverse=True,
+    )
+    selected: list[dict[str, object]] = []
+    wanted = first_choice.strip().casefold()
+    if wanted:
+        first = next((row for row in rows if wanted in searchable(row)), None)
+        if first:
+            selected.append(first)
+    selected.extend(row for row in ranked if row not in selected)
+    result = []
+    for row in selected[:limit]:
+        enriched = dict(row)
+        enriched["match_score"] = sum(
+            1 for term in terms if term in searchable(row)
+        )
+        result.append(enriched)
+    return result
+
+
+def query_knowledge_table(
+    query: str,
+    doc_name: str = "",
+    first_choice: str = "",
+    limit: int = 5,
+) -> ToolResponse:
+    """Query rows in the latest readable XLSX knowledge document.
+
+    Use this for row-oriented comparisons or recommendations where ordinary
+    chunk search would repeat overlapping spreadsheet evidence. ``query``
+    should contain short, space-separated constraints. ``first_choice`` is
+    placed first when it exists in the document. Results always come from the
+    caller's currently authorized knowledge base.
+    """
+    service = _service()
+    if service is None:
+        return _text_response(
+            json.dumps(
+                {"success": False, "error": "No authenticated knowledge context."}
+            )
+        )
+    requested_name = doc_name.strip().casefold()
+    documents = [
+        doc
+        for doc in service.list_documents()
+        if doc.source_type.casefold() == "xlsx"
+        and (not requested_name or doc.name.casefold() == requested_name)
+    ]
+    if not documents:
+        return _text_response(
+            json.dumps(
+                {"success": False, "error": "No matching XLSX knowledge document."}
+            )
+        )
+    doc = documents[0]
+    asset = service.read_raw_document_asset(doc.id, doc.scope)
+    if not asset:
+        return _text_response(
+            json.dumps({"success": False, "error": "Raw XLSX asset is unavailable."})
+        )
+    try:
+        rows = _workbook_rows(asset["content"])
+    except (OSError, ValueError, KeyError) as exc:
+        return _text_response(
+            json.dumps({"success": False, "error": f"Cannot read XLSX: {exc}"})
+        )
+    # Keep spreadsheet evidence bounded even when a model asks for more.  The
+    # employment recommendation contract consumes exactly five candidates,
+    # and returning wider rows would only inflate every later ReAct turn.
+    del limit
+    bounded_limit = 5
+    selected = _rank_table_rows(rows, query, first_choice, bounded_limit)
+    payload = {
+        "success": True,
+        "count": len(selected),
+        "rows": selected,
+        "source": {
+            "doc_id": doc.id,
+            "name": doc.name,
+            "sha256": asset["sha256"],
+        },
+    }
+    return _text_response(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))

@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from io import BytesIO
+import json
 
 import pytest
+from openpyxl import Workbook
 
 from qwenpaw.agents.tools import mindspace_tools, wiki_tools
 from qwenpaw.app.agent_context import set_current_user_id
@@ -25,6 +28,16 @@ def _tool_text(response) -> str:
             return str(first.get("text", ""))
         return str(first)
     return str(content)
+
+
+def _xlsx_bytes(rows: list[list[str]]) -> bytes:
+    workbook = Workbook()
+    sheet = workbook.active
+    for row in rows:
+        sheet.append(row)
+    output = BytesIO()
+    workbook.save(output)
+    return output.getvalue()
 
 
 @pytest.fixture(autouse=True)
@@ -129,6 +142,171 @@ async def test_read_mindspace_doc_returns_bounded_chunk_window(monkeypatch, tmp_
         assert "chunk:2" in text
         assert "chunk:3" not in text
         assert "start_chunk=3" in text
+    finally:
+        reset_app_engine_cache()
+
+
+def test_query_knowledge_table_returns_five_ranked_rows(monkeypatch, tmp_path):
+    db_path = tmp_path / "qwenpaw.db"
+    monkeypatch.setenv("QWENPAW_SQLITE_PATH", str(db_path))
+    reset_app_engine_cache()
+    workspace = tmp_path / "agent"
+    global_root = tmp_path / "global"
+    service = MindspaceService(
+        global_root=global_root,
+        agent_workspace=workspace,
+        agent_id="agent-a",
+        user_id="experience-a",
+        exclusive_personal=True,
+    )
+    headers = ["招聘单位", "岗位", "岗位要求", "入职地点", "薪资待遇", "入职流程", "合同性质", "备注"]
+    rows = [headers]
+    rows.extend(
+        [f"单位{index}", "会计" if index < 6 else "技术", "本科 会计", "长沙", "年薪10万", "面试→入职", "国企直签", ""]
+        for index in range(1, 8)
+    )
+    service.stage_local_bytes(
+        name="公司就业项目汇总.xlsx",
+        content=_xlsx_bytes(rows),
+        scope=MindspaceScope.PERSONAL,
+        source_type="xlsx",
+    )
+    set_current_workspace_dir(workspace)
+    monkeypatch.setattr(mindspace_tools, "_global_root", lambda: global_root)
+    monkeypatch.setattr(mindspace_tools, "_service", lambda: service)
+
+    try:
+        response = mindspace_tools.query_knowledge_table(
+            query="本科 会计 长沙",
+            doc_name="公司就业项目汇总.xlsx",
+            limit=8,
+        )
+        payload = json.loads(_tool_text(response))
+
+        assert payload["success"] is True
+        assert payload["count"] == 5
+        assert len(payload["rows"]) == 5
+        assert all(row["招聘单位"].startswith("单位") for row in payload["rows"])
+        assert payload["source"]["name"] == "公司就业项目汇总.xlsx"
+    finally:
+        reset_app_engine_cache()
+
+
+def test_query_knowledge_table_maps_production_header_aliases(monkeypatch, tmp_path):
+    db_path = tmp_path / "qwenpaw.db"
+    monkeypatch.setenv("QWENPAW_SQLITE_PATH", str(db_path))
+    reset_app_engine_cache()
+    workspace = tmp_path / "agent"
+    global_root = tmp_path / "global"
+    service = MindspaceService(
+        global_root=global_root,
+        agent_workspace=workspace,
+        agent_id="agent-a",
+        user_id="experience-a",
+        exclusive_personal=True,
+    )
+    service.stage_local_bytes(
+        name="公司就业项目汇总.xlsx",
+        content=_xlsx_bytes(
+            [["项目", "招聘单位", "岗位", "招聘条件", "入职地点", "薪资待遇", "服务流程", "合同性质", "备注"]]
+            + [[index, f"单位{index}", "会计", "本科", "长沙", "年薪10万", "面试→入职", "国企直签", ""] for index in range(1, 6)]
+        ),
+        scope=MindspaceScope.PERSONAL,
+        source_type="xlsx",
+    )
+    monkeypatch.setattr(mindspace_tools, "_service", lambda: service)
+
+    try:
+        payload = json.loads(
+            _tool_text(mindspace_tools.query_knowledge_table(query="本科 会计", limit=5))
+        )
+        assert payload["rows"][0]["岗位要求"] == "本科"
+        assert payload["rows"][0]["入职流程"] == "面试→入职"
+    finally:
+        reset_app_engine_cache()
+
+
+def test_query_knowledge_table_places_first_choice_first(monkeypatch, tmp_path):
+    db_path = tmp_path / "qwenpaw.db"
+    monkeypatch.setenv("QWENPAW_SQLITE_PATH", str(db_path))
+    reset_app_engine_cache()
+    workspace = tmp_path / "agent"
+    global_root = tmp_path / "global"
+    service = MindspaceService(
+        global_root=global_root,
+        agent_workspace=workspace,
+        agent_id="agent-a",
+        user_id="experience-a",
+        exclusive_personal=True,
+    )
+    service.stage_local_bytes(
+        name="公司就业项目汇总.xlsx",
+        content=_xlsx_bytes(
+            [["招聘单位", "岗位", "岗位要求", "入职地点"]]
+            + [[f"单位{index}", "会计", "本科", "长沙"] for index in range(1, 7)]
+            + [["国家电网", "技能岗", "电气专业", "湖南"]]
+        ),
+        scope=MindspaceScope.PERSONAL,
+        source_type="xlsx",
+    )
+    set_current_workspace_dir(workspace)
+    monkeypatch.setattr(mindspace_tools, "_global_root", lambda: global_root)
+    monkeypatch.setattr(mindspace_tools, "_service", lambda: service)
+
+    try:
+        response = mindspace_tools.query_knowledge_table(
+            query="本科 会计 长沙",
+            doc_name="公司就业项目汇总.xlsx",
+            first_choice="国家电网",
+            limit=5,
+        )
+        payload = json.loads(_tool_text(response))
+
+        assert len(payload["rows"]) == 5
+        assert payload["rows"][0]["招聘单位"] == "国家电网"
+    finally:
+        reset_app_engine_cache()
+
+
+def test_query_knowledge_table_uses_latest_same_name_upload(monkeypatch, tmp_path):
+    db_path = tmp_path / "qwenpaw.db"
+    monkeypatch.setenv("QWENPAW_SQLITE_PATH", str(db_path))
+    reset_app_engine_cache()
+    workspace = tmp_path / "agent"
+    global_root = tmp_path / "global"
+    service = MindspaceService(
+        global_root=global_root,
+        agent_workspace=workspace,
+        agent_id="agent-a",
+        user_id="experience-a",
+        exclusive_personal=True,
+    )
+    for version in ("旧单位", "新单位"):
+        service.stage_local_bytes(
+            name="公司就业项目汇总.xlsx",
+            content=_xlsx_bytes(
+                [["招聘单位", "岗位"]]
+                + [[f"{version}{index}", "会计"] for index in range(1, 6)]
+            ),
+            scope=MindspaceScope.PERSONAL,
+            source_type="xlsx",
+        )
+    set_current_workspace_dir(workspace)
+    monkeypatch.setattr(mindspace_tools, "_service", lambda: service)
+
+    try:
+        payload = json.loads(
+            _tool_text(
+                mindspace_tools.query_knowledge_table(
+                    query="会计",
+                    doc_name="公司就业项目汇总.xlsx",
+                    limit=5,
+                )
+            )
+        )
+
+        assert len(payload["rows"]) == 5
+        assert all(row["招聘单位"].startswith("新单位") for row in payload["rows"])
     finally:
         reset_app_engine_cache()
 

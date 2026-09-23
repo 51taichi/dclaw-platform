@@ -35,6 +35,7 @@ from .agent_management import (
 from .delegate_external_agent import delegate_external_agent
 from .wiki_tools import read_wiki_page, search_wiki
 from .mindspace_tools import (
+    query_knowledge_table,
     read_knowledge_doc,
     read_mindspace_doc,
     search_knowledge,
@@ -77,6 +78,7 @@ __all__ = [
     "read_mindspace_doc",
     "search_mindspace",
     "read_knowledge_doc",
+    "query_knowledge_table",
     "search_knowledge",
     "web_search",
     "read_web_page",

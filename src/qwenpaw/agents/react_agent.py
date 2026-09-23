@@ -61,6 +61,7 @@ from .tools import (
     list_agents,
     python_sandbox,
     read_file,
+    query_knowledge_table,
     read_knowledge_doc,
     send_file_to_user,
     set_user_timezone,
@@ -99,6 +100,7 @@ SEALED_ALLOWED_BUILTIN_TOOLS = frozenset(
         "read_web_page",
         "search_knowledge",
         "read_knowledge_doc",
+        "query_knowledge_table",
         "search_wiki",
         "read_wiki_page",
         "read_agent_skill",
@@ -466,6 +468,7 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
             "search_mindspace": search_mindspace,
             "read_knowledge_doc": read_knowledge_doc,
             "search_knowledge": search_knowledge,
+            "query_knowledge_table": query_knowledge_table,
             "web_search": web_search,
             "read_web_page": read_web_page,
         }

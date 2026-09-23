@@ -1631,6 +1631,12 @@ def _default_builtin_tools() -> Dict[str, BuiltinToolConfig]:
             description="Read a knowledge document within current user permissions",
             icon="📚",
         ),
+        "query_knowledge_table": BuiltinToolConfig(
+            name="query_knowledge_table",
+            enabled=False,
+            description="Query rows from an authorized XLSX knowledge document",
+            icon="📊",
+        ),
     }
 
     # Merge dynamically registered tools from plugins
