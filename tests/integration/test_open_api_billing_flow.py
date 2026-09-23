@@ -1146,9 +1146,14 @@ class _RejectLimiter:
         return None
 
 
-def test_claimed_limiter_failure_is_sealed_and_replayed_exactly(billing_flow):
+def test_claimed_limiter_failure_is_sealed_and_replayed_exactly(
+    billing_flow,
+    monkeypatch,
+):
     _fund(billing_flow, 20, "limiter-funds")
     billing_flow.app.state.task_limiter = _RejectLimiter()
+    monkeypatch.setenv("DCLAW_OPEN_API_WAIT_TIMEOUT_SECONDS", "0.01")
+    monkeypatch.setenv("DCLAW_OPEN_API_WAIT_POLL_SECONDS", "0.002")
 
     first = _post(billing_flow, key="limiter-replay")
     assert first.status_code == 429

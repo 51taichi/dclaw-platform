@@ -21,10 +21,15 @@ def _int_env(name: str, default: int) -> int:
     return max(value, 1)
 
 
-def _bounded_limit(configured: int, requested: int | None) -> int:
+def _effective_limit(
+    configured: int,
+    requested: int | None,
+    *,
+    global_limit: int,
+) -> int:
     if requested is None:
-        return configured
-    return max(1, min(configured, int(requested)))
+        return min(configured, global_limit)
+    return max(1, min(global_limit, int(requested)))
 
 
 @dataclass
@@ -77,26 +82,42 @@ class TaskConcurrencyLimiter:
         user_id: str,
         max_per_agent: int | None = None,
         max_per_user: int | None = None,
+        record_rejection: bool = True,
     ) -> Optional[TaskPermit]:
         agent_key = agent_id or "default"
         user_key = user_id or "default"
-        agent_limit = _bounded_limit(self.max_per_agent, max_per_agent)
-        user_limit = _bounded_limit(self.max_per_user, max_per_user)
+        agent_limit = _effective_limit(
+            self.max_per_agent,
+            max_per_agent,
+            global_limit=self.max_global,
+        )
+        user_limit = _effective_limit(
+            self.max_per_user,
+            max_per_user,
+            global_limit=self.max_global,
+        )
         async with self._lock:
             if self._global >= self.max_global:
-                self._rejected_acquire_count += 1
+                if record_rejection:
+                    self._rejected_acquire_count += 1
                 return None
             if self._by_agent.get(agent_key, 0) >= agent_limit:
-                self._rejected_acquire_count += 1
+                if record_rejection:
+                    self._rejected_acquire_count += 1
                 return None
             if self._by_user.get(user_key, 0) >= user_limit:
-                self._rejected_acquire_count += 1
+                if record_rejection:
+                    self._rejected_acquire_count += 1
                 return None
 
             self._global += 1
             self._by_agent[agent_key] = self._by_agent.get(agent_key, 0) + 1
             self._by_user[user_key] = self._by_user.get(user_key, 0) + 1
             return TaskPermit(self, agent_key, user_key)
+
+    async def note_rejection(self) -> None:
+        async with self._lock:
+            self._rejected_acquire_count += 1
 
     async def release(self, agent_id: str, user_id: str) -> None:
         agent_key = agent_id or "default"
@@ -209,11 +230,20 @@ class RedisTaskConcurrencyLimiter:
         user_id: str,
         max_per_agent: int | None = None,
         max_per_user: int | None = None,
+        record_rejection: bool = True,
     ) -> Optional[RedisTaskPermit]:
         agent_key = agent_id or "default"
         user_key = user_id or "default"
-        agent_limit = _bounded_limit(self.max_per_agent, max_per_agent)
-        user_limit = _bounded_limit(self.max_per_user, max_per_user)
+        agent_limit = _effective_limit(
+            self.max_per_agent,
+            max_per_agent,
+            global_limit=self.max_global,
+        )
+        user_limit = _effective_limit(
+            self.max_per_user,
+            max_per_user,
+            global_limit=self.max_global,
+        )
         permit_id = str(uuid.uuid4())
 
         for _ in range(10):
@@ -230,15 +260,18 @@ class RedisTaskConcurrencyLimiter:
                     user_count = int(await pipe.scard(self._user_key(user_key)))
                     if global_count >= self.max_global:
                         await pipe.unwatch()
-                        await self._increment_rejected()
+                        if record_rejection:
+                            await self._increment_rejected()
                         return None
                     if agent_count >= agent_limit:
                         await pipe.unwatch()
-                        await self._increment_rejected()
+                        if record_rejection:
+                            await self._increment_rejected()
                         return None
                     if user_count >= user_limit:
                         await pipe.unwatch()
-                        await self._increment_rejected()
+                        if record_rejection:
+                            await self._increment_rejected()
                         return None
 
                     payload = json.dumps(
@@ -276,6 +309,9 @@ class RedisTaskConcurrencyLimiter:
                 except _watch_error_type():
                     continue
         return None
+
+    async def note_rejection(self) -> None:
+        await self._increment_rejected()
 
     async def release(
         self,

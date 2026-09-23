@@ -980,10 +980,13 @@ async def test_open_api_concurrency_is_independent_from_bound_wallet(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_open_api_concurrency_rejects_sixth_request_for_api_key(monkeypatch):
+async def test_open_api_concurrency_respects_configured_api_key_limit(monkeypatch):
     workspace = _workspace(agent_id="agent-published")
     repo = FakeOpenApiRepository(publication=_publication())
     monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
+    monkeypatch.setenv("DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_API_KEY", "5")
+    monkeypatch.setenv("DCLAW_OPEN_API_WAIT_TIMEOUT_SECONDS", "0.01")
+    monkeypatch.setenv("DCLAW_OPEN_API_WAIT_POLL_SECONDS", "0.002")
     limiter = TaskConcurrencyLimiter(
         max_global=20,
         max_per_agent=12,
@@ -1015,12 +1018,18 @@ async def test_open_api_concurrency_rejects_sixth_request_for_api_key(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_open_api_concurrency_rejects_thirteenth_publication_request(
+async def test_open_api_concurrency_respects_configured_publication_limit(
     monkeypatch,
 ):
     workspace = _workspace(agent_id="agent-published")
     repo = FakeOpenApiRepository(publication=_publication())
     monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
+    monkeypatch.setenv(
+        "DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_PUBLICATION",
+        "12",
+    )
+    monkeypatch.setenv("DCLAW_OPEN_API_WAIT_TIMEOUT_SECONDS", "0.01")
+    monkeypatch.setenv("DCLAW_OPEN_API_WAIT_POLL_SECONDS", "0.002")
     limiter = TaskConcurrencyLimiter(
         max_global=20,
         max_per_agent=20,
@@ -1046,6 +1055,131 @@ async def test_open_api_concurrency_rejects_thirteenth_publication_request(
             _request(workspace=workspace, limiter=limiter),
         )
         assert response.status_code == 429
+    finally:
+        for permit in held:
+            await permit.release()
+
+
+@pytest.mark.asyncio
+async def test_open_api_wait_queue_drains_one_hundred_request_burst(monkeypatch):
+    monkeypatch.setenv(
+        "DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_PUBLICATION",
+        "30",
+    )
+    monkeypatch.setenv("DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_API_KEY", "20")
+    monkeypatch.setenv("DCLAW_OPEN_API_WAIT_TIMEOUT_SECONDS", "2")
+    monkeypatch.setenv("DCLAW_OPEN_API_WAIT_POLL_SECONDS", "0.005")
+    monkeypatch.setenv("DCLAW_OPEN_API_MAX_WAITING_PER_PUBLICATION", "200")
+    monkeypatch.setenv("DCLAW_OPEN_API_MAX_WAITING_PER_API_KEY", "100")
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            task_limiter=TaskConcurrencyLimiter(
+                max_global=32,
+                max_per_agent=12,
+                max_per_user=6,
+            ),
+        ),
+    )
+    active = 0
+    peak = 0
+    lock = asyncio.Lock()
+
+    async def execute_one():
+        nonlocal active, peak
+        permit = await open_api._acquire_open_api_permit(
+            app,
+            publication_id="pub-db-1",
+            api_key_id="key-1",
+        )
+        assert permit is not None
+        async with lock:
+            active += 1
+            peak = max(peak, active)
+        await asyncio.sleep(0.005)
+        async with lock:
+            active -= 1
+        await permit.release()
+
+    await asyncio.gather(*(execute_one() for _ in range(100)))
+
+    assert peak == 20
+    assert active == 0
+    snapshot = await app.state.task_limiter.snapshot()
+    assert snapshot["rejected_acquire_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_open_api_wait_queue_has_bounded_capacity():
+    queue = open_api._OpenApiWaitQueue()
+    first = await queue.try_join(
+        "publication-1",
+        "api-key-1",
+        max_per_publication=1,
+        max_per_api_key=1,
+    )
+    assert first is not None
+    assert (
+        await queue.try_join(
+            "publication-1",
+            "api-key-1",
+            max_per_publication=1,
+            max_per_api_key=1,
+        )
+        is None
+    )
+    await first.release()
+    replacement = await queue.try_join(
+        "publication-1",
+        "api-key-1",
+        max_per_publication=1,
+        max_per_api_key=1,
+    )
+    assert replacement is not None
+    await replacement.release()
+
+
+@pytest.mark.asyncio
+async def test_open_api_queue_timeout_returns_retry_after(monkeypatch):
+    workspace = _workspace(agent_id="agent-published")
+    repo = FakeOpenApiRepository(publication=_publication())
+    monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
+    monkeypatch.setenv(
+        "DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_PUBLICATION",
+        "30",
+    )
+    monkeypatch.setenv("DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_API_KEY", "20")
+    monkeypatch.setenv("DCLAW_OPEN_API_WAIT_TIMEOUT_SECONDS", "0.01")
+    monkeypatch.setenv("DCLAW_OPEN_API_WAIT_POLL_SECONDS", "0.002")
+    monkeypatch.setenv("DCLAW_OPEN_API_RETRY_AFTER_SECONDS", "5")
+    limiter = TaskConcurrencyLimiter(
+        max_global=32,
+        max_per_agent=12,
+        max_per_user=6,
+    )
+    held = []
+    for _ in range(20):
+        permit = await limiter.try_acquire(
+            agent_id="openapi-publication:pub-db-1",
+            user_id="openapi-api-key:key-1",
+            max_per_agent=30,
+            max_per_user=20,
+        )
+        assert permit is not None
+        held.append(permit)
+
+    try:
+        response = await open_api.post_open_message(
+            "public-agent",
+            OpenMessageRequest(
+                external_user_id="ext-user",
+                external_session_id="ext-session",
+                message="hello",
+            ),
+            _request(workspace=workspace, limiter=limiter),
+        )
+        assert response.status_code == 429
+        assert response.headers["retry-after"] == "5"
+        assert (await limiter.snapshot())["rejected_acquire_count"] == 1
     finally:
         for permit in held:
             await permit.release()

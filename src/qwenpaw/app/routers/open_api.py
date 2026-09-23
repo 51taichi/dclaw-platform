@@ -62,6 +62,91 @@ class _OpenApiStreamFailure:
     error_summary: str
 
 
+@dataclass
+class _OpenApiQueueTicket:
+    queue: "_OpenApiWaitQueue"
+    publication_id: str
+    api_key_id: str
+    released: bool = False
+
+    async def release(self) -> None:
+        if self.released:
+            return
+        self.released = True
+        await self.queue.leave(self.publication_id, self.api_key_id)
+
+
+@dataclass
+class _OpenApiTaskPermit:
+    permit: Any
+    queue: "_OpenApiWaitQueue"
+    released: bool = False
+
+    async def release(self) -> None:
+        if self.released:
+            return
+        self.released = True
+        await self.permit.release()
+        await self.queue.notify_slot_available()
+
+
+class _OpenApiWaitQueue:
+    """Bounded in-process wait queue for the single-worker OpenAPI runtime."""
+
+    def __init__(self) -> None:
+        self._condition = asyncio.Condition()
+        self._by_publication: dict[str, int] = {}
+        self._by_api_key: dict[str, int] = {}
+
+    async def try_join(
+        self,
+        publication_id: str,
+        api_key_id: str,
+        *,
+        max_per_publication: int,
+        max_per_api_key: int,
+    ) -> _OpenApiQueueTicket | None:
+        async with self._condition:
+            if (
+                self._by_publication.get(publication_id, 0)
+                >= max_per_publication
+            ):
+                return None
+            if self._by_api_key.get(api_key_id, 0) >= max_per_api_key:
+                return None
+            self._by_publication[publication_id] = (
+                self._by_publication.get(publication_id, 0) + 1
+            )
+            self._by_api_key[api_key_id] = (
+                self._by_api_key.get(api_key_id, 0) + 1
+            )
+            return _OpenApiQueueTicket(self, publication_id, api_key_id)
+
+    async def leave(self, publication_id: str, api_key_id: str) -> None:
+        async with self._condition:
+            self._decrement(self._by_publication, publication_id)
+            self._decrement(self._by_api_key, api_key_id)
+
+    async def wait_for_slot(self, timeout: float) -> None:
+        async with self._condition:
+            try:
+                await asyncio.wait_for(self._condition.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                pass
+
+    async def notify_slot_available(self) -> None:
+        async with self._condition:
+            self._condition.notify_all()
+
+    @staticmethod
+    def _decrement(bucket: dict[str, int], key: str) -> None:
+        next_value = bucket.get(key, 0) - 1
+        if next_value > 0:
+            bucket[key] = next_value
+        else:
+            bucket.pop(key, None)
+
+
 _DIRECT_AGENT_FAILURES: dict[str, tuple[int, str]] = {
     "response_format_adapter_unavailable": (
         500,
@@ -393,27 +478,23 @@ async def post_open_message(
 
         permit = None
         if owns_execution:
-            publication_limit = _positive_int_env(
-                "DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_PUBLICATION",
-                12,
-            )
-            api_key_limit = _positive_int_env(
-                "DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_API_KEY",
-                5,
-            )
-            permit = await get_task_limiter(request.app).try_acquire(
-                agent_id=f"openapi-publication:{billing_session.publication_id}",
-                user_id=f"openapi-api-key:{billing_session.api_key_id}",
-                max_per_agent=publication_limit,
-                max_per_user=api_key_limit,
+            permit = await _acquire_open_api_permit(
+                request.app,
+                publication_id=str(billing_session.publication_id),
+                api_key_id=str(billing_session.api_key_id),
             )
             if permit is None:
+                retry_after = _positive_int_env(
+                    "DCLAW_OPEN_API_RETRY_AFTER_SECONDS",
+                    5,
+                )
                 raise HTTPException(
                     status_code=429,
                     detail=(
-                        "Too many running tasks. Please wait for an existing "
-                        "task to finish and try again."
+                        "OpenAPI capacity is busy and the wait queue timed out "
+                        "or is full. Please retry shortly."
                     ),
+                    headers={"Retry-After": str(retry_after)},
                 )
 
         assert execution_fence is not None
@@ -547,6 +628,7 @@ async def post_open_message(
             status_code=exc.status_code,
             message=str(exc.detail),
             started_at=started_at,
+            response_headers=exc.headers,
         )
         await _cancel_heartbeat(heartbeat_task)
         return response
@@ -814,6 +896,7 @@ async def _seal_preproducer_failure(
     status_code: int,
     message: str,
     started_at: float,
+    response_headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     """Seal a claimed invocation that exits before its producer starts."""
     if not owns_execution:
@@ -844,6 +927,10 @@ async def _seal_preproducer_failure(
         required_credits=None,
         billing_status=str(financial.get("billing_status") or "settled"),
     )
+    if response_headers:
+        terminal["headers"].update(
+            {str(key): str(value) for key, value in response_headers.items()},
+        )
     if no_items:
         sealed = (
             billing.open_api_repository.finalize_empty_invocation_execution(
@@ -1003,6 +1090,90 @@ def _positive_int_env(name: str, default: int) -> int:
     except ValueError:
         return default
     return max(1, value)
+
+
+def _get_open_api_wait_queue(app: Any) -> _OpenApiWaitQueue:
+    queue = getattr(app.state, "open_api_wait_queue", None)
+    if queue is None:
+        queue = _OpenApiWaitQueue()
+        app.state.open_api_wait_queue = queue
+    return queue
+
+
+async def _acquire_open_api_permit(
+    app: Any,
+    *,
+    publication_id: str,
+    api_key_id: str,
+) -> _OpenApiTaskPermit | None:
+    limiter = get_task_limiter(app)
+    queue = _get_open_api_wait_queue(app)
+    publication_limit = _positive_int_env(
+        "DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_PUBLICATION",
+        30,
+    )
+    api_key_limit = _positive_int_env(
+        "DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_API_KEY",
+        20,
+    )
+    agent_key = f"openapi-publication:{publication_id}"
+    user_key = f"openapi-api-key:{api_key_id}"
+
+    async def try_acquire():
+        return await limiter.try_acquire(
+            agent_id=agent_key,
+            user_id=user_key,
+            max_per_agent=publication_limit,
+            max_per_user=api_key_limit,
+            record_rejection=False,
+        )
+
+    permit = await try_acquire()
+    if permit is not None:
+        return _OpenApiTaskPermit(permit, queue)
+
+    ticket = await queue.try_join(
+        publication_id,
+        api_key_id,
+        max_per_publication=_positive_int_env(
+            "DCLAW_OPEN_API_MAX_WAITING_PER_PUBLICATION",
+            200,
+        ),
+        max_per_api_key=_positive_int_env(
+            "DCLAW_OPEN_API_MAX_WAITING_PER_API_KEY",
+            100,
+        ),
+    )
+    if ticket is None:
+        await _note_limiter_rejection(limiter)
+        return None
+
+    deadline = time.monotonic() + _positive_seconds_env(
+        "DCLAW_OPEN_API_WAIT_TIMEOUT_SECONDS",
+        60.0,
+    )
+    poll_seconds = _positive_seconds_env(
+        "DCLAW_OPEN_API_WAIT_POLL_SECONDS",
+        0.25,
+    )
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                await _note_limiter_rejection(limiter)
+                return None
+            await queue.wait_for_slot(min(poll_seconds, remaining))
+            permit = await try_acquire()
+            if permit is not None:
+                return _OpenApiTaskPermit(permit, queue)
+    finally:
+        await ticket.release()
+
+
+async def _note_limiter_rejection(limiter: Any) -> None:
+    note_rejection = getattr(limiter, "note_rejection", None)
+    if callable(note_rejection):
+        await note_rejection()
 
 
 async def _attach_tracker_queue(tracker: Any, run_key: str) -> Any | None:

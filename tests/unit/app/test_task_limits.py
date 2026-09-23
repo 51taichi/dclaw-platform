@@ -92,6 +92,57 @@ async def test_task_limiter_applies_request_specific_scope_limits():
 
 
 @pytest.mark.asyncio
+async def test_request_scope_limits_can_exceed_defaults_but_not_global_limit():
+    limiter = TaskConcurrencyLimiter(
+        max_global=32,
+        max_per_agent=12,
+        max_per_user=6,
+    )
+
+    permits = []
+    for _ in range(20):
+        permit = await limiter.try_acquire(
+            agent_id="openapi-publication-1",
+            user_id="openapi-api-key-1",
+            max_per_agent=30,
+            max_per_user=20,
+        )
+        assert permit is not None
+        permits.append(permit)
+
+    assert (
+        await limiter.try_acquire(
+            agent_id="openapi-publication-1",
+            user_id="openapi-api-key-1",
+            max_per_agent=30,
+            max_per_user=20,
+        )
+        is None
+    )
+
+    for permit in permits:
+        await permit.release()
+
+    ordinary = []
+    for _ in range(6):
+        permit = await limiter.try_acquire(
+            agent_id="ordinary-agent",
+            user_id="ordinary-user",
+        )
+        assert permit is not None
+        ordinary.append(permit)
+    assert (
+        await limiter.try_acquire(
+            agent_id="ordinary-agent",
+            user_id="ordinary-user",
+        )
+        is None
+    )
+    for permit in ordinary:
+        await permit.release()
+
+
+@pytest.mark.asyncio
 async def test_task_tracker_finish_callback_releases_limit_slot():
     limiter = TaskConcurrencyLimiter(max_global=1, max_per_agent=1, max_per_user=1)
     permit = await limiter.try_acquire(agent_id="agent-a", user_id="user-a")
@@ -263,6 +314,43 @@ async def test_redis_task_limiter_applies_request_specific_scope_limits():
             user_id="api-key-1",
             max_per_agent=12,
             max_per_user=5,
+        )
+        is None
+    )
+
+    for permit in permits:
+        await permit.release()
+
+
+@pytest.mark.asyncio
+async def test_redis_request_scope_limits_can_exceed_defaults():
+    fakeredis = pytest.importorskip("fakeredis.aioredis")
+    limiter = RedisTaskConcurrencyLimiter(
+        fakeredis.FakeRedis(decode_responses=True),
+        namespace="testtaskshighoverrides",
+        max_global=32,
+        max_per_agent=12,
+        max_per_user=6,
+        permit_ttl_seconds=30,
+    )
+
+    permits = []
+    for _ in range(20):
+        permit = await limiter.try_acquire(
+            agent_id="openapi-publication-1",
+            user_id="openapi-api-key-1",
+            max_per_agent=30,
+            max_per_user=20,
+        )
+        assert permit is not None
+        permits.append(permit)
+
+    assert (
+        await limiter.try_acquire(
+            agent_id="openapi-publication-1",
+            user_id="openapi-api-key-1",
+            max_per_agent=30,
+            max_per_user=20,
         )
         is None
     )
