@@ -396,14 +396,21 @@ def list_expert_team_templates(
     *,
     enabled_only: bool = False,
 ) -> list[ExpertTeamTemplate]:
-    rows = get_expert_team_repository().list_template_rows(
+    repo = get_expert_team_repository()
+    rows = repo.list_template_rows(
         enabled_only=enabled_only,
     )
+    completed_counts = repo.completed_usage_counts()
+    for row in rows:
+        row["usage_count"] = completed_counts.get(str(row["id"]), 0)
     return [_template_from_row(row) for row in rows]
 
 
 def get_expert_team_template(team_id: str) -> ExpertTeamTemplate | None:
-    row = get_expert_team_repository().get_template_row(team_id)
+    repo = get_expert_team_repository()
+    row = repo.get_template_row(team_id)
+    if row is not None:
+        row["usage_count"] = repo.completed_usage_counts().get(team_id, 0)
     return _template_from_row(row) if row else None
 
 

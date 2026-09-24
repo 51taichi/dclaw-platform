@@ -81,6 +81,26 @@ async def test_list_agents_uses_persisted_order(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_list_agents_includes_settled_usage_counts(monkeypatch):
+    config = _build_config(["default", "alpha"])
+
+    monkeypatch.setattr(agents_router, "load_config", lambda: config)
+    monkeypatch.setattr(agents_router, "load_agent_config", _agent_config)
+    monkeypatch.setattr(
+        agents_router,
+        "get_settled_agent_usage_counts",
+        lambda: {"default": 7, "alpha": 3},
+    )
+
+    response = await agents_router.list_agents()
+
+    assert {agent.id: agent.usage_count for agent in response.agents} == {
+        "default": 7,
+        "alpha": 3,
+    }
+
+
+@pytest.mark.asyncio
 async def test_list_agents_appends_missing_ids(monkeypatch):
     """Old configs without complete order should still return all agents."""
     config = _build_config(

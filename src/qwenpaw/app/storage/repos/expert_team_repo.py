@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from sqlalchemy import delete, insert, select, update
+from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.engine import Engine
 
 from ... import db
@@ -30,6 +30,9 @@ class ExpertTeamRepository(Protocol):
         ...
 
     def get_template_row(self, team_id: str) -> dict[str, Any] | None:
+        ...
+
+    def completed_usage_counts(self) -> dict[str, int]:
         ...
 
     def upsert_template_row(self, row: dict[str, Any]) -> None:
@@ -162,6 +165,19 @@ class SqlAlchemyExpertTeamRepository:
                 select(expert_team_templates).where(expert_team_templates.c.id == team_id),
             ).mappings().first()
         return dict(row) if row else None
+
+    def completed_usage_counts(self) -> dict[str, int]:
+        statement = (
+            select(
+                expert_team_runs.c.team_id,
+                func.count(expert_team_runs.c.id),
+            )
+            .where(expert_team_runs.c.state == "completed")
+            .group_by(expert_team_runs.c.team_id)
+        )
+        with self.engine.connect() as conn:
+            rows = conn.execute(statement).all()
+        return {str(team_id): int(count) for team_id, count in rows}
 
     def upsert_template_row(self, row: dict[str, Any]) -> None:
         now = _now()
@@ -525,6 +541,20 @@ class SqliteExpertTeamRepository:
             (team_id,),
         ).fetchone()
         return dict(row) if row else None
+
+    def completed_usage_counts(self) -> dict[str, int]:
+        rows = db.get_db().execute(
+            """
+            SELECT team_id, COUNT(*) AS usage_count
+            FROM expert_team_runs
+            WHERE state = 'completed'
+            GROUP BY team_id
+            """,
+        ).fetchall()
+        return {
+            str(row["team_id"]): int(row["usage_count"] or 0)
+            for row in rows
+        }
 
     def upsert_template_row(self, row: dict[str, Any]) -> None:
         db.get_db().execute(

@@ -147,10 +147,23 @@ def test_create_run_initializes_members_and_usage(monkeypatch):
     assert {member.state for member in run.members} == {"pending"}
     assert run.members[0].stage_index == 0
 
-    template = expert_teams.get_expert_team_template("ai_video_team")
+    template = next(
+        item
+        for item in expert_teams.list_expert_team_templates()
+        if item.id == "ai_video_team"
+    )
 
     assert template is not None
-    assert template.usage_count == 1
+    assert template.usage_count == 0
+
+    expert_teams.update_expert_team_run_state(run.id, "completed")
+    completed_template = next(
+        item
+        for item in expert_teams.list_expert_team_templates()
+        if item.id == "ai_video_team"
+    )
+
+    assert completed_template.usage_count == 1
 
 
 def test_member_state_updates_and_chat_lookup(monkeypatch):

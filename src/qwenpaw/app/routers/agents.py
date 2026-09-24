@@ -60,6 +60,7 @@ from ..storage.repos.open_api_repo import get_open_api_repository
 from ..sealed_agents.models import AgentCapabilities, SealedCapability
 from ..sealed_agents.policy import assert_sealed_capability
 from ..sealed_agents.registry import get_sealed_agent_registry
+from ..usage_counts import get_settled_agent_usage_counts
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,7 @@ class AgentSummary(BaseModel):
     availability: str = "available"
     open_api_enabled: bool = False
     avatar: str | None = None
+    usage_count: int = 0
     capabilities: AgentCapabilities = Field(
         default_factory=AgentCapabilities.for_standard,
     )
@@ -248,6 +250,11 @@ async def list_agents(exclude_open_api: bool = False) -> AgentListResponse:
         if publication.get("target_type") == "agent"
         and publication.get("target_id")
     }
+    try:
+        usage_counts = get_settled_agent_usage_counts()
+    except Exception:
+        logger.exception("Failed to load settled agent usage counts")
+        usage_counts = {}
 
     agents = []
     sealed_registry = get_sealed_agent_registry()
@@ -277,6 +284,7 @@ async def list_agents(exclude_open_api: bool = False) -> AgentListResponse:
                     enabled=getattr(agent_ref, "enabled", True),
                     active_model=active_model,
                     open_api_enabled=agent_id in open_api_agent_ids,
+                    usage_count=usage_counts.get(agent_id, 0),
                 ),
             )
         except Exception:  # noqa: E722
@@ -288,6 +296,7 @@ async def list_agents(exclude_open_api: bool = False) -> AgentListResponse:
                     workspace_dir=agent_ref.workspace_dir,
                     enabled=getattr(agent_ref, "enabled", True),
                     open_api_enabled=agent_id in open_api_agent_ids,
+                    usage_count=usage_counts.get(agent_id, 0),
                 ),
             )
 
@@ -322,6 +331,7 @@ async def list_agents(exclude_open_api: bool = False) -> AgentListResponse:
                 ),
                 open_api_enabled=sealed.agent_id in open_api_agent_ids,
                 avatar=sealed.avatar,
+                usage_count=usage_counts.get(sealed.agent_id, 0),
                 capabilities=AgentCapabilities.for_sealed_global(),
             ),
         )
