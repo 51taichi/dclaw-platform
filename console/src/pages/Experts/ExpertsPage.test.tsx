@@ -106,7 +106,7 @@ describe("ExpertsPage", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("uses frontend usage configuration for every expert card kind", async () => {
+  it("uses backend usage counts for every expert card kind", async () => {
     mockListAgents.mockResolvedValue({
       agents: [
         {
@@ -117,6 +117,7 @@ describe("ExpertsPage", () => {
           agent_type: "sealed",
           avatar: "data:image/png;base64,luyu-avatar",
           open_api_enabled: false,
+          usage_count: 532,
         },
         {
           id: "fullstack_dev",
@@ -125,6 +126,7 @@ describe("ExpertsPage", () => {
           enabled: true,
           agent_type: "standard",
           open_api_enabled: false,
+          usage_count: 13,
         },
       ],
     });
@@ -153,11 +155,8 @@ describe("ExpertsPage", () => {
     const teamSection = screen.getByRole("region", { name: "专家团" });
     const ordinarySection = screen.getByRole("region", { name: "专家" });
 
-    expect(within(superSection).getByText("0 次使用")).toBeVisible();
-    expect(within(teamSection).getByText("0 次使用")).toBeVisible();
-    expect(
-      within(teamSection).queryByText("321 次使用"),
-    ).not.toBeInTheDocument();
-    expect(within(ordinarySection).getByText("12,850 次使用")).toBeVisible();
+    expect(within(superSection).getByText("532 次使用")).toBeVisible();
+    expect(within(teamSection).getByText("321 次使用")).toBeVisible();
+    expect(within(ordinarySection).getByText("13 次使用")).toBeVisible();
   });
 });

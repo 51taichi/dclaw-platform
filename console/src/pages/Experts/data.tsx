@@ -22,23 +22,6 @@ export interface ExpertUIConfig {
   badge?: "hot" | "new";
 }
 
-export const EXPERT_USAGE_COUNTS: Record<string, number> = {
-  fullstack_dev: 12850,
-  content_creation: 9320,
-  product_design: 7640,
-  data_analysis: 6180,
-  finance_research: 5420,
-  consultant: 4250,
-  opc_company: 8910,
-  legal: 3180,
-  marketing_agent: 15420,
-  luyu_dclaw_agent: 0,
-  luyu_dclaw_dzb_agent: 0,
-  ai_video_team: 0,
-  software_dev_team: 0,
-  deep_research_team: 0,
-};
-
 export const EXPERT_UI_CONFIGS: ExpertUIConfig[] = [
   {
     id: "fullstack_dev",
