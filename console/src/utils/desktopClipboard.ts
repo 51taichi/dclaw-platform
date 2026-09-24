@@ -1,4 +1,4 @@
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 
 interface NativeClipboardAttachment {
   name: string;
@@ -15,7 +15,8 @@ const decodeBase64 = (encoded: string) => {
   return bytes;
 };
 
-export const isDesktopRuntime = () => isTauri();
+export const isDesktopRuntime = () =>
+  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 export async function readDesktopClipboardFiles(): Promise<File[]> {
   if (!isDesktopRuntime()) return [];

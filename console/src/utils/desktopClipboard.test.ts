@@ -1,13 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { invokeMock, isTauriMock } = vi.hoisted(() => ({
+const { invokeMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
-  isTauriMock: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: invokeMock,
-  isTauri: isTauriMock,
 }));
 
 import {
@@ -18,7 +16,10 @@ import {
 describe("readDesktopClipboardFiles", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    isTauriMock.mockReturnValue(true);
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: {},
+    });
   });
 
   it("turns native clipboard payloads into browser files", async () => {
@@ -47,16 +48,15 @@ describe("readDesktopClipboardFiles", () => {
   });
 
   it("does not invoke native clipboard outside the desktop app", async () => {
-    isTauriMock.mockReturnValue(false);
+    Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
 
     await expect(readDesktopClipboardFiles()).resolves.toEqual([]);
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
   it("reports whether the page is running inside Tauri", () => {
-    isTauriMock.mockReturnValue(true);
     expect(isDesktopRuntime()).toBe(true);
-    isTauriMock.mockReturnValue(false);
+    Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
     expect(isDesktopRuntime()).toBe(false);
   });
 });
