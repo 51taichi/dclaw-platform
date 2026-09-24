@@ -1,3 +1,7 @@
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use clipboard_rs::{common::RustImage, Clipboard, ClipboardContext, ContentFormat};
+use serde::Serialize;
+use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -14,6 +18,102 @@ enum CloseAction {
     HideToTray,
     Quit,
     KeepOpen,
+}
+
+const CHAT_ATTACHMENT_MAX_BYTES: u64 = 25 * 1024 * 1024;
+const CLIPBOARD_ATTACHMENT_LIMIT: usize = 20;
+
+#[derive(Debug, Serialize)]
+struct ClipboardAttachment {
+    name: String,
+    mime_type: String,
+    base64_data: String,
+}
+
+fn attachment_from_bytes(
+    name: String,
+    mime_type: String,
+    bytes: Vec<u8>,
+) -> Option<ClipboardAttachment> {
+    if bytes.is_empty() || bytes.len() as u64 > CHAT_ATTACHMENT_MAX_BYTES {
+        return None;
+    }
+    Some(ClipboardAttachment {
+        name,
+        mime_type,
+        base64_data: BASE64.encode(bytes),
+    })
+}
+
+fn attachment_from_path(path: &Path) -> Result<Option<ClipboardAttachment>, String> {
+    let metadata = std::fs::metadata(path)
+        .map_err(|error| format!("无法读取剪切板文件 {}: {error}", path.display()))?;
+    if !metadata.is_file() || metadata.len() > CHAT_ATTACHMENT_MAX_BYTES {
+        return Ok(None);
+    }
+
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("剪切板文件名无效: {}", path.display()))?
+        .to_owned();
+    let bytes = std::fs::read(path)
+        .map_err(|error| format!("无法读取剪切板文件 {}: {error}", path.display()))?;
+    let mime_type = mime_guess::from_path(path)
+        .first_or_octet_stream()
+        .essence_str()
+        .to_owned();
+    Ok(attachment_from_bytes(name, mime_type, bytes))
+}
+
+fn attachments_from_paths(paths: &[PathBuf]) -> Result<Vec<ClipboardAttachment>, String> {
+    paths
+        .iter()
+        .take(CLIPBOARD_ATTACHMENT_LIMIT)
+        .filter_map(|path| match attachment_from_path(path) {
+            Ok(Some(attachment)) => Some(Ok(attachment)),
+            Ok(None) => None,
+            Err(error) => Some(Err(error)),
+        })
+        .collect()
+}
+
+fn read_clipboard_attachments_blocking() -> Result<Vec<ClipboardAttachment>, String> {
+    let clipboard =
+        ClipboardContext::new().map_err(|error| format!("无法访问系统剪切板: {error}"))?;
+    let paths = clipboard
+        .get_files()
+        .unwrap_or_default()
+        .into_iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    let files = attachments_from_paths(&paths)?;
+    if !files.is_empty() {
+        return Ok(files);
+    }
+
+    if !clipboard.has(ContentFormat::Image) {
+        return Ok(Vec::new());
+    }
+    let png = clipboard
+        .get_image()
+        .and_then(|image| image.to_png())
+        .map_err(|error| format!("无法读取剪切板图片: {error}"))?;
+    Ok(attachment_from_bytes(
+        "clipboard.png".to_owned(),
+        "image/png".to_owned(),
+        png.get_bytes().to_vec(),
+    )
+    .into_iter()
+    .collect())
+}
+
+#[tauri::command]
+async fn read_clipboard_attachments() -> Result<Vec<ClipboardAttachment>, String> {
+    tauri::async_runtime::spawn_blocking(read_clipboard_attachments_blocking)
+        .await
+        .map_err(|error| format!("读取剪切板任务失败: {error}"))?
 }
 
 fn close_action(result: &MessageDialogResult) -> CloseAction {
@@ -64,25 +164,23 @@ pub fn run() {
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .tooltip("DClaw - AI 智能工作台")
-                .on_menu_event(move |app, event| {
-                    match event.id.as_ref() {
-                        "show" => {
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                                let _ = window.unminimize();
-                            }
+                .on_menu_event(move |app, event| match event.id.as_ref() {
+                    "show" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                            let _ = window.unminimize();
                         }
-                        "hide" => {
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.hide();
-                            }
-                        }
-                        "quit" => {
-                            app.exit(0);
-                        }
-                        _ => {}
                     }
+                    "hide" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.hide();
+                        }
+                    }
+                    "quit" => {
+                        app.exit(0);
+                    }
+                    _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
                     if let tauri::tray::TrayIconEvent::Click {
@@ -139,7 +237,10 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_app_status])
+        .invoke_handler(tauri::generate_handler![
+            get_app_status,
+            read_clipboard_attachments
+        ])
         .run(tauri::generate_context!())
         .expect("error while running DClaw");
 }
@@ -157,7 +258,8 @@ fn get_app_status() -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{close_action, CloseAction};
+    use super::{attachments_from_paths, close_action, CloseAction};
+    use std::{fs, time::SystemTime};
     use tauri_plugin_dialog::MessageDialogResult;
 
     #[test]
@@ -174,5 +276,25 @@ mod tests {
             close_action(&MessageDialogResult::Cancel),
             CloseAction::KeepOpen
         );
+    }
+
+    #[test]
+    fn clipboard_paths_become_bounded_upload_payloads() {
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("dclaw-clipboard-{unique}"));
+        fs::create_dir_all(&directory).unwrap();
+        let document = directory.join("客户资料.pdf");
+        fs::write(&document, b"pdf").unwrap();
+
+        let attachments = attachments_from_paths(&[document]).unwrap();
+
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].name, "客户资料.pdf");
+        assert_eq!(attachments[0].mime_type, "application/pdf");
+        assert_eq!(attachments[0].base64_data, "cGRm");
+        fs::remove_dir_all(directory).unwrap();
     }
 }

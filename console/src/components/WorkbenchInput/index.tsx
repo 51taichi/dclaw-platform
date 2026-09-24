@@ -29,6 +29,10 @@ import {
 } from "../../features/realtimeSpeech/RealtimeSpeechController";
 import { resizeTextareaToContent } from "../../utils/textareaAutosize";
 import { getRouteChatId } from "../../pages/Chat/routeSession";
+import {
+  isDesktopRuntime,
+  readDesktopClipboardFiles,
+} from "../../utils/desktopClipboard";
 import styles from "./index.module.less";
 
 // ── Types ─────────────────────────────────────────────────────────
@@ -347,12 +351,45 @@ export default function WorkbenchInput({
   };
 
   const handlePaste = useCallback(
-    (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
       if (disabled) return;
-      const files = getClipboardFiles(event);
-      if (files.length === 0) return;
+      const webFiles = getClipboardFiles(event);
+      if (webFiles.length > 0) {
+        event.preventDefault();
+        void uploadFiles(webFiles);
+        return;
+      }
+
+      if (!isDesktopRuntime()) return;
+
+      const textarea = event.currentTarget;
+      const selectionStart = textarea.selectionStart ?? textarea.value.length;
+      const selectionEnd = textarea.selectionEnd ?? selectionStart;
+      const pastedText = event.clipboardData.getData?.("text/plain") ?? "";
       event.preventDefault();
-      void uploadFiles(files);
+      try {
+        const nativeFiles = await readDesktopClipboardFiles();
+        if (nativeFiles.length > 0) {
+          void uploadFiles(nativeFiles);
+          return;
+        }
+      } catch (error) {
+        console.warn("Unable to read desktop clipboard attachments:", error);
+      }
+
+      if (!pastedText) return;
+      setCustomInputValue(
+        (currentValue) =>
+          `${currentValue.slice(
+            0,
+            selectionStart,
+          )}${pastedText}${currentValue.slice(selectionEnd)}`,
+      );
+      requestAnimationFrame(() => {
+        const nextPosition = selectionStart + pastedText.length;
+        textarea.focus();
+        textarea.setSelectionRange(nextPosition, nextPosition);
+      });
     },
     [disabled, uploadFiles],
   );

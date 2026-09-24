@@ -10,6 +10,18 @@ import { renderWithProviders } from "@/test/common_setup";
 import WorkbenchInput from "./index";
 import { chatApi } from "../../api/modules/chat";
 
+const { isDesktopRuntimeMock, readDesktopClipboardFilesMock } = vi.hoisted(
+  () => ({
+    isDesktopRuntimeMock: vi.fn(),
+    readDesktopClipboardFilesMock: vi.fn(),
+  }),
+);
+
+vi.mock("../../utils/desktopClipboard", () => ({
+  isDesktopRuntime: isDesktopRuntimeMock,
+  readDesktopClipboardFiles: readDesktopClipboardFilesMock,
+}));
+
 describe("WorkbenchInput file drop", () => {
   it("clears the file hint on cancellation and ignores text drags", () => {
     const { container } = renderWithProviders(
@@ -44,7 +56,11 @@ describe("WorkbenchInput file drop", () => {
 });
 
 describe("WorkbenchInput clipboard attachments", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    isDesktopRuntimeMock.mockReturnValue(false);
+    readDesktopClipboardFilesMock.mockResolvedValue([]);
+  });
 
   it("uploads pasted images and files without sending or clearing the draft", async () => {
     const onSubmit = vi.fn();
@@ -93,6 +109,53 @@ describe("WorkbenchInput clipboard attachments", () => {
     fireEvent(input, pasteEvent);
 
     expect(pasteEvent.defaultPrevented).toBe(false);
+    expect(chatApi.uploadFile).not.toHaveBeenCalled();
+  });
+
+  it("falls back to native clipboard files when the webview exposes none", async () => {
+    isDesktopRuntimeMock.mockReturnValue(true);
+    const nativeFile = new File(["native"], "客户名单.xlsx", {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    readDesktopClipboardFilesMock.mockResolvedValue([nativeFile]);
+    vi.mocked(chatApi.uploadFile).mockResolvedValue({
+      url: "/native-attachment",
+    } as never);
+    renderWithProviders(<WorkbenchInput onSubmit={vi.fn()} />);
+    const input = screen.getByRole("textbox");
+    const pasteEvent = createEvent.paste(input, {
+      clipboardData: { items: [], files: [] },
+    });
+
+    fireEvent(input, pasteEvent);
+
+    expect(pasteEvent.defaultPrevented).toBe(true);
+    await waitFor(() =>
+      expect(readDesktopClipboardFilesMock).toHaveBeenCalledTimes(1),
+    );
+    await waitFor(() =>
+      expect(chatApi.uploadFile).toHaveBeenCalledWith(nativeFile),
+    );
+  });
+
+  it("preserves a text-only paste in the desktop runtime", async () => {
+    isDesktopRuntimeMock.mockReturnValue(true);
+    renderWithProviders(<WorkbenchInput onSubmit={vi.fn()} />);
+    const input = screen.getByRole("textbox") as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "前后" } });
+    input.setSelectionRange(1, 1);
+    const pasteEvent = createEvent.paste(input, {
+      clipboardData: {
+        items: [{ kind: "string", getAsFile: () => null }],
+        files: [],
+        getData: () => "普通文字",
+      },
+    });
+
+    fireEvent(input, pasteEvent);
+
+    expect(pasteEvent.defaultPrevented).toBe(true);
+    await waitFor(() => expect(input).toHaveValue("前普通文字后"));
     expect(chatApi.uploadFile).not.toHaveBeenCalled();
   });
 });
