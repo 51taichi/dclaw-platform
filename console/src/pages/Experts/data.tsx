@@ -18,10 +18,26 @@ export interface ExpertUIConfig {
   color: string;
   members: string[];
   tags: string[];
-  usageCount: number;
   category: string;
   badge?: "hot" | "new";
 }
+
+export const EXPERT_USAGE_COUNTS: Record<string, number> = {
+  fullstack_dev: 12850,
+  content_creation: 9320,
+  product_design: 7640,
+  data_analysis: 6180,
+  finance_research: 5420,
+  consultant: 4250,
+  opc_company: 8910,
+  legal: 3180,
+  marketing_agent: 15420,
+  luyu_dclaw_agent: 0,
+  luyu_dclaw_dzb_agent: 0,
+  ai_video_team: 0,
+  software_dev_team: 0,
+  deep_research_team: 0,
+};
 
 export const EXPERT_UI_CONFIGS: ExpertUIConfig[] = [
   {
@@ -32,7 +48,6 @@ export const EXPERT_UI_CONFIGS: ExpertUIConfig[] = [
     color: "#2563EB",
     members: ["架构师", "前端专家", "后端专家", "测试工程师"],
     tags: ["软件开发", "全栈"],
-    usageCount: 12850,
     category: "dev",
     badge: "hot",
   },
@@ -44,7 +59,6 @@ export const EXPERT_UI_CONFIGS: ExpertUIConfig[] = [
     color: "#8b5cf6",
     members: ["文案策划", "SEO 专家", "新媒体运营"],
     tags: ["内容营销", "品牌"],
-    usageCount: 9320,
     category: "content",
     badge: "hot",
   },
@@ -56,7 +70,6 @@ export const EXPERT_UI_CONFIGS: ExpertUIConfig[] = [
     color: "#ec4899",
     members: ["产品经理", "UX 设计师", "UI 设计师"],
     tags: ["产品设计", "UX"],
-    usageCount: 7640,
     category: "business",
     badge: "new",
   },
@@ -68,7 +81,6 @@ export const EXPERT_UI_CONFIGS: ExpertUIConfig[] = [
     color: "#10b981",
     members: ["数据分析师", "BI 工程师", "数据科学家"],
     tags: ["数据分析", "BI"],
-    usageCount: 6180,
     category: "data",
   },
   {
@@ -79,7 +91,6 @@ export const EXPERT_UI_CONFIGS: ExpertUIConfig[] = [
     color: "#f59e0b",
     members: ["行业研究员", "量化分析师", "风控专家"],
     tags: ["金融", "投研"],
-    usageCount: 5420,
     category: "finance",
   },
   {
@@ -90,7 +101,6 @@ export const EXPERT_UI_CONFIGS: ExpertUIConfig[] = [
     color: "#6366f1",
     members: ["战略顾问", "流程专家", "变革管理师"],
     tags: ["企业咨询", "管理"],
-    usageCount: 4250,
     category: "business",
   },
   {
@@ -101,7 +111,6 @@ export const EXPERT_UI_CONFIGS: ExpertUIConfig[] = [
     color: "#ef4444",
     members: ["全能助手", "运营专家", "技术顾问"],
     tags: ["一人公司", "全能"],
-    usageCount: 8910,
     category: "business",
     badge: "hot",
   },
@@ -113,7 +122,6 @@ export const EXPERT_UI_CONFIGS: ExpertUIConfig[] = [
     color: "#0ea5e9",
     members: ["法律顾问", "合规专家", "知产顾问"],
     tags: ["法务", "合规"],
-    usageCount: 3180,
     category: "business",
     badge: "new",
   },
@@ -125,7 +133,6 @@ export const EXPERT_UI_CONFIGS: ExpertUIConfig[] = [
     color: "#f97316",
     members: ["营销总监", "增长黑客", "SEO 专家"],
     tags: ["数字营销", "增长", "SEO"],
-    usageCount: 15420,
     category: "business",
     badge: "hot",
   },

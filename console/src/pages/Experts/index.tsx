@@ -5,7 +5,12 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { useAgentStore } from "../../stores/agentStore";
 import { Star, ArrowRight, Users } from "lucide-react";
 import styles from "../shared/ecoPage.module.less";
-import { CATEGORIES, EXPERT_UI_CONFIGS, TEAM_COLORS } from "./data";
+import {
+  CATEGORIES,
+  EXPERT_UI_CONFIGS,
+  EXPERT_USAGE_COUNTS,
+  TEAM_COLORS,
+} from "./data";
 import { expertTeamsApi } from "../../api/modules/expertTeams";
 import type { ExpertTeamTemplate } from "../../api/types/expertTeams";
 import { agentsApi } from "../../api/modules/agents";
@@ -86,7 +91,7 @@ export default function ExpertsPage() {
       color: isSuperExpert ? "#b7791f" : uiConf?.color || "#6b7280",
       members: uiConf?.members || [],
       tags: uiConf?.tags || [],
-      usageCount: uiConf?.usageCount || 0,
+      usageCount: EXPERT_USAGE_COUNTS[agent.id] ?? 0,
       category: uiConf?.category || "business",
       badge: uiConf?.badge,
       kind: "agent",
@@ -108,7 +113,7 @@ export default function ExpertsPage() {
       color,
       members: team.members.map((member) => member.display_name),
       tags: team.tags || [],
-      usageCount: team.usage_count || 0,
+      usageCount: EXPERT_USAGE_COUNTS[team.id] ?? 0,
       category: mappedCategory || team.category || "business",
       badge: team.source === "builtin" ? "hot" : undefined,
       kind: "team",

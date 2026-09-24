@@ -105,4 +105,59 @@ describe("ExpertsPage", () => {
       within(ordinarySection).queryByLabelText("超级专家"),
     ).not.toBeInTheDocument();
   });
+
+  it("uses frontend usage configuration for every expert card kind", async () => {
+    mockListAgents.mockResolvedValue({
+      agents: [
+        {
+          id: "luyu_dclaw_agent",
+          name: "陆羽 AI 流量操盘手",
+          description: "带客户完成业务理解、流量诊断、内容执行与数据复盘。",
+          enabled: true,
+          agent_type: "sealed",
+          avatar: "data:image/png;base64,luyu-avatar",
+          open_api_enabled: false,
+        },
+        {
+          id: "fullstack_dev",
+          name: "全栈开发专家",
+          description: "处理软件开发任务。",
+          enabled: true,
+          agent_type: "standard",
+          open_api_enabled: false,
+        },
+      ],
+    });
+    mockListExpertTeams.mockResolvedValue([
+      {
+        id: "ai_video_team",
+        name: "AI 视频创作团队",
+        description: "完成视频创作任务。",
+        category: "content",
+        tags: ["视频策划"],
+        icon: "🎬",
+        enabled: true,
+        leader_agent_id: "content_creation",
+        members: [],
+        workflow: [],
+        usage_count: 321,
+        source: "builtin",
+      },
+    ]);
+
+    renderWithProviders(<ExpertsPage />, { initialEntries: ["/experts"] });
+
+    const superSection = await screen.findByRole("region", {
+      name: "超级专家",
+    });
+    const teamSection = screen.getByRole("region", { name: "专家团" });
+    const ordinarySection = screen.getByRole("region", { name: "专家" });
+
+    expect(within(superSection).getByText("0 次使用")).toBeVisible();
+    expect(within(teamSection).getByText("0 次使用")).toBeVisible();
+    expect(
+      within(teamSection).queryByText("321 次使用"),
+    ).not.toBeInTheDocument();
+    expect(within(ordinarySection).getByText("12,850 次使用")).toBeVisible();
+  });
 });
