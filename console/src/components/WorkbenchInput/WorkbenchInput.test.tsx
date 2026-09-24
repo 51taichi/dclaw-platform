@@ -1,4 +1,9 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import {
+  createEvent,
+  fireEvent,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "@/test/common_setup";
@@ -35,6 +40,60 @@ describe("WorkbenchInput file drop", () => {
     await waitFor(() => expect(chatApi.uploadFile).toHaveBeenCalledTimes(2));
     expect(input).toHaveValue("保留草稿");
     expect(onSubmit).not.toHaveBeenCalled();
+  });
+});
+
+describe("WorkbenchInput clipboard attachments", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("uploads pasted images and files without sending or clearing the draft", async () => {
+    const onSubmit = vi.fn();
+    vi.mocked(chatApi.uploadFile).mockResolvedValue({
+      url: "/attachment",
+    } as never);
+    renderWithProviders(<WorkbenchInput onSubmit={onSubmit} />);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "保留草稿" } });
+    const image = new File(["image"], "screenshot.png", {
+      type: "image/png",
+    });
+    const document = new File(["document"], "brief.pdf", {
+      type: "application/pdf",
+    });
+    const pasteEvent = createEvent.paste(input, {
+      clipboardData: {
+        items: [
+          { kind: "file", getAsFile: () => image },
+          { kind: "file", getAsFile: () => document },
+        ],
+        files: [image, document],
+      },
+    });
+
+    fireEvent(input, pasteEvent);
+
+    expect(pasteEvent.defaultPrevented).toBe(true);
+    await waitFor(() => expect(chatApi.uploadFile).toHaveBeenCalledTimes(2));
+    expect(chatApi.uploadFile).toHaveBeenNthCalledWith(1, image);
+    expect(chatApi.uploadFile).toHaveBeenNthCalledWith(2, document);
+    expect(input).toHaveValue("保留草稿");
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("leaves text-only paste to the textarea", () => {
+    renderWithProviders(<WorkbenchInput onSubmit={vi.fn()} />);
+    const input = screen.getByRole("textbox");
+    const pasteEvent = createEvent.paste(input, {
+      clipboardData: {
+        items: [{ kind: "string", getAsFile: () => null }],
+        files: [],
+      },
+    });
+
+    fireEvent(input, pasteEvent);
+
+    expect(pasteEvent.defaultPrevented).toBe(false);
+    expect(chatApi.uploadFile).not.toHaveBeenCalled();
   });
 });
 

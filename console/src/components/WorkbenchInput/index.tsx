@@ -73,6 +73,16 @@ const createUploadId = (file: File) =>
 const hasDraggedFiles = (event: React.DragEvent<HTMLElement>) =>
   Array.from(event.dataTransfer.types || []).includes("Files");
 
+const getClipboardFiles = (event: React.ClipboardEvent<HTMLElement>) => {
+  const itemFiles = Array.from(event.clipboardData.items || [])
+    .filter((item) => item.kind === "file")
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => file !== null);
+  return itemFiles.length > 0
+    ? itemFiles
+    : Array.from(event.clipboardData.files || []);
+};
+
 const normalizeActiveMode = (mode?: string): ActiveMode | undefined => {
   if (mode === "craft" || mode === "plan" || mode === "ask" || mode === "") {
     return mode;
@@ -335,6 +345,17 @@ export default function WorkbenchInput({
   const handleDeleteAttachment = (fileId: string) => {
     setUploadedFiles((prev) => prev.filter((f) => f.id !== fileId));
   };
+
+  const handlePaste = useCallback(
+    (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      if (disabled) return;
+      const files = getClipboardFiles(event);
+      if (files.length === 0) return;
+      event.preventDefault();
+      void uploadFiles(files);
+    },
+    [disabled, uploadFiles],
+  );
 
   const handleDragEnter = useCallback(
     (event: React.DragEvent<HTMLDivElement>) => {
@@ -826,6 +847,7 @@ export default function WorkbenchInput({
           value={customInputValue}
           onChange={handleCustomChange}
           onKeyDown={handleCustomKeyDown}
+          onPaste={handlePaste}
           rows={2}
           disabled={disabled || speechState !== "idle"}
         />
