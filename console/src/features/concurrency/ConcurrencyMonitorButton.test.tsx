@@ -61,6 +61,7 @@ describe("ConcurrencyMonitorButton", () => {
 
     expect(await screen.findByText("3 / 100")).toBeInTheDocument();
     expect(screen.getByText("4 / 150")).toBeInTheDocument();
+    expect(screen.getByText("模型并发")).toBeInTheDocument();
     expect(screen.getByText("2 / 999")).toBeInTheDocument();
     expect(screen.getByText("当前排队 2")).toBeInTheDocument();
     expect(screen.getByText("customer-service")).toBeInTheDocument();

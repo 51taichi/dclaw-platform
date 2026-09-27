@@ -168,7 +168,7 @@ export default function ConcurrencyMonitorButton({
                   maximum={snapshot.platform_tasks.max_running}
                 />
                 <SummaryCard
-                  title="模型调用"
+                  title="模型并发"
                   current={snapshot.model_calls.running}
                   maximum={snapshot.model_calls.max_running}
                 />
