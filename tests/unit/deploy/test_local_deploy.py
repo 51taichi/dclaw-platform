@@ -161,6 +161,21 @@ def test_generated_env_enables_auth_and_complete_backends(tmp_path):
     assert values["DCLAW_REALTIME_STT_ENABLED"] == "true"
     assert values["DCLAW_STT_INTERNAL_TOKEN"] == "x" * 32
     assert values["DCLAW_STT_MODEL"] == "base"
+    assert values["DCLAW_OPEN_API_MAX_RUNNING_TASKS_GLOBAL"] == "100"
+    assert values["DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_PUBLICATION"] == "60"
+    assert values["DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_API_KEY"] == "20"
+    assert values["QWENPAW_MAX_RUNNING_TASKS"] == "150"
+    assert values["QWENPAW_LLM_MAX_CONCURRENT"] == "999"
+
+
+def test_compose_passes_capacity_settings_to_local_container():
+    compose = (ROOT / "deploy/local/compose.local.yml").read_text(encoding="utf-8")
+
+    assert "DCLAW_OPEN_API_MAX_RUNNING_TASKS_GLOBAL" in compose
+    assert "DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_PUBLICATION" in compose
+    assert "DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_API_KEY" in compose
+    assert "QWENPAW_MAX_RUNNING_TASKS" in compose
+    assert "QWENPAW_LLM_MAX_CONCURRENT" in compose
 
 
 def test_compose_public_url_is_optional_for_lan_request_origin():
