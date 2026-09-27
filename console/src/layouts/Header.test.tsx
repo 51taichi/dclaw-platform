@@ -3,7 +3,8 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import Header from "./Header";
 
-const { themeState } = vi.hoisted(() => ({
+const { authState, themeState } = vi.hoisted(() => ({
+  authState: { role: "user" },
   themeState: { isDark: false },
 }));
 
@@ -15,7 +16,7 @@ vi.mock("../contexts/ThemeContext", () => ({
 
 vi.mock("../contexts/AuthContext", () => ({
   useAuth: () => ({
-    role: "user",
+    role: authState.role,
   }),
 }));
 
@@ -35,6 +36,7 @@ vi.mock("../components/ThemeToggleButton", () => ({
 
 describe("Header brand logo", () => {
   beforeEach(() => {
+    authState.role = "user";
     themeState.isDark = false;
   });
 
@@ -64,5 +66,18 @@ describe("Header brand logo", () => {
       "src",
       "/dclaw-logo-dark.svg",
     );
+  });
+
+  it("shows concurrency monitoring in the admin header", () => {
+    authState.role = "admin";
+    render(
+      <MemoryRouter initialEntries={["/admin/agents"]}>
+        <Header />
+      </MemoryRouter>,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "并发监控" }),
+    ).toBeInTheDocument();
   });
 });

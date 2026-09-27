@@ -8,6 +8,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
 import ThemeToggleButton from "../components/ThemeToggleButton";
 import BalanceBadge from "../features/billing/BalanceBadge";
+import ConcurrencyMonitorButton from "../features/concurrency/ConcurrencyMonitorButton";
 import styles from "./index.module.less";
 import { DesktopVersion } from "../components/DesktopVersion";
 
@@ -49,6 +50,7 @@ export default function Header() {
               : t("header.adminConsole", "管理后台")}
           </Button>
         )}
+        {isAdminRole && isAdminMode && <ConcurrencyMonitorButton />}
         <LanguageSwitcher />
         <ThemeToggleButton />
       </Space>
