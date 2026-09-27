@@ -11,6 +11,7 @@ from sqlalchemy import inspect as sa_inspect, text
 
 from .. import db
 from ..console_push_store import stats as push_store_stats
+from ..open_api.knowledge import publication_target_name
 from ..performance import get_request_metrics
 from ..runtime.event_bus import get_runtime_event_bus
 from ..storage.engine import get_app_engine
@@ -173,11 +174,7 @@ def _open_api_agent_names(
         publication = publications.get(publication_id)
         if publication is None:
             return "未知 Agent"
-        return str(
-            publication.get("name")
-            or publication.get("target_id")
-            or "未知 Agent"
-        )
+        return publication_target_name(publication)
 
     return (
         {

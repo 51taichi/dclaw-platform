@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from qwenpaw.app import performance
+from qwenpaw.app.open_api import knowledge as open_api_knowledge
 from qwenpaw.app.routers import performance as performance_router
 from qwenpaw.app.routers import open_api
 from qwenpaw.app.routers.performance import router
@@ -211,7 +212,8 @@ async def test_concurrency_snapshot_reports_open_api_platform_and_model_usage(
             list_publications=lambda enabled_only=False: [
                 {
                     "id": "publication-1",
-                    "name": "国央企就业小顶",
+                    "name": "xiaoding_kf",
+                    "target_type": "agent",
                     "target_id": "gyqjy_service",
                 },
             ],
@@ -223,6 +225,16 @@ async def test_concurrency_snapshot_reports_open_api_platform_and_model_usage(
             ],
         ),
         raising=False,
+    )
+    monkeypatch.setattr(
+        open_api_knowledge,
+        "get_sealed_agent_registry",
+        lambda: SimpleNamespace(get_agent=lambda agent_id: None),
+    )
+    monkeypatch.setattr(
+        open_api_knowledge,
+        "load_agent_config",
+        lambda agent_id: SimpleNamespace(name="国央企就业小顶"),
     )
 
     try:
