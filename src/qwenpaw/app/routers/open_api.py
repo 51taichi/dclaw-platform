@@ -1187,7 +1187,7 @@ async def _acquire_open_api_permit(
 
     deadline = time.monotonic() + _positive_seconds_env(
         "DCLAW_OPEN_API_WAIT_TIMEOUT_SECONDS",
-        60.0,
+        120.0,
     )
     poll_seconds = _positive_seconds_env(
         "DCLAW_OPEN_API_WAIT_POLL_SECONDS",

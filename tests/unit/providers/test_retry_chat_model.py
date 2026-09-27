@@ -6,6 +6,7 @@ import asyncio
 
 import pytest
 
+from qwenpaw import constant
 from qwenpaw.providers.retry_chat_model import (
     RateLimitConfig,
     RetryChatModel,
@@ -90,6 +91,33 @@ class _StreamingModel:
     async def __call__(self, *_args, **_kwargs):
         self.calls += 1
         return next(self._streams)
+
+
+class _ImmediateModel:
+    model_name = "immediate"
+    stream = False
+
+    async def __call__(self, *_args, **_kwargs):
+        return "done"
+
+
+@pytest.mark.asyncio
+async def test_agent_rate_limit_does_not_override_platform_model_concurrency(
+    monkeypatch,
+):
+    monkeypatch.setattr(constant, "LLM_MAX_CONCURRENT", 999)
+    monkeypatch.setattr(constant, "LLM_MAX_QPM", 0)
+    wrapper = RetryChatModel(
+        _ImmediateModel(),
+        retry_config=RetryConfig(enabled=False),
+        rate_limit_config=RateLimitConfig(max_concurrent=10, max_qpm=600),
+    )
+
+    assert await wrapper(messages=[]) == "done"
+
+    stats = (await get_rate_limiter()).stats()
+    assert stats["max_concurrent"] == 999
+    assert stats["max_qpm"] == 0
 
 
 @pytest.mark.asyncio

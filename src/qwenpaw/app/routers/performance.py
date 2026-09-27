@@ -214,7 +214,7 @@ async def _concurrency_status(request: Request) -> dict[str, Any]:
             ),
             "wait_timeout_seconds": _env_float(
                 "DCLAW_OPEN_API_WAIT_TIMEOUT_SECONDS",
-                60.0,
+                120.0,
             ),
             "by_agent": by_agent,
             "by_api_key": by_api_key,

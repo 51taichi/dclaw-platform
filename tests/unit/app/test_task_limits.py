@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import suppress
 
 import pytest
@@ -259,6 +260,124 @@ async def test_redis_task_limiter_enforces_global_limit_across_instances():
     next_permit = await limiter_b.try_acquire(agent_id="agent-b", user_id="user-b")
     assert next_permit is not None
     await next_permit.release()
+
+
+@pytest.mark.asyncio
+async def test_redis_task_limiter_reclaims_permit_after_owner_heartbeat_expires():
+    fakeredis = pytest.importorskip("fakeredis.aioredis")
+    server = fakeredis.FakeServer()
+    limiter_a = RedisTaskConcurrencyLimiter(
+        fakeredis.FakeRedis(server=server, decode_responses=True),
+        namespace="testtasksowner",
+        max_global=1,
+        max_per_agent=1,
+        max_per_user=1,
+        permit_ttl_seconds=30,
+        owner_id="worker-a",
+        owner_ttl_seconds=1,
+    )
+    limiter_b = RedisTaskConcurrencyLimiter(
+        fakeredis.FakeRedis(server=server, decode_responses=True),
+        namespace="testtasksowner",
+        max_global=1,
+        max_per_agent=1,
+        max_per_user=1,
+        permit_ttl_seconds=30,
+        owner_id="worker-b",
+        owner_ttl_seconds=1,
+    )
+
+    leaked = await limiter_a.try_acquire(agent_id="agent-a", user_id="user-a")
+    assert leaked is not None
+    leaked._refresh_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await leaked._refresh_task
+
+    await asyncio.sleep(1.1)
+
+    recovered = await limiter_b.try_acquire(agent_id="agent-b", user_id="user-b")
+    assert recovered is not None
+    snapshot = await limiter_b.snapshot()
+    assert snapshot["running_global"] == 1
+    assert snapshot["running_by_agent"] == {"agent-b": 1}
+    assert snapshot["expired_permit_count"] == 1
+    await recovered.release()
+
+
+@pytest.mark.asyncio
+async def test_redis_task_limiter_keeps_live_permit_past_owner_ttl():
+    fakeredis = pytest.importorskip("fakeredis.aioredis")
+    server = fakeredis.FakeServer()
+    limiter_a = RedisTaskConcurrencyLimiter(
+        fakeredis.FakeRedis(server=server, decode_responses=True),
+        namespace="testtasksliveowner",
+        max_global=1,
+        max_per_agent=1,
+        max_per_user=1,
+        permit_ttl_seconds=30,
+        owner_id="worker-a",
+        owner_ttl_seconds=1,
+    )
+    limiter_b = RedisTaskConcurrencyLimiter(
+        fakeredis.FakeRedis(server=server, decode_responses=True),
+        namespace="testtasksliveowner",
+        max_global=1,
+        max_per_agent=1,
+        max_per_user=1,
+        permit_ttl_seconds=30,
+        owner_id="worker-b",
+        owner_ttl_seconds=1,
+    )
+
+    active = await limiter_a.try_acquire(agent_id="agent-a", user_id="user-a")
+    assert active is not None
+
+    await asyncio.sleep(1.1)
+
+    assert await limiter_b.try_acquire(agent_id="agent-b", user_id="user-b") is None
+    snapshot = await limiter_b.snapshot()
+    assert snapshot["running_global"] == 1
+    assert snapshot["running_by_agent"] == {"agent-a": 1}
+    assert snapshot["expired_permit_count"] == 0
+    await active.release()
+
+
+@pytest.mark.asyncio
+async def test_redis_task_limiter_reclaims_legacy_permit_without_owner():
+    fakeredis = pytest.importorskip("fakeredis.aioredis")
+    client = fakeredis.FakeRedis(decode_responses=True)
+    namespace = "testtaskslegacy"
+    permit_id = "legacy-permit"
+    agent_id = "openapi-publication:publication-1"
+    user_id = "openapi-api-key:key-1"
+    await client.set(
+        f"{namespace}:permit:{permit_id}",
+        json.dumps({"agent_id": agent_id, "user_id": user_id}),
+        ex=30,
+    )
+    await client.sadd(f"{namespace}:global", permit_id)
+    await client.sadd(f"{namespace}:agent:{agent_id}", permit_id)
+    await client.sadd(f"{namespace}:user:{user_id}", permit_id)
+    await client.sadd(f"{namespace}:agents", agent_id)
+    await client.sadd(f"{namespace}:users", user_id)
+
+    limiter = RedisTaskConcurrencyLimiter(
+        client,
+        namespace=namespace,
+        max_global=1,
+        max_per_agent=1,
+        max_per_user=1,
+        permit_ttl_seconds=30,
+        owner_id="worker-new",
+        owner_ttl_seconds=10,
+    )
+
+    snapshot = await limiter.snapshot()
+
+    assert snapshot["running_global"] == 0
+    assert snapshot["running_by_agent"] == {}
+    assert snapshot["running_by_user"] == {}
+    assert snapshot["expired_permit_count"] == 1
 
 
 @pytest.mark.asyncio

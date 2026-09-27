@@ -154,7 +154,7 @@ async def test_concurrency_snapshot_reports_open_api_platform_and_model_usage(
     monkeypatch.setenv("DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_API_KEY", "20")
     monkeypatch.setenv("DCLAW_OPEN_API_MAX_WAITING_PER_PUBLICATION", "200")
     monkeypatch.setenv("DCLAW_OPEN_API_MAX_WAITING_PER_API_KEY", "100")
-    monkeypatch.setenv("DCLAW_OPEN_API_WAIT_TIMEOUT_SECONDS", "60")
+    monkeypatch.setenv("DCLAW_OPEN_API_WAIT_TIMEOUT_SECONDS", "120")
 
     limiter = TaskConcurrencyLimiter(
         max_global=150,
@@ -220,7 +220,7 @@ async def test_concurrency_snapshot_reports_open_api_platform_and_model_usage(
         assert body["open_api"]["waiting"] == 1
         assert body["open_api"]["max_waiting_per_agent"] == 200
         assert body["open_api"]["max_waiting_per_api_key"] == 100
-        assert body["open_api"]["wait_timeout_seconds"] == 60.0
+        assert body["open_api"]["wait_timeout_seconds"] == 120.0
         assert body["open_api"]["by_agent"] == [
             {
                 "agent_id": "publication-1",

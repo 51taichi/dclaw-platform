@@ -73,15 +73,16 @@ class RetryConfig:
 class RateLimitConfig:
     """Rate-limiting policy for LLM calls.
 
-    Controls the global LLMRateLimiter singleton that caps concurrency and
-    coordinates pauses when a 429 is received.  The singleton is initialised
-    on the *first* call; subsequent callers share the same instance.
+    The global LLMRateLimiter policy is loaded from platform environment
+    variables. Per-agent values remain in this compatibility object, but they
+    do not reconfigure the shared limiter. ``acquire_timeout`` still controls
+    how long this caller waits for a platform slot.
 
     Attributes:
-        max_concurrent: Maximum concurrent in-flight LLM calls.
-        max_qpm: Maximum queries per minute (sliding window). 0 = disabled.
-        pause_seconds: Global pause duration (s) on a 429 response.
-        jitter_range: Random jitter (s) added on top of the pause.
+        max_concurrent: Legacy per-agent compatibility value.
+        max_qpm: Legacy per-agent compatibility value.
+        pause_seconds: Legacy per-agent compatibility value.
+        jitter_range: Legacy per-agent compatibility value.
         acquire_timeout: Max seconds to wait for a slot before raising.
     """
 
@@ -317,12 +318,10 @@ class RetryChatModel(ChatModelBase):
         if cache.get(key, "needs_reasoning_content", False):
             _inject_reasoning_content(args, kwargs)
 
-        limiter = await get_rate_limiter(
-            max_concurrent=self._rate_limit_config.max_concurrent,
-            max_qpm=self._rate_limit_config.max_qpm,
-            default_pause_seconds=self._rate_limit_config.pause_seconds,
-            jitter_range=self._rate_limit_config.jitter_range,
-        )
+        # This limiter is shared by all agents in the process. Its policy must
+        # come from platform configuration rather than whichever agent makes
+        # the first model call after startup.
+        limiter = await get_rate_limiter()
 
         retries = (
             self._retry_config.max_retries if self._retry_config.enabled else 0

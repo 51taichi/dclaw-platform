@@ -164,7 +164,11 @@ def test_generated_env_enables_auth_and_complete_backends(tmp_path):
     assert values["DCLAW_OPEN_API_MAX_RUNNING_TASKS_GLOBAL"] == "100"
     assert values["DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_PUBLICATION"] == "60"
     assert values["DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_API_KEY"] == "20"
+    assert values["DCLAW_OPEN_API_MAX_WAITING_PER_PUBLICATION"] == "200"
+    assert values["DCLAW_OPEN_API_MAX_WAITING_PER_API_KEY"] == "100"
+    assert values["DCLAW_OPEN_API_WAIT_TIMEOUT_SECONDS"] == "120"
     assert values["QWENPAW_MAX_RUNNING_TASKS"] == "150"
+    assert values["QWENPAW_TASK_OWNER_TTL_SECONDS"] == "180"
     assert values["QWENPAW_LLM_MAX_CONCURRENT"] == "999"
 
 
@@ -174,7 +178,11 @@ def test_compose_passes_capacity_settings_to_local_container():
     assert "DCLAW_OPEN_API_MAX_RUNNING_TASKS_GLOBAL" in compose
     assert "DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_PUBLICATION" in compose
     assert "DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_API_KEY" in compose
+    assert "DCLAW_OPEN_API_MAX_WAITING_PER_PUBLICATION" in compose
+    assert "DCLAW_OPEN_API_MAX_WAITING_PER_API_KEY" in compose
+    assert "DCLAW_OPEN_API_WAIT_TIMEOUT_SECONDS" in compose
     assert "QWENPAW_MAX_RUNNING_TASKS" in compose
+    assert "QWENPAW_TASK_OWNER_TTL_SECONDS" in compose
     assert "QWENPAW_LLM_MAX_CONCURRENT" in compose
 
 

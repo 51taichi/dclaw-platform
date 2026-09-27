@@ -871,8 +871,8 @@ class AgentsRunningConfig(BaseModel):
         default=LLM_MAX_CONCURRENT,
         ge=1,
         description=(
-            "Maximum number of concurrent in-flight LLM calls. "
-            "Shared across all agents; only the first initialization wins."
+            "Legacy Agent compatibility field. The shared platform limit is "
+            "configured with QWENPAW_LLM_MAX_CONCURRENT."
         ),
     )
 
@@ -880,9 +880,8 @@ class AgentsRunningConfig(BaseModel):
         default=LLM_MAX_QPM,
         ge=0,
         description=(
-            "Maximum queries per minute (60-second sliding window). "
-            "New requests that would exceed this limit wait before being "
-            "dispatched — proactively preventing 429s. 0 = disabled."
+            "Legacy Agent compatibility field. The shared platform QPM limit "
+            "is configured with QWENPAW_LLM_MAX_QPM."
         ),
     )
 
@@ -890,8 +889,8 @@ class AgentsRunningConfig(BaseModel):
         default=LLM_RATE_LIMIT_PAUSE,
         ge=1.0,
         description=(
-            "Default pause duration (seconds) applied globally when a 429 "
-            "rate-limit response is received."
+            "Legacy Agent compatibility field. The shared platform pause is "
+            "configured with QWENPAW_LLM_RATE_LIMIT_PAUSE."
         ),
     )
 
@@ -899,8 +898,8 @@ class AgentsRunningConfig(BaseModel):
         default=LLM_RATE_LIMIT_JITTER,
         ge=0.0,
         description=(
-            "Random jitter range (seconds) added on top of the pause so "
-            "concurrent waiters stagger their wake-up."
+            "Legacy Agent compatibility field. The shared platform jitter is "
+            "configured with QWENPAW_LLM_RATE_LIMIT_JITTER."
         ),
     )
 

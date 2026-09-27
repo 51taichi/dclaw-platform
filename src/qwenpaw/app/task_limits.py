@@ -181,7 +181,14 @@ class RedisTaskPermit:
         )
 
     async def _refresh_loop(self) -> None:
-        interval = max(0.5, self.limiter.permit_ttl_seconds / 3)
+        interval = max(
+            0.5,
+            min(
+                self.limiter.permit_ttl_seconds,
+                self.limiter.owner_ttl_seconds,
+            )
+            / 3,
+        )
         while True:
             await asyncio.sleep(interval)
             await self.limiter.refresh(
@@ -205,6 +212,8 @@ class RedisTaskConcurrencyLimiter:
         max_per_agent: int,
         max_per_user: int,
         permit_ttl_seconds: int,
+        owner_id: str | None = None,
+        owner_ttl_seconds: int = 180,
     ) -> None:
         self.client = client
         self.namespace = namespace.rstrip(":")
@@ -212,6 +221,8 @@ class RedisTaskConcurrencyLimiter:
         self.max_per_agent = max_per_agent
         self.max_per_user = max_per_user
         self.permit_ttl_seconds = max(int(permit_ttl_seconds), 1)
+        self.owner_id = owner_id or str(uuid.uuid4())
+        self.owner_ttl_seconds = max(int(owner_ttl_seconds), 1)
 
     @classmethod
     def from_env(cls, client) -> "RedisTaskConcurrencyLimiter":
@@ -221,6 +232,7 @@ class RedisTaskConcurrencyLimiter:
             max_per_agent=_int_env("QWENPAW_MAX_RUNNING_TASKS_PER_AGENT", 12),
             max_per_user=_int_env("QWENPAW_MAX_RUNNING_TASKS_PER_USER", 6),
             permit_ttl_seconds=_int_env("QWENPAW_TASK_PERMIT_TTL_SECONDS", 14400),
+            owner_ttl_seconds=_int_env("QWENPAW_TASK_OWNER_TTL_SECONDS", 180),
         )
 
     async def try_acquire(
@@ -275,10 +287,19 @@ class RedisTaskConcurrencyLimiter:
                         return None
 
                     payload = json.dumps(
-                        {"agent_id": agent_key, "user_id": user_key},
+                        {
+                            "agent_id": agent_key,
+                            "user_id": user_key,
+                            "owner_id": self.owner_id,
+                        },
                         ensure_ascii=False,
                     )
                     pipe.multi()
+                    pipe.set(
+                        self._owner_key(self.owner_id),
+                        "alive",
+                        ex=self.owner_ttl_seconds,
+                    )
                     pipe.set(
                         self._permit_key(permit_id),
                         payload,
@@ -346,6 +367,11 @@ class RedisTaskConcurrencyLimiter:
         user_key = user_id or "default"
         pipe = self.client.pipeline(transaction=True)
         pipe.expire(self._permit_key(permit_id), self.permit_ttl_seconds)
+        pipe.set(
+            self._owner_key(self.owner_id),
+            "alive",
+            ex=self.owner_ttl_seconds,
+        )
         for key in (
             self._global_key(),
             self._agent_key(agent_key),
@@ -406,9 +432,26 @@ class RedisTaskConcurrencyLimiter:
             return 0
         missing = []
         for permit_id in permit_ids:
-            if not await self.client.exists(self._permit_key(permit_id)):
+            permit_key = self._permit_key(permit_id)
+            raw_payload = await self.client.get(permit_key)
+            if raw_payload is None:
+                missing.append(permit_id)
+                continue
+            try:
+                payload = json.loads(raw_payload)
+            except (TypeError, ValueError):
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            owner_id = str(payload.get("owner_id") or "")
+            if not owner_id or not await self.client.exists(
+                self._owner_key(owner_id),
+            ):
                 missing.append(permit_id)
         if missing:
+            await self.client.delete(
+                *(self._permit_key(permit_id) for permit_id in missing),
+            )
             await self.client.srem(key, *missing)
             if key == self._global_key():
                 await self.client.incrby(self._expired_key(), len(missing))
@@ -443,6 +486,9 @@ class RedisTaskConcurrencyLimiter:
 
     def _permit_key(self, permit_id: str) -> str:
         return f"{self.namespace}:permit:{permit_id}"
+
+    def _owner_key(self, owner_id: str) -> str:
+        return f"{self.namespace}:owner:{owner_id}"
 
     def _agents_key(self) -> str:
         return f"{self.namespace}:agents"
