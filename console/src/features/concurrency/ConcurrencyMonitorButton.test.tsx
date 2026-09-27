@@ -62,8 +62,10 @@ describe("ConcurrencyMonitorButton", () => {
     await user.click(trigger);
 
     expect(await screen.findByText("3 / 100")).toBeInTheDocument();
+    expect(screen.getByText("OpenAPI 并发")).toBeInTheDocument();
     expect(screen.getByText("4 / 150")).toBeInTheDocument();
-    expect(screen.getByText("模型并发")).toBeInTheDocument();
+    expect(screen.getByText("平台任务并发")).toBeInTheDocument();
+    expect(screen.getByText("模型调用并发")).toBeInTheDocument();
     expect(screen.getByText("2 / 999")).toBeInTheDocument();
     expect(screen.getByText("当前排队 2")).toBeInTheDocument();
     expect(screen.getAllByText("国央企就业小顶")).toHaveLength(2);

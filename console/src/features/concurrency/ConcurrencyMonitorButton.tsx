@@ -170,18 +170,18 @@ export default function ConcurrencyMonitorButton({
                 }}
               >
                 <SummaryCard
-                  title="OpenAPI 执行"
+                  title="OpenAPI 并发"
                   current={snapshot.open_api.running}
                   maximum={snapshot.open_api.max_running}
                   detail={`当前排队 ${snapshot.open_api.waiting}`}
                 />
                 <SummaryCard
-                  title="平台任务"
+                  title="平台任务并发"
                   current={snapshot.platform_tasks.running}
                   maximum={snapshot.platform_tasks.max_running}
                 />
                 <SummaryCard
-                  title="模型并发"
+                  title="模型调用并发"
                   current={snapshot.model_calls.running}
                   maximum={snapshot.model_calls.max_running}
                 />
