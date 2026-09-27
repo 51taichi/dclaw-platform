@@ -1191,6 +1191,29 @@ async def test_open_api_wait_queue_has_bounded_capacity():
 
 
 @pytest.mark.asyncio
+async def test_open_api_wait_queue_snapshot_reports_running_and_waiting():
+    queue = open_api._OpenApiWaitQueue()
+    assert await queue.try_acquire_execution_slot(3) is True
+    ticket = await queue.try_join(
+        "publication-1",
+        "api-key-1",
+        max_per_publication=2,
+        max_per_api_key=2,
+    )
+    assert ticket is not None
+
+    assert await queue.snapshot() == {
+        "running_global": 1,
+        "waiting_global": 1,
+        "waiting_by_publication": {"publication-1": 1},
+        "waiting_by_api_key": {"api-key-1": 1},
+    }
+
+    await ticket.release()
+    await queue.release_execution_slot()
+
+
+@pytest.mark.asyncio
 async def test_open_api_queue_timeout_returns_retry_after(monkeypatch):
     workspace = _workspace(agent_id="agent-published")
     repo = FakeOpenApiRepository(publication=_publication())

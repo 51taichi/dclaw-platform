@@ -2,6 +2,8 @@
 """Admin-only performance diagnostics."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import os
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -14,6 +16,8 @@ from ..runtime.event_bus import get_runtime_event_bus
 from ..storage.engine import get_app_engine
 from ..storage.schema import table_names
 from ..storage.settings import get_storage_settings
+from ..task_limits import get_task_limiter
+from ...providers.rate_limiter import get_rate_limiter
 
 router = APIRouter(prefix="/performance", tags=["performance"])
 
@@ -123,6 +127,110 @@ async def _task_limit_status(request: Request) -> dict[str, Any]:
     return await limiter.snapshot()
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, "").strip() or default))
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return max(0.01, float(os.environ.get(name, "").strip() or default))
+    except ValueError:
+        return default
+
+
+def _masked_api_key_id(api_key_id: str) -> str:
+    suffix = api_key_id[-4:] if len(api_key_id) > 4 else api_key_id
+    return f"••••{suffix}"
+
+
+async def _concurrency_status(request: Request) -> dict[str, Any]:
+    from .open_api import _get_open_api_wait_queue
+
+    task_snapshot = await get_task_limiter(request.app).snapshot()
+    queue_snapshot = await _get_open_api_wait_queue(request.app).snapshot()
+    llm_snapshot = (await get_rate_limiter()).stats()
+
+    agent_prefix = "openapi-publication:"
+    key_prefix = "openapi-api-key:"
+    running_by_agent = {
+        key.removeprefix(agent_prefix): int(value)
+        for key, value in task_snapshot.get("running_by_agent", {}).items()
+        if key.startswith(agent_prefix)
+    }
+    running_by_key = {
+        key.removeprefix(key_prefix): int(value)
+        for key, value in task_snapshot.get("running_by_user", {}).items()
+        if key.startswith(key_prefix)
+    }
+    waiting_by_agent = queue_snapshot["waiting_by_publication"]
+    waiting_by_key = queue_snapshot["waiting_by_api_key"]
+    agent_limit = _env_int(
+        "DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_PUBLICATION",
+        30,
+    )
+    api_key_limit = _env_int(
+        "DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_API_KEY",
+        20,
+    )
+
+    by_agent = [
+        {
+            "agent_id": agent_id,
+            "running": running_by_agent.get(agent_id, 0),
+            "waiting": waiting_by_agent.get(agent_id, 0),
+            "max_running": agent_limit,
+        }
+        for agent_id in sorted(set(running_by_agent) | set(waiting_by_agent))
+    ]
+    by_api_key = [
+        {
+            "api_key": _masked_api_key_id(api_key_id),
+            "running": running_by_key.get(api_key_id, 0),
+            "waiting": waiting_by_key.get(api_key_id, 0),
+            "max_running": api_key_limit,
+        }
+        for api_key_id in sorted(set(running_by_key) | set(waiting_by_key))
+    ]
+
+    return {
+        "sampled_at": datetime.now(timezone.utc).isoformat(),
+        "open_api": {
+            "running": queue_snapshot["running_global"],
+            "max_running": _env_int(
+                "DCLAW_OPEN_API_MAX_RUNNING_TASKS_GLOBAL",
+                8,
+            ),
+            "waiting": queue_snapshot["waiting_global"],
+            "max_waiting_per_agent": _env_int(
+                "DCLAW_OPEN_API_MAX_WAITING_PER_PUBLICATION",
+                200,
+            ),
+            "max_waiting_per_api_key": _env_int(
+                "DCLAW_OPEN_API_MAX_WAITING_PER_API_KEY",
+                100,
+            ),
+            "wait_timeout_seconds": _env_float(
+                "DCLAW_OPEN_API_WAIT_TIMEOUT_SECONDS",
+                60.0,
+            ),
+            "by_agent": by_agent,
+            "by_api_key": by_api_key,
+        },
+        "platform_tasks": {
+            "running": int(task_snapshot.get("running_global") or 0),
+            "max_running": int(task_snapshot.get("max_global") or 0),
+        },
+        "model_calls": {
+            "running": int(llm_snapshot.get("current_in_flight") or 0),
+            "max_running": int(llm_snapshot.get("max_concurrent") or 0),
+            "available": int(llm_snapshot.get("current_available") or 0),
+        },
+    }
+
+
 async def _approval_status() -> dict[str, Any]:
     from ..approvals import get_approval_service
 
@@ -173,3 +281,8 @@ async def get_performance_diagnostics(request: Request) -> dict[str, Any]:
         "approvals": await _approval_status(),
         "aigc_studio": _aigc_studio_status(),
     }
+
+
+@router.get("/concurrency")
+async def get_concurrency_diagnostics(request: Request) -> dict[str, Any]:
+    return await _concurrency_status(request)

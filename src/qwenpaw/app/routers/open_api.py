@@ -153,6 +153,15 @@ class _OpenApiWaitQueue:
         async with self._condition:
             self._condition.notify_all()
 
+    async def snapshot(self) -> dict[str, Any]:
+        async with self._condition:
+            return {
+                "running_global": self._running_global,
+                "waiting_global": sum(self._by_publication.values()),
+                "waiting_by_publication": dict(self._by_publication),
+                "waiting_by_api_key": dict(self._by_api_key),
+            }
+
     @staticmethod
     def _decrement(bucket: dict[str, int], key: str) -> None:
         next_value = bucket.get(key, 0) - 1
