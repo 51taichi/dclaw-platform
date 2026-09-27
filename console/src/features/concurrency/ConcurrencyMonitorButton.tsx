@@ -1,4 +1,4 @@
-import { LineChartOutlined, ReloadOutlined } from "@ant-design/icons";
+import { MonitorOutlined, ReloadOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
@@ -113,10 +113,18 @@ export default function ConcurrencyMonitorButton({
       <Tooltip title="并发监控">
         <Button
           type="text"
-          shape="circle"
-          icon={<LineChartOutlined />}
+          icon={<MonitorOutlined />}
           aria-label="并发监控"
           onClick={showDrawer}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 32,
+            height: 32,
+            padding: 0,
+            verticalAlign: "middle",
+          }}
         />
       </Tooltip>
       <Drawer

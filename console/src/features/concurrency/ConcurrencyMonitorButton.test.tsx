@@ -44,7 +44,17 @@ describe("ConcurrencyMonitorButton", () => {
       <ConcurrencyMonitorButton loadSnapshot={loadSnapshot} />,
     );
 
-    await user.click(screen.getByRole("button", { name: "并发监控" }));
+    const trigger = screen.getByRole("button", { name: "并发监控" });
+    expect(trigger.querySelector('[data-icon="monitor"]')).toBeInTheDocument();
+    expect(trigger).toHaveStyle({
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+      width: "32px",
+      height: "32px",
+    });
+
+    await user.click(trigger);
 
     expect(await screen.findByText("3 / 100")).toBeInTheDocument();
     expect(screen.getByText("4 / 150")).toBeInTheDocument();
