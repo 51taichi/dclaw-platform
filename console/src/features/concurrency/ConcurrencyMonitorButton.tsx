@@ -128,17 +128,17 @@ export default function ConcurrencyMonitorButton({
 
   const breakdownColumns = (objectTitle: string) => [
     {
-      title: "Agent 名称",
+      title: "Agent",
       dataIndex: "agent_name",
       key: "agent_name",
-      width: 160,
+      width: 112,
       ellipsis: true,
     },
     {
       title: objectTitle,
       dataIndex: "label",
       key: "label",
-      width: 190,
+      width: 238,
       ellipsis: true,
     },
     { title: "执行中", dataIndex: "running", key: "running", width: 76 },
@@ -191,13 +191,37 @@ export default function ConcurrencyMonitorButton({
         onClose={() => setOpen(false)}
         extra={
           <Space size="small">
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {loading
-                ? "正在刷新"
-                : pageVisible
-                ? `${refreshCountdown} 秒后刷新`
-                : "自动刷新已暂停"}
-            </Typography.Text>
+            {loading ? (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                正在刷新
+              </Typography.Text>
+            ) : pageVisible ? (
+              <span
+                aria-label={`${refreshCountdown} 秒后刷新`}
+                style={{ display: "inline-flex", alignItems: "baseline" }}
+              >
+                <Typography.Text
+                  data-testid="refresh-countdown-value"
+                  style={{
+                    color: "#1677ff",
+                    fontSize: 16,
+                    fontWeight: 600,
+                    fontVariantNumeric: "tabular-nums",
+                    minWidth: 18,
+                    textAlign: "right",
+                  }}
+                >
+                  {refreshCountdown}
+                </Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  秒后刷新
+                </Typography.Text>
+              </span>
+            ) : (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                自动刷新已暂停
+              </Typography.Text>
+            )}
             <Button
               icon={<ReloadOutlined />}
               aria-label="刷新"

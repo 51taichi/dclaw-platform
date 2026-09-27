@@ -72,7 +72,17 @@ describe("ConcurrencyMonitorButton", () => {
     expect(screen.getByText("模型调用并发")).toBeInTheDocument();
     expect(screen.getByText("2 / 999")).toBeInTheDocument();
     expect(screen.getByText("当前排队 2")).toBeInTheDocument();
-    expect(screen.getByText("10 秒后刷新")).toBeInTheDocument();
+    expect(screen.getByLabelText("10 秒后刷新")).toBeInTheDocument();
+    expect(screen.getByTestId("refresh-countdown-value")).toHaveStyle({
+      fontSize: "16px",
+      fontWeight: "600",
+    });
+    expect(screen.getAllByRole("columnheader", { name: "Agent" })).toHaveLength(
+      2,
+    );
+    expect(
+      screen.queryByRole("columnheader", { name: "Agent 名称" }),
+    ).not.toBeInTheDocument();
     expect(screen.getAllByText("国央企就业小顶")).toHaveLength(2);
     expect(screen.getByText("customer-service")).toBeInTheDocument();
     expect(screen.getByText("••••abcd")).toBeInTheDocument();
@@ -113,12 +123,12 @@ describe("ConcurrencyMonitorButton", () => {
     fireEvent.click(screen.getByRole("button", { name: "并发监控" }));
     await act(async () => Promise.resolve());
     expect(loadSnapshot).toHaveBeenCalledTimes(1);
-    expect(screen.getByText("10 秒后刷新")).toBeInTheDocument();
+    expect(screen.getByLabelText("10 秒后刷新")).toBeInTheDocument();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1000);
     });
-    expect(screen.getByText("9 秒后刷新")).toBeInTheDocument();
+    expect(screen.getByLabelText("9 秒后刷新")).toBeInTheDocument();
 
     for (let second = 0; second < 9; second += 1) {
       await act(async () => {
@@ -126,7 +136,7 @@ describe("ConcurrencyMonitorButton", () => {
       });
     }
     expect(loadSnapshot).toHaveBeenCalledTimes(2);
-    expect(screen.getByText("10 秒后刷新")).toBeInTheDocument();
+    expect(screen.getByLabelText("10 秒后刷新")).toBeInTheDocument();
   });
 
   it("pauses while hidden and refreshes immediately when visible again", async () => {
@@ -166,7 +176,7 @@ describe("ConcurrencyMonitorButton", () => {
         await Promise.resolve();
       });
       expect(loadSnapshot).toHaveBeenCalledTimes(2);
-      expect(screen.getByText("10 秒后刷新")).toBeInTheDocument();
+      expect(screen.getByLabelText("10 秒后刷新")).toBeInTheDocument();
     } finally {
       if (originalDescriptor) {
         Object.defineProperty(document, "visibilityState", originalDescriptor);
