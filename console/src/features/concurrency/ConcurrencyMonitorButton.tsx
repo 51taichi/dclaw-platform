@@ -84,8 +84,21 @@ export default function ConcurrencyMonitorButton({
     void refresh();
   };
 
-  const breakdownColumns = [
-    { title: "对象", dataIndex: "label", key: "label" },
+  const breakdownColumns = (objectTitle: string) => [
+    {
+      title: "Agent 名称",
+      dataIndex: "agent_name",
+      key: "agent_name",
+      width: 160,
+      ellipsis: true,
+    },
+    {
+      title: objectTitle,
+      dataIndex: "label",
+      key: "label",
+      width: 190,
+      ellipsis: true,
+    },
     { title: "执行中", dataIndex: "running", key: "running", width: 76 },
     { title: "排队", dataIndex: "waiting", key: "waiting", width: 64 },
     {
@@ -131,7 +144,7 @@ export default function ConcurrencyMonitorButton({
       </Tooltip>
       <Drawer
         title="并发监控"
-        width={560}
+        width={720}
         open={open}
         onClose={() => setOpen(false)}
         extra={
@@ -191,7 +204,7 @@ export default function ConcurrencyMonitorButton({
               <Card size="small" title="按 Agent">
                 {agentRows.length ? (
                   <Table
-                    columns={breakdownColumns}
+                    columns={breakdownColumns("发布 ID")}
                     dataSource={agentRows}
                     pagination={false}
                     size="small"
@@ -207,7 +220,7 @@ export default function ConcurrencyMonitorButton({
               <Card size="small" title="按 API Key">
                 {apiKeyRows.length ? (
                   <Table
-                    columns={breakdownColumns}
+                    columns={breakdownColumns("API Key")}
                     dataSource={apiKeyRows}
                     pagination={false}
                     size="small"

@@ -1,4 +1,5 @@
 export interface ConcurrencyBreakdownRow {
+  agent_name: string;
   running: number;
   waiting: number;
   max_running: number;

@@ -14,10 +14,11 @@ const firstSnapshot: ConcurrencySnapshot = {
     waiting: 2,
     max_waiting_per_agent: 200,
     max_waiting_per_api_key: 100,
-    wait_timeout_seconds: 60,
+    wait_timeout_seconds: 120,
     by_agent: [
       {
         agent_id: "customer-service",
+        agent_name: "国央企就业小顶",
         running: 3,
         waiting: 2,
         max_running: 60,
@@ -26,6 +27,7 @@ const firstSnapshot: ConcurrencySnapshot = {
     by_api_key: [
       {
         api_key: "••••abcd",
+        agent_name: "国央企就业小顶",
         running: 3,
         waiting: 2,
         max_running: 20,
@@ -64,6 +66,7 @@ describe("ConcurrencyMonitorButton", () => {
     expect(screen.getByText("模型并发")).toBeInTheDocument();
     expect(screen.getByText("2 / 999")).toBeInTheDocument();
     expect(screen.getByText("当前排队 2")).toBeInTheDocument();
+    expect(screen.getAllByText("国央企就业小顶")).toHaveLength(2);
     expect(screen.getByText("customer-service")).toBeInTheDocument();
     expect(screen.getByText("••••abcd")).toBeInTheDocument();
     expect(loadSnapshot).toHaveBeenCalledTimes(1);
