@@ -204,6 +204,26 @@ async def test_concurrency_snapshot_reports_open_api_platform_and_model_usage(
         "get_rate_limiter",
         fake_get_rate_limiter,
     )
+    monkeypatch.setattr(
+        performance_router,
+        "get_open_api_repository",
+        lambda: SimpleNamespace(
+            list_publications=lambda enabled_only=False: [
+                {
+                    "id": "publication-1",
+                    "name": "国央企就业小顶",
+                    "target_id": "gyqjy_service",
+                },
+            ],
+            list_api_keys=lambda: [
+                {
+                    "id": "key-super-secret",
+                    "publication_id": "publication-1",
+                },
+            ],
+        ),
+        raising=False,
+    )
 
     try:
         transport = ASGITransport(app=app)
@@ -224,6 +244,7 @@ async def test_concurrency_snapshot_reports_open_api_platform_and_model_usage(
         assert body["open_api"]["by_agent"] == [
             {
                 "agent_id": "publication-1",
+                "agent_name": "国央企就业小顶",
                 "running": 1,
                 "waiting": 1,
                 "max_running": 60,
@@ -232,6 +253,7 @@ async def test_concurrency_snapshot_reports_open_api_platform_and_model_usage(
         assert body["open_api"]["by_api_key"] == [
             {
                 "api_key": "••••cret",
+                "agent_name": "国央企就业小顶",
                 "running": 1,
                 "waiting": 1,
                 "max_running": 20,

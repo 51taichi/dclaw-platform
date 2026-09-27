@@ -14,6 +14,7 @@ from ..console_push_store import stats as push_store_stats
 from ..performance import get_request_metrics
 from ..runtime.event_bus import get_runtime_event_bus
 from ..storage.engine import get_app_engine
+from ..storage.repos.open_api_repo import get_open_api_repository
 from ..storage.schema import table_names
 from ..storage.settings import get_storage_settings
 from ..task_limits import get_task_limiter
@@ -146,6 +147,50 @@ def _masked_api_key_id(api_key_id: str) -> str:
     return f"••••{suffix}"
 
 
+def _open_api_agent_names(
+    publication_ids: set[str],
+    api_key_ids: set[str],
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Resolve active publication and API key identifiers to display names."""
+    try:
+        repo = get_open_api_repository()
+        keys = {
+            str(row.get("id")): str(row.get("publication_id") or "")
+            for row in repo.list_api_keys()
+            if str(row.get("id")) in api_key_ids
+        }
+        relevant_publication_ids = publication_ids | set(keys.values())
+        publications = {
+            str(row.get("id")): row
+            for row in repo.list_publications(enabled_only=False)
+            if str(row.get("id")) in relevant_publication_ids
+        }
+    except Exception:  # pragma: no cover - monitoring must remain best effort
+        publications = {}
+        keys = {}
+
+    def publication_name(publication_id: str) -> str:
+        publication = publications.get(publication_id)
+        if publication is None:
+            return "未知 Agent"
+        return str(
+            publication.get("name")
+            or publication.get("target_id")
+            or "未知 Agent"
+        )
+
+    return (
+        {
+            publication_id: publication_name(publication_id)
+            for publication_id in publication_ids
+        },
+        {
+            api_key_id: publication_name(publication_id)
+            for api_key_id, publication_id in keys.items()
+        },
+    )
+
+
 async def _concurrency_status(request: Request) -> dict[str, Any]:
     from .open_api import _get_open_api_wait_queue
 
@@ -175,24 +220,32 @@ async def _concurrency_status(request: Request) -> dict[str, Any]:
         "DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_API_KEY",
         20,
     )
+    agent_ids = set(running_by_agent) | set(waiting_by_agent)
+    api_key_ids = set(running_by_key) | set(waiting_by_key)
+    agent_names, api_key_agent_names = _open_api_agent_names(
+        agent_ids,
+        api_key_ids,
+    )
 
     by_agent = [
         {
             "agent_id": agent_id,
+            "agent_name": agent_names.get(agent_id, "未知 Agent"),
             "running": running_by_agent.get(agent_id, 0),
             "waiting": waiting_by_agent.get(agent_id, 0),
             "max_running": agent_limit,
         }
-        for agent_id in sorted(set(running_by_agent) | set(waiting_by_agent))
+        for agent_id in sorted(agent_ids)
     ]
     by_api_key = [
         {
             "api_key": _masked_api_key_id(api_key_id),
+            "agent_name": api_key_agent_names.get(api_key_id, "未知 Agent"),
             "running": running_by_key.get(api_key_id, 0),
             "waiting": waiting_by_key.get(api_key_id, 0),
             "max_running": api_key_limit,
         }
-        for api_key_id in sorted(set(running_by_key) | set(waiting_by_key))
+        for api_key_id in sorted(api_key_ids)
     ]
 
     return {
