@@ -193,6 +193,7 @@ async def test_concurrency_snapshot_reports_open_api_platform_and_model_usage(
         def stats(self):
             return {
                 "current_in_flight": 3,
+                "current_active_calls": 4,
                 "max_concurrent": 999,
                 "current_available": 996,
             }
@@ -275,7 +276,7 @@ async def test_concurrency_snapshot_reports_open_api_platform_and_model_usage(
             "running": 2,
             "max_running": 150,
         }
-        assert body["model_calls"]["running"] == 3
+        assert body["model_calls"]["running"] == 4
         assert body["model_calls"]["max_running"] == 999
     finally:
         await ticket.release()

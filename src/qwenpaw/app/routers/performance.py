@@ -274,7 +274,13 @@ async def _concurrency_status(request: Request) -> dict[str, Any]:
             "max_running": int(task_snapshot.get("max_global") or 0),
         },
         "model_calls": {
-            "running": int(llm_snapshot.get("current_in_flight") or 0),
+            "running": int(
+                llm_snapshot.get(
+                    "current_active_calls",
+                    llm_snapshot.get("current_in_flight"),
+                )
+                or 0
+            ),
             "max_running": int(llm_snapshot.get("max_concurrent") or 0),
             "available": int(llm_snapshot.get("current_available") or 0),
         },

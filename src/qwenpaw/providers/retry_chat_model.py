@@ -447,6 +447,7 @@ class _RetryStreamOwner(AsyncIterator[ChatResponse]):
         self._max_attempts = max_attempts
         self._limiter = limiter
         self._owns_permit = True
+        self._stream_active = False
         self._closed = False
 
     @classmethod
@@ -544,9 +545,13 @@ class _RetryStreamOwner(AsyncIterator[ChatResponse]):
                 failure = stream_exc
                 continue
 
-            # Once the provider starts delivering, the request has been
-            # accepted and no longer consumes a retry concurrency permit.
-            self._release_permit()
+            # Once the provider starts delivering, move it from the admission
+            # permit counter to the active-stream counter without creating a
+            # gap in the monitoring snapshot.
+            if not self._stream_active:
+                self._limiter.mark_stream_started()
+                self._stream_active = True
+                self._release_permit()
             return chunk
 
     async def aclose(self) -> None:
@@ -628,8 +633,15 @@ class _RetryStreamOwner(AsyncIterator[ChatResponse]):
                         ),
                     )
         finally:
+            self._finish_stream()
             self._release_permit()
         return cleanup_errors
+
+    def _finish_stream(self) -> None:
+        if not self._stream_active:
+            return
+        self._stream_active = False
+        self._limiter.mark_stream_finished()
 
     def _release_permit(self) -> None:
         if not self._owns_permit:

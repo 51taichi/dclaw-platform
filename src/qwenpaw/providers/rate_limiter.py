@@ -61,6 +61,9 @@ class LLMRateLimiter:
 
         # Own counter instead of reading semaphore._value (private API).
         self._in_flight: int = 0
+        # Streaming calls release their admission permit after the first
+        # chunk, but remain active until the stream is closed or exhausted.
+        self._active_streams: int = 0
 
         self._total_acquired: int = 0
         self._total_paused: int = 0
@@ -149,6 +152,14 @@ class LLMRateLimiter:
         self._in_flight -= 1
         self._semaphore.release()
 
+    def mark_stream_started(self) -> None:
+        """Track a stream after its admission permit has been released."""
+        self._active_streams += 1
+
+    def mark_stream_finished(self) -> None:
+        """Stop tracking a previously started stream."""
+        self._active_streams -= 1
+
     async def report_rate_limit(
         self,
         retry_after: float | None = None,
@@ -181,6 +192,7 @@ class LLMRateLimiter:
         return {
             "max_concurrent": self._max_concurrent,
             "current_in_flight": self._in_flight,
+            "current_active_calls": self._in_flight + self._active_streams,
             "current_available": max(
                 0,
                 self._max_concurrent - self._in_flight,

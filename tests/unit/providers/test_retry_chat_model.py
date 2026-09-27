@@ -204,6 +204,30 @@ async def test_unstarted_stream_close_releases_slot_and_closes_inner():
 
 
 @pytest.mark.asyncio
+async def test_stream_is_reported_active_until_consumption_finishes():
+    stream = _CustomAsyncIterator(["first", "second"])
+    wrapper = RetryChatModel(
+        _StreamingModel([stream]),
+        retry_config=RetryConfig(enabled=False),
+        rate_limit_config=RateLimitConfig(max_concurrent=1, max_qpm=0),
+    )
+
+    result = await wrapper(messages=[])
+    limiter = await get_rate_limiter()
+    assert limiter.stats()["current_active_calls"] == 1
+
+    assert await result.__anext__() == "first"
+    assert limiter.stats()["current_active_calls"] == 1
+
+    assert await result.__anext__() == "second"
+    assert limiter.stats()["current_active_calls"] == 1
+
+    with pytest.raises(StopAsyncIteration):
+        await result.__anext__()
+    assert limiter.stats()["current_active_calls"] == 0
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("iterator_close_fails", "iterable_close_fails"),
     [(True, False), (False, True), (True, True)],
@@ -284,3 +308,4 @@ async def test_started_stream_releases_slot_exactly_once(exit_kind):
     limiter = await get_rate_limiter()
     assert stream.close_calls == 1
     assert limiter.stats()["current_in_flight"] == 0
+    assert limiter.stats()["current_active_calls"] == 0
