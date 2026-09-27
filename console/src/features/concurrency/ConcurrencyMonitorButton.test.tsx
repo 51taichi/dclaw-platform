@@ -45,13 +45,16 @@ describe("ConcurrencyMonitorButton", () => {
     );
 
     const trigger = screen.getByRole("button", { name: "并发监控" });
-    expect(trigger.querySelector('[data-icon="monitor"]')).toBeInTheDocument();
+    expect(
+      trigger.querySelector('[data-icon="SparkAdvancedMonitoringLine"]'),
+    ).toBeInTheDocument();
     expect(trigger).toHaveStyle({
       display: "inline-flex",
       alignItems: "center",
       justifyContent: "center",
       width: "32px",
       height: "32px",
+      transform: "translateY(-3px)",
     });
 
     await user.click(trigger);

@@ -1,4 +1,5 @@
-import { MonitorOutlined, ReloadOutlined } from "@ant-design/icons";
+import { ReloadOutlined } from "@ant-design/icons";
+import { SparkAdvancedMonitoringLine } from "@agentscope-ai/icons";
 import {
   Alert,
   Button,
@@ -113,7 +114,7 @@ export default function ConcurrencyMonitorButton({
       <Tooltip title="并发监控">
         <Button
           type="text"
-          icon={<MonitorOutlined />}
+          icon={<SparkAdvancedMonitoringLine />}
           aria-label="并发监控"
           onClick={showDrawer}
           style={{
@@ -124,6 +125,7 @@ export default function ConcurrencyMonitorButton({
             height: 32,
             padding: 0,
             verticalAlign: "middle",
+            transform: "translateY(-3px)",
           }}
         />
       </Tooltip>
