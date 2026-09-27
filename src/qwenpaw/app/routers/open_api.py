@@ -86,8 +86,10 @@ class _OpenApiTaskPermit:
         if self.released:
             return
         self.released = True
-        await self.permit.release()
-        await self.queue.notify_slot_available()
+        try:
+            await self.permit.release()
+        finally:
+            await self.queue.release_execution_slot()
 
 
 class _OpenApiWaitQueue:
@@ -97,6 +99,19 @@ class _OpenApiWaitQueue:
         self._condition = asyncio.Condition()
         self._by_publication: dict[str, int] = {}
         self._by_api_key: dict[str, int] = {}
+        self._running_global = 0
+
+    async def try_acquire_execution_slot(self, max_running: int) -> bool:
+        async with self._condition:
+            if self._running_global >= max_running:
+                return False
+            self._running_global += 1
+            return True
+
+    async def release_execution_slot(self) -> None:
+        async with self._condition:
+            self._running_global = max(0, self._running_global - 1)
+            self._condition.notify_all()
 
     async def try_join(
         self,
@@ -1116,17 +1131,30 @@ async def _acquire_open_api_permit(
         "DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_API_KEY",
         20,
     )
+    global_limit = _positive_int_env(
+        "DCLAW_OPEN_API_MAX_RUNNING_TASKS_GLOBAL",
+        8,
+    )
     agent_key = f"openapi-publication:{publication_id}"
     user_key = f"openapi-api-key:{api_key_id}"
 
     async def try_acquire():
-        return await limiter.try_acquire(
-            agent_id=agent_key,
-            user_id=user_key,
-            max_per_agent=publication_limit,
-            max_per_user=api_key_limit,
-            record_rejection=False,
-        )
+        if not await queue.try_acquire_execution_slot(global_limit):
+            return None
+        try:
+            permit = await limiter.try_acquire(
+                agent_id=agent_key,
+                user_id=user_key,
+                max_per_agent=publication_limit,
+                max_per_user=api_key_limit,
+                record_rejection=False,
+            )
+        except Exception:
+            await queue.release_execution_slot()
+            raise
+        if permit is None:
+            await queue.release_execution_slot()
+        return permit
 
     permit = await try_acquire()
     if permit is not None:

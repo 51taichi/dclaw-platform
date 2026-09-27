@@ -1062,6 +1062,7 @@ async def test_open_api_concurrency_respects_configured_publication_limit(
 
 @pytest.mark.asyncio
 async def test_open_api_wait_queue_drains_one_hundred_request_burst(monkeypatch):
+    monkeypatch.setenv("DCLAW_OPEN_API_MAX_RUNNING_TASKS_GLOBAL", "20")
     monkeypatch.setenv(
         "DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_PUBLICATION",
         "30",
@@ -1106,6 +1107,57 @@ async def test_open_api_wait_queue_drains_one_hundred_request_burst(monkeypatch)
     assert active == 0
     snapshot = await app.state.task_limiter.snapshot()
     assert snapshot["rejected_acquire_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_open_api_concurrency_has_global_execution_limit(monkeypatch):
+    monkeypatch.setenv("DCLAW_OPEN_API_MAX_RUNNING_TASKS_GLOBAL", "8")
+    monkeypatch.setenv(
+        "DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_PUBLICATION",
+        "30",
+    )
+    monkeypatch.setenv("DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_API_KEY", "20")
+    monkeypatch.setenv("DCLAW_OPEN_API_WAIT_TIMEOUT_SECONDS", "0.2")
+    monkeypatch.setenv("DCLAW_OPEN_API_WAIT_POLL_SECONDS", "0.002")
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            task_limiter=TaskConcurrencyLimiter(
+                max_global=32,
+                max_per_agent=12,
+                max_per_user=6,
+            ),
+        ),
+    )
+    held = []
+    for index in range(8):
+        permit = await open_api._acquire_open_api_permit(
+            app,
+            publication_id=f"publication-{index}",
+            api_key_id=f"api-key-{index}",
+        )
+        assert permit is not None
+        held.append(permit)
+
+    waiting = asyncio.create_task(
+        open_api._acquire_open_api_permit(
+            app,
+            publication_id="publication-9",
+            api_key_id="api-key-9",
+        ),
+    )
+    await asyncio.sleep(0.02)
+
+    try:
+        assert not waiting.done()
+        await held.pop().release()
+        replacement = await asyncio.wait_for(waiting, timeout=0.1)
+        assert replacement is not None
+        held.append(replacement)
+    finally:
+        if not waiting.done():
+            waiting.cancel()
+        for permit in held:
+            await permit.release()
 
 
 @pytest.mark.asyncio
