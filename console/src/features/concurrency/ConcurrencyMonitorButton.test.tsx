@@ -1,6 +1,6 @@
-import { screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "@/test/common_setup";
 import ConcurrencyMonitorButton, {
   type ConcurrencySnapshot,
@@ -39,6 +39,10 @@ const firstSnapshot: ConcurrencySnapshot = {
 };
 
 describe("ConcurrencyMonitorButton", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("loads a snapshot when opened and displays current and maximum values", async () => {
     const loadSnapshot = vi.fn().mockResolvedValue(firstSnapshot);
     const user = userEvent.setup();
@@ -68,6 +72,7 @@ describe("ConcurrencyMonitorButton", () => {
     expect(screen.getByText("模型调用并发")).toBeInTheDocument();
     expect(screen.getByText("2 / 999")).toBeInTheDocument();
     expect(screen.getByText("当前排队 2")).toBeInTheDocument();
+    expect(screen.getByText("10 秒后刷新")).toBeInTheDocument();
     expect(screen.getAllByText("国央企就业小顶")).toHaveLength(2);
     expect(screen.getByText("customer-service")).toBeInTheDocument();
     expect(screen.getByText("••••abcd")).toBeInTheDocument();
@@ -96,5 +101,78 @@ describe("ConcurrencyMonitorButton", () => {
     );
     expect(screen.getByText("当前排队 0")).toBeInTheDocument();
     expect(loadSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("counts down and refreshes automatically every ten seconds", async () => {
+    vi.useFakeTimers();
+    const loadSnapshot = vi.fn().mockResolvedValue(firstSnapshot);
+    renderWithProviders(
+      <ConcurrencyMonitorButton loadSnapshot={loadSnapshot} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "并发监控" }));
+    await act(async () => Promise.resolve());
+    expect(loadSnapshot).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("10 秒后刷新")).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(screen.getByText("9 秒后刷新")).toBeInTheDocument();
+
+    for (let second = 0; second < 9; second += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+    }
+    expect(loadSnapshot).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("10 秒后刷新")).toBeInTheDocument();
+  });
+
+  it("pauses while hidden and refreshes immediately when visible again", async () => {
+    vi.useFakeTimers();
+    let visibilityState = "visible";
+    const originalDescriptor = Object.getOwnPropertyDescriptor(
+      document,
+      "visibilityState",
+    );
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => visibilityState,
+    });
+    const loadSnapshot = vi.fn().mockResolvedValue(firstSnapshot);
+
+    try {
+      renderWithProviders(
+        <ConcurrencyMonitorButton loadSnapshot={loadSnapshot} />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "并发监控" }));
+      await act(async () => Promise.resolve());
+      expect(loadSnapshot).toHaveBeenCalledTimes(1);
+
+      visibilityState = "hidden";
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(screen.getByText("自动刷新已暂停")).toBeInTheDocument();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20_000);
+      });
+      expect(loadSnapshot).toHaveBeenCalledTimes(1);
+
+      visibilityState = "visible";
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+        await Promise.resolve();
+      });
+      expect(loadSnapshot).toHaveBeenCalledTimes(2);
+      expect(screen.getByText("10 秒后刷新")).toBeInTheDocument();
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(document, "visibilityState", originalDescriptor);
+      } else {
+        Reflect.deleteProperty(document, "visibilityState");
+      }
+    }
   });
 });

@@ -12,7 +12,7 @@ import {
   Tooltip,
   Typography,
 } from "antd";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getConcurrencySnapshot } from "../../api/modules/concurrency";
 import type { ConcurrencySnapshot } from "./types";
 
@@ -21,6 +21,8 @@ export type { ConcurrencySnapshot } from "./types";
 interface ConcurrencyMonitorButtonProps {
   loadSnapshot?: () => Promise<ConcurrencySnapshot>;
 }
+
+const AUTO_REFRESH_SECONDS = 10;
 
 function percent(current: number, maximum: number): number {
   if (maximum <= 0) return 0;
@@ -66,8 +68,16 @@ export default function ConcurrencyMonitorButton({
   const [loading, setLoading] = useState(false);
   const [snapshot, setSnapshot] = useState<ConcurrencySnapshot>();
   const [error, setError] = useState<string>();
+  const [refreshCountdown, setRefreshCountdown] =
+    useState(AUTO_REFRESH_SECONDS);
+  const [pageVisible, setPageVisible] = useState(
+    () => document.visibilityState !== "hidden",
+  );
+  const refreshInFlightRef = useRef(false);
 
   const refresh = useCallback(async () => {
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
     setLoading(true);
     setError(undefined);
     try {
@@ -75,14 +85,46 @@ export default function ConcurrencyMonitorButton({
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "并发数据加载失败");
     } finally {
+      refreshInFlightRef.current = false;
       setLoading(false);
+      setRefreshCountdown(AUTO_REFRESH_SECONDS);
     }
   }, [loadSnapshot]);
 
   const showDrawer = () => {
     setOpen(true);
-    void refresh();
   };
+
+  useEffect(() => {
+    if (!open) return;
+
+    const handleVisibilityChange = () => {
+      const visible = document.visibilityState !== "hidden";
+      setPageVisible(visible);
+      if (visible) void refresh();
+    };
+
+    setPageVisible(document.visibilityState !== "hidden");
+    setRefreshCountdown(AUTO_REFRESH_SECONDS);
+    void refresh();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [open, refresh]);
+
+  useEffect(() => {
+    if (!open || !pageVisible || loading) return;
+
+    const timer = window.setTimeout(() => {
+      if (refreshCountdown <= 1) {
+        void refresh();
+      } else {
+        setRefreshCountdown(refreshCountdown - 1);
+      }
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [loading, open, pageVisible, refresh, refreshCountdown]);
 
   const breakdownColumns = (objectTitle: string) => [
     {
@@ -148,14 +190,23 @@ export default function ConcurrencyMonitorButton({
         open={open}
         onClose={() => setOpen(false)}
         extra={
-          <Button
-            icon={<ReloadOutlined />}
-            aria-label="刷新"
-            onClick={() => void refresh()}
-            loading={loading}
-          >
-            刷新
-          </Button>
+          <Space size="small">
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {loading
+                ? "正在刷新"
+                : pageVisible
+                ? `${refreshCountdown} 秒后刷新`
+                : "自动刷新已暂停"}
+            </Typography.Text>
+            <Button
+              icon={<ReloadOutlined />}
+              aria-label="刷新"
+              onClick={() => void refresh()}
+              loading={loading}
+            >
+              刷新
+            </Button>
+          </Space>
         }
       >
         <Space direction="vertical" size="middle" style={{ width: "100%" }}>
