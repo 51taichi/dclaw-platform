@@ -52,6 +52,12 @@ _MAX_AUTOMATIC_CONTINUATION_PASSES = 8
 _PLATFORM_REVIEW_PREFIX = (
     "当前绑定的 DClaw AIGC 素材已由客户明确提交。任务ID："
 )
+_AIGC_REVIEW_CONTINUATION_INSTRUCTION = (
+    "The current host-submitted AIGC review has been accepted. Continue the "
+    "user's still-pending request from the existing conversation using only "
+    "the governed AIGC workflow tools now available. Do not repeat the review "
+    "and do not ask the user to send another confirmation or continue message."
+)
 _INTERACTION_DELIVERY_PREFIX = re.compile(
     r"^\s*"
     r"(?:(?:好(?:了|的)?|可以|行)[，,。.!！；;：:]?\s*)?"
@@ -700,14 +706,21 @@ async def run_workspace_orchestration_turn(
     )
     agent_execute_call_number = 0
     created_interaction_ids: list[str] = []
+    accepted_aigc_review = False
 
     async def tracked_business_call(
         capability: str,
         arguments: dict[str, Any],
     ) -> Any:
+        nonlocal accepted_aigc_review
         if business_call is None:
             raise WorkspaceOrchestrationError("unauthorized_capability")
         value = await _maybe_await(business_call(capability, arguments))
+        if (
+            capability == "aigc.review.complete"
+            and arguments.get("decision") == "ACCEPTED"
+        ):
+            accepted_aigc_review = True
         if capability == "interaction.card.create/1" and isinstance(value, dict):
             interaction = value.get("interaction")
             interaction_id = (
@@ -744,11 +757,19 @@ async def run_workspace_orchestration_turn(
             updates["verified_interaction_ids"] = tuple(created_interaction_ids)
         return turn_result.model_copy(update=updates)
 
-    async def execute_agent(arguments: dict[str, Any]) -> dict[str, Any]:
+    async def execute_agent(
+        arguments: dict[str, Any],
+        active_safe_metadata: dict[str, Any],
+    ) -> dict[str, Any]:
         nonlocal agent_execute_call_number
         response_format = _agent_execute_response_format(arguments)
         execution_mode = _agent_execute_mode(arguments)
         instruction = _agent_execute_instruction(arguments)
+        if active_safe_metadata.get("aigcReviewContinuation") is True:
+            instruction = "\n\n".join(filter(None, (
+                instruction,
+                _AIGC_REVIEW_CONTINUATION_INSTRUCTION,
+            )))
         require_interaction = _agent_execute_require_interaction(arguments)
         if instruction is not None and execution_mode != "agent_loop":
             raise WorkspaceOrchestrationError("orchestration_error")
@@ -837,11 +858,11 @@ async def run_workspace_orchestration_turn(
                     installation_id=authorization.installation_id,
                     conversation_id=turn_request.session_id,
                     business_call=effective_business_call, read_task=read_aigc_task,
-                    review_input=(safe_metadata or {}).get("aigcReviewInput"),
+                    review_input=active_safe_metadata.get("aigcReviewInput"),
                     media_delivery=media_delivery,
                 )
                 review_only = bool(
-                    (safe_metadata or {}).get("aigcReviewInput")
+                    active_safe_metadata.get("aigcReviewInput")
                 )
                 interaction_tools = (
                     {}
@@ -854,7 +875,7 @@ async def run_workspace_orchestration_turn(
                         read_card=read_interaction_card,
                     )
                 )
-                if aigc_tools or interaction_tools:
+                if review_only or aigc_tools or interaction_tools:
                     if review_only:
                         removed = _drop_prior_platform_review_attempts(
                             getattr(agent, "memory", None),
@@ -971,11 +992,18 @@ async def run_workspace_orchestration_turn(
     actual_timeout = (workspace_orchestration_timeout_seconds()
                       if timeout_seconds is None else timeout_seconds)
 
-    def build_orchestrator(active_invocation_id: str) -> "WorkspaceTurnOrchestrator":
+    def build_orchestrator(
+        active_invocation_id: str,
+        active_safe_metadata: dict[str, Any],
+    ) -> "WorkspaceTurnOrchestrator":
         return WorkspaceTurnOrchestrator(
             workspace_root=workspace_root, config=config,
             signed_files=authorization.signed_workspace_files,
-            execute_agent=execute_agent, session_context=lambda: trusted_context,
+            execute_agent=lambda arguments: execute_agent(
+                arguments,
+                active_safe_metadata,
+            ),
+            session_context=lambda: trusted_context,
             business_call=effective_business_call,
             trace_sink=lambda trace: _append_runtime_trace(
                 state_storage_root, installation_id=authorization.installation_id,
@@ -984,7 +1012,7 @@ async def run_workspace_orchestration_turn(
             ), timeout_seconds=actual_timeout,
         )
 
-    orchestrator = build_orchestrator(invocation_id)
+    orchestrator = build_orchestrator(invocation_id, turn_request.safe_metadata)
     try:
         result = attach_created_interactions(
             await orchestrator.invoke(turn_request, transaction),
@@ -1018,6 +1046,102 @@ async def run_workspace_orchestration_turn(
             else {}
         ),
     )
+    continuation_source_request = turn_request
+    if accepted_aigc_review and turn_request.safe_metadata.get("aigcReviewInput"):
+        continuation_invocation_id = uuid.uuid4().hex
+        continuation_transaction = None
+        continuation_request = None
+        try:
+            continuation_transaction = WorkspaceStateTransaction.begin(
+                state_storage_root,
+                installation_id=authorization.installation_id,
+                session_id=turn_request.session_id,
+                invocation_id=continuation_invocation_id,
+            )
+            continuation_request = turn_request.model_copy(update={
+                "invocation_id": continuation_invocation_id,
+                "state_root": continuation_transaction.state_root,
+                "transaction_root": continuation_transaction.transaction_root,
+                "normalized_input": {"messages": [{
+                    "name": "customer", "role": "user", "content": "",
+                }]},
+                "safe_metadata": {
+                    key: deepcopy(value)
+                    for key, value in turn_request.safe_metadata.items()
+                    if key != "aigcReviewInput"
+                } | {"aigcReviewContinuation": True},
+            })
+            continuation_request._runtime_continuation = True
+            _append_runtime_trace(
+                state_storage_root,
+                installation_id=authorization.installation_id,
+                session_id=turn_request.session_id,
+                invocation_id=continuation_invocation_id,
+                event_type="orchestration.review_continuation.started",
+            )
+            continued = attach_created_interactions(
+                await build_orchestrator(
+                    continuation_invocation_id,
+                    continuation_request.safe_metadata,
+                ).invoke(
+                    continuation_request,
+                    continuation_transaction,
+                ),
+            )
+            _append_runtime_trace(
+                state_storage_root,
+                installation_id=authorization.installation_id,
+                session_id=turn_request.session_id,
+                invocation_id=continuation_invocation_id,
+                event_type=(
+                    "orchestration.review_continuation.completed"
+                    if continued.error_code is None
+                    else "orchestration.review_continuation.failed"
+                ),
+                payload=(
+                    {}
+                    if continued.error_code is None
+                    else {
+                        "error_code": continued.error_code,
+                        "diagnostic_ref": continued.diagnostic_ref,
+                    }
+                ),
+            )
+        except asyncio.CancelledError:
+            if continuation_transaction is not None:
+                continuation_transaction.discard()
+            _append_runtime_trace(
+                state_storage_root,
+                installation_id=authorization.installation_id,
+                session_id=turn_request.session_id,
+                invocation_id=continuation_invocation_id,
+                event_type="orchestration.cancelled",
+                payload={"error_code": "cancelled"},
+            )
+            raise
+        except Exception as exc:
+            if continuation_transaction is not None:
+                continuation_transaction.discard()
+            logger.exception("AIGC review continuation setup failed")
+            continued = WorkspaceTurnResult(
+                error_code="orchestration_error",
+                diagnostic_ref=type(exc).__name__,
+            )
+        result = (
+            continued
+            if continued.error_code is None
+            else WorkspaceTurnResult(
+                message={
+                    "reply": (
+                        "素材审核已完成，但后续制作未能完整结束，"
+                        "请查看当前任务状态后再重试。"
+                    ),
+                },
+                diagnostics={"review_continuation": "failed"},
+            )
+        )
+        if continuation_request is not None:
+            continuation_source_request = continuation_request
     last_committed_result = result if result.error_code is None else None
     continuation_pass = 0
     while (
@@ -1032,7 +1156,7 @@ async def run_workspace_orchestration_turn(
             session_id=turn_request.session_id,
             invocation_id=continuation_invocation_id,
         )
-        continuation_request = turn_request.model_copy(update={
+        continuation_request = continuation_source_request.model_copy(update={
             "invocation_id": continuation_invocation_id,
             "state_root": continuation_transaction.state_root,
             "transaction_root": continuation_transaction.transaction_root,
@@ -1042,7 +1166,8 @@ async def run_workspace_orchestration_turn(
                 "name": "customer", "role": "user", "content": "",
             }]},
             "safe_metadata": {
-                key: deepcopy(value) for key, value in turn_request.safe_metadata.items()
+                key: deepcopy(value)
+                for key, value in continuation_source_request.safe_metadata.items()
                 if key != "conversationReset"
             },
         })
@@ -1056,7 +1181,10 @@ async def run_workspace_orchestration_turn(
         )
         try:
             continued = attach_created_interactions(
-                await build_orchestrator(continuation_invocation_id).invoke(
+                await build_orchestrator(
+                    continuation_invocation_id,
+                    continuation_request.safe_metadata,
+                ).invoke(
                     continuation_request, continuation_transaction,
                 ),
             )
@@ -1086,6 +1214,7 @@ async def run_workspace_orchestration_turn(
             break
         result = continued
         last_committed_result = continued
+        continuation_source_request = continuation_request
     if ((result.diagnostics or {}).get("continuation_reason") == "turn_budget_exhausted"
             and continuation_pass >= _MAX_AUTOMATIC_CONTINUATION_PASSES):
         _append_runtime_trace(

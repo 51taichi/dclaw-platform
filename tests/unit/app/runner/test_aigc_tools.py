@@ -702,7 +702,18 @@ def create_runtime(): return Runtime()
 
 
 @pytest.mark.asyncio
-async def test_review_agent_loop_exposes_only_skill_reader_and_review_tool(tmp_path):
+@pytest.mark.parametrize(
+    ('review_granted', 'expected_tools'),
+    [
+        (True, {'read_agent_skill', 'aigc_task_review'}),
+        (False, {'read_agent_skill'}),
+    ],
+)
+async def test_review_agent_loop_exposes_only_review_safe_tools(
+    tmp_path,
+    review_granted,
+    expected_tools,
+):
     from agentscope.message import Msg
     from qwenpaw.app.workspace.orchestration import (
         AuthorizedWorkspaceRelease,
@@ -736,10 +747,7 @@ def create_runtime(): return Runtime()
             self.toolkit.register_tool_function(execute_shell_command)
 
         async def __call__(self, _messages):
-            assert set(self.toolkit.tools) == {
-                'read_agent_skill',
-                'aigc_task_review',
-            }
+            assert set(self.toolkit.tools) == expected_tools
             return Msg('assistant', 'reviewed', 'assistant')
 
     binding = {
@@ -763,7 +771,7 @@ def create_runtime(): return Runtime()
         granted_capabilities={
             **{key: '1' for key in HOST_CAPABILITIES_V1},
             'aigc.task.create': '1',
-            'aigc.review.complete': '1',
+            **({'aigc.review.complete': '1'} if review_granted else {}),
         },
         signed_workspace_files=frozenset({'runtime.py'}),
     )
@@ -796,6 +804,221 @@ def create_runtime(): return Runtime()
     )
 
     assert response.error_code is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        'continuation_fails',
+        'budget_exhausted',
+        'setup_fails',
+        'initial_review_fails',
+        'expected_reply',
+        'expected_calls',
+    ),
+    [
+        (False, False, False, True, 'production continued', 2),
+        (False, False, False, False, 'production continued', 2),
+        (False, True, False, True, 'production continued', 3),
+        (
+            True,
+            False,
+            False,
+            True,
+            '素材审核已完成，但后续制作未能完整结束，请查看当前任务状态后再重试。',
+            2,
+        ),
+        (
+            False,
+            False,
+            True,
+            True,
+            '素材审核已完成，但后续制作未能完整结束，请查看当前任务状态后再重试。',
+            1,
+        ),
+    ],
+)
+async def test_accepted_review_failure_continues_with_full_aigc_tools(
+    tmp_path,
+    monkeypatch,
+    continuation_fails,
+    budget_exhausted,
+    setup_fails,
+    initial_review_fails,
+    expected_reply,
+    expected_calls,
+):
+    """Catch accepted reviews getting stranded in the review-only tool scope."""
+    from agentscope.message import Msg
+    from qwenpaw.app.workspace.orchestration import (
+        AuthorizedWorkspaceRelease,
+        run_workspace_orchestration_turn,
+        WorkspaceStateTransaction,
+    )
+    from qwenpaw.app.workspace.orchestration_contract import (
+        HOST_CAPABILITIES_V1,
+        OrchestrationConfig,
+    )
+
+    root = tmp_path / 'workspace'
+    root.mkdir()
+    (root / 'runtime.py').write_text('''
+from pathlib import Path
+class Runtime:
+    async def handle(self, request, host):
+        if getattr(request, '_runtime_continuation', False):
+            assert 'aigcReviewInput' not in request.safe_metadata
+        try:
+            value = await host.call('agent.execute', {
+                'messages': request.normalized_input['messages'],
+                'execution_mode': 'agent_loop',
+            })
+        except Exception:
+            await host.call('runtime.fail', {
+                'invocation_id': request.invocation_id,
+                'error_code': 'runtime_failed',
+            })
+            return
+        diagnostics = {}
+        marker = Path(request.transaction_root) / 'review-budget-used'
+        if (request.safe_metadata.get('forceBudgetOnce') is True
+                and request.safe_metadata.get('aigcReviewContinuation') is True
+                and not marker.exists()):
+            marker.write_text('used')
+            diagnostics = {'continuation_reason': 'turn_budget_exhausted'}
+        await host.call('runtime.complete', {
+            'invocation_id': request.invocation_id,
+            'message': value['message'],
+            'diagnostics': diagnostics,
+        })
+def create_runtime(): return Runtime()
+''')
+
+    async def read_agent_skill(skill_name: str):
+        return skill_name
+
+    async def imagegen(prompt: str):
+        return prompt
+
+    binding = {
+        'installation_id': 'expert',
+        'conversation_id': 'session',
+        'agent_task_id': 'content',
+        'content_revision': 1,
+        'material_task_id': 'material',
+        'canvas_id': 'canvas',
+        'node_id': 'script',
+    }
+    task = {
+        'binding': binding,
+        'asset_id': 'asset',
+        'status': 'SUBMITTED',
+        'review_assets': [{'node_id': 'script', 'asset_id': 'asset'}],
+    }
+
+    class Agent:
+        def __init__(self):
+            self.calls = 0
+            self._sys_prompt = 'base prompt'
+            self.toolkit = Toolkit()
+            self.toolkit.register_tool_function(read_agent_skill)
+            self.toolkit.register_tool_function(imagegen)
+
+        async def __call__(self, _messages):
+            self.calls += 1
+            if self.calls == 1:
+                assert set(self.toolkit.tools) == {
+                    'read_agent_skill',
+                    'aigc_task_review',
+                }
+                review = self.toolkit.tools['aigc_task_review'].original_func
+                await review('material', 'ACCEPTED', '脚本内容可用')
+                if initial_review_fails:
+                    raise RuntimeError('attempted follow-up work in review-only scope')
+                return Msg('assistant', 'reviewed', 'assistant')
+            assert 'aigc_workflow_catalog' in self.toolkit.tools
+            assert 'aigc_workflow_create' in self.toolkit.tools
+            assert 'AIGC review has been accepted' in self._sys_prompt
+            if continuation_fails and self.calls == 2:
+                raise RuntimeError('follow-up provider unavailable')
+            if budget_exhausted and self.calls == 2:
+                return Msg('assistant', 'checkpoint', 'assistant')
+            return Msg('assistant', 'production continued', 'assistant')
+
+    agent = Agent()
+    authorization = AuthorizedWorkspaceRelease(
+        installation_id='expert', release_id='release',
+        release_digest='sha256:' + 'a' * 64,
+        granted_capabilities={
+            **{key: '1' for key in HOST_CAPABILITIES_V1},
+            CATALOG: '1',
+            CREATE: '1',
+            'aigc.task.create': '1',
+            'aigc.review.complete': '1',
+        },
+        signed_workspace_files=frozenset({'runtime.py'}),
+    )
+
+    business_calls = []
+
+    async def business_call(capability, _arguments):
+        business_calls.append(capability)
+        if capability == CATALOG:
+            return {'nodes': [], 'available_models': []}
+        return {'status': 'ACCEPTED'}
+
+    if setup_fails:
+        original_begin = WorkspaceStateTransaction.begin
+        begin_calls = 0
+
+        def fail_second_begin(cls, storage_root, **kwargs):
+            nonlocal begin_calls
+            begin_calls += 1
+            if begin_calls == 2:
+                raise OSError('continuation state unavailable')
+            return original_begin(storage_root, **kwargs)
+
+        monkeypatch.setattr(
+            WorkspaceStateTransaction,
+            'begin',
+            classmethod(fail_second_begin),
+        )
+
+    response = await run_workspace_orchestration_turn(
+        agent=agent,
+        original_messages=[Msg('user', 'review script and continue', 'user')],
+        conversation_history=[Msg('assistant', 'existing work', 'assistant')],
+        request=SimpleNamespace(
+            session_id='session', user_id='user', channel='console',
+            channel_meta={},
+        ),
+        agent_id='expert', workspace_root=root,
+        state_storage_root=tmp_path / 'states',
+        config=OrchestrationConfig(
+            enabled=True,
+            entrypoint='runtime.py:create_runtime',
+            required_host_capabilities=HOST_CAPABILITIES_V1,
+        ),
+        authorization=authorization,
+        business_call=business_call,
+        read_aigc_task=lambda key: task if key == 'material' else None,
+        safe_metadata={
+            'forceBudgetOnce': budget_exhausted,
+            'aigcReviewInput': {
+                'binding': binding,
+                'asset_id': 'asset',
+                'review_assets': task['review_assets'],
+                'media_kind': 'text',
+                'block_digest': 'sha256:block',
+            },
+        },
+    )
+
+    assert response.error_code is None
+    reply = response.message.get('reply') or response.message.get('content')
+    assert reply == expected_reply
+    assert agent.calls == expected_calls
+    assert business_calls.count('aigc.review.complete') == 1
 
 
 def test_prior_platform_review_attempts_are_removed_from_agent_memory():
