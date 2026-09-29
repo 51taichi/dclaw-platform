@@ -108,8 +108,9 @@ One row per user:
 - `critical_threshold`: non-negative bigint, default 1,000.
 - `created_at`, `updated_at`.
 
-The service enforces `warning_threshold > critical_threshold >= 0`. A row is
-created with a new user and lazily for legacy users on first access.
+The service enforces
+`0 <= critical_threshold < warning_threshold <= 9,223,372,036,854,775,807`.
+A row is created with a new user and lazily for legacy users on first access.
 
 ### `credit_alert_states`
 
@@ -208,8 +209,9 @@ All routes remain under the existing authenticated admin or user router.
   validates them atomically, saves them, reconciles against the current balance,
   and returns the same resource representation.
 - `POST /api/user/billing/credit-alerts/{tier}/dismiss` dismisses an active tier
-  idempotently and returns the updated resource. Unknown tiers return 404;
-  invalid or non-active transitions return a stable 409 response.
+  and returns the updated resource. Repeating dismissal of that already
+  dismissed tier returns the same current resource with HTTP 200. Unknown tiers
+  return 404; attempts to dismiss a different non-visible tier return 409.
 
 The server resolves `user_id` exclusively from the authenticated request. A
 caller cannot read or change another customer's preferences or dismissal
