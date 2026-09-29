@@ -20,6 +20,8 @@ import styles from "./index.module.less";
 
 interface CreateUserFormValues {
   username: string;
+  display_name: string;
+  phone_number: string;
   password: string;
   role?: "admin" | "user";
 }
@@ -63,6 +65,8 @@ export default function UsersPage() {
     try {
       await adminUsersApi.createUser({
         username: values.username,
+        display_name: values.display_name.trim(),
+        phone_number: values.phone_number.trim(),
         password: values.password,
         role: values.role || "user",
       });
@@ -105,10 +109,24 @@ export default function UsersPage() {
       width: 72,
     },
     {
-      title: "用户名",
+      title: "登录 ID",
       dataIndex: "username",
       key: "username",
       width: 180,
+    },
+    {
+      title: "姓名",
+      dataIndex: "display_name",
+      key: "display_name",
+      width: 160,
+      render: (value: string | null) => value || "—",
+    },
+    {
+      title: "手机号",
+      dataIndex: "phone_number",
+      key: "phone_number",
+      width: 180,
+      render: (value: string | null) => value || "—",
     },
     {
       title: "角色",
@@ -193,7 +211,7 @@ export default function UsersPage() {
             rowKey="id"
             loading={loading}
             size="middle"
-            scroll={{ x: 800 }}
+            scroll={{ x: 1120 }}
             pagination={{ pageSize: 20, showSizeChanger: false }}
           />
         </Card>
@@ -214,10 +232,27 @@ export default function UsersPage() {
         <Form form={createForm} layout="vertical" onFinish={handleCreateUser}>
           <Form.Item
             name="username"
-            label="用户名"
-            rules={[{ required: true, message: "请输入用户名！" }]}
+            label="登录 ID"
+            rules={[{ required: true, whitespace: true, message: "请输入登录 ID！" }]}
           >
             <Input />
+          </Form.Item>
+          <Form.Item
+            name="display_name"
+            label="姓名"
+            rules={[{ required: true, whitespace: true, message: "请输入姓名！" }]}
+          >
+            <Input maxLength={100} />
+          </Form.Item>
+          <Form.Item
+            name="phone_number"
+            label="手机号"
+            rules={[
+              { required: true, whitespace: true, message: "请输入手机号！" },
+              { pattern: /^(?:\+86)?1[3-9]\d{9}$/, message: "请输入有效的中国大陆手机号！" },
+            ]}
+          >
+            <Input maxLength={14} />
           </Form.Item>
           <Form.Item
             name="password"

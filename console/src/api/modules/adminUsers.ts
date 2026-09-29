@@ -3,8 +3,18 @@ import { getApiUrl, getApiToken } from "../config";
 export interface AdminUser {
   id: number;
   username: string;
+  display_name?: string | null;
+  phone_number?: string | null;
   role: string;
   created_at: string;
+}
+
+export interface CreateAdminUserInput {
+  username: string;
+  display_name?: string;
+  phone_number?: string;
+  password: string;
+  role: "admin" | "user";
 }
 
 export const adminUsersApi = {
@@ -21,7 +31,7 @@ export const adminUsersApi = {
     return res.json();
   },
 
-  async createUser(data: any): Promise<AdminUser> {
+  async createUser(data: CreateAdminUserInput): Promise<AdminUser> {
     const res = await fetch(getApiUrl("/admin/users"), {
       method: "POST",
       headers: {
