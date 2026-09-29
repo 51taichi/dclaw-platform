@@ -26,4 +26,3 @@ def test_repository_creates_default_preferences_and_states(tmp_path):
     assert {row["tier"]: row["status"] for row in states} == {
         "warning": "armed", "critical": "armed",
     }
-

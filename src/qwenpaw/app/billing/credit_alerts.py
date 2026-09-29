@@ -8,10 +8,13 @@ from uuid import uuid4
 from sqlalchemy.engine import Connection, Engine
 
 from ..notifications.sms import DisabledSmsSender, SmsAlert, SmsSender
+from ..storage.repos.billing_repo import BillingRepository
 from ..storage.repos.credit_alert_repo import CreditAlertRepository
 
 MAX_THRESHOLD = 2**63 - 1
-Cause = Literal["balance_change", "expiry", "reconciliation", "preference_change"]
+Cause = Literal[
+    "balance_change", "expiry", "reconciliation", "preference_change", "recovery",
+]
 
 
 class AlertTierNotFound(ValueError):
@@ -37,11 +40,18 @@ class CreditAlertService:
             self._reconcile_user(conn, user_id, available, cause="reconciliation")
             return self._resource(conn, user_id, available)
 
+    def get_for_wallet(self, user_id: int, wallet_id: str) -> dict[str, Any]:
+        with self._lock, self.engine.begin() as conn:
+            available, cause = self._locked_wallet_context(
+                conn, user_id, wallet_id,
+            )
+            self._reconcile_user(conn, user_id, available, cause=cause)
+            return self._resource(conn, user_id, available)
+
     def update_preferences(
         self, user_id: int, warning_threshold: int, critical_threshold: int, available: int,
     ) -> dict[str, Any]:
-        if not 0 <= critical_threshold < warning_threshold <= MAX_THRESHOLD:
-            raise ValueError("thresholds must satisfy 0 <= critical < warning <= 9223372036854775807")
+        self._validate_thresholds(warning_threshold, critical_threshold)
         with self._lock, self.engine.begin() as conn:
             self.repository.ensure_preferences(conn, user_id)
             self.repository.ensure_states(conn, user_id)
@@ -49,6 +59,28 @@ class CreditAlertService:
                 conn, user_id, warning_threshold, critical_threshold,
             )
             self._reconcile_user(conn, user_id, available, cause="preference_change")
+            return self._resource(conn, user_id, available)
+
+    def update_preferences_for_wallet(
+        self,
+        user_id: int,
+        wallet_id: str,
+        warning_threshold: int,
+        critical_threshold: int,
+    ) -> dict[str, Any]:
+        self._validate_thresholds(warning_threshold, critical_threshold)
+        with self._lock, self.engine.begin() as conn:
+            available, _ = self._locked_wallet_context(
+                conn, user_id, wallet_id,
+            )
+            self.repository.ensure_preferences(conn, user_id)
+            self.repository.ensure_states(conn, user_id)
+            self.repository.update_preferences(
+                conn, user_id, warning_threshold, critical_threshold,
+            )
+            self._reconcile_user(
+                conn, user_id, available, cause="preference_change",
+            )
             return self._resource(conn, user_id, available)
 
     def dismiss(self, user_id: int, tier: str, available: int) -> dict[str, Any]:
@@ -62,6 +94,30 @@ class CreditAlertService:
                 now = datetime.now(timezone.utc)
                 self.repository.update_state(
                     conn, user_id, tier, status="dismissed", dismissed_at=now,
+                )
+            elif states[tier]["status"] != "dismissed":
+                raise AlertConflict("tier is not the visible active alert")
+            return self._resource(conn, user_id, available)
+
+    def dismiss_for_wallet(
+        self, user_id: int, wallet_id: str, tier: str,
+    ) -> dict[str, Any]:
+        if tier not in ("warning", "critical"):
+            raise AlertTierNotFound(tier)
+        with self._lock, self.engine.begin() as conn:
+            available, cause = self._locked_wallet_context(
+                conn, user_id, wallet_id,
+            )
+            self._reconcile_user(conn, user_id, available, cause=cause)
+            states = {
+                row["tier"]: row
+                for row in self.repository.ensure_states(conn, user_id)
+            }
+            visible = self._visible(states)
+            if visible and visible["tier"] == tier:
+                self.repository.update_state(
+                    conn, user_id, tier, status="dismissed",
+                    dismissed_at=datetime.now(timezone.utc),
                 )
             elif states[tier]["status"] != "dismissed":
                 raise AlertConflict("tier is not the visible active alert")
@@ -106,7 +162,11 @@ class CreditAlertService:
         if not eligible:
             return
         selected = eligible[0]
-        source = "crossing" if cause in ("balance_change", "expiry") else "reconciliation"
+        source = (
+            "crossing"
+            if cause in ("balance_change", "expiry", "recovery")
+            else "reconciliation"
+        )
         now = datetime.now(timezone.utc)
         cycle = int(current[selected]["cycle_number"])
         if source == "crossing":
@@ -139,6 +199,33 @@ class CreditAlertService:
                 available=available, threshold=thresholds[selected],
                 display_name=identity.get("display_name"), phone_number=phone,
                 sms_status=status,
+            )
+
+    def _locked_wallet_context(
+        self, conn: Connection, user_id: int, wallet_id: str,
+    ) -> tuple[int, Cause]:
+        balance, expired = BillingRepository(
+            self.engine,
+        ).balance_for_alert_in_connection(conn, wallet_id)
+        if self.repository.user_for_wallet(conn, wallet_id) != user_id:
+            raise AlertConflict("wallet does not belong to user")
+        states_preexisting = self.repository.states_exist(conn, user_id)
+        if not states_preexisting:
+            cause: Cause = "reconciliation"
+        elif expired:
+            cause = "expiry"
+        else:
+            cause = "recovery"
+        return balance.available, cause
+
+    @staticmethod
+    def _validate_thresholds(
+        warning_threshold: int, critical_threshold: int,
+    ) -> None:
+        if not 0 <= critical_threshold < warning_threshold <= MAX_THRESHOLD:
+            raise ValueError(
+                "thresholds must satisfy "
+                "0 <= critical < warning <= 9223372036854775807",
             )
 
     def _resource(self, conn: Connection, user_id: int, available: int) -> dict[str, Any]:

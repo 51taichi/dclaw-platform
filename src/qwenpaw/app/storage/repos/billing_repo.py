@@ -436,19 +436,30 @@ class BillingRepository:
 
     def balance(self, wallet_id: str) -> WalletBalance:
         with self.engine.begin() as conn:
-            wallet = conn.execute(
-                self._wallet_for_update_statement(wallet_id),
-            ).first()
-            if wallet is None:
-                raise BillingInvariantError(f"wallet not found: {wallet_id}")
-            expired = self._expire_available_lots(conn, wallet_id, self._clock())
-            balance = self._balance_for_update(conn, wallet_id)
-            self._assert_projection(conn, wallet_id, balance)
+            balance, expired = self.balance_for_alert_in_connection(
+                conn, wallet_id,
+            )
             if expired:
                 self._best_effort_credit_alert(
                     conn, wallet_id, balance.available, cause="expiry",
                 )
             return balance
+
+    def balance_for_alert_in_connection(
+        self,
+        conn: Connection,
+        wallet_id: str,
+    ) -> tuple[WalletBalance, bool]:
+        """Lock, expire, and read a wallet before alert-state mutation."""
+        wallet = conn.execute(
+            self._wallet_for_update_statement(wallet_id),
+        ).first()
+        if wallet is None:
+            raise BillingInvariantError(f"wallet not found: {wallet_id}")
+        expired = self._expire_available_lots(conn, wallet_id, self._clock())
+        balance = self._balance_for_update(conn, wallet_id)
+        self._assert_projection(conn, wallet_id, balance)
+        return balance, expired
 
     def balance_in_connection(
         self,
@@ -720,10 +731,12 @@ class BillingRepository:
                 _reconcile_credit_alert(
                     conn, wallet_id, available, cause=cause,
                 )
-        except Exception:
-            logger.exception(
-                "credit alert reconciliation failed for wallet %s",
+        except Exception as exc:
+            logger.error(
+                "credit alert reconciliation failed for wallet %s "
+                "(error_type=%s)",
                 wallet_id,
+                type(exc).__name__,
             )
 
     def _append_grant(self, conn, command: LedgerTransaction) -> None:

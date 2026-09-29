@@ -32,4 +32,3 @@ class DisabledSmsSender:
     def send(self, alert: SmsAlert) -> SmsSubmissionResult:
         del alert
         return SmsSubmissionResult(status="skipped_unconfigured")
-

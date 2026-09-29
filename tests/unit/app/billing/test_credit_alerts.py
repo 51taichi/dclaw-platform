@@ -8,6 +8,8 @@ from sqlalchemy import insert, select
 from qwenpaw.app.billing.credit_alerts import CreditAlertService
 from qwenpaw.app.notifications.sms import DisabledSmsSender, SmsAlert
 from qwenpaw.app.storage.engine import create_engine_from_settings
+from qwenpaw.app.storage.repos.billing_repo import BillingRepository
+from qwenpaw.app.storage.repos.credit_alert_repo import CreditAlertRepository
 from qwenpaw.app.storage.schema import (
     billing_wallets,
     create_all,
@@ -134,3 +136,55 @@ def test_concurrent_reconciliation_records_one_event(alert_env):
     with ThreadPoolExecutor(max_workers=2) as executor:
         list(executor.map(lambda _: reconcile(engine, service, "wallet-1", 5000), range(2)))
     assert len(events(engine)) == 1
+
+
+def test_wallet_scoped_get_uses_current_balance_and_does_not_rearm(alert_env):
+    engine, service = alert_env
+    billing = BillingRepository(engine)
+    billing.grant(
+        "wallet-1", credits=6000, credit_type="purchased", expires_at=None,
+        idempotency_key="wallet-scoped-seed",
+    )
+    billing.hold(
+        "wallet-1", credits=1000, business_key="wallet-scoped-hold",
+        idempotency_key="wallet-scoped-hold",
+    )
+
+    resource = service.get_for_wallet(1, "wallet-1")
+    billing.hold(
+        "wallet-1", credits=1, business_key="wallet-scoped-next",
+        idempotency_key="wallet-scoped-next",
+    )
+
+    assert resource["available"] == 5000
+    assert resource["alert"]["tier"] == "warning"
+    assert len(events(engine)) == 1
+
+
+def test_wallet_scoped_get_recovers_failed_crossing_event(
+    alert_env, monkeypatch,
+):
+    engine, service = alert_env
+    billing = BillingRepository(engine)
+    billing.grant(
+        "wallet-1", credits=6000, credit_type="purchased", expires_at=None,
+        idempotency_key="recovery-seed",
+    )
+    original = CreditAlertRepository.create_event
+
+    def fail_event(*args, **kwargs):
+        raise RuntimeError("event persistence unavailable")
+
+    monkeypatch.setattr(CreditAlertRepository, "create_event", fail_event)
+    billing.hold(
+        "wallet-1", credits=1000, business_key="recovery-hold",
+        idempotency_key="recovery-hold",
+    )
+    monkeypatch.setattr(CreditAlertRepository, "create_event", original)
+
+    resource = service.get_for_wallet(1, "wallet-1")
+
+    assert resource["alert"]["tier"] == "warning"
+    assert [(row["tier"], row["available_balance"]) for row in events(engine)] == [
+        ("warning", 5000),
+    ]

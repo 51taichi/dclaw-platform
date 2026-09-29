@@ -440,6 +440,32 @@ def test_alert_failure_does_not_rollback_ledger(monkeypatch, repo, engine):
     assert repo.list_ledger(wallet["id"], 10, None)[0]["idempotency_key"] == "resilient-grant"
 
 
+def test_alert_failure_log_does_not_include_exception_details(
+    monkeypatch, repo, engine, caplog,
+):
+    with engine.begin() as conn:
+        user_id = conn.execute(insert(users).values(
+            username="private-user", password_hash="h", password_salt="s", role="user",
+            phone_number_e164="+8613800138000",
+        ).returning(users.c.id)).scalar_one()
+    wallet = repo.ensure_wallet("user", str(user_id))
+    monkeypatch.setattr(
+        "qwenpaw.app.storage.repos.billing_repo._reconcile_credit_alert",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("failed SQL parameters: +8613800138000"),
+        ),
+    )
+
+    with caplog.at_level("ERROR"):
+        repo.grant(
+            wallet["id"], credits=6000, credit_type="purchased", expires_at=None,
+            idempotency_key="private-grant",
+        )
+
+    assert "+8613800138000" not in caplog.text
+    assert "RuntimeError" in caplog.text
+
+
 def test_expiry_reconciles_credit_alert(engine):
     clock = MutableClock(datetime(2026, 8, 26, tzinfo=timezone.utc))
     repo = BillingRepository(engine, clock=clock)

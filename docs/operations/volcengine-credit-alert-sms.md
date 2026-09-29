@@ -78,4 +78,3 @@ tier 和提供商错误码，不得记录 AK/SK 或完整手机号。超时结�
 - 紧急回滚只需把 `DCLAW_VOLCENGINE_SMS_ENABLED=false` 并滚动重启发送进程。
   客户端横幅和积分账本继续工作；回滚前已经 `submitted` 的事件仍可接收回执，
   但所有 `skipped_unconfigured`、`skipped_missing_phone` 和其他历史终态都不得补发。
-

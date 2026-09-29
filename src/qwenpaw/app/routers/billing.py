@@ -513,7 +513,7 @@ def get_user_wallet(request: Request) -> dict[str, int]:
     return wallet_balance_dict(repository.balance(str(wallet["id"])))
 
 
-def _credit_alert_context(request: Request) -> tuple[int, int]:
+def _credit_alert_context(request: Request) -> tuple[int, str]:
     owner_id = _authenticated_owner(request)
     try:
         user_id = int(owner_id)
@@ -521,24 +521,23 @@ def _credit_alert_context(request: Request) -> tuple[int, int]:
         raise HTTPException(status_code=404, detail="User not found") from exc
     repository = get_billing_repository()
     wallet = repository.ensure_wallet("user", owner_id)
-    available = repository.balance(str(wallet["id"])).available
-    return user_id, available
+    return user_id, str(wallet["id"])
 
 
 @user_router.get("/credit-alerts")
 def get_credit_alerts(request: Request) -> dict[str, Any]:
-    user_id, available = _credit_alert_context(request)
-    return get_credit_alert_service().get(user_id, available)
+    user_id, wallet_id = _credit_alert_context(request)
+    return get_credit_alert_service().get_for_wallet(user_id, wallet_id)
 
 
 @user_router.patch("/credit-alerts/preferences")
 def update_credit_alert_preferences(
     payload: CreditAlertPreferencesBody, request: Request,
 ) -> dict[str, Any]:
-    user_id, available = _credit_alert_context(request)
+    user_id, wallet_id = _credit_alert_context(request)
     try:
-        return get_credit_alert_service().update_preferences(
-            user_id, payload.warning_threshold, payload.critical_threshold, available,
+        return get_credit_alert_service().update_preferences_for_wallet(
+            user_id, wallet_id, payload.warning_threshold, payload.critical_threshold,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -546,9 +545,11 @@ def update_credit_alert_preferences(
 
 @user_router.post("/credit-alerts/{tier}/dismiss")
 def dismiss_credit_alert(tier: str, request: Request) -> dict[str, Any]:
-    user_id, available = _credit_alert_context(request)
+    user_id, wallet_id = _credit_alert_context(request)
     try:
-        return get_credit_alert_service().dismiss(user_id, tier, available)
+        return get_credit_alert_service().dismiss_for_wallet(
+            user_id, wallet_id, tier,
+        )
     except AlertTierNotFound as exc:
         raise HTTPException(status_code=404, detail="Alert tier not found") from exc
     except AlertConflict as exc:
