@@ -3,6 +3,7 @@ import styles from "./index.module.less";
 import { UploadOutlined, DownloadOutlined } from "@ant-design/icons";
 import { Button, Tooltip } from "@agentscope-ai/design";
 import { workspaceApi } from "../../../api/modules/workspace";
+import { saveDownloadedBlob } from "../../../utils/download";
 import { useRef, useEffect, useState, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { PageHeader } from "@/components/PageHeader";
@@ -14,7 +15,8 @@ import { agentsApi } from "../../../api/modules/agents";
 export default function WorkspacePage() {
   const { t } = useTranslation();
   const { message } = useAppMessage();
-  const { selectedAgent, setSelectedAgent, agents, setAgents } = useAgentStore();
+  const { selectedAgent, setSelectedAgent, agents, setAgents } =
+    useAgentStore();
   const [loadingAgents, setLoadingAgents] = useState(false);
 
   useEffect(() => {
@@ -77,15 +79,9 @@ export default function WorkspacePage() {
   const handleDownload = async () => {
     try {
       const { blob, filename } = await workspaceApi.downloadWorkspace();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-      message.success(t("workspace.downloadSuccess"));
+      if (await saveDownloadedBlob(blob, filename)) {
+        message.success(t("workspace.downloadSuccess"));
+      }
     } catch (error) {
       console.error("Download failed:", error);
       message.error(
@@ -153,7 +149,14 @@ export default function WorkspacePage() {
       <PageHeader
         items={[{ title: t("nav.agent") }, { title: t("workspace.title") }]}
         afterBreadcrumb={
-          <div style={{ display: "flex", alignItems: "center", gap: 16, marginLeft: 16 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 16,
+              marginLeft: 16,
+            }}
+          >
             <Select
               showSearch
               value={selectedAgent}
@@ -165,7 +168,9 @@ export default function WorkspacePage() {
               options={agentOptions}
               optionFilterProp="label"
               filterOption={(input, option) =>
-                (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+                (option?.label ?? "")
+                  .toLowerCase()
+                  .includes(input.toLowerCase())
               }
               placeholder={t("workspace.selectAgent", "选择智能体")}
             />

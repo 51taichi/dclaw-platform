@@ -14,6 +14,7 @@ declare module "*.less" {
 interface PyWebViewAPI {
   open_external_link: (url: string) => void;
   save_file: (url: string, filename: string) => Promise<boolean>;
+  save_blob: (data: number[], filename: string) => Promise<boolean>;
 }
 
 declare global {

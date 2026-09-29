@@ -841,7 +841,7 @@ dependencies = [
 
 [[package]]
 name = "dclaw"
-version = "2.4.7"
+version = "2.4.8"
 dependencies = [
  "base64 0.22.1",
  "clipboard-rs",
@@ -853,6 +853,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-autostart",
  "tauri-plugin-dialog",
+ "tauri-plugin-fs",
  "tauri-plugin-global-shortcut",
  "tauri-plugin-log",
  "tauri-plugin-process",

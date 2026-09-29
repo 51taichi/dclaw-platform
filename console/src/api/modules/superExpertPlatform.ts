@@ -1,4 +1,5 @@
 import { request } from "../request";
+import { saveDownloadedBlob } from "../../utils/download";
 
 export interface SuperExpertPlatformCommand {
   installation_id: string;
@@ -285,14 +286,7 @@ export const superExpertPlatformApi = {
         materialTaskId,
       )}/review-assets/archive`,
     );
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `审核素材-${materialTaskId}.zip`;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(url);
+    await saveDownloadedBlob(blob, `审核素材-${materialTaskId}.zip`);
   },
   getOperation: (operationId: string) =>
     request<AigcOperationContract>(

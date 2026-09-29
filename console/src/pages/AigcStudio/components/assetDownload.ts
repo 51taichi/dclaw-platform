@@ -5,6 +5,8 @@ import {
   absoluteAuthenticatedAssetFetchUrl,
   shouldFetchAuthenticatedAsset,
 } from "./AuthenticatedAssetImage";
+import { isDesktopApp } from "../../../utils/env";
+import { saveDownloadedBlob } from "../../../utils/download";
 
 const DOWNLOAD_CLEANUP_DELAY_MS = 1000;
 let downloadToastSequence = 0;
@@ -109,7 +111,33 @@ export async function downloadAssetSource({
     key: toastKey,
   });
   try {
-    if (reusableHref) {
+    if (isDesktopApp()) {
+      const href = reusableHref || downloadFetchUrl(source);
+      let saved = false;
+      try {
+        const response = await fetch(
+          href,
+          reusableHref ? undefined : downloadFetchOptions(source),
+        );
+        if (!response.ok) {
+          throw new Error(`Asset download failed: ${response.status}`);
+        }
+        saved = await saveDownloadedBlob(
+          await response.blob(),
+          safeDownloadFileName(label),
+        );
+      } finally {
+        cleanup?.();
+      }
+      if (!saved) {
+        message.info({
+          content: "已取消保存",
+          duration: 2,
+          key: toastKey,
+        });
+        return;
+      }
+    } else if (reusableHref) {
       clickDownloadLink(reusableHref, safeDownloadFileName(label), cleanup);
     } else if (
       shouldFetchAuthenticatedAsset(source) ||

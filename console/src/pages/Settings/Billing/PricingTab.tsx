@@ -11,6 +11,7 @@ import {
   Upload,
 } from "antd";
 import { billingApi } from "../../../api/modules/billing";
+import { saveDownloadedBlob } from "../../../utils/download";
 import type {
   PriceableModel,
   PricingAudit,
@@ -129,12 +130,7 @@ export default function PricingTab() {
   };
   const exportExcel = async () => {
     const blob = await billingApi.exportPricing();
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = "pricing-list.xlsx";
-    anchor.click();
-    URL.revokeObjectURL(url);
+    await saveDownloadedBlob(blob, "pricing-list.xlsx");
   };
   if (error)
     return (

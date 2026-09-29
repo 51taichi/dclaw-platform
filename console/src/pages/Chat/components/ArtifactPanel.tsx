@@ -39,6 +39,7 @@ import { chatApi } from "../../../api/modules/chat";
 import type { ChatHistory, Message } from "../../../api/types/chat";
 import { expertTeamsApi } from "../../../api/modules/expertTeams";
 import type { ExpertTeamRun } from "../../../api/types/expertTeams";
+import { saveDownloadedBlob } from "../../../utils/download";
 
 // ── File icon & color resolver ───────────────────────────────────
 
@@ -179,17 +180,6 @@ export function isDownloadOnlyPreviewFile(filename: string) {
     !isImageFile(filename) &&
     !isMediaPreviewFile(filename)
   );
-}
-
-function triggerBrowserDownload(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  URL.revokeObjectURL(url);
-  document.body.removeChild(a);
 }
 
 // ── Recursive File Tree Node Interface ────────────────────────────
@@ -748,11 +738,7 @@ export default function ArtifactPanel({
     };
 
     const refresh = async () => {
-      if (
-        !cancelled &&
-        !inFlight &&
-        document.visibilityState !== "hidden"
-      ) {
+      if (!cancelled && !inFlight && document.visibilityState !== "hidden") {
         inFlight = true;
         try {
           await loadExpertTeamRun();
@@ -902,8 +888,9 @@ export default function ArtifactPanel({
       const { blob, filename } = await workspaceApi.downloadArtifacts(
         realChatId,
       );
-      triggerBrowserDownload(blob, filename);
-      message.success("产物包已开始下载");
+      if (await saveDownloadedBlob(blob, filename)) {
+        message.success("产物包已保存");
+      }
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
@@ -918,8 +905,9 @@ export default function ArtifactPanel({
           filePath,
           realChatId,
         );
-        triggerBrowserDownload(blob, filename);
-        message.success("文件已开始下载");
+        if (await saveDownloadedBlob(blob, filename)) {
+          message.success("文件已保存");
+        }
       } catch (error) {
         const errorMessage =
           error instanceof Error ? error.message : String(error);
