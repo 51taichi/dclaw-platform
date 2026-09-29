@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -53,6 +54,17 @@ _TYPE_COLUMNS = {
     "promotional": billing_wallets.c.promotional_credits,
     "package": billing_wallets.c.package_credits,
 }
+logger = logging.getLogger(__name__)
+
+
+def _reconcile_credit_alert(
+    conn: Connection, wallet_id: str, available: int, *, cause: str,
+) -> None:
+    from ...billing.credit_alerts import CreditAlertService
+
+    CreditAlertService(conn.engine).reconcile_in_connection(
+        conn, wallet_id, available, cause=cause,
+    )
 
 
 class BillingRepository:
@@ -253,6 +265,9 @@ class BillingRepository:
 
         balance = self._balance_for_update(conn, command.wallet_id)
         self._assert_projection(conn, command.wallet_id, balance)
+        self._best_effort_credit_alert(
+            conn, command.wallet_id, balance.available, cause="balance_change",
+        )
         return balance
 
     def grant(
@@ -426,9 +441,13 @@ class BillingRepository:
             ).first()
             if wallet is None:
                 raise BillingInvariantError(f"wallet not found: {wallet_id}")
-            self._expire_available_lots(conn, wallet_id, self._clock())
+            expired = self._expire_available_lots(conn, wallet_id, self._clock())
             balance = self._balance_for_update(conn, wallet_id)
             self._assert_projection(conn, wallet_id, balance)
+            if expired:
+                self._best_effort_credit_alert(
+                    conn, wallet_id, balance.available, cause="expiry",
+                )
             return balance
 
     def balance_in_connection(
@@ -602,7 +621,7 @@ class BillingRepository:
         conn,
         wallet_id: str,
         now: datetime,
-    ) -> None:
+    ) -> bool:
         rows = (
             conn.execute(
                 select(billing_credit_lots)
@@ -690,6 +709,22 @@ class BillingRepository:
                 raise BillingInvariantError(
                     "wallet changed during credit expiry",
                 )
+        return bool(rows)
+
+    @staticmethod
+    def _best_effort_credit_alert(
+        conn: Connection, wallet_id: str, available: int, *, cause: str,
+    ) -> None:
+        try:
+            with conn.begin_nested():
+                _reconcile_credit_alert(
+                    conn, wallet_id, available, cause=cause,
+                )
+        except Exception:
+            logger.exception(
+                "credit alert reconciliation failed for wallet %s",
+                wallet_id,
+            )
 
     def _append_grant(self, conn, command: LedgerTransaction) -> None:
         assert command.credit_type is not None

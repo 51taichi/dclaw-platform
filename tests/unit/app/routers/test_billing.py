@@ -9,9 +9,10 @@ from threading import Barrier, Lock
 import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import event, func, select
+from sqlalchemy import event, func, insert, select
 
 from qwenpaw.app.billing.models import LedgerTransaction, WalletBalance
+from qwenpaw.app.billing.credit_alerts import CreditAlertService
 from qwenpaw.app.billing.pricing import (
     PriceCatalogDraft,
     PriceCatalogService,
@@ -34,6 +35,7 @@ from qwenpaw.app.storage.repos.top_up_repo import TopUpRepository
 from qwenpaw.app.storage.schema import (
     billing_usage_orders,
     create_all,
+    users,
 )
 from qwenpaw.app.storage.settings import get_storage_settings
 
@@ -100,6 +102,10 @@ def _app(
     monkeypatch.setattr(billing, "get_billing_repository", lambda: wallet_repo)
     monkeypatch.setattr(billing, "get_price_catalog_service", lambda: pricing)
     monkeypatch.setattr(
+        billing, "get_credit_alert_service", lambda: CreditAlertService(wallet_repo.engine),
+        raising=False,
+    )
+    monkeypatch.setattr(
         billing,
         "get_pricing_unlock_service",
         lambda: type(
@@ -150,6 +156,62 @@ def test_billing_mode_defaults_to_shadow(monkeypatch, wallet_repo, pricing):
     service = UsageService(wallet_repo, pricing)
 
     assert service.mode == "shadow"
+
+
+def test_customer_credit_alert_routes_are_owner_scoped(
+    monkeypatch, engine, wallet_repo, pricing,
+):
+    with engine.begin() as conn:
+        alice_id = conn.execute(insert(users).values(
+            username="alert-alice", password_hash="h", password_salt="s", role="user",
+        ).returning(users.c.id)).scalar_one()
+        bob_id = conn.execute(insert(users).values(
+            username="alert-bob", password_hash="h", password_salt="s", role="user",
+        ).returning(users.c.id)).scalar_one()
+    alice_wallet = wallet_repo.ensure_wallet("user", str(alice_id))
+    bob_wallet = wallet_repo.ensure_wallet("user", str(bob_id))
+    wallet_repo.grant(alice_wallet["id"], credits=6000, credit_type="purchased", expires_at=None, idempotency_key="alice-alert-seed")
+    wallet_repo.grant(bob_wallet["id"], credits=9000, credit_type="purchased", expires_at=None, idempotency_key="bob-alert-seed")
+    client = TestClient(_app(monkeypatch, UsageService(wallet_repo, pricing, mode="shadow"), wallet_repo, pricing))
+
+    initial = client.get("/api/user/billing/credit-alerts", headers=_headers(str(alice_id)))
+    assert initial.status_code == 200
+    assert initial.json() == {
+        "preferences": {"warning_threshold": 5000, "critical_threshold": 1000},
+        "available": 6000, "alert": None,
+    }
+    updated = client.patch(
+        "/api/user/billing/credit-alerts/preferences", headers=_headers(str(alice_id)),
+        json={"warning_threshold": 7000, "critical_threshold": 2000},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["alert"]["tier"] == "warning"
+    assert client.get("/api/user/billing/credit-alerts", headers=_headers(str(bob_id))).json()["preferences"] == {
+        "warning_threshold": 5000, "critical_threshold": 1000,
+    }
+    assert client.post("/api/user/billing/credit-alerts/unknown/dismiss", headers=_headers(str(alice_id))).status_code == 404
+    assert client.post("/api/user/billing/credit-alerts/critical/dismiss", headers=_headers(str(alice_id))).status_code == 409
+    first = client.post("/api/user/billing/credit-alerts/warning/dismiss", headers=_headers(str(alice_id)))
+    second = client.post("/api/user/billing/credit-alerts/warning/dismiss", headers=_headers(str(alice_id)))
+    assert first.status_code == second.status_code == 200
+    assert first.json()["alert"] is None and second.json()["alert"] is None
+
+
+@pytest.mark.parametrize("warning,critical", [(1000, 1000), (999, 1000), (5000, -1), (2**63, 1000)])
+def test_customer_credit_alert_routes_reject_invalid_thresholds(
+    monkeypatch, engine, wallet_repo, pricing, warning, critical,
+):
+    with engine.begin() as conn:
+        user_id = conn.execute(insert(users).values(
+            username=f"invalid-{warning}-{critical}", password_hash="h", password_salt="s",
+        ).returning(users.c.id)).scalar_one()
+    wallet_repo.ensure_wallet("user", str(user_id))
+    client = TestClient(_app(monkeypatch, UsageService(wallet_repo, pricing, mode="shadow"), wallet_repo, pricing))
+    response = client.patch(
+        "/api/user/billing/credit-alerts/preferences", headers=_headers(str(user_id)),
+        json={"warning_threshold": warning, "critical_threshold": critical},
+    )
+    assert response.status_code == 422
 
 
 def test_manual_top_up_routes_use_auth_owner_and_server_product_snapshot(

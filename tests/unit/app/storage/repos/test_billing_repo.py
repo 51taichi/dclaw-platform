@@ -23,6 +23,8 @@ from qwenpaw.app.storage.schema import (
     billing_ledger_allocations,
     billing_ledger_entries,
     billing_wallets,
+    credit_alert_events,
+    credit_alert_states,
     create_all,
     users,
 )
@@ -372,6 +374,65 @@ def test_append_transaction_returns_typed_balance(repo):
     )
 
     assert balance == WalletBalance(7, 0, 0, 7, 0)
+
+
+def test_ledger_mutation_reconciles_credit_alert_in_outer_transaction(repo, engine):
+    with engine.begin() as conn:
+        user_id = conn.execute(insert(users).values(
+            username="alert-user", password_hash="h", password_salt="s", role="user",
+            phone_number_e164="+8613800138000",
+        ).returning(users.c.id)).scalar_one()
+    wallet = repo.ensure_wallet("user", str(user_id))
+    repo.grant(wallet["id"], credits=6000, credit_type="purchased", expires_at=None, idempotency_key="seed-alert")
+    repo.hold(wallet["id"], credits=1000, business_key="alert-hold", idempotency_key="alert-hold")
+
+    with engine.connect() as conn:
+        state = conn.execute(select(credit_alert_states).where(
+            credit_alert_states.c.user_id == user_id,
+            credit_alert_states.c.tier == "warning",
+        )).mappings().one()
+        event_row = conn.execute(select(credit_alert_events)).mappings().one()
+    assert state["status"] == "active"
+    assert event_row["available_balance"] == 5000
+
+
+def test_alert_failure_does_not_rollback_ledger(monkeypatch, repo, engine):
+    with engine.begin() as conn:
+        user_id = conn.execute(insert(users).values(
+            username="resilient-user", password_hash="h", password_salt="s", role="user",
+        ).returning(users.c.id)).scalar_one()
+    wallet = repo.ensure_wallet("user", str(user_id))
+    monkeypatch.setattr(
+        "qwenpaw.app.storage.repos.billing_repo._reconcile_credit_alert",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("alert unavailable")),
+    )
+
+    result = repo.grant(wallet["id"], credits=6000, credit_type="purchased", expires_at=None, idempotency_key="resilient-grant")
+
+    assert result.available == 6000
+    assert repo.balance(wallet["id"]).available == 6000
+    assert repo.list_ledger(wallet["id"], 10, None)[0]["idempotency_key"] == "resilient-grant"
+
+
+def test_expiry_reconciles_credit_alert(engine):
+    clock = MutableClock(datetime(2026, 8, 26, tzinfo=timezone.utc))
+    repo = BillingRepository(engine, clock=clock)
+    with engine.begin() as conn:
+        user_id = conn.execute(insert(users).values(
+            username="expiry-alert-user", password_hash="h", password_salt="s", role="user",
+        ).returning(users.c.id)).scalar_one()
+    wallet = repo.ensure_wallet("user", str(user_id))
+    repo.grant(
+        wallet["id"], credits=6000, credit_type="promotional",
+        expires_at=clock.now + timedelta(days=1), idempotency_key="expiry-alert-seed",
+    )
+    clock.now += timedelta(days=2)
+
+    assert repo.balance(wallet["id"]).available == 0
+    with engine.connect() as conn:
+        event_row = conn.execute(select(credit_alert_events)).mappings().one()
+    assert event_row["tier"] == "critical"
+    assert event_row["available_balance"] == 0
 
 
 def test_list_ledger_uses_an_exclusive_cursor(repo):

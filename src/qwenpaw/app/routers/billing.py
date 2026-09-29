@@ -19,6 +19,12 @@ from ..billing.pricing import (
     PriceRuleNotFoundError,
     QuoteRequest,
 )
+from ..billing.credit_alerts import (
+    MAX_THRESHOLD,
+    AlertConflict,
+    AlertTierNotFound,
+    CreditAlertService,
+)
 from ..billing.pricing_unlock import (
     PersistentPricingUnlockLimiter,
     PricingUnlockDenied,
@@ -174,6 +180,12 @@ class PricingUnlockBody(BaseModel):
     password: str = Field(min_length=1, max_length=1024)
 
 
+class CreditAlertPreferencesBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    warning_threshold: int = Field(ge=0, le=MAX_THRESHOLD)
+    critical_threshold: int = Field(ge=0, le=MAX_THRESHOLD)
+
+
 class PricingPolicyBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     scope_type: Literal["global", "provider", "category", "model"]
@@ -220,6 +232,10 @@ class PricingModelMappingBody(BaseModel):
 
 def get_billing_repository() -> BillingRepository:
     return BillingRepository(get_app_engine())
+
+
+def get_credit_alert_service() -> CreditAlertService:
+    return CreditAlertService(get_app_engine())
 
 
 def get_price_catalog_service() -> PriceCatalogService:
@@ -495,6 +511,48 @@ def get_user_wallet(request: Request) -> dict[str, int]:
     repository = get_billing_repository()
     wallet = repository.ensure_wallet("user", owner_id)
     return wallet_balance_dict(repository.balance(str(wallet["id"])))
+
+
+def _credit_alert_context(request: Request) -> tuple[int, int]:
+    owner_id = _authenticated_owner(request)
+    try:
+        user_id = int(owner_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="User not found") from exc
+    repository = get_billing_repository()
+    wallet = repository.ensure_wallet("user", owner_id)
+    available = repository.balance(str(wallet["id"])).available
+    return user_id, available
+
+
+@user_router.get("/credit-alerts")
+def get_credit_alerts(request: Request) -> dict[str, Any]:
+    user_id, available = _credit_alert_context(request)
+    return get_credit_alert_service().get(user_id, available)
+
+
+@user_router.patch("/credit-alerts/preferences")
+def update_credit_alert_preferences(
+    payload: CreditAlertPreferencesBody, request: Request,
+) -> dict[str, Any]:
+    user_id, available = _credit_alert_context(request)
+    try:
+        return get_credit_alert_service().update_preferences(
+            user_id, payload.warning_threshold, payload.critical_threshold, available,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@user_router.post("/credit-alerts/{tier}/dismiss")
+def dismiss_credit_alert(tier: str, request: Request) -> dict[str, Any]:
+    user_id, available = _credit_alert_context(request)
+    try:
+        return get_credit_alert_service().dismiss(user_id, tier, available)
+    except AlertTierNotFound as exc:
+        raise HTTPException(status_code=404, detail="Alert tier not found") from exc
+    except AlertConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @user_router.get("/ledger")
