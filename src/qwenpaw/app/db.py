@@ -46,10 +46,17 @@ def init_db():
             password_hash TEXT NOT NULL,
             password_salt TEXT NOT NULL,
             role TEXT DEFAULT 'user',
+            display_name TEXT,
+            phone_number_e164 TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """
     )
+    user_columns = {row[1] for row in cursor.execute("PRAGMA table_info(users)").fetchall()}
+    if "display_name" not in user_columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN display_name TEXT")
+    if "phone_number_e164" not in user_columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN phone_number_e164 TEXT")
 
     # 2. User Connections table (for MCP Connectors)
     cursor.execute(

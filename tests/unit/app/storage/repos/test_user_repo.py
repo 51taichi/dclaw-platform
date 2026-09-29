@@ -11,6 +11,9 @@ from qwenpaw.app.storage.engine import create_engine_from_settings
 from qwenpaw.app.storage.repos.user_repo import SqlAlchemyUserRepository, SqliteUserRepository
 from qwenpaw.app.storage.schema import (
     chats,
+    credit_alert_events,
+    credit_alert_preferences,
+    credit_alert_states,
     create_all,
     messages,
     session_states,
@@ -19,6 +22,21 @@ from qwenpaw.app.storage.schema import (
     users,
 )
 from qwenpaw.app.storage.settings import get_storage_settings
+from qwenpaw.app.user_identity import normalize_cn_mobile
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [(None, None), ("13800138000", "+8613800138000"), (" +8613900139000 ", "+8613900139000")],
+)
+def test_normalize_cn_mobile_accepts_supported_forms(raw, expected):
+    assert normalize_cn_mobile(raw) == expected
+
+
+@pytest.mark.parametrize("raw", ["", "12800128000", "+1 555 0100", "1380013800"])
+def test_normalize_cn_mobile_rejects_malformed_values(raw):
+    with pytest.raises(ValueError):
+        normalize_cn_mobile(raw)
 
 
 @pytest.fixture
@@ -45,6 +63,8 @@ def test_sqlalchemy_user_repo_creates_lists_and_updates_users(repo):
     assert created["id"] == 1
     assert created["username"] == "alice"
     assert created["role"] == "admin"
+    assert created["display_name"] is None
+    assert created["phone_number_e164"] is None
     assert repo.count_users() == 1
     assert repo.count_admins() == 1
     assert repo.get_user_by_username("alice")["id"] == 1
@@ -59,6 +79,22 @@ def test_sqlalchemy_user_repo_creates_lists_and_updates_users(repo):
         "password_salt": "salt-b",
     }
     assert [user["username"] for user in repo.list_users()] == ["alice"]
+
+
+def test_sqlalchemy_user_repo_round_trips_identity(repo):
+    created = repo.create_user(
+        username="alice",
+        password_hash="hash",
+        password_salt="salt",
+        role="user",
+        display_name="Alice Chen",
+        phone_number_e164="+8613800138000",
+    )
+
+    assert created["display_name"] == "Alice Chen"
+    assert created["phone_number_e164"] == "+8613800138000"
+    assert repo.get_user_by_username("alice")["display_name"] == "Alice Chen"
+    assert repo.list_users()[0]["phone_number_e164"] == "+8613800138000"
 
 
 def test_sqlalchemy_user_repo_ensure_and_update_legacy_user(repo):
@@ -206,6 +242,13 @@ def test_sqlalchemy_user_repo_delete_user_cascades_owned_records(engine, repo):
                 "completion_tokens": 2,
             },
         )
+        conn.execute(insert(credit_alert_preferences), {"user_id": 1})
+        conn.execute(insert(credit_alert_states), {"user_id": 1, "tier": "warning"})
+        conn.execute(insert(credit_alert_events), {
+            "id": "alert-1", "user_id": 1, "tier": "warning", "cycle_number": 1,
+            "available_balance": 5000, "threshold": 5000,
+            "sms_status": "skipped_unconfigured",
+        })
 
     assert repo.delete_user_cascade(1) is True
 
@@ -216,6 +259,9 @@ def test_sqlalchemy_user_repo_delete_user_cascades_owned_records(engine, repo):
         assert conn.execute(select(session_states)).first() is None
         assert conn.execute(select(user_connections)).first() is None
         assert conn.execute(select(token_usage_logs)).first() is None
+        assert conn.execute(select(credit_alert_preferences)).first() is None
+        assert conn.execute(select(credit_alert_states)).first() is None
+        assert conn.execute(select(credit_alert_events)).first() is None
         assert conn.execute(select(users).where(users.c.id == 2)).first() is not None
 
 

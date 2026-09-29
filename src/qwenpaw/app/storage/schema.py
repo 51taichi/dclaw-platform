@@ -18,6 +18,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    UniqueConstraint,
     false,
     func,
     inspect,
@@ -136,6 +137,8 @@ users = Table(
     Column("password_hash", Text, nullable=False),
     Column("password_salt", Text, nullable=False),
     Column("role", String, server_default="user"),
+    Column("display_name", String(100), nullable=True),
+    Column("phone_number_e164", String(32), nullable=True),
     Column(
         "billing_overdraft_enabled",
         Boolean,
@@ -143,6 +146,56 @@ users = Table(
         server_default=false(),
     ),
     Column("created_at", DateTime(timezone=True), server_default=func.now()),
+)
+
+credit_alert_preferences = Table(
+    "credit_alert_preferences", metadata,
+    Column("user_id", Integer, ForeignKey("users.id"), primary_key=True),
+    Column("warning_threshold", BigInteger, nullable=False, server_default="5000"),
+    Column("critical_threshold", BigInteger, nullable=False, server_default="1000"),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    CheckConstraint("critical_threshold >= 0 AND critical_threshold < warning_threshold", name="ck_credit_alert_preferences_order"),
+)
+
+credit_alert_states = Table(
+    "credit_alert_states", metadata,
+    Column("user_id", Integer, ForeignKey("users.id"), primary_key=True),
+    Column("tier", String, primary_key=True),
+    Column("status", String, nullable=False, server_default="armed"),
+    Column("cycle_number", BigInteger, nullable=False, server_default="0"),
+    Column("activation_source", String, nullable=True),
+    Column("trigger_balance", BigInteger, nullable=True),
+    Column("triggered_at", DateTime(timezone=True), nullable=True),
+    Column("dismissed_at", DateTime(timezone=True), nullable=True),
+    Column("rearmed_at", DateTime(timezone=True), nullable=True),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    CheckConstraint("tier IN ('warning', 'critical')", name="ck_credit_alert_states_tier"),
+    CheckConstraint("status IN ('armed', 'active', 'dismissed', 'superseded')", name="ck_credit_alert_states_status"),
+    CheckConstraint("activation_source IS NULL OR activation_source IN ('crossing', 'reconciliation')", name="ck_credit_alert_states_source"),
+)
+
+credit_alert_events = Table(
+    "credit_alert_events", metadata,
+    Column("id", String, primary_key=True),
+    Column("user_id", Integer, ForeignKey("users.id"), nullable=False),
+    Column("tier", String, nullable=False),
+    Column("cycle_number", BigInteger, nullable=False),
+    Column("available_balance", BigInteger, nullable=False),
+    Column("threshold", BigInteger, nullable=False),
+    Column("display_name_snapshot", String(100), nullable=True),
+    Column("phone_number_snapshot", String(32), nullable=True),
+    Column("sms_status", String, nullable=False),
+    Column("provider_message_id", String, nullable=True),
+    Column("provider_error", Text, nullable=True),
+    Column("attempt_count", Integer, nullable=False, server_default="0"),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("submitted_at", DateTime(timezone=True), nullable=True),
+    Column("delivered_at", DateTime(timezone=True), nullable=True),
+    CheckConstraint("tier IN ('warning', 'critical')", name="ck_credit_alert_events_tier"),
+    CheckConstraint("sms_status IN ('skipped_unconfigured', 'skipped_missing_phone', 'pending', 'submitted', 'delivered', 'failed')", name="ck_credit_alert_events_sms_status"),
+    UniqueConstraint("user_id", "tier", "cycle_number", name="uq_credit_alert_event_cycle"),
 )
 
 user_connections = Table(
@@ -1701,6 +1754,7 @@ Index(
 def create_all(engine: Engine) -> None:
     """Create all known durable tables and indexes."""
     metadata.create_all(engine)
+    _ensure_user_identity_columns(engine)
     _ensure_user_overdraft_columns(engine)
     _ensure_pricing_catalog_revision(engine)
     _ensure_pricing_audit_immutable(engine)
@@ -1718,6 +1772,21 @@ def create_all(engine: Engine) -> None:
     _ensure_reconciliation_audit_immutable(engine)
     _ensure_top_up_audit_immutable(engine)
     _backfill_personal_wallets(engine)
+
+
+def _ensure_user_identity_columns(engine: Engine) -> None:
+    if not inspect(engine).has_table("users"):
+        return
+    existing = {column["name"] for column in inspect(engine).get_columns("users")}
+    statements = []
+    if "display_name" not in existing:
+        statements.append("ALTER TABLE users ADD COLUMN display_name VARCHAR(100)")
+    if "phone_number_e164" not in existing:
+        statements.append("ALTER TABLE users ADD COLUMN phone_number_e164 VARCHAR(32)")
+    if statements:
+        with engine.begin() as conn:
+            for statement in statements:
+                conn.execute(text(statement))
 
 
 def _ensure_user_overdraft_columns(engine: Engine) -> None:

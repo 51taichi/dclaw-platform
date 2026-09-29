@@ -14,6 +14,9 @@ from ..schema import (
     messages,
     session_states,
     token_usage_logs,
+    credit_alert_events,
+    credit_alert_preferences,
+    credit_alert_states,
     user_capabilities,
     user_connections,
     users,
@@ -68,6 +71,8 @@ class UserRepository(Protocol):
         password_hash: str,
         password_salt: str,
         role: str,
+        display_name: str | None = None,
+        phone_number_e164: str | None = None,
     ) -> dict[str, Any]:
         ...
 
@@ -108,7 +113,7 @@ class SqlAlchemyUserRepository:
     def get_user_by_id(self, user_id: int) -> dict[str, Any] | None:
         with self.engine.connect() as conn:
             row = conn.execute(
-                select(users.c.id, users.c.username, users.c.role, users.c.created_at).where(
+                select(users.c.id, users.c.username, users.c.role, users.c.display_name, users.c.phone_number_e164, users.c.created_at).where(
                     users.c.id == user_id,
                 ),
             ).mappings().first()
@@ -117,7 +122,7 @@ class SqlAlchemyUserRepository:
     def get_user_by_username(self, username: str) -> dict[str, Any] | None:
         with self.engine.connect() as conn:
             row = conn.execute(
-                select(users.c.id, users.c.username, users.c.role).where(
+                select(users.c.id, users.c.username, users.c.role, users.c.display_name, users.c.phone_number_e164).where(
                     users.c.username == username,
                 ),
             ).mappings().first()
@@ -182,7 +187,7 @@ class SqlAlchemyUserRepository:
     def list_users(self) -> list[dict[str, Any]]:
         with self.engine.connect() as conn:
             rows = conn.execute(
-                select(users.c.id, users.c.username, users.c.role, users.c.created_at).order_by(
+                select(users.c.id, users.c.username, users.c.role, users.c.display_name, users.c.phone_number_e164, users.c.created_at).order_by(
                     desc(users.c.created_at),
                 ),
             ).mappings().all()
@@ -195,6 +200,8 @@ class SqlAlchemyUserRepository:
         password_hash: str,
         password_salt: str,
         role: str,
+        display_name: str | None = None,
+        phone_number_e164: str | None = None,
     ) -> dict[str, Any]:
         with self.engine.begin() as conn:
             result = conn.execute(
@@ -203,6 +210,8 @@ class SqlAlchemyUserRepository:
                     password_hash=password_hash,
                     password_salt=password_salt,
                     role=role,
+                    display_name=display_name,
+                    phone_number_e164=phone_number_e164,
                 ),
             )
             user_id = int(result.inserted_primary_key[0])
@@ -247,6 +256,9 @@ class SqlAlchemyUserRepository:
             conn.execute(delete(user_connections).where(user_connections.c.user_id == user_id))
             conn.execute(delete(chats).where(chats.c.user_id == user_id_str))
             conn.execute(delete(token_usage_logs).where(token_usage_logs.c.user_id == user_id))
+            conn.execute(delete(credit_alert_events).where(credit_alert_events.c.user_id == user_id))
+            conn.execute(delete(credit_alert_states).where(credit_alert_states.c.user_id == user_id))
+            conn.execute(delete(credit_alert_preferences).where(credit_alert_preferences.c.user_id == user_id))
             conn.execute(delete(users).where(users.c.id == user_id))
         return True
 
@@ -280,17 +292,17 @@ class SqliteUserRepository:
 
     def get_user_by_id(self, user_id: int) -> dict[str, Any] | None:
         row = db.get_db().execute(
-            "SELECT id, username, role, created_at FROM users WHERE id = ?",
+            "SELECT * FROM users WHERE id = ?",
             (user_id,),
         ).fetchone()
-        return _dict_or_none(row)
+        return _sqlite_user_dict(row)
 
     def get_user_by_username(self, username: str) -> dict[str, Any] | None:
         row = db.get_db().execute(
-            "SELECT id, username, role FROM users WHERE username = ?",
+            "SELECT * FROM users WHERE username = ?",
             (username,),
         ).fetchone()
-        return _dict_or_none(row)
+        return _sqlite_user_dict(row)
 
     def get_user_credentials(self, username: str) -> dict[str, str] | None:
         row = db.get_db().execute(
@@ -348,10 +360,8 @@ class SqliteUserRepository:
         return self.get_user_by_username(username)
 
     def list_users(self) -> list[dict[str, Any]]:
-        rows = db.get_db().execute(
-            "SELECT id, username, role, created_at FROM users ORDER BY created_at DESC",
-        ).fetchall()
-        return [dict(row) for row in rows]
+        rows = db.get_db().execute("SELECT * FROM users ORDER BY created_at DESC").fetchall()
+        return [_sqlite_user_dict(row) for row in rows]
 
     def create_user(
         self,
@@ -360,15 +370,17 @@ class SqliteUserRepository:
         password_hash: str,
         password_salt: str,
         role: str,
+        display_name: str | None = None,
+        phone_number_e164: str | None = None,
     ) -> dict[str, Any]:
         conn = db.get_db()
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO users (username, password_hash, password_salt, role)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO users (username, password_hash, password_salt, role, display_name, phone_number_e164)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (username, password_hash, password_salt, role),
+            (username, password_hash, password_salt, role, display_name, phone_number_e164),
         )
         conn.commit()
         user = self.get_user_by_id(int(cursor.lastrowid))
@@ -396,6 +408,12 @@ class SqliteUserRepository:
             return False
         conn = db.get_db()
         cursor = conn.cursor()
+        for table in ("credit_alert_events", "credit_alert_states", "credit_alert_preferences"):
+            exists = cursor.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,),
+            ).fetchone()
+            if exists:
+                cursor.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
         cursor.execute("DELETE FROM user_capabilities WHERE user_id = ?", (user_id,))
         cursor.execute("DELETE FROM user_connections WHERE user_id = ?", (user_id,))
         cursor.execute("SELECT id FROM chats WHERE user_id = ?", (str(user_id),))
@@ -436,6 +454,14 @@ def _dict_or_none(row: Any) -> dict[str, Any] | None:
     if row is None:
         return None
     return dict(row)
+
+
+def _sqlite_user_dict(row: Any) -> dict[str, Any] | None:
+    value = _dict_or_none(row)
+    if value is not None:
+        value.setdefault("display_name", None)
+        value.setdefault("phone_number_e164", None)
+    return value
 
 
 def _normalize_chat_row(row: dict[str, Any]) -> dict[str, Any]:
