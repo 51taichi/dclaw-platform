@@ -1,0 +1,33 @@
+.formRow {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.fields {
+  min-width: 0;
+}
+
+.field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.saveButton {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+@media (max-width: 720px) {
+  .formRow {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .saveButton {
+    align-self: flex-end;
+  }
+}

@@ -47,10 +47,14 @@ function pricingHeaders(token: string): Headers {
 
 export const billingApi = {
   getWallet: () => request<BillingWallet>("/billing/wallet"),
-  getCreditAlerts: () =>
-    request<CreditAlertResource>("/billing/credit-alerts"),
+  getCreditAlerts: () => request<CreditAlertResource>("/billing/credit-alerts"),
   updateCreditAlertPreferences: (payload: CreditAlertPreferences) =>
     request<CreditAlertResource>("/billing/credit-alerts/preferences", {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  updateCreditAlertPhone: (payload: { phone_number: string }) =>
+    request<CreditAlertResource>("/billing/credit-alerts/phone", {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),

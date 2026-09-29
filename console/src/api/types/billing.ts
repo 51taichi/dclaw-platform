@@ -22,6 +22,7 @@ export interface CreditAlertResource {
   preferences: CreditAlertPreferences;
   available: number;
   alert: CreditAlert | null;
+  phone_number: string | null;
 }
 
 export interface InsufficientCreditsFailure {

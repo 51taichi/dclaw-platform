@@ -8,6 +8,7 @@ vi.mock("../../../api/modules/billing", () => ({
   billingApi: {
     getCreditAlerts: vi.fn(),
     updateCreditAlertPreferences: vi.fn(),
+    updateCreditAlertPhone: vi.fn(),
   },
 }));
 
@@ -15,13 +16,17 @@ const resource = {
   preferences: { warning_threshold: 5000, critical_threshold: 1000 },
   available: 8000,
   alert: null,
+  phone_number: "+8613800138000",
 };
 
 describe("CreditAlertSettings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(billingApi.getCreditAlerts).mockResolvedValue(resource);
-    vi.mocked(billingApi.updateCreditAlertPreferences).mockResolvedValue(resource);
+    vi.mocked(billingApi.updateCreditAlertPreferences).mockResolvedValue(
+      resource,
+    );
+    vi.mocked(billingApi.updateCreditAlertPhone).mockResolvedValue(resource);
   });
 
   it("loads defaults and saves literal integer thresholds", async () => {
@@ -35,14 +40,77 @@ describe("CreditAlertSettings", () => {
     fireEvent.change(warning, { target: { value: "6000" } });
     fireEvent.change(critical, { target: { value: "1200" } });
     await user.click(screen.getByRole("button", { name: "保存预警设置" }));
-    await waitFor(() => expect(billingApi.updateCreditAlertPreferences).toHaveBeenCalledWith({
-      warning_threshold: 6000, critical_threshold: 1200,
-    }));
-    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: "dclaw:credit-alert-changed" }));
+    await waitFor(() =>
+      expect(billingApi.updateCreditAlertPreferences).toHaveBeenCalledWith({
+        warning_threshold: 6000,
+        critical_threshold: 1200,
+      }),
+    );
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "dclaw:credit-alert-changed" }),
+    );
+  });
+
+  it("requires a missing mobile and locks it after saving", async () => {
+    const user = userEvent.setup();
+    const withoutPhone = { ...resource, phone_number: null };
+    vi.mocked(billingApi.getCreditAlerts).mockResolvedValue(withoutPhone);
+    vi.mocked(billingApi.updateCreditAlertPhone).mockResolvedValue(resource);
+    render(<CreditAlertSettings />);
+
+    const phone = await screen.findByLabelText("客户手机号");
+    expect(phone).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "保存预警设置" }));
+    expect(
+      await screen.findByText("请输入有效的中国大陆手机号"),
+    ).toBeInTheDocument();
+    expect(billingApi.updateCreditAlertPhone).not.toHaveBeenCalled();
+    expect(billingApi.updateCreditAlertPreferences).not.toHaveBeenCalled();
+
+    await user.type(phone, "13800138000");
+    await user.click(screen.getByRole("button", { name: "保存预警设置" }));
+    await waitFor(() =>
+      expect(billingApi.updateCreditAlertPhone).toHaveBeenCalledWith({
+        phone_number: "13800138000",
+      }),
+    );
+    expect(billingApi.updateCreditAlertPreferences).toHaveBeenCalledWith({
+      warning_threshold: 5000,
+      critical_threshold: 1000,
+    });
+    expect(phone).toBeDisabled();
+    expect(phone).toHaveValue("+8613800138000");
+  });
+
+  it("keeps an existing mobile locked until the user unlocks and updates it", async () => {
+    const user = userEvent.setup();
+    const updatedResource = { ...resource, phone_number: "+8613900139000" };
+    vi.mocked(billingApi.updateCreditAlertPhone).mockResolvedValue(
+      updatedResource,
+    );
+    render(<CreditAlertSettings />);
+
+    const phone = await screen.findByLabelText("客户手机号");
+    expect(phone).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "修改手机号" }));
+    expect(phone).toBeEnabled();
+    await user.clear(phone);
+    await user.type(phone, "13900139000");
+    await user.click(screen.getByRole("button", { name: "保存预警设置" }));
+
+    await waitFor(() =>
+      expect(billingApi.updateCreditAlertPhone).toHaveBeenCalledWith({
+        phone_number: "13900139000",
+      }),
+    );
+    expect(phone).toBeDisabled();
+    expect(phone).toHaveValue("+8613900139000");
   });
 
   it.each([
-    [1000, 1000], [999, 1000], [5000, -1],
+    [1000, 1000],
+    [999, 1000],
+    [5000, -1],
   ])("blocks invalid ordering %s/%s", async (warningValue, criticalValue) => {
     const user = userEvent.setup();
     render(<CreditAlertSettings />);
@@ -51,20 +119,26 @@ describe("CreditAlertSettings", () => {
     fireEvent.change(warning, { target: { value: String(warningValue) } });
     fireEvent.change(critical, { target: { value: String(criticalValue) } });
     await user.click(screen.getByRole("button", { name: "保存预警设置" }));
-    expect(await screen.findByText("严重预警积分必须大于等于 0，且小于预警积分")).toBeInTheDocument();
+    expect(
+      await screen.findByText("严重预警积分必须大于等于 0，且小于预警积分"),
+    ).toBeInTheDocument();
     expect(billingApi.updateCreditAlertPreferences).not.toHaveBeenCalled();
   });
 
   it("keeps the form usable and emits no event after a server error", async () => {
     const user = userEvent.setup();
     const dispatch = vi.spyOn(window, "dispatchEvent");
-    vi.mocked(billingApi.updateCreditAlertPreferences).mockRejectedValue(new Error("save failed"));
+    vi.mocked(billingApi.updateCreditAlertPreferences).mockRejectedValue(
+      new Error("save failed"),
+    );
     render(<CreditAlertSettings />);
     const warning = await screen.findByLabelText("预警积分");
     fireEvent.change(warning, { target: { value: "6000" } });
     await user.click(screen.getByRole("button", { name: "保存预警设置" }));
     expect(await screen.findByText("save failed")).toBeInTheDocument();
     expect(warning).toHaveValue("6000");
-    expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: "dclaw:credit-alert-changed" }));
+    expect(dispatch).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "dclaw:credit-alert-changed" }),
+    );
   });
 });

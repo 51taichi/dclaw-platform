@@ -88,7 +88,7 @@ describe("WalletPage", () => {
     });
     vi.mocked(billingApi.getCreditAlerts).mockResolvedValue({
       preferences: { warning_threshold: 5000, critical_threshold: 1000 },
-      available: 100, alert: null,
+      available: 100, alert: null, phone_number: "+8613800138000",
     });
   });
 

@@ -41,19 +41,31 @@ describe("billingApi", () => {
       warning_threshold: 6000,
       critical_threshold: 1200,
     });
+    await billingApi.updateCreditAlertPhone({ phone_number: "13800138000" });
     await billingApi.dismissCreditAlert("critical");
 
     const calls = vi.mocked(fetch).mock.calls;
     expect(String(calls[0][0])).toContain("/api/user/billing/credit-alerts");
     expect(calls[0][1]?.method).toBeUndefined();
-    expect(String(calls[1][0])).toContain("/api/user/billing/credit-alerts/preferences");
+    expect(String(calls[1][0])).toContain(
+      "/api/user/billing/credit-alerts/preferences",
+    );
     expect(calls[1][1]?.method).toBe("PATCH");
     expect(JSON.parse(String(calls[1][1]?.body))).toEqual({
       warning_threshold: 6000,
       critical_threshold: 1200,
     });
-    expect(String(calls[2][0])).toContain("/api/user/billing/credit-alerts/critical/dismiss");
-    expect(calls[2][1]?.method).toBe("POST");
+    expect(String(calls[2][0])).toContain(
+      "/api/user/billing/credit-alerts/phone",
+    );
+    expect(calls[2][1]?.method).toBe("PATCH");
+    expect(JSON.parse(String(calls[2][1]?.body))).toEqual({
+      phone_number: "13800138000",
+    });
+    expect(String(calls[3][0])).toContain(
+      "/api/user/billing/credit-alerts/critical/dismiss",
+    );
+    expect(calls[3][1]?.method).toBe("POST");
   });
 
   it("submits only customer evidence with an idempotency header", async () => {

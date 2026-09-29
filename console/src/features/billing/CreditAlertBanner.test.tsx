@@ -13,6 +13,7 @@ vi.mock("../../api/modules/billing", () => ({
 const warning: CreditAlertResource = {
   preferences: { warning_threshold: 5000, critical_threshold: 1000 },
   available: 4500,
+  phone_number: "+8613800138000",
   alert: { tier: "warning", threshold: 5000, available: 4500, triggered_at: "2026-09-29T00:00:00Z" },
 };
 const critical: CreditAlertResource = {
