@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, Space } from "antd";
 import { useNavigate } from "react-router-dom";
 import { billingApi } from "../../api/modules/billing";
@@ -11,22 +11,35 @@ export default function CreditAlertBanner() {
   const navigate = useNavigate();
   const [resource, setResource] = useState<CreditAlertResource | null>(null);
   const [dismissing, setDismissing] = useState(false);
+  const requestGeneration = useRef(0);
+  const dismissingRef = useRef(false);
+  const mountedRef = useRef(true);
 
   const refresh = useCallback(async () => {
+    if (dismissingRef.current) return;
+    const generation = ++requestGeneration.current;
     try {
-      setResource(await billingApi.getCreditAlerts());
+      const nextResource = await billingApi.getCreditAlerts();
+      if (mountedRef.current && generation === requestGeneration.current) {
+        setResource(nextResource);
+      }
     } catch {
-      setResource(null);
+      if (mountedRef.current && generation === requestGeneration.current) {
+        setResource(null);
+      }
     }
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
     void refresh();
     const listener = () => void refresh();
     window.addEventListener("dclaw:billing-settled", listener);
     window.addEventListener("dclaw:credit-alert-changed", listener);
     const timer = window.setInterval(listener, REFRESH_INTERVAL_MS);
     return () => {
+      mountedRef.current = false;
+      requestGeneration.current += 1;
       window.removeEventListener("dclaw:billing-settled", listener);
       window.removeEventListener("dclaw:credit-alert-changed", listener);
       window.clearInterval(timer);
@@ -38,14 +51,19 @@ export default function CreditAlertBanner() {
   const critical = alert.tier === "critical";
 
   const dismiss = async () => {
+    dismissingRef.current = true;
+    const generation = ++requestGeneration.current;
     setDismissing(true);
     try {
-      await billingApi.dismissCreditAlert(alert.tier);
-      await refresh();
+      const nextResource = await billingApi.dismissCreditAlert(alert.tier);
+      if (mountedRef.current && generation === requestGeneration.current) {
+        setResource(nextResource);
+      }
     } catch {
       // Keep the confirmed server resource visible when dismissal fails.
     } finally {
-      setDismissing(false);
+      dismissingRef.current = false;
+      if (mountedRef.current) setDismissing(false);
     }
   };
 

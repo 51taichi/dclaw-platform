@@ -22,6 +22,16 @@ const critical: CreditAlertResource = {
 };
 const clear: CreditAlertResource = { ...warning, alert: null };
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((onResolve, onReject) => {
+    resolve = onResolve;
+    reject = onReject;
+  });
+  return { promise, resolve, reject };
+}
+
 function Location() {
   return <span data-testid="location">{useLocation().pathname}</span>;
 }
@@ -90,5 +100,45 @@ describe("CreditAlertBanner", () => {
     window.dispatchEvent(new CustomEvent("dclaw:credit-alert-changed"));
     await act(async () => { vi.advanceTimersByTime(60_000); await Promise.resolve(); });
     expect(billingApi.getCreditAlerts).toHaveBeenCalledTimes(4);
+  });
+
+  it("ignores refresh responses that resolve out of order", async () => {
+    const oldRequest = deferred<CreditAlertResource>();
+    const newRequest = deferred<CreditAlertResource>();
+    vi.mocked(billingApi.getCreditAlerts)
+      .mockReturnValueOnce(oldRequest.promise)
+      .mockReturnValueOnce(newRequest.promise);
+    renderBanner();
+    window.dispatchEvent(new CustomEvent("dclaw:billing-settled"));
+    await waitFor(() => expect(billingApi.getCreditAlerts).toHaveBeenCalledTimes(2));
+
+    newRequest.resolve(critical);
+    expect(await screen.findByText("积分严重不足")).toBeInTheDocument();
+    oldRequest.resolve(warning);
+    await act(async () => Promise.resolve());
+
+    expect(screen.getByText("积分严重不足")).toBeInTheDocument();
+    expect(screen.queryByText("积分不足提醒")).not.toBeInTheDocument();
+  });
+
+  it("does not restore an alert from a refresh started before dismissal", async () => {
+    const staleRequest = deferred<CreditAlertResource>();
+    vi.mocked(billingApi.getCreditAlerts)
+      .mockResolvedValueOnce(warning)
+      .mockReturnValueOnce(staleRequest.promise)
+      .mockResolvedValue(clear);
+    vi.mocked(billingApi.dismissCreditAlert).mockResolvedValue(clear);
+    const user = userEvent.setup();
+    renderBanner();
+    await screen.findByText("积分不足提醒");
+    window.dispatchEvent(new CustomEvent("dclaw:billing-settled"));
+    await waitFor(() => expect(billingApi.getCreditAlerts).toHaveBeenCalledTimes(2));
+
+    await user.click(screen.getByRole("button", { name: "不再提醒" }));
+    await waitFor(() => expect(screen.queryByText("积分不足提醒")).not.toBeInTheDocument());
+    staleRequest.resolve(warning);
+    await act(async () => Promise.resolve());
+
+    expect(screen.queryByText("积分不足提醒")).not.toBeInTheDocument();
   });
 });
