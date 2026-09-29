@@ -11,12 +11,12 @@ from ... import db
 from ..engine import get_app_engine
 from ..schema import (
     chats,
-    messages,
-    session_states,
-    token_usage_logs,
     credit_alert_events,
     credit_alert_preferences,
     credit_alert_states,
+    messages,
+    session_states,
+    token_usage_logs,
     user_capabilities,
     user_connections,
     users,
