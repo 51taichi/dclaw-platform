@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import insert, select
+from sqlalchemy import insert
 
 from qwenpaw.app.storage.engine import create_engine_from_settings
 from qwenpaw.app.storage.repos.credit_alert_repo import CreditAlertRepository
