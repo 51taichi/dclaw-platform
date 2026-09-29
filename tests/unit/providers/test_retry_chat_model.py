@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncGenerator
 
 import pytest
 
@@ -201,6 +202,23 @@ async def test_unstarted_stream_close_releases_slot_and_closes_inner():
     next_result = await asyncio.wait_for(wrapper(messages=[]), timeout=0.2)
     assert [chunk async for chunk in next_result] == ["next"]
     assert limiter.stats()["current_in_flight"] == 0
+
+
+@pytest.mark.asyncio
+async def test_stream_preserves_agentscope_async_generator_contract():
+    """AgentScope identifies streaming model responses by this ABC."""
+    stream = _CustomAsyncIterator(["chunk"])
+    wrapper = RetryChatModel(
+        _StreamingModel([stream]),
+        retry_config=RetryConfig(enabled=False),
+        rate_limit_config=RateLimitConfig(max_concurrent=1, max_qpm=0),
+    )
+
+    result = await wrapper(messages=[])
+
+    assert isinstance(result, AsyncGenerator)
+    assert [chunk async for chunk in result] == ["chunk"]
+    assert (await get_rate_limiter()).stats()["current_active_calls"] == 0
 
 
 @pytest.mark.asyncio

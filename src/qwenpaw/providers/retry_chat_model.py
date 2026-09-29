@@ -27,7 +27,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from collections.abc import AsyncIterable, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -419,7 +419,7 @@ class RetryChatModel(ChatModelBase):
         raise last_exc  # type: ignore[misc]
 
 
-class _RetryStreamOwner(AsyncIterator[ChatResponse]):
+class _RetryStreamOwner(AsyncGenerator[ChatResponse, None]):
     """Own one retrying stream and its current concurrency permit eagerly."""
 
     def __init__(
@@ -495,6 +495,32 @@ class _RetryStreamOwner(AsyncIterator[ChatResponse]):
 
     def __aiter__(self) -> "_RetryStreamOwner":
         return self
+
+    async def asend(self, value: None) -> ChatResponse:
+        """Preserve the standard async-generator protocol for consumers."""
+        if value is not None:
+            raise TypeError("cannot send a non-None value to this stream")
+        return await self.__anext__()
+
+    async def athrow(
+        self,
+        typ: type[BaseException] | BaseException,
+        val: Any = None,
+        tb: Any = None,
+    ) -> ChatResponse:
+        """Close the provider stream before propagating an injected error."""
+        if isinstance(typ, BaseException):
+            error = typ
+        elif val is None:
+            error = typ()
+        elif isinstance(val, BaseException):
+            error = val
+        else:
+            error = typ(val)
+        if tb is not None:
+            error = error.with_traceback(tb)
+        await self.aclose()
+        raise error
 
     async def __anext__(self) -> ChatResponse:
         if self._closed:
