@@ -42,6 +42,34 @@ class WebViewAPI:
             return
         webbrowser.open(url)
 
+    @staticmethod
+    def _safe_download_name(filename: str) -> str:
+        """Return a cross-platform filename suitable for a save dialog."""
+        import re
+
+        return re.sub(r'[<>:"/\\|?*]', "_", filename).strip(" .") or "download"
+
+    def _choose_save_path(self, filename: str) -> str | None:
+        result = webview.windows[0].create_file_dialog(
+            webview.SAVE_DIALOG,
+            save_filename=self._safe_download_name(filename),
+        )
+        if not result:
+            return None
+        return result if isinstance(result, str) else result[0]
+
+    def save_blob(self, data: list[int], filename: str) -> bool:
+        """Save bytes supplied by the web UI through the native save dialog."""
+        try:
+            destination = self._choose_save_path(filename)
+            if not destination:
+                return False
+            Path(destination).write_bytes(bytes(data))
+            return True
+        except Exception:
+            logger.exception("save_blob failed")
+            return False
+
     def save_file(self, url: str, filename: str) -> bool:
         """Download a file from *url* and save it via a native save dialog.
 
@@ -58,28 +86,16 @@ class WebViewAPI:
             True if the file was saved successfully, False if the user
             cancelled the dialog or an error occurred.
         """
-        import re
         import shutil
         import urllib.request
 
         if not url.startswith(("http://", "https://")):
             return False
 
-        # Sanitize filename: remove characters illegal on Windows
-        # (< > : " / \ | ? *) and trim leading/trailing whitespace/dots.
-        # Colons are common in backup names like "Backup 2026-04-22 17:36".
-        safe_name = re.sub(r'[<>:"/\\|?*]', "_", filename).strip(" .")
-
         try:
-            # Show native OS save dialog via pywebview
-            result = webview.windows[0].create_file_dialog(
-                webview.SAVE_DIALOG,
-                save_filename=safe_name,
-            )
-            if not result:
+            dest_path = self._choose_save_path(filename)
+            if not dest_path:
                 return False  # user cancelled
-
-            dest_path = result if isinstance(result, str) else result[0]
 
             # Download from the local backend and write to chosen path
             with urllib.request.urlopen(url) as response:

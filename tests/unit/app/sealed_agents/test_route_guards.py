@@ -19,6 +19,7 @@ class Request:
         header_agent=None,
         method="GET",
         url_path="/api/user/skills",
+        query_params=None,
     ):
         self.path_params = {"agentId": path_agent} if path_agent else {}
         self.state = SimpleNamespace()
@@ -27,6 +28,7 @@ class Request:
         self.headers = {"X-Agent-Id": header_agent} if header_agent else {}
         self.method = method
         self.url = SimpleNamespace(path=url_path)
+        self.query_params = query_params or {}
 
 
 @pytest.mark.parametrize(
@@ -65,6 +67,70 @@ def test_asset_guard_keeps_standard_agent_routes_unchanged(monkeypatch):
     )
 
     policy.deny_sealed_asset_access(Request(header_agent="ordinary"))
+
+
+@pytest.mark.parametrize(
+    ("url_path", "query_params"),
+    [
+        ("/api/user/workspace/artifacts", {"session_id": "chat-1"}),
+        ("/api/user/workspace/artifacts/download", {"session_id": "chat-1"}),
+        (
+            "/api/user/workspace/files/download/report.pdf",
+            {"chatId": "chat-1"},
+        ),
+    ],
+)
+def test_asset_guard_allows_owned_chat_artifact_delivery_for_sealed_agent(
+    monkeypatch,
+    url_path,
+    query_params,
+):
+    monkeypatch.setattr(
+        policy,
+        "get_sealed_agent_registry",
+        lambda: SimpleNamespace(is_sealed=lambda agent_id: agent_id == "luyu"),
+    )
+
+    policy.deny_sealed_asset_access(
+        Request(
+            header_agent="luyu",
+            method="GET",
+            url_path=url_path,
+            query_params=query_params,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("url_path", "query_params"),
+    [
+        ("/api/user/workspace/artifacts", {}),
+        ("/api/user/workspace/files/raw/report.md", {"chatId": "chat-1"}),
+        ("/api/agents/luyu/workspace/artifacts", {"session_id": "chat-1"}),
+    ],
+)
+def test_asset_guard_keeps_other_sealed_workspace_assets_protected(
+    monkeypatch,
+    url_path,
+    query_params,
+):
+    monkeypatch.setattr(
+        policy,
+        "get_sealed_agent_registry",
+        lambda: SimpleNamespace(is_sealed=lambda agent_id: agent_id == "luyu"),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        policy.deny_sealed_asset_access(
+            Request(
+                header_agent="luyu",
+                method="GET",
+                url_path=url_path,
+                query_params=query_params,
+            ),
+        )
+
+    assert exc_info.value.status_code == 403
 
 
 def test_skill_asset_guard_allows_global_pool_listing_with_sealed_header(

@@ -10,7 +10,26 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from click.testing import CliRunner
 
 from qwenpaw.cli import desktop_cmd as desktop_cmd_module
-from qwenpaw.cli.desktop_cmd import _DesktopConsoleStaticHandler, desktop_cmd
+from qwenpaw.cli.desktop_cmd import WebViewAPI, _DesktopConsoleStaticHandler, desktop_cmd
+
+
+def test_webview_save_blob_uses_native_destination_dialog(monkeypatch, tmp_path):
+    destination = tmp_path / "客户方案.pdf"
+
+    class Window:
+        @staticmethod
+        def create_file_dialog(_dialog_type, *, save_filename):
+            assert save_filename == "客户方案.pdf"
+            return str(destination)
+
+    monkeypatch.setattr(
+        desktop_cmd_module,
+        "webview",
+        type("FakeWebview", (), {"SAVE_DIALOG": "save", "windows": [Window()]})(),
+    )
+
+    assert WebViewAPI().save_blob([37, 80, 68, 70], "客户方案.pdf") is True
+    assert destination.read_bytes() == b"%PDF"
 
 
 def test_desktop_remote_api_url_serves_local_frontend_without_backend(

@@ -13,6 +13,41 @@ _PUBLIC_CAPABILITIES = {
 }
 
 
+def _is_owned_chat_artifact_delivery(request: Request) -> bool:
+    """Allow user-facing task outputs through the sealed asset boundary.
+
+    The workspace handlers still perform the authoritative user/chat/file
+    ownership checks.  This exception only prevents the coarse sealed-Agent
+    guard from rejecting those handlers before their narrower checks run.
+    """
+    if getattr(request, "method", "GET").upper() != "GET":
+        return False
+
+    path = str(getattr(getattr(request, "url", None), "path", "")).rstrip("/")
+    if not path.startswith("/api/user/workspace/"):
+        return False
+
+    query_params = getattr(request, "query_params", {}) or {}
+    headers = getattr(request, "headers", {}) or {}
+    chat_id = (
+        query_params.get("chatId")
+        or query_params.get("session_id")
+        or headers.get("X-Session-Id")
+        or headers.get("X-Chat-Id")
+        or headers.get("x-session-id")
+        or headers.get("x-chat-id")
+    )
+    if not chat_id:
+        return False
+
+    if path in {
+        "/api/user/workspace/artifacts",
+        "/api/user/workspace/artifacts/download",
+    }:
+        return True
+    return path.startswith("/api/user/workspace/files/download/")
+
+
 def assert_sealed_capability(
     agent_id: str,
     capability: SealedCapability,
@@ -47,6 +82,8 @@ def requested_agent_id(request: Request) -> str | None:
 
 def deny_sealed_asset_access(request: Request) -> None:
     """FastAPI dependency guarding any endpoint that exposes agent assets."""
+    if _is_owned_chat_artifact_delivery(request):
+        return
     agent_id = requested_agent_id(request)
     if not agent_id:
         return
