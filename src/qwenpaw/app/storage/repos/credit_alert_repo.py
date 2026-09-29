@@ -17,6 +17,11 @@ from ..schema import (
 
 
 class CreditAlertRepository:
+    def states_exist(self, conn: Connection, user_id: int) -> bool:
+        return conn.execute(select(credit_alert_states.c.user_id).where(
+            credit_alert_states.c.user_id == user_id,
+        ).limit(1)).first() is not None
+
     def ensure_preferences(self, conn: Connection, user_id: int) -> dict[str, Any]:
         self._insert_ignore(conn, credit_alert_preferences, {"user_id": user_id}, ["user_id"])
         row = conn.execute(select(credit_alert_preferences).where(

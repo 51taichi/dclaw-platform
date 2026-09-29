@@ -396,6 +396,32 @@ def test_ledger_mutation_reconciles_credit_alert_in_outer_transaction(repo, engi
     assert event_row["available_balance"] == 5000
 
 
+def test_initial_grant_below_warning_threshold_does_not_create_sms_event(
+    repo, engine,
+):
+    with engine.begin() as conn:
+        user_id = conn.execute(insert(users).values(
+            username="new-alert-user", password_hash="h", password_salt="s", role="user",
+            phone_number_e164="+8613800138000",
+        ).returning(users.c.id)).scalar_one()
+    wallet = repo.ensure_wallet("user", str(user_id))
+
+    repo.grant(
+        wallet["id"], credits=5000, credit_type="purchased", expires_at=None,
+        idempotency_key="initial-grant-at-warning",
+    )
+
+    with engine.connect() as conn:
+        events = conn.execute(select(credit_alert_events)).mappings().all()
+        warning = conn.execute(select(credit_alert_states).where(
+            credit_alert_states.c.user_id == user_id,
+            credit_alert_states.c.tier == "warning",
+        )).mappings().one()
+    assert events == []
+    assert warning["status"] == "active"
+    assert warning["activation_source"] == "reconciliation"
+
+
 def test_alert_failure_does_not_rollback_ledger(monkeypatch, repo, engine):
     with engine.begin() as conn:
         user_id = conn.execute(insert(users).values(

@@ -73,7 +73,12 @@ class CreditAlertService:
         with self._lock:
             user_id = self.repository.user_for_wallet(conn, wallet_id)
             if user_id is not None and self.repository.identity(conn, user_id) is not None:
-                self._reconcile_user(conn, user_id, available, cause=cause)
+                effective_cause = cause
+                if not self.repository.states_exist(conn, user_id):
+                    effective_cause = "reconciliation"
+                self._reconcile_user(
+                    conn, user_id, available, cause=effective_cause,
+                )
 
     def _reconcile_user(
         self, conn: Connection, user_id: int, available: int, *, cause: Cause,
