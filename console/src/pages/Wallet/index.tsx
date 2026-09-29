@@ -15,6 +15,7 @@ import ClaimHistory from "./components/ClaimHistory";
 import LedgerTable from "./components/LedgerTable";
 import TopUpPanel from "./components/TopUpPanel";
 import UsageOrders from "./components/UsageOrders";
+import CreditAlertSettings from "./components/CreditAlertSettings";
 import ecoStyles from "../shared/ecoPage.module.less";
 import styles from "./index.module.less";
 
@@ -112,6 +113,9 @@ export default function WalletPage() {
           </Card>
         </Col>
       </Row>
+      <div className={styles.alertSettings}>
+        <CreditAlertSettings />
+      </div>
       <TopUpPanel
         config={config}
         products={products}

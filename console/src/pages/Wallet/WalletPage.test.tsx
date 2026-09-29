@@ -17,6 +17,8 @@ vi.mock("../../api/modules/billing", () => ({
     getUsage: vi.fn(),
     getSummary: vi.fn(),
     submitClaim: vi.fn(),
+    getCreditAlerts: vi.fn(),
+    updateCreditAlertPreferences: vi.fn(),
   },
 }));
 
@@ -84,6 +86,18 @@ describe("WalletPage", () => {
       created_at: "2026-08-29T00:00:00Z",
       updated_at: "2026-08-29T00:00:00Z",
     });
+    vi.mocked(billingApi.getCreditAlerts).mockResolvedValue({
+      preferences: { warning_threshold: 5000, critical_threshold: 1000 },
+      available: 100, alert: null,
+    });
+  });
+
+  it("keeps wallet content available when alert settings fail", async () => {
+    vi.mocked(billingApi.getCreditAlerts).mockRejectedValue(new Error("alerts unavailable"));
+    render(<MemoryRouter><WalletPage /></MemoryRouter>);
+    expect(await screen.findByText("积分钱包")).toBeInTheDocument();
+    expect(screen.getByText("CNY 10")).toBeInTheDocument();
+    expect(await screen.findByText("预警设置暂时不可用")).toBeInTheDocument();
   });
 
   it("renders server-owned product and submits no amount or credits", async () => {

@@ -35,6 +35,27 @@ describe("billingApi", () => {
     );
   });
 
+  it("uses the customer credit alert contracts", async () => {
+    await billingApi.getCreditAlerts();
+    await billingApi.updateCreditAlertPreferences({
+      warning_threshold: 6000,
+      critical_threshold: 1200,
+    });
+    await billingApi.dismissCreditAlert("critical");
+
+    const calls = vi.mocked(fetch).mock.calls;
+    expect(String(calls[0][0])).toContain("/api/user/billing/credit-alerts");
+    expect(calls[0][1]?.method).toBeUndefined();
+    expect(String(calls[1][0])).toContain("/api/user/billing/credit-alerts/preferences");
+    expect(calls[1][1]?.method).toBe("PATCH");
+    expect(JSON.parse(String(calls[1][1]?.body))).toEqual({
+      warning_threshold: 6000,
+      critical_threshold: 1200,
+    });
+    expect(String(calls[2][0])).toContain("/api/user/billing/credit-alerts/critical/dismiss");
+    expect(calls[2][1]?.method).toBe("POST");
+  });
+
   it("submits only customer evidence with an idempotency header", async () => {
     await billingApi.submitClaim(
       {

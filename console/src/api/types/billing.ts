@@ -6,6 +6,24 @@ export interface BillingWallet {
   package: number;
 }
 
+export interface CreditAlertPreferences {
+  warning_threshold: number;
+  critical_threshold: number;
+}
+
+export interface CreditAlert {
+  tier: "warning" | "critical";
+  threshold: number;
+  available: number;
+  triggered_at: string;
+}
+
+export interface CreditAlertResource {
+  preferences: CreditAlertPreferences;
+  available: number;
+  alert: CreditAlert | null;
+}
+
 export interface InsufficientCreditsFailure {
   code: "INSUFFICIENT_CREDITS";
   available_credits: number;

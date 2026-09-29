@@ -24,6 +24,8 @@ import type {
   PricingUnlock,
   PricingDraft,
   PricingCollectionJob,
+  CreditAlertPreferences,
+  CreditAlertResource,
 } from "../types/billing";
 
 function query(params: Record<string, string | number | undefined>): string {
@@ -45,6 +47,17 @@ function pricingHeaders(token: string): Headers {
 
 export const billingApi = {
   getWallet: () => request<BillingWallet>("/billing/wallet"),
+  getCreditAlerts: () =>
+    request<CreditAlertResource>("/billing/credit-alerts"),
+  updateCreditAlertPreferences: (payload: CreditAlertPreferences) =>
+    request<CreditAlertResource>("/billing/credit-alerts/preferences", {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  dismissCreditAlert: (tier: "warning" | "critical") =>
+    request<CreditAlertResource>(`/billing/credit-alerts/${tier}/dismiss`, {
+      method: "POST",
+    }),
   listLedger: (params: { limit?: number; cursor?: string } = {}) =>
     request<Page<BillingLedgerEntry>>(`/billing/ledger${query(params)}`),
   listUsage: (params: Record<string, string | number | undefined> = {}) =>
