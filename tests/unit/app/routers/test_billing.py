@@ -32,6 +32,7 @@ from qwenpaw.app.storage.engine import create_engine_from_settings
 from qwenpaw.app.storage.repos.billing_repo import BillingRepository
 from qwenpaw.app.storage.repos.price_catalog_repo import PriceCatalogRepository
 from qwenpaw.app.storage.repos.top_up_repo import TopUpRepository
+from qwenpaw.app.storage.repos.user_repo import SqlAlchemyUserRepository
 from qwenpaw.app.storage.schema import (
     billing_usage_orders,
     create_all,
@@ -107,6 +108,11 @@ def _app(
     )
     monkeypatch.setattr(
         billing,
+        "get_user_repository",
+        lambda: SqlAlchemyUserRepository(wallet_repo.engine),
+    )
+    monkeypatch.setattr(
+        billing,
         "get_pricing_unlock_service",
         lambda: type(
             "Unlocked", (), {"is_valid": lambda self, token, actor: True}
@@ -178,7 +184,7 @@ def test_customer_credit_alert_routes_are_owner_scoped(
     assert initial.status_code == 200
     assert initial.json() == {
         "preferences": {"warning_threshold": 5000, "critical_threshold": 1000},
-        "available": 6000, "alert": None,
+        "available": 6000, "alert": None, "phone_number": None,
     }
     updated = client.patch(
         "/api/user/billing/credit-alerts/preferences", headers=_headers(str(alice_id)),
@@ -195,6 +201,62 @@ def test_customer_credit_alert_routes_are_owner_scoped(
     second = client.post("/api/user/billing/credit-alerts/warning/dismiss", headers=_headers(str(alice_id)))
     assert first.status_code == second.status_code == 200
     assert first.json()["alert"] is None and second.json()["alert"] is None
+
+
+def test_customer_credit_alert_phone_updates_current_user_without_suppressing_alert(
+    monkeypatch, engine, wallet_repo, pricing,
+):
+    with engine.begin() as conn:
+        alice_id = conn.execute(insert(users).values(
+            username="phone-alice", password_hash="h", password_salt="s", role="user",
+        ).returning(users.c.id)).scalar_one()
+        bob_id = conn.execute(insert(users).values(
+            username="phone-bob", password_hash="h", password_salt="s", role="user",
+            phone_number_e164="+8613900139000",
+        ).returning(users.c.id)).scalar_one()
+    alice_wallet = wallet_repo.ensure_wallet("user", str(alice_id))
+    wallet_repo.ensure_wallet("user", str(bob_id))
+    wallet_repo.grant(
+        alice_wallet["id"], credits=800, credit_type="purchased", expires_at=None,
+        idempotency_key="alice-phone-alert-seed",
+    )
+    client = TestClient(
+        _app(
+            monkeypatch,
+            UsageService(wallet_repo, pricing, mode="shadow"),
+            wallet_repo,
+            pricing,
+        ),
+    )
+
+    before = client.get(
+        "/api/user/billing/credit-alerts", headers=_headers(str(alice_id)),
+    )
+    assert before.status_code == 200
+    assert before.json()["phone_number"] is None
+    assert before.json()["alert"]["tier"] == "critical"
+
+    invalid = client.patch(
+        "/api/user/billing/credit-alerts/phone", headers=_headers(str(alice_id)),
+        json={"phone_number": "12345"},
+    )
+    assert invalid.status_code == 422
+
+    updated = client.patch(
+        "/api/user/billing/credit-alerts/phone", headers=_headers(str(alice_id)),
+        json={"phone_number": "13800138000"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["phone_number"] == "+8613800138000"
+    assert updated.json()["alert"]["tier"] == "critical"
+
+    with engine.connect() as conn:
+        assert conn.execute(
+            select(users.c.phone_number_e164).where(users.c.id == alice_id),
+        ).scalar_one() == "+8613800138000"
+        assert conn.execute(
+            select(users.c.phone_number_e164).where(users.c.id == bob_id),
+        ).scalar_one() == "+8613900139000"
 
 
 @pytest.mark.parametrize("warning,critical", [(1000, 1000), (999, 1000), (5000, -1), (2**63, 1000)])

@@ -84,6 +84,13 @@ class UserRepository(Protocol):
     ) -> bool:
         ...
 
+    def update_user_phone(
+        self,
+        user_id: int,
+        phone_number_e164: str,
+    ) -> dict[str, Any] | None:
+        ...
+
     def delete_user_cascade(self, user_id: int) -> bool:
         ...
 
@@ -233,6 +240,21 @@ class SqlAlchemyUserRepository:
                 .values(password_hash=password_hash, password_salt=password_salt),
             )
             return bool(result.rowcount)
+
+    def update_user_phone(
+        self,
+        user_id: int,
+        phone_number_e164: str,
+    ) -> dict[str, Any] | None:
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                update(users)
+                .where(users.c.id == user_id)
+                .values(phone_number_e164=phone_number_e164),
+            )
+        if not result.rowcount:
+            return None
+        return self.get_user_by_id(user_id)
 
     def delete_user_cascade(self, user_id: int) -> bool:
         if self.get_user_by_id(user_id) is None:
@@ -402,6 +424,22 @@ class SqliteUserRepository:
         )
         conn.commit()
         return cursor.rowcount > 0
+
+    def update_user_phone(
+        self,
+        user_id: int,
+        phone_number_e164: str,
+    ) -> dict[str, Any] | None:
+        conn = db.get_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE users SET phone_number_e164 = ? WHERE id = ?",
+            (phone_number_e164, user_id),
+        )
+        conn.commit()
+        if cursor.rowcount == 0:
+            return None
+        return self.get_user_by_id(user_id)
 
     def delete_user_cascade(self, user_id: int) -> bool:
         if self.get_user_by_id(user_id) is None:

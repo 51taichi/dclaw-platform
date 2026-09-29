@@ -69,6 +69,7 @@ from ..storage.repos.pricing_admin_repo import (
     PricingRevisionConflict,
 )
 from ..storage.repos.user_repo import get_user_repository
+from ..user_identity import normalize_cn_mobile
 from ...providers.provider_manager import ProviderManager
 from ..storage.repos.top_up_repo import (
     TopUpIdempotencyConflict,
@@ -184,6 +185,11 @@ class CreditAlertPreferencesBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     warning_threshold: int = Field(ge=0, le=MAX_THRESHOLD)
     critical_threshold: int = Field(ge=0, le=MAX_THRESHOLD)
+
+
+class CreditAlertPhoneBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    phone_number: str = Field(min_length=1, max_length=32)
 
 
 class PricingPolicyBody(BaseModel):
@@ -524,10 +530,18 @@ def _credit_alert_context(request: Request) -> tuple[int, str]:
     return user_id, str(wallet["id"])
 
 
+def _with_credit_alert_phone(user_id: int, resource: dict[str, Any]) -> dict[str, Any]:
+    user = get_user_repository().get_user_by_id(user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {**resource, "phone_number": user.get("phone_number_e164")}
+
+
 @user_router.get("/credit-alerts")
 def get_credit_alerts(request: Request) -> dict[str, Any]:
     user_id, wallet_id = _credit_alert_context(request)
-    return get_credit_alert_service().get_for_wallet(user_id, wallet_id)
+    resource = get_credit_alert_service().get_for_wallet(user_id, wallet_id)
+    return _with_credit_alert_phone(user_id, resource)
 
 
 @user_router.patch("/credit-alerts/preferences")
@@ -536,20 +550,40 @@ def update_credit_alert_preferences(
 ) -> dict[str, Any]:
     user_id, wallet_id = _credit_alert_context(request)
     try:
-        return get_credit_alert_service().update_preferences_for_wallet(
+        resource = get_credit_alert_service().update_preferences_for_wallet(
             user_id, wallet_id, payload.warning_threshold, payload.critical_threshold,
         )
+        return _with_credit_alert_phone(user_id, resource)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@user_router.patch("/credit-alerts/phone")
+def update_credit_alert_phone(
+    payload: CreditAlertPhoneBody, request: Request,
+) -> dict[str, Any]:
+    user_id, wallet_id = _credit_alert_context(request)
+    try:
+        phone_number = normalize_cn_mobile(payload.phone_number)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if phone_number is None:
+        raise HTTPException(status_code=422, detail="Phone number is required")
+    user = get_user_repository().update_user_phone(user_id, phone_number)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    resource = get_credit_alert_service().get_for_wallet(user_id, wallet_id)
+    return {**resource, "phone_number": phone_number}
 
 
 @user_router.post("/credit-alerts/{tier}/dismiss")
 def dismiss_credit_alert(tier: str, request: Request) -> dict[str, Any]:
     user_id, wallet_id = _credit_alert_context(request)
     try:
-        return get_credit_alert_service().dismiss_for_wallet(
+        resource = get_credit_alert_service().dismiss_for_wallet(
             user_id, wallet_id, tier,
         )
+        return _with_credit_alert_phone(user_id, resource)
     except AlertTierNotFound as exc:
         raise HTTPException(status_code=404, detail="Alert tier not found") from exc
     except AlertConflict as exc:
