@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import ClientLayout from "./ClientLayout";
 
 vi.mock("../api/modules/superExpertPlatform", () => ({
@@ -28,6 +28,17 @@ vi.mock("../components/ConsolePollService", () => ({
 
 vi.mock("../plugins/PluginContext", () => ({
   usePlugins: () => ({ pluginRoutes: [] }),
+}));
+
+vi.mock("../api/modules/billing", () => ({
+  billingApi: {
+    getCreditAlerts: vi.fn(async () => ({
+      preferences: { warning_threshold: 5000, critical_threshold: 1000 },
+      available: 4500,
+      alert: { tier: "warning", threshold: 5000, available: 4500, triggered_at: "2026-09-29T00:00:00Z" },
+    })),
+    dismissCreditAlert: vi.fn(),
+  },
 }));
 
 vi.mock("../pages/Chat", () => ({
@@ -84,6 +95,14 @@ function renderAt(pathname: string) {
 }
 
 describe("ClientLayout routing", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("mounts the persistent alert above routed content", async () => {
+    renderAt("/workbench");
+    const banner = await screen.findByText("积分不足提醒");
+    const content = await screen.findByTestId("workbench-page");
+    expect(banner.compareDocumentPosition(content) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
   it("retains the active runtime while a draft becomes a persisted task", async () => {
     renderAt("/task");
     fireEvent.click(

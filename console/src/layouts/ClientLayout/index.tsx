@@ -16,6 +16,7 @@ import TaskPage from "../../pages/Task";
 import TaskConversationRoute from "../../pages/Task/TaskConversationRoute";
 import AigcStudioPage from "../../pages/AigcStudio";
 import WalletPage from "../../pages/Wallet";
+import CreditAlertBanner from "../../features/billing/CreditAlertBanner";
 
 // ── Ecosystem pages (WorkBuddy-style) ─────────────────────────────────────────
 const ExpertsPage = lazyImportWithRetry("../../pages/Experts");
@@ -68,6 +69,9 @@ export default function ClientLayout() {
         <Sidebar selectedKey={selectedKey} />
         <Content className="page-container">
           <ConsolePollService />
+          <div className={styles.creditAlertSlot}>
+            <CreditAlertBanner />
+          </div>
           <div className="page-content">
             <ChunkErrorBoundary resetKey={currentPath}>
               <Suspense
