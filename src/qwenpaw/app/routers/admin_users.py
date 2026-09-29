@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from typing import List
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..auth import _hash_password
 from ..billing.service import get_wallet_service
 from ..storage.repos.user_repo import get_user_repository
+from ..user_identity import normalize_cn_mobile
 
 router = APIRouter(prefix="/users", tags=["admin_users"])
 
@@ -18,12 +19,16 @@ class UserSpec(BaseModel):
     username: str
     role: str
     created_at: str
+    display_name: str | None = None
+    phone_number: str | None = None
 
 
 class CreateUserRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(max_length=100)
+    password: str = Field(max_length=1024)
     role: str = "user"
+    display_name: str | None = Field(default=None, max_length=100)
+    phone_number: str | None = Field(default=None, max_length=32)
 
 
 class ResetPasswordRequest(BaseModel):
@@ -39,6 +44,8 @@ async def list_users():
             username=row["username"],
             role=row["role"],
             created_at=str(row["created_at"]),
+            display_name=row.get("display_name"),
+            phone_number=row.get("phone_number_e164"),
         )
         for row in get_user_repository().list_users()
     ]
@@ -61,6 +68,11 @@ async def create_user(req: CreateUserRequest):
 
     # Check if username exists
     username = req.username.strip()
+    display_name = req.display_name.strip() if req.display_name is not None else None
+    try:
+        phone_number = normalize_cn_mobile(req.phone_number)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     existing = get_user_repository().get_user_by_username(username)
     if existing:
         # Repair a prior user-created/wallet-failed attempt before returning
@@ -78,6 +90,8 @@ async def create_user(req: CreateUserRequest):
             password_hash=pw_hash,
             password_salt=salt,
             role=req.role,
+            display_name=display_name,
+            phone_number_e164=phone_number,
         )
         # New users get an empty wallet. Trial credits are deliberately not
         # granted here because a username is not verified-mobile evidence.
@@ -87,6 +101,8 @@ async def create_user(req: CreateUserRequest):
             username=row["username"],
             role=row["role"],
             created_at=str(row["created_at"]),
+            display_name=row.get("display_name"),
+            phone_number=row.get("phone_number_e164"),
         )
     except Exception as e:
         raise HTTPException(

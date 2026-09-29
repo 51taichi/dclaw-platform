@@ -19,6 +19,8 @@ class FakeUserRepository:
                 "created_at": "2026-06-08T10:00:00",
                 "password_hash": "old-hash",
                 "password_salt": "old-salt",
+                "display_name": None,
+                "phone_number_e164": None,
             }
         }
         self.next_id = 2
@@ -31,6 +33,8 @@ class FakeUserRepository:
                 "username": row["username"],
                 "role": row["role"],
                 "created_at": row["created_at"],
+                "display_name": row.get("display_name"),
+                "phone_number_e164": row.get("phone_number_e164"),
             }
             for row in self.users.values()
         ]
@@ -51,7 +55,10 @@ class FakeUserRepository:
     def count_admins(self):
         return sum(1 for row in self.users.values() if row["role"] == "admin")
 
-    def create_user(self, *, username, password_hash, password_salt, role):
+    def create_user(
+        self, *, username, password_hash, password_salt, role,
+        display_name=None, phone_number_e164=None,
+    ):
         user_id = self.next_id
         self.next_id += 1
         row = {
@@ -61,6 +68,8 @@ class FakeUserRepository:
             "created_at": f"2026-06-08T10:00:0{user_id}",
             "password_hash": password_hash,
             "password_salt": password_salt,
+            "display_name": display_name,
+            "phone_number_e164": phone_number_e164,
         }
         self.users[user_id] = row
         return row
@@ -121,6 +130,8 @@ async def test_admin_user_routes_use_user_repository(
         )
     )
     assert created.username == "alice"
+    assert created.display_name is None
+    assert created.phone_number is None
     stored = fake_repo.get_user_by_username("alice")
     assert verify_password(
         "new-password",
@@ -143,6 +154,34 @@ async def test_admin_user_routes_use_user_repository(
 
     assert await admin_users.delete_user(created.id) == {"success": True}
     assert fake_repo.deleted == [created.id]
+
+
+@pytest.mark.asyncio
+async def test_admin_create_user_normalizes_identity(fake_repo, fake_wallet_service):
+    created = await admin_users.create_user(admin_users.CreateUserRequest(
+        username="alice", password="password", role="user",
+        display_name="  Alice Chen  ", phone_number="13800138000",
+    ))
+
+    assert created.display_name == "Alice Chen"
+    assert created.phone_number == "+8613800138000"
+    stored = fake_repo.get_user_by_username("alice")
+    assert stored["display_name"] == "Alice Chen"
+    assert stored["phone_number_e164"] == "+8613800138000"
+
+
+@pytest.mark.asyncio
+async def test_admin_create_user_rejects_invalid_phone_before_side_effects(
+    fake_repo, fake_wallet_service,
+):
+    with pytest.raises(HTTPException) as error:
+        await admin_users.create_user(admin_users.CreateUserRequest(
+            username="alice", password="password", phone_number="12345",
+        ))
+
+    assert error.value.status_code == 422
+    assert fake_repo.get_user_by_username("alice") is None
+    assert fake_wallet_service.wallet_users == []
 
 
 def test_admin_user_router_does_not_expose_a_signup_trial_path():
