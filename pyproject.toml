@@ -76,7 +76,7 @@ include-package-data = true
     "aigc/contracts/*.json",
     "docs/*.md",
 ]
-"config_patch_service" = ["resources/*.json"]
+"config_patch_service" = ["resources/**"]
 
 [build-system]
 requires = ["setuptools>=42", "wheel"]

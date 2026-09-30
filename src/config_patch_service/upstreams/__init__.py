@@ -21,8 +21,15 @@ class UpstreamNotFoundError(UpstreamError):
     pass
 
 
+class UpstreamBootstrapRequiredError(UpstreamError):
+    def __init__(self, missing_items: list[str]) -> None:
+        self.missing_items = list(dict.fromkeys(missing_items))
+        super().__init__("ADMIN_BOOTSTRAP_REQUIRED")
+
+
 __all__ = [
     "UpstreamContractError",
+    "UpstreamBootstrapRequiredError",
     "UpstreamError",
     "UpstreamNotFoundError",
     "UpstreamUnavailableError",

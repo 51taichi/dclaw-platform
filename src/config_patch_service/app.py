@@ -11,6 +11,7 @@ from fastapi import Depends, FastAPI
 
 from . import SERVICE_NAME, SERVICE_VERSION
 from .audit import AuditService
+from .bundles import WorkspaceBundleBuilder
 from .capabilities import CapabilityCatalog, CapabilityCatalogService
 from .context import ConfigurationContextService
 from .db import ConfigPatchDatabase
@@ -18,6 +19,12 @@ from .dependencies import require_staff_token
 from .models import AuthenticatedStaffToken
 from .routers.admin_tokens import router as admin_tokens_router
 from .routers.staff_bots import router as staff_bots_router
+from .routers.staff_bundles import router as staff_bundles_router
+from .releases import (
+    BaselineExportService,
+    ContentAddressedObjectStore,
+    ReleaseRepository,
+)
 from .settings import ConfigPatchSettings
 from .tokens import StaffTokenService
 from .upstreams.dclaw import DclawClient
@@ -57,6 +64,25 @@ def create_app(
     )
     catalog_service = capability_catalog or CapabilityCatalogService()
     catalog = catalog_service.load()
+    object_store = ContentAddressedObjectStore(
+        effective_settings.data_dir / "objects"
+    )
+    release_repository = ReleaseRepository(
+        database,
+        object_store=object_store,
+        audit=audit,
+        **audit_kwargs,
+    )
+    bundle_builder = WorkspaceBundleBuilder(
+        object_store=object_store,
+        capability_catalog=catalog,
+    )
+    baseline_export_service = BaselineExportService(
+        omnichannel=effective_omnichannel_client,
+        dclaw=effective_dclaw_client,
+        releases=release_repository,
+        bundle_builder=bundle_builder,
+    )
 
     app = FastAPI(title=SERVICE_NAME, version=SERVICE_VERSION)
     app.state.config_patch_settings = effective_settings
@@ -66,8 +92,13 @@ def create_app(
     app.state.configuration_context_service = context_service
     app.state.capability_catalog_service = catalog_service
     app.state.capability_catalog = catalog
+    app.state.config_patch_object_store = object_store
+    app.state.release_repository = release_repository
+    app.state.workspace_bundle_builder = bundle_builder
+    app.state.baseline_export_service = baseline_export_service
     app.include_router(admin_tokens_router)
     app.include_router(staff_bots_router)
+    app.include_router(staff_bundles_router)
 
     @app.get("/health")
     def health() -> dict[str, str]:

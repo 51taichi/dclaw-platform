@@ -13,7 +13,9 @@ class ConfigPatchDatabase:
         self.path = Path(path)
 
     def connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path, check_same_thread=False, timeout=5)
+        connection = sqlite3.connect(
+            self.path, check_same_thread=False, timeout=5
+        )
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA busy_timeout = 5000")
@@ -54,6 +56,30 @@ class ConfigPatchDatabase:
 
                 CREATE INDEX IF NOT EXISTS idx_audit_events_created_at
                 ON audit_events (created_at DESC, id DESC);
+
+                CREATE TABLE IF NOT EXISTS configuration_releases (
+                    row_id TEXT PRIMARY KEY,
+                    bot_id TEXT NOT NULL,
+                    release_id TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    source TEXT NOT NULL,
+                    actor_token_id TEXT NOT NULL,
+                    bot_name TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    agent_profile_id TEXT NOT NULL,
+                    source_version TEXT NOT NULL,
+                    snapshot_digest TEXT NOT NULL,
+                    component_digests_json TEXT NOT NULL,
+                    omnichannel_snapshot_object_key TEXT NOT NULL,
+                    dclaw_snapshot_object_key TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(bot_id, release_id),
+                    UNIQUE(bot_id, version),
+                    UNIQUE(bot_id, snapshot_digest)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_configuration_releases_bot
+                ON configuration_releases (bot_id, version DESC);
                 """
             )
 

@@ -9,7 +9,12 @@ import httpx
 from pydantic import ValidationError
 
 from ..models import DclawConfigurationContext, DclawSnapshotArchive
-from . import UpstreamContractError, UpstreamNotFoundError, UpstreamUnavailableError
+from . import (
+    UpstreamBootstrapRequiredError,
+    UpstreamContractError,
+    UpstreamNotFoundError,
+    UpstreamUnavailableError,
+)
 
 
 def _validated_base_url(value: str) -> str:
@@ -37,7 +42,9 @@ class DclawClient:
             raise ValueError("DClaw service secret is required")
         self._service_secret = service_secret
         self._client = httpx.Client(
-            timeout=httpx.Timeout(connect=2.0, read=20.0, write=20.0, pool=2.0),
+            timeout=httpx.Timeout(
+                connect=2.0, read=20.0, write=20.0, pool=2.0
+            ),
             transport=transport,
             trust_env=False,
         )
@@ -60,9 +67,23 @@ class DclawClient:
                 },
             )
         except httpx.HTTPError as exc:
-            raise UpstreamUnavailableError("DCLAW_UPSTREAM_UNAVAILABLE") from exc
+            raise UpstreamUnavailableError(
+                "DCLAW_UPSTREAM_UNAVAILABLE"
+            ) from exc
         if response.status_code == 404:
             raise UpstreamNotFoundError("DCLAW_AGENT_NOT_FOUND")
+        if response.status_code == 409:
+            try:
+                detail = response.json().get("detail", {})
+                missing_items = detail.get("missingItems", [])
+                if (
+                    detail.get("code") == "ADMIN_BOOTSTRAP_REQUIRED"
+                    and isinstance(missing_items, list)
+                    and all(isinstance(item, str) for item in missing_items)
+                ):
+                    raise UpstreamBootstrapRequiredError(missing_items)
+            except (AttributeError, ValueError, TypeError):
+                pass
         if not response.is_success:
             raise UpstreamUnavailableError("DCLAW_UPSTREAM_UNAVAILABLE")
         return response
@@ -74,15 +95,18 @@ class DclawClient:
         *,
         correlation_id: str | None = None,
     ) -> DclawConfigurationContext:
+        agent_path = quote(agent_id, safe="")
         response = self._get(
             base_url,
-            f"api/internal/config-patch/v1/agents/{quote(agent_id, safe='')}/context",
+            f"api/internal/config-patch/v1/agents/{agent_path}/context",
             correlation_id=correlation_id,
         )
         try:
             return DclawConfigurationContext.model_validate(response.json())
         except (ValueError, ValidationError, TypeError) as exc:
-            raise UpstreamContractError("DCLAW_UPSTREAM_CONTRACT_INVALID") from exc
+            raise UpstreamContractError(
+                "DCLAW_UPSTREAM_CONTRACT_INVALID"
+            ) from exc
 
     def download_snapshot(
         self,
@@ -91,9 +115,10 @@ class DclawClient:
         *,
         correlation_id: str | None = None,
     ) -> DclawSnapshotArchive:
+        agent_path = quote(agent_id, safe="")
         response = self._get(
             base_url,
-            f"api/internal/config-patch/v1/agents/{quote(agent_id, safe='')}/snapshot",
+            f"api/internal/config-patch/v1/agents/{agent_path}/snapshot",
             correlation_id=correlation_id,
         )
         try:
@@ -108,4 +133,6 @@ class DclawClient:
                 knowledge_digest=response.headers["X-DClaw-Knowledge-Digest"],
             )
         except (KeyError, ValueError, ValidationError) as exc:
-            raise UpstreamContractError("DCLAW_SNAPSHOT_CONTRACT_INVALID") from exc
+            raise UpstreamContractError(
+                "DCLAW_SNAPSHOT_CONTRACT_INVALID"
+            ) from exc
