@@ -82,6 +82,8 @@ _PUBLIC_PREFIXES: tuple[str, ...] = (
     "/qwenpaw-symbol.svg",
     "/api/aigc-studio/public-assets/",
     "/api/plugins/",  # plugin JS bundles served to unauthenticated login page
+    # This prefix has its own mandatory service-to-service secret dependency.
+    "/api/internal/config-patch/",
 )
 
 

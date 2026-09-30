@@ -63,6 +63,9 @@ from .mindspace_cloud import (
     public_router as public_mindspace_cloud_router,
     user_router as user_mindspace_cloud_router,
 )
+from ..config_patch_participant.router import (
+    router as config_patch_participant_router,
+)
 
 
 router = APIRouter()
@@ -75,6 +78,7 @@ router.include_router(desktop_router)
 router.include_router(public_aigc_studio_router)
 router.include_router(settings_router)
 router.include_router(open_api_router)
+router.include_router(config_patch_participant_router)
 router.include_router(
     open_api_knowledge_router,
     dependencies=[Depends(require_user)],
