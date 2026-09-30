@@ -294,6 +294,7 @@ def query_knowledge_table(
     doc_name: str = "",
     first_choice: str = "",
     limit: int = 5,
+    result_mode: str = "ranked_rows",
 ) -> ToolResponse:
     """Query rows in the latest readable XLSX knowledge document.
 
@@ -301,7 +302,10 @@ def query_knowledge_table(
     chunk search would repeat overlapping spreadsheet evidence. ``query``
     should contain short, space-separated constraints. ``first_choice`` is
     placed first when it exists in the document. Results always come from the
-    caller's currently authorized knowledge base.
+    caller's currently authorized knowledge base. ``result_mode=full_index``
+    exports every parsed row to a workspace-local JSON index and returns only
+    its path and metadata. This lets a deterministic local generator filter
+    the complete table without placing the complete workbook in model context.
     """
     service = _service()
     if service is None:
@@ -335,6 +339,40 @@ def query_knowledge_table(
         return _text_response(
             json.dumps({"success": False, "error": f"Cannot read XLSX: {exc}"})
         )
+    source = {
+        "doc_id": doc.id,
+        "name": doc.name,
+        "sha256": asset["sha256"],
+    }
+    if result_mode.strip().casefold() == "full_index":
+        workspace_dir = get_current_workspace_dir()
+        if workspace_dir is None:
+            return _text_response(
+                json.dumps({"success": False, "error": "No active workspace."})
+            )
+        index_dir = Path(workspace_dir) / "runtime" / "knowledge_table_indexes"
+        index_dir.mkdir(parents=True, exist_ok=True)
+        index_path = index_dir / f"{asset['sha256']}.json"
+        index_payload = {"rows": rows, "source": source}
+        temporary = index_path.with_suffix(".tmp")
+        temporary.write_text(
+            json.dumps(index_payload, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        temporary.replace(index_path)
+        return _text_response(
+            json.dumps(
+                {
+                    "success": True,
+                    "count": len(rows),
+                    "index_path": str(index_path),
+                    "source": source,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
+
     # Keep spreadsheet evidence bounded even when a model asks for more.  The
     # employment recommendation contract consumes exactly five candidates,
     # and returning wider rows would only inflate every later ReAct turn.
@@ -345,10 +383,6 @@ def query_knowledge_table(
         "success": True,
         "count": len(selected),
         "rows": selected,
-        "source": {
-            "doc_id": doc.id,
-            "name": doc.name,
-            "sha256": asset["sha256"],
-        },
+        "source": source,
     }
     return _text_response(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))

@@ -192,6 +192,56 @@ def test_query_knowledge_table_returns_five_ranked_rows(monkeypatch, tmp_path):
         reset_app_engine_cache()
 
 
+def test_query_knowledge_table_exports_every_row_without_putting_rows_in_response(
+    monkeypatch, tmp_path
+):
+    db_path = tmp_path / "qwenpaw.db"
+    monkeypatch.setenv("QWENPAW_SQLITE_PATH", str(db_path))
+    reset_app_engine_cache()
+    workspace = tmp_path / "agent"
+    global_root = tmp_path / "global"
+    service = MindspaceService(
+        global_root=global_root,
+        agent_workspace=workspace,
+        agent_id="agent-a",
+        user_id="experience-a",
+        exclusive_personal=True,
+    )
+    headers = ["招聘单位", "岗位", "岗位要求", "入职地点"]
+    rows = [headers] + [
+        [f"单位{index}", "会计", "本科", "长沙"] for index in range(1, 13)
+    ]
+    service.stage_local_bytes(
+        name="公司就业项目汇总.xlsx",
+        content=_xlsx_bytes(rows),
+        scope=MindspaceScope.PERSONAL,
+        source_type="xlsx",
+    )
+    set_current_workspace_dir(workspace)
+    monkeypatch.setattr(mindspace_tools, "_global_root", lambda: global_root)
+    monkeypatch.setattr(mindspace_tools, "_service", lambda: service)
+
+    try:
+        response = mindspace_tools.query_knowledge_table(
+            query="本科 会计 长沙",
+            doc_name="公司就业项目汇总.xlsx",
+            result_mode="full_index",
+        )
+        payload = json.loads(_tool_text(response))
+
+        assert payload["success"] is True
+        assert payload["count"] == 12
+        assert "rows" not in payload
+        index_path = Path(payload["index_path"])
+        assert index_path.is_file()
+        assert index_path.is_relative_to(workspace)
+        index_payload = json.loads(index_path.read_text(encoding="utf-8"))
+        assert len(index_payload["rows"]) == 12
+        assert index_payload["source"]["sha256"] == payload["source"]["sha256"]
+    finally:
+        reset_app_engine_cache()
+
+
 def test_query_knowledge_table_maps_production_header_aliases(monkeypatch, tmp_path):
     db_path = tmp_path / "qwenpaw.db"
     monkeypatch.setenv("QWENPAW_SQLITE_PATH", str(db_path))
