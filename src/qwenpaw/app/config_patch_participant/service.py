@@ -83,15 +83,7 @@ class DclawConfigurationContextService:
         if agent_type != "unknown" and not enabled:
             missing.append("agent_enabled")
 
-        publications = [
-            row
-            for row in self._publication_repository.list_publications(
-                enabled_only=False,
-            )
-            if str(row.get("target_type") or "") == "agent"
-            and str(row.get("target_id") or "") == agent_id
-        ]
-        publication = publications[0] if len(publications) == 1 else None
+        publication = self.resolve_publication(agent_id)
         publication_id: str | None = None
         public_id: str | None = None
         knowledge_base_id: str | None = None
@@ -134,7 +126,18 @@ class DclawConfigurationContextService:
             readiness=Readiness(ready=not missing, missing_items=missing),
         )
 
+    def resolve_publication(self, agent_id: str) -> dict[str, Any] | None:
+        """Return the unique authoritative Publication for an Agent."""
+        matches = [
+            row
+            for row in self._publication_repository.list_publications(
+                enabled_only=False,
+            )
+            if str(row.get("target_type") or "") == "agent"
+            and str(row.get("target_id") or "") == agent_id
+        ]
+        return matches[0] if len(matches) == 1 else None
+
 
 def get_dclaw_configuration_context_service() -> DclawConfigurationContextService:
     return DclawConfigurationContextService()
-
