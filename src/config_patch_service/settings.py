@@ -14,6 +14,7 @@ class ConfigPatchSettings:
     admin_secret: str = field(repr=False)
     dclaw_service_secret: str = field(repr=False)
     omnichannel_service_secret: str = field(repr=False)
+    omnichannel_base_url: str
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "data_dir", Path(self.data_dir).expanduser().resolve())
@@ -30,6 +31,7 @@ class ConfigPatchSettings:
             "admin_secret": "CONFIG_PATCH_ADMIN_SECRET",
             "dclaw_service_secret": "DCLAW_CONFIG_PATCH_INTERNAL_SECRET",
             "omnichannel_service_secret": "OMNICHANNEL_CONFIG_PATCH_INTERNAL_SECRET",
+            "omnichannel_base_url": "OMNICHANNEL_CONFIG_PATCH_BASE_URL",
         }
         values = {field_name: os.environ.get(env_name, "") for field_name, env_name in names.items()}
         missing = [names[field_name] for field_name, value in values.items() if not value]

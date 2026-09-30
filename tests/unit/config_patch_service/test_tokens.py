@@ -39,6 +39,7 @@ def test_environment_settings_require_dedicated_storage_and_every_service_secret
         "CONFIG_PATCH_ADMIN_SECRET": "admin-value",
         "DCLAW_CONFIG_PATCH_INTERNAL_SECRET": "dclaw-value",
         "OMNICHANNEL_CONFIG_PATCH_INTERNAL_SECRET": "omnichannel-value",
+        "OMNICHANNEL_CONFIG_PATCH_BASE_URL": "https://omnichannel.internal.example",
     }
     for name, value in names.items():
         monkeypatch.setenv(name, value)

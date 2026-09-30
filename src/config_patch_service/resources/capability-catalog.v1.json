@@ -1,0 +1,61 @@
+{
+  "schemaVersion": "capability-catalog.v1",
+  "version": "2026.09.30",
+  "modules": [
+    {
+      "moduleId": "agent",
+      "owner": "DClaw",
+      "purpose": "对话策略、工具编排、回复规则与跨模块协作决策",
+      "useWhen": ["需要改变如何理解或回复客户", "需要调用平台工具或协调状态机、标签和经验库"]
+    },
+    {
+      "moduleId": "state-machine-and-tags",
+      "owner": "AI客服中台",
+      "purpose": "确定性流程节点、字段收集、迁移条件、客户标签及其触发规则",
+      "useWhen": ["需要改变固定业务阶段或跳转", "需要改变客户分类、标签证据或标签触发动作"]
+    },
+    {
+      "moduleId": "knowledge",
+      "owner": "DClaw经验库",
+      "purpose": "保存可追溯的产品、政策、话术事实和结构化业务资料",
+      "useWhen": ["需要新增或纠正事实资料", "回答应随资料更新而变化但不改变工作流"]
+    }
+  ],
+  "profiles": {
+    "standard-2026.09": {
+      "profileId": "standard-2026.09",
+      "name": "普通专家",
+      "capabilities": ["文件化Agent源码", "DClaw平台工具", "经验库检索", "AI客服状态机与标签协作"]
+    },
+    "super-expert-2026.09": {
+      "profileId": "super-expert-2026.09",
+      "name": "超级专家",
+      "capabilities": ["超级专家源码快照", "超级专家运行能力", "DClaw平台工具", "经验库检索", "AI客服状态机与标签协作"]
+    }
+  },
+  "semantics": {
+    "stateMachine": {
+      "owner": "AI客服中台",
+      "purpose": "用节点、收集字段和迁移规则表达确定性客户旅程",
+      "changeWhen": ["阶段定义变化", "必填字段变化", "迁移条件或节点动作变化"],
+      "coordinateWith": ["agent", "tags"]
+    },
+    "tags": {
+      "owner": "AI客服中台",
+      "purpose": "基于可核验客户证据维护分类和后续触发",
+      "changeWhen": ["分类口径变化", "标签证据变化", "标签触发动作变化"],
+      "coordinateWith": ["agent", "stateMachine"]
+    },
+    "knowledge": {
+      "owner": "DClaw经验库",
+      "purpose": "提供版本化、可追溯且可检索的业务事实",
+      "changeWhen": ["产品事实变化", "政策或标准话术变化", "需要补充结构化资料"],
+      "coordinateWith": ["agent"]
+    }
+  },
+  "capabilityRequest": {
+    "requiredFields": ["botId", "requirement", "missingCapability", "suggestedPlatformChange"],
+    "destination": "DClaw平台管理员",
+    "outcome": "形成可评审的平台能力变更建议；能力目录更新后调用方重新获取目录并完成实现"
+  }
+}

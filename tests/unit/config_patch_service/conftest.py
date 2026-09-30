@@ -34,6 +34,7 @@ def settings(tmp_path) -> ConfigPatchSettings:
         admin_secret="test-admin-secret-never-log",
         dclaw_service_secret="test-dclaw-service-secret",
         omnichannel_service_secret="test-omnichannel-service-secret",
+        omnichannel_base_url="https://omnichannel.internal.example",
     )
 
 
