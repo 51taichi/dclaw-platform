@@ -18,6 +18,7 @@ from config_patch_service.models import (
     OmnichannelBotSummary,
 )
 from config_patch_service.settings import ConfigPatchSettings
+from config_patch_service.upstreams import UpstreamUnavailableError
 
 from tests.unit.config_patch_service.test_releases import dclaw_archive
 from tests.unit.config_patch_service.test_upstream_clients import (
@@ -47,6 +48,7 @@ def settings(tmp_path) -> ConfigPatchSettings:
         token_pepper="integration-token-pepper",
         admin_secret="integration-admin-secret",
         dclaw_service_secret="integration-dclaw-secret",
+        dclaw_allowed_origins=("https://dclaw.internal.example",),
         omnichannel_service_secret="integration-omnichannel-secret",
         omnichannel_base_url="https://omnichannel.internal.example",
     )
@@ -80,12 +82,20 @@ class SequenceOmnichannel:
 
 
 class SequenceDclaw:
-    def __init__(self, contexts: list[dict], *, profile="standard-2026.09"):
+    def __init__(
+        self,
+        contexts: list[dict],
+        *,
+        profile="standard-2026.09",
+        snapshot_sources: list[bytes] | None = None,
+    ):
         self.contexts = [
             DclawConfigurationContext.model_validate(item) for item in contexts
         ]
         self.context_index = 0
         self.profile = profile
+        self.snapshot_sources = snapshot_sources or [b"agent source"]
+        self.snapshot_index = 0
         self.write_calls = 0
 
     def get_context(
@@ -101,13 +111,25 @@ class SequenceDclaw:
         context = self.contexts[
             max(0, min(self.context_index - 1, len(self.contexts) - 1))
         ]
-        return DclawSnapshotArchive(
-            archive=dclaw_archive(),
+        source = self.snapshot_sources[
+            min(self.snapshot_index, len(self.snapshot_sources) - 1)
+        ]
+        self.snapshot_index += 1
+        archive = dclaw_archive(
+            source,
             agent_id=agent_id,
             profile_id=self.profile,
             source_version=context.source_version or "unknown",
-            agent_digest="sha256:" + "a" * 64,
-            knowledge_digest="sha256:" + "k" * 64,
+        )
+        with zipfile.ZipFile(io.BytesIO(archive)) as opened:
+            component = json.loads(opened.read("dclaw-component.json"))
+        return DclawSnapshotArchive(
+            archive=archive,
+            agent_id=agent_id,
+            profile_id=self.profile,
+            source_version=context.source_version or "unknown",
+            agent_digest=component["agentDigest"],
+            knowledge_digest=component["knowledgeDigest"],
         )
 
 
@@ -155,13 +177,20 @@ class MultiAgentDclaw:
         self, base_url: str, agent_id: str, *, correlation_id=None
     ):
         context = self.contexts[agent_id]
-        return DclawSnapshotArchive(
-            archive=dclaw_archive(),
+        archive = dclaw_archive(
             agent_id=agent_id,
             profile_id=context.agent_profile_id or "unknown",
             source_version=context.source_version or "unknown",
-            agent_digest="sha256:" + "a" * 64,
-            knowledge_digest="sha256:" + "k" * 64,
+        )
+        with zipfile.ZipFile(io.BytesIO(archive)) as opened:
+            component = json.loads(opened.read("dclaw-component.json"))
+        return DclawSnapshotArchive(
+            archive=archive,
+            agent_id=agent_id,
+            profile_id=context.agent_profile_id or "unknown",
+            source_version=context.source_version or "unknown",
+            agent_digest=component["agentDigest"],
+            knowledge_digest=component["knowledgeDigest"],
         )
 
 
@@ -274,6 +303,116 @@ def test_double_read_rejects_binding_and_source_drift_without_release(
 
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == code
+    assert release_count(client) == 0
+
+
+def test_double_snapshot_rejects_agent_content_drift_even_when_context_is_stable(
+    settings, clock
+):
+    snapshot, context = ready_sources()
+    client, headers = authenticated_client(
+        settings,
+        clock,
+        SequenceOmnichannel([snapshot, snapshot]),
+        SequenceDclaw(
+            [context, context],
+            snapshot_sources=[b"first source", b"second source"],
+        ),
+    )
+
+    response = client.post(
+        "/staff/v1/bots/bot-a/workspace-bundles/export", headers=headers
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "DCLAW_SOURCE_CHANGED"
+    assert release_count(client) == 0
+
+
+def test_export_rejects_openapi_publication_identity_mismatch(
+    settings, clock
+):
+    snapshot, context = ready_sources()
+    context["openapiPublicId"] = "different-public-id"
+    client, headers = authenticated_client(
+        settings,
+        clock,
+        SequenceOmnichannel([snapshot]),
+        SequenceDclaw([context]),
+    )
+
+    response = client.post(
+        "/staff/v1/bots/bot-a/workspace-bundles/export", headers=headers
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "TARGET_BINDING_CHANGED"
+    assert release_count(client) == 0
+
+
+def test_export_maps_and_audits_upstream_failure(settings, clock):
+    snapshot, context = ready_sources()
+
+    class FailingDclaw(SequenceDclaw):
+        def get_context(self, base_url, agent_id, *, correlation_id=None):
+            raise UpstreamUnavailableError("DCLAW_UPSTREAM_UNAVAILABLE")
+
+    client, headers = authenticated_client(
+        settings,
+        clock,
+        SequenceOmnichannel([snapshot]),
+        FailingDclaw([context]),
+    )
+    response = client.post(
+        "/staff/v1/bots/bot-a/workspace-bundles/export", headers=headers
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "DCLAW_UPSTREAM_UNAVAILABLE"
+    with client.app.state.config_patch_database.connect() as connection:
+        row = connection.execute(
+            "SELECT result, metadata_json FROM audit_events "
+            "WHERE action = 'staff.workspace_bundle.export' "
+            "ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    assert row["result"] == "failure"
+    assert "DCLAW_UPSTREAM_UNAVAILABLE" in row["metadata_json"]
+
+
+def test_invalid_dclaw_archive_never_creates_a_release(settings, clock):
+    snapshot, context = ready_sources()
+
+    class InvalidSnapshotDclaw(SequenceDclaw):
+        def download_snapshot(
+            self, base_url, agent_id, *, correlation_id=None
+        ):
+            valid = super().download_snapshot(
+                base_url,
+                agent_id,
+                correlation_id=correlation_id,
+            )
+            output = io.BytesIO()
+            with zipfile.ZipFile(output, "w") as archive:
+                archive.writestr("agent/source.md", "agent")
+                archive.writestr(
+                    "knowledge/knowledge-manifest.json", "{}"
+                )
+            return valid.model_copy(update={"archive": output.getvalue()})
+
+    client, headers = authenticated_client(
+        settings,
+        clock,
+        SequenceOmnichannel([snapshot, snapshot]),
+        InvalidSnapshotDclaw([context, context]),
+    )
+    response = client.post(
+        "/staff/v1/bots/bot-a/workspace-bundles/export", headers=headers
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"]["code"] == (
+        "DCLAW_SNAPSHOT_CONTRACT_INVALID"
+    )
     assert release_count(client) == 0
 
 

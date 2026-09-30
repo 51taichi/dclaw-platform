@@ -112,6 +112,52 @@ def _is_sensitive_name(name: str) -> bool:
     )
 
 
+def read_bounded_regular_file(path: Path, *, max_bytes: int) -> bytes:
+    """Read one unchanged regular file through a no-follow descriptor."""
+    candidate = Path(path)
+    before = candidate.lstat()
+    if stat.S_ISLNK(before.st_mode):
+        raise SnapshotArchiveError("source tree contains a link")
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(candidate, flags)
+    except OSError as exc:
+        raise SnapshotArchiveError("source file cannot be opened safely") from exc
+    try:
+        opened = os.fstat(descriptor)
+        if (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino):
+            raise SnapshotArchiveError("source file changed during export")
+        if not stat.S_ISREG(opened.st_mode):
+            raise SnapshotArchiveError("source tree contains a non-regular file")
+        if opened.st_nlink > 1:
+            raise SnapshotArchiveError("source tree contains a hard link")
+        if opened.st_size > max_bytes:
+            raise SnapshotArchiveError("single file exceeds archive limit")
+        chunks: list[bytes] = []
+        actual = 0
+        while True:
+            chunk = os.read(descriptor, min(1024 * 1024, max_bytes + 1 - actual))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            actual += len(chunk)
+            if actual > max_bytes or actual > opened.st_size:
+                raise SnapshotArchiveError("source file changed during export")
+        after = os.fstat(descriptor)
+        if (
+            actual != opened.st_size
+            or after.st_size != opened.st_size
+            or after.st_mtime_ns != opened.st_mtime_ns
+            or after.st_ctime_ns != opened.st_ctime_ns
+        ):
+            raise SnapshotArchiveError("source file changed during export")
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
+
+
 def collect_directory_files(
     root: Path,
     *,
@@ -124,6 +170,7 @@ def collect_directory_files(
         raise SnapshotArchiveError("source directory is unavailable")
     resolved_root = root.resolve(strict=True)
     result: dict[str, bytes] = {}
+    total = 0
     for candidate in sorted(root.rglob("*"), key=lambda path: path.as_posix()):
         if candidate.is_symlink():
             raise SnapshotArchiveError("source tree contains a link")
@@ -132,8 +179,8 @@ def collect_directory_files(
             continue
         if not stat.S_ISREG(metadata.st_mode):
             raise SnapshotArchiveError("source tree contains a non-regular file")
-        if metadata.st_nlink > 1:
-            raise SnapshotArchiveError("source tree contains a hard link")
+        if len(result) >= limits.max_files:
+            raise SnapshotArchiveError("archive has too many files")
         resolved = candidate.resolve(strict=True)
         if not resolved.is_relative_to(resolved_root):
             raise SnapshotArchiveError("source tree escapes its root")
@@ -141,6 +188,12 @@ def collect_directory_files(
         if any(_is_sensitive_name(part) for part in relative.parts):
             raise SnapshotArchiveError("source tree contains a sensitive file")
         archive_path = PurePosixPath(prefix, *relative.parts).as_posix()
-        result[archive_path] = resolved.read_bytes()
+        remaining = limits.max_total_bytes - total
+        content = read_bounded_regular_file(
+            candidate,
+            max_bytes=min(limits.max_file_bytes, remaining),
+        )
+        total += len(content)
+        result[archive_path] = content
     _normalized_files(result, limits)
     return result

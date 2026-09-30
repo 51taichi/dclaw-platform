@@ -36,6 +36,7 @@ def test_config_patch_compose_is_explicit_and_owns_only_its_data() -> None:
     rendered = _compose()
     assert set(rendered["services"]) == {"config-patch"}
     service = rendered["services"]["config-patch"]
+    assert service["build"]["context"] == ".."
     assert service["build"]["dockerfile"] == "deploy/config-patch.Dockerfile"
     assert service["volumes"] == [
         "config-patch-data:/var/lib/dclaw-config-patch"
@@ -63,6 +64,7 @@ def test_config_patch_compose_requires_every_credential_without_defaults() -> (
         "DCLAW_CONFIG_PATCH_INTERNAL_SECRET",
         "OMNICHANNEL_CONFIG_PATCH_INTERNAL_SECRET",
         "OMNICHANNEL_CONFIG_PATCH_BASE_URL",
+        "DCLAW_CONFIG_PATCH_ALLOWED_ORIGINS",
     }
     assert required <= set(environment)
     for name in required:
@@ -92,5 +94,9 @@ def test_phase_one_runbook_covers_operations_and_safe_shutdown() -> None:
     ):
         assert heading in text
     assert "Authorization: Bearer <员工_TOKEN>" in text
-    assert "docker compose -f deploy/config-patch.compose.yaml stop" in text
+    stop_command = (
+        "docker compose --env-file /opt/dclaw-config-patch/config-patch.env "
+        "\\\n  -f deploy/config-patch.compose.yaml stop"
+    )
+    assert stop_command in text
     assert "无需回滚 DClaw 或 AI 客服业务数据" in text

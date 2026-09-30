@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections import Counter
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 from config_patch_service.app import create_app
@@ -11,7 +13,10 @@ from config_patch_service.models import (
     OmnichannelBotSnapshot,
     OmnichannelBotSummary,
 )
-from config_patch_service.upstreams import UpstreamUnavailableError
+from config_patch_service.upstreams import (
+    UpstreamContractError,
+    UpstreamUnavailableError,
+)
 
 from .test_upstream_clients import dclaw_context, omni_snapshot, omni_summary
 
@@ -121,6 +126,22 @@ def test_one_unavailable_agent_does_not_hide_other_bots():
     assert targets[1].readiness.code == "DCLAW_UPSTREAM_UNAVAILABLE"
 
 
+def test_publication_identity_mismatch_is_never_reported_ready():
+    summary = omni_summary("bot-a", "agent-a")
+    context = dclaw_context()
+    context["readiness"] = {"ready": True, "missingItems": []}
+    context["openapiPublicId"] = "different-public-id"
+    service = ConfigurationContextService(
+        omnichannel=FakeOmnichannelClient([summary], {}),
+        dclaw=FakeDclawClient({"agent-a": context}),
+    )
+
+    target = service.list_bots()[0]
+
+    assert target.readiness.ready is False
+    assert target.readiness.missing_items == ["openapi_public_id_mismatch"]
+
+
 def test_staff_routes_show_the_same_all_bot_list_to_every_valid_employee(
     settings,
     clock,
@@ -168,3 +189,47 @@ def test_staff_routes_show_the_same_all_bot_list_to_every_valid_employee(
     assert context_response.json()["boundAgentId"] == "agent-a"
     assert "baseUrl" not in context_response.text
     assert dclaw.calls[-1][0] == "https://dclaw.internal.example"
+
+
+@pytest.mark.parametrize(
+    ("error", "status"),
+    [
+        (UpstreamUnavailableError("OMNICHANNEL_UPSTREAM_UNAVAILABLE"), 503),
+        (UpstreamContractError("OMNICHANNEL_UPSTREAM_CONTRACT_INVALID"), 502),
+    ],
+)
+def test_staff_bot_list_maps_and_audits_upstream_failures(
+    settings, clock, error, status
+):
+    class FailingOmnichannel:
+        def list_bots(self, *, correlation_id=None):
+            raise error
+
+    client = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            omnichannel_client=FailingOmnichannel(),
+            dclaw_client=FakeDclawClient({}),
+        )
+    )
+    token = client.post(
+        "/internal/admin/v1/staff-tokens",
+        headers={"X-Config-Patch-Admin-Secret": settings.admin_secret},
+        json={"employeeName": "员工", "tokenName": "Codex"},
+    ).json()
+
+    response = client.get(
+        "/staff/v1/bots",
+        headers={"Authorization": f"Bearer {token['token']}"},
+    )
+
+    assert response.status_code == status
+    assert response.json()["detail"]["code"] == error.code
+    with client.app.state.config_patch_database.connect() as connection:
+        row = connection.execute(
+            "SELECT result, metadata_json FROM audit_events "
+            "WHERE action = 'staff.bots.list' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    assert row["result"] == "failure"
+    assert error.code in row["metadata_json"]

@@ -38,6 +38,9 @@ def test_environment_settings_require_dedicated_storage_and_every_service_secret
         "CONFIG_PATCH_TOKEN_PEPPER": "pepper-value",
         "CONFIG_PATCH_ADMIN_SECRET": "admin-value",
         "DCLAW_CONFIG_PATCH_INTERNAL_SECRET": "dclaw-value",
+        "DCLAW_CONFIG_PATCH_ALLOWED_ORIGINS": (
+            "https://dclaw-a.internal.example,https://dclaw-b.internal.example:8443"
+        ),
         "OMNICHANNEL_CONFIG_PATCH_INTERNAL_SECRET": "omnichannel-value",
         "OMNICHANNEL_CONFIG_PATCH_BASE_URL": "https://omnichannel.internal.example",
     }
@@ -47,6 +50,10 @@ def test_environment_settings_require_dedicated_storage_and_every_service_secret
     loaded = ConfigPatchSettings.from_env()
     assert loaded.data_dir == (tmp_path / "dedicated").resolve()
     assert loaded.database_path.parent == loaded.data_dir
+    assert loaded.dclaw_allowed_origins == (
+        "https://dclaw-a.internal.example",
+        "https://dclaw-b.internal.example:8443",
+    )
     assert "pepper-value" not in repr(loaded)
     assert "admin-value" not in repr(loaded)
 

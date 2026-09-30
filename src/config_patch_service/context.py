@@ -55,6 +55,10 @@ def _target(
             missing.append("dclaw_location_configured")
     else:
         missing.extend(dclaw.readiness.missing_items)
+        if dclaw.agent_id != bot.agent_id:
+            missing.append("agent_identity_mismatch")
+        if dclaw.openapi_public_id != bot.dclaw.public_id:
+            missing.append("openapi_public_id_mismatch")
     return BotConfigurationTarget(
         bot_id=bot.bot_id,
         bot_name=bot.bot_name,

@@ -13,6 +13,11 @@ from ..models import (
     BotConfigurationContext,
     BotConfigurationTargetList,
 )
+from ..upstreams import (
+    UpstreamContractError,
+    UpstreamError,
+    UpstreamUnavailableError,
+)
 
 
 router = APIRouter(
@@ -25,6 +30,14 @@ def _context_service(request: Request) -> ConfigurationContextService:
     return request.app.state.configuration_context_service
 
 
+def _upstream_status(exc: UpstreamError) -> int:
+    if isinstance(exc, UpstreamUnavailableError):
+        return 503
+    if isinstance(exc, UpstreamContractError):
+        return 502
+    return 502
+
+
 @router.get("/bots", response_model=BotConfigurationTargetList)
 def list_bots(
     request: Request,
@@ -32,7 +45,20 @@ def list_bots(
     service: ConfigurationContextService = Depends(_context_service),
 ) -> BotConfigurationTargetList:
     correlation_id = uuid.uuid4().hex
-    bots = service.list_bots(correlation_id=correlation_id)
+    try:
+        bots = service.list_bots(correlation_id=correlation_id)
+    except UpstreamError as exc:
+        request.app.state.config_patch_audit.record(
+            "staff.bots.list",
+            token_id=identity.token_id,
+            employee_name=identity.employee_name,
+            result="failure",
+            metadata={"correlationId": correlation_id, "code": exc.code},
+        )
+        raise HTTPException(
+            status_code=_upstream_status(exc),
+            detail={"code": exc.code},
+        ) from exc
     request.app.state.config_patch_audit.record(
         "staff.bots.list",
         token_id=identity.token_id,
@@ -57,9 +83,36 @@ def get_bot_configuration_context(
     try:
         context = service.get(bot_id, correlation_id=correlation_id)
     except BotNotFoundError as exc:
+        request.app.state.config_patch_audit.record(
+            "staff.bot.context.read",
+            token_id=identity.token_id,
+            employee_name=identity.employee_name,
+            result="failure",
+            metadata={
+                "correlationId": correlation_id,
+                "botId": bot_id,
+                "code": "CONFIG_PATCH_BOT_NOT_FOUND",
+            },
+        )
         raise HTTPException(
             status_code=404,
             detail={"code": "CONFIG_PATCH_BOT_NOT_FOUND"},
+        ) from exc
+    except UpstreamError as exc:
+        request.app.state.config_patch_audit.record(
+            "staff.bot.context.read",
+            token_id=identity.token_id,
+            employee_name=identity.employee_name,
+            result="failure",
+            metadata={
+                "correlationId": correlation_id,
+                "botId": bot_id,
+                "code": exc.code,
+            },
+        )
+        raise HTTPException(
+            status_code=_upstream_status(exc),
+            detail={"code": exc.code},
         ) from exc
     request.app.state.config_patch_audit.record(
         "staff.bot.context.read",

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
+import struct
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
@@ -19,17 +21,44 @@ from config_patch_service.releases import (
 from .test_upstream_clients import omni_snapshot
 
 
-def dclaw_archive(agent_text: bytes = b"agent source") -> bytes:
+def _digest(files: dict[str, bytes]) -> str:
+    digest = hashlib.sha256()
+    for path, content in sorted(files.items()):
+        encoded = path.encode()
+        digest.update(struct.pack(">Q", len(encoded)))
+        digest.update(encoded)
+        digest.update(struct.pack(">Q", len(content)))
+        digest.update(content)
+    return "sha256:" + digest.hexdigest()
+
+
+def dclaw_archive(
+    agent_text: bytes = b"agent source",
+    *,
+    agent_id: str = "agent-a",
+    profile_id: str = "standard-2026.09",
+    source_version: str = "workspace",
+) -> bytes:
+    agent_files = {"agent/source.md": agent_text}
+    knowledge_files = {
+        "knowledge/documents/doc-1/source.txt": b"knowledge source",
+        "knowledge/knowledge-manifest.json": json.dumps(
+            {"documents": []}, sort_keys=True
+        ).encode(),
+    }
+    component = {
+        "agentDigest": _digest(agent_files),
+        "agentId": agent_id,
+        "agentProfileId": profile_id,
+        "knowledgeBaseId": "kb-a",
+        "knowledgeDigest": _digest(knowledge_files),
+        "sourceVersion": source_version,
+    }
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as archive:
-        archive.writestr("agent/source.md", agent_text)
-        archive.writestr(
-            "knowledge/documents/doc-1/source.txt", b"knowledge source"
-        )
-        archive.writestr(
-            "knowledge/knowledge-manifest.json",
-            json.dumps({"documents": []}, sort_keys=True),
-        )
+        for path, content in {**agent_files, **knowledge_files}.items():
+            archive.writestr(path, content)
+        archive.writestr("dclaw-component.json", json.dumps(component))
     return output.getvalue()
 
 
@@ -38,15 +67,18 @@ def aggregated_snapshot(
 ):
     omni_value = omni_snapshot()
     omni_value["digests"]["flowMachine"] = flow_digest
+    archive = dclaw_archive(profile_id=profile)
+    with zipfile.ZipFile(io.BytesIO(archive)) as opened:
+        component = json.loads(opened.read("dclaw-component.json"))
     return AggregatedSnapshot.from_sources(
         omnichannel=OmnichannelBotSnapshot.model_validate(omni_value),
         dclaw=DclawSnapshotArchive(
-            archive=dclaw_archive(),
+            archive=archive,
             agent_id="agent-a",
             profile_id=profile,
             source_version="workspace",
-            agent_digest="sha256:" + "a" * 64,
-            knowledge_digest="sha256:" + "k" * 64,
+            agent_digest=component["agentDigest"],
+            knowledge_digest=component["knowledgeDigest"],
         ),
     )
 
@@ -84,8 +116,8 @@ def test_first_snapshot_creates_r1_and_same_snapshot_reuses_it(
     assert first.release_id == "R1"
     assert second == first
     assert first.component_digests == {
-        "agent": "sha256:" + "a" * 64,
-        "knowledge": "sha256:" + "k" * 64,
+        "agent": snapshot.dclaw.agent_digest,
+        "knowledge": snapshot.dclaw.knowledge_digest,
         "flowMachine": "f" * 64,
         "tags": "t" * 64,
     }
@@ -111,6 +143,36 @@ def test_concurrent_first_exports_leave_exactly_one_r1(
         results = list(executor.map(lambda _: create(), range(2)))
 
     assert [result.release_id for result in results] == ["R1", "R1"]
+    assert len(releases.list_for_bot("bot-a")) == 1
+
+
+def test_concurrent_different_snapshots_allow_only_one_cas_success(
+    database, settings, clock
+):
+    releases, _ = repository(database, settings, clock)
+    snapshots = [
+        aggregated_snapshot(flow_digest="x" * 64),
+        aggregated_snapshot(flow_digest="y" * 64),
+    ]
+
+    def create(snapshot):
+        return releases.create_or_get_baseline(
+            snapshot,
+            actor_token_id="token-concurrent",
+            source="initial_baseline",
+            expected_previous_snapshot_digest=None,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(create, snapshot) for snapshot in snapshots]
+    outcomes = []
+    for future in futures:
+        try:
+            outcomes.append(future.result().release_id)
+        except Exception as exc:  # asserted below by stable domain type
+            outcomes.append(type(exc).__name__)
+
+    assert sorted(outcomes) == ["R1", "ReleaseConflictError"]
     assert len(releases.list_for_bot("bot-a")) == 1
 
 

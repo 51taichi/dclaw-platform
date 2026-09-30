@@ -13,6 +13,7 @@ class ConfigPatchSettings:
     token_pepper: str = field(repr=False)
     admin_secret: str = field(repr=False)
     dclaw_service_secret: str = field(repr=False)
+    dclaw_allowed_origins: tuple[str, ...]
     omnichannel_service_secret: str = field(repr=False)
     omnichannel_base_url: str
 
@@ -30,13 +31,26 @@ class ConfigPatchSettings:
             "token_pepper": "CONFIG_PATCH_TOKEN_PEPPER",
             "admin_secret": "CONFIG_PATCH_ADMIN_SECRET",
             "dclaw_service_secret": "DCLAW_CONFIG_PATCH_INTERNAL_SECRET",
+            "dclaw_allowed_origins": "DCLAW_CONFIG_PATCH_ALLOWED_ORIGINS",
             "omnichannel_service_secret": "OMNICHANNEL_CONFIG_PATCH_INTERNAL_SECRET",
             "omnichannel_base_url": "OMNICHANNEL_CONFIG_PATCH_BASE_URL",
         }
-        values = {field_name: os.environ.get(env_name, "") for field_name, env_name in names.items()}
-        missing = [names[field_name] for field_name, value in values.items() if not value]
+        values = {
+            field_name: os.environ.get(env_name, "")
+            for field_name, env_name in names.items()
+        }
+        missing = [
+            names[field_name]
+            for field_name, value in values.items()
+            if not value
+        ]
         if missing:
             raise RuntimeError(
                 "missing required config patch settings: " + ", ".join(sorted(missing))
             )
+        values["dclaw_allowed_origins"] = tuple(
+            item.strip()
+            for item in values["dclaw_allowed_origins"].split(",")
+            if item.strip()
+        )
         return cls(**values)

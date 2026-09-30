@@ -85,10 +85,33 @@ def test_directory_collection_rejects_hardlinks(tmp_path):
         collect_directory_files(tmp_path, prefix="agent")
 
 
+def test_directory_collection_checks_size_metadata_before_reading(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "oversized.bin"
+    source.write_bytes(b"12345")
+    reads: list[str] = []
+    original = type(source).read_bytes
+
+    def tracked_read(path):
+        reads.append(path.name)
+        return original(path)
+
+    monkeypatch.setattr(type(source), "read_bytes", tracked_read)
+
+    with pytest.raises(SnapshotArchiveError, match="single file"):
+        collect_directory_files(
+            tmp_path,
+            prefix="agent",
+            limits=ArchiveLimits(max_file_bytes=4),
+        )
+
+    assert reads == []
+
+
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFO unsupported")
 def test_directory_collection_rejects_device_like_special_files(tmp_path):
     os.mkfifo(tmp_path / "pipe")
 
     with pytest.raises(SnapshotArchiveError, match="regular file"):
         collect_directory_files(tmp_path, prefix="agent")
-

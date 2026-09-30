@@ -110,6 +110,7 @@ def test_dclaw_client_uses_only_supplied_authoritative_location_and_download_con
 
     client = DclawClient(
         service_secret="dclaw-secret",
+        allowed_origins=("https://dclaw.internal.example",),
         transport=httpx.MockTransport(handler),
     )
     context = client.get_context(
@@ -150,6 +151,7 @@ def test_upstream_failures_and_invalid_schemas_never_echo_secrets_or_response_bo
     else:
         client = DclawClient(
             service_secret=service_secret,
+            allowed_origins=("https://dclaw.internal.example",),
             transport=httpx.MockTransport(failing_handler),
         )
         call = lambda: client.get_context("https://dclaw.internal.example", "agent-a")
@@ -169,7 +171,39 @@ def test_upstream_failures_and_invalid_schemas_never_echo_secrets_or_response_bo
         )
         invalid_call = invalid_client.list_bots
     else:
-        invalid_client = DclawClient(service_secret=service_secret, transport=invalid_transport)
+        invalid_client = DclawClient(
+            service_secret=service_secret,
+            allowed_origins=("https://dclaw.internal.example",),
+            transport=invalid_transport,
+        )
         invalid_call = lambda: invalid_client.get_context("https://dclaw.internal.example", "agent-a")
     with pytest.raises(UpstreamContractError):
         invalid_call()
+
+
+@pytest.mark.parametrize(
+    "untrusted_url",
+    [
+        "http://127.0.0.1:8080",
+        "http://169.254.169.254/latest/meta-data",
+        "https://dclaw.internal.example.attacker.invalid",
+        "https://attacker.invalid/dclaw",
+    ],
+)
+def test_dclaw_client_rejects_untrusted_origins_before_sending_secret(
+    untrusted_url: str,
+):
+    requests: list[httpx.Request] = []
+    client = DclawClient(
+        service_secret="must-not-leave-service",
+        allowed_origins=("https://dclaw.internal.example",),
+        transport=httpx.MockTransport(
+            lambda request: requests.append(request)
+            or httpx.Response(200, json=dclaw_context()),
+        ),
+    )
+
+    with pytest.raises(UpstreamContractError, match="DCLAW_LOCATION_NOT_ALLOWED"):
+        client.get_context(untrusted_url, "agent-a")
+
+    assert requests == []

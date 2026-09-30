@@ -33,6 +33,7 @@ def settings(tmp_path) -> ConfigPatchSettings:
         token_pepper="test-token-pepper-never-log",
         admin_secret="test-admin-secret-never-log",
         dclaw_service_secret="test-dclaw-service-secret",
+        dclaw_allowed_origins=("https://dclaw.internal.example",),
         omnichannel_service_secret="test-omnichannel-service-secret",
         omnichannel_base_url="https://omnichannel.internal.example",
     )

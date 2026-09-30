@@ -12,6 +12,7 @@
 | `CONFIG_PATCH_TOKEN_PEPPER` | 员工 Token HMAC Pepper；丢失后现有 Token 全部失效 |
 | `CONFIG_PATCH_ADMIN_SECRET` | AI 客服后台服务端调用 Token 管理接口的专用密钥 |
 | `DCLAW_CONFIG_PATCH_INTERNAL_SECRET` | 补丁服务只读访问 DClaw 的专用密钥 |
+| `DCLAW_CONFIG_PATCH_ALLOWED_ORIGINS` | 可接收上述专用密钥的 DClaw Origin 精确白名单，多个值用逗号分隔 |
 | `OMNICHANNEL_CONFIG_PATCH_INTERNAL_SECRET` | 补丁服务只读访问 AI 客服中台的专用密钥 |
 | `OMNICHANNEL_CONFIG_PATCH_BASE_URL` | AI 客服中台的服务端地址 |
 | `CONFIG_PATCH_HOST` / `CONFIG_PATCH_PORT` | 独立监听地址和端口，默认 `0.0.0.0:8788` |
@@ -102,7 +103,8 @@ sqlite3 "$CONFIG_PATCH_DATA_DIR/config-patch.sqlite3" \
 阶段一停用只需停止独立服务并从反向代理移除入口：
 
 ```bash
-docker compose -f deploy/config-patch.compose.yaml stop
+docker compose --env-file /opt/dclaw-config-patch/config-patch.env \
+  -f deploy/config-patch.compose.yaml stop
 ```
 
 随后可移除 AI 客服后台的两个补丁服务环境变量以让 Token 页安全返回 503。DClaw 和 AI 客服的原业务继续运行；无需回滚 DClaw 或 AI 客服业务数据。保留 `config-patch-data` 卷和加密备份以便审计或恢复，不要直接删除。

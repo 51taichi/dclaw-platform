@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from qwenpaw.app.config_patch_participant import router as router_module
+from qwenpaw.app.config_patch_participant.archive import ArchiveLimits
 from qwenpaw.app.config_patch_participant.export import (
     DclawSnapshotExporter,
     SnapshotExportError,
@@ -117,6 +118,7 @@ def _exporter(
     config=None,
     record=None,
     knowledge_docs=None,
+    archive_limits=ArchiveLimits(),
 ):
     return DclawSnapshotExporter(
         context_service=_ContextService(context or _ready_context()),
@@ -126,6 +128,7 @@ def _exporter(
         knowledge_service_factory=lambda _publication: _KnowledgeService(
             _knowledge_docs() if knowledge_docs is None else knowledge_docs,
         ),
+        archive_limits=archive_limits,
     )
 
 
@@ -178,6 +181,185 @@ def test_standard_snapshot_exports_agent_and_publication_knowledge(tmp_path):
     serialized = exported.archive.decode("latin1")
     assert str(workspace) not in serialized
     assert "bound_user_id" not in serialized
+
+
+def test_snapshot_sanitizes_runtime_credentials_from_agent_json(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    source = {
+        "id": "a_service",
+        "name": "售后客服",
+        "workspace_dir": "/srv/private/a_service",
+        "running": {"token_count_estimate_divisor": 4.0},
+        "channels": {"telegram": {"bot_token": "channel-secret"}},
+        "mcp": {
+            "clients": {
+                "crm": {
+                    "name": "crm",
+                    "transport": "streamable_http",
+                    "url": "https://mcp.example.test/api?api_key=url-secret",
+                    "headers": {"Authorization": "Bearer header-secret"},
+                    "env": {"CRM_API_KEY": "env-secret"},
+                    "cwd": "/srv/private/mcp-runtime",
+                    "oauth": {
+                        "access_token": "oauth-access-secret",
+                        "refresh_token": "oauth-refresh-secret",
+                    },
+                }
+            }
+        },
+        "acp": {
+            "agents": {
+                "codex": {
+                    "enabled": True,
+                    "command": "/usr/local/private/codex",
+                    "args": [
+                        "--token",
+                        "argument-secret",
+                        "-H",
+                        "Authorization: Bearer header-argument-secret",
+                        "-u",
+                        "alice:basic-auth-secret",
+                        "--user",
+                        "bob:other-basic-secret",
+                        "--header=X-Api-Key: inline-header-secret",
+                        "-HCookie: session=cookie-secret",
+                    ],
+                    "env": {"OPENAI_API_KEY": "acp-env-secret"},
+                }
+            }
+        },
+        "tools": {
+            "builtin_tools": {
+                "custom": {
+                    "name": "custom",
+                    "enabled": True,
+                    "config": {"apiKey": "tool-secret", "region": "cn"},
+                }
+            }
+        },
+    }
+    (workspace / "agent.json").write_text(
+        json.dumps(source, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    exported = _exporter(tmp_path=tmp_path, config=_config(workspace)).export(
+        "a_service",
+    )
+    files = _archive_files(exported.archive)
+    sanitized = json.loads(files["agent/agent.json"])
+    serialized = json.dumps(sanitized, ensure_ascii=False)
+
+    for secret in (
+        "channel-secret",
+        "url-secret",
+        "header-secret",
+        "env-secret",
+        "oauth-access-secret",
+        "oauth-refresh-secret",
+        "argument-secret",
+        "header-argument-secret",
+        "basic-auth-secret",
+        "other-basic-secret",
+        "inline-header-secret",
+        "cookie-secret",
+        "acp-env-secret",
+        "tool-secret",
+        "/srv/private/a_service",
+        "/srv/private/mcp-runtime",
+        "/usr/local/private/codex",
+    ):
+        assert secret not in serialized
+    assert "channels" not in sanitized
+    assert sanitized["mcp"]["clients"]["crm"]["headers"] == {
+        "Authorization": ""
+    }
+    assert sanitized["mcp"]["clients"]["crm"]["env"] == {
+        "CRM_API_KEY": ""
+    }
+    assert sanitized["tools"]["builtin_tools"]["custom"]["config"][
+        "region"
+    ] == "cn"
+    assert sanitized["running"]["token_count_estimate_divisor"] == 4.0
+    assert sanitized["acp"]["agents"]["codex"]["args"] == []
+    assert json.loads((workspace / "agent.json").read_text(encoding="utf-8")) == source
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "api_key: literal-secret-1234",
+        "Authorization: Bearer literal-bearer-secret",
+        "-----BEGIN PRIVATE KEY-----\nliteral-key-material",
+        "endpoint: https://example.test/api?token=literal-url-secret",
+    ],
+)
+def test_snapshot_rejects_embedded_credentials_in_non_json_source(
+    tmp_path, content
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "agent.json").write_text(
+        json.dumps({"id": "a_service", "name": "售后客服"}),
+        encoding="utf-8",
+    )
+    (workspace / "settings.yaml").write_text(content, encoding="utf-8")
+
+    with pytest.raises(SnapshotExportError) as captured:
+        _exporter(tmp_path=tmp_path, config=_config(workspace)).export(
+            "a_service"
+        )
+
+    assert captured.value.code == "ADMIN_BOOTSTRAP_REQUIRED"
+    assert captured.value.missing_items == ["agent_source_security"]
+
+
+def test_snapshot_rejects_declared_oversized_knowledge_before_reading(
+    tmp_path
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "agent.json").write_text(
+        json.dumps({"id": "a_service", "name": "售后客服"}),
+        encoding="utf-8",
+    )
+    document, content = _knowledge_docs()[0]
+    document.byte_size = 101
+
+    with pytest.raises(SnapshotExportError) as captured:
+        _exporter(
+            tmp_path=tmp_path,
+            config=_config(workspace),
+            knowledge_docs=[(document, content)],
+            archive_limits=ArchiveLimits(max_file_bytes=100),
+        ).export("a_service")
+
+    assert captured.value.missing_items == ["knowledge_source_snapshot"]
+
+
+def test_snapshot_allows_code_that_reads_credentials_from_environment(
+    tmp_path
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "agent.json").write_text(
+        json.dumps({"id": "a_service", "name": "售后客服"}),
+        encoding="utf-8",
+    )
+    (workspace / "client.py").write_text(
+        'API_KEY = os.getenv("CRM_API_KEY")\n',
+        encoding="utf-8",
+    )
+
+    exported = _exporter(
+        tmp_path=tmp_path,
+        config=_config(workspace),
+    ).export("a_service")
+
+    assert _archive_files(exported.archive)["agent/client.py"].startswith(
+        b"API_KEY = os.getenv"
+    )
 
 
 def test_super_expert_exports_signed_release_source_not_runtime_workspace(tmp_path):

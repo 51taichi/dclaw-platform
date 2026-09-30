@@ -57,6 +57,7 @@ def create_app(
     )
     effective_dclaw_client = dclaw_client or DclawClient(
         service_secret=effective_settings.dclaw_service_secret,
+        allowed_origins=effective_settings.dclaw_allowed_origins,
     )
     context_service = ConfigurationContextService(
         omnichannel=effective_omnichannel_client,

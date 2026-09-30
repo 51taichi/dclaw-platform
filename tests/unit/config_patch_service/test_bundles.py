@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import zipfile
+import pytest
 
 from config_patch_service.audit import AuditService
 from config_patch_service.bundles import WorkspaceBundleBuilder
@@ -12,7 +13,7 @@ from config_patch_service.releases import (
     ReleaseRepository,
 )
 
-from .test_releases import aggregated_snapshot
+from .test_releases import aggregated_snapshot, dclaw_archive
 
 
 def archive_files(archive: bytes) -> dict[str, bytes]:
@@ -80,7 +81,14 @@ def test_workspace_bundle_has_exact_contract_and_release_fingerprints(
     assert manifest["agentProfileId"] == release.agent_profile_id
     assert manifest["baseReleaseId"] == "R1"
     assert manifest["capabilityCatalogVersion"] == "2026.09.30"
-    assert manifest["fingerprints"] == release.component_digests
+    assert manifest["bundleId"].startswith("bundle_")
+    assert manifest["exportedAt"] == release.created_at.isoformat()
+    assert manifest["sourceFingerprints"] == {
+        "agent": release.component_digests["agent"],
+        "knowledge": release.component_digests["knowledge"],
+        "flow": release.component_digests["flowMachine"],
+        "tags": release.component_digests["tags"],
+    }
     assert store.get(built.object_key) == built.archive
 
 
@@ -121,3 +129,47 @@ def test_standard_and_super_bundles_are_transparent_and_secret_free(
         str(settings.data_dir),
     ):
         assert forbidden not in rendered
+
+
+def test_bundle_recomputes_component_digests_instead_of_trusting_headers(
+    database, settings, clock
+):
+    release, builder, store = release_and_builder(database, settings, clock)
+    forged = dclaw_archive(agent_text=b"forged")
+    object.__setattr__(
+        release,
+        "dclaw_snapshot_object_key",
+        store.put(forged),
+    )
+
+    with pytest.raises(ValueError, match="digest"):
+        builder.build(release)
+
+
+@pytest.mark.parametrize("kind", ["symlink", "unicode_collision", "ratio"])
+def test_bundle_rejects_unsafe_zip_metadata(
+    database, settings, clock, kind
+):
+    release, builder, store = release_and_builder(database, settings, clock)
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        if kind == "symlink":
+            info = zipfile.ZipInfo("agent/link")
+            info.create_system = 3
+            info.external_attr = 0o120777 << 16
+            archive.writestr(info, "target")
+        elif kind == "unicode_collision":
+            archive.writestr("agent/caf\u00e9.txt", "one")
+            archive.writestr("agent/cafe\u0301.txt", "two")
+        else:
+            archive.writestr("agent/bomb.txt", b"0" * (2 * 1024 * 1024))
+        archive.writestr("knowledge/knowledge-manifest.json", "{}")
+        archive.writestr("dclaw-component.json", "{}")
+    object.__setattr__(
+        release,
+        "dclaw_snapshot_object_key",
+        store.put(output.getvalue()),
+    )
+
+    with pytest.raises(ValueError):
+        builder.build(release)

@@ -31,16 +31,31 @@ def _validated_base_url(value: str) -> str:
     return value.rstrip("/")
 
 
+def _origin(value: str) -> str:
+    parsed = urlsplit(_validated_base_url(value))
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
 class DclawClient:
     def __init__(
         self,
         *,
         service_secret: str,
+        allowed_origins: tuple[str, ...],
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         if not service_secret:
             raise ValueError("DClaw service secret is required")
+        if not allowed_origins:
+            raise ValueError("at least one DClaw origin is required")
         self._service_secret = service_secret
+        self._allowed_origins = frozenset(
+            _origin(value) for value in allowed_origins
+        )
+        for value in allowed_origins:
+            parsed = urlsplit(_validated_base_url(value))
+            if parsed.path not in {"", "/"}:
+                raise ValueError("DClaw allowed origins must not contain paths")
         self._client = httpx.Client(
             timeout=httpx.Timeout(
                 connect=2.0, read=20.0, write=20.0, pool=2.0
@@ -57,6 +72,8 @@ class DclawClient:
         correlation_id: str | None,
     ) -> httpx.Response:
         authority = _validated_base_url(base_url)
+        if _origin(authority) not in self._allowed_origins:
+            raise UpstreamContractError("DCLAW_LOCATION_NOT_ALLOWED")
         request_id = correlation_id or uuid.uuid4().hex
         try:
             response = self._client.get(

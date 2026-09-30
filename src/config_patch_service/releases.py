@@ -20,7 +20,10 @@ from .models import (
     DclawSnapshotArchive,
     OmnichannelBotSnapshot,
 )
-from .upstreams import UpstreamBootstrapRequiredError
+from .upstreams import (
+    UpstreamBootstrapRequiredError,
+    UpstreamContractError,
+)
 
 if TYPE_CHECKING:
     from .bundles import BuiltWorkspaceBundle, WorkspaceBundleBuilder
@@ -29,6 +32,7 @@ if TYPE_CHECKING:
 
 
 BaselineSource = Literal["initial_baseline", "external_baseline"]
+_UNSET = object()
 
 
 def _utc_now() -> datetime:
@@ -59,6 +63,10 @@ class BaselineExportError(RuntimeError):
         self.code = code
         self.missing_items = _unique(missing_items or [])
         super().__init__(code)
+
+
+class ReleaseConflictError(RuntimeError):
+    """The release head changed after the caller read its export sources."""
 
 
 class ContentAddressedObjectStore:
@@ -210,6 +218,7 @@ class ReleaseRepository:
         *,
         actor_token_id: str,
         source: BaselineSource,
+        expected_previous_snapshot_digest: str | None | object = _UNSET,
     ) -> ConfigurationRelease:
         omni_bytes = _canonical_json(
             snapshot.omnichannel.model_dump(by_alias=True, mode="json"),
@@ -237,13 +246,24 @@ class ReleaseRepository:
                 """,
                 (bot_id,),
             ).fetchone()
+            actual_previous_digest = (
+                latest["snapshot_digest"] if latest is not None else None
+            )
+            if (
+                expected_previous_snapshot_digest is not _UNSET
+                and actual_previous_digest
+                != expected_previous_snapshot_digest
+            ):
+                raise ReleaseConflictError("release baseline changed")
             version = int(latest["version"]) + 1 if latest else 1
             previous_release_id = latest["release_id"] if latest else None
             expected_source = (
                 "external_baseline" if latest else "initial_baseline"
             )
             if source != expected_source:
-                raise ValueError(f"baseline source must be {expected_source}")
+                raise ReleaseConflictError(
+                    f"baseline source must be {expected_source}"
+                )
             release_id = f"R{version}"
             created_at = self._clock().astimezone(timezone.utc).isoformat()
             connection.execute(
@@ -348,6 +368,19 @@ def _dclaw_context_fingerprint(context: DclawConfigurationContext) -> bytes:
     return _canonical_json(context.model_dump(by_alias=True, mode="json"))
 
 
+def _dclaw_snapshot_fingerprint(snapshot: DclawSnapshotArchive) -> bytes:
+    return _canonical_json(
+        {
+            "agentId": snapshot.agent_id,
+            "profileId": snapshot.profile_id,
+            "sourceVersion": snapshot.source_version,
+            "agentDigest": snapshot.agent_digest,
+            "knowledgeDigest": snapshot.knowledge_digest,
+            "archiveDigest": _sha256(snapshot.archive),
+        }
+    )
+
+
 def _omnichannel_configuration_fingerprint(
     snapshot: OmnichannelBotSnapshot,
 ) -> bytes:
@@ -382,6 +415,12 @@ class BaselineExportService:
         actor_token_id: str,
         correlation_id: str,
     ) -> "BuiltWorkspaceBundle":
+        expected_previous = self._releases.latest(bot_id)
+        expected_previous_digest = (
+            expected_previous.snapshot_digest
+            if expected_previous is not None
+            else None
+        )
         first_omni = self._omnichannel.get_bot_snapshot(
             bot_id,
             correlation_id=correlation_id,
@@ -399,6 +438,12 @@ class BaselineExportService:
             first_omni.agent.agent_id,
             correlation_id=correlation_id,
         )
+        if (
+            first_context.agent_id != first_omni.agent.agent_id
+            or first_context.openapi_public_id
+            != first_omni.agent.dclaw.public_id
+        ):
+            raise BaselineExportError("TARGET_BINDING_CHANGED")
         missing = _unique(
             first_omni.readiness.missing_items
             + first_context.readiness.missing_items,
@@ -409,7 +454,7 @@ class BaselineExportService:
                 missing_items=missing,
             )
         try:
-            dclaw_snapshot = self._dclaw.download_snapshot(
+            first_dclaw_snapshot = self._dclaw.download_snapshot(
                 first_omni.agent.dclaw.base_url,
                 first_omni.agent.agent_id,
                 correlation_id=correlation_id,
@@ -428,7 +473,6 @@ class BaselineExportService:
             second_omni.agent.agent_id != first_omni.agent.agent_id
             or second_omni.agent.dclaw.base_url
             != first_omni.agent.dclaw.base_url
-            or dclaw_snapshot.agent_id != first_omni.agent.agent_id
         ):
             raise BaselineExportError("TARGET_BINDING_CHANGED")
         if _omnichannel_configuration_fingerprint(
@@ -442,25 +486,57 @@ class BaselineExportService:
             correlation_id=correlation_id,
         )
         if (
+            second_context.agent_id != second_omni.agent.agent_id
+            or second_context.openapi_public_id
+            != second_omni.agent.dclaw.public_id
+        ):
+            raise BaselineExportError("TARGET_BINDING_CHANGED")
+        try:
+            second_dclaw_snapshot = self._dclaw.download_snapshot(
+                second_omni.agent.dclaw.base_url,
+                second_omni.agent.agent_id,
+                correlation_id=correlation_id,
+            )
+        except UpstreamBootstrapRequiredError as exc:
+            raise BaselineExportError(
+                "ADMIN_BOOTSTRAP_REQUIRED",
+                missing_items=exc.missing_items,
+            ) from exc
+        if (
             _dclaw_context_fingerprint(first_context)
             != _dclaw_context_fingerprint(second_context)
-            or dclaw_snapshot.profile_id != first_context.agent_profile_id
-            or dclaw_snapshot.source_version != first_context.source_version
+            or _dclaw_snapshot_fingerprint(first_dclaw_snapshot)
+            != _dclaw_snapshot_fingerprint(second_dclaw_snapshot)
+            or second_dclaw_snapshot.agent_id != second_context.agent_id
+            or second_dclaw_snapshot.profile_id
+            != second_context.agent_profile_id
+            or second_dclaw_snapshot.source_version
+            != second_context.source_version
         ):
             raise BaselineExportError("DCLAW_SOURCE_CHANGED")
 
         snapshot = AggregatedSnapshot.from_sources(
             omnichannel=second_omni,
-            dclaw=dclaw_snapshot,
+            dclaw=second_dclaw_snapshot,
         )
+        try:
+            self._bundle_builder.validate_snapshot(snapshot)
+        except ValueError as exc:
+            raise UpstreamContractError(
+                "DCLAW_SNAPSHOT_CONTRACT_INVALID"
+            ) from exc
         source: BaselineSource = (
             "external_baseline"
-            if self._releases.latest(bot_id) is not None
+            if expected_previous is not None
             else "initial_baseline"
         )
-        release = self._releases.create_or_get_baseline(
-            snapshot,
-            actor_token_id=actor_token_id,
-            source=source,
-        )
+        try:
+            release = self._releases.create_or_get_baseline(
+                snapshot,
+                actor_token_id=actor_token_id,
+                source=source,
+                expected_previous_snapshot_digest=expected_previous_digest,
+            )
+        except ReleaseConflictError as exc:
+            raise BaselineExportError("BASELINE_CHANGED_RETRY") from exc
         return self._bundle_builder.build(release)
