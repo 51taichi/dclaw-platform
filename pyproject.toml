@@ -77,8 +77,6 @@ include-package-data = true
     "aigc/contracts/*.json",
     "docs/*.md",
 ]
-"config_patch_service" = ["resources/**"]
-
 [build-system]
 requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
@@ -86,8 +84,6 @@ build-backend = "setuptools.build_meta"
 [project.scripts]
 qwenpaw = "qwenpaw.cli.main:cli"
 copaw = "qwenpaw.cli.main:cli"
-dclaw-config-patch = "config_patch_service.app:main"
-
 # Optional doctor plugins: callable (DoctorRunContext) -> list[str]
 # [project.entry-points."qwenpaw.doctor"]
 # my_pkg = "my_pkg.doctor:doctor_notes"
@@ -146,7 +142,7 @@ testpaths = [
 ]
 
 [tool.coverage.run]
-source = ["src/qwenpaw", "src/config_patch_service"]
+source = ["src/qwenpaw"]
 omit = [
     "*/tests/*",
     "*/test_*",
