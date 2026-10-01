@@ -11,6 +11,26 @@
 鉴权方式：Authorization: Bearer <个人 Codex Token>
 ```
 
+### Token 与环境的强绑定关系
+
+测试环境和正式环境使用相互独立的 Token 数据库、加密 Pepper 和生命周期记录。两边生成的 Token 虽然都以 `dclaw_staff_` 开头，但不能跨环境使用，也不会自动回退到另一个环境验证。
+
+| Token 创建位置 | 允许调用的员工 API | 是否用于本次联调 |
+| --- | --- | --- |
+| `https://worktool-test.deepmega.cn/admin/` | `https://worktool-test.deepmega.cn/staff/v1/*` | 是 |
+| `https://worktool.deepmega.cn/admin/` | `https://dclaw.deepmega.cn/staff/v1/*` | 否 |
+
+本执行单只允许使用在 `worktool-test.deepmega.cn/admin/` 创建或轮换的测试 Token。正式环境 Token 调用测试接口会返回：
+
+```text
+HTTP 401
+detail.code = INVALID_STAFF_TOKEN
+```
+
+如果同时收到测试和正式两枚 Token，必须由交付人员通过安全渠道明确标记哪一枚是 `TEST`。调用方不得根据 Token 前缀或外观猜测环境，也不得在两个环境之间轮流试 Token。
+
+如果无法确定哪一枚是测试 Token，应停止联调，请平台管理员在测试后台轮换测试 Token 后重新交付。不要把两枚 Token 发到聊天中进行辨认。
+
 请将 Token 保存在本地 Secret 或环境变量中，不要把完整 Token 写入聊天、日志、代码、Git、测试快照或客户工作目录。
 
 推荐使用以下环境变量：
