@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[3]
 DOCKERFILE = ROOT / "deploy" / "config-patch.Dockerfile"
 ENTRYPOINT = ROOT / "deploy" / "config-patch-entrypoint.sh"
 COMPOSE = ROOT / "deploy" / "config-patch.compose.yaml"
+PRODUCTION_OVERLAY = ROOT / "deploy" / "config-patch.production.compose.yaml"
 RUNBOOK = ROOT / "docs" / "config-patch-service-phase1-runbook.md"
 
 
@@ -80,6 +81,21 @@ def test_config_patch_compose_requires_every_credential_without_defaults() -> (
         assert forbidden not in serialized
 
 
+def test_production_overlay_joins_only_the_two_required_service_networks() -> None:
+    rendered = yaml.safe_load(PRODUCTION_OVERLAY.read_text(encoding="utf-8"))
+    assert set(rendered["services"]) == {"config-patch"}
+    assert rendered["services"]["config-patch"]["networks"] == [
+        "dclaw-net",
+        "omnichannel-net",
+    ]
+    assert rendered["networks"] == {
+        "omnichannel-net": {
+            "external": True,
+            "name": "${OMNICHANNEL_DOCKER_NETWORK:-worktool-bot-service_default}",
+        }
+    }
+
+
 def test_phase_one_runbook_covers_operations_and_safe_shutdown() -> None:
     text = RUNBOOK.read_text(encoding="utf-8")
     for heading in (
@@ -96,7 +112,8 @@ def test_phase_one_runbook_covers_operations_and_safe_shutdown() -> None:
     assert "Authorization: Bearer <员工_TOKEN>" in text
     stop_command = (
         "docker compose --env-file /opt/dclaw-config-patch/config-patch.env "
-        "\\\n  -f deploy/config-patch.compose.yaml stop"
+        "\\\n  -f deploy/config-patch.compose.yaml "
+        "\\\n  -f deploy/config-patch.production.compose.yaml stop"
     )
     assert stop_command in text
     assert "无需回滚 DClaw 或 AI 客服业务数据" in text

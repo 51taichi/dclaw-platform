@@ -25,9 +25,12 @@
 
 ```bash
 docker compose --env-file /opt/dclaw-config-patch/config-patch.env \
-  -f deploy/config-patch.compose.yaml up -d --build
+  -f deploy/config-patch.compose.yaml \
+  -f deploy/config-patch.production.compose.yaml up -d --build
 curl --fail --silent http://127.0.0.1:18788/health
 ```
+
+生产覆盖文件只把补丁容器加入 DClaw 与 AI 客服两个现有 Docker 网络，不会把补丁服务并入或替换任一业务进程。若 AI 客服 Compose 项目名不同，通过 `OMNICHANNEL_DOCKER_NETWORK` 显式指定其网络名。
 
 健康接口不需要员工 Token，只返回服务名、阶段版本和状态，不返回地址或密钥。公网入口应由现有 HTTPS 反向代理转发到 `127.0.0.1:18788`；只开放 `/staff/v1/*` 给员工。`/internal/admin/v1/*` 只允许 AI 客服后台的服务端访问。
 
@@ -104,7 +107,8 @@ sqlite3 "$CONFIG_PATCH_DATA_DIR/config-patch.sqlite3" \
 
 ```bash
 docker compose --env-file /opt/dclaw-config-patch/config-patch.env \
-  -f deploy/config-patch.compose.yaml stop
+  -f deploy/config-patch.compose.yaml \
+  -f deploy/config-patch.production.compose.yaml stop
 ```
 
 随后可移除 AI 客服后台的两个补丁服务环境变量以让 Token 页安全返回 503。DClaw 和 AI 客服的原业务继续运行；无需回滚 DClaw 或 AI 客服业务数据。保留 `config-patch-data` 卷和加密备份以便审计或恢复，不要直接删除。

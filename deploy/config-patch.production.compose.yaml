@@ -1,0 +1,10 @@
+services:
+  config-patch:
+    networks:
+      - dclaw-net
+      - omnichannel-net
+
+networks:
+  omnichannel-net:
+    external: true
+    name: ${OMNICHANNEL_DOCKER_NETWORK:-worktool-bot-service_default}
