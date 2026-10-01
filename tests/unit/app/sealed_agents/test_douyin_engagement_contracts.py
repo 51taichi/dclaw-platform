@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from agent_sources.douyin_engagement_agent.agent.contracts import (
     AgentOperationRequest,
@@ -13,6 +15,12 @@ from agent_sources.douyin_engagement_agent.agent.contracts import (
     validate_operation_response,
 )
 from agent_sources.douyin_engagement_agent.agent.prompts import build_agent_messages
+from qwenpaw.app.sealed_agents.package import build_signed_package_bytes
+from qwenpaw.app.super_experts.capabilities import compute_capability_set_digest
+
+DOUYIN_AGENT_ROOT = (
+    Path(__file__).parents[4] / "agent_sources/douyin_engagement_agent"
+)
 
 
 def message(
@@ -79,6 +87,26 @@ def valid_plan() -> dict[str, object]:
             },
         ],
     }
+
+
+def test_release_manifest_builds_the_signed_agent_package() -> None:
+    manifest = json.loads(
+        (DOUYIN_AGENT_ROOT / "manifest.template.json").read_text(encoding="utf-8")
+    )
+    files = {
+        f"agent/{path.relative_to(DOUYIN_AGENT_ROOT / 'agent').as_posix()}": (
+            path.read_bytes()
+        )
+        for path in (DOUYIN_AGENT_ROOT / "agent").rglob("*")
+        if path.is_file() and not path.is_symlink()
+    }
+
+    assert manifest["capability_digest"] == compute_capability_set_digest(manifest)
+    assert build_signed_package_bytes(
+        manifest,
+        files,
+        Ed25519PrivateKey.generate(),
+    )
 
 
 def test_parse_operation_message_preserves_trusted_and_user_sections() -> None:

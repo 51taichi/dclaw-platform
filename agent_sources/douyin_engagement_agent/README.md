@@ -17,7 +17,7 @@ uv run pytest \
 
 ## User-operated packaging
 
-Copy `manifest.template.json`, replace the version and approved signer ID, then sign it with a user-controlled Ed25519 private key:
+Copy `manifest.template.json`, replace the version and approved signer ID, then sign it with a user-controlled Ed25519 private key. The checked-in `capability_digest` already covers the declared platform authority; if any orchestration, platform-contract, or capability declaration changes, recompute it with `compute_capability_set_digest` before packaging.
 
 ```bash
 uv run python scripts/build_sealed_agent.py \
@@ -33,7 +33,7 @@ The repository intentionally contains no production key. Uploading, installing, 
 
 After the local gates pass, the operator performs the live steps with credentials they control:
 
-1. Copy `manifest.template.json`, choose an immutable semantic version, and set an approved signer ID. Do not put the private key or an API key in this repository.
+1. Copy `manifest.template.json`, choose an immutable semantic version, and set an approved signer ID. Preserve the checked-in capability digest unless the authority declarations change. Do not put the private key or an API key in this repository.
 2. Run the packaging command above and retain the ZIP digest and manifest beside the release record.
 3. In DClaw, register the signer public key, then open **设置 → 密封 Agent**, upload the ZIP, inspect validation output, install it, and activate that exact version.
 4. In **Open API**, publish the activated sealed Agent as an Agent target. Enable it, grant `messages:create`, bind a dedicated application/API key, and copy the generated stable Public ID. Persistent sessions are required for private-message operations; isolated attempts are used by the comment-plan operations requested by Bot Server.
