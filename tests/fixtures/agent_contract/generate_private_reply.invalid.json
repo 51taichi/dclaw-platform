@@ -1,0 +1,9 @@
+{
+  "operation": "GENERATE_PRIVATE_REPLY",
+  "response": {
+    "schemaVersion": 1,
+    "replyText": 42,
+    "intent": "回答咨询",
+    "conversationSummary": "客户咨询售后"
+  }
+}

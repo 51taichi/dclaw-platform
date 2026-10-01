@@ -11,7 +11,8 @@ uv run python scripts/validate_standard_agent_workspace.py \
 
 uv run pytest \
   tests/unit/app/sealed_agents/test_douyin_engagement_contracts.py \
-  tests/unit/app/sealed_agents/test_douyin_engagement_runtime.py -q
+  tests/unit/app/sealed_agents/test_douyin_engagement_runtime.py \
+  tests/contract/test_douyin_engagement_fixtures.py -q
 ```
 
 ## User-operated packaging
@@ -27,3 +28,16 @@ uv run python scripts/build_sealed_agent.py \
 ```
 
 The repository intentionally contains no production key. Uploading, installing, publishing, and binding the resulting package are deployment actions performed by the operator; they are not part of this source implementation.
+
+## Operator handoff
+
+After the local gates pass, the operator performs the live steps with credentials they control:
+
+1. Copy `manifest.template.json`, choose an immutable semantic version, and set an approved signer ID. Do not put the private key or an API key in this repository.
+2. Run the packaging command above and retain the ZIP digest and manifest beside the release record.
+3. In DClaw, register the signer public key, then open **设置 → 密封 Agent**, upload the ZIP, inspect validation output, install it, and activate that exact version.
+4. In **Open API**, publish the activated sealed Agent as an Agent target. Enable it, grant `messages:create`, bind a dedicated application/API key, and copy the generated stable Public ID. Persistent sessions are required for private-message operations; isolated attempts are used by the comment-plan operations requested by Bot Server.
+5. In Bot Server, open **系统设置 → DClaw Agent** and enter the DClaw base URL, Public ID, dedicated API key, capability version `2`, and timeout. Save, then use **测试连接** before enabling any Agent-backed strategy.
+6. Start with controlled test accounts. Verify request audit, persistent private conversation continuity, isolated comment planning, error alarms, and quota behavior before production use.
+
+Source validation and fixture tests do not upload, install, activate, publish, or call a live Agent. Those state-changing operations remain explicitly user-operated.

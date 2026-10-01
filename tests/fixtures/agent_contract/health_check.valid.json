@@ -1,0 +1,6 @@
+{
+  "operation": "HEALTH_CHECK",
+  "systemRules": {"operation": "HEALTH_CHECK"},
+  "userScriptRequirements": {"expectedResponse": {"ok": true}},
+  "response": {"ok": true, "capabilityVersion": "2"}
+}

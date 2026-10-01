@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-import json
-import re
-from typing import Any, Mapping
-
+from typing import Any
 
 MAX_MESSAGE_CHARS = 262_144
 MAX_PRIVATE_REPLY_CHARS = 1_000

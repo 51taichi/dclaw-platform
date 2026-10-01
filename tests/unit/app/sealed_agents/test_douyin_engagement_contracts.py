@@ -104,8 +104,10 @@ def test_parse_operation_message_preserves_trusted_and_user_sections() -> None:
             "missing_section",
         ),
         (
-            "DCLAW_OPERATION: HEALTH_CHECK\nSYSTEM_RULES_JSON:\n{}\n"
-            "SYSTEM_RULES_JSON:\n{}\nUSER_SCRIPT_REQUIREMENTS_JSON:\n{}",
+            (
+                "DCLAW_OPERATION: HEALTH_CHECK\nSYSTEM_RULES_JSON:\n{}\n"
+                "SYSTEM_RULES_JSON:\n{}\nUSER_SCRIPT_REQUIREMENTS_JSON:\n{}"
+            ),
             "duplicate_section",
         ),
         (

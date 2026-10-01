@@ -6,7 +6,6 @@ import json
 
 from .contracts import AgentOperationRequest, Operation
 
-
 _OPERATION_RULES = {
     Operation.HEALTH_CHECK: "Return the exact health capability object requested by the schema.",
     Operation.GENERATE_PLAN: "Generate a complete dependency-safe comment plan that satisfies every system rule.",
