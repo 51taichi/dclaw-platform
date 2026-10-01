@@ -1,0 +1,3 @@
+services:
+  config-patch:
+    container_name: dclaw-config-patch-test

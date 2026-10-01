@@ -11,6 +11,7 @@ DOCKERFILE = ROOT / "deploy" / "config-patch.Dockerfile"
 ENTRYPOINT = ROOT / "deploy" / "config-patch-entrypoint.sh"
 COMPOSE = ROOT / "deploy" / "config-patch.compose.yaml"
 PRODUCTION_OVERLAY = ROOT / "deploy" / "config-patch.production.compose.yaml"
+TEST_OVERLAY = ROOT / "deploy" / "config-patch.test.compose.yaml"
 RUNBOOK = ROOT / "docs" / "config-patch-service-phase1-runbook.md"
 
 
@@ -92,6 +93,15 @@ def test_production_overlay_joins_only_the_two_required_service_networks() -> No
         "omnichannel-net": {
             "external": True,
             "name": "${OMNICHANNEL_DOCKER_NETWORK:-worktool-bot-service_default}",
+        }
+    }
+
+
+def test_test_overlay_uses_an_isolated_container_name() -> None:
+    rendered = yaml.safe_load(TEST_OVERLAY.read_text(encoding="utf-8"))
+    assert rendered == {
+        "services": {
+            "config-patch": {"container_name": "dclaw-config-patch-test"}
         }
     }
 
