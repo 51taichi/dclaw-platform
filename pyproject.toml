@@ -73,6 +73,7 @@ include-package-data = true
     "security/skill_scanner/rules/**",
     "security/skill_scanner/data/**",
     "app/billing/default_prices/*.json",
+    "app/integration_delivery/resources/*.json",
     "aigc/contracts/*.json",
     "docs/*.md",
 ]
