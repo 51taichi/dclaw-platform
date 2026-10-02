@@ -4,12 +4,24 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
 import stat
+import tempfile
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
 from typing import Any
 
-from .archive import ArchiveLimits, SnapshotArchiveError, _normalize_path, deterministic_digest
+from ...config.utils import load_config
+from .archive import (
+    ArchiveLimits,
+    SnapshotArchiveError,
+    _normalize_path,
+    collect_directory_files,
+    deterministic_digest,
+)
+from .export import _is_agent_runtime_path
 from .models import DeliveryValidation
 
 
@@ -28,6 +40,16 @@ class ParsedDeliveryBundle:
     knowledge_base_id: str | None
     agent_files: dict[str, bytes]
     knowledge_files: dict[str, bytes]
+
+
+@dataclass(frozen=True, slots=True)
+class AgentApplyReceipt:
+    operation_id: str
+    agent_id: str
+    workspace_dir: Path
+    backup_dir: Path
+    agent_digest_before: str
+    agent_digest_after: str
 
 
 def _read_archive(archive_bytes: bytes) -> dict[str, bytes]:
@@ -176,3 +198,146 @@ def validate_delivery_bundle(
         agent_digest=parsed.agent_digest,
         knowledge_digest=parsed.knowledge_digest,
     )
+
+
+def _standard_workspace(agent_id: str) -> Path:
+    config = load_config()
+    profiles = config.agents.profiles if config.agents else {}
+    profile = profiles.get(agent_id)
+    if profile is None or not getattr(profile, "enabled", True):
+        raise DeliveryBundleError("standard Agent is unavailable")
+    workspace = Path(profile.workspace_dir).expanduser()
+    if not workspace.is_dir():
+        raise DeliveryBundleError("standard Agent is unavailable")
+    return workspace
+
+
+def _source_digest(workspace: Path) -> str:
+    return deterministic_digest(
+        collect_directory_files(
+            workspace,
+            prefix="agent",
+            exclude=_is_agent_runtime_path,
+        )
+    )
+
+
+def _remove_source_files(workspace: Path) -> None:
+    for candidate in sorted(
+        workspace.rglob("*"),
+        key=lambda path: len(path.parts),
+        reverse=True,
+    ):
+        relative = PurePosixPath(*candidate.relative_to(workspace).parts)
+        if _is_agent_runtime_path(relative):
+            continue
+        if candidate.is_symlink() or candidate.is_file():
+            candidate.unlink()
+        elif candidate.is_dir():
+            try:
+                candidate.rmdir()
+            except OSError:
+                pass
+
+
+def _temporary_sibling(workspace: Path, label: str) -> Path:
+    workspace.parent.mkdir(parents=True, exist_ok=True)
+    return Path(
+        tempfile.mkdtemp(
+            prefix=f".{workspace.name}.{label}-",
+            dir=workspace.parent,
+        )
+    )
+
+
+def apply_standard_agent_source(
+    bundle: ParsedDeliveryBundle,
+    operation_id: str,
+    *,
+    workspace_dir: Path | None = None,
+    reload_agent: Callable[[str], None] | None = None,
+) -> AgentApplyReceipt:
+    """Replace exported Agent source while retaining runtime-only state."""
+
+    workspace = (
+        Path(workspace_dir) if workspace_dir is not None else _standard_workspace(bundle.agent_id)
+    )
+    if not workspace.is_dir():
+        raise DeliveryBundleError("standard Agent is unavailable")
+    before_digest = _source_digest(workspace)
+    staging = _temporary_sibling(workspace, "staging")
+    backup = _temporary_sibling(workspace, "backup")
+    shutil.rmtree(staging)
+    shutil.rmtree(backup)
+    installed = False
+    try:
+        shutil.copytree(workspace, staging, symlinks=True)
+        _remove_source_files(staging)
+        for archive_path, content in bundle.agent_files.items():
+            relative = PurePosixPath(archive_path).relative_to("agent")
+            target = staging.joinpath(*relative.parts)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+
+        staged_digest = _source_digest(staging)
+        if staged_digest != bundle.agent_digest:
+            raise DeliveryBundleError("staged Agent digest mismatch")
+
+        workspace.rename(backup)
+        staging.rename(workspace)
+        installed = True
+        if reload_agent is not None:
+            try:
+                reload_agent(bundle.agent_id)
+            except Exception:
+                failed = _temporary_sibling(workspace, "failed")
+                shutil.rmtree(failed)
+                workspace.rename(failed)
+                backup.rename(workspace)
+                try:
+                    reload_agent(bundle.agent_id)
+                except Exception:
+                    pass
+                shutil.rmtree(failed, ignore_errors=True)
+                installed = False
+                raise
+        return AgentApplyReceipt(
+            operation_id=operation_id,
+            agent_id=bundle.agent_id,
+            workspace_dir=workspace,
+            backup_dir=backup,
+            agent_digest_before=before_digest,
+            agent_digest_after=staged_digest,
+        )
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        if not installed and backup.exists():
+            shutil.rmtree(backup, ignore_errors=True)
+
+
+def restore_standard_agent_source(
+    receipt: AgentApplyReceipt,
+    *,
+    reload_agent: Callable[[str], None] | None = None,
+) -> None:
+    """Restore the exact workspace captured before a standard Agent update."""
+
+    workspace = receipt.workspace_dir
+    backup = receipt.backup_dir
+    if not backup.is_dir() or not workspace.is_dir():
+        raise DeliveryBundleError("Agent backup is unavailable")
+    replaced = _temporary_sibling(workspace, "replaced")
+    shutil.rmtree(replaced)
+    workspace.rename(replaced)
+    try:
+        backup.rename(workspace)
+        if reload_agent is not None:
+            reload_agent(receipt.agent_id)
+    except Exception:
+        if workspace.exists():
+            workspace.rename(backup)
+        replaced.rename(workspace)
+        raise
+    else:
+        shutil.rmtree(replaced, ignore_errors=True)
