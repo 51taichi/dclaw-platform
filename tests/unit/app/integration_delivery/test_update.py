@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import zipfile
 
 import pytest
@@ -13,6 +14,7 @@ from qwenpaw.app.integration_delivery.archive import (
 )
 from qwenpaw.app.integration_delivery.update import (
     DeliveryBundleError,
+    IntegrationDeliveryUpdater,
     apply_standard_agent_source,
     parse_delivery_bundle,
     restore_standard_agent_source,
@@ -67,6 +69,56 @@ def _delivery_archive(*, agent_id: str = "a_service") -> tuple[bytes, str, str]:
                     sort_keys=True,
                 ).encode(),
             },
+        ),
+        agent_digest,
+        knowledge_digest,
+    )
+
+
+def _custom_delivery_archive(
+    *,
+    agent_files: dict[str, bytes],
+    documents: list[dict[str, object]],
+) -> tuple[bytes, str, str]:
+    knowledge_files: dict[str, bytes] = {}
+    manifest: list[dict[str, object]] = []
+    for document in documents:
+        doc_id = str(document["id"])
+        name = str(document["name"])
+        relative = f"documents/{doc_id}/{name}"
+        knowledge_files[f"knowledge/{relative}"] = bytes(document["content"])
+        manifest.append(
+            {
+                "category": document.get("category", "faq"),
+                "id": doc_id,
+                "name": name,
+                "path": relative,
+                "sourceType": document.get("sourceType", "md"),
+                "tags": document.get("tags", []),
+            }
+        )
+    knowledge_files["knowledge/knowledge-manifest.json"] = json.dumps(
+        {"documents": manifest}, separators=(",", ":"), sort_keys=True
+    ).encode()
+    agent_digest = deterministic_digest(agent_files)
+    knowledge_digest = deterministic_digest(knowledge_files)
+    component = {
+        "agentDigest": agent_digest,
+        "agentId": "a_service",
+        "agentProfileId": "standard-2026.09",
+        "knowledgeBaseId": "kb-1",
+        "knowledgeDigest": knowledge_digest,
+        "sourceVersion": "workspace",
+    }
+    return (
+        build_deterministic_archive(
+            {
+                **agent_files,
+                **knowledge_files,
+                "dclaw-component.json": json.dumps(
+                    component, separators=(",", ":"), sort_keys=True
+                ).encode(),
+            }
         ),
         agent_digest,
         knowledge_digest,
@@ -200,6 +252,44 @@ def test_standard_update_preserves_runtime_directories(tmp_path: Path) -> None:
     assert (workspace / "qwenpaw_app.log").read_text() == "runtime log"
 
 
+def test_standard_update_preserves_server_owned_json_values(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    (workspace / "agent.json").write_text(
+        json.dumps(
+            {
+                "id": "a_service",
+                "name": "Old",
+                "cwd": "/srv/private/a_service",
+                "env": {"API_TOKEN": "server-secret"},
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    archive, _, _ = _custom_delivery_archive(
+        agent_files={
+            "agent/AGENTS.md": b"# Rules\n",
+            "agent/agent.json": (
+                b'{"env":{"API_TOKEN":""},"id":"a_service","name":"Service"}'
+            ),
+        },
+        documents=[{"id": "doc-1", "name": "faq.md", "content": b"FAQ"}],
+    )
+
+    apply_standard_agent_source(
+        parse_delivery_bundle("a_service", archive),
+        "operation-secret",
+        workspace_dir=workspace,
+        reload_agent=lambda _agent_id: None,
+    )
+
+    installed = json.loads((workspace / "agent.json").read_text())
+    assert installed["name"] == "Service"
+    assert installed["cwd"] == "/srv/private/a_service"
+    assert installed["env"]["API_TOKEN"] == "server-secret"
+
+
 def test_standard_update_can_restore_previous_source(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     archive, _, _ = _delivery_archive()
@@ -251,3 +341,171 @@ def test_standard_update_restores_old_source_after_reload_failure(
         "runtime session"
     )
     assert attempts == 2
+
+
+class _KnowledgeStore:
+    def __init__(self, documents: list[dict[str, object]]) -> None:
+        self.documents = [dict(document) for document in documents]
+        self.fail_next = False
+
+    def replace_delivery_documents(self, documents: list[dict[str, object]]) -> None:
+        if self.fail_next:
+            self.fail_next = False
+            raise RuntimeError("knowledge failed")
+        self.documents = [dict(document) for document in documents]
+
+
+def _transaction_fixture(tmp_path: Path):
+    workspace = _workspace(tmp_path)
+    old_documents = [
+        {"id": "old-doc", "name": "old.md", "content": b"old knowledge"}
+    ]
+    new_documents = [
+        {"id": "doc-1", "name": "faq.md", "content": b"# FAQ\n"}
+    ]
+    old_archive, old_agent_digest, old_knowledge_digest = _custom_delivery_archive(
+        agent_files={
+            "agent/AGENTS.md": b"# Old rules\n",
+            "agent/agent.json": b'{"id":"a_service","name":"Old"}',
+            "agent/obsolete.md": b"remove me",
+        },
+        documents=old_documents,
+    )
+    new_archive, new_agent_digest, new_knowledge_digest = _custom_delivery_archive(
+        agent_files={
+            "agent/AGENTS.md": b"# Rules\n",
+            "agent/agent.json": b'{"id":"a_service","name":"Service"}',
+        },
+        documents=new_documents,
+    )
+    exported = SimpleNamespace(
+        archive=old_archive,
+        agent_digest=old_agent_digest,
+        knowledge_digest=old_knowledge_digest,
+    )
+    exporter = SimpleNamespace(export=lambda agent_id: exported)
+    context = SimpleNamespace(resolve_publication=lambda agent_id: {"id": "pub-1"})
+    knowledge = _KnowledgeStore(old_documents)
+
+    def apply_agent(bundle, operation_id):
+        return apply_standard_agent_source(
+            bundle,
+            operation_id,
+            workspace_dir=workspace,
+            reload_agent=lambda _agent_id: None,
+        )
+
+    return SimpleNamespace(
+        workspace=workspace,
+        old_documents=old_documents,
+        new_documents=new_documents,
+        old_archive=old_archive,
+        new_archive=new_archive,
+        old_agent_digest=old_agent_digest,
+        old_knowledge_digest=old_knowledge_digest,
+        new_agent_digest=new_agent_digest,
+        new_knowledge_digest=new_knowledge_digest,
+        exporter=exporter,
+        context=context,
+        knowledge=knowledge,
+        apply_agent=apply_agent,
+    )
+
+
+def _updater(tmp_path: Path, fixture) -> IntegrationDeliveryUpdater:
+    return IntegrationDeliveryUpdater(
+        operations_root=tmp_path / "operations",
+        snapshot_exporter=fixture.exporter,
+        context_service=fixture.context,
+        knowledge_service_factory=lambda publication: fixture.knowledge,
+        apply_agent=fixture.apply_agent,
+        restore_agent=restore_standard_agent_source,
+    )
+
+
+def _knowledge_identity(documents: list[dict[str, object]]) -> list[tuple[object, ...]]:
+    return [
+        (item["id"], item["name"], item["content"])
+        for item in documents
+    ]
+
+
+def test_apply_replaces_agent_and_knowledge_as_one_operation(tmp_path: Path) -> None:
+    fixture = _transaction_fixture(tmp_path)
+
+    result = _updater(tmp_path, fixture).apply(
+        "a_service",
+        fixture.new_archive,
+        "operation-5",
+        expected_agent_digest=fixture.old_agent_digest,
+        expected_knowledge_digest=fixture.old_knowledge_digest,
+    )
+
+    assert result.status == "applied"
+    assert result.agent_digest == fixture.new_agent_digest
+    assert result.knowledge_digest == fixture.new_knowledge_digest
+    assert _knowledge_identity(fixture.knowledge.documents) == _knowledge_identity(
+        fixture.new_documents
+    )
+    assert json.loads((fixture.workspace / "agent.json").read_text())["name"] == (
+        "Service"
+    )
+
+
+def test_knowledge_failure_restores_agent_and_documents(tmp_path: Path) -> None:
+    fixture = _transaction_fixture(tmp_path)
+    fixture.knowledge.fail_next = True
+
+    with pytest.raises(RuntimeError, match="knowledge failed"):
+        _updater(tmp_path, fixture).apply(
+            "a_service",
+            fixture.new_archive,
+            "operation-6",
+            expected_agent_digest=fixture.old_agent_digest,
+            expected_knowledge_digest=fixture.old_knowledge_digest,
+        )
+
+    assert json.loads((fixture.workspace / "agent.json").read_text())["name"] == "Old"
+    assert _knowledge_identity(fixture.knowledge.documents) == _knowledge_identity(
+        fixture.old_documents
+    )
+
+
+def test_restore_is_idempotent(tmp_path: Path) -> None:
+    fixture = _transaction_fixture(tmp_path)
+    updater = _updater(tmp_path, fixture)
+    updater.apply(
+        "a_service",
+        fixture.new_archive,
+        "operation-7",
+        expected_agent_digest=fixture.old_agent_digest,
+        expected_knowledge_digest=fixture.old_knowledge_digest,
+    )
+
+    first = updater.restore("a_service", "operation-7")
+    second = updater.restore("a_service", "operation-7")
+
+    assert first == second
+    assert first.status == "restored"
+    assert _knowledge_identity(fixture.knowledge.documents) == _knowledge_identity(
+        fixture.old_documents
+    )
+    assert json.loads((fixture.workspace / "agent.json").read_text())["name"] == "Old"
+
+
+def test_operation_receipt_survives_service_restart(tmp_path: Path) -> None:
+    fixture = _transaction_fixture(tmp_path)
+    _updater(tmp_path, fixture).apply(
+        "a_service",
+        fixture.new_archive,
+        "operation-8",
+        expected_agent_digest=fixture.old_agent_digest,
+        expected_knowledge_digest=fixture.old_knowledge_digest,
+    )
+
+    restarted = _updater(tmp_path, fixture)
+    result = restarted.get_operation("a_service", "operation-8")
+    restored = restarted.restore("a_service", "operation-8")
+
+    assert result.status == "applied"
+    assert restored.status == "restored"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import shutil
 import stat
 import tempfile
@@ -14,6 +15,9 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ...config.utils import load_config
+from ...constant import WORKING_DIR
+from ...mindspace import MindspaceScope
+from ..open_api.knowledge import publication_knowledge_service
 from .archive import (
     ArchiveLimits,
     SnapshotArchiveError,
@@ -21,12 +25,25 @@ from .archive import (
     collect_directory_files,
     deterministic_digest,
 )
-from .export import _is_agent_runtime_path
-from .models import DeliveryValidation
+from .export import (
+    DclawSnapshotExporter,
+    _is_agent_runtime_path,
+    _sanitize_agent_files,
+    _sanitize_config,
+)
+from .models import DeliveryOperationView, DeliveryValidation
+from .service import (
+    DclawConfigurationContextService,
+    get_dclaw_configuration_context_service,
+)
 
 
 class DeliveryBundleError(ValueError):
     """A delivery bundle is unsafe or does not match its target."""
+
+
+class DeliverySourceChanged(DeliveryBundleError):
+    """The caller's exported baseline no longer matches the current source."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,12 +231,63 @@ def _standard_workspace(agent_id: str) -> Path:
 
 def _source_digest(workspace: Path) -> str:
     return deterministic_digest(
-        collect_directory_files(
-            workspace,
-            prefix="agent",
-            exclude=_is_agent_runtime_path,
+        _sanitize_agent_files(
+            collect_directory_files(
+                workspace,
+                prefix="agent",
+                exclude=_is_agent_runtime_path,
+            )
         )
     )
+
+
+def _merge_server_owned_json(original: Any, sanitized: Any, submitted: Any) -> Any:
+    if not all(isinstance(value, dict) for value in (original, sanitized, submitted)):
+        if submitted == sanitized and original != sanitized:
+            return original
+        return submitted
+    result: dict[str, Any] = {}
+    for key, value in submitted.items():
+        if key in original and key in sanitized:
+            result[key] = _merge_server_owned_json(
+                original[key],
+                sanitized[key],
+                value,
+            )
+        else:
+            result[key] = value
+    for key, value in original.items():
+        if key not in sanitized:
+            result[key] = value
+    return result
+
+
+def _agent_source_content(
+    workspace: Path,
+    relative: PurePosixPath,
+    submitted: bytes,
+) -> bytes:
+    if relative.suffix.casefold() != ".json":
+        return submitted
+    existing = workspace.joinpath(*relative.parts)
+    if not existing.is_file() or existing.is_symlink():
+        return submitted
+    try:
+        original = json.loads(existing.read_text(encoding="utf-8"))
+        incoming = json.loads(submitted.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return submitted
+    merged = _merge_server_owned_json(
+        original,
+        _sanitize_config(original),
+        incoming,
+    )
+    return json.dumps(
+        merged,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
 
 
 def _remove_source_files(workspace: Path) -> None:
@@ -272,8 +340,16 @@ def apply_standard_agent_source(
     installed = False
     try:
         shutil.copytree(workspace, staging, symlinks=True)
+        source_contents = {
+            archive_path: _agent_source_content(
+                workspace,
+                PurePosixPath(archive_path).relative_to("agent"),
+                content,
+            )
+            for archive_path, content in bundle.agent_files.items()
+        }
         _remove_source_files(staging)
-        for archive_path, content in bundle.agent_files.items():
+        for archive_path, content in source_contents.items():
             relative = PurePosixPath(archive_path).relative_to("agent")
             target = staging.joinpath(*relative.parts)
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -341,3 +417,235 @@ def restore_standard_agent_source(
         raise
     else:
         shutil.rmtree(replaced, ignore_errors=True)
+
+
+_OPERATION_PART = re.compile(r"^[A-Za-z0-9._-]{1,160}$")
+
+
+def _delivery_documents(bundle: ParsedDeliveryBundle) -> list[dict[str, object]]:
+    manifest = _json_object(
+        bundle.knowledge_files["knowledge/knowledge-manifest.json"],
+        label="knowledge manifest",
+    )
+    result: list[dict[str, object]] = []
+    for item in manifest["documents"]:
+        relative = str(item["path"])
+        result.append(
+            {
+                "id": str(item["id"]),
+                "name": str(item["name"]),
+                "sourceType": str(item.get("sourceType") or "txt"),
+                "category": str(item.get("category") or "uncategorized"),
+                "tags": list(item.get("tags") or []),
+                "content": bundle.knowledge_files[f"knowledge/{relative}"],
+            }
+        )
+    return result
+
+
+def _replace_knowledge_documents(service: Any, bundle: ParsedDeliveryBundle) -> None:
+    documents = _delivery_documents(bundle)
+    replace = getattr(service, "replace_delivery_documents", None)
+    if callable(replace):
+        replace(documents)
+        return
+
+    current = list(service.list_documents(MindspaceScope.PERSONAL))
+    for document in current:
+        service.delete_document(document.id, MindspaceScope.PERSONAL)
+    for item in documents:
+        # Mindspace has no public bulk replace method. This adapter deliberately
+        # uses its established staging/indexing primitives while retaining the
+        # exported document ID so future deterministic snapshots stay stable.
+        document = service._new_doc(  # noqa: SLF001
+            name=item["name"],
+            source_type=item["sourceType"],
+            scope=MindspaceScope.PERSONAL,
+            byte_size=len(item["content"]),
+            status="pending",
+            progress=5,
+            category=item["category"],
+            tags=item["tags"],
+        )
+        document.id = item["id"]
+        service._upsert_doc(document)  # noqa: SLF001
+        service._store_asset(document, item["content"], mime_type=None)  # noqa: SLF001
+        indexed = service.process_staged_document(
+            document.id,
+            scope=MindspaceScope.PERSONAL,
+        )
+        if indexed is None or indexed.status != "ready":
+            raise DeliveryBundleError("knowledge document indexing failed")
+
+
+class IntegrationDeliveryUpdater:
+    """Coordinate one Agent source and its isolated knowledge as one operation."""
+
+    def __init__(
+        self,
+        *,
+        operations_root: Path | None = None,
+        snapshot_exporter: DclawSnapshotExporter | Any | None = None,
+        context_service: DclawConfigurationContextService | Any | None = None,
+        knowledge_service_factory: Callable[[dict[str, Any]], Any] = (
+            publication_knowledge_service
+        ),
+        apply_agent: Callable[[ParsedDeliveryBundle, str], AgentApplyReceipt] = (
+            apply_standard_agent_source
+        ),
+        restore_agent: Callable[[AgentApplyReceipt], None] = (
+            restore_standard_agent_source
+        ),
+    ) -> None:
+        self._root = Path(
+            operations_root
+            or Path(WORKING_DIR) / "integration_delivery" / "operations"
+        )
+        self._root.mkdir(parents=True, exist_ok=True)
+        self._context = context_service or get_dclaw_configuration_context_service()
+        self._exporter = snapshot_exporter or DclawSnapshotExporter(
+            context_service=self._context
+        )
+        self._knowledge_factory = knowledge_service_factory
+        self._apply_agent = apply_agent
+        self._restore_agent = restore_agent
+
+    def _operation_dir(self, agent_id: str, operation_id: str) -> Path:
+        if not _OPERATION_PART.fullmatch(agent_id) or not _OPERATION_PART.fullmatch(
+            operation_id
+        ):
+            raise DeliveryBundleError("operation identity is invalid")
+        return self._root / agent_id / operation_id
+
+    @staticmethod
+    def _view(data: dict[str, Any]) -> DeliveryOperationView:
+        return DeliveryOperationView.model_validate(data)
+
+    def _write_receipt(self, directory: Path, view: DeliveryOperationView) -> None:
+        directory.mkdir(parents=True, exist_ok=True)
+        receipt = directory / "receipt.json"
+        temporary = directory / ".receipt.json.tmp"
+        temporary.write_text(
+            json.dumps(
+                view.model_dump(by_alias=True),
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        temporary.replace(receipt)
+
+    def get_operation(self, agent_id: str, operation_id: str) -> DeliveryOperationView:
+        receipt = self._operation_dir(agent_id, operation_id) / "receipt.json"
+        try:
+            data = json.loads(receipt.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise DeliveryBundleError("delivery operation is unavailable") from exc
+        return self._view(data)
+
+    def _knowledge_service(self, agent_id: str) -> Any:
+        publication = self._context.resolve_publication(agent_id)
+        if publication is None:
+            raise DeliveryBundleError("OpenAPI publication is unavailable")
+        return self._knowledge_factory(publication)
+
+    def apply(
+        self,
+        agent_id: str,
+        archive: bytes,
+        operation_id: str,
+        *,
+        expected_agent_digest: str,
+        expected_knowledge_digest: str,
+    ) -> DeliveryOperationView:
+        bundle = parse_delivery_bundle(agent_id, archive)
+        current = self._exporter.export(agent_id)
+        if (
+            current.agent_digest != expected_agent_digest
+            or current.knowledge_digest != expected_knowledge_digest
+        ):
+            raise DeliverySourceChanged("DClaw source changed")
+
+        directory = self._operation_dir(agent_id, operation_id)
+        if directory.exists():
+            return self.get_operation(agent_id, operation_id)
+        directory.mkdir(parents=True)
+        (directory / "before.zip").write_bytes(current.archive)
+        (directory / "submitted.zip").write_bytes(bytes(archive))
+        previous = parse_delivery_bundle(agent_id, current.archive)
+        knowledge = self._knowledge_service(agent_id)
+        agent_receipt: AgentApplyReceipt | None = None
+        try:
+            agent_receipt = self._apply_agent(bundle, operation_id)
+            _replace_knowledge_documents(knowledge, bundle)
+        except Exception:
+            if agent_receipt is not None:
+                self._restore_agent(agent_receipt)
+            try:
+                _replace_knowledge_documents(knowledge, previous)
+            except Exception:
+                pass
+            failed = DeliveryOperationView(
+                operation_id=operation_id,
+                agent_id=agent_id,
+                status="failed",
+                previous_agent_digest=current.agent_digest,
+                previous_knowledge_digest=current.knowledge_digest,
+                agent_digest=current.agent_digest,
+                knowledge_digest=current.knowledge_digest,
+                error_code="DCLAW_DELIVERY_APPLY_FAILED",
+            )
+            self._write_receipt(directory, failed)
+            raise
+
+        applied = DeliveryOperationView(
+            operation_id=operation_id,
+            agent_id=agent_id,
+            status="applied",
+            previous_agent_digest=current.agent_digest,
+            previous_knowledge_digest=current.knowledge_digest,
+            agent_digest=bundle.agent_digest,
+            knowledge_digest=bundle.knowledge_digest,
+        )
+        self._write_receipt(directory, applied)
+        return applied
+
+    def restore(self, agent_id: str, operation_id: str) -> DeliveryOperationView:
+        directory = self._operation_dir(agent_id, operation_id)
+        current = self.get_operation(agent_id, operation_id)
+        if current.status == "restored":
+            return current
+        if current.status != "applied":
+            raise DeliveryBundleError("delivery operation cannot be restored")
+
+        previous = parse_delivery_bundle(
+            agent_id,
+            (directory / "before.zip").read_bytes(),
+        )
+        submitted = parse_delivery_bundle(
+            agent_id,
+            (directory / "submitted.zip").read_bytes(),
+        )
+        knowledge = self._knowledge_service(agent_id)
+        receipt = self._apply_agent(previous, f"{operation_id}.restore")
+        try:
+            _replace_knowledge_documents(knowledge, previous)
+        except Exception:
+            self._restore_agent(receipt)
+            try:
+                _replace_knowledge_documents(knowledge, submitted)
+            except Exception:
+                pass
+            raise
+
+        restored = current.model_copy(
+            update={
+                "status": "restored",
+                "agent_digest": previous.agent_digest,
+                "knowledge_digest": previous.knowledge_digest,
+                "error_code": None,
+            }
+        )
+        self._write_receipt(directory, restored)
+        return restored
