@@ -63,10 +63,12 @@ class ParsedDeliveryBundle:
 class AgentApplyReceipt:
     operation_id: str
     agent_id: str
-    workspace_dir: Path
-    backup_dir: Path
     agent_digest_before: str
     agent_digest_after: str
+    workspace_dir: Path | None = None
+    backup_dir: Path | None = None
+    previous_release_id: str | None = None
+    applied_release_id: str | None = None
 
 
 def _read_archive(archive_bytes: bytes) -> dict[str, bytes]:
@@ -401,7 +403,12 @@ def restore_standard_agent_source(
 
     workspace = receipt.workspace_dir
     backup = receipt.backup_dir
-    if not backup.is_dir() or not workspace.is_dir():
+    if (
+        workspace is None
+        or backup is None
+        or not backup.is_dir()
+        or not workspace.is_dir()
+    ):
         raise DeliveryBundleError("Agent backup is unavailable")
     replaced = _temporary_sibling(workspace, "replaced")
     shutil.rmtree(replaced)
@@ -490,12 +497,9 @@ class IntegrationDeliveryUpdater:
         knowledge_service_factory: Callable[[dict[str, Any]], Any] = (
             publication_knowledge_service
         ),
-        apply_agent: Callable[[ParsedDeliveryBundle, str], AgentApplyReceipt] = (
-            apply_standard_agent_source
-        ),
-        restore_agent: Callable[[AgentApplyReceipt], None] = (
-            restore_standard_agent_source
-        ),
+        apply_agent: Callable[[ParsedDeliveryBundle, str], AgentApplyReceipt]
+        | None = None,
+        restore_agent: Callable[[AgentApplyReceipt], None] | None = None,
     ) -> None:
         self._root = Path(
             operations_root
@@ -507,8 +511,8 @@ class IntegrationDeliveryUpdater:
             context_service=self._context
         )
         self._knowledge_factory = knowledge_service_factory
-        self._apply_agent = apply_agent
-        self._restore_agent = restore_agent
+        self._apply_agent_override = apply_agent
+        self._restore_agent_override = restore_agent
 
     def _operation_dir(self, agent_id: str, operation_id: str) -> Path:
         if not _OPERATION_PART.fullmatch(agent_id) or not _OPERATION_PART.fullmatch(
@@ -550,6 +554,70 @@ class IntegrationDeliveryUpdater:
             raise DeliveryBundleError("OpenAPI publication is unavailable")
         return self._knowledge_factory(publication)
 
+    def _apply_agent_bundle(
+        self,
+        bundle: ParsedDeliveryBundle,
+        operation_id: str,
+    ) -> AgentApplyReceipt:
+        if self._apply_agent_override is not None:
+            return self._apply_agent_override(bundle, operation_id)
+        if self._context.describe(bundle.agent_id).agent_type == "sealed":
+            from .sealed_update import apply_sealed_agent_source
+
+            return apply_sealed_agent_source(bundle, operation_id)
+        return apply_standard_agent_source(bundle, operation_id)
+
+    def _restore_agent_receipt(self, receipt: AgentApplyReceipt) -> None:
+        if self._restore_agent_override is not None:
+            self._restore_agent_override(receipt)
+            return
+        if receipt.previous_release_id is not None:
+            from .sealed_update import restore_sealed_agent_source
+
+            restore_sealed_agent_source(receipt)
+            return
+        restore_standard_agent_source(receipt)
+
+    @staticmethod
+    def _receipt_payload(receipt: AgentApplyReceipt) -> dict[str, Any]:
+        return {
+            "operationId": receipt.operation_id,
+            "agentId": receipt.agent_id,
+            "agentDigestBefore": receipt.agent_digest_before,
+            "agentDigestAfter": receipt.agent_digest_after,
+            "workspaceDir": (
+                str(receipt.workspace_dir) if receipt.workspace_dir is not None else None
+            ),
+            "backupDir": (
+                str(receipt.backup_dir) if receipt.backup_dir is not None else None
+            ),
+            "previousReleaseId": receipt.previous_release_id,
+            "appliedReleaseId": receipt.applied_release_id,
+        }
+
+    @staticmethod
+    def _receipt_from_payload(payload: dict[str, Any]) -> AgentApplyReceipt:
+        workspace = payload.get("workspaceDir")
+        backup = payload.get("backupDir")
+        return AgentApplyReceipt(
+            operation_id=str(payload["operationId"]),
+            agent_id=str(payload["agentId"]),
+            agent_digest_before=str(payload["agentDigestBefore"]),
+            agent_digest_after=str(payload["agentDigestAfter"]),
+            workspace_dir=Path(str(workspace)) if workspace else None,
+            backup_dir=Path(str(backup)) if backup else None,
+            previous_release_id=(
+                str(payload["previousReleaseId"])
+                if payload.get("previousReleaseId")
+                else None
+            ),
+            applied_release_id=(
+                str(payload["appliedReleaseId"])
+                if payload.get("appliedReleaseId")
+                else None
+            ),
+        )
+
     def apply(
         self,
         agent_id: str,
@@ -577,11 +645,11 @@ class IntegrationDeliveryUpdater:
         knowledge = self._knowledge_service(agent_id)
         agent_receipt: AgentApplyReceipt | None = None
         try:
-            agent_receipt = self._apply_agent(bundle, operation_id)
+            agent_receipt = self._apply_agent_bundle(bundle, operation_id)
             _replace_knowledge_documents(knowledge, bundle)
         except Exception:
             if agent_receipt is not None:
-                self._restore_agent(agent_receipt)
+                self._restore_agent_receipt(agent_receipt)
             try:
                 _replace_knowledge_documents(knowledge, previous)
             except Exception:
@@ -598,6 +666,15 @@ class IntegrationDeliveryUpdater:
             )
             self._write_receipt(directory, failed)
             raise
+
+        (directory / "agent-receipt.json").write_text(
+            json.dumps(
+                self._receipt_payload(agent_receipt),
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
 
         applied = DeliveryOperationView(
             operation_id=operation_id,
@@ -628,11 +705,25 @@ class IntegrationDeliveryUpdater:
             (directory / "submitted.zip").read_bytes(),
         )
         knowledge = self._knowledge_service(agent_id)
-        receipt = self._apply_agent(previous, f"{operation_id}.restore")
+        stored_receipt = self._receipt_from_payload(
+            json.loads((directory / "agent-receipt.json").read_text(encoding="utf-8"))
+        )
+        if stored_receipt.previous_release_id is not None:
+            self._restore_agent_receipt(stored_receipt)
+            receipt = AgentApplyReceipt(
+                operation_id=f"{operation_id}.restore",
+                agent_id=agent_id,
+                agent_digest_before=previous.agent_digest,
+                agent_digest_after=submitted.agent_digest,
+                previous_release_id=stored_receipt.applied_release_id,
+                applied_release_id=stored_receipt.previous_release_id,
+            )
+        else:
+            receipt = self._apply_agent_bundle(previous, f"{operation_id}.restore")
         try:
             _replace_knowledge_documents(knowledge, previous)
         except Exception:
-            self._restore_agent(receipt)
+            self._restore_agent_receipt(receipt)
             try:
                 _replace_knowledge_documents(knowledge, submitted)
             except Exception:
