@@ -14,6 +14,7 @@ from qwenpaw.app.integration_delivery.archive import (
 )
 from qwenpaw.app.integration_delivery.update import (
     DeliveryBundleError,
+    DeliveryIdempotencyKeyReused,
     IntegrationDeliveryUpdater,
     apply_standard_agent_source,
     parse_delivery_bundle,
@@ -509,3 +510,33 @@ def test_operation_receipt_survives_service_restart(tmp_path: Path) -> None:
 
     assert result.status == "applied"
     assert restored.status == "restored"
+
+
+def test_operation_idempotency_reuses_only_the_same_request(tmp_path: Path) -> None:
+    fixture = _transaction_fixture(tmp_path)
+    updater = _updater(tmp_path, fixture)
+    first = updater.apply(
+        "a_service",
+        fixture.new_archive,
+        "operation-9",
+        expected_agent_digest=fixture.old_agent_digest,
+        expected_knowledge_digest=fixture.old_knowledge_digest,
+    )
+
+    repeated = updater.apply(
+        "a_service",
+        fixture.new_archive,
+        "operation-9",
+        expected_agent_digest=fixture.old_agent_digest,
+        expected_knowledge_digest=fixture.old_knowledge_digest,
+    )
+
+    assert repeated == first
+    with pytest.raises(DeliveryIdempotencyKeyReused):
+        updater.apply(
+            "a_service",
+            fixture.new_archive,
+            "operation-9",
+            expected_agent_digest=fixture.old_agent_digest,
+            expected_knowledge_digest="sha256:" + "0" * 64,
+        )

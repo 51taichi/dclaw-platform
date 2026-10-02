@@ -66,4 +66,8 @@ def test_router_exposes_only_generic_platform_paths() -> None:
         "/internal/integrations/v1/capabilities",
         "/internal/integrations/v1/agents/{agent_id}/delivery-context",
         "/internal/integrations/v1/agents/{agent_id}/source-bundle",
+        "/internal/integrations/v1/agents/{agent_id}/delivery-bundle/validate",
+        "/internal/integrations/v1/agents/{agent_id}/delivery-bundle",
+        "/internal/integrations/v1/agents/{agent_id}/delivery-operations/{operation_id}",
+        "/internal/integrations/v1/agents/{agent_id}/delivery-operations/{operation_id}/restore",
     }

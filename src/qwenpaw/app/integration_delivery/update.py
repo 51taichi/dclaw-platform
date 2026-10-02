@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import re
 import shutil
@@ -44,6 +45,10 @@ class DeliveryBundleError(ValueError):
 
 class DeliverySourceChanged(DeliveryBundleError):
     """The caller's exported baseline no longer matches the current source."""
+
+
+class DeliveryIdempotencyKeyReused(DeliveryBundleError):
+    """An operation identity was reused for a different delivery request."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -554,6 +559,45 @@ class IntegrationDeliveryUpdater:
             raise DeliveryBundleError("OpenAPI publication is unavailable")
         return self._knowledge_factory(publication)
 
+    @staticmethod
+    def _request_fingerprint(
+        archive: bytes,
+        expected_agent_digest: str,
+        expected_knowledge_digest: str,
+    ) -> str:
+        digest = hashlib.sha256()
+        for value in (
+            expected_agent_digest.encode("ascii"),
+            expected_knowledge_digest.encode("ascii"),
+            bytes(archive),
+        ):
+            digest.update(len(value).to_bytes(8, "big"))
+            digest.update(value)
+        return "sha256:" + digest.hexdigest()
+
+    def validate(
+        self,
+        agent_id: str,
+        archive: bytes,
+        *,
+        expected_agent_digest: str,
+        expected_knowledge_digest: str,
+    ) -> DeliveryValidation:
+        bundle = parse_delivery_bundle(agent_id, archive)
+        current = self._exporter.export(agent_id)
+        if (
+            current.agent_digest != expected_agent_digest
+            or current.knowledge_digest != expected_knowledge_digest
+        ):
+            raise DeliverySourceChanged("DClaw source changed")
+        return DeliveryValidation(
+            agent_id=bundle.agent_id,
+            agent_profile_id=bundle.agent_profile_id,
+            source_version=bundle.source_version,
+            agent_digest=bundle.agent_digest,
+            knowledge_digest=bundle.knowledge_digest,
+        )
+
     def _apply_agent_bundle(
         self,
         bundle: ParsedDeliveryBundle,
@@ -628,6 +672,26 @@ class IntegrationDeliveryUpdater:
         expected_knowledge_digest: str,
     ) -> DeliveryOperationView:
         bundle = parse_delivery_bundle(agent_id, archive)
+        directory = self._operation_dir(agent_id, operation_id)
+        fingerprint = self._request_fingerprint(
+            archive,
+            expected_agent_digest,
+            expected_knowledge_digest,
+        )
+        request_path = directory / "request.json"
+        if directory.exists():
+            try:
+                previous_request = json.loads(request_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise DeliveryIdempotencyKeyReused(
+                    "operation identity is already in use"
+                ) from exc
+            if previous_request.get("fingerprint") != fingerprint:
+                raise DeliveryIdempotencyKeyReused(
+                    "operation identity is already in use"
+                )
+            return self.get_operation(agent_id, operation_id)
+
         current = self._exporter.export(agent_id)
         if (
             current.agent_digest != expected_agent_digest
@@ -635,10 +699,24 @@ class IntegrationDeliveryUpdater:
         ):
             raise DeliverySourceChanged("DClaw source changed")
 
-        directory = self._operation_dir(agent_id, operation_id)
-        if directory.exists():
+        try:
+            directory.mkdir(parents=True)
+        except FileExistsError:
+            try:
+                previous_request = json.loads(request_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise DeliveryIdempotencyKeyReused(
+                    "operation identity is already in use"
+                ) from exc
+            if previous_request.get("fingerprint") != fingerprint:
+                raise DeliveryIdempotencyKeyReused(
+                    "operation identity is already in use"
+                )
             return self.get_operation(agent_id, operation_id)
-        directory.mkdir(parents=True)
+        request_path.write_text(
+            json.dumps({"fingerprint": fingerprint}, separators=(",", ":")),
+            encoding="utf-8",
+        )
         (directory / "before.zip").write_bytes(current.archive)
         (directory / "submitted.zip").write_bytes(bytes(archive))
         previous = parse_delivery_bundle(agent_id, current.archive)

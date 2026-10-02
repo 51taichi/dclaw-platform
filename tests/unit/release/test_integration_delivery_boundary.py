@@ -15,6 +15,10 @@ def test_dclaw_keeps_only_the_generic_delivery_integration_surface() -> None:
         "/internal/integrations/v1/capabilities",
         "/internal/integrations/v1/agents/{agent_id}/delivery-context",
         "/internal/integrations/v1/agents/{agent_id}/source-bundle",
+        "/internal/integrations/v1/agents/{agent_id}/delivery-bundle/validate",
+        "/internal/integrations/v1/agents/{agent_id}/delivery-bundle",
+        "/internal/integrations/v1/agents/{agent_id}/delivery-operations/{operation_id}",
+        "/internal/integrations/v1/agents/{agent_id}/delivery-operations/{operation_id}/restore",
     }
     assert not (ROOT / "src" / "config_patch_service").exists()
     assert not (
