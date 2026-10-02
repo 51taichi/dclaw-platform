@@ -166,6 +166,35 @@ An ordinary rollback never restores PostgreSQL. It changes only the
 application image, uses the same lock and 420 seconds health gate, and keeps
 the existing database, Redis, network, and volumes attached.
 
+An image rollback does not undo integration-delivery data changes. To restore
+one Agent and its isolated knowledge from a specific delivery operation, use
+the authenticated operation restore endpoint documented in
+`docs/integration-delivery-write-api.zh-CN.md` before or after the image
+rollback, as appropriate. Do not restore the whole database for a single
+delivery operation.
+
+## Integration-delivery signing material
+
+The optional write adapter is disabled operationally unless its client secret
+and signing material are configured. Store the Ed25519 private signer at:
+
+```text
+${QWENPAW_SECRET_DIR}/integration_delivery_signer.json
+```
+
+The file must be owned by the application runtime user and mode `0600`. Its
+public key must be present in
+`sealed_agents/trusted_signers.json`; a signer used for super experts must also
+be present in `sealed_agents/official_super_expert_signers.json`. Never print,
+copy into an image layer, or place the private key in `production.env`.
+
+Before an update, retain the running image digest and confirm that the
+`dclaw-data` and `dclaw-secrets` volumes are attached. Delivery operation
+receipts live under `integration_delivery/operations/` in the data volume and
+must survive container replacement. After an update, validate the existing
+read endpoints first, then validate the four internal write-adapter endpoints
+with a non-production Agent before allowing an upstream publisher to use them.
+
 ## Backups and disaster recovery
 
 Each non-no-op update and the initial adoption creates a custom-format

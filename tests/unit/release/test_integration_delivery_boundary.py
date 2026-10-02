@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from pathlib import Path
@@ -17,8 +18,10 @@ def test_dclaw_keeps_only_the_generic_delivery_integration_surface() -> None:
         "/internal/integrations/v1/agents/{agent_id}/source-bundle",
         "/internal/integrations/v1/agents/{agent_id}/delivery-bundle/validate",
         "/internal/integrations/v1/agents/{agent_id}/delivery-bundle",
-        "/internal/integrations/v1/agents/{agent_id}/delivery-operations/{operation_id}",
-        "/internal/integrations/v1/agents/{agent_id}/delivery-operations/{operation_id}/restore",
+        "/internal/integrations/v1/agents/{agent_id}/"
+        "delivery-operations/{operation_id}",
+        "/internal/integrations/v1/agents/{agent_id}/"
+        "delivery-operations/{operation_id}/restore",
     }
     assert not (ROOT / "src" / "config_patch_service").exists()
     assert not (
@@ -26,13 +29,15 @@ def test_dclaw_keeps_only_the_generic_delivery_integration_surface() -> None:
     ).exists()
 
 
-def test_dclaw_has_no_customer_service_patch_runtime_or_public_staff_api() -> None:
+def test_dclaw_has_no_customer_service_patch_runtime_or_public_staff_api() -> (
+    None
+):
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     router_registry = (
         ROOT / "src" / "qwenpaw" / "app" / "routers" / "__init__.py"
     ).read_text(encoding="utf-8")
     auth = (ROOT / "src" / "qwenpaw" / "app" / "auth.py").read_text(
-        encoding="utf-8"
+        encoding="utf-8",
     )
 
     assert "dclaw-config-patch" not in pyproject
@@ -46,10 +51,14 @@ def test_dclaw_has_no_customer_service_patch_runtime_or_public_staff_api() -> No
         if path.is_file()
     ]
     assert forbidden_deploy_files == []
-    assert not (ROOT / ".github" / "workflows" / "config-patch-image.yml").exists()
+    assert not (
+        ROOT / ".github" / "workflows" / "config-patch-image.yml"
+    ).exists()
 
 
-def test_dclaw_runtime_sources_do_not_name_ai_customer_service_ownership() -> None:
+def test_dclaw_runtime_sources_do_not_name_ai_customer_service_ownership() -> (
+    None
+):
     roots = [ROOT / "src", ROOT / "deploy"]
     forbidden = (
         "/staff/v1",
@@ -66,3 +75,33 @@ def test_dclaw_runtime_sources_do_not_name_ai_customer_service_ownership() -> No
             text = path.read_text(encoding="utf-8", errors="ignore")
             for marker in forbidden:
                 assert marker not in text, f"{marker!r} remains in {path}"
+
+
+def test_write_adapter_contract_documents_all_routes_and_safety_rules() -> (
+    None
+):
+    contract = (
+        ROOT / "docs" / "integration-delivery-write-api.zh-CN.md"
+    ).read_text(
+        encoding="utf-8",
+    )
+
+    required = (
+        "POST /api/internal/integrations/v1/agents/{agent_id}/"
+        "delivery-bundle/validate",
+        "PUT /api/internal/integrations/v1/agents/{agent_id}/delivery-bundle",
+        "GET /api/internal/integrations/v1/agents/{agent_id}/"
+        "delivery-operations/{operation_id}",
+        "POST /api/internal/integrations/v1/agents/{agent_id}/"
+        "delivery-operations/{operation_id}/restore",
+        "Idempotency-Key",
+        "X-DClaw-Expected-Agent-Digest",
+        "X-DClaw-Expected-Knowledge-Digest",
+        "DCLAW_SOURCE_CHANGED",
+        "IDEMPOTENCY_KEY_REUSED",
+        "普通专家",
+        "超级专家",
+        "共享 Agent",
+    )
+    for marker in required:
+        assert marker in contract
