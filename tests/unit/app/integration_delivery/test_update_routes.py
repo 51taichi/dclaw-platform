@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from fastapi import FastAPI
@@ -31,7 +32,7 @@ class _Updater:
         self.error = None
         self.calls = 0
 
-    def validate(self, agent_id, archive, **kwargs):
+    def validate(self, agent_id, archive, **_kwargs):
         self.body = archive
         if self.error:
             raise self.error
@@ -43,7 +44,7 @@ class _Updater:
             knowledge_digest="sha256:" + "4" * 64,
         )
 
-    def apply(self, agent_id, archive, operation_id, **kwargs):
+    def apply(self, agent_id, archive, operation_id, **_kwargs):
         self.calls += 1
         self.body = archive
         if self.error:
@@ -75,9 +76,9 @@ def _client(monkeypatch, updater: _Updater) -> TestClient:
     )
     app = FastAPI()
     app.include_router(router_module.router)
-    app.dependency_overrides[router_module.get_integration_delivery_updater] = (
-        lambda: updater
-    )
+    app.dependency_overrides[
+        router_module.get_integration_delivery_updater
+    ] = lambda: updater
     return TestClient(app)
 
 
@@ -91,10 +92,14 @@ def test_write_routes_require_integration_authentication(monkeypatch) -> None:
     )
 
     assert response.status_code == 401
-    assert response.json()["detail"]["code"] == "INVALID_INTEGRATION_CREDENTIAL"
+    assert (
+        response.json()["detail"]["code"] == "INVALID_INTEGRATION_CREDENTIAL"
+    )
 
 
-def test_validate_receives_raw_zip_and_returns_stable_contract(monkeypatch) -> None:
+def test_validate_receives_raw_zip_and_returns_stable_contract(
+    monkeypatch,
+) -> None:
     updater = _Updater()
     client = _client(monkeypatch, updater)
 
@@ -177,11 +182,13 @@ def test_query_and_restore_operation(monkeypatch) -> None:
     operation_id = "a" * 64
 
     queried = client.get(
-        f"/internal/integrations/v1/agents/a_service/delivery-operations/{operation_id}",
+        "/internal/integrations/v1/agents/a_service/"
+        f"delivery-operations/{operation_id}",
         headers=AUTH,
     )
     restored = client.post(
-        f"/internal/integrations/v1/agents/a_service/delivery-operations/{operation_id}/restore",
+        "/internal/integrations/v1/agents/a_service/"
+        f"delivery-operations/{operation_id}/restore",
         headers={**AUTH, "Idempotency-Key": "restore-r6"},
     )
 

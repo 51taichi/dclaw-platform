@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Internal read-only routes consumed by the integration client."""
 
 from __future__ import annotations
@@ -7,7 +8,14 @@ import hashlib
 from functools import lru_cache
 from importlib.resources import files
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
+from fastapi import (
+    APIRouter,
+    Depends,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+)
 
 from .auth import AuthenticatedIntegrationClient, require_integration_client
 from .models import (
@@ -42,7 +50,7 @@ router = APIRouter(
 @lru_cache(maxsize=1)
 def _capability_catalog() -> dict[str, object]:
     resource = files("qwenpaw.app.integration_delivery.resources").joinpath(
-        "dclaw-capability-catalog.v1.json"
+        "dclaw-capability-catalog.v1.json",
     )
     return json.loads(resource.read_text(encoding="utf-8"))
 
@@ -105,7 +113,8 @@ def _required_write_headers(
     if (
         not expected_agent_digest
         or not expected_knowledge_digest
-        or idempotency_key is not None and not idempotency_key.strip()
+        or idempotency_key is not None
+        and not idempotency_key.strip()
     ):
         raise HTTPException(
             status_code=400,
@@ -114,7 +123,11 @@ def _required_write_headers(
     return expected_agent_digest, expected_knowledge_digest
 
 
-def _write_error(exc: Exception, *, operation_lookup: bool = False) -> HTTPException:
+def _write_error(
+    exc: Exception,
+    *,
+    operation_lookup: bool = False,
+) -> HTTPException:
     if isinstance(exc, DeliverySourceChanged):
         return HTTPException(409, detail={"code": "DCLAW_SOURCE_CHANGED"})
     if isinstance(exc, DeliveryIdempotencyKeyReused):
@@ -127,7 +140,7 @@ def _write_error(exc: Exception, *, operation_lookup: bool = False) -> HTTPExcep
                     "DCLAW_OPERATION_NOT_FOUND"
                     if operation_lookup
                     else "DCLAW_DELIVERY_BUNDLE_INVALID"
-                )
+                ),
             },
         )
     return HTTPException(500, detail={"code": "DCLAW_DELIVERY_APPLY_FAILED"})
@@ -153,13 +166,19 @@ async def _reload_agent(request: Request, agent_id: str) -> None:
 async def validate_agent_delivery_bundle(
     agent_id: str,
     request: Request,
-    expected_agent_digest: str | None = Header(
-        default=None, alias="X-DClaw-Expected-Agent-Digest"
+    expected_agent_digest: str
+    | None = Header(
+        default=None,
+        alias="X-DClaw-Expected-Agent-Digest",
     ),
-    expected_knowledge_digest: str | None = Header(
-        default=None, alias="X-DClaw-Expected-Knowledge-Digest"
+    expected_knowledge_digest: str
+    | None = Header(
+        default=None,
+        alias="X-DClaw-Expected-Knowledge-Digest",
     ),
-    updater: IntegrationDeliveryUpdater = Depends(get_integration_delivery_updater),
+    updater: IntegrationDeliveryUpdater = Depends(
+        get_integration_delivery_updater,
+    ),
 ) -> DeliveryValidation:
     expected_agent_digest, expected_knowledge_digest = _required_write_headers(
         expected_agent_digest,
@@ -183,15 +202,24 @@ async def validate_agent_delivery_bundle(
 async def apply_agent_delivery_bundle(
     agent_id: str,
     request: Request,
-    client: AuthenticatedIntegrationClient = Depends(require_integration_client),
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-    expected_agent_digest: str | None = Header(
-        default=None, alias="X-DClaw-Expected-Agent-Digest"
+    client: AuthenticatedIntegrationClient = Depends(
+        require_integration_client,
     ),
-    expected_knowledge_digest: str | None = Header(
-        default=None, alias="X-DClaw-Expected-Knowledge-Digest"
+    idempotency_key: str
+    | None = Header(default=None, alias="Idempotency-Key"),
+    expected_agent_digest: str
+    | None = Header(
+        default=None,
+        alias="X-DClaw-Expected-Agent-Digest",
     ),
-    updater: IntegrationDeliveryUpdater = Depends(get_integration_delivery_updater),
+    expected_knowledge_digest: str
+    | None = Header(
+        default=None,
+        alias="X-DClaw-Expected-Knowledge-Digest",
+    ),
+    updater: IntegrationDeliveryUpdater = Depends(
+        get_integration_delivery_updater,
+    ),
 ) -> DeliveryOperationView:
     expected_agent_digest, expected_knowledge_digest = _required_write_headers(
         expected_agent_digest,
@@ -201,7 +229,7 @@ async def apply_agent_delivery_bundle(
     if idempotency_key is None:
         raise HTTPException(400, detail={"code": "DCLAW_REQUEST_INVALID"})
     operation_id = hashlib.sha256(
-        f"{client.client_id}\0{idempotency_key}".encode("utf-8")
+        f"{client.client_id}\0{idempotency_key}".encode("utf-8"),
     ).hexdigest()
     try:
         result = updater.apply(
@@ -216,7 +244,11 @@ async def apply_agent_delivery_bundle(
     except Exception as exc:
         if not isinstance(
             exc,
-            (DeliveryBundleError, DeliverySourceChanged, DeliveryIdempotencyKeyReused),
+            (
+                DeliveryBundleError,
+                DeliverySourceChanged,
+                DeliveryIdempotencyKeyReused,
+            ),
         ):
             try:
                 updater.restore(agent_id, operation_id)
@@ -233,7 +265,9 @@ async def apply_agent_delivery_bundle(
 def get_agent_delivery_operation(
     agent_id: str,
     operation_id: str,
-    updater: IntegrationDeliveryUpdater = Depends(get_integration_delivery_updater),
+    updater: IntegrationDeliveryUpdater = Depends(
+        get_integration_delivery_updater,
+    ),
 ) -> DeliveryOperationView:
     try:
         return updater.get_operation(agent_id, operation_id)
@@ -249,8 +283,11 @@ async def restore_agent_delivery_operation(
     agent_id: str,
     operation_id: str,
     request: Request,
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-    updater: IntegrationDeliveryUpdater = Depends(get_integration_delivery_updater),
+    idempotency_key: str
+    | None = Header(default=None, alias="Idempotency-Key"),
+    updater: IntegrationDeliveryUpdater = Depends(
+        get_integration_delivery_updater,
+    ),
 ) -> DeliveryOperationView:
     if not idempotency_key or not idempotency_key.strip():
         raise HTTPException(400, detail={"code": "DCLAW_REQUEST_INVALID"})

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import io
@@ -23,7 +24,10 @@ from qwenpaw.app.integration_delivery.update import (
 )
 
 
-def _delivery_archive(*, agent_id: str = "a_service") -> tuple[bytes, str, str]:
+def _delivery_archive(
+    *,
+    agent_id: str = "a_service",
+) -> tuple[bytes, str, str]:
     agent_files = {
         "agent/AGENTS.md": b"# Rules\n",
         "agent/agent.json": json.dumps(
@@ -87,7 +91,9 @@ def _custom_delivery_archive(
         doc_id = str(document["id"])
         name = str(document["name"])
         relative = f"documents/{doc_id}/{name}"
-        knowledge_files[f"knowledge/{relative}"] = bytes(document["content"])
+        content = document["content"]
+        assert isinstance(content, bytes)
+        knowledge_files[f"knowledge/{relative}"] = content
         manifest.append(
             {
                 "category": document.get("category", "faq"),
@@ -96,10 +102,12 @@ def _custom_delivery_archive(
                 "path": relative,
                 "sourceType": document.get("sourceType", "md"),
                 "tags": document.get("tags", []),
-            }
+            },
         )
     knowledge_files["knowledge/knowledge-manifest.json"] = json.dumps(
-        {"documents": manifest}, separators=(",", ":"), sort_keys=True
+        {"documents": manifest},
+        separators=(",", ":"),
+        sort_keys=True,
     ).encode()
     agent_digest = deterministic_digest(agent_files)
     knowledge_digest = deterministic_digest(knowledge_files)
@@ -117,9 +125,11 @@ def _custom_delivery_archive(
                 **agent_files,
                 **knowledge_files,
                 "dclaw-component.json": json.dumps(
-                    component, separators=(",", ":"), sort_keys=True
+                    component,
+                    separators=(",", ":"),
+                    sort_keys=True,
                 ).encode(),
-            }
+            },
         ),
         agent_digest,
         knowledge_digest,
@@ -150,14 +160,18 @@ def test_validate_delivery_bundle_is_read_only_and_returns_four_identifiers(
         "knowledgeDigest": knowledge_digest,
     }
     assert marker.read_text(encoding="utf-8") == "unchanged"
-    assert sorted(path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*")) == [
+    assert sorted(
+        path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*")
+    ) == [
         "agent-workspace",
         "agent-workspace/marker.txt",
     ]
 
 
 def test_validate_rejects_agent_id_mismatch() -> None:
-    archive, agent_digest, knowledge_digest = _delivery_archive(agent_id="other")
+    archive, agent_digest, knowledge_digest = _delivery_archive(
+        agent_id="other",
+    )
 
     with pytest.raises(DeliveryBundleError, match="agent identity mismatch"):
         validate_delivery_bundle(
@@ -171,7 +185,11 @@ def test_validate_rejects_agent_id_mismatch() -> None:
 @pytest.mark.parametrize("unsafe_name", ["../agent.json", "/agent/agent.json"])
 def test_validate_rejects_unsafe_members(unsafe_name: str) -> None:
     output = io.BytesIO()
-    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+    with zipfile.ZipFile(
+        output,
+        "w",
+        compression=zipfile.ZIP_DEFLATED,
+    ) as archive:
         archive.writestr(unsafe_name, b"{}")
 
     with pytest.raises(DeliveryBundleError, match="invalid"):
@@ -185,7 +203,11 @@ def test_validate_rejects_unsafe_members(unsafe_name: str) -> None:
 
 def test_validate_rejects_compression_bomb_member() -> None:
     output = io.BytesIO()
-    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+    with zipfile.ZipFile(
+        output,
+        "w",
+        compression=zipfile.ZIP_DEFLATED,
+    ) as archive:
         archive.writestr("agent/agent.json", b"0" * (2 * 1024 * 1024))
 
     with pytest.raises(DeliveryBundleError, match="invalid"):
@@ -213,7 +235,9 @@ def _workspace(tmp_path: Path) -> Path:
     return workspace
 
 
-def test_standard_update_replaces_only_exported_source_files(tmp_path: Path) -> None:
+def test_standard_update_replaces_only_exported_source_files(
+    tmp_path: Path,
+) -> None:
     workspace = _workspace(tmp_path)
     archive, _, _ = _delivery_archive()
     bundle = parse_delivery_bundle("a_service", archive)
@@ -253,7 +277,9 @@ def test_standard_update_preserves_runtime_directories(tmp_path: Path) -> None:
     assert (workspace / "qwenpaw_app.log").read_text() == "runtime log"
 
 
-def test_standard_update_preserves_server_owned_json_values(tmp_path: Path) -> None:
+def test_standard_update_preserves_server_owned_json_values(
+    tmp_path: Path,
+) -> None:
     workspace = _workspace(tmp_path)
     (workspace / "agent.json").write_text(
         json.dumps(
@@ -349,7 +375,10 @@ class _KnowledgeStore:
         self.documents = [dict(document) for document in documents]
         self.fail_next = False
 
-    def replace_delivery_documents(self, documents: list[dict[str, object]]) -> None:
+    def replace_delivery_documents(
+        self,
+        documents: list[dict[str, object]],
+    ) -> None:
         if self.fail_next:
             self.fail_next = False
             raise RuntimeError("knowledge failed")
@@ -358,13 +387,17 @@ class _KnowledgeStore:
 
 def _transaction_fixture(tmp_path: Path):
     workspace = _workspace(tmp_path)
-    old_documents = [
-        {"id": "old-doc", "name": "old.md", "content": b"old knowledge"}
+    old_documents: list[dict[str, object]] = [
+        {"id": "old-doc", "name": "old.md", "content": b"old knowledge"},
     ]
-    new_documents = [
-        {"id": "doc-1", "name": "faq.md", "content": b"# FAQ\n"}
+    new_documents: list[dict[str, object]] = [
+        {"id": "doc-1", "name": "faq.md", "content": b"# FAQ\n"},
     ]
-    old_archive, old_agent_digest, old_knowledge_digest = _custom_delivery_archive(
+    (
+        old_archive,
+        old_agent_digest,
+        old_knowledge_digest,
+    ) = _custom_delivery_archive(
         agent_files={
             "agent/AGENTS.md": b"# Old rules\n",
             "agent/agent.json": b'{"id":"a_service","name":"Old"}',
@@ -372,7 +405,11 @@ def _transaction_fixture(tmp_path: Path):
         },
         documents=old_documents,
     )
-    new_archive, new_agent_digest, new_knowledge_digest = _custom_delivery_archive(
+    (
+        new_archive,
+        new_agent_digest,
+        new_knowledge_digest,
+    ) = _custom_delivery_archive(
         agent_files={
             "agent/AGENTS.md": b"# Rules\n",
             "agent/agent.json": b'{"id":"a_service","name":"Service"}',
@@ -385,7 +422,9 @@ def _transaction_fixture(tmp_path: Path):
         knowledge_digest=old_knowledge_digest,
     )
     exporter = SimpleNamespace(export=lambda agent_id: exported)
-    context = SimpleNamespace(resolve_publication=lambda agent_id: {"id": "pub-1"})
+    context = SimpleNamespace(
+        resolve_publication=lambda agent_id: {"id": "pub-1"},
+    )
     knowledge = _KnowledgeStore(old_documents)
 
     def apply_agent(bundle, operation_id):
@@ -424,14 +463,15 @@ def _updater(tmp_path: Path, fixture) -> IntegrationDeliveryUpdater:
     )
 
 
-def _knowledge_identity(documents: list[dict[str, object]]) -> list[tuple[object, ...]]:
-    return [
-        (item["id"], item["name"], item["content"])
-        for item in documents
-    ]
+def _knowledge_identity(
+    documents: list[dict[str, object]],
+) -> list[tuple[object, ...]]:
+    return [(item["id"], item["name"], item["content"]) for item in documents]
 
 
-def test_apply_replaces_agent_and_knowledge_as_one_operation(tmp_path: Path) -> None:
+def test_apply_replaces_agent_and_knowledge_as_one_operation(
+    tmp_path: Path,
+) -> None:
     fixture = _transaction_fixture(tmp_path)
 
     result = _updater(tmp_path, fixture).apply(
@@ -445,15 +485,19 @@ def test_apply_replaces_agent_and_knowledge_as_one_operation(tmp_path: Path) -> 
     assert result.status == "applied"
     assert result.agent_digest == fixture.new_agent_digest
     assert result.knowledge_digest == fixture.new_knowledge_digest
-    assert _knowledge_identity(fixture.knowledge.documents) == _knowledge_identity(
-        fixture.new_documents
+    assert _knowledge_identity(
+        fixture.knowledge.documents,
+    ) == _knowledge_identity(
+        fixture.new_documents,
     )
-    assert json.loads((fixture.workspace / "agent.json").read_text())["name"] == (
-        "Service"
-    )
+    assert json.loads((fixture.workspace / "agent.json").read_text())[
+        "name"
+    ] == ("Service")
 
 
-def test_knowledge_failure_restores_agent_and_documents(tmp_path: Path) -> None:
+def test_knowledge_failure_restores_agent_and_documents(
+    tmp_path: Path,
+) -> None:
     fixture = _transaction_fixture(tmp_path)
     fixture.knowledge.fail_next = True
 
@@ -466,9 +510,14 @@ def test_knowledge_failure_restores_agent_and_documents(tmp_path: Path) -> None:
             expected_knowledge_digest=fixture.old_knowledge_digest,
         )
 
-    assert json.loads((fixture.workspace / "agent.json").read_text())["name"] == "Old"
-    assert _knowledge_identity(fixture.knowledge.documents) == _knowledge_identity(
-        fixture.old_documents
+    assert (
+        json.loads((fixture.workspace / "agent.json").read_text())["name"]
+        == "Old"
+    )
+    assert _knowledge_identity(
+        fixture.knowledge.documents,
+    ) == _knowledge_identity(
+        fixture.old_documents,
     )
 
 
@@ -488,10 +537,15 @@ def test_restore_is_idempotent(tmp_path: Path) -> None:
 
     assert first == second
     assert first.status == "restored"
-    assert _knowledge_identity(fixture.knowledge.documents) == _knowledge_identity(
-        fixture.old_documents
+    assert _knowledge_identity(
+        fixture.knowledge.documents,
+    ) == _knowledge_identity(
+        fixture.old_documents,
     )
-    assert json.loads((fixture.workspace / "agent.json").read_text())["name"] == "Old"
+    assert (
+        json.loads((fixture.workspace / "agent.json").read_text())["name"]
+        == "Old"
+    )
 
 
 def test_operation_receipt_survives_service_restart(tmp_path: Path) -> None:
@@ -512,7 +566,9 @@ def test_operation_receipt_survives_service_restart(tmp_path: Path) -> None:
     assert restored.status == "restored"
 
 
-def test_operation_idempotency_reuses_only_the_same_request(tmp_path: Path) -> None:
+def test_operation_idempotency_reuses_only_the_same_request(
+    tmp_path: Path,
+) -> None:
     fixture = _transaction_fixture(tmp_path)
     updater = _updater(tmp_path, fixture)
     first = updater.apply(

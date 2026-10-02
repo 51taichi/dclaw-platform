@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Validation primitives for integration delivery updates."""
 
 from __future__ import annotations
@@ -93,6 +94,7 @@ def _read_archive(archive_bytes: bytes) -> dict[str, bytes]:
                 portable_key = path.casefold()
                 mode = entry.external_attr >> 16
                 file_type = stat.S_IFMT(mode)
+                # pylint: disable=too-many-boolean-expressions
                 if (
                     path in result
                     or portable_key in portable_seen
@@ -118,7 +120,12 @@ def _read_archive(archive_bytes: bytes) -> dict[str, bytes]:
                 if len(content) != entry.file_size:
                     raise DeliveryBundleError("delivery bundle is invalid")
                 result[path] = content
-    except (OSError, RuntimeError, SnapshotArchiveError, zipfile.BadZipFile) as exc:
+    except (
+        OSError,
+        RuntimeError,
+        SnapshotArchiveError,
+        zipfile.BadZipFile,
+    ) as exc:
         raise DeliveryBundleError("delivery bundle is invalid") from exc
     return result
 
@@ -133,7 +140,10 @@ def _json_object(content: bytes, *, label: str) -> dict[str, Any]:
     return value
 
 
-def parse_delivery_bundle(agent_id: str, archive: bytes) -> ParsedDeliveryBundle:
+def parse_delivery_bundle(
+    agent_id: str,
+    archive: bytes,
+) -> ParsedDeliveryBundle:
     files = _read_archive(bytes(archive))
     try:
         component_bytes = files.pop("dclaw-component.json")
@@ -154,7 +164,9 @@ def parse_delivery_bundle(agent_id: str, archive: bytes) -> ParsedDeliveryBundle
         raise DeliveryBundleError("agent identity mismatch")
 
     agent_files = {
-        path: content for path, content in files.items() if path.startswith("agent/")
+        path: content
+        for path, content in files.items()
+        if path.startswith("agent/")
     }
     knowledge_files = {
         path: content
@@ -171,7 +183,10 @@ def parse_delivery_bundle(agent_id: str, archive: bytes) -> ParsedDeliveryBundle
         if not isinstance(document, dict):
             raise DeliveryBundleError("knowledge manifest is invalid")
         relative = document.get("path")
-        if not isinstance(relative, str) or f"knowledge/{relative}" not in knowledge_files:
+        if (
+            not isinstance(relative, str)
+            or f"knowledge/{relative}" not in knowledge_files
+        ):
             raise DeliveryBundleError("knowledge manifest is invalid")
 
     agent_digest = deterministic_digest(agent_files)
@@ -188,7 +203,10 @@ def parse_delivery_bundle(agent_id: str, archive: bytes) -> ParsedDeliveryBundle
     if not isinstance(source_version, str) or not source_version:
         raise DeliveryBundleError("component manifest is invalid")
     knowledge_base_id = component.get("knowledgeBaseId")
-    if knowledge_base_id is not None and not isinstance(knowledge_base_id, str):
+    if knowledge_base_id is not None and not isinstance(
+        knowledge_base_id,
+        str,
+    ):
         raise DeliveryBundleError("component manifest is invalid")
     return ParsedDeliveryBundle(
         archive=bytes(archive),
@@ -243,13 +261,19 @@ def _source_digest(workspace: Path) -> str:
                 workspace,
                 prefix="agent",
                 exclude=_is_agent_runtime_path,
-            )
-        )
+            ),
+        ),
     )
 
 
-def _merge_server_owned_json(original: Any, sanitized: Any, submitted: Any) -> Any:
-    if not all(isinstance(value, dict) for value in (original, sanitized, submitted)):
+def _merge_server_owned_json(
+    original: Any,
+    sanitized: Any,
+    submitted: Any,
+) -> Any:
+    if not all(
+        isinstance(value, dict) for value in (original, sanitized, submitted)
+    ):
         if submitted == sanitized and original != sanitized:
             return original
         return submitted
@@ -321,7 +345,7 @@ def _temporary_sibling(workspace: Path, label: str) -> Path:
         tempfile.mkdtemp(
             prefix=f".{workspace.name}.{label}-",
             dir=workspace.parent,
-        )
+        ),
     )
 
 
@@ -335,7 +359,9 @@ def apply_standard_agent_source(
     """Replace exported Agent source while retaining runtime-only state."""
 
     workspace = (
-        Path(workspace_dir) if workspace_dir is not None else _standard_workspace(bundle.agent_id)
+        Path(workspace_dir)
+        if workspace_dir is not None
+        else _standard_workspace(bundle.agent_id)
     )
     if not workspace.is_dir():
         raise DeliveryBundleError("standard Agent is unavailable")
@@ -427,14 +453,15 @@ def restore_standard_agent_source(
             workspace.rename(backup)
         replaced.rename(workspace)
         raise
-    else:
-        shutil.rmtree(replaced, ignore_errors=True)
+    shutil.rmtree(replaced, ignore_errors=True)
 
 
 _OPERATION_PART = re.compile(r"^[A-Za-z0-9._-]{1,160}$")
 
 
-def _delivery_documents(bundle: ParsedDeliveryBundle) -> list[dict[str, object]]:
+def _delivery_documents(
+    bundle: ParsedDeliveryBundle,
+) -> list[dict[str, object]]:
     manifest = _json_object(
         bundle.knowledge_files["knowledge/knowledge-manifest.json"],
         label="knowledge manifest",
@@ -450,12 +477,16 @@ def _delivery_documents(bundle: ParsedDeliveryBundle) -> list[dict[str, object]]
                 "category": str(item.get("category") or "uncategorized"),
                 "tags": list(item.get("tags") or []),
                 "content": bundle.knowledge_files[f"knowledge/{relative}"],
-            }
+            },
         )
     return result
 
 
-def _replace_knowledge_documents(service: Any, bundle: ParsedDeliveryBundle) -> None:
+def _replace_knowledge_documents(
+    service: Any,
+    bundle: ParsedDeliveryBundle,
+) -> None:  # pylint: disable=protected-access
+    # pylint: disable=protected-access
     documents = _delivery_documents(bundle)
     replace = getattr(service, "replace_delivery_documents", None)
     if callable(replace):
@@ -466,14 +497,16 @@ def _replace_knowledge_documents(service: Any, bundle: ParsedDeliveryBundle) -> 
     for document in current:
         service.delete_document(document.id, MindspaceScope.PERSONAL)
     for item in documents:
-        # Mindspace has no public bulk replace method. This adapter deliberately
-        # uses its established staging/indexing primitives while retaining the
-        # exported document ID so future deterministic snapshots stay stable.
+        # Mindspace has no public bulk replace method. This adapter uses its
+        # existing staging primitives and retains deterministic document IDs.
+        content = item["content"]
+        if not isinstance(content, bytes):
+            raise DeliveryBundleError("knowledge document content is invalid")
         document = service._new_doc(  # noqa: SLF001
             name=item["name"],
             source_type=item["sourceType"],
             scope=MindspaceScope.PERSONAL,
-            byte_size=len(item["content"]),
+            byte_size=len(content),
             status="pending",
             progress=5,
             category=item["category"],
@@ -481,7 +514,11 @@ def _replace_knowledge_documents(service: Any, bundle: ParsedDeliveryBundle) -> 
         )
         document.id = item["id"]
         service._upsert_doc(document)  # noqa: SLF001
-        service._store_asset(document, item["content"], mime_type=None)  # noqa: SLF001
+        service._store_asset(
+            document,
+            content,
+            mime_type=None,
+        )  # noqa: SLF001
         indexed = service.process_staged_document(
             document.id,
             scope=MindspaceScope.PERSONAL,
@@ -491,7 +528,7 @@ def _replace_knowledge_documents(service: Any, bundle: ParsedDeliveryBundle) -> 
 
 
 class IntegrationDeliveryUpdater:
-    """Coordinate one Agent source and its isolated knowledge as one operation."""
+    """Coordinate Agent source and isolated knowledge as one operation."""
 
     def __init__(
         self,
@@ -508,20 +545,24 @@ class IntegrationDeliveryUpdater:
     ) -> None:
         self._root = Path(
             operations_root
-            or Path(WORKING_DIR) / "integration_delivery" / "operations"
+            or Path(WORKING_DIR) / "integration_delivery" / "operations",
         )
         self._root.mkdir(parents=True, exist_ok=True)
-        self._context = context_service or get_dclaw_configuration_context_service()
+        self._context = (
+            context_service or get_dclaw_configuration_context_service()
+        )
         self._exporter = snapshot_exporter or DclawSnapshotExporter(
-            context_service=self._context
+            context_service=self._context,
         )
         self._knowledge_factory = knowledge_service_factory
         self._apply_agent_override = apply_agent
         self._restore_agent_override = restore_agent
 
     def _operation_dir(self, agent_id: str, operation_id: str) -> Path:
-        if not _OPERATION_PART.fullmatch(agent_id) or not _OPERATION_PART.fullmatch(
-            operation_id
+        if not _OPERATION_PART.fullmatch(
+            agent_id,
+        ) or not _OPERATION_PART.fullmatch(
+            operation_id,
         ):
             raise DeliveryBundleError("operation identity is invalid")
         return self._root / agent_id / operation_id
@@ -530,7 +571,11 @@ class IntegrationDeliveryUpdater:
     def _view(data: dict[str, Any]) -> DeliveryOperationView:
         return DeliveryOperationView.model_validate(data)
 
-    def _write_receipt(self, directory: Path, view: DeliveryOperationView) -> None:
+    def _write_receipt(
+        self,
+        directory: Path,
+        view: DeliveryOperationView,
+    ) -> None:
         directory.mkdir(parents=True, exist_ok=True)
         receipt = directory / "receipt.json"
         temporary = directory / ".receipt.json.tmp"
@@ -545,12 +590,18 @@ class IntegrationDeliveryUpdater:
         )
         temporary.replace(receipt)
 
-    def get_operation(self, agent_id: str, operation_id: str) -> DeliveryOperationView:
+    def get_operation(
+        self,
+        agent_id: str,
+        operation_id: str,
+    ) -> DeliveryOperationView:
         receipt = self._operation_dir(agent_id, operation_id) / "receipt.json"
         try:
             data = json.loads(receipt.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise DeliveryBundleError("delivery operation is unavailable") from exc
+            raise DeliveryBundleError(
+                "delivery operation is unavailable",
+            ) from exc
         return self._view(data)
 
     def _knowledge_service(self, agent_id: str) -> Any:
@@ -590,6 +641,10 @@ class IntegrationDeliveryUpdater:
             or current.knowledge_digest != expected_knowledge_digest
         ):
             raise DeliverySourceChanged("DClaw source changed")
+        if self._context.describe(agent_id).agent_type == "sealed":
+            from .sealed_update import validate_sealed_agent_source
+
+            validate_sealed_agent_source(bundle)
         return DeliveryValidation(
             agent_id=bundle.agent_id,
             agent_profile_id=bundle.agent_profile_id,
@@ -630,10 +685,14 @@ class IntegrationDeliveryUpdater:
             "agentDigestBefore": receipt.agent_digest_before,
             "agentDigestAfter": receipt.agent_digest_after,
             "workspaceDir": (
-                str(receipt.workspace_dir) if receipt.workspace_dir is not None else None
+                str(receipt.workspace_dir)
+                if receipt.workspace_dir is not None
+                else None
             ),
             "backupDir": (
-                str(receipt.backup_dir) if receipt.backup_dir is not None else None
+                str(receipt.backup_dir)
+                if receipt.backup_dir is not None
+                else None
             ),
             "previousReleaseId": receipt.previous_release_id,
             "appliedReleaseId": receipt.applied_release_id,
@@ -681,15 +740,17 @@ class IntegrationDeliveryUpdater:
         request_path = directory / "request.json"
         if directory.exists():
             try:
-                previous_request = json.loads(request_path.read_text(encoding="utf-8"))
+                previous_request = json.loads(
+                    request_path.read_text(encoding="utf-8"),
+                )
             except (OSError, json.JSONDecodeError) as exc:
                 raise DeliveryIdempotencyKeyReused(
-                    "operation identity is already in use"
+                    "operation identity is already in use",
                 ) from exc
             if previous_request.get("fingerprint") != fingerprint:
                 raise DeliveryIdempotencyKeyReused(
-                    "operation identity is already in use"
-                )
+                    "operation identity is already in use",
+                ) from None
             return self.get_operation(agent_id, operation_id)
 
         current = self._exporter.export(agent_id)
@@ -703,15 +764,17 @@ class IntegrationDeliveryUpdater:
             directory.mkdir(parents=True)
         except FileExistsError:
             try:
-                previous_request = json.loads(request_path.read_text(encoding="utf-8"))
+                previous_request = json.loads(
+                    request_path.read_text(encoding="utf-8"),
+                )
             except (OSError, json.JSONDecodeError) as exc:
                 raise DeliveryIdempotencyKeyReused(
-                    "operation identity is already in use"
+                    "operation identity is already in use",
                 ) from exc
             if previous_request.get("fingerprint") != fingerprint:
                 raise DeliveryIdempotencyKeyReused(
-                    "operation identity is already in use"
-                )
+                    "operation identity is already in use",
+                ) from None
             return self.get_operation(agent_id, operation_id)
         request_path.write_text(
             json.dumps({"fingerprint": fingerprint}, separators=(",", ":")),
@@ -766,7 +829,11 @@ class IntegrationDeliveryUpdater:
         self._write_receipt(directory, applied)
         return applied
 
-    def restore(self, agent_id: str, operation_id: str) -> DeliveryOperationView:
+    def restore(
+        self,
+        agent_id: str,
+        operation_id: str,
+    ) -> DeliveryOperationView:
         directory = self._operation_dir(agent_id, operation_id)
         current = self.get_operation(agent_id, operation_id)
         if current.status == "restored":
@@ -784,7 +851,9 @@ class IntegrationDeliveryUpdater:
         )
         knowledge = self._knowledge_service(agent_id)
         stored_receipt = self._receipt_from_payload(
-            json.loads((directory / "agent-receipt.json").read_text(encoding="utf-8"))
+            json.loads(
+                (directory / "agent-receipt.json").read_text(encoding="utf-8"),
+            ),
         )
         if stored_receipt.previous_release_id is not None:
             self._restore_agent_receipt(stored_receipt)
@@ -797,7 +866,10 @@ class IntegrationDeliveryUpdater:
                 applied_release_id=stored_receipt.previous_release_id,
             )
         else:
-            receipt = self._apply_agent_bundle(previous, f"{operation_id}.restore")
+            receipt = self._apply_agent_bundle(
+                previous,
+                f"{operation_id}.restore",
+            )
         try:
             _replace_knowledge_documents(knowledge, previous)
         except Exception:
@@ -814,7 +886,7 @@ class IntegrationDeliveryUpdater:
                 "agent_digest": previous.agent_digest,
                 "knowledge_digest": previous.knowledge_digest,
                 "error_code": None,
-            }
+            },
         )
         self._write_receipt(directory, restored)
         return restored

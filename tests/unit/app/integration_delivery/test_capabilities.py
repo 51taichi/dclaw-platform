@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from fastapi import FastAPI
@@ -8,13 +9,13 @@ from qwenpaw.app.integration_delivery import router as router_module
 
 def test_platform_capability_catalog_is_generic_and_versioned() -> None:
     app = FastAPI()
-    app.dependency_overrides[router_module.require_integration_client] = (
-        lambda: None
-    )
+    app.dependency_overrides[
+        router_module.require_integration_client
+    ] = lambda: None
     app.include_router(router_module.router, prefix="/api")
 
     response = TestClient(app).get(
-        "/api/internal/integrations/v1/capabilities"
+        "/api/internal/integrations/v1/capabilities",
     )
 
     assert response.status_code == 200
@@ -68,6 +69,8 @@ def test_router_exposes_only_generic_platform_paths() -> None:
         "/internal/integrations/v1/agents/{agent_id}/source-bundle",
         "/internal/integrations/v1/agents/{agent_id}/delivery-bundle/validate",
         "/internal/integrations/v1/agents/{agent_id}/delivery-bundle",
-        "/internal/integrations/v1/agents/{agent_id}/delivery-operations/{operation_id}",
-        "/internal/integrations/v1/agents/{agent_id}/delivery-operations/{operation_id}/restore",
+        "/internal/integrations/v1/agents/{agent_id}/"
+        "delivery-operations/{operation_id}",
+        "/internal/integrations/v1/agents/{agent_id}/"
+        "delivery-operations/{operation_id}/restore",
     }

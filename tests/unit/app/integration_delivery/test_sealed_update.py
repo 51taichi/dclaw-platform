@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import base64
@@ -13,13 +14,16 @@ from qwenpaw.app.integration_delivery.sealed_update import (
     SealedDeliveryError,
     apply_sealed_agent_source,
     restore_sealed_agent_source,
+    validate_sealed_agent_source,
 )
 from qwenpaw.app.integration_delivery.update import parse_delivery_bundle
 from qwenpaw.app.integration_delivery.archive import (
     build_deterministic_archive,
     deterministic_digest,
 )
-from qwenpaw.app.super_experts.capabilities import compute_capability_set_digest
+from qwenpaw.app.super_experts.capabilities import (
+    compute_capability_set_digest,
+)
 
 
 def _bundle(agent_id: str = "a_service") -> bytes:
@@ -46,9 +50,11 @@ def _bundle(agent_id: str = "a_service") -> bytes:
             **agent_files,
             **knowledge_files,
             "dclaw-component.json": json.dumps(
-                component, separators=(",", ":"), sort_keys=True
+                component,
+                separators=(",", ":"),
+                sort_keys=True,
             ).encode(),
-        }
+        },
     )
 
 
@@ -73,19 +79,39 @@ def _manifest(package_type: str) -> dict[str, object]:
         "content_digest": "sha256:" + "1" * 64,
     }
     if package_type == "super_expert":
+        host_capabilities = [
+            "agent.execute",
+            "session.context",
+            "runtime.trace",
+            "runtime.complete",
+            "runtime.fail",
+        ]
         manifest.update(
             {
+                "platform_contract_versions": {
+                    "runtime": "1",
+                    "runtime_host": "1",
+                    "card": "1",
+                },
                 "capabilities": [
-                    {"capability_id": "card.create", "contract_version": "1"}
+                    {
+                        "capability_id": "workspace.turn.orchestrate/1",
+                        "contract_version": "1",
+                    },
+                    *[
+                        {"capability_id": value, "contract_version": "1"}
+                        for value in host_capabilities
+                    ],
+                    {"capability_id": "card.create", "contract_version": "1"},
                 ],
                 "capability_digest": "sha256:" + "2" * 64,
                 "orchestration": {
                     "capability_id": "workspace.turn.orchestrate/1",
                     "contract_version": "1",
                     "entrypoint": "agent/orchestrator.py:run",
-                    "required_host_capabilities": ["agent.execute"],
+                    "required_host_capabilities": host_capabilities,
                 },
-            }
+            },
         )
         manifest["capability_digest"] = compute_capability_set_digest(manifest)
     return manifest
@@ -96,7 +122,7 @@ class _SealedService:
         self.root = root
         self.trusted_signers = {"delivery": public_key}
         self.super_expert_trust_store = SimpleNamespace(
-            is_official=lambda signer_id: signer_id == "delivery"
+            is_official=lambda signer_id: signer_id == "delivery",
         )
         self.old_release = SimpleNamespace(
             release_id="release-old",
@@ -114,7 +140,8 @@ class _SealedService:
         release_root = root / "releases/a_service/release-old"
         (release_root / "agent").mkdir(parents=True)
         (release_root / "manifest.json").write_text(
-            json.dumps(_manifest(package_type)), encoding="utf-8"
+            json.dumps(_manifest(package_type)),
+            encoding="utf-8",
         )
 
     def get_agent(self, agent_id: str):
@@ -128,30 +155,42 @@ class _SealedService:
         output = self.root / "candidate.zip"
         output.write_bytes(package)
         with zipfile.ZipFile(output) as archive:
-            self.installed_manifest = json.loads(archive.read("manifest.json"))
+            manifest = json.loads(archive.read("manifest.json"))
+        self.installed_manifest = manifest
         release = SimpleNamespace(
             release_id="release-new",
-            version=self.installed_manifest["version"],
-            package_type=self.installed_manifest["package_type"],
+            version=manifest["version"],
+            package_type=manifest["package_type"],
         )
         self.record.releases.append(release)
         return release
 
-    async def validate_release_runtime(self, agent_id: str, release_id: str):
+    async def validate_release_runtime(
+        self,
+        _agent_id: str,
+        _release_id: str,
+    ):
         return SimpleNamespace(status="valid")
 
-    def prepare_runtime_workspace(self, agent_id: str, release_id: str) -> Path:
-        target = self.root / "runtime_workspaces" / agent_id / release_id / "agent"
+    def prepare_runtime_workspace(
+        self,
+        agent_id: str,
+        release_id: str,
+    ) -> Path:
+        target = (
+            self.root / "runtime_workspaces" / agent_id / release_id / "agent"
+        )
         target.mkdir(parents=True, exist_ok=True)
         (target / "agent.json").write_text(
-            '{"id":"a_service"}', encoding="utf-8"
+            '{"id":"a_service"}',
+            encoding="utf-8",
         )
         return target
 
-    def grant_installation(self, agent_id, release_id, **kwargs):
+    def grant_installation(self, _agent_id, _release_id, **_kwargs):
         return None
 
-    def activate(self, agent_id: str, release_id: str, **kwargs):
+    def activate(self, _agent_id: str, release_id: str, **_kwargs):
         self.activated.append(release_id)
         self.record.active_release_id = release_id
         return self.record
@@ -164,7 +203,7 @@ def _signer(path: Path, private: Ed25519PrivateKey) -> None:
             {
                 "signerId": "delivery",
                 "privateKey": base64.b64encode(raw).decode(),
-            }
+            },
         ),
         encoding="utf-8",
     )
@@ -178,7 +217,11 @@ def test_sealed_update_preserves_declarations_and_can_restore(
     private = Ed25519PrivateKey.generate()
     signer = tmp_path / "signer.json"
     _signer(signer, private)
-    service = _SealedService(tmp_path / "sealed", private.public_key(), package_type)
+    service = _SealedService(
+        tmp_path / "sealed",
+        private.public_key(),
+        package_type,
+    )
 
     receipt = apply_sealed_agent_source(
         parse_delivery_bundle("a_service", _bundle()),
@@ -186,32 +229,44 @@ def test_sealed_update_preserves_declarations_and_can_restore(
         service=service,
         signer_path=signer,
         activate_runtime=lambda release_id: service.activate(
-            "a_service", release_id
+            "a_service",
+            release_id,
         ),
     )
 
+    assert service.installed_manifest is not None
     assert service.installed_manifest["version"] == "1.2.4"
     assert service.installed_manifest["package_type"] == package_type
-    assert service.installed_manifest["public_metadata"]["description"] == "kept"
+    assert (
+        service.installed_manifest["public_metadata"]["description"] == "kept"
+    )
     if package_type == "super_expert":
-        assert service.installed_manifest["capabilities"] == _manifest(package_type)[
-            "capabilities"
-        ]
+        assert (
+            service.installed_manifest["capabilities"]
+            == _manifest(package_type)["capabilities"]
+        )
     assert service.activated == ["release-new"]
 
     restore_sealed_agent_source(
         receipt,
         service=service,
         activate_runtime=lambda release_id: service.activate(
-            "a_service", release_id
+            "a_service",
+            release_id,
         ),
     )
     assert service.activated == ["release-new", "release-old"]
 
 
-def test_sealed_update_rejects_missing_signing_material(tmp_path: Path) -> None:
+def test_sealed_update_rejects_missing_signing_material(
+    tmp_path: Path,
+) -> None:
     private = Ed25519PrivateKey.generate()
-    service = _SealedService(tmp_path / "sealed", private.public_key(), "sealed_agent")
+    service = _SealedService(
+        tmp_path / "sealed",
+        private.public_key(),
+        "sealed_agent",
+    )
 
     with pytest.raises(SealedDeliveryError, match="signing material"):
         apply_sealed_agent_source(
@@ -221,10 +276,19 @@ def test_sealed_update_rejects_missing_signing_material(tmp_path: Path) -> None:
             signer_path=tmp_path / "missing.json",
         )
 
-    assert service.activated == []
+    assert not service.activated
+
+    with pytest.raises(SealedDeliveryError, match="signing material"):
+        validate_sealed_agent_source(
+            parse_delivery_bundle("a_service", _bundle()),
+            service=service,
+            signer_path=tmp_path / "missing.json",
+        )
 
 
-def test_sealed_update_rejects_signer_public_key_mismatch(tmp_path: Path) -> None:
+def test_sealed_update_rejects_signer_public_key_mismatch(
+    tmp_path: Path,
+) -> None:
     private = Ed25519PrivateKey.generate()
     signer = tmp_path / "signer.json"
     _signer(signer, private)
@@ -242,4 +306,4 @@ def test_sealed_update_rejects_signer_public_key_mismatch(tmp_path: Path) -> Non
             signer_path=signer,
         )
 
-    assert service.activated == []
+    assert not service.activated

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Public-safe contracts returned to the independent integration client."""
 
 from __future__ import annotations

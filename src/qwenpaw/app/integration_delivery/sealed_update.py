@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Transparent signed-release adapter for sealed and super-expert Agents."""
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from ..sealed_agents.package import (
     build_signed_package_bytes,
 )
 from ..sealed_agents.service import SealedAgentService
+from ..super_experts.capabilities import validate_super_expert_manifest
 from .update import (
     AgentApplyReceipt,
     DeliveryBundleError,
@@ -50,19 +52,39 @@ def _load_signer(
         signer_id = str(payload["signerId"])
         raw = base64.b64decode(payload["privateKey"], validate=True)
         private = Ed25519PrivateKey.from_private_bytes(raw)
-    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise SealedDeliveryError("sealed delivery signing material is unavailable") from exc
+    except (
+        OSError,
+        KeyError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as exc:
+        raise SealedDeliveryError(
+            "sealed delivery signing material is unavailable",
+        ) from exc
     trusted = service.trusted_signers.get(signer_id)
     if trusted is None:
-        raise SealedDeliveryError("sealed delivery trusted signer is unavailable")
+        raise SealedDeliveryError(
+            "sealed delivery trusted signer is unavailable",
+        )
     encoding = serialization.Encoding.Raw
     public_format = serialization.PublicFormat.Raw
-    if private.public_key().public_bytes(encoding, public_format) != trusted.public_bytes(
-        encoding, public_format
+    if private.public_key().public_bytes(
+        encoding,
+        public_format,
+    ) != trusted.public_bytes(
+        encoding,
+        public_format,
     ):
-        raise SealedDeliveryError("sealed delivery trusted signer does not match")
-    if super_expert and not service.super_expert_trust_store.is_official(signer_id):
-        raise SealedDeliveryError("sealed delivery trusted signer is not official")
+        raise SealedDeliveryError(
+            "sealed delivery trusted signer does not match",
+        )
+    if super_expert and not service.super_expert_trust_store.is_official(
+        signer_id,
+    ):
+        raise SealedDeliveryError(
+            "sealed delivery trusted signer is not official",
+        )
     return signer_id, private
 
 
@@ -74,7 +96,10 @@ def _next_version(record: Any) -> str:
     return f"{current.major}.{current.minor}.{current.micro + 1}"
 
 
-def _active_manifest(service: SealedAgentService | Any, agent_id: str) -> tuple[Any, dict[str, Any]]:
+def _active_manifest(
+    service: SealedAgentService | Any,
+    agent_id: str,
+) -> tuple[Any, dict[str, Any]]:
     record = service.get_agent(agent_id)
     active = record.active_release if record is not None else None
     if record is None or not record.enabled or active is None:
@@ -82,20 +107,30 @@ def _active_manifest(service: SealedAgentService | Any, agent_id: str) -> tuple[
     path = service.release_root(agent_id, active.release_id) / "manifest.json"
     try:
         manifest = SealedPackageManifest.model_validate_json(
-            path.read_text(encoding="utf-8")
+            path.read_text(encoding="utf-8"),
         ).model_dump(mode="json")
     except (OSError, ValueError) as exc:
-        raise SealedDeliveryError("sealed Agent manifest is unavailable") from exc
+        raise SealedDeliveryError(
+            "sealed Agent manifest is unavailable",
+        ) from exc
     if manifest["agent_id"] != agent_id:
         raise SealedDeliveryError("sealed Agent identity mismatch")
     return record, manifest
 
 
-def _validate_release(service: SealedAgentService | Any, agent_id: str, release_id: str) -> None:
+def _validate_release(
+    service: SealedAgentService | Any,
+    agent_id: str,
+    release_id: str,
+) -> None:
     try:
-        validation = asyncio.run(service.validate_release_runtime(agent_id, release_id))
+        validation = asyncio.run(
+            service.validate_release_runtime(agent_id, release_id),
+        )
     except RuntimeError as exc:
-        raise SealedDeliveryError("sealed Agent runtime validation failed") from exc
+        raise SealedDeliveryError(
+            "sealed Agent runtime validation failed",
+        ) from exc
     if validation.status != "valid":
         raise SealedDeliveryError("sealed Agent runtime validation failed")
 
@@ -136,16 +171,22 @@ def apply_sealed_agent_source(
     tenant_id: str = "local",
     activate_runtime: Callable[[str], Any] | None = None,
 ) -> AgentApplyReceipt:
-    """Sign, validate and activate a new immutable release for an existing Agent."""
+    """Sign, validate and activate an immutable release for an Agent."""
 
     sealed_service = service or _service()
     record, manifest = _active_manifest(sealed_service, bundle.agent_id)
     active = record.active_release
-    active_root = sealed_service.release_root(bundle.agent_id, active.release_id) / "agent"
+    active_root = (
+        sealed_service.release_root(bundle.agent_id, active.release_id)
+        / "agent"
+    )
     before_digest = _source_digest(active_root)
     package_type = str(manifest["package_type"])
     signer_id, private_key = _load_signer(
-        Path(signer_path or Path(SECRET_DIR) / "integration_delivery_signer.json"),
+        Path(
+            signer_path
+            or Path(SECRET_DIR) / "integration_delivery_signer.json",
+        ),
         sealed_service,
         super_expert=package_type == "super_expert",
     )
@@ -154,8 +195,13 @@ def apply_sealed_agent_source(
         {
             "version": _next_version(record),
             "signer_id": signer_id,
-        }
+        },
     )
+    if package_type == "super_expert":
+        validate_super_expert_manifest(
+            SealedPackageManifest.model_validate(next_manifest),
+            sealed_service.super_expert_trust_store,
+        )
     package = build_signed_package_bytes(
         next_manifest,
         bundle.agent_files,
@@ -178,7 +224,10 @@ def apply_sealed_agent_source(
             activate_runtime=activate_runtime,
         )
     except Exception:
-        if sealed_service.get_agent(bundle.agent_id).active_release_id != active.release_id:
+        if (
+            sealed_service.get_agent(bundle.agent_id).active_release_id
+            != active.release_id
+        ):
             try:
                 _activate(
                     sealed_service,
@@ -201,6 +250,40 @@ def apply_sealed_agent_source(
     )
 
 
+def validate_sealed_agent_source(
+    bundle: ParsedDeliveryBundle,
+    *,
+    service: SealedAgentService | Any | None = None,
+    signer_path: Path | None = None,
+) -> None:
+    """Validate signing and retained declarations without installing."""
+
+    sealed_service = service or _service()
+    record, manifest = _active_manifest(sealed_service, bundle.agent_id)
+    package_type = str(manifest["package_type"])
+    signer_id, private_key = _load_signer(
+        Path(
+            signer_path
+            or Path(SECRET_DIR) / "integration_delivery_signer.json",
+        ),
+        sealed_service,
+        super_expert=package_type == "super_expert",
+    )
+    next_manifest = dict(manifest)
+    next_manifest.update(
+        {
+            "version": _next_version(record),
+            "signer_id": signer_id,
+        },
+    )
+    if package_type == "super_expert":
+        validate_super_expert_manifest(
+            SealedPackageManifest.model_validate(next_manifest),
+            sealed_service.super_expert_trust_store,
+        )
+    build_signed_package_bytes(next_manifest, bundle.agent_files, private_key)
+
+
 def restore_sealed_agent_source(
     receipt: AgentApplyReceipt,
     *,
@@ -211,7 +294,9 @@ def restore_sealed_agent_source(
     """Reactivate the immutable release that preceded this delivery update."""
 
     if receipt.previous_release_id is None:
-        raise SealedDeliveryError("sealed Agent recovery release is unavailable")
+        raise SealedDeliveryError(
+            "sealed Agent recovery release is unavailable",
+        )
     _activate(
         service or _service(),
         receipt.agent_id,
