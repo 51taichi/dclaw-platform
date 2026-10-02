@@ -1,43 +1,44 @@
 # Douyin Engagement Agent source
 
-This directory is the source package for the single sealed Agent used by the DClaw Bot comment and private-message workflows.
+`workspace/` is the deployable ordinary DClaw Agent used by the DClaw Bot comment and private-message workflows. It follows the same workspace model as other business Agents: `agent.json`, prompt files, `skill.json`, and local Skills. It is not a sealed Agent and does not require a signer or a sealed-Agent installation.
+
+The older `agent/` orchestration runtime and `manifest.template.json` remain only as contract-test reference material. They are not the deployment target.
 
 ## Local validation
 
 ```bash
-uv run python scripts/validate_standard_agent_workspace.py \
-  agent_sources/douyin_engagement_agent/agent \
-  --agent-id douyin-engagement-agent
-
 uv run pytest \
+  tests/unit/app/test_douyin_engagement_standard_agent.py \
   tests/unit/app/sealed_agents/test_douyin_engagement_contracts.py \
   tests/unit/app/sealed_agents/test_douyin_engagement_runtime.py \
   tests/contract/test_douyin_engagement_fixtures.py -q
 ```
 
-## User-operated packaging
+The sealed-runtime tests remain in the gate because they exercise the same five wire contracts consumed by Bot Server. Passing them does not make the ordinary workspace a sealed Agent.
 
-Copy `manifest.template.json`, replace the version and approved signer ID, then sign it with a user-controlled Ed25519 private key. The checked-in `capability_digest` already covers the declared platform authority; if any orchestration, platform-contract, or capability declaration changes, recompute it with `compute_capability_set_digest` before packaging.
+## Package
+
+Create a ZIP whose single wrapper directory contains the contents of `workspace/`. DClaw's normal Agent import page accepts that package and discovers `agent.json` plus the local Skill.
 
 ```bash
-uv run python scripts/build_sealed_agent.py \
-  --source agent_sources/douyin_engagement_agent/agent \
-  --manifest /path/to/manifest.json \
-  --private-key /path/to/private-key.base64 \
-  --output /path/to/douyin-engagement-agent.zip
+mkdir -p /tmp/douyin-engagement-agent-package/douyin-engagement-agent
+cp -R agent_sources/douyin_engagement_agent/workspace/. \
+  /tmp/douyin-engagement-agent-package/douyin-engagement-agent/
+(cd /tmp/douyin-engagement-agent-package && \
+  zip -qr /path/to/douyin-engagement-agent-v1.0.0.zip douyin-engagement-agent)
 ```
 
-The repository intentionally contains no production key. Uploading, installing, publishing, and binding the resulting package are deployment actions performed by the operator; they are not part of this source implementation.
+The package contains no model key, OpenAPI key, Bot credential, or customer data.
 
 ## Operator handoff
 
 After the local gates pass, the operator performs the live steps with credentials they control:
 
-1. Copy `manifest.template.json`, choose an immutable semantic version, and set an approved signer ID. Preserve the checked-in capability digest unless the authority declarations change. Do not put the private key or an API key in this repository.
-2. Run the packaging command above and retain the ZIP digest and manifest beside the release record.
-3. In DClaw, register the signer public key, then open **设置 → 密封 Agent**, upload the ZIP, inspect validation output, install it, and activate that exact version.
-4. In **Open API**, publish the activated sealed Agent as an Agent target. Enable it, grant `messages:create`, bind a dedicated application/API key, and copy the generated stable Public ID. Persistent sessions are required for private-message operations; isolated attempts are used by the comment-plan operations requested by Bot Server.
-5. In Bot Server, open **系统设置 → DClaw Agent** and enter the DClaw base URL, Public ID, dedicated API key, capability version `2`, and timeout. Save, then use **测试连接** before enabling any Agent-backed strategy.
+1. In the server DClaw Agent page, import the ZIP as a normal Agent and select an available model.
+2. Test `HEALTH_CHECK` in a fresh conversation and confirm the response is exactly `{"ok":true,"capabilityVersion":"2"}`.
+3. In **Open API**, publish the Agent as a target. Enable it, grant `messages:create`, bind a dedicated application/API key, and copy the stable Public ID.
+4. Send the DClaw base URL, Public ID, and dedicated API key to the Bot Server operator through a secure channel. Persistent sessions are required for private-message operations; isolated attempts are used for comment-plan operations.
+5. In Bot Server, save the Agent configuration and use **测试连接** before enabling any Agent-backed strategy.
 6. Start with controlled test accounts. Verify request audit, persistent private conversation continuity, isolated comment planning, error alarms, and quota behavior before production use.
 
-Source validation and fixture tests do not upload, install, activate, publish, or call a live Agent. Those state-changing operations remain explicitly user-operated.
+Source validation and fixture tests do not upload, import, publish, or call a live Agent. The first server import and OpenAPI publication remain explicitly user-operated.

@@ -1,0 +1,28 @@
+{
+  "schema_version": "workspace-skill-manifest.v1",
+  "version": 2026100201,
+  "skills": {
+    "douyin_operation_contract": {
+      "enabled": true,
+      "channels": ["all"],
+      "source": "local",
+      "metadata": {
+        "name": "douyin_operation_contract",
+        "description": "抖音评论剧本、B 计划和私信回复的五种 OpenAPI 操作契约。",
+        "version_text": "1.0.0",
+        "source": "local",
+        "protected": false,
+        "requirements": {
+          "require_bins": [],
+          "require_envs": []
+        },
+        "updated_at": "2026-10-02T00:00:00Z"
+      },
+      "requirements": {
+        "require_bins": [],
+        "require_envs": []
+      },
+      "updated_at": "2026-10-02T00:00:00Z"
+    }
+  }
+}
