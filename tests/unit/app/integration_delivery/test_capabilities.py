@@ -20,7 +20,7 @@ def test_platform_capability_catalog_is_generic_and_versioned() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["schemaVersion"] == "dclaw-integration-capabilities.v1"
-    assert body["version"] == "2026.09.30"
+    assert body["version"] == "2026.10.02"
     assert set(body["profiles"]) == {
         "standard-2026.09",
         "super-expert-2026.09",
@@ -48,6 +48,10 @@ def test_platform_capability_catalog_is_generic_and_versioned() -> None:
         "agent-delivery-context",
         "agent-source-bundle",
         "knowledge-source-bundle",
+        "agent-delivery-validate",
+        "agent-delivery-update",
+        "knowledge-delivery-update",
+        "delivery-restore",
     ]
     assert "AI客服" not in response.text
     assert "状态机" not in response.text

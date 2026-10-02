@@ -35,3 +35,23 @@ class DclawConfigurationContext(IntegrationModel):
     knowledge_base_id: str | None = None
     billing_account_configured: bool = False
     readiness: Readiness
+
+
+class DeliveryValidation(IntegrationModel):
+    valid: bool = True
+    agent_id: str
+    agent_profile_id: str
+    source_version: str
+    agent_digest: str
+    knowledge_digest: str
+
+
+class DeliveryOperationView(IntegrationModel):
+    operation_id: str
+    agent_id: str
+    status: Literal["applied", "restored", "failed"]
+    previous_agent_digest: str
+    previous_knowledge_digest: str
+    agent_digest: str
+    knowledge_digest: str
+    error_code: str | None = None

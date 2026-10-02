@@ -1,10 +1,14 @@
 {
   "schemaVersion": "dclaw-integration-capabilities.v1",
-  "version": "2026.09.30",
+  "version": "2026.10.02",
   "platformCapabilities": [
     "agent-delivery-context",
     "agent-source-bundle",
-    "knowledge-source-bundle"
+    "knowledge-source-bundle",
+    "agent-delivery-validate",
+    "agent-delivery-update",
+    "knowledge-delivery-update",
+    "delivery-restore"
   ],
   "profiles": {
     "standard-2026.09": {
