@@ -183,6 +183,45 @@ def test_standard_snapshot_exports_agent_and_publication_knowledge(tmp_path):
     assert "bound_user_id" not in serialized
 
 
+def test_standard_snapshot_excludes_runtime_state_and_keeps_agent_source(
+    tmp_path,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    source_files = {
+        "agent.json": '{"id":"a_service","name":"售后客服"}',
+        "AGENTS.md": "# Rules",
+        "skills/refund/SKILL.md": "# Refund skill",
+    }
+    runtime_files = {
+        "sessions_data/session:2026-10-02/MEMORY.md": "runtime session",
+        "tool_results/result.json": "{}",
+        "file_store/chroma.sqlite3": "runtime database",
+        "backup/old-agent.json": "{}",
+        "memory/cache.json": "{}",
+        ".reme_store_v1": "1",
+        ".skill.json.lock": "locked",
+        "memory_file_metadata.json": "{}",
+        "qwenpaw_app.log": "runtime log",
+        "nested/__pycache__/module.pyc": "compiled",
+    }
+    for relative, content in {**source_files, **runtime_files}.items():
+        target = workspace / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+
+    exported = _exporter(tmp_path=tmp_path, config=_config(workspace)).export(
+        "a_service",
+    )
+    files = _archive_files(exported.archive)
+
+    assert {path for path in files if path.startswith("agent/")} == {
+        "agent/AGENTS.md",
+        "agent/agent.json",
+        "agent/skills/refund/SKILL.md",
+    }
+
+
 def test_snapshot_sanitizes_runtime_credentials_from_agent_json(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()

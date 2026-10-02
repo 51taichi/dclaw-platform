@@ -40,6 +40,12 @@ def test_archive_is_byte_stable_and_uses_fixed_safe_metadata():
         "agent\\agent.json",
         "C:/windows.txt",
         "./relative.txt",
+        "agent/session:2026-10-02/source.md",
+        'agent/bad"name.md',
+        "agent/trailing-dot./source.md",
+        "agent/trailing-space /source.md",
+        "agent/NUL.txt",
+        "agent/control\x01name.md",
     ],
 )
 def test_archive_rejects_unsafe_member_paths(path: str):
@@ -51,6 +57,13 @@ def test_archive_rejects_duplicate_unicode_normalized_paths():
     with pytest.raises(SnapshotArchiveError, match="duplicate normalized"):
         build_deterministic_archive(
             {"knowledge/café.txt": b"one", "knowledge/cafe\u0301.txt": b"two"},
+        )
+
+
+def test_archive_rejects_case_insensitive_portable_path_collisions():
+    with pytest.raises(SnapshotArchiveError, match="duplicate portable"):
+        build_deterministic_archive(
+            {"agent/Rules.md": b"one", "agent/rules.md": b"two"},
         )
 
 

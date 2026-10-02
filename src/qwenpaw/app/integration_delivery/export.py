@@ -6,7 +6,7 @@ import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -100,6 +100,62 @@ _EMBEDDED_SECRET = re.compile(
     rb"https?://[^\s]+[?&](?:api_?key|token|secret|password)=[^&\s]+"
     rb")"
 )
+
+_AGENT_RUNTIME_ROOT_DIRS = frozenset(
+    {
+        ".cache",
+        ".git",
+        ".pytest_cache",
+        ".thumbnails",
+        "__pycache__",
+        "backup",
+        "browser",
+        "cloud_docs",
+        "dialog",
+        "embedding_cache",
+        "file_store",
+        "logs",
+        "media",
+        "memory",
+        "missions",
+        "renders",
+        "sessions",
+        "sessions_data",
+        "tool_result",
+        "tool_results",
+    }
+)
+_AGENT_RUNTIME_ROOT_FILES = frozenset(
+    {
+        ".DS_Store",
+        ".bootstrap_completed",
+        ".skill.json.lock",
+        "chats.json",
+        "cloud_docs.json",
+        "jobs.json",
+        "memory_file_metadata.json",
+        "overview.md.lock",
+        "qwenpaw_app.log",
+        "qwenpaw_app_new.log",
+        "token_usage.json",
+    }
+)
+
+
+def _is_agent_runtime_path(path: PurePosixPath) -> bool:
+    if not path.parts:
+        return True
+    if path.parts[0] in _AGENT_RUNTIME_ROOT_DIRS:
+        return True
+    if any(part in {"__pycache__", ".pytest_cache"} for part in path.parts):
+        return True
+    if len(path.parts) == 1:
+        name = path.name
+        return (
+            name in _AGENT_RUNTIME_ROOT_FILES
+            or name.startswith(".reme_store_")
+        )
+    return False
 
 
 def _normalized_key(value: str) -> str:
@@ -236,6 +292,7 @@ class DclawSnapshotExporter:
                 self._agent_source_root(agent_id, context.agent_type),
                 prefix="agent",
                 limits=self._archive_limits,
+                exclude=_is_agent_runtime_path,
             )
             agent_files = _sanitize_agent_files(agent_files)
         except SnapshotArchiveError as exc:

@@ -9,6 +9,7 @@ import stat
 import struct
 import unicodedata
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Mapping
@@ -25,6 +26,31 @@ class ArchiveLimits:
     max_total_bytes: int = 400 * 1024 * 1024
 
 
+_WINDOWS_FORBIDDEN_CHARACTERS = frozenset('<>:"|?*')
+_WINDOWS_RESERVED_BASENAMES = frozenset(
+    {
+        "con",
+        "prn",
+        "aux",
+        "nul",
+        *(f"com{number}" for number in range(1, 10)),
+        *(f"lpt{number}" for number in range(1, 10)),
+    }
+)
+
+
+def _is_portable_segment(value: str) -> bool:
+    if value.endswith((" ", ".")):
+        return False
+    if any(
+        character in _WINDOWS_FORBIDDEN_CHARACTERS or ord(character) < 32
+        for character in value
+    ):
+        return False
+    basename = value.split(".", 1)[0].casefold()
+    return basename not in _WINDOWS_RESERVED_BASENAMES
+
+
 def _normalize_path(raw_path: str) -> str:
     if not raw_path or "\\" in raw_path:
         raise SnapshotArchiveError("unsafe archive path")
@@ -35,7 +61,11 @@ def _normalize_path(raw_path: str) -> str:
         and normalized[2] == "/"
     ):
         raise SnapshotArchiveError("unsafe archive path")
-    if any(part in {"", ".", ".."} for part in normalized.split("/")):
+    raw_parts = normalized.split("/")
+    if any(
+        part in {"", ".", ".."} or not _is_portable_segment(part)
+        for part in raw_parts
+    ):
         raise SnapshotArchiveError("unsafe archive path")
     path = PurePosixPath(normalized)
     if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
@@ -51,12 +81,17 @@ def _normalized_files(
         raise SnapshotArchiveError("archive has too many files")
     normalized: list[tuple[str, bytes]] = []
     seen: set[str] = set()
+    portable_seen: set[str] = set()
     total = 0
     for raw_path, raw_content in files.items():
         path = _normalize_path(raw_path)
         if path in seen:
             raise SnapshotArchiveError("duplicate normalized archive path")
         seen.add(path)
+        portable_key = path.casefold()
+        if portable_key in portable_seen:
+            raise SnapshotArchiveError("duplicate portable archive path")
+        portable_seen.add(portable_key)
         content = bytes(raw_content)
         if len(content) > limits.max_file_bytes:
             raise SnapshotArchiveError("single file exceeds archive limit")
@@ -163,6 +198,7 @@ def collect_directory_files(
     *,
     prefix: str,
     limits: ArchiveLimits = ArchiveLimits(),
+    exclude: Callable[[PurePosixPath], bool] | None = None,
 ) -> dict[str, bytes]:
     """Read a source directory while rejecting links, secrets, and special files."""
     root = Path(root)
@@ -172,6 +208,9 @@ def collect_directory_files(
     result: dict[str, bytes] = {}
     total = 0
     for candidate in sorted(root.rglob("*"), key=lambda path: path.as_posix()):
+        relative_path = PurePosixPath(*candidate.relative_to(root).parts)
+        if exclude is not None and exclude(relative_path):
+            continue
         if candidate.is_symlink():
             raise SnapshotArchiveError("source tree contains a link")
         metadata = candidate.lstat()
