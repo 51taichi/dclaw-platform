@@ -239,7 +239,8 @@ async def apply_agent_delivery_bundle(
             expected_agent_digest=expected_agent_digest,
             expected_knowledge_digest=expected_knowledge_digest,
         )
-        await _reload_agent(request, agent_id)
+        if result.previous_agent_digest != result.agent_digest:
+            await _reload_agent(request, agent_id)
         return result
     except Exception as exc:
         if not isinstance(
@@ -292,8 +293,10 @@ async def restore_agent_delivery_operation(
     if not idempotency_key or not idempotency_key.strip():
         raise HTTPException(400, detail={"code": "DCLAW_REQUEST_INVALID"})
     try:
+        before = updater.get_operation(agent_id, operation_id)
         result = updater.restore(agent_id, operation_id)
-        await _reload_agent(request, agent_id)
+        if before.agent_digest != result.agent_digest:
+            await _reload_agent(request, agent_id)
         return result
     except Exception as exc:
         raise _write_error(exc, operation_lookup=True) from exc

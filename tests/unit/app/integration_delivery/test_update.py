@@ -317,6 +317,37 @@ def test_standard_update_preserves_server_owned_json_values(
     assert installed["env"]["API_TOKEN"] == "server-secret"
 
 
+def test_standard_update_preserves_runtime_skill_manifest_version(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    (workspace / "skill.json").write_text(
+        '{"skills":{"refund":{"enabled":true}},"version":1791016236618}',
+        encoding="utf-8",
+    )
+    archive, _, _ = _custom_delivery_archive(
+        agent_files={
+            "agent/AGENTS.md": b"# Rules\n",
+            "agent/agent.json": b'{"id":"a_service","name":"Service"}',
+            "agent/skill.json": b'{"skills":{"refund":{"enabled":true}}}',
+        },
+        documents=[{"id": "doc-1", "name": "faq.md", "content": b"FAQ"}],
+    )
+
+    apply_standard_agent_source(
+        parse_delivery_bundle("a_service", archive),
+        "operation-skill-version",
+        workspace_dir=workspace,
+        reload_agent=lambda _agent_id: None,
+    )
+
+    installed = json.loads((workspace / "skill.json").read_text())
+    assert installed == {
+        "skills": {"refund": {"enabled": True}},
+        "version": 1791016236618,
+    }
+
+
 def test_standard_update_can_restore_previous_source(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     archive, _, _ = _delivery_archive()
@@ -374,11 +405,13 @@ class _KnowledgeStore:
     def __init__(self, documents: list[dict[str, object]]) -> None:
         self.documents = [dict(document) for document in documents]
         self.fail_next = False
+        self.replace_calls = 0
 
     def replace_delivery_documents(
         self,
         documents: list[dict[str, object]],
     ) -> None:
+        self.replace_calls += 1
         if self.fail_next:
             self.fail_next = False
             raise RuntimeError("knowledge failed")
@@ -493,6 +526,143 @@ def test_apply_replaces_agent_and_knowledge_as_one_operation(
     assert json.loads((fixture.workspace / "agent.json").read_text())[
         "name"
     ] == ("Service")
+
+
+def test_knowledge_only_apply_does_not_replace_agent_source(
+    tmp_path: Path,
+) -> None:
+    fixture = _transaction_fixture(tmp_path)
+    archive, _, knowledge_digest = _custom_delivery_archive(
+        agent_files={
+            "agent/AGENTS.md": b"# Old rules\n",
+            "agent/agent.json": b'{"id":"a_service","name":"Old"}',
+            "agent/obsolete.md": b"remove me",
+        },
+        documents=fixture.new_documents,
+    )
+
+    def reject_agent_apply(*_args, **_kwargs):
+        raise AssertionError("knowledge-only update touched Agent source")
+
+    updater = IntegrationDeliveryUpdater(
+        operations_root=tmp_path / "operations",
+        snapshot_exporter=fixture.exporter,
+        context_service=fixture.context,
+        knowledge_service_factory=lambda publication: fixture.knowledge,
+        apply_agent=reject_agent_apply,
+        restore_agent=restore_standard_agent_source,
+    )
+    result = updater.apply(
+        "a_service",
+        archive,
+        "operation-knowledge-only",
+        expected_agent_digest=fixture.old_agent_digest,
+        expected_knowledge_digest=fixture.old_knowledge_digest,
+    )
+
+    assert result.agent_digest == fixture.old_agent_digest
+    assert result.knowledge_digest == knowledge_digest
+    assert fixture.knowledge.replace_calls == 1
+    assert json.loads((fixture.workspace / "agent.json").read_text())[
+        "name"
+    ] == "Old"
+    assert not (
+        tmp_path
+        / "operations/a_service/operation-knowledge-only/agent-receipt.json"
+    ).exists()
+
+
+def test_agent_only_apply_does_not_replace_knowledge(
+    tmp_path: Path,
+) -> None:
+    fixture = _transaction_fixture(tmp_path)
+    archive, agent_digest, _ = _custom_delivery_archive(
+        agent_files={
+            "agent/AGENTS.md": b"# Rules\n",
+            "agent/agent.json": b'{"id":"a_service","name":"Service"}',
+        },
+        documents=fixture.old_documents,
+    )
+
+    result = _updater(tmp_path, fixture).apply(
+        "a_service",
+        archive,
+        "operation-agent-only",
+        expected_agent_digest=fixture.old_agent_digest,
+        expected_knowledge_digest=fixture.old_knowledge_digest,
+    )
+
+    assert result.agent_digest == agent_digest
+    assert result.knowledge_digest == fixture.old_knowledge_digest
+    assert fixture.knowledge.replace_calls == 0
+
+
+def test_no_change_apply_does_not_replace_any_component(tmp_path: Path) -> None:
+    fixture = _transaction_fixture(tmp_path)
+
+    def reject_agent_apply(*_args, **_kwargs):
+        raise AssertionError("no-change update touched Agent source")
+
+    updater = IntegrationDeliveryUpdater(
+        operations_root=tmp_path / "operations",
+        snapshot_exporter=fixture.exporter,
+        context_service=fixture.context,
+        knowledge_service_factory=lambda publication: fixture.knowledge,
+        apply_agent=reject_agent_apply,
+        restore_agent=restore_standard_agent_source,
+    )
+    result = updater.apply(
+        "a_service",
+        fixture.old_archive,
+        "operation-no-change",
+        expected_agent_digest=fixture.old_agent_digest,
+        expected_knowledge_digest=fixture.old_knowledge_digest,
+    )
+
+    assert result.agent_digest == fixture.old_agent_digest
+    assert result.knowledge_digest == fixture.old_knowledge_digest
+    assert fixture.knowledge.replace_calls == 0
+
+
+def test_knowledge_only_restore_does_not_replace_agent_source(
+    tmp_path: Path,
+) -> None:
+    fixture = _transaction_fixture(tmp_path)
+    archive, _, _ = _custom_delivery_archive(
+        agent_files={
+            "agent/AGENTS.md": b"# Old rules\n",
+            "agent/agent.json": b'{"id":"a_service","name":"Old"}',
+            "agent/obsolete.md": b"remove me",
+        },
+        documents=fixture.new_documents,
+    )
+
+    def reject_agent_apply(*_args, **_kwargs):
+        raise AssertionError("knowledge-only restore touched Agent source")
+
+    updater = IntegrationDeliveryUpdater(
+        operations_root=tmp_path / "operations",
+        snapshot_exporter=fixture.exporter,
+        context_service=fixture.context,
+        knowledge_service_factory=lambda publication: fixture.knowledge,
+        apply_agent=reject_agent_apply,
+        restore_agent=restore_standard_agent_source,
+    )
+    updater.apply(
+        "a_service",
+        archive,
+        "operation-knowledge-restore",
+        expected_agent_digest=fixture.old_agent_digest,
+        expected_knowledge_digest=fixture.old_knowledge_digest,
+    )
+
+    restored = updater.restore("a_service", "operation-knowledge-restore")
+
+    assert restored.status == "restored"
+    assert _knowledge_identity(
+        fixture.knowledge.documents
+    ) == _knowledge_identity(fixture.old_documents)
+    assert fixture.knowledge.replace_calls == 2
 
 
 def test_knowledge_failure_restores_agent_and_documents(

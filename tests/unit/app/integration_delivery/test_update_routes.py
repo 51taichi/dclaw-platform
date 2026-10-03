@@ -27,10 +27,11 @@ BASELINE = {
 
 
 class _Updater:
-    def __init__(self) -> None:
+    def __init__(self, *, agent_changed: bool = True) -> None:
         self.body = None
         self.error = None
         self.calls = 0
+        self.agent_changed = agent_changed
 
     def validate(self, agent_id, archive, **_kwargs):
         self.body = archive
@@ -40,7 +41,11 @@ class _Updater:
             agent_id=agent_id,
             agent_profile_id="standard-2026.09",
             source_version="workspace",
-            agent_digest="sha256:" + "3" * 64,
+            agent_digest=(
+                "sha256:" + "3" * 64
+                if self.agent_changed
+                else BASELINE["X-DClaw-Expected-Agent-Digest"]
+            ),
             knowledge_digest="sha256:" + "4" * 64,
         )
 
@@ -57,7 +62,11 @@ class _Updater:
             previous_knowledge_digest=BASELINE[
                 "X-DClaw-Expected-Knowledge-Digest"
             ],
-            agent_digest="sha256:" + "3" * 64,
+            agent_digest=(
+                "sha256:" + "3" * 64
+                if self.agent_changed
+                else BASELINE["X-DClaw-Expected-Agent-Digest"]
+            ),
             knowledge_digest="sha256:" + "4" * 64,
         )
 
@@ -147,6 +156,25 @@ def test_apply_returns_operation_and_same_key_is_stable(monkeypatch) -> None:
     assert first.status_code == 200
     assert second.json()["operationId"] == first.json()["operationId"]
     assert len(first.json()["operationId"]) == 64
+
+
+def test_knowledge_only_apply_does_not_reload_agent(monkeypatch) -> None:
+    reloads: list[str] = []
+
+    async def track_reload(_request, agent_id):
+        reloads.append(agent_id)
+
+    monkeypatch.setattr(router_module, "_reload_agent", track_reload)
+    client = _client(monkeypatch, _Updater(agent_changed=False))
+
+    response = client.put(
+        "/internal/integrations/v1/agents/a_service/delivery-bundle",
+        content=b"zip-content",
+        headers={**AUTH, **BASELINE, "Idempotency-Key": "knowledge-r7"},
+    )
+
+    assert response.status_code == 200
+    assert reloads == []
 
 
 def test_write_errors_have_stable_codes(monkeypatch) -> None:

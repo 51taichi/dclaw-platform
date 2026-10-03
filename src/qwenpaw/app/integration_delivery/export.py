@@ -247,6 +247,9 @@ def _sanitize_agent_files(files: dict[str, bytes]) -> dict[str, bytes]:
             if path == "agent/agent.json":
                 raise SnapshotArchiveError("Agent manifest is invalid") from exc
             continue
+        if path == "agent/skill.json" and isinstance(parsed, dict):
+            parsed = dict(parsed)
+            parsed.pop("version", None)
         result[path] = _canonical_json(_sanitize_config(parsed))
     for path, content in result.items():
         if _EMBEDDED_SECRET.search(content):

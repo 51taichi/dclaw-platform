@@ -308,9 +308,13 @@ def _agent_source_content(
         incoming = json.loads(submitted.decode("utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return submitted
+    sanitized = _sanitize_config(original)
+    if relative == PurePosixPath("skill.json") and isinstance(sanitized, dict):
+        sanitized = dict(sanitized)
+        sanitized.pop("version", None)
     merged = _merge_server_owned_json(
         original,
-        _sanitize_config(original),
+        sanitized,
         incoming,
     )
     return json.dumps(
@@ -784,17 +788,22 @@ class IntegrationDeliveryUpdater:
         (directory / "submitted.zip").write_bytes(bytes(archive))
         previous = parse_delivery_bundle(agent_id, current.archive)
         knowledge = self._knowledge_service(agent_id)
+        agent_changed = current.agent_digest != bundle.agent_digest
+        knowledge_changed = current.knowledge_digest != bundle.knowledge_digest
         agent_receipt: AgentApplyReceipt | None = None
         try:
-            agent_receipt = self._apply_agent_bundle(bundle, operation_id)
-            _replace_knowledge_documents(knowledge, bundle)
+            if agent_changed:
+                agent_receipt = self._apply_agent_bundle(bundle, operation_id)
+            if knowledge_changed:
+                _replace_knowledge_documents(knowledge, bundle)
         except Exception:
             if agent_receipt is not None:
                 self._restore_agent_receipt(agent_receipt)
-            try:
-                _replace_knowledge_documents(knowledge, previous)
-            except Exception:
-                pass
+            if knowledge_changed:
+                try:
+                    _replace_knowledge_documents(knowledge, previous)
+                except Exception:
+                    pass
             failed = DeliveryOperationView(
                 operation_id=operation_id,
                 agent_id=agent_id,
@@ -808,14 +817,15 @@ class IntegrationDeliveryUpdater:
             self._write_receipt(directory, failed)
             raise
 
-        (directory / "agent-receipt.json").write_text(
-            json.dumps(
-                self._receipt_payload(agent_receipt),
-                separators=(",", ":"),
-                sort_keys=True,
-            ),
-            encoding="utf-8",
-        )
+        if agent_receipt is not None:
+            (directory / "agent-receipt.json").write_text(
+                json.dumps(
+                    self._receipt_payload(agent_receipt),
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
 
         applied = DeliveryOperationView(
             operation_id=operation_id,
@@ -850,34 +860,43 @@ class IntegrationDeliveryUpdater:
             (directory / "submitted.zip").read_bytes(),
         )
         knowledge = self._knowledge_service(agent_id)
-        stored_receipt = self._receipt_from_payload(
-            json.loads(
-                (directory / "agent-receipt.json").read_text(encoding="utf-8"),
-            ),
-        )
-        if stored_receipt.previous_release_id is not None:
-            self._restore_agent_receipt(stored_receipt)
-            receipt = AgentApplyReceipt(
-                operation_id=f"{operation_id}.restore",
-                agent_id=agent_id,
-                agent_digest_before=previous.agent_digest,
-                agent_digest_after=submitted.agent_digest,
-                previous_release_id=stored_receipt.applied_release_id,
-                applied_release_id=stored_receipt.previous_release_id,
+        agent_changed = previous.agent_digest != submitted.agent_digest
+        knowledge_changed = previous.knowledge_digest != submitted.knowledge_digest
+        receipt: AgentApplyReceipt | None = None
+        if agent_changed:
+            stored_receipt = self._receipt_from_payload(
+                json.loads(
+                    (directory / "agent-receipt.json").read_text(
+                        encoding="utf-8",
+                    ),
+                ),
             )
-        else:
-            receipt = self._apply_agent_bundle(
-                previous,
-                f"{operation_id}.restore",
-            )
+            if stored_receipt.previous_release_id is not None:
+                self._restore_agent_receipt(stored_receipt)
+                receipt = AgentApplyReceipt(
+                    operation_id=f"{operation_id}.restore",
+                    agent_id=agent_id,
+                    agent_digest_before=previous.agent_digest,
+                    agent_digest_after=submitted.agent_digest,
+                    previous_release_id=stored_receipt.applied_release_id,
+                    applied_release_id=stored_receipt.previous_release_id,
+                )
+            else:
+                receipt = self._apply_agent_bundle(
+                    previous,
+                    f"{operation_id}.restore",
+                )
         try:
-            _replace_knowledge_documents(knowledge, previous)
+            if knowledge_changed:
+                _replace_knowledge_documents(knowledge, previous)
         except Exception:
-            self._restore_agent_receipt(receipt)
-            try:
-                _replace_knowledge_documents(knowledge, submitted)
-            except Exception:
-                pass
+            if receipt is not None:
+                self._restore_agent_receipt(receipt)
+            if knowledge_changed:
+                try:
+                    _replace_knowledge_documents(knowledge, submitted)
+                except Exception:
+                    pass
             raise
 
         restored = current.model_copy(
