@@ -28,17 +28,15 @@ def test_douyin_engagement_workspace_loads_as_an_ordinary_agent() -> None:
     assert config.running.history_max_length == 10_000
 
 
-def test_douyin_engagement_workspace_exposes_no_runtime_tools() -> None:
+def test_douyin_engagement_workspace_only_enables_jev_and_skill_reader() -> None:
     payload = json.loads((WORKSPACE / "agent.json").read_text(encoding="utf-8"))
 
     config = AgentProfileConfig.model_validate(payload)
 
     assert config.tools is not None
     assert config.tools.builtin_tools
-    assert all(
-        tool.enabled is False
-        for tool in config.tools.builtin_tools.values()
-    )
+    enabled = {name for name, tool in config.tools.builtin_tools.items() if tool.enabled}
+    assert enabled == {"read_agent_skill", "route_private_message_jev"}
 
 
 def test_douyin_operation_contract_skill_is_enabled_and_discoverable() -> None:
@@ -51,3 +49,13 @@ def test_douyin_operation_contract_skill_is_enabled_and_discoverable() -> None:
     assert manifest["skills"]["douyin_operation_contract"]["source"] == "local"
     assert skill["name"] == "douyin_operation_contract"
     assert skill["description"]
+
+
+def test_jev_routing_skill_is_enabled() -> None:
+    manifest = json.loads((WORKSPACE / "skill.json").read_text(encoding="utf-8"))
+    for name in ("jev_private_message_routing", "typesafe-ai"):
+        skill = frontmatter.loads(
+            (WORKSPACE / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
+        )
+        assert manifest["skills"][name]["enabled"] is True
+        assert skill["name"] == name

@@ -1,7 +1,7 @@
 {
   "id": "douyin_engagement_agent",
   "name": "抖音互动 Agent",
-  "description": "为抖音机器人生成评论任务剧本、修复剧本、依赖丢失时的 B 计划，以及带会话上下文的私信回复。",
+  "description": "为抖音机器人生成评论剧本与 B 计划，使用 Jev 归因私信任务并生成对应回复。",
   "workspace_dir": "/app/working/workspaces/douyin_engagement_agent",
   "channels": {
     "console": {
@@ -14,7 +14,7 @@
     "target": "main"
   },
   "running": {
-    "max_iters": 2,
+    "max_iters": 8,
     "auto_continue_on_text_only": false,
     "llm_retry_enabled": true,
     "llm_max_retries": 3,
@@ -76,7 +76,8 @@
     "builtin_tools": {
       "execute_shell_command": {"name": "execute_shell_command", "enabled": false},
       "read_file": {"name": "read_file", "enabled": false},
-      "read_agent_skill": {"name": "read_agent_skill", "enabled": false},
+      "read_agent_skill": {"name": "read_agent_skill", "enabled": true},
+      "route_private_message_jev": {"name": "route_private_message_jev", "enabled": true},
       "write_file": {"name": "write_file", "enabled": false},
       "edit_file": {"name": "edit_file", "enabled": false},
       "grep_search": {"name": "grep_search", "enabled": false},

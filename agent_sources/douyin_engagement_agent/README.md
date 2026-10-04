@@ -1,6 +1,6 @@
 # Douyin Engagement Agent source
 
-`workspace/` is the deployable ordinary DClaw Agent used by the DClaw Bot comment and private-message workflows. It follows the same workspace model as other business Agents: `agent.json`, prompt files, `skill.json`, and local Skills. It is not a sealed Agent and does not require a signer or a sealed-Agent installation.
+`workspace/` is the deployable ordinary DClaw Agent used by the DClaw Bot comment and private-message workflows. It follows the same workspace model as other business Agents: `agent.json`, prompt files, `skill.json`, and local Skills. It is not a sealed Agent and does not require a signer or a sealed-Agent installation. Private-message attribution uses the bundled TypeSafe Skill and the opt-in `jev-private-routing` plugin.
 
 The older `agent/` orchestration runtime and `manifest.template.json` remain only as contract-test reference material. They are not the deployment target.
 
@@ -9,12 +9,13 @@ The older `agent/` orchestration runtime and `manifest.template.json` remain onl
 ```bash
 uv run pytest \
   tests/unit/app/test_douyin_engagement_standard_agent.py \
+  tests/unit/app/test_jev_private_routing.py \
   tests/unit/app/sealed_agents/test_douyin_engagement_contracts.py \
   tests/unit/app/sealed_agents/test_douyin_engagement_runtime.py \
   tests/contract/test_douyin_engagement_fixtures.py -q
 ```
 
-The sealed-runtime tests remain in the gate because they exercise the same five wire contracts consumed by Bot Server. Passing them does not make the ordinary workspace a sealed Agent.
+The sealed-runtime tests remain in the gate because they exercise the existing wire contracts consumed by Bot Server. Passing them does not make the ordinary workspace a sealed Agent.
 
 ## Package
 
@@ -34,11 +35,12 @@ The package contains no model key, OpenAPI key, Bot credential, or customer data
 
 After the local gates pass, the operator performs the live steps with credentials they control:
 
-1. In the server DClaw Agent page, import the ZIP as a normal Agent and select an available model.
-2. Test `HEALTH_CHECK` in a fresh conversation and confirm the response is exactly `{"ok":true,"capabilityVersion":"2"}`.
-3. In **Open API**, publish the Agent as a target. Enable it, grant `messages:create`, bind a dedicated application/API key, and copy the stable Public ID.
-4. Send the DClaw base URL, Public ID, and dedicated API key to the Bot Server operator through a secure channel. Persistent sessions are required for private-message operations; isolated attempts are used for comment-plan operations.
-5. In Bot Server, save the Agent configuration and use **测试连接** before enabling any Agent-backed strategy.
-6. Start with controlled test accounts. Verify request audit, persistent private conversation continuity, isolated comment planning, error alarms, and quota behavior before production use.
+1. Install `plugins/tool/jev-private-routing` on DClaw and set `TYPESAFE_API_KEY` in the DClaw server environment. Restart DClaw so the plugin tool is registered.
+2. In the server DClaw Agent page, import the ZIP as a normal Agent and select an available model. Confirm only `read_agent_skill` and `route_private_message_jev` are enabled.
+3. Test `HEALTH_CHECK` in a fresh conversation and confirm the response is exactly `{"ok":true,"capabilityVersion":"2"}`.
+4. In **Open API**, publish the Agent as a target. Enable it, grant `messages:create`, bind a dedicated application/API key, and copy the stable Public ID.
+5. Send the DClaw base URL, Public ID, and dedicated API key to the Bot Server operator through a secure channel. Task-aware private replies and routing use isolated attempts with explicit recent history; legacy private replies remain persistent.
+6. In Bot Server, save the Agent configuration and use **测试连接** before enabling an Agent-backed private strategy.
+7. Start with controlled test accounts. Verify attribution, unresolved greetings, task-specific replies, request audit, error alarms, and quota behavior before production use.
 
 Source validation and fixture tests do not upload, import, publish, or call a live Agent. The first server import and OpenAPI publication remain explicitly user-operated.

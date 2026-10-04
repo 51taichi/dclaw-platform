@@ -1,0 +1,17 @@
+{
+  "id": "jev-private-routing",
+  "name": "Jev Private Message Routing",
+  "version": "1.0.0",
+  "type": "tool",
+  "description": "Classify a Douyin private message against candidate comment tasks",
+  "author": "DClaw Team",
+  "entry": {"backend": "plugin.py"},
+  "dependencies": ["httpx>=0.24.0"],
+  "meta": {
+    "tools": [{
+      "name": "route_private_message_jev",
+      "description": "Use Jev to attribute a private message to one candidate comment task or return unresolved",
+      "requires_config": false
+    }]
+  }
+}
