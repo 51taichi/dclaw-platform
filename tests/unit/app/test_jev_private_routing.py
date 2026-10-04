@@ -129,10 +129,58 @@ async def test_multiple_batches_with_conflicting_matches_stay_unresolved(monkeyp
         }
         for index in range(201)
     ]
-    requests = mock_api(monkeypatch, ["task-0", "task-200"])
+    requests = mock_api(monkeypatch, ["task-0", "task-200", "no_match"])
     result = await routing.route_private_message_jev("咨询", tasks)
-    assert len(requests) == 2
+    assert len(requests) == 3
     assert result_body(result)["status"] == "UNRESOLVED"
+
+
+@pytest.mark.asyncio
+async def test_routes_more_than_500_candidates_with_global_final(monkeypatch):
+    tasks = [
+        {
+            "taskId": f"task-{index}",
+            "name": f"任务{index}",
+            "routingDescription": f"主题{index}",
+            "routingThreshold": 0.5,
+        }
+        for index in range(501)
+    ]
+    requests = mock_api(monkeypatch, ["task-0", "task-200", "task-423", "task-423"])
+    result = await routing.route_private_message_jev("咨询主题423", tasks)
+
+    assert len(requests) == 4
+    assert result_body(result)["status"] == "MATCHED"
+    assert result_body(result)["taskId"] == "task-423"
+
+
+@pytest.mark.asyncio
+async def test_task_threshold_is_enforced(monkeypatch):
+    mock_api(monkeypatch, ["task-a"])
+    result = await routing.route_private_message_jev(
+        "装修",
+        [
+            {
+                "taskId": "task-a",
+                "name": "装修",
+                "routingDescription": "家装",
+                "routingThreshold": 0.95,
+            }
+        ],
+    )
+    assert result_body(result)["status"] == "UNRESOLVED"
+
+
+@pytest.mark.asyncio
+async def test_shared_video_prevents_greeting_shortcut(monkeypatch):
+    requests = mock_api(monkeypatch, ["task-a"])
+    result = await routing.route_private_message_jev(
+        "你好",
+        [{"taskId": "task-a", "name": "装修", "routingDescription": "家装"}],
+        shared_video={"videoId": "123", "title": "装修视频"},
+    )
+    assert result_body(result)["status"] == "MATCHED"
+    assert requests[0]["state"]["sharedVideo"]["videoId"] == "123"
 
 
 @pytest.mark.asyncio

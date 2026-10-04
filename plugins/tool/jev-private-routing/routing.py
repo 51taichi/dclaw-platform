@@ -10,9 +10,8 @@ from agentscope.tool import ToolResponse
 
 API_URL = "https://api.typesafe.ai/v1/systemone"
 NO_MATCH = "no_match"
-MAX_CANDIDATES = 400
+MAX_CANDIDATES = 2_000
 BATCH_SIZE = 200  # Choice permits 255 options including no_match.
-MIN_PROBABILITY = 0.8
 MIN_MARGIN = 0.15
 
 
@@ -48,13 +47,15 @@ async def route_private_message_jev(
     message: str,
     candidate_tasks: list[dict],
     recent_history: list[dict] | None = None,
+    shared_video: dict | None = None,
 ) -> ToolResponse:
     """Choose a task from taskId/name/routingDescription candidates using Jev.
 
     Args:
         message: The latest inbound private-message text.
-        candidate_tasks: Bot Server supplied tasks, each with taskId, name, and routingDescription.
+        candidate_tasks: Bot Server tasks with routing metadata and routingThreshold.
         recent_history: Recent messages in this same Douyin conversation, with direction and text.
+        shared_video: Observable metadata from a shared-video card, when available.
     """
     if not isinstance(message, str) or not message.strip() or len(message) > 4000:
         return _result("ERROR")
@@ -67,7 +68,7 @@ async def route_private_message_jev(
         recent_history = []
     if not isinstance(recent_history, list) or len(recent_history) > 20:
         return _result("ERROR")
-    if not recent_history and message.strip().rstrip("!！?？。,.， ").lower() in {
+    if not recent_history and not shared_video and message.strip().rstrip("!！?？。,.， ").lower() in {
         "你好",
         "您好",
         "在吗",
@@ -78,12 +79,14 @@ async def route_private_message_jev(
         return _result("UNRESOLVED")
 
     descriptions = {}
+    thresholds = {}
     for task in candidate_tasks:
         if not isinstance(task, dict):
             return _result("ERROR")
         task_id = task.get("taskId")
         name = task.get("name")
         description = task.get("routingDescription")
+        threshold = task.get("routingThreshold", 0.5)
         if (
             not isinstance(task_id, str)
             or not task_id
@@ -96,9 +99,18 @@ async def route_private_message_jev(
             or not isinstance(description, str)
             or not description.strip()
             or len(description) > 1000
+            or not _valid_probability(threshold)
         ):
             return _result("ERROR")
         descriptions[task_id] = {"task": name, "signals": description}
+        thresholds[task_id] = float(threshold)
+
+    if shared_video is not None:
+        if not isinstance(shared_video, dict) or not any(
+            isinstance(shared_video.get(key), str) and shared_video[key].strip()
+            for key in ("videoId", "shareUrl", "title", "authorId")
+        ):
+            return _result("ERROR")
 
     history = []
     for item in recent_history:
@@ -115,7 +127,7 @@ async def route_private_message_jev(
     api_key = os.environ.get("TYPESAFE_API_KEY")
     if not api_key:
         return _result("ERROR")
-    matches = []
+    winners = []
     unresolved_confidence = None
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -127,7 +139,11 @@ async def route_private_message_jev(
                 }
                 payload = {
                     "model": "jev-latest",
-                    "state": {"message": message, "recentHistory": history},
+                    "state": {
+                        "message": message,
+                        "recentHistory": history,
+                        "sharedVideo": shared_video,
+                    },
                     "questions": {
                         "task": {
                             "type": "choice",
@@ -140,46 +156,78 @@ async def route_private_message_jev(
                         }
                     },
                 }
-                response = await client.post(
-                    API_URL,
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    json=payload,
-                )
-                response.raise_for_status()
-                answer = response.json()["answers"]["task"]
-                if not isinstance(answer, dict):
-                    return _result("ERROR")
-                probabilities = answer.get("probabilities")
-                choice = answer.get("choice")
-                confidence = answer.get("confidence")
-                if (
-                    answer.get("type") != "choice"
-                    or choice not in criteria
-                    or not isinstance(probabilities, dict)
-                    or set(probabilities) != set(criteria)
-                    or not all(
-                        _valid_probability(value) for value in probabilities.values()
-                    )
-                    or not _valid_probability(confidence)
-                ):
-                    return _result("ERROR")
+                choice, probabilities, confidence = await _choose(client, payload, criteria, api_key)
                 if choice == NO_MATCH:
                     unresolved_confidence = confidence
                     continue
-                probability = probabilities[choice]
-                runner_up = max(
-                    value for key, value in probabilities.items() if key != choice
+                winners.append((choice, probabilities[choice], confidence, probabilities))
+
+            if not winners:
+                return _result("UNRESOLVED", confidence=unresolved_confidence)
+
+            if len(descriptions) <= BATCH_SIZE:
+                choice, probability, confidence, probabilities = winners[0]
+            else:
+                finalist_ids = list(dict.fromkeys(item[0] for item in winners))
+                final_criteria = {
+                    NO_MATCH: "所有批次候选都缺少足够证据时选择这里。",
+                    **{task_id: descriptions[task_id] for task_id in finalist_ids},
+                }
+                final_payload = {
+                    "model": "jev-latest",
+                    "state": {
+                        "message": message,
+                        "recentHistory": history,
+                        "sharedVideo": shared_video,
+                    },
+                    "questions": {
+                        "task": {
+                            "type": "choice",
+                            "instructions": (
+                                "对各批次优胜候选做最终全局比较。只有证据明确时选择任务，"
+                                "否则选择 no_match。"
+                            ),
+                            "criteria": final_criteria,
+                        }
+                    },
+                }
+                choice, probabilities, confidence = await _choose(
+                    client, final_payload, final_criteria, api_key
                 )
-                if (
-                    probability >= MIN_PROBABILITY
-                    and probability - runner_up >= MIN_MARGIN
-                ):
-                    matches.append((choice, probability, confidence))
+                if choice == NO_MATCH:
+                    return _result("UNRESOLVED", confidence=confidence)
+                probability = probabilities[choice]
     except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError):
         return _result("ERROR")
-    if len(matches) != 1:
-        return _result("UNRESOLVED", confidence=unresolved_confidence)
-    choice, probability, confidence = matches[0]
+
+    runner_up = max(value for key, value in probabilities.items() if key != choice)
+    if probability < thresholds[choice] or probability - runner_up < MIN_MARGIN:
+        return _result("UNRESOLVED", confidence=confidence)
     return _result(
         "MATCHED", task_id=choice, probability=probability, confidence=confidence
     )
+
+
+async def _choose(client, payload, criteria, api_key):
+    response = await client.post(
+        API_URL,
+        headers={"Authorization": f"Bearer {api_key}"},
+        json=payload,
+    )
+    response.raise_for_status()
+    answer = response.json()["answers"]["task"]
+    if not isinstance(answer, dict):
+        raise ValueError("invalid Jev answer")
+    probabilities = answer.get("probabilities")
+    choice = answer.get("choice")
+    confidence = answer.get("confidence")
+    if (
+        answer.get("type") != "choice"
+        or choice not in criteria
+        or not isinstance(probabilities, dict)
+        or set(probabilities) != set(criteria)
+        or not all(_valid_probability(value) for value in probabilities.values())
+        or not _valid_probability(confidence)
+    ):
+        raise ValueError("invalid Jev choice")
+    return choice, probabilities, confidence
