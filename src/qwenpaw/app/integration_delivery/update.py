@@ -32,6 +32,7 @@ from .export import (
     _is_agent_runtime_path,
     _sanitize_agent_files,
     _sanitize_config,
+    _strip_skill_runtime_fields,
 )
 from .models import DeliveryOperationView, DeliveryValidation
 from .service import (
@@ -91,6 +92,7 @@ def _read_archive(archive_bytes: bytes) -> dict[str, bytes]:
                 raise DeliveryBundleError("delivery bundle is invalid")
             for entry in entries:
                 path = _normalize_path(entry.filename)
+                parts = PurePosixPath(path).parts
                 portable_key = path.casefold()
                 mode = entry.external_attr >> 16
                 file_type = stat.S_IFMT(mode)
@@ -101,6 +103,12 @@ def _read_archive(archive_bytes: bytes) -> dict[str, bytes]:
                     or entry.is_dir()
                     or file_type not in {0, stat.S_IFREG}
                     or entry.flag_bits & 0x1
+                    or any(
+                        part == "__MACOSX"
+                        or part == ".DS_Store"
+                        or part.startswith("._")
+                        for part in parts
+                    )
                     or (
                         path != "dclaw-component.json"
                         and not path.startswith(("agent/", "knowledge/"))
@@ -309,9 +317,8 @@ def _agent_source_content(
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return submitted
     sanitized = _sanitize_config(original)
-    if relative == PurePosixPath("skill.json") and isinstance(sanitized, dict):
-        sanitized = dict(sanitized)
-        sanitized.pop("version", None)
+    if relative == PurePosixPath("skill.json"):
+        sanitized = _strip_skill_runtime_fields(sanitized)
     merged = _merge_server_owned_json(
         original,
         sanitized,

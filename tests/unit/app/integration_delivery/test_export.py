@@ -204,6 +204,10 @@ def test_standard_snapshot_excludes_runtime_state_and_keeps_agent_source(
         "memory_file_metadata.json": "{}",
         "qwenpaw_app.log": "runtime log",
         "nested/__pycache__/module.pyc": "compiled",
+        "._AGENTS.md": "AppleDouble metadata",
+        "skills/refund/._SKILL.md": "AppleDouble metadata",
+        "__MACOSX/agent.json": "AppleDouble metadata",
+        "nested/.DS_Store": "Finder metadata",
     }
     for relative, content in {**source_files, **runtime_files}.items():
         target = workspace / relative
@@ -222,7 +226,7 @@ def test_standard_snapshot_excludes_runtime_state_and_keeps_agent_source(
     }
 
 
-def test_standard_snapshot_excludes_runtime_skill_manifest_version(tmp_path):
+def test_standard_snapshot_excludes_runtime_skill_manifest_fields(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "agent.json").write_text(
@@ -230,7 +234,8 @@ def test_standard_snapshot_excludes_runtime_skill_manifest_version(tmp_path):
         encoding="utf-8",
     )
     (workspace / "skill.json").write_text(
-        '{"skills":{"refund":{"enabled":true}},"version":1791016236618}',
+        '{"skills":{"refund":{"builtin_language":null,"enabled":true}},'
+        '"version":1791016236618}',
         encoding="utf-8",
     )
 
@@ -238,7 +243,8 @@ def test_standard_snapshot_excludes_runtime_skill_manifest_version(tmp_path):
         "a_service",
     )
     (workspace / "skill.json").write_text(
-        '{"skills":{"refund":{"enabled":true}},"version":1791017000000}',
+        '{"skills":{"refund":{"builtin_language":"zh","enabled":true}},'
+        '"version":1791017000000}',
         encoding="utf-8",
     )
     second = _exporter(tmp_path=tmp_path, config=_config(workspace)).export(

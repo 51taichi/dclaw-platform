@@ -145,6 +145,11 @@ _AGENT_RUNTIME_ROOT_FILES = frozenset(
 def _is_agent_runtime_path(path: PurePosixPath) -> bool:
     if not path.parts:
         return True
+    if any(
+        part == "__MACOSX" or part == ".DS_Store" or part.startswith("._")
+        for part in path.parts
+    ):
+        return True
     if path.parts[0] in _AGENT_RUNTIME_ROOT_DIRS:
         return True
     if any(part in {"__pycache__", ".pytest_cache"} for part in path.parts):
@@ -156,6 +161,28 @@ def _is_agent_runtime_path(path: PurePosixPath) -> bool:
             or name.startswith(".reme_store_")
         )
     return False
+
+
+def _strip_skill_runtime_fields(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    sanitized = dict(value)
+    sanitized.pop("version", None)
+    skills = sanitized.get("skills")
+    if isinstance(skills, dict):
+        sanitized["skills"] = {
+            name: (
+                {
+                    key: item
+                    for key, item in definition.items()
+                    if key != "builtin_language"
+                }
+                if isinstance(definition, dict)
+                else definition
+            )
+            for name, definition in skills.items()
+        }
+    return sanitized
 
 
 def _normalized_key(value: str) -> str:
@@ -247,10 +274,10 @@ def _sanitize_agent_files(files: dict[str, bytes]) -> dict[str, bytes]:
             if path == "agent/agent.json":
                 raise SnapshotArchiveError("Agent manifest is invalid") from exc
             continue
-        if path == "agent/skill.json" and isinstance(parsed, dict):
-            parsed = dict(parsed)
-            parsed.pop("version", None)
-        result[path] = _canonical_json(_sanitize_config(parsed))
+        sanitized = _sanitize_config(parsed)
+        if path == "agent/skill.json":
+            sanitized = _strip_skill_runtime_fields(sanitized)
+        result[path] = _canonical_json(sanitized)
     for path, content in result.items():
         if _EMBEDDED_SECRET.search(content):
             raise SnapshotArchiveError(

@@ -201,6 +201,28 @@ def test_validate_rejects_unsafe_members(unsafe_name: str) -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "metadata_name",
+    ["agent/._AGENTS.md", "__MACOSX/agent/AGENTS.md", "agent/.DS_Store"],
+)
+def test_validate_rejects_platform_metadata_members(metadata_name: str) -> None:
+    output = io.BytesIO()
+    with zipfile.ZipFile(
+        output,
+        "w",
+        compression=zipfile.ZIP_DEFLATED,
+    ) as archive:
+        archive.writestr(metadata_name, b"metadata")
+
+    with pytest.raises(DeliveryBundleError, match="invalid"):
+        validate_delivery_bundle(
+            "a_service",
+            output.getvalue(),
+            expected_agent_digest="sha256:" + "0" * 64,
+            expected_knowledge_digest="sha256:" + "0" * 64,
+        )
+
+
 def test_validate_rejects_compression_bomb_member() -> None:
     output = io.BytesIO()
     with zipfile.ZipFile(
@@ -317,12 +339,13 @@ def test_standard_update_preserves_server_owned_json_values(
     assert installed["env"]["API_TOKEN"] == "server-secret"
 
 
-def test_standard_update_preserves_runtime_skill_manifest_version(
+def test_standard_update_preserves_runtime_skill_manifest_fields(
     tmp_path: Path,
 ) -> None:
     workspace = _workspace(tmp_path)
     (workspace / "skill.json").write_text(
-        '{"skills":{"refund":{"enabled":true}},"version":1791016236618}',
+        '{"skills":{"refund":{"builtin_language":"zh","enabled":true}},'
+        '"version":1791016236618}',
         encoding="utf-8",
     )
     archive, _, _ = _custom_delivery_archive(
@@ -343,7 +366,7 @@ def test_standard_update_preserves_runtime_skill_manifest_version(
 
     installed = json.loads((workspace / "skill.json").read_text())
     assert installed == {
-        "skills": {"refund": {"enabled": True}},
+        "skills": {"refund": {"builtin_language": "zh", "enabled": True}},
         "version": 1791016236618,
     }
 
