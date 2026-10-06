@@ -166,20 +166,26 @@ def _is_agent_runtime_path(path: PurePosixPath) -> bool:
 def _strip_skill_runtime_fields(value: Any) -> Any:
     if not isinstance(value, dict):
         return value
+
+    def strip_definition_runtime_fields(definition: Any) -> Any:
+        if isinstance(definition, dict):
+            return {
+                key: strip_definition_runtime_fields(item)
+                for key, item in definition.items()
+                if key not in {"builtin_language", "updated_at"}
+            }
+        if isinstance(definition, list):
+            return [
+                strip_definition_runtime_fields(item) for item in definition
+            ]
+        return definition
+
     sanitized = dict(value)
     sanitized.pop("version", None)
     skills = sanitized.get("skills")
     if isinstance(skills, dict):
         sanitized["skills"] = {
-            name: (
-                {
-                    key: item
-                    for key, item in definition.items()
-                    if key != "builtin_language"
-                }
-                if isinstance(definition, dict)
-                else definition
-            )
+            name: strip_definition_runtime_fields(definition)
             for name, definition in skills.items()
         }
     return sanitized

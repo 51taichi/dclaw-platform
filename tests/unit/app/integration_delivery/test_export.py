@@ -234,7 +234,9 @@ def test_standard_snapshot_excludes_runtime_skill_manifest_fields(tmp_path):
         encoding="utf-8",
     )
     (workspace / "skill.json").write_text(
-        '{"skills":{"refund":{"builtin_language":null,"enabled":true}},'
+        '{"skills":{"refund":{"builtin_language":null,"enabled":true,'
+        '"updated_at":"2026-10-01T07:09:52Z",'
+        '"metadata":{"updated_at":"2026-10-01T07:09:52Z"}}},'
         '"version":1791016236618}',
         encoding="utf-8",
     )
@@ -243,7 +245,9 @@ def test_standard_snapshot_excludes_runtime_skill_manifest_fields(tmp_path):
         "a_service",
     )
     (workspace / "skill.json").write_text(
-        '{"skills":{"refund":{"builtin_language":"zh","enabled":true}},'
+        '{"skills":{"refund":{"builtin_language":"zh","enabled":true,'
+        '"updated_at":"2026-10-06T09:58:36Z",'
+        '"metadata":{"updated_at":"2026-10-06T09:58:36Z"}}},'
         '"version":1791017000000}',
         encoding="utf-8",
     )
@@ -252,7 +256,7 @@ def test_standard_snapshot_excludes_runtime_skill_manifest_fields(tmp_path):
     )
 
     assert json.loads(_archive_files(first.archive)["agent/skill.json"]) == {
-        "skills": {"refund": {"enabled": True}}
+        "skills": {"refund": {"enabled": True, "metadata": {}}}
     }
     assert second.agent_digest == first.agent_digest
     assert second.archive == first.archive

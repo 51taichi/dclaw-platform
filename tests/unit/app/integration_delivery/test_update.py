@@ -344,7 +344,9 @@ def test_standard_update_preserves_runtime_skill_manifest_fields(
 ) -> None:
     workspace = _workspace(tmp_path)
     (workspace / "skill.json").write_text(
-        '{"skills":{"refund":{"builtin_language":"zh","enabled":true}},'
+        '{"skills":{"refund":{"builtin_language":"zh","enabled":true,'
+        '"updated_at":"2026-10-06T09:58:36Z",'
+        '"metadata":{"updated_at":"2026-10-06T09:58:36Z"}}},'
         '"version":1791016236618}',
         encoding="utf-8",
     )
@@ -352,7 +354,9 @@ def test_standard_update_preserves_runtime_skill_manifest_fields(
         agent_files={
             "agent/AGENTS.md": b"# Rules\n",
             "agent/agent.json": b'{"id":"a_service","name":"Service"}',
-            "agent/skill.json": b'{"skills":{"refund":{"enabled":true}}}',
+            "agent/skill.json": (
+                b'{"skills":{"refund":{"enabled":true,"metadata":{}}}}'
+            ),
         },
         documents=[{"id": "doc-1", "name": "faq.md", "content": b"FAQ"}],
     )
@@ -366,7 +370,14 @@ def test_standard_update_preserves_runtime_skill_manifest_fields(
 
     installed = json.loads((workspace / "skill.json").read_text())
     assert installed == {
-        "skills": {"refund": {"builtin_language": "zh", "enabled": True}},
+        "skills": {
+            "refund": {
+                "builtin_language": "zh",
+                "enabled": True,
+                "metadata": {"updated_at": "2026-10-06T09:58:36Z"},
+                "updated_at": "2026-10-06T09:58:36Z",
+            }
+        },
         "version": 1791016236618,
     }
 
