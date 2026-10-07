@@ -270,7 +270,9 @@ def test_validate_private_reply_rejects_unsafe_or_non_text_output(reply_text: ob
 def test_validate_private_reply_accepts_plain_text() -> None:
     payload = {
         "schemaVersion": 1,
+        "action": "REPLY",
         "replyText": "你好，可以为你介绍具体流程。",
+        "replyGoalReached": False,
         "intent": "回答咨询",
         "conversationSummary": "用户咨询业务流程",
     }
@@ -279,3 +281,29 @@ def test_validate_private_reply_accepts_plain_text() -> None:
         Operation.GENERATE_PRIVATE_REPLY,
         payload,
     ) == payload
+
+
+def test_validate_private_reply_accepts_no_reply() -> None:
+    payload = {
+        "schemaVersion": 1,
+        "action": "NO_REPLY",
+        "replyText": None,
+        "replyGoalReached": False,
+        "intent": "避免无必要闲聊",
+        "conversationSummary": "回复目标已发送，客户没有提出需要处理的问题",
+    }
+
+    assert validate_operation_response(Operation.GENERATE_PRIVATE_REPLY, payload) == payload
+
+
+def test_validate_lead_rule_requires_copied_evidence() -> None:
+    payload = {
+        "schemaVersion": 1,
+        "matched": True,
+        "leadValue": "18583030303",
+        "evidenceMessageId": "message-2",
+        "evidenceText": "你加我，18583030303",
+        "reason": "客户主动留下手机号",
+    }
+
+    assert validate_operation_response(Operation.EVALUATE_LEAD_RULE, payload) == payload

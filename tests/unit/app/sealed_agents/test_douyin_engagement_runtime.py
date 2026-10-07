@@ -121,10 +121,12 @@ class FakeHost:
                 {"maxLength": 1000},
                 {"inboundMessage": {"text": "你好"}},
             ),
-            {
-                "schemaVersion": 1,
-                "replyText": "你好，请问有什么可以帮你？",
-                "intent": "回应问候",
+                {
+                    "schemaVersion": 1,
+                    "action": "REPLY",
+                    "replyText": "你好，请问有什么可以帮你？",
+                    "replyGoalReached": False,
+                    "intent": "回应问候",
                 "conversationSummary": "用户问候",
             },
         ),
@@ -152,7 +154,9 @@ async def test_runtime_routes_and_completes_all_operations(content, output) -> N
 async def test_runtime_repairs_once_after_invalid_model_json() -> None:
     valid = {
         "schemaVersion": 1,
+        "action": "REPLY",
         "replyText": "有效回复",
+        "replyGoalReached": False,
         "intent": "回答",
         "conversationSummary": "咨询",
     }

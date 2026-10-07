@@ -11,7 +11,8 @@ _OPERATION_RULES = {
     Operation.GENERATE_PLAN: "Generate a complete dependency-safe comment plan that satisfies every system rule.",
     Operation.REPAIR_PLAN: "Repair the supplied plan while preserving valid nodes and satisfying every system rule.",
     Operation.GENERATE_RECOVERY: "Choose one supplied nearby comment or create a new root reply as permitted.",
-    Operation.GENERATE_PRIVATE_REPLY: "Generate one concise, safe, plain-text private-message reply.",
+    Operation.GENERATE_PRIVATE_REPLY: "Minimize Douyin conversation, return NO_REPLY whenever no reply is needed for attribution or off-platform handoff, and keep any necessary reply to one concise message focused on the configured goal.",
+    Operation.EVALUATE_LEAD_RULE: "Judge whether a real inbound customer message satisfies the configured lead rule, and copy exact evidence.",
 }
 
 

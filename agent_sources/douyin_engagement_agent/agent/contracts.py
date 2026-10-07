@@ -24,6 +24,7 @@ class Operation(str, Enum):
     REPAIR_PLAN = "REPAIR_PLAN"
     GENERATE_RECOVERY = "GENERATE_RECOVERY"
     GENERATE_PRIVATE_REPLY = "GENERATE_PRIVATE_REPLY"
+    EVALUATE_LEAD_RULE = "EVALUATE_LEAD_RULE"
 
 
 class ContractError(ValueError):
@@ -212,17 +213,41 @@ def _validate_recovery(
 def _validate_private_reply(payload: object) -> dict[str, Any]:
     value = _require_object(payload, "invalid_private_reply")
     reply = value.get("replyText")
+    action = value.get("action")
     if (
         value.get("schemaVersion") != 1
-        or not isinstance(reply, str)
-        or not reply.strip()
-        or len(reply) > MAX_PRIVATE_REPLY_CHARS
-        or "```" in reply
-        or _HTML_TAG.search(reply) is not None
+        or action not in ("REPLY", "NO_REPLY")
+        or not isinstance(value.get("replyGoalReached"), bool)
         or not _nonempty_text(value.get("intent"))
         or not _nonempty_text(value.get("conversationSummary"))
     ):
-        raise ContractError("invalid_private_reply", "private reply must be safe non-empty plain text")
+        raise ContractError("invalid_private_reply", "private reply decision shape is invalid")
+    if action == "REPLY":
+        if (
+            not isinstance(reply, str)
+            or not reply.strip()
+            or len(reply) > MAX_PRIVATE_REPLY_CHARS
+            or "```" in reply
+            or _HTML_TAG.search(reply) is not None
+        ):
+            raise ContractError("invalid_private_reply", "reply action requires safe plain text")
+    elif reply is not None or value["replyGoalReached"]:
+        raise ContractError("invalid_private_reply", "no-reply action cannot include reply text or reach the goal")
+    return value
+
+
+def _validate_lead_rule(payload: object) -> dict[str, Any]:
+    value = _require_object(payload, "invalid_lead_rule")
+    if value.get("schemaVersion") != 1 or not isinstance(value.get("matched"), bool):
+        raise ContractError("invalid_lead_rule", "lead evaluation shape is invalid")
+    fields = ("leadValue", "evidenceMessageId", "evidenceText")
+    if value["matched"]:
+        if any(not _nonempty_text(value.get(field)) for field in fields):
+            raise ContractError("invalid_lead_rule", "matched lead requires copied evidence")
+    elif any(value.get(field) is not None for field in fields):
+        raise ContractError("invalid_lead_rule", "unmatched lead cannot include evidence")
+    if not _nonempty_text(value.get("reason")):
+        raise ContractError("invalid_lead_rule", "lead evaluation requires a reason")
     return value
 
 
@@ -239,4 +264,6 @@ def validate_operation_response(
         return _validate_recovery(payload, request)
     if operation is Operation.GENERATE_PRIVATE_REPLY:
         return _validate_private_reply(payload)
+    if operation is Operation.EVALUATE_LEAD_RULE:
+        return _validate_lead_rule(payload)
     raise ContractError("unknown_operation", f"unsupported operation: {operation}")

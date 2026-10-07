@@ -32,7 +32,9 @@
   },
   "response": {
     "schemaVersion": 1,
+    "action": "REPLY",
     "replyText": "可以的，请把订单情况发给我，我帮你继续核实。",
+    "replyGoalReached": false,
     "intent": "收集售后所需信息",
     "conversationSummary": "客户正在咨询售后处理流程。"
   }

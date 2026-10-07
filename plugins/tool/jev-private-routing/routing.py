@@ -11,6 +11,7 @@ from agentscope.tool import ToolResponse
 API_URL = "https://api.typesafe.ai/v1/systemone"
 NO_MATCH = "no_match"
 MAX_CANDIDATES = 2_000
+MAX_HISTORY = 2_000
 BATCH_SIZE = 200  # Choice permits 255 options including no_match.
 MIN_MARGIN = 0.15
 
@@ -48,6 +49,7 @@ async def route_private_message_jev(
     candidate_tasks: list[dict],
     recent_history: list[dict] | None = None,
     shared_video: dict | None = None,
+    minimum_margin: float = MIN_MARGIN,
 ) -> ToolResponse:
     """Choose a task from taskId/name/routingDescription candidates using Jev.
 
@@ -66,7 +68,9 @@ async def route_private_message_jev(
         return _result("ERROR")
     if recent_history is None:
         recent_history = []
-    if not isinstance(recent_history, list) or len(recent_history) > 20:
+    if not isinstance(recent_history, list) or len(recent_history) > MAX_HISTORY:
+        return _result("ERROR")
+    if not _valid_probability(minimum_margin):
         return _result("ERROR")
     if not recent_history and not shared_video and message.strip().rstrip("!！?？。,.， ").lower() in {
         "你好",
@@ -80,6 +84,7 @@ async def route_private_message_jev(
 
     descriptions = {}
     thresholds = {}
+    margins = {}
     for task in candidate_tasks:
         if not isinstance(task, dict):
             return _result("ERROR")
@@ -87,6 +92,7 @@ async def route_private_message_jev(
         name = task.get("name")
         description = task.get("routingDescription")
         threshold = task.get("routingThreshold", 0.5)
+        margin = task.get("routingMinMargin", minimum_margin)
         if (
             not isinstance(task_id, str)
             or not task_id
@@ -100,10 +106,12 @@ async def route_private_message_jev(
             or not description.strip()
             or len(description) > 1000
             or not _valid_probability(threshold)
+            or not _valid_probability(margin)
         ):
             return _result("ERROR")
         descriptions[task_id] = {"task": name, "signals": description}
         thresholds[task_id] = float(threshold)
+        margins[task_id] = float(margin)
 
     if shared_video is not None:
         if not isinstance(shared_video, dict) or not any(
@@ -122,7 +130,17 @@ async def route_private_message_jev(
         value = item.get("text")
         if not isinstance(value, str) or len(value) > 4000:
             return _result("ERROR")
-        history.append({"direction": item["direction"], "text": value})
+        normalized = {"direction": item["direction"], "text": value}
+        kind = item.get("kind")
+        if kind in ("TEXT", "VIDEO_SHARE"):
+            normalized["kind"] = kind
+        video = item.get("video")
+        if isinstance(video, dict):
+            normalized["video"] = video
+        observed_at = item.get("observedAt")
+        if isinstance(observed_at, str) and observed_at:
+            normalized["observedAt"] = observed_at
+        history.append(normalized)
 
     api_key = os.environ.get("TYPESAFE_API_KEY")
     if not api_key:
@@ -201,7 +219,7 @@ async def route_private_message_jev(
         return _result("ERROR")
 
     runner_up = max(value for key, value in probabilities.items() if key != choice)
-    if probability < thresholds[choice] or probability - runner_up < MIN_MARGIN:
+    if probability < thresholds[choice] or probability - runner_up < margins[choice]:
         return _result("UNRESOLVED", confidence=confidence)
     return _result(
         "MATCHED", task_id=choice, probability=probability, confidence=confidence

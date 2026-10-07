@@ -1,7 +1,7 @@
 {
   "id": "jev-private-routing",
   "name": "Jev Private Message Routing",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "tool",
   "description": "Classify a Douyin private message against candidate comment tasks",
   "author": "DClaw Team",

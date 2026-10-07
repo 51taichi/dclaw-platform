@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -14,7 +15,7 @@ routing = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(routing)
 
 
-def test_plugin_registers_the_routing_tool():
+def load_plugin_module():
     plugin_path = ROUTING_PATH.parent / "plugin.py"
     plugin_spec = importlib.util.spec_from_file_location(
         "jev_routing_plugin",
@@ -27,17 +28,71 @@ def test_plugin_registers_the_routing_tool():
     plugin_module = importlib.util.module_from_spec(plugin_spec)
     sys.modules["jev_routing_plugin"] = plugin_module
     plugin_spec.loader.exec_module(plugin_module)
+    return plugin_module
+
+
+def test_plugin_registers_the_routing_tool():
+    plugin_module = load_plugin_module()
 
     class Api:
         registered = None
+        router = None
 
         def register_tool(self, **kwargs):
             self.registered = kwargs
+
+        def register_http_router(self, router, **kwargs):
+            self.router = (router, kwargs)
 
     api = Api()
     plugin_module.plugin.register(api)
     assert api.registered["tool_name"] == "route_private_message_jev"
     assert callable(api.registered["tool_func"])
+    assert api.router is not None
+    assert api.router[1]["prefix"] == "/open/v1/jev-private-routing"
+
+
+@pytest.mark.asyncio
+async def test_http_route_checks_publication_and_calls_jev_directly(monkeypatch):
+    plugin_module = load_plugin_module()
+    calls = []
+
+    class Repository:
+        def get_enabled_publication_by_public_id(self, public_id):
+            assert public_id == "douyin-agent"
+            return {"id": "publication-1", "target_type": "agent"}
+
+    async def direct_jev(**kwargs):
+        calls.append(kwargs)
+        return routing._result(
+            "MATCHED", task_id="task-1", probability=0.88, confidence=0.9
+        )
+
+    monkeypatch.setattr(plugin_module, "get_open_api_repository", Repository)
+    monkeypatch.setattr(plugin_module, "route_private_message_jev", direct_jev)
+    payload = plugin_module.RouteRequest.model_validate(
+        {
+            "message": "我想问旧房翻新",
+            "candidateTasks": [
+                {
+                    "taskId": "task-1",
+                    "name": "装修",
+                    "routingDescription": "旧房翻新",
+                }
+            ],
+        }
+    )
+    request = SimpleNamespace(
+        state=SimpleNamespace(open_publication_id="publication-1")
+    )
+
+    result = await plugin_module.route_private_message(
+        "douyin-agent", payload, request
+    )
+
+    assert result["status"] == "MATCHED"
+    assert result["taskId"] == "task-1"
+    assert calls[0]["candidate_tasks"][0]["routingDescription"] == "旧房翻新"
 
 
 def result_body(result):
@@ -165,6 +220,50 @@ async def test_task_threshold_is_enforced(monkeypatch):
                 "name": "装修",
                 "routingDescription": "家装",
                 "routingThreshold": 0.95,
+            }
+        ],
+    )
+    assert result_body(result)["status"] == "UNRESOLVED"
+
+
+@pytest.mark.asyncio
+async def test_task_specific_minimum_margin_is_enforced(monkeypatch):
+    original_client = httpx.AsyncClient
+
+    def handler(request):
+        criteria = json.loads(request.content)["questions"]["task"]["criteria"]
+        probabilities = {key: 0.0 for key in criteria}
+        probabilities["task-a"] = 0.60
+        probabilities["no_match"] = 0.50
+        return httpx.Response(
+            200,
+            json={
+                "answers": {
+                    "task": {
+                        "type": "choice",
+                        "choice": "task-a",
+                        "probabilities": probabilities,
+                        "confidence": 0.7,
+                    }
+                }
+            },
+        )
+
+    monkeypatch.setattr(
+        routing.httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(transport=httpx.MockTransport(handler), **kwargs),
+    )
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-only")
+    result = await routing.route_private_message_jev(
+        "装修",
+        [
+            {
+                "taskId": "task-a",
+                "name": "装修",
+                "routingDescription": "家装",
+                "routingThreshold": 0.5,
+                "routingMinMargin": 0.15,
             }
         ],
     )
