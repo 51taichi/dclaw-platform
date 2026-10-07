@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-import io
 import hashlib
+import io
 import json
 import re
 import shutil
@@ -647,6 +647,8 @@ class IntegrationDeliveryUpdater:
     ) -> DeliveryValidation:
         bundle = parse_delivery_bundle(agent_id, archive)
         current = self._exporter.export(agent_id)
+        if bundle.agent_profile_id != current.profile_id:
+            raise DeliveryBundleError("agent profile mismatch")
         if (
             current.agent_digest != expected_agent_digest
             or current.knowledge_digest != expected_knowledge_digest
@@ -765,6 +767,8 @@ class IntegrationDeliveryUpdater:
             return self.get_operation(agent_id, operation_id)
 
         current = self._exporter.export(agent_id)
+        if bundle.agent_profile_id != current.profile_id:
+            raise DeliveryBundleError("agent profile mismatch")
         if (
             current.agent_digest != expected_agent_digest
             or current.knowledge_digest != expected_knowledge_digest

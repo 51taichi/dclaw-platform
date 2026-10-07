@@ -144,6 +144,15 @@ POST /api/internal/integrations/v1/agents/{agent_id}/delivery-operations/{operat
 
 文件应由运行用户持有并设置为 `0600`。对应公钥必须预先加入 `sealed_agents/trusted_signers.json`；若用于超级专家，还必须加入 `sealed_agents/official_super_expert_signers.json`。缺失、无效或公私钥不匹配时验证/发布失败，当前 Active Release 不变。
 
+生产环境使用内置的幂等命令初始化并检查该身份，命令只输出状态，不输出私钥：
+
+```bash
+python -m qwenpaw.app.integration_delivery.signer_provisioning --provision
+python -m qwenpaw.app.integration_delivery.signer_provisioning --check
+```
+
+`--provision` 只在文件不存在时生成私钥；重复执行沿用原密钥并补齐两个公钥信任库。同名 signer 已存在但公钥不一致时失败关闭，不覆盖任何密钥。首次配置或调整信任库后必须重启 DClaw，使密封 Agent 服务重新加载信任集合。
+
 ## 9. 共享 Agent 语义
 
 本接口不增加环境锁或 Bot 级 Agent 副本。如果多个系统主动绑定同一个共享 Agent，更新仍按 DClaw 既有语义影响该 Agent 的所有使用方。测试与正式 AI 客服应由业务侧使用不同 Bot 和不同 Agent 隔离。
@@ -151,4 +160,3 @@ POST /api/internal/integrations/v1/agents/{agent_id}/delivery-operations/{operat
 ## 10. 调用顺序
 
 上层补丁服务应固定执行：导出当前包 → 本地生成候选包 → 调用验证 → 获取业务侧写屏障 → 调用应用 → 更新业务侧状态机和标签 → 两侧回读。后续步骤失败时，使用本次 `operationId` 调用恢复，再释放业务侧写屏障。
-

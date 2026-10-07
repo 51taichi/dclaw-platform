@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import io
 import json
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
-import zipfile
 
 import pytest
 
@@ -27,6 +27,7 @@ from qwenpaw.app.integration_delivery.update import (
 def _delivery_archive(
     *,
     agent_id: str = "a_service",
+    profile_id: str = "standard-2026.09",
 ) -> tuple[bytes, str, str]:
     agent_files = {
         "agent/AGENTS.md": b"# Rules\n",
@@ -58,7 +59,7 @@ def _delivery_archive(
     component = {
         "agentDigest": agent_digest,
         "agentId": agent_id,
-        "agentProfileId": "standard-2026.09",
+        "agentProfileId": profile_id,
         "knowledgeBaseId": "kb-1",
         "knowledgeDigest": knowledge_digest,
         "sourceVersion": "workspace",
@@ -487,10 +488,12 @@ def _transaction_fixture(tmp_path: Path):
         archive=old_archive,
         agent_digest=old_agent_digest,
         knowledge_digest=old_knowledge_digest,
+        profile_id="standard-2026.09",
     )
     exporter = SimpleNamespace(export=lambda agent_id: exported)
     context = SimpleNamespace(
         resolve_publication=lambda agent_id: {"id": "pub-1"},
+        describe=lambda agent_id: SimpleNamespace(agent_type="standard"),
     )
     knowledge = _KnowledgeStore(old_documents)
 
@@ -560,6 +563,36 @@ def test_apply_replaces_agent_and_knowledge_as_one_operation(
     assert json.loads((fixture.workspace / "agent.json").read_text())[
         "name"
     ] == ("Service")
+
+
+def test_validate_and_apply_reject_agent_profile_changes(
+    tmp_path: Path,
+) -> None:
+    fixture = _transaction_fixture(tmp_path)
+    archive, _, _ = _delivery_archive(
+        profile_id="super-expert-2026.09",
+    )
+    updater = _updater(tmp_path, fixture)
+
+    with pytest.raises(DeliveryBundleError, match="agent profile mismatch"):
+        updater.validate(
+            "a_service",
+            archive,
+            expected_agent_digest=fixture.old_agent_digest,
+            expected_knowledge_digest=fixture.old_knowledge_digest,
+        )
+    with pytest.raises(DeliveryBundleError, match="agent profile mismatch"):
+        updater.apply(
+            "a_service",
+            archive,
+            "operation-profile-change",
+            expected_agent_digest=fixture.old_agent_digest,
+            expected_knowledge_digest=fixture.old_knowledge_digest,
+        )
+
+    assert not (
+        tmp_path / "operations/a_service/operation-profile-change"
+    ).exists()
 
 
 def test_knowledge_only_apply_does_not_replace_agent_source(

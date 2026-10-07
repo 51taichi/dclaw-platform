@@ -188,6 +188,18 @@ public key must be present in
 be present in `sealed_agents/official_super_expert_signers.json`. Never print,
 copy into an image layer, or place the private key in `production.env`.
 
+Provision and verify the identity inside the runtime image. Both commands emit
+status only and never key material:
+
+```bash
+python -m qwenpaw.app.integration_delivery.signer_provisioning --provision
+python -m qwenpaw.app.integration_delivery.signer_provisioning --check
+```
+
+Provisioning is idempotent and refuses to overwrite a conflicting signer ID.
+Restart DClaw after the first provision so the sealed-Agent service reloads
+both trust registries.
+
 Before an update, retain the running image digest and confirm that the
 `dclaw-data` and `dclaw-secrets` volumes are attached. Delivery operation
 receipts live under `integration_delivery/operations/` in the data volume and
