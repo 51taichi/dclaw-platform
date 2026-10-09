@@ -296,9 +296,11 @@ async def test_missing_key_fails_closed(monkeypatch):
 async def test_configured_api_url_is_used(monkeypatch):
     original_client = httpx.AsyncClient
     urls = []
+    relay_tokens = []
 
     def handler(request):
         urls.append(str(request.url))
+        relay_tokens.append(request.headers.get("X-DClaw-Relay-Token"))
         criteria = json.loads(request.content)["questions"]["task"]["criteria"]
         return httpx.Response(
             200,
@@ -328,6 +330,7 @@ async def test_configured_api_url_is_used(monkeypatch):
     monkeypatch.setenv(
         "TYPESAFE_API_URL", "https://typesafe-relay.example/v1/systemone"
     )
+    monkeypatch.setenv("TYPESAFE_RELAY_TOKEN", "relay-test-token")
 
     result = await routing.route_private_message_jev(
         "装修",
@@ -336,6 +339,7 @@ async def test_configured_api_url_is_used(monkeypatch):
 
     assert result_body(result)["status"] == "MATCHED"
     assert urls == ["https://typesafe-relay.example/v1/systemone"]
+    assert relay_tokens == ["relay-test-token"]
 
 
 @pytest.mark.asyncio

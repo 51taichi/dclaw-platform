@@ -148,6 +148,7 @@ async def route_private_message_jev(
     api_key = os.environ.get("TYPESAFE_API_KEY")
     if not api_key:
         return _result("ERROR")
+    relay_token = os.environ.get("TYPESAFE_RELAY_TOKEN", "").strip()
     api_url = os.environ.get("TYPESAFE_API_URL", DEFAULT_API_URL).strip()
     try:
         parsed_api_url = httpx.URL(api_url)
@@ -186,7 +187,7 @@ async def route_private_message_jev(
                     },
                 }
                 choice, probabilities, confidence = await _choose(
-                    client, payload, criteria, api_key, api_url
+                    client, payload, criteria, api_key, api_url, relay_token
                 )
                 if choice == NO_MATCH:
                     unresolved_confidence = confidence
@@ -223,7 +224,12 @@ async def route_private_message_jev(
                     },
                 }
                 choice, probabilities, confidence = await _choose(
-                    client, final_payload, final_criteria, api_key, api_url
+                    client,
+                    final_payload,
+                    final_criteria,
+                    api_key,
+                    api_url,
+                    relay_token,
                 )
                 if choice == NO_MATCH:
                     return _result("UNRESOLVED", confidence=confidence)
@@ -240,10 +246,13 @@ async def route_private_message_jev(
     )
 
 
-async def _choose(client, payload, criteria, api_key, api_url):
+async def _choose(client, payload, criteria, api_key, api_url, relay_token):
+    headers = {"Authorization": f"Bearer {api_key}"}
+    if relay_token:
+        headers["X-DClaw-Relay-Token"] = relay_token
     response = await client.post(
         api_url,
-        headers={"Authorization": f"Bearer {api_key}"},
+        headers=headers,
         json=payload,
     )
     response.raise_for_status()

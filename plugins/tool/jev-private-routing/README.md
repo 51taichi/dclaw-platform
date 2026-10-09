@@ -1,6 +1,6 @@
 # Jev private-message routing
 
-Install with `qwenpaw plugin install plugins/tool/jev-private-routing`, then restart DClaw. Set `TYPESAFE_API_KEY` in the DClaw server process environment. The key is read at call time and is never passed to the Agent prompt or stored in its workspace. The plugin uses `https://api.typesafe.ai/v1/systemone` by default; deployments that require a regional relay can override the complete endpoint with `TYPESAFE_API_URL`.
+Install with `qwenpaw plugin install plugins/tool/jev-private-routing`, then restart DClaw. Set `TYPESAFE_API_KEY` in the DClaw server process environment. The key is read at call time and is never passed to the Agent prompt or stored in its workspace. The plugin uses `https://api.typesafe.ai/v1/systemone` by default; deployments that require a regional relay can override the complete endpoint with `TYPESAFE_API_URL`. Set `TYPESAFE_RELAY_TOKEN` when the relay requires the `X-DClaw-Relay-Token` header.
 
 Only `douyin_engagement_agent` enables `route_private_message_jev` in its `agent.json`. Plugin registration adds a disabled entry to other Agent profiles. The tool accepts the latest private message, optional shared-video metadata, same-conversation history, and Bot Server candidate tasks containing only routing metadata and a task-specific confidence threshold. It batches up to 2,000 candidates and compares batch winners globally.
 

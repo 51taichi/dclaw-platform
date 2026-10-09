@@ -1,0 +1,7 @@
+name = "dclaw-typesafe-relay"
+main = "src/index.js"
+compatibility_date = "2026-10-09"
+workers_dev = true
+
+[vars]
+TYPESAFE_UPSTREAM_URL = "https://api.typesafe.ai/v1/systemone"
