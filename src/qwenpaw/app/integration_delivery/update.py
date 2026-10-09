@@ -151,6 +151,8 @@ def _json_object(content: bytes, *, label: str) -> dict[str, Any]:
 def parse_delivery_bundle(
     agent_id: str,
     archive: bytes,
+    *,
+    require_complete_knowledge: bool = True,
 ) -> ParsedDeliveryBundle:
     files = _read_archive(bytes(archive))
     try:
@@ -187,15 +189,29 @@ def parse_delivery_bundle(
     documents = knowledge_manifest.get("documents")
     if not isinstance(documents, list):
         raise DeliveryBundleError("knowledge manifest is invalid")
+    declared_paths: set[str] = set()
+    document_ids: set[str] = set()
     for document in documents:
         if not isinstance(document, dict):
             raise DeliveryBundleError("knowledge manifest is invalid")
         relative = document.get("path")
+        document_id = document.get("id")
         if (
             not isinstance(relative, str)
+            or not isinstance(document_id, str)
+            or not document_id
             or f"knowledge/{relative}" not in knowledge_files
+            or relative in declared_paths
+            or document_id in document_ids
         ):
             raise DeliveryBundleError("knowledge manifest is invalid")
+        declared_paths.add(relative)
+        document_ids.add(document_id)
+    if require_complete_knowledge and set(knowledge_files) != {
+        "knowledge/knowledge-manifest.json",
+        *(f"knowledge/{path}" for path in declared_paths),
+    }:
+        raise DeliveryBundleError("knowledge manifest is incomplete")
 
     agent_digest = deterministic_digest(agent_files)
     knowledge_digest = deterministic_digest(knowledge_files)
@@ -807,23 +823,49 @@ class IntegrationDeliveryUpdater:
                 agent_receipt = self._apply_agent_bundle(bundle, operation_id)
             if knowledge_changed:
                 _replace_knowledge_documents(knowledge, bundle)
+            confirmed = self._exporter.export(agent_id)
+            if (
+                confirmed.agent_digest != bundle.agent_digest
+                or confirmed.knowledge_digest != bundle.knowledge_digest
+            ):
+                raise RuntimeError("DCLAW_DELIVERY_READBACK_MISMATCH")
         except Exception:
+            recovery_failed = False
             if agent_receipt is not None:
-                self._restore_agent_receipt(agent_receipt)
+                try:
+                    self._restore_agent_receipt(agent_receipt)
+                except Exception:
+                    recovery_failed = True
             if knowledge_changed:
                 try:
                     _replace_knowledge_documents(knowledge, previous)
                 except Exception:
-                    pass
+                    recovery_failed = True
+            actual_agent_digest = current.agent_digest
+            actual_knowledge_digest = current.knowledge_digest
+            try:
+                recovered = self._exporter.export(agent_id)
+                actual_agent_digest = recovered.agent_digest
+                actual_knowledge_digest = recovered.knowledge_digest
+                recovery_failed = recovery_failed or (
+                    actual_agent_digest != current.agent_digest
+                    or actual_knowledge_digest != current.knowledge_digest
+                )
+            except Exception:
+                recovery_failed = True
             failed = DeliveryOperationView(
                 operation_id=operation_id,
                 agent_id=agent_id,
                 status="failed",
                 previous_agent_digest=current.agent_digest,
                 previous_knowledge_digest=current.knowledge_digest,
-                agent_digest=current.agent_digest,
-                knowledge_digest=current.knowledge_digest,
-                error_code="DCLAW_DELIVERY_APPLY_FAILED",
+                agent_digest=actual_agent_digest,
+                knowledge_digest=actual_knowledge_digest,
+                error_code=(
+                    "DCLAW_DELIVERY_RECOVERY_REQUIRED"
+                    if recovery_failed
+                    else "DCLAW_DELIVERY_APPLY_FAILED"
+                ),
             )
             self._write_receipt(directory, failed)
             raise
@@ -844,8 +886,8 @@ class IntegrationDeliveryUpdater:
             status="applied",
             previous_agent_digest=current.agent_digest,
             previous_knowledge_digest=current.knowledge_digest,
-            agent_digest=bundle.agent_digest,
-            knowledge_digest=bundle.knowledge_digest,
+            agent_digest=confirmed.agent_digest,
+            knowledge_digest=confirmed.knowledge_digest,
         )
         self._write_receipt(directory, applied)
         return applied
@@ -869,6 +911,7 @@ class IntegrationDeliveryUpdater:
         submitted = parse_delivery_bundle(
             agent_id,
             (directory / "submitted.zip").read_bytes(),
+            require_complete_knowledge=False,
         )
         knowledge = self._knowledge_service(agent_id)
         agent_changed = previous.agent_digest != submitted.agent_digest
@@ -909,6 +952,13 @@ class IntegrationDeliveryUpdater:
                 except Exception:
                     pass
             raise
+
+        confirmed = self._exporter.export(agent_id)
+        if (
+            confirmed.agent_digest != previous.agent_digest
+            or confirmed.knowledge_digest != previous.knowledge_digest
+        ):
+            raise RuntimeError("DCLAW_DELIVERY_RESTORE_READBACK_MISMATCH")
 
         restored = current.model_copy(
             update={

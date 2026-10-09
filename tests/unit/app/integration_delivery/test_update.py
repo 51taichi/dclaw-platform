@@ -224,6 +224,30 @@ def test_validate_rejects_platform_metadata_members(metadata_name: str) -> None:
         )
 
 
+def test_validate_rejects_knowledge_files_missing_from_manifest() -> None:
+    archive, _, _ = _delivery_archive()
+    with zipfile.ZipFile(io.BytesIO(archive)) as opened:
+        files = {name: opened.read(name) for name in opened.namelist()}
+    files["knowledge/documents/orphan/undeclared.md"] = b"not declared"
+    component = json.loads(files["dclaw-component.json"])
+    component["knowledgeDigest"] = deterministic_digest(
+        {
+            path: content
+            for path, content in files.items()
+            if path.startswith("knowledge/")
+        }
+    )
+    files["dclaw-component.json"] = json.dumps(
+        component, separators=(",", ":"), sort_keys=True
+    ).encode()
+
+    with pytest.raises(DeliveryBundleError, match="manifest is incomplete"):
+        parse_delivery_bundle(
+            "a_service",
+            build_deterministic_archive(files),
+        )
+
+
 def test_validate_rejects_compression_bomb_member() -> None:
     output = io.BytesIO()
     with zipfile.ZipFile(
@@ -484,18 +508,33 @@ def _transaction_fixture(tmp_path: Path):
         },
         documents=new_documents,
     )
-    exported = SimpleNamespace(
-        archive=old_archive,
-        agent_digest=old_agent_digest,
-        knowledge_digest=old_knowledge_digest,
-        profile_id="standard-2026.09",
-    )
-    exporter = SimpleNamespace(export=lambda agent_id: exported)
     context = SimpleNamespace(
         resolve_publication=lambda agent_id: {"id": "pub-1"},
         describe=lambda agent_id: SimpleNamespace(agent_type="standard"),
     )
     knowledge = _KnowledgeStore(old_documents)
+
+    def export_current(agent_id):
+        assert agent_id == "a_service"
+        agent_files = {
+            f"agent/{path.relative_to(workspace).as_posix()}": path.read_bytes()
+            for path in workspace.rglob("*")
+            if path.is_file()
+            and "sessions_data" not in path.relative_to(workspace).parts
+            and path.name != "qwenpaw_app.log"
+        }
+        archive, agent_digest, knowledge_digest = _custom_delivery_archive(
+            agent_files=agent_files,
+            documents=knowledge.documents,
+        )
+        return SimpleNamespace(
+            archive=archive,
+            agent_digest=agent_digest,
+            knowledge_digest=knowledge_digest,
+            profile_id="standard-2026.09",
+        )
+
+    exporter = SimpleNamespace(export=export_current)
 
     def apply_agent(bundle, operation_id):
         return apply_standard_agent_source(
@@ -756,6 +795,33 @@ def test_knowledge_failure_restores_agent_and_documents(
     ) == _knowledge_identity(
         fixture.old_documents,
     )
+
+
+def test_apply_fails_and_restores_when_knowledge_write_does_not_read_back(
+    tmp_path: Path,
+) -> None:
+    fixture = _transaction_fixture(tmp_path)
+
+    def ignore_replacement(documents):
+        fixture.knowledge.replace_calls += 1
+
+    fixture.knowledge.replace_delivery_documents = ignore_replacement
+    updater = _updater(tmp_path, fixture)
+
+    with pytest.raises(RuntimeError, match="DCLAW_DELIVERY_READBACK_MISMATCH"):
+        updater.apply(
+            "a_service",
+            fixture.new_archive,
+            "operation-readback-mismatch",
+            expected_agent_digest=fixture.old_agent_digest,
+            expected_knowledge_digest=fixture.old_knowledge_digest,
+        )
+
+    operation = updater.get_operation("a_service", "operation-readback-mismatch")
+    assert operation.status == "failed"
+    assert operation.agent_digest == fixture.old_agent_digest
+    assert operation.knowledge_digest == fixture.old_knowledge_digest
+    assert operation.error_code == "DCLAW_DELIVERY_APPLY_FAILED"
 
 
 def test_restore_is_idempotent(tmp_path: Path) -> None:
