@@ -935,7 +935,7 @@ async def test_capabilities_fail_closed_without_effective_catalog(
     assert response.json() == {"capabilities": [], "defaults": {}}
 
 
-async def test_configured_image_policy_filters_capabilities_and_returns_default(
+async def test_configured_image_policy_keeps_available_models_and_returns_default(
     tmp_path,
     monkeypatch,
 ):
@@ -964,7 +964,12 @@ async def test_configured_image_policy_filters_capabilities_and_returns_default(
         if item["capability"] in {"text_to_image", "image_edit"}
         and item["source"] == "model_registry"
     }
-    assert image_pairs == {("stub-aigc", "stub-image")}
+    assert image_pairs == {
+        ("stub-aigc", "stub-image"),
+        ("openai", "gpt-image-2"),
+        ("volcengine", "custom-image-model"),
+        ("volcengine", "doubao-seedream-3-0-t2i"),
+    }
     assert payload["defaults"]["image"] == {
         "configured": True,
         "configured_default": selected,
@@ -1029,15 +1034,21 @@ async def test_text_policy_inventory_preserves_availability_and_selection_gates(
         item.model_id for item in inventory.capabilities
         if item.provider_id == "text-provider" and item.capability == "storyboard"
     ]
-    assert projected == (["configured-llm"] if expected else [])
+    assert projected == (
+        ["configured-llm", "not-selected"] if expected else []
+    )
     # Submission uses the same capability lookup, not just the visible menu.
     found = await aigc_studio._find_capability(
         request, "text-provider", "configured-llm", "storyboard",
     )
     assert (found is not None) == expected
+    alternative = await aigc_studio._find_capability(
+        request, "text-provider", "not-selected", "storyboard",
+    )
+    assert (alternative is not None) == expected
 
 
-async def test_job_submission_rejects_model_removed_from_allowlist(
+async def test_job_submission_accepts_other_published_available_model(
     tmp_path,
     monkeypatch,
 ):
@@ -1079,8 +1090,7 @@ async def test_job_submission_rejects_model_removed_from_allowlist(
                 },
             )
 
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "aigc_model_not_allowed"
+    assert response.status_code == 202
     engine.dispose()
 
 

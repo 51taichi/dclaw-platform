@@ -287,11 +287,20 @@ class AigcModelPolicyService:
             ),
             None,
         )
-        available = tuple(
+        selected_available = tuple(
             by_key[(ref.provider_id, ref.model_id)]
             for ref in ordered_refs
             if (ref.provider_id, ref.model_id) in by_key
             and by_key[(ref.provider_id, ref.model_id)].selectable
+        )
+        selected_keys = {
+            (item.provider_id, item.model_id) for item in selected_available
+        }
+        available = selected_available + tuple(
+            item
+            for item in candidates
+            if item.selectable
+            and (item.provider_id, item.model_id) not in selected_keys
         )
         configured_item = (
             by_key.get((configured_default.provider_id, configured_default.model_id))

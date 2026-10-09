@@ -227,6 +227,39 @@ async def test_configured_default_recovers_when_selectable_again():
     assert effective.fallback_active is False
 
 
+@pytest.mark.asyncio
+async def test_configured_category_keeps_all_selectable_models_after_preferred_models():
+    models = [
+        model("preferred", model_type="llm", capabilities=("storyboard",)),
+        model("also-available", model_type="llm", capabilities=("storyboard",)),
+    ]
+    manager = StubManager([provider("p", models)])
+    pairs = {("p", item.id) for item in models}
+    service = AigcModelPolicyService(
+        StubPolicies({
+            "text": {
+                "configured": True,
+                "models": [{
+                    "provider_id": "p",
+                    "model_id": "preferred",
+                    "sort_order": 0,
+                    "is_default": True,
+                }],
+            },
+        }),
+        published_pairs=pairs,
+        priced_pairs=pairs,
+    )
+
+    effective = await service.effective("text", manager)
+
+    assert [item.model_id for item in effective.models] == [
+        "preferred",
+        "also-available",
+    ]
+    assert effective.effective_default.model_id == "preferred"
+
+
 def test_filter_capabilities_removes_disallowed_models_but_keeps_plugins():
     capabilities = [
         SimpleNamespace(

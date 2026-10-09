@@ -104,14 +104,14 @@ def _output_matches(job: Any, expected_output_type: str | None) -> bool:
 
 
 def _job_matches_definition(job: Any, definition: Any) -> bool:
-    expected_pairs = (
-        ("capability", definition.expected_capability),
-        ("provider_id", definition.expected_provider_id),
-        ("model_id", definition.expected_model_id),
-    )
-    if any(
-        expected is not None and str(getattr(job, field, "") or "") != expected
-        for field, expected in expected_pairs
+    # The workflow fixes the operation, not the concrete provider/model.  A
+    # customer may select any currently authorized model for that capability;
+    # treating that choice as a semantic mismatch leaves a successful node
+    # permanently stuck in the recovery guide.
+    expected_capability = definition.expected_capability
+    if (
+        expected_capability is not None
+        and str(getattr(job, "capability", "") or "") != expected_capability
     ):
         return False
     return _output_matches(job, definition.expected_output_type)

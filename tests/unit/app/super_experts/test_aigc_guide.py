@@ -217,6 +217,23 @@ def test_wrong_model_capability_or_output_kind_does_not_unlock_step():
     assert guide.current_step.recovery.code == "NODE_JOB_SEMANTICS_MISMATCH"
 
 
+def test_authorized_model_choice_does_not_change_workflow_semantics():
+    jobs = [
+        _job(
+            "prompt-1",
+            "succeeded",
+            1,
+            model_id="customer-selected-model",
+            kind="file",
+        )
+    ]
+
+    guide = project_aigc_guide(task=_task(), canvas=_canvas(), jobs=jobs)
+
+    assert _status(guide, "copy.generate") == "COMPLETED"
+    assert guide.current_step_id == "clip.generate"
+
+
 def test_optional_skip_is_projected_only_from_durable_bound_event():
     task = _task(optional_copy=True)
     task = task.model_copy(
