@@ -1017,6 +1017,24 @@ def _authoritative_workflow_execution_binding(
     return binding
 
 
+def _accepted_workflow_allows_unbound_node(canvas: Canvas) -> bool:
+    """Allow normal canvas work after the bound expert task is accepted."""
+    material_task_id = str(
+        canvas.meta.get("super_expert_material_task_id") or ""
+    ).strip()
+    if not material_task_id:
+        return False
+    from ..super_experts.composition import get_super_expert_platform_service
+    from ..super_experts.models import AigcTaskStatus
+
+    task = get_super_expert_platform_service().get_task(material_task_id)
+    return bool(
+        task is not None
+        and task.binding.canvas_id == canvas.id
+        and task.status == AigcTaskStatus.ACCEPTED
+    )
+
+
 def _validate_job_resource_binding(request: Request, body: AigcJobCreate) -> None:
     canvas = _load_canvas_for_request(request, body.canvas_id)
     target_node = next((node for node in canvas.nodes if node.id == body.node_id), None)
@@ -1025,15 +1043,27 @@ def _validate_job_resource_binding(request: Request, body: AigcJobCreate) -> Non
             status_code=400,
             detail=f"Node '{body.node_id}' not found in canvas '{body.canvas_id}'.",
         )
-    authoritative = _authoritative_workflow_execution_binding(
-        body.canvas_id,
-        body.node_id,
-        AigcCanvasService.owner(canvas) or "",
-    )
     workflow_marker = str(
         target_node.data.get("workflowLogicalNodeId") or ""
     ).strip()
-    if authoritative is None and (workflow_marker or canvas.meta.get("workflow_id")):
+    allow_unbound_node = (
+        not workflow_marker and _accepted_workflow_allows_unbound_node(canvas)
+    )
+    try:
+        authoritative = _authoritative_workflow_execution_binding(
+            body.canvas_id,
+            body.node_id,
+            AigcCanvasService.owner(canvas) or "",
+        )
+    except HTTPException as exc:
+        if exc.detail != "WORKFLOW_NODE_BINDING_REQUIRED" or not allow_unbound_node:
+            raise
+        authoritative = None
+    if (
+        authoritative is None
+        and (workflow_marker or canvas.meta.get("workflow_id"))
+        and not allow_unbound_node
+    ):
         raise HTTPException(
             status_code=409, detail="WORKFLOW_BINDING_MIGRATION_REQUIRED",
         )

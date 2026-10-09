@@ -294,3 +294,51 @@ async def test_managed_canvas_cannot_bypass_contract_with_new_node_id(legacy, mo
         await aigc_studio._validate_job_submission(SimpleNamespace(), body)
     assert failure.value.status_code == 409
     assert failure.value.detail == "WORKFLOW_NODE_BINDING_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_accepted_workflow_canvas_allows_new_unbound_node(legacy, monkeypatch):
+    from qwenpaw.app.routers import aigc_studio
+    from qwenpaw.app.super_experts import composition
+    from qwenpaw.app.super_experts.models import AigcTaskStatus
+
+    migrate(legacy, apply=True)
+    canvas = legacy.store.read("canvases", legacy.binding["canvas_id"])
+    task = legacy.tasks.get(legacy.binding["material_task_id"])
+    accepted = task.model_copy(update={"status": AigcTaskStatus.ACCEPTED})
+    monkeypatch.setattr(
+        composition,
+        "get_super_expert_platform_service",
+        lambda: SimpleNamespace(get_task=lambda *_: accepted),
+    )
+    parsed_canvas = aigc_studio.Canvas(**canvas)
+    assert aigc_studio._accepted_workflow_allows_unbound_node(parsed_canvas)
+
+    target = dict(canvas["nodes"][-1])
+    target["id"] = "customer-added-image-node"
+    target["data"] = {
+        key: value
+        for key, value in target.get("data", {}).items()
+        if key != "workflowLogicalNodeId"
+    }
+    canvas["nodes"].append(target)
+    monkeypatch.setattr(
+        aigc_studio,
+        "_load_canvas_for_request",
+        lambda *_: aigc_studio.Canvas(**canvas),
+    )
+
+    async def available(*_):
+        return object()
+
+    monkeypatch.setattr(aigc_studio, "_find_capability", available)
+    monkeypatch.setattr(aigc_studio, "_assert_job_model_policy_allowed", available)
+    body = aigc_studio.AigcJobCreate(
+        canvas_id=canvas["id"],
+        node_id=target["id"],
+        provider_id="other-provider",
+        model_id="other-model",
+        capability="text_to_video",
+    )
+
+    await aigc_studio._validate_job_submission(SimpleNamespace(), body)
