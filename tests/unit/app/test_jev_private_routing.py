@@ -290,3 +290,78 @@ async def test_missing_key_fails_closed(monkeypatch):
         [{"taskId": "task-a", "name": "装修", "routingDescription": "家装"}],
     )
     assert result_body(result)["status"] == "ERROR"
+
+
+@pytest.mark.asyncio
+async def test_configured_api_url_is_used(monkeypatch):
+    original_client = httpx.AsyncClient
+    urls = []
+
+    def handler(request):
+        urls.append(str(request.url))
+        criteria = json.loads(request.content)["questions"]["task"]["criteria"]
+        return httpx.Response(
+            200,
+            json={
+                "answers": {
+                    "task": {
+                        "type": "choice",
+                        "choice": "task-a",
+                        "probabilities": {
+                            key: 0.93 if key == "task-a" else 0.07
+                            for key in criteria
+                        },
+                        "confidence": 0.9,
+                    }
+                }
+            },
+        )
+
+    monkeypatch.setattr(
+        routing.httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(
+            transport=httpx.MockTransport(handler), **kwargs
+        ),
+    )
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-only")
+    monkeypatch.setenv(
+        "TYPESAFE_API_URL", "https://typesafe-relay.example/v1/systemone"
+    )
+
+    result = await routing.route_private_message_jev(
+        "装修",
+        [{"taskId": "task-a", "name": "装修", "routingDescription": "家装"}],
+    )
+
+    assert result_body(result)["status"] == "MATCHED"
+    assert urls == ["https://typesafe-relay.example/v1/systemone"]
+
+
+@pytest.mark.asyncio
+async def test_provider_http_error_is_logged(monkeypatch, caplog):
+    original_client = httpx.AsyncClient
+
+    def handler(_request):
+        return httpx.Response(
+            451,
+            json={"title": "Typesafe is not available in your region."},
+        )
+
+    monkeypatch.setattr(
+        routing.httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(
+            transport=httpx.MockTransport(handler), **kwargs
+        ),
+    )
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-only")
+    caplog.set_level("WARNING")
+
+    result = await routing.route_private_message_jev(
+        "装修",
+        [{"taskId": "task-a", "name": "装修", "routingDescription": "家装"}],
+    )
+
+    assert result_body(result)["status"] == "ERROR"
+    assert "451" in caplog.text

@@ -1,6 +1,7 @@
 """Bounded TypeSafe Choice for private-message task attribution."""
 
 import json
+import logging
 import os
 from math import isfinite
 
@@ -8,7 +9,9 @@ import httpx
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
 
-API_URL = "https://api.typesafe.ai/v1/systemone"
+logger = logging.getLogger(__name__)
+
+DEFAULT_API_URL = "https://api.typesafe.ai/v1/systemone"
 NO_MATCH = "no_match"
 MAX_CANDIDATES = 2_000
 MAX_HISTORY = 2_000
@@ -145,6 +148,14 @@ async def route_private_message_jev(
     api_key = os.environ.get("TYPESAFE_API_KEY")
     if not api_key:
         return _result("ERROR")
+    api_url = os.environ.get("TYPESAFE_API_URL", DEFAULT_API_URL).strip()
+    try:
+        parsed_api_url = httpx.URL(api_url)
+        if parsed_api_url.scheme not in ("http", "https") or not parsed_api_url.host:
+            raise ValueError("invalid TypeSafe API URL")
+    except (TypeError, ValueError):
+        logger.error("TYPESAFE_API_URL is invalid")
+        return _result("ERROR")
     winners = []
     unresolved_confidence = None
     try:
@@ -174,7 +185,9 @@ async def route_private_message_jev(
                         }
                     },
                 }
-                choice, probabilities, confidence = await _choose(client, payload, criteria, api_key)
+                choice, probabilities, confidence = await _choose(
+                    client, payload, criteria, api_key, api_url
+                )
                 if choice == NO_MATCH:
                     unresolved_confidence = confidence
                     continue
@@ -210,12 +223,13 @@ async def route_private_message_jev(
                     },
                 }
                 choice, probabilities, confidence = await _choose(
-                    client, final_payload, final_criteria, api_key
+                    client, final_payload, final_criteria, api_key, api_url
                 )
                 if choice == NO_MATCH:
                     return _result("UNRESOLVED", confidence=confidence)
                 probability = probabilities[choice]
-    except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError):
+    except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        logger.warning("TypeSafe Jev routing failed: %s", exc)
         return _result("ERROR")
 
     runner_up = max(value for key, value in probabilities.items() if key != choice)
@@ -226,9 +240,9 @@ async def route_private_message_jev(
     )
 
 
-async def _choose(client, payload, criteria, api_key):
+async def _choose(client, payload, criteria, api_key, api_url):
     response = await client.post(
-        API_URL,
+        api_url,
         headers={"Authorization": f"Bearer {api_key}"},
         json=payload,
     )
