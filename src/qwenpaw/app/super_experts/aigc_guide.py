@@ -217,6 +217,17 @@ def project_aigc_guide(
     success_times: dict[str, datetime] = {}
     projected: list[AigcGuideStepProjection] = []
     logical_status: dict[str, GuideStepStatus] = {}
+    revision_requested_at = next(
+        (
+            event.occurred_at
+            for event in reversed(task.events)
+            if event.action == "request_revision"
+        ),
+        None,
+    )
+    review_node_ids = set(workflow.blueprint.review_node_ids)
+    if not review_node_ids:
+        review_node_ids.add(workflow.blueprint.output_node_id)
 
     for definition in workflow.guide_steps:
         recovery = None
@@ -331,6 +342,15 @@ def project_aigc_guide(
                                 else "NODE_OUTPUT_MISSING"
                             ),
                         )
+                    elif (
+                        definition.logical_node_id in review_node_ids
+                        and revision_requested_at is not None
+                        and succeeded_at <= revision_requested_at
+                    ):
+                        # A rejected review invalidates only the submitted output nodes.
+                        # Their upstream inputs remain reusable, while submission stays
+                        # locked until a newer result exists for every review node.
+                        status = "READY"
                     elif upstream_times and succeeded_at < max(upstream_times):
                         status = "READY"
                     else:

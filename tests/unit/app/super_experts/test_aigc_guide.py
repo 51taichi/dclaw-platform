@@ -9,6 +9,7 @@ from qwenpaw.app.super_experts.aigc_guide import project_aigc_guide
 from qwenpaw.app.super_experts.models import (
     AigcMaterialTask,
     AigcTaskBinding,
+    AigcTaskEvent,
     AigcTaskStatus,
     AigcWorkflowDefinition,
     AigcWorkflowGuideEvent,
@@ -195,6 +196,53 @@ def test_regenerated_upstream_invalidates_older_downstream_result():
     assert _status(guide, "copy.generate") == "COMPLETED"
     assert _status(guide, "clip.generate") == "READY"
     assert guide.current_step_id == "clip.generate"
+
+
+def test_revision_reopens_review_node_and_requires_a_new_result_before_submit():
+    task = _task().model_copy(
+        update={
+            "status": AigcTaskStatus.IN_PROGRESS,
+            "events": (
+                AigcTaskEvent(
+                    event_id="revision-1",
+                    action="request_revision",
+                    from_status=AigcTaskStatus.REVIEWING,
+                    to_status=AigcTaskStatus.REVISION_REQUIRED,
+                    occurred_at=NOW + timedelta(minutes=3),
+                ),
+                AigcTaskEvent(
+                    event_id="resume-1",
+                    action="resume",
+                    from_status=AigcTaskStatus.REVISION_REQUIRED,
+                    to_status=AigcTaskStatus.IN_PROGRESS,
+                    occurred_at=NOW + timedelta(minutes=4),
+                ),
+            ),
+        }
+    )
+    previous_jobs = [
+        _job("prompt-1", "succeeded", 1),
+        _job("video-1", "succeeded", 2, kind="video"),
+    ]
+
+    needs_revision = project_aigc_guide(
+        task=task, canvas=_canvas(), jobs=previous_jobs
+    )
+
+    assert _status(needs_revision, "copy.generate") == "COMPLETED"
+    assert _status(needs_revision, "clip.generate") == "READY"
+    assert _status(needs_revision, "workflow.submit") == "LOCKED"
+    assert needs_revision.current_step_id == "clip.generate"
+
+    revised = project_aigc_guide(
+        task=task,
+        canvas=_canvas(),
+        jobs=[*previous_jobs, _job("video-1", "succeeded", 5, kind="video")],
+    )
+
+    assert _status(revised, "clip.generate") == "COMPLETED"
+    assert _status(revised, "workflow.submit") == "READY"
+    assert revised.current_step_id == "workflow.submit"
 
 
 def test_wrong_model_capability_or_output_kind_does_not_unlock_step():
