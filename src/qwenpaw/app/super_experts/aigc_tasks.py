@@ -67,6 +67,7 @@ class _TaskDocument(BaseModel):
     tasks: dict[str, AigcMaterialTask] = Field(default_factory=dict)
     idempotency: dict[str, _IdempotencyRecord] = Field(default_factory=dict)
     event_ids: set[str] = Field(default_factory=set)
+    dismissed_task_ids: set[str] = Field(default_factory=set)
 
 
 _TRANSITIONS = {
@@ -154,8 +155,24 @@ class AigcTaskRepository:
     def list_for_conversations(self, conversation_ids: set[str]) -> tuple[AigcMaterialTask, ...]:
         """Read task snapshots for an already authorized chat and its aliases."""
         with self._lock:
-            return tuple(task for task in self._read().tasks.values()
-                         if task.binding.conversation_id in conversation_ids)
+            document = self._read()
+            return tuple(
+                task
+                for task_id, task in document.tasks.items()
+                if task.binding.conversation_id in conversation_ids
+                and task_id not in document.dismissed_task_ids
+            )
+
+    def dismiss(self, material_task_id: str) -> bool:
+        """Hide a task card without deleting its workflow, canvas, or audit history."""
+        with self._lock:
+            document = self._read()
+            if material_task_id not in document.tasks:
+                return False
+            if material_task_id not in document.dismissed_task_ids:
+                document.dismissed_task_ids.add(material_task_id)
+                self._write(document)
+            return True
 
     def find_workflow_task_for_node(
         self,

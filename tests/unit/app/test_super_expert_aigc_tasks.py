@@ -164,6 +164,19 @@ def test_idempotency_replay_returns_same_result_but_key_reuse_fails(tmp_path):
         )
 
 
+def test_dismiss_hides_card_but_preserves_task_and_history(tmp_path):
+    repository = AigcTaskRepository(tmp_path)
+    created = repository.apply(
+        _command("create", "event-1"), idempotency_key="key-1"
+    )
+
+    assert repository.dismiss("missing") is False
+    assert repository.dismiss(created.binding.material_task_id) is True
+    assert repository.dismiss(created.binding.material_task_id) is True
+    assert repository.list_for_conversations({"conversation-1"}) == ()
+    assert repository.get(created.binding.material_task_id) == created
+
+
 def test_duplicate_event_and_cross_binding_or_stale_revision_are_rejected(tmp_path):
     repository = AigcTaskRepository(tmp_path)
     repository.apply(_command("create", "event-1"), idempotency_key="key-1")

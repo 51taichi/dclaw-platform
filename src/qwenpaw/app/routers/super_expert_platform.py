@@ -11,7 +11,7 @@ import uuid
 import zipfile
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from agentscope.message import Msg
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
@@ -545,6 +545,33 @@ def get_super_expert_task(
     payload = task.model_dump(mode="json")
     payload["latest_review"] = service.latest_task_review(material_task_id)
     return payload
+
+
+@frontend_read_router.delete(
+    "/tasks/{material_task_id}", status_code=204, response_class=Response
+)
+@router.delete(
+    "/tasks/{material_task_id}", status_code=204, response_class=Response
+)
+def dismiss_super_expert_task(
+    material_task_id: str,
+    request: Request,
+) -> Response:
+    service = get_super_expert_platform_service()
+    task = service.get_task(material_task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="AIGC task not found")
+    ensure_chat_access(
+        request,
+        task.binding.conversation_id,
+        allow_admin=True,
+    )
+    grant = service.grant_repository.get(task.binding.installation_id)
+    tenant_id = str(getattr(request.state, "tenant_id", "local") or "local")
+    if grant is None or grant.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="AIGC task not found")
+    service.task_repository.dismiss(material_task_id)
+    return Response(status_code=204)
 
 
 def _unique_archive_name(name: str, asset_id: str, used: set[str]) -> str:

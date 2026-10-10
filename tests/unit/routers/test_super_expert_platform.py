@@ -597,6 +597,11 @@ async def test_chat_cards_restore_from_tasks_without_runtime_events(tmp_path, mo
             assert {card['material_task_id'] for card in cards} == {'material-1', 'material-2'}
             assert next(card for card in cards if card['material_task_id']=='material-1')['status']=='IN_PROGRESS'
             assert all(card['href'].startswith('/aigc-studio?task=') for card in cards)
+        deleted = await client.delete('/api/super-expert-platform/tasks/material-1')
+        assert deleted.status_code == 204, deleted.text
+        response = await client.get('/api/super-expert-platform/cards', params={'conversation_id': 'public-chat'})
+        assert {card['material_task_id'] for card in response.json()['cards']} == {'material-2'}
+        assert service.get_task('material-1') is not None
         response = await client.get('/api/super-expert-platform/cards', params={'conversation_id': 'other-chat'})
         assert response.status_code == 404
     assert not bus.events
