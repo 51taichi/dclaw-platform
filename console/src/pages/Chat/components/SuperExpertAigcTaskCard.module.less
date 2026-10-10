@@ -118,6 +118,7 @@
     background-color 150ms ease,
     border-color 150ms ease,
     box-shadow 150ms ease;
+  position: relative;
   &[data-task-status="ACCEPTED"] {
     --card-accent: #16a34a;
     border-color: rgba(22, 163, 74, 0.35);
@@ -132,6 +133,36 @@
     box-shadow: 0 2px 7px
       color-mix(in srgb, var(--card-accent) 18%, transparent);
   }
+}
+.deleteButton {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: var(--ant-color-text-tertiary, #94a3b8);
+  background: var(--ant-color-bg-container, #fff);
+  cursor: pointer;
+}
+.deleteButton:hover {
+  color: #dc2626;
+  background: rgba(220, 38, 38, 0.08);
+}
+.deleteButton:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+.card.compact .compactEntry {
+  padding-right: 40px;
+}
+.heading {
+  padding-right: 28px;
 }
 .card.emphasized {
   border-color: var(--card-accent);

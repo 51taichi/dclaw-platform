@@ -89,6 +89,25 @@ describe("SuperExpertAigcTaskCard", () => {
     expect(onCommand).toHaveBeenCalledWith("resume", "task-1");
   });
 
+  it("exposes an icon delete action without opening the task", async () => {
+    const user = userEvent.setup();
+    const onDelete = vi.fn().mockResolvedValue(undefined);
+    const onCommand = vi.fn();
+    render(
+      <SuperExpertAigcTaskCard
+        projection={projection("IN_PROGRESS")}
+        onCommand={onCommand}
+        onDelete={onDelete}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "删除素材任务：生成首条口播视频" }),
+    );
+    expect(onDelete).toHaveBeenCalledWith("task-1");
+    expect(onCommand).not.toHaveBeenCalled();
+  });
+
   it("renders text as text rather than agent supplied HTML", () => {
     render(
       <SuperExpertAigcTaskCard

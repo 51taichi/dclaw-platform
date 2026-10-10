@@ -1,5 +1,11 @@
 import { useRef, useState } from "react";
-import { CircleCheck, ExternalLink, RotateCcw, Video } from "lucide-react";
+import {
+  CircleCheck,
+  ExternalLink,
+  RotateCcw,
+  Trash2,
+  Video,
+} from "lucide-react";
 import { buildAigcTaskRoute } from "../routeSession";
 import styles from "./SuperExpertAigcTaskCard.module.less";
 import type { RuntimeEvent } from "../../../api/modules/runtimeEvents";
@@ -102,13 +108,16 @@ export function SuperExpertAigcTaskCard({
   onCommand,
   compact = false,
   emphasized = false,
+  onDelete,
 }: {
   projection: SuperExpertAigcTaskCardProjection;
   onCommand: (command: "resume", materialTaskId: string) => Promise<void>;
   compact?: boolean;
   emphasized?: boolean;
+  onDelete?: (materialTaskId: string) => Promise<void>;
 }) {
   const [submitting, setSubmitting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const actionInFlight = useRef(false);
   const label = actionLabel(projection.status);
   const route = buildAigcTaskRoute(projection.materialTaskId);
@@ -161,6 +170,23 @@ export function SuperExpertAigcTaskCard({
         data-card-id={projection.cardId}
         data-task-status={projection.status}
       >
+        {onDelete ? (
+          <button
+            type="button"
+            className={styles.deleteButton}
+            aria-label={`删除素材任务：${projection.title}`}
+            title="删除素材任务"
+            disabled={deleting}
+            onClick={() => {
+              setDeleting(true);
+              void onDelete(projection.materialTaskId).catch(() =>
+                setDeleting(false),
+              );
+            }}
+          >
+            <Trash2 size={14} />
+          </button>
+        ) : null}
         {label ? (
           <button
             type="button"
@@ -195,6 +221,23 @@ export function SuperExpertAigcTaskCard({
       data-card-id={projection.cardId}
       data-task-status={projection.status}
     >
+      {onDelete ? (
+        <button
+          type="button"
+          className={styles.deleteButton}
+          aria-label={`删除素材任务：${projection.title}`}
+          title="删除素材任务"
+          disabled={deleting}
+          onClick={() => {
+            setDeleting(true);
+            void onDelete(projection.materialTaskId).catch(() =>
+              setDeleting(false),
+            );
+          }}
+        >
+          <Trash2 size={14} />
+        </button>
+      ) : null}
       <div className={styles.heading}>
         <span className={styles.icon}>
           {projection.status === "ACCEPTED" ? (

@@ -1,13 +1,20 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEvent } from "../../../api/modules/runtimeEvents";
 import { SuperExpertAigcCards } from "./SuperExpertAigcCards";
 
 const listCards = vi.hoisted(() => vi.fn());
+const dismissTask = vi.hoisted(() => vi.fn());
 const runtimeEvents = vi.hoisted(() => ({ current: [] as RuntimeEvent[] }));
 vi.mock("../../../api/modules/superExpertPlatform", () => ({
-  superExpertPlatformApi: { listCards },
+  superExpertPlatformApi: { listCards, dismissTask },
 }));
 vi.mock("../../../contexts/RuntimeEventContext", () => ({
   useRuntimeEvents: () => ({
@@ -43,6 +50,7 @@ describe("conversation card status refresh", () => {
     vi.resetAllMocks();
     runtimeEvents.current = [];
     localStorage.clear();
+    dismissTask.mockResolvedValue(undefined);
   });
   it("defaults to compact cards, expands and remembers the choice across remounts", async () => {
     localStorage.setItem("dclaw:aigc-card-introduced:c1", "true");
@@ -170,6 +178,36 @@ describe("conversation card status refresh", () => {
       </MemoryRouter>,
     );
     resolveOld(snapshot("ACCEPTED"));
+    await waitFor(() =>
+      expect(screen.queryByText("开场视频")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("confirms and persistently dismisses a material task card", async () => {
+    localStorage.setItem("dclaw:aigc-card-introduced:c1", "true");
+    localStorage.setItem("dclaw:aigc-card-shelf:expanded", "true");
+    listCards.mockResolvedValue(snapshot("IN_PROGRESS"));
+    render(
+      <MemoryRouter>
+        <SuperExpertAigcCards conversationId="c1" />
+      </MemoryRouter>,
+    );
+    await screen.findByText("开场视频");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "删除素材任务：开场视频" }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getAllByText("删除这张素材任务卡片？").length,
+      ).toBeGreaterThan(0),
+    );
+    const confirmDialog = screen.getByRole("dialog");
+    fireEvent.click(
+      within(confirmDialog).getByRole("button", { name: /删\s*除/ }),
+    );
+
+    await waitFor(() => expect(dismissTask).toHaveBeenCalledWith("m1"));
     await waitFor(() =>
       expect(screen.queryByText("开场视频")).not.toBeInTheDocument(),
     );

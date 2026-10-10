@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, Sparkles } from "lucide-react";
+import { Modal, message } from "antd";
 import { useNavigate } from "react-router-dom";
 import { superExpertPlatformApi } from "../../../api/modules/superExpertPlatform";
 import { useRuntimeEvents } from "../../../contexts/RuntimeEventContext";
@@ -109,6 +110,9 @@ export function SuperExpertAigcCards({
   const [error, setError] = useState(false);
   const [retry, setRetry] = useState(0);
   const [introducedTaskId, setIntroducedTaskId] = useState<string | null>(null);
+  const [dismissedTaskIds, setDismissedTaskIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   useEffect(() => {
     const refresh = () => {
       if (document.visibilityState !== "hidden") setRetry((value) => value + 1);
@@ -162,8 +166,11 @@ export function SuperExpertAigcCards({
   const snapshotCards =
     snapshot?.conversationId === conversationId ? snapshot.cards : [];
   const cards = useMemo(
-    () => mergeCards(snapshotCards, liveCards),
-    [liveCards, snapshotCards],
+    () =>
+      mergeCards(snapshotCards, liveCards).filter(
+        (card) => !dismissedTaskIds.has(card.materialTaskId),
+      ),
+    [dismissedTaskIds, liveCards, snapshotCards],
   );
   const firstCardId = cards[0]?.materialTaskId;
   useEffect(() => {
@@ -225,6 +232,31 @@ export function SuperExpertAigcCards({
             projection={projection}
             compact={!expanded}
             emphasized={introducedTaskId === projection.materialTaskId}
+            onDelete={async (materialTaskId) => {
+              await new Promise<void>((resolve, reject) => {
+                Modal.confirm({
+                  title: "删除这张素材任务卡片？",
+                  content: "卡片将从当前会话移除，已生成的画布和素材仍会保留。",
+                  okText: "删除",
+                  okButtonProps: { danger: true },
+                  cancelText: "取消",
+                  onOk: async () => {
+                    try {
+                      await superExpertPlatformApi.dismissTask(materialTaskId);
+                      setDismissedTaskIds(
+                        (current) => new Set([...current, materialTaskId]),
+                      );
+                      message.success("素材任务卡片已删除");
+                      resolve();
+                    } catch (error) {
+                      message.error("删除失败，请重试");
+                      reject(error);
+                    }
+                  },
+                  onCancel: () => reject(new Error("dismiss cancelled")),
+                });
+              });
+            }}
             onCommand={async (_, materialTaskId) => {
               setIntroducedTaskId(null);
               const currentLifetime = lifetime.current;

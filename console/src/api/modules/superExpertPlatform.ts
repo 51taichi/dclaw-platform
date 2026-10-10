@@ -280,6 +280,11 @@ export const superExpertPlatformApi = {
     request<BoundAigcTask>(
       `/super-expert-platform/tasks/${encodeURIComponent(materialTaskId)}`,
     ),
+  dismissTask: (materialTaskId: string) =>
+    request<void>(
+      `/super-expert-platform/tasks/${encodeURIComponent(materialTaskId)}`,
+      { method: "DELETE" },
+    ),
   downloadReviewAssets: async (materialTaskId: string) => {
     const blob = await request<Blob>(
       `/super-expert-platform/tasks/${encodeURIComponent(
