@@ -1,0 +1,19 @@
+services:
+  dclaw-typesafe-relay:
+    build: .
+    image: dclaw-typesafe-relay:local
+    container_name: dclaw-typesafe-relay
+    restart: unless-stopped
+    environment:
+      RELAY_TOKEN: ${RELAY_TOKEN:?RELAY_TOKEN is required}
+      TYPESAFE_UPSTREAM_URL: https://api.typesafe.ai/v1/systemone
+    ports:
+      - "127.0.0.1:18766:8787"
+    expose:
+      - "8787"
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true
