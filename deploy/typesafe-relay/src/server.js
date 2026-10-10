@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 
-import worker from "./index.js";
+import { handleRelayRequest } from "./relay.js";
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 
@@ -61,7 +61,7 @@ export function createRelayServer(env = process.env) {
         `${forwardedProto}://${host}${incoming.url || "/"}`,
         init,
       );
-      const result = await worker.fetch(request, env);
+      const result = await handleRelayRequest(request, env);
       writeResponse(outgoing, result);
     } catch (error) {
       const status = error instanceof RangeError ? 413 : 502;

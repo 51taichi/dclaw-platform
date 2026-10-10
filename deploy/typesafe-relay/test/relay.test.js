@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import worker from "../src/index.js";
+import { handleRelayRequest } from "../src/relay.js";
 
 const env = {
   RELAY_TOKEN: "relay-secret",
@@ -9,7 +9,7 @@ const env = {
 };
 
 test("rejects requests without the relay token", async () => {
-  const response = await worker.fetch(
+  const response = await handleRelayRequest(
     new Request("https://relay.example/v1/systemone", {
       method: "POST",
       headers: { Authorization: "Bearer typesafe-key" },
@@ -42,7 +42,7 @@ test("forwards only the TypeSafe request and selected response headers", async (
     });
   };
 
-  const response = await worker.fetch(
+  const response = await handleRelayRequest(
     new Request("https://relay.example/v1/systemone", {
       method: "POST",
       headers: {
@@ -62,7 +62,7 @@ test("forwards only the TypeSafe request and selected response headers", async (
 });
 
 test("does not expose any other path", async () => {
-  const response = await worker.fetch(
+  const response = await handleRelayRequest(
     new Request("https://relay.example/anything", { method: "POST" }),
     env,
   );
