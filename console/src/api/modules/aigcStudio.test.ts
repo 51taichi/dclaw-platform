@@ -382,6 +382,68 @@ describe("aigcStudioApi", () => {
     );
   });
 
+  it("resumes an accepted provider task in query-only mode while it is still running", async () => {
+    vi.useFakeTimers();
+    const runningJob = {
+      id: "job-provider-pending",
+      canvas_id: "canvas-1",
+      node_id: "image-1",
+      capability: "text_to_image",
+      provider_id: "mxapi",
+      model_id: "gpt-image-2",
+      inputs: {},
+      parameters: {},
+      status: "running",
+      outputs: [],
+      logs: ["Job started."],
+      created_at: "2026-10-10T08:19:02Z",
+      updated_at: "2026-10-10T08:19:02Z",
+    };
+    const succeededJob = {
+      ...runningJob,
+      status: "succeeded",
+      outputs: [
+        {
+          id: "asset-recovered",
+          kind: "image",
+          name: "recovered.png",
+          path: "aigc/recovered.png",
+          created_at: "2026-10-10T08:24:00Z",
+        },
+      ],
+    };
+    let runRequests = 0;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/jobs/job-provider-pending/run?background=true")) {
+        runRequests += 1;
+        return new Response(
+          JSON.stringify(runRequests === 1 ? runningJob : succeededJob),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify(runningJob), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    const resultPromise = aigcStudioApi.runJob("job-provider-pending");
+    await vi.advanceTimersByTimeAsync(30_000);
+    const result = await resultPromise;
+
+    expect(result.status).toBe("succeeded");
+    expect(runRequests).toBe(2);
+    expect(
+      vi.mocked(fetch).mock.calls.filter(([input]) =>
+        String(input).endsWith("/aigc-studio/jobs"),
+      ),
+    ).toHaveLength(0);
+    expect(
+      vi.mocked(fetch).mock.calls.filter(([, init]) => init?.method === "POST"),
+    ).toHaveLength(2);
+  });
+
   it("uploads assets directly to signed OSS URLs before completing metadata", async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce(

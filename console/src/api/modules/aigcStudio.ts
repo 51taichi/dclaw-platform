@@ -250,6 +250,7 @@ const AIGC_JOB_TERMINAL_STATUSES = new Set<AigcJob["status"]>([
 ]);
 const AIGC_JOB_POLL_INTERVAL_MS = 1500;
 const AIGC_JOB_POLL_TIMEOUT_MS = 20 * 60 * 1000;
+const AIGC_JOB_RECOVERY_INTERVAL_MS = 30 * 1000;
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -270,11 +271,23 @@ async function pollJobUntilTerminal(startedJob: AigcJob): Promise<AigcJob> {
 
   const jobId = startedJob.id;
   const deadline = Date.now() + AIGC_JOB_POLL_TIMEOUT_MS;
+  let nextRecoveryAt = Date.now() + AIGC_JOB_RECOVERY_INTERVAL_MS;
   let latest = startedJob;
 
   while (!isTerminalJob(latest)) {
     try {
-      latest = await getJob(jobId);
+      if (Date.now() >= nextRecoveryAt) {
+        // The provider may complete after the server-side polling window. This
+        // endpoint resumes the persisted provider task in query-only mode, so
+        // it cannot submit or charge for the generation a second time.
+        latest = await request<AigcJob>(
+          `/aigc-studio/jobs/${encodeURIComponent(jobId)}/run?background=true`,
+          { method: "POST" },
+        );
+        nextRecoveryAt = Date.now() + AIGC_JOB_RECOVERY_INTERVAL_MS;
+      } else {
+        latest = await getJob(jobId);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const nonRetryable = /not authenticated|\b40[134]\b/i.test(message);

@@ -244,7 +244,7 @@ export function AigcGuidePanel({
 
         {revisionFeedback ? (
           <section className={styles.reviewFeedback} aria-label="上次审核意见">
-            <h3>上次审核意见</h3>
+            <h3>需要修改后重新提交</h3>
             <p>{revisionFeedback}</p>
           </section>
         ) : null}

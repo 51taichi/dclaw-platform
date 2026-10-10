@@ -208,7 +208,7 @@ describe("AigcGuidePanel", () => {
     );
 
     expect(
-      screen.getByRole("heading", { name: "上次审核意见" }),
+      screen.getByRole("heading", { name: "需要修改后重新提交" }),
     ).toBeInTheDocument();
     expect(
       screen.getByText("封面列出的三项与后面的内容页不一致。"),
