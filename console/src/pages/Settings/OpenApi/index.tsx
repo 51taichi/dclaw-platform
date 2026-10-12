@@ -27,6 +27,7 @@ import {
   RefreshCw,
   RotateCcw,
   ShieldCheck,
+  Trash2,
 } from "lucide-react";
 
 import { AgentExperienceLibrary } from "@/components/AgentExperienceLibrary";
@@ -171,6 +172,7 @@ export default function OpenApiPage() {
   const [creatingApp, setCreatingApp] = useState(false);
   const [creatingKey, setCreatingKey] = useState(false);
   const [statusBusyId, setStatusBusyId] = useState<string>();
+  const [deleteBusyId, setDeleteBusyId] = useState<string>();
   const [editingPublication, setEditingPublication] =
     useState<OpenApiPublication>();
   const [updatingBoundUser, setUpdatingBoundUser] = useState(false);
@@ -541,6 +543,35 @@ export default function OpenApiPage() {
     }
   };
 
+  const handleDeletePublication = async (publication: OpenApiPublication) => {
+    setDeleteBusyId(publication.id);
+    try {
+      await openApiApi.deletePublication(publication.id);
+      const remainingPublications = publications.filter(
+        (item) => item.id !== publication.id,
+      );
+      setPublications(remainingPublications);
+      setKeys((prev) =>
+        prev.filter((item) => item.publication_id !== publication.id),
+      );
+      setInvocations((prev) =>
+        prev.filter((item) => item.publication_id !== publication.id),
+      );
+      if (selectedPublicationId === publication.id) {
+        const nextPublicationId = remainingPublications.find(
+          (item) => item.status === "enabled",
+        )?.id;
+        setSelectedPublicationId(nextPublicationId);
+        setKeyDefaults(remainingPublications, apps, nextPublicationId);
+      }
+      message.success("发布对象已删除，历史调用和计费记录已保留");
+    } catch (error) {
+      message.error(getErrorMessage(error, "删除发布对象失败"));
+    } finally {
+      setDeleteBusyId(undefined);
+    }
+  };
+
   const handleRevokeKey = async (key: OpenApiKey) => {
     setRevokeBusyId(key.id);
     try {
@@ -643,7 +674,7 @@ export default function OpenApiPage() {
     {
       title: "操作",
       key: "actions",
-      width: 240,
+      width: 330,
       render: (_, record) => {
         const enabled = record.status === "enabled";
         return (
@@ -664,6 +695,25 @@ export default function OpenApiPage() {
             >
               {enabled ? "禁用" : "启用"}
             </Button>
+            {!enabled && (
+              <Popconfirm
+                title="删除发布对象"
+                description="删除后将从页面隐藏，历史调用和计费记录仍会保留。"
+                okText="删除"
+                cancelText="取消"
+                okButtonProps={{ danger: true }}
+                onConfirm={() => handleDeletePublication(record)}
+              >
+                <Button
+                  danger
+                  icon={<Trash2 size={14} />}
+                  loading={deleteBusyId === record.id}
+                  size="small"
+                >
+                  删除
+                </Button>
+              </Popconfirm>
+            )}
           </Space>
         );
       },
@@ -929,7 +979,7 @@ export default function OpenApiPage() {
                       className={styles.inlineNotice}
                       type="info"
                       showIcon
-                      message="不再使用的接口可以先禁用；关闭“仅显示启用”即可随时查看和重新启用。"
+                      message="不再使用的接口需先禁用；禁用后可重新启用，也可删除并从页面隐藏。"
                     />
                     <Table
                       columns={publicationColumns}

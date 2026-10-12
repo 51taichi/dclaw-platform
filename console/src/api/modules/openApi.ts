@@ -61,6 +61,12 @@ export const openApiApi = {
       },
     ),
 
+  deletePublication: (publicationId: string) =>
+    request<{ deleted: boolean; id: string }>(
+      `/open-api/publications/${publicationId}`,
+      { method: "DELETE" },
+    ),
+
   listApps: () => request<OpenApiExternalApp[]>("/open-api/apps"),
 
   createApp: (payload: CreateOpenApiExternalAppRequest) =>

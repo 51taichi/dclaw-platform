@@ -7,6 +7,7 @@ import { authApi } from "../../api/modules/auth";
 import { setAuthToken } from "../../api/config";
 import { useAuth } from "../../contexts/AuthContext";
 import loginMascotAsset from "../../assets/login/login-mascot.png";
+import { getLoginErrorMessage } from "./loginError";
 import styles from "./index.module.less";
 
 export default function LoginPage() {
@@ -62,13 +63,10 @@ export default function LoginPage() {
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "";
-      const isRateLimited = errorMessage.toLowerCase().includes("too many");
       message.error(
         isRegister
           ? errorMessage || t("login.registerFailed")
-          : isRateLimited
-          ? t("login.tooManyAttempts")
-          : t("login.failed"),
+          : getLoginErrorMessage(err, t),
       );
     } finally {
       setLoading(false);

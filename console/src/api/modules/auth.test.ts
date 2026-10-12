@@ -1,12 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { authApi } from "./auth";
+import { AuthApiError, AuthNetworkError, authApi } from "./auth";
 
 // auth.ts uses fetch directly (not the request wrapper), so mock global fetch
 vi.mock("../config", () => ({
   getApiUrl: (path: string) => `/api${path}`,
 }));
 
-function mockFetch(status: number, body: unknown) {
+function mockFetch(
+  status: number,
+  body: unknown,
+  headers: Record<string, string> = {},
+) {
   global.fetch = vi.fn().mockResolvedValue({
     ok: status >= 200 && status < 300,
     status,
@@ -14,7 +18,21 @@ function mockFetch(status: number, body: unknown) {
     json: () => Promise.resolve(body),
     text: () =>
       Promise.resolve(typeof body === "string" ? body : JSON.stringify(body)),
+    headers: new Headers(headers),
   } as unknown as Response);
+}
+
+function getLastFetchInit(): RequestInit {
+  const calls = vi.mocked(global.fetch).mock.calls;
+  const call = calls[calls.length - 1];
+  expect(call).toBeDefined();
+  return call?.[1] ?? {};
+}
+
+function getLastJsonBody(): Record<string, unknown> {
+  const body = getLastFetchInit().body;
+  expect(typeof body).toBe("string");
+  return JSON.parse(body as string) as Record<string, unknown>;
 }
 
 describe("authApi.login", () => {
@@ -38,21 +56,46 @@ describe("authApi.login", () => {
   it("request body contains username and password", async () => {
     mockFetch(200, { token: "tok", username: "alice" });
     await authApi.login("alice", "secret");
-    const body = JSON.parse((fetch as any).mock.calls[0][1].body);
+    const body = getLastJsonBody();
     expect(body).toEqual({ username: "alice", password: "secret" });
   });
 
   it("throws error with detail on login failure", async () => {
     mockFetch(401, { detail: "Invalid username or password" });
-    await expect(authApi.login("alice", "wrong")).rejects.toThrow(
-      "Invalid username or password",
-    );
+    await expect(authApi.login("alice", "wrong")).rejects.toMatchObject({
+      name: "AuthApiError",
+      message: "Invalid username or password",
+      status: 401,
+    } satisfies Partial<AuthApiError>);
   });
 
   it("throws default error when response has no detail", async () => {
     mockFetch(401, {});
     await expect(authApi.login("alice", "wrong")).rejects.toThrow(
       "Login failed",
+    );
+  });
+
+  it("preserves retry-after metadata for rate limits", async () => {
+    mockFetch(
+      429,
+      { detail: "Too many failed login attempts" },
+      {
+        "Retry-After": "37",
+      },
+    );
+
+    await expect(authApi.login("alice", "wrong")).rejects.toMatchObject({
+      status: 429,
+      retryAfterSeconds: 37,
+    } satisfies Partial<AuthApiError>);
+  });
+
+  it("distinguishes network failures from credential failures", async () => {
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Load failed"));
+
+    await expect(authApi.login("alice", "pass")).rejects.toBeInstanceOf(
+      AuthNetworkError,
     );
   });
 });
@@ -126,7 +169,7 @@ describe("authApi.updateProfile", () => {
   it("request body contains current password and new username", async () => {
     mockFetch(200, { token: "t", username: "newname" });
     await authApi.updateProfile("oldpass", "newname");
-    const body = JSON.parse((fetch as any).mock.calls[0][1].body);
+    const body = getLastJsonBody();
     expect(body.current_password).toBe("oldpass");
     expect(body.new_username).toBe("newname");
     expect(body.new_password).toBeNull();
@@ -136,7 +179,7 @@ describe("authApi.updateProfile", () => {
     localStorage.setItem("qwenpaw_auth_token", "my-token");
     mockFetch(200, { token: "t", username: "alice" });
     await authApi.updateProfile("oldpass");
-    const headers = (fetch as any).mock.calls[0][1].headers;
+    const headers = getLastFetchInit().headers as Record<string, string>;
     expect(headers.Authorization).toBe("Bearer my-token");
   });
 

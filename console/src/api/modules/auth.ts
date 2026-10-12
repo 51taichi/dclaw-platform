@@ -11,16 +11,56 @@ export interface AuthStatusResponse {
   has_users: boolean;
 }
 
+export class AuthApiError extends Error {
+  readonly status: number;
+  readonly retryAfterSeconds: number | null;
+
+  constructor(
+    message: string,
+    status: number,
+    retryAfterSeconds: number | null = null,
+  ) {
+    super(message);
+    this.name = "AuthApiError";
+    this.status = status;
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
+export class AuthNetworkError extends Error {
+  constructor() {
+    super("Unable to reach the authentication service");
+    this.name = "AuthNetworkError";
+  }
+}
+
+function getRetryAfterSeconds(response: Response): number | null {
+  const raw = response.headers?.get("Retry-After");
+  if (!raw) return null;
+
+  const seconds = Number.parseInt(raw, 10);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+}
+
 export const authApi = {
   login: async (username: string, password: string): Promise<LoginResponse> => {
-    const res = await fetch(getApiUrl("/auth/login"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
-    });
+    let res: Response;
+    try {
+      res = await fetch(getApiUrl("/auth/login"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+    } catch {
+      throw new AuthNetworkError();
+    }
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || "Login failed");
+      throw new AuthApiError(
+        err.detail || "Login failed",
+        res.status,
+        getRetryAfterSeconds(res),
+      );
     }
     return res.json();
   },

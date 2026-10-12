@@ -23,6 +23,7 @@ const {
       createPublication: vi.fn(),
       updatePublicationStatus: vi.fn(),
       updatePublicationBoundUser: vi.fn(),
+      deletePublication: vi.fn(),
       listApps: vi.fn(),
       createApp: vi.fn(),
       listKeys: vi.fn(),
@@ -122,6 +123,10 @@ describe("OpenApiPage", () => {
     ]);
     mockOpenApiApi.listKeys.mockResolvedValue([]);
     mockOpenApiApi.listInvocations.mockResolvedValue([]);
+    mockOpenApiApi.deletePublication.mockResolvedValue({
+      deleted: true,
+      id: "pub-disabled",
+    });
     mockOpenApiApi.createKey.mockResolvedValue({
       secret: "qp_live_secret_once",
       key: {
@@ -348,6 +353,40 @@ describe("OpenApiPage", () => {
       );
     });
     expect(await screen.findByText("new-owner")).toBeInTheDocument();
+  });
+
+  it("deletes a disabled publication after confirmation", async () => {
+    const user = userEvent.setup();
+    mockOpenApiApi.listPublications.mockResolvedValue([
+      {
+        id: "pub-disabled",
+        public_id: "legacy_support",
+        target_type: "agent",
+        target_id: "agent-1",
+        bound_user_id: "7",
+        knowledge_base_id: "openapi-pub-disabled",
+        name: "旧客服接口",
+        status: "disabled",
+        allowed_scopes: ["messages:create"],
+      },
+    ]);
+
+    render(<OpenApiPage />);
+
+    await user.click(await screen.findByRole("switch", { name: "仅显示启用" }));
+    expect(await screen.findByText("旧客服接口")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "删除" }));
+    const deleteButtons = await screen.findAllByRole("button", {
+      name: /删\s*除/,
+    });
+    await user.click(deleteButtons[deleteButtons.length - 1]);
+
+    await waitFor(() => {
+      expect(mockOpenApiApi.deletePublication).toHaveBeenCalledWith(
+        "pub-disabled",
+      );
+    });
+    expect(screen.queryByText("旧客服接口")).not.toBeInTheDocument();
   });
 
   it("reuses the shared agent experience library in the knowledge tab", async () => {
