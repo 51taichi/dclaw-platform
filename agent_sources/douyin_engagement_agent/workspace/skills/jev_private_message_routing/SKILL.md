@@ -5,7 +5,7 @@ description: 抖音私信任务归因。仅在 ROUTE_PRIVATE_MESSAGE 操作中�
 
 # 私信任务归因
 
-收到 `ROUTE_PRIVATE_MESSAGE` 时，调用一次 `route_private_message_jev`。传入 `inboundMessage.text`、`inboundMessage.video`（存在时）、当前会话的 `recentHistory` 和 Bot Server 提供的 `candidateTasks`。候选任务只包含 `taskId`、`name`、`routingDescription`、`routingThreshold`，不得加入回复话术、微信号或其他客户的私密配置。
+收到 `ROUTE_PRIVATE_MESSAGE` 时，调用一次 `route_private_message_jev`。传入 `inboundMessage.text`、`inboundMessage.video`（存在时）、当前会话的 `recentHistory` 和 Bot Server 提供的 `candidateTasks`。候选任务只包含 `taskId`、`name`、`routingDescription`、`targetVideo`、`routingThreshold` 和 `routingMinMargin`。`targetVideo` 是目标视频的完整分享文案，可用其中的作者、标题、话题标签和链接辅助归因；不得加入回复话术、微信号或其他客户的私密配置。
 
 工具把候选任务与 `no_match` 放入 Jev Choice。超过 200 个任务时先分批选出候选，再用一次 Jev Choice 做全局比较，最多支持 2000 个任务。最终概率必须达到所选任务的 `routingThreshold`，并达到该任务的 `routingMinMargin`；泛化问候、缺少线索、多个候选接近或 API 错误均不得强行归因。
 

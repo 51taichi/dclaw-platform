@@ -54,7 +54,7 @@ async def route_private_message_jev(
     shared_video: dict | None = None,
     minimum_margin: float = MIN_MARGIN,
 ) -> ToolResponse:
-    """Choose a task from taskId/name/routingDescription candidates using Jev.
+    """Choose a task from task routing and target-video evidence using Jev.
 
     Args:
         message: The latest inbound private-message text.
@@ -94,6 +94,7 @@ async def route_private_message_jev(
         task_id = task.get("taskId")
         name = task.get("name")
         description = task.get("routingDescription")
+        target_video = task.get("targetVideo")
         threshold = task.get("routingThreshold", 0.5)
         margin = task.get("routingMinMargin", minimum_margin)
         if (
@@ -108,11 +109,17 @@ async def route_private_message_jev(
             or not isinstance(description, str)
             or not description.strip()
             or len(description) > 1000
+            or (
+                target_video is not None
+                and (not isinstance(target_video, str) or len(target_video) > 4000)
+            )
             or not _valid_probability(threshold)
             or not _valid_probability(margin)
         ):
             return _result("ERROR")
         descriptions[task_id] = {"task": name, "signals": description}
+        if isinstance(target_video, str) and target_video.strip():
+            descriptions[task_id]["targetVideo"] = target_video.strip()
         thresholds[task_id] = float(threshold)
         margins[task_id] = float(margin)
 
@@ -179,7 +186,8 @@ async def route_private_message_jev(
                             "type": "choice",
                             "instructions": (
                                 "根据当前私信及同一会话历史，判断用户明确在咨询本组哪个评论任务。"
-                                "只依据业务线索和用户明确陈述；不能因 Bot 账号或候选顺序猜测。"
+                                "候选的 targetVideo 是目标视频分享文案，可使用其中的作者、标题和话题标签作为证据。"
+                                "只依据业务线索、目标视频信息和用户明确陈述；不能因 Bot 账号或候选顺序猜测。"
                                 "没有足够证据时选择 no_match。"
                             ),
                             "criteria": criteria,

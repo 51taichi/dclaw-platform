@@ -78,6 +78,7 @@ async def test_http_route_checks_publication_and_calls_jev_directly(monkeypatch)
                     "taskId": "task-1",
                     "name": "装修",
                     "routingDescription": "旧房翻新",
+                    "targetVideo": "看看【装修师傅的作品】#旧房翻新 https://v.douyin.com/demo/",
                 }
             ],
         }
@@ -93,6 +94,7 @@ async def test_http_route_checks_publication_and_calls_jev_directly(monkeypatch)
     assert result["status"] == "MATCHED"
     assert result["taskId"] == "task-1"
     assert calls[0]["candidate_tasks"][0]["routingDescription"] == "旧房翻新"
+    assert "#旧房翻新" in calls[0]["candidate_tasks"][0]["targetVideo"]
 
 
 def result_body(result):
@@ -152,6 +154,10 @@ async def test_matches_only_supplied_task_and_keeps_reply_instructions_out_of_je
                 "taskId": "task-renovation",
                 "name": "装修",
                 "routingDescription": "家装报价",
+                "targetVideo": (
+                    "复制打开抖音，看看【装修师傅的作品】# 旧房翻新 "
+                    "https://v.douyin.com/demo/"
+                ),
                 "instructions": "微信 secret",
             }
         ],
@@ -159,6 +165,9 @@ async def test_matches_only_supplied_task_and_keeps_reply_instructions_out_of_je
     assert result_body(result)["taskId"] == "task-renovation"
     assert result_body(result)["status"] == "MATCHED"
     assert "微信 secret" not in json.dumps(requests, ensure_ascii=False)
+    assert requests[0]["questions"]["task"]["criteria"]["task-renovation"][
+        "targetVideo"
+    ].startswith("复制打开抖音")
     assert requests[0]["model"] == "jev-latest"
 
 
