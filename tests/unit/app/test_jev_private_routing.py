@@ -72,13 +72,16 @@ async def test_http_route_checks_publication_and_calls_jev_directly(monkeypatch)
     monkeypatch.setattr(plugin_module, "route_private_message_jev", direct_jev)
     payload = plugin_module.RouteRequest.model_validate(
         {
+            "schemaVersion": 2,
             "message": "我想问旧房翻新",
             "candidateTasks": [
                 {
                     "taskId": "task-1",
-                    "name": "装修",
-                    "routingDescription": "旧房翻新",
-                    "targetVideo": "看看【装修师傅的作品】#旧房翻新 https://v.douyin.com/demo/",
+                    "routingContext": (
+                        "归因线索：旧房翻新\n"
+                        "目标视频：看看【装修师傅的作品】#旧房翻新 "
+                        "https://v.douyin.com/demo/"
+                    ),
                 }
             ],
         }
@@ -93,8 +96,9 @@ async def test_http_route_checks_publication_and_calls_jev_directly(monkeypatch)
 
     assert result["status"] == "MATCHED"
     assert result["taskId"] == "task-1"
-    assert calls[0]["candidate_tasks"][0]["routingDescription"] == "旧房翻新"
-    assert "#旧房翻新" in calls[0]["candidate_tasks"][0]["targetVideo"]
+    context = calls[0]["candidate_tasks"][0]["routingContext"]
+    assert "归因线索：旧房翻新" in context
+    assert "#旧房翻新" in context
 
 
 def result_body(result):
@@ -152,9 +156,8 @@ async def test_matches_only_supplied_task_and_keeps_reply_instructions_out_of_je
         [
             {
                 "taskId": "task-renovation",
-                "name": "装修",
-                "routingDescription": "家装报价",
-                "targetVideo": (
+                "routingContext": (
+                    "归因线索：家装报价\n目标视频："
                     "复制打开抖音，看看【装修师傅的作品】# 旧房翻新 "
                     "https://v.douyin.com/demo/"
                 ),
@@ -165,9 +168,10 @@ async def test_matches_only_supplied_task_and_keeps_reply_instructions_out_of_je
     assert result_body(result)["taskId"] == "task-renovation"
     assert result_body(result)["status"] == "MATCHED"
     assert "微信 secret" not in json.dumps(requests, ensure_ascii=False)
-    assert requests[0]["questions"]["task"]["criteria"]["task-renovation"][
-        "targetVideo"
-    ].startswith("复制打开抖音")
+    assert requests[0]["questions"]["task"]["criteria"]["task-renovation"] == (
+        "归因线索：家装报价\n目标视频：复制打开抖音，看看【装修师傅的作品】"
+        "# 旧房翻新 https://v.douyin.com/demo/"
+    )
     assert requests[0]["model"] == "jev-latest"
 
 

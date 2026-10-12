@@ -54,11 +54,11 @@ async def route_private_message_jev(
     shared_video: dict | None = None,
     minimum_margin: float = MIN_MARGIN,
 ) -> ToolResponse:
-    """Choose a task from task routing and target-video evidence using Jev.
+    """Choose a task from caller-composed routing contexts using Jev.
 
     Args:
         message: The latest inbound private-message text.
-        candidate_tasks: Bot Server tasks with routing metadata and routingThreshold.
+        candidate_tasks: Opaque routingContext values with IDs and confidence controls.
         recent_history: Recent messages in this same Douyin conversation, with direction and text.
         shared_video: Observable metadata from a shared-video card, when available.
     """
@@ -85,16 +85,14 @@ async def route_private_message_jev(
     }:
         return _result("UNRESOLVED")
 
-    descriptions = {}
+    contexts = {}
     thresholds = {}
     margins = {}
     for task in candidate_tasks:
         if not isinstance(task, dict):
             return _result("ERROR")
         task_id = task.get("taskId")
-        name = task.get("name")
-        description = task.get("routingDescription")
-        target_video = task.get("targetVideo")
+        routing_context = task.get("routingContext")
         threshold = task.get("routingThreshold", 0.5)
         margin = task.get("routingMinMargin", minimum_margin)
         if (
@@ -102,24 +100,20 @@ async def route_private_message_jev(
             or not task_id
             or len(task_id) > 128
             or task_id == NO_MATCH
-            or task_id in descriptions
-            or not isinstance(name, str)
-            or not name.strip()
-            or len(name) > 128
-            or not isinstance(description, str)
-            or not description.strip()
-            or len(description) > 1000
-            or (
-                target_video is not None
-                and (not isinstance(target_video, str) or len(target_video) > 4000)
-            )
+            or task_id in contexts
             or not _valid_probability(threshold)
             or not _valid_probability(margin)
         ):
             return _result("ERROR")
-        descriptions[task_id] = {"task": name, "signals": description}
-        if isinstance(target_video, str) and target_video.strip():
-            descriptions[task_id]["targetVideo"] = target_video.strip()
+        if routing_context is None:
+            routing_context = _legacy_routing_context(task)
+        if (
+            not isinstance(routing_context, str)
+            or not routing_context.strip()
+            or len(routing_context) > 6000
+        ):
+            return _result("ERROR")
+        contexts[task_id] = routing_context
         thresholds[task_id] = float(threshold)
         margins[task_id] = float(margin)
 
@@ -168,8 +162,8 @@ async def route_private_message_jev(
     unresolved_confidence = None
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            for offset in range(0, len(descriptions), BATCH_SIZE):
-                batch = dict(list(descriptions.items())[offset : offset + BATCH_SIZE])
+            for offset in range(0, len(contexts), BATCH_SIZE):
+                batch = dict(list(contexts.items())[offset : offset + BATCH_SIZE])
                 criteria = {
                     NO_MATCH: "没有足够证据归属到本组任一任务；泛化问候也选这里。",
                     **batch,
@@ -186,8 +180,8 @@ async def route_private_message_jev(
                             "type": "choice",
                             "instructions": (
                                 "根据当前私信及同一会话历史，判断用户明确在咨询本组哪个评论任务。"
-                                "候选的 targetVideo 是目标视频分享文案，可使用其中的作者、标题和话题标签作为证据。"
-                                "只依据业务线索、目标视频信息和用户明确陈述；不能因 Bot 账号或候选顺序猜测。"
+                                "每个候选值是调用方提供的完整归因上下文，必须结合用户明确陈述判断。"
+                                "不能因 Bot 账号、候选 ID 或候选顺序猜测。"
                                 "没有足够证据时选择 no_match。"
                             ),
                             "criteria": criteria,
@@ -205,13 +199,13 @@ async def route_private_message_jev(
             if not winners:
                 return _result("UNRESOLVED", confidence=unresolved_confidence)
 
-            if len(descriptions) <= BATCH_SIZE:
+            if len(contexts) <= BATCH_SIZE:
                 choice, probability, confidence, probabilities = winners[0]
             else:
                 finalist_ids = list(dict.fromkeys(item[0] for item in winners))
                 final_criteria = {
                     NO_MATCH: "所有批次候选都缺少足够证据时选择这里。",
-                    **{task_id: descriptions[task_id] for task_id in finalist_ids},
+                    **{task_id: contexts[task_id] for task_id in finalist_ids},
                 }
                 final_payload = {
                     "model": "jev-latest",
@@ -252,6 +246,30 @@ async def route_private_message_jev(
     return _result(
         "MATCHED", task_id=choice, probability=probability, confidence=confidence
     )
+
+
+def _legacy_routing_context(task):
+    """Keep schema v1 requests working during rolling upgrades."""
+    name = task.get("name")
+    description = task.get("routingDescription")
+    target_video = task.get("targetVideo")
+    if (
+        not isinstance(name, str)
+        or not name.strip()
+        or len(name) > 128
+        or not isinstance(description, str)
+        or not description.strip()
+        or len(description) > 1000
+        or (
+            target_video is not None
+            and (not isinstance(target_video, str) or len(target_video) > 4000)
+        )
+    ):
+        return None
+    parts = [f"任务名称：{name.strip()}", f"归因线索：{description.strip()}"]
+    if isinstance(target_video, str) and target_video.strip():
+        parts.append(f"目标视频：{target_video.strip()}")
+    return "\n".join(parts)
 
 
 async def _choose(client, payload, criteria, api_key, api_url, relay_token):

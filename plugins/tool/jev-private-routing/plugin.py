@@ -1,6 +1,7 @@
 """Register deterministic Jev private-message routing."""
 
 import json
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -13,7 +14,7 @@ from .routing import route_private_message_jev
 class RouteRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    schema_version: int = Field(default=1, alias="schemaVersion")
+    schema_version: Literal[1, 2] = Field(default=2, alias="schemaVersion")
     message: str = Field(min_length=1, max_length=4_000)
     candidate_tasks: list[dict] = Field(alias="candidateTasks", min_length=1, max_length=2_000)
     recent_history: list[dict] = Field(default_factory=list, alias="recentHistory", max_length=2_000)
