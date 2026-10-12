@@ -126,6 +126,23 @@ def test_update_publication_bound_user_changes_only_the_binding(repo):
     assert repo.get_publication("pub-1")["bound_user_id"] == "user-9"
 
 
+def test_delete_publication_requires_disabled_status_and_soft_deletes(repo):
+    repo.upsert_publication(_publication_row())
+
+    assert repo.delete_disabled_publication("pub-1", "user-1") is None
+    assert repo.get_publication("pub-1")["status"] == "enabled"
+
+    repo.upsert_publication(_publication_row(status="disabled"))
+    deleted = repo.delete_disabled_publication("pub-1", "user-1")
+
+    assert deleted is not None
+    assert deleted["status"] == "deleted"
+    assert repo.get_publication("pub-1")["status"] == "deleted"
+    assert repo.list_publications(enabled_only=True) == []
+    assert repo.delete_disabled_publication("pub-1", "user-1") is None
+    assert repo.delete_disabled_publication("pub-1", "other-owner") is None
+
+
 def test_open_api_repo_creates_external_app_api_key_and_usage(repo):
     repo.upsert_publication(_publication_row())
 

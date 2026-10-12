@@ -43,6 +43,21 @@ class FakeOpenApiRepository:
         publication["bound_user_id"] = bound_user_id
         return publication
 
+    def delete_disabled_publication(
+        self,
+        publication_id: str,
+        owner_user_id: str,
+    ):
+        publication = self.publications.get(publication_id)
+        if (
+            publication is None
+            or str(publication.get("owner_user_id")) != owner_user_id
+            or publication.get("status") != "disabled"
+        ):
+            return None
+        publication["status"] = "deleted"
+        return publication
+
     def upsert_publication(self, row: dict[str, object]):
         self.publications[str(row["id"])] = dict(row)
         return self.publications[str(row["id"])]
@@ -186,10 +201,70 @@ def test_list_publications_only_returns_current_owner(monkeypatch):
     repo = _patch_repo(monkeypatch, FakeOpenApiRepository())
     repo.publications["pub-1"] = {"id": "pub-1", "owner_user_id": "admin-1"}
     repo.publications["pub-2"] = {"id": "pub-2", "owner_user_id": "admin-2"}
+    repo.publications["pub-3"] = {
+        "id": "pub-3",
+        "owner_user_id": "admin-1",
+        "status": "deleted",
+    }
 
     rows = open_api_admin.list_publications(_request(user_id="admin-1"))
 
     assert rows == [{"id": "pub-1", "owner_user_id": "admin-1"}]
+
+
+def test_delete_publication_soft_deletes_disabled_publication(monkeypatch):
+    repo = _patch_repo(monkeypatch, FakeOpenApiRepository())
+    repo.publications["pub-1"] = {
+        "id": "pub-1",
+        "owner_user_id": "admin-1",
+        "status": "disabled",
+    }
+
+    result = open_api_admin.delete_publication(
+        "pub-1",
+        _request(user_id="admin-1"),
+    )
+
+    assert result == {"deleted": True, "id": "pub-1"}
+    assert repo.publications["pub-1"]["status"] == "deleted"
+    assert open_api_admin.list_publications(_request(user_id="admin-1")) == []
+
+
+def test_delete_publication_requires_disabled_status(monkeypatch):
+    repo = _patch_repo(monkeypatch, FakeOpenApiRepository())
+    repo.publications["pub-1"] = {
+        "id": "pub-1",
+        "owner_user_id": "admin-1",
+        "status": "enabled",
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        open_api_admin.delete_publication(
+            "pub-1",
+            _request(user_id="admin-1"),
+        )
+
+    assert exc_info.value.status_code == 409
+    assert repo.publications["pub-1"]["status"] == "enabled"
+
+
+def test_deleted_public_id_cannot_be_reused(monkeypatch):
+    repo = _patch_repo(monkeypatch, FakeOpenApiRepository())
+    repo.publications["pub-1"] = {
+        "id": "pub-1",
+        "public_id": "retired_api",
+        "owner_user_id": "admin-1",
+        "status": "deleted",
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        open_api_admin._assert_public_id_available(
+            repo,
+            "retired_api",
+            "admin-1",
+        )
+
+    assert exc_info.value.status_code == 409
 
 
 def test_create_publication_uses_admin_owner_and_validates_agent(monkeypatch):
@@ -719,7 +794,17 @@ def test_list_invocations_filters_owner_before_paginating(monkeypatch):
     repo = _patch_repo(monkeypatch, FakeOpenApiRepository())
     repo.publications["pub-1"] = {"id": "pub-1", "owner_user_id": "admin-1"}
     repo.publications["pub-2"] = {"id": "pub-2", "owner_user_id": "admin-2"}
+    repo.publications["pub-3"] = {
+        "id": "pub-3",
+        "owner_user_id": "admin-1",
+        "status": "deleted",
+    }
     repo.invocations = [
+        {
+            "id": "deleted-new",
+            "publication_id": "pub-3",
+            "created_at": "2026-07-02T11:00:00",
+        },
         {
             "id": "other-new",
             "publication_id": "pub-2",
@@ -763,8 +848,14 @@ def test_list_api_keys_only_returns_current_owner_publication_keys(
     repo = _patch_repo(monkeypatch, FakeOpenApiRepository())
     repo.publications["pub-1"] = {"id": "pub-1", "owner_user_id": "admin-1"}
     repo.publications["pub-2"] = {"id": "pub-2", "owner_user_id": "admin-2"}
+    repo.publications["pub-3"] = {
+        "id": "pub-3",
+        "owner_user_id": "admin-1",
+        "status": "deleted",
+    }
     repo.keys["key-1"] = {"id": "key-1", "publication_id": "pub-1"}
     repo.keys["key-2"] = {"id": "key-2", "publication_id": "pub-2"}
+    repo.keys["key-3"] = {"id": "key-3", "publication_id": "pub-3"}
 
     rows = open_api_admin.list_api_keys(_request(user_id="admin-1"))
 

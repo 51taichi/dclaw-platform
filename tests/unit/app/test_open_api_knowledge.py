@@ -177,6 +177,32 @@ def test_admin_lists_only_owned_publications(monkeypatch):
     assert [row["id"] for row in rows] == ["mine"]
 
 
+def test_deleted_publications_are_not_accessible(monkeypatch):
+    publication = {
+        "id": "deleted",
+        "public_id": "retired",
+        "name": "已删除入口",
+        "target_type": "agent",
+        "target_id": "agent-1",
+        "owner_user_id": "admin-1",
+        "bound_user_id": "7",
+        "knowledge_base_id": "openapi-deleted",
+        "status": "deleted",
+    }
+    _patch_repo(monkeypatch, FakeOpenApiRepository(publication))
+
+    assert knowledge.list_accessible_publications(
+        _request(user_id="admin-1", role="admin"),
+    ) == []
+    with pytest.raises(HTTPException) as exc_info:
+        knowledge.require_accessible_publication(
+            "deleted",
+            _request(user_id="7", role="user"),
+        )
+
+    assert exc_info.value.status_code == 404
+
+
 def test_inaccessible_publication_is_reported_as_not_found(monkeypatch):
     _patch_repo(
         monkeypatch,

@@ -32,6 +32,8 @@ def can_manage_publication(
     request: Request,
 ) -> bool:
     """Return whether the authenticated caller may manage its knowledge."""
+    if publication.get("status") == "deleted":
+        return False
     user_id = str(getattr(request.state, "user_id", "") or "")
     if not user_id:
         return False

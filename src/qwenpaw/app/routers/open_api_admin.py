@@ -131,6 +131,7 @@ def list_publications(request: Request) -> list[dict[str, Any]]:
         _with_target_policy(publication)
         for publication in get_open_api_repository().list_publications(enabled_only=False)
         if str(publication.get("owner_user_id")) == owner_user_id
+        and publication.get("status") != "deleted"
     ]
 
 
@@ -197,11 +198,7 @@ def update_publication_status(
 ) -> dict[str, Any]:
     owner_user_id = _require_admin(request)
     repo = get_open_api_repository()
-    publication = repo.get_publication(publication_id)
-    if publication is None:
-        raise HTTPException(status_code=404, detail="Open API publication not found")
-    if str(publication.get("owner_user_id")) != owner_user_id:
-        raise HTTPException(status_code=404, detail="Open API publication not found")
+    publication = _owned_publication(publication_id, owner_user_id)
     updated = dict(publication)
     updated["status"] = payload.status
     return repo.upsert_publication(updated)
@@ -232,11 +229,36 @@ def update_publication_bound_user(
     return updated
 
 
+@router.delete("/publications/{publication_id}")
+def delete_publication(
+    publication_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    owner_user_id = _require_admin(request)
+    publication = _owned_publication(publication_id, owner_user_id)
+    if publication.get("status") != "disabled":
+        raise HTTPException(
+            status_code=409,
+            detail="Disable the Open API publication before deleting it",
+        )
+    deleted = get_open_api_repository().delete_disabled_publication(
+        publication_id,
+        owner_user_id,
+    )
+    if deleted is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Open API publication status changed; disable it before deleting",
+        )
+    return {"deleted": True, "id": publication_id}
+
+
 def _owned_publication(publication_id: str, owner_user_id: str) -> dict[str, Any]:
     publication = get_open_api_repository().get_publication(publication_id)
     if (
         publication is None
         or str(publication.get("owner_user_id")) != owner_user_id
+        or publication.get("status") == "deleted"
     ):
         raise HTTPException(status_code=404, detail="Open API publication not found")
     return publication
@@ -357,12 +379,10 @@ def create_api_key(
     if app.get("status") != "enabled":
         raise HTTPException(status_code=400, detail="Open API app is disabled")
 
-    publication = repo.get_publication(payload.publication_id)
-    if publication is None:
-        raise HTTPException(status_code=404, detail="Open API publication not found")
+    publication = _owned_publication(payload.publication_id, owner_user_id)
     if (
-        str(publication.get("owner_user_id")) != owner_user_id
-        or str(publication.get("owner_user_id")) != str(app.get("owner_user_id"))
+        str(publication.get("owner_user_id"))
+        != str(app.get("owner_user_id"))
     ):
         raise HTTPException(status_code=404, detail="Open API publication not found")
     if publication.get("status") != "enabled":
@@ -408,6 +428,7 @@ def list_api_keys(
         str(publication["id"])
         for publication in repo.list_publications(enabled_only=False)
         if str(publication.get("owner_user_id")) == owner_user_id
+        and publication.get("status") != "deleted"
     }
     return [
         key
@@ -454,6 +475,7 @@ def list_invocations(
             str(publication["id"])
             for publication in repo.list_publications(enabled_only=False)
             if str(publication.get("owner_user_id")) == owner_user_id
+            and publication.get("status") != "deleted"
         }
         rows: list[dict[str, Any]] = []
         for visible_publication_id in visible_publication_ids:
@@ -475,7 +497,11 @@ def list_invocations(
 
 def _owns_publication(repo: Any, publication_id: str, owner_user_id: str) -> bool:
     publication = repo.get_publication(publication_id)
-    return publication is not None and str(publication.get("owner_user_id")) == owner_user_id
+    return (
+        publication is not None
+        and str(publication.get("owner_user_id")) == owner_user_id
+        and publication.get("status") != "deleted"
+    )
 
 
 def _assert_public_id_available(
@@ -486,7 +512,10 @@ def _assert_public_id_available(
     for publication in repo.list_publications(enabled_only=False):
         if str(publication.get("public_id")) != public_id:
             continue
-        if str(publication.get("owner_user_id")) != owner_user_id:
+        if (
+            publication.get("status") == "deleted"
+            or str(publication.get("owner_user_id")) != owner_user_id
+        ):
             raise HTTPException(
                 status_code=409,
                 detail="Open API public_id is already used",

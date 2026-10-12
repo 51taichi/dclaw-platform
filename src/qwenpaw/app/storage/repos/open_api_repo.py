@@ -66,6 +66,13 @@ class OpenApiRepository(Protocol):  # pylint: disable=too-many-public-methods
     ) -> dict[str, Any] | None:
         ...
 
+    def delete_disabled_publication(
+        self,
+        publication_id: str,
+        owner_user_id: str,
+    ) -> dict[str, Any] | None:
+        ...
+
     def create_external_app(self, row: dict[str, Any]) -> dict[str, Any]:
         ...
 
@@ -327,6 +334,28 @@ class SqlAlchemyOpenApiRepository:  # pylint: disable=too-many-public-methods
                 )
                 .values(
                     bound_user_id=bound_user_id,
+                    updated_at=_now(),
+                ),
+            )
+        if result.rowcount != 1:
+            return None
+        return self.get_publication(publication_id)
+
+    def delete_disabled_publication(
+        self,
+        publication_id: str,
+        owner_user_id: str,
+    ) -> dict[str, Any] | None:
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                update(open_api_publications)
+                .where(
+                    open_api_publications.c.id == publication_id,
+                    open_api_publications.c.owner_user_id == owner_user_id,
+                    open_api_publications.c.status == "disabled",
+                )
+                .values(
+                    status="deleted",
                     updated_at=_now(),
                 ),
             )
@@ -1135,6 +1164,25 @@ class SqliteOpenApiRepository:  # pylint: disable=too-many-public-methods
             WHERE id = ? AND owner_user_id = ?
             """,
             (bound_user_id, publication_id, owner_user_id),
+        )
+        conn.commit()
+        if result.rowcount != 1:
+            return None
+        return self.get_publication(publication_id)
+
+    def delete_disabled_publication(
+        self,
+        publication_id: str,
+        owner_user_id: str,
+    ) -> dict[str, Any] | None:
+        conn = db.get_db()
+        result = conn.execute(
+            """
+            UPDATE open_api_publications
+            SET status = 'deleted', updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND owner_user_id = ? AND status = 'disabled'
+            """,
+            (publication_id, owner_user_id),
         )
         conn.commit()
         if result.rowcount != 1:

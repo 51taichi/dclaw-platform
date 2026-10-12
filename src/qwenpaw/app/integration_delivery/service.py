@@ -135,6 +135,7 @@ class DclawConfigurationContextService:
             )
             if str(row.get("target_type") or "") == "agent"
             and str(row.get("target_id") or "") == agent_id
+            and row.get("status") != "deleted"
         ]
         return matches[0] if len(matches) == 1 else None
 
