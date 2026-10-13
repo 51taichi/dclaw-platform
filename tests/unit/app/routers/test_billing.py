@@ -1331,6 +1331,7 @@ def test_admin_pricing_draft_routes_use_authenticated_actor_and_export_xlsx(
         def __init__(self):
             self.exclusion_actor = None
             self.decision_actor = None
+            self.unpublish_actor = None
             self.generated_actors = []
 
         def generate_draft(self, actor_id):
@@ -1381,6 +1382,22 @@ def test_admin_pricing_draft_routes_use_authenticated_actor_and_export_xlsx(
         def batch_set_model_decision(self, draft_key, **values):
             self.decision_actor = values["actor_id"]
             return {"updated_models": 1, "decisions": []}
+
+        def unpublish_model(
+            self,
+            provider_id,
+            model_key,
+            actor_id,
+            reason=None,
+            ip_address=None,
+        ):
+            self.unpublish_actor = actor_id
+            return {
+                "version": "unpublish-v1",
+                "provider_id": provider_id,
+                "model_key": model_key,
+                "reason": reason,
+            }
 
     class ExcelRepo:
         def record_import(self, *_args):
@@ -1446,6 +1463,15 @@ def test_admin_pricing_draft_routes_use_authenticated_actor_and_export_xlsx(
             "reason": "等待复核",
         },
     )
+    unpublished = client.post(
+        "/api/admin/billing/pricing/models/unpublish",
+        headers=headers | {"X-Billing-Unlock": "valid"},
+        json={
+            "provider_id": "dashscope",
+            "model_key": "qwen3-max",
+            "reason": "供应商临时维护",
+        },
+    )
 
     assert generated.status_code == 200
     assert "result" not in generated.json()
@@ -1461,6 +1487,9 @@ def test_admin_pricing_draft_routes_use_authenticated_actor_and_export_xlsx(
     assert fake.decision_actor == "admin-7"
     assert batch.status_code == 200
     assert batch.json()["updated_models"] == 1
+    assert unpublished.status_code == 200
+    assert unpublished.json()["version"] == "unpublish-v1"
+    assert fake.unpublish_actor == "admin-7"
 
 
 def test_admin_can_start_and_read_collection_job_without_pricing_unlock(

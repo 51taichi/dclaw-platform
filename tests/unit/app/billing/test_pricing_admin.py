@@ -2,8 +2,13 @@ from datetime import datetime, timezone
 
 import pytest
 
+from qwenpaw.app.billing.model_publication import ModelPublicationService
 from qwenpaw.app.billing.official_pricing import OfficialPriceRegistry
-from qwenpaw.app.billing.pricing import PriceCatalogService, QuoteRequest
+from qwenpaw.app.billing.pricing import (
+    ModelNotPricedError,
+    PriceCatalogService,
+    QuoteRequest,
+)
 from qwenpaw.app.billing.pricing_admin import PricingAdminService
 from qwenpaw.app.billing.pricing_inventory import PriceableModel
 from qwenpaw.app.storage.engine import create_engine_from_settings
@@ -272,6 +277,71 @@ def test_policy_cost_preview_publish_and_rollback(service):
         "policy.updated",
         "catalog.published",
         "catalog.rolled_back",
+    }
+
+
+def test_unpublish_model_replaces_active_catalog_and_excludes_future_drafts(service):
+    pricing, repo = service
+    models = tuple(
+        PriceableModel("dashscope", "百炼", key, key, "text")
+        for key in ("qwen-plus", "qwen-turbo")
+    )
+    pricing.inventory = type(
+        "Inventory",
+        (),
+        {"list_enabled": lambda self: models},
+    )()
+    pricing.save_policy("global", "*", "1.5", {}, "1", 0)
+    for model in models:
+        for unit, amount in (
+            ("input_tokens", "0.004"),
+            ("output_tokens", "0.012"),
+        ):
+            repo.append_cost_snapshot(
+                {
+                    "provider_id": model.provider_id,
+                    "model_key": model.model_key,
+                    "capability": "chat",
+                    "unit_key": unit,
+                    "source_type": "manual",
+                    "source_reference": "official",
+                    "original_currency": "CNY",
+                    "original_price_decimal": amount,
+                    "fx_rate_decimal": "1",
+                    "rmb_cost_decimal": amount,
+                    "conditions": {},
+                    "verification_status": "verified",
+                    "verified_at": NOW,
+                }
+            )
+
+    preview = pricing.preview_initial_catalog("1")
+    pricing.publish_preview(preview["catalog_id"], "1")
+    published = pricing.unpublish_model(
+        "dashscope",
+        "qwen-turbo",
+        "1",
+        "供应商临时维护",
+    )
+
+    assert {
+        (rule["provider_id"], rule["model_key"])
+        for rule in published["rules"]
+    } == {("dashscope", "qwen-plus")}
+    publication = ModelPublicationService(pricing.catalogs, clock=lambda: NOW)
+    assert publication.published_pairs() == {("dashscope", "qwen-plus")}
+    with pytest.raises(ModelNotPricedError):
+        pricing.pricing.quote(
+            QuoteRequest("dashscope", "qwen-turbo", "chat", {})
+        )
+    draft = pricing.generate_draft("1")
+    assert all(
+        row["include_in_publish"] is False
+        for row in draft["rows"]
+        if row["model_key"] == "qwen-turbo"
+    )
+    assert "model.unpublished" in {
+        row["action"] for row in repo.list_audits()
     }
 
 

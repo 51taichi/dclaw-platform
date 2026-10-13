@@ -871,3 +871,99 @@ class PricingAdminService:
             {"ip_address": ip_address},
         )
         return published
+
+    def unpublish_model(
+        self,
+        provider_id: str,
+        model_key: str,
+        actor_id: str,
+        reason: str | None = None,
+        ip_address: str | None = None,
+    ) -> dict[str, Any]:
+        provider_id = provider_id.strip()
+        model_key = model_key.strip()
+        if not provider_id or not model_key:
+            raise ValueError("provider and model are required")
+
+        source = self.catalogs.effective_catalog(self.clock())
+        target = (provider_id, model_key)
+        removed = [
+            rule
+            for rule in source["rules"]
+            if (rule["provider_id"], rule["model_key"]) == target
+        ]
+        if not removed:
+            raise ValueError("model is not published in the active catalog")
+
+        retained = [
+            rule
+            for rule in source["rules"]
+            if (rule["provider_id"], rule["model_key"]) != target
+        ]
+        if not retained:
+            raise ValueError("cannot unpublish the last priced model")
+
+        normalized_reason = (reason or "").strip() or "管理员在定价页面手动下架"
+        now = self.clock()
+        version_digest = hashlib.sha256(
+            f"{provider_id}/{model_key}".encode()
+        ).hexdigest()[:8]
+        version = (
+            f"unpublish-{now.strftime('%Y%m%d%H%M%S%f')}-{version_digest}"
+        )
+        new_id = self.pricing.publish(
+            PriceCatalogDraft(
+                version=version,
+                effective_at=now,
+                rules=tuple(
+                    PriceRule(
+                        **{
+                            key: rule[key]
+                            for key in PriceRule.__dataclass_fields__
+                        }
+                    )
+                    for rule in retained
+                ),
+                created_by=f"admin:{actor_id}",
+                metadata={
+                    "source": "pricing_admin",
+                    "action": "model_unpublished",
+                    "source_catalog_id": source["id"],
+                    "source_catalog_version": source["version"],
+                    "unpublished_model": {
+                        "provider_id": provider_id,
+                        "model_key": model_key,
+                        "reason": normalized_reason,
+                    },
+                },
+            )
+        )
+        published = self.catalogs.get_catalog(new_id)
+
+        draft_key = self._draft_key(tuple(self.inventory.list_enabled()))
+        self.repository.replace_draft_exclusion(
+            draft_key,
+            provider_id,
+            model_key,
+            True,
+            normalized_reason,
+            actor_id,
+        )
+        self.repository.append_audit(
+            "model.unpublished",
+            actor_id,
+            {
+                "catalog_id": source["id"],
+                "catalog_version": source["version"],
+                "provider_id": provider_id,
+                "model_key": model_key,
+                "rule_count": len(removed),
+            },
+            {
+                "catalog_id": new_id,
+                "catalog_version": published["version"],
+                "reason": normalized_reason,
+            },
+            {"ip_address": ip_address},
+        )
+        return published

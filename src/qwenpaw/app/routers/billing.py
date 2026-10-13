@@ -201,6 +201,13 @@ class PricingPolicyBody(BaseModel):
     expected_revision: int = Field(ge=0)
 
 
+class PricingModelUnpublishBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider_id: str = Field(min_length=1, max_length=255)
+    model_key: str = Field(min_length=1, max_length=255)
+    reason: str | None = Field(default=None, max_length=2000)
+
+
 class PricingExclusionBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     excluded: bool
@@ -984,6 +991,24 @@ def save_pricing_policy(
             status_code=409,
             detail="Pricing policy was updated; reload and retry",
         ) from exc
+
+
+@admin_router.post("/pricing/models/unpublish")
+def unpublish_pricing_model(
+    payload: PricingModelUnpublishBody,
+    request: Request,
+    actor_id: str = Depends(require_pricing_unlock),
+) -> dict[str, Any]:
+    try:
+        return get_pricing_admin_service().unpublish_model(
+            payload.provider_id,
+            payload.model_key,
+            actor_id,
+            payload.reason,
+            request.client.host if request.client else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @admin_router.post("/pricing/initialize/preview")
