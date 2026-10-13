@@ -35,6 +35,7 @@ export default function PricingTab() {
   const [error, setError] = useState<string>();
   const [unlock, setUnlock] = useState<PricingUnlock>();
   const [unlockOpen, setUnlockOpen] = useState(false);
+  const [unpublishingModel, setUnpublishingModel] = useState<string>();
   const [now, setNow] = useState(Date.now());
   const load = () =>
     Promise.all([
@@ -202,11 +203,36 @@ export default function PricingTab() {
               <PricingRules
                 disabled={!activeUnlock}
                 policies={policies}
+                catalogs={overview.catalogs}
+                unpublishingModel={unpublishingModel}
                 onSave={async (value) => {
                   if (!activeUnlock) return;
                   await billingApi.savePricingPolicy(value, activeUnlock.token);
                   await load();
                   message.success("倍数规则已保存");
+                }}
+                onUnpublish={async (providerId, modelKey) => {
+                  if (!activeUnlock) return;
+                  const identity = `${providerId}/${modelKey}`;
+                  setUnpublishingModel(identity);
+                  try {
+                    await billingApi.unpublishPricingModel(
+                      {
+                        provider_id: providerId,
+                        model_key: modelKey,
+                        reason: "管理员在定价页面手动下架",
+                      },
+                      activeUnlock.token,
+                    );
+                    await load();
+                    message.success(`${identity} 已下架`);
+                  } catch (reason) {
+                    message.error(
+                      reason instanceof Error ? reason.message : "模型下架失败",
+                    );
+                  } finally {
+                    setUnpublishingModel(undefined);
+                  }
                 }}
               />
             ),

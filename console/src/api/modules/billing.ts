@@ -236,6 +236,15 @@ export const billingApi = {
       headers: pricingHeaders(token),
       body: JSON.stringify({ ...payload, settings: payload.settings ?? {} }),
     }),
+  unpublishPricingModel: (
+    payload: { provider_id: string; model_key: string; reason?: string },
+    token: string,
+  ) =>
+    request<PricingCatalogSummary>("/admin/billing/pricing/models/unpublish", {
+      method: "POST",
+      headers: pricingHeaders(token),
+      body: JSON.stringify(payload),
+    }),
   initializePricingPreview: (token: string) =>
     request<PricingPreview>("/admin/billing/pricing/initialize/preview", {
       method: "POST",

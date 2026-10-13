@@ -17,6 +17,7 @@ vi.mock("../../../api/modules/billing", () => ({
     previewPricingImport: vi.fn(),
     confirmPricingImport: vi.fn(),
     setPricingExclusion: vi.fn(),
+    unpublishPricingModel: vi.fn(),
     listPricingCollectionJobs: vi.fn(),
     savePricingModelMapping: vi.fn(),
   },

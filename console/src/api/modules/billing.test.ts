@@ -121,6 +121,29 @@ describe("billingApi", () => {
     );
   });
 
+  it("unpublishes a priced model with the scoped billing unlock", async () => {
+    await billingApi.unpublishPricingModel(
+      {
+        provider_id: "dashscope",
+        model_key: "qwen-plus",
+        reason: "供应商临时维护",
+      },
+      "unlock-token",
+    );
+
+    const [url, options] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toContain("/pricing/models/unpublish");
+    expect(options?.method).toBe("POST");
+    expect((options?.headers as Headers).get("X-Billing-Unlock")).toBe(
+      "unlock-token",
+    );
+    expect(JSON.parse(String(options?.body))).toEqual({
+      provider_id: "dashscope",
+      model_key: "qwen-plus",
+      reason: "供应商临时维护",
+    });
+  });
+
   it("uses the draft, workbook, exclusion and refresh contracts", async () => {
     await billingApi.generatePricingDraft();
     await billingApi.exportPricingDraft("draft key");

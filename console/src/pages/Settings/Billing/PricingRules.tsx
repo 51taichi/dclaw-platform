@@ -5,25 +5,54 @@ import {
   Descriptions,
   Form,
   Input,
+  Popconfirm,
   Select,
   Space,
   Table,
+  Tag,
 } from "antd";
 import type {
+  PricingCatalogSummary,
   PricingPolicy,
   PricingPolicyInput,
 } from "../../../api/types/billing";
 
+function modelIdentity(policy: PricingPolicy) {
+  if (policy.scope_type !== "model") return undefined;
+  const separator = policy.scope_key.indexOf("/");
+  if (separator <= 0 || separator === policy.scope_key.length - 1) {
+    return undefined;
+  }
+  return {
+    provider_id: policy.scope_key.slice(0, separator),
+    model_key: policy.scope_key.slice(separator + 1),
+  };
+}
+
 export default function PricingRules({
   disabled = true,
   policies = [],
+  catalogs = [],
+  unpublishingModel,
   onSave,
+  onUnpublish,
 }: {
   disabled?: boolean;
   policies?: PricingPolicy[];
+  catalogs?: PricingCatalogSummary[];
+  unpublishingModel?: string;
   onSave?: (value: PricingPolicyInput) => Promise<void>;
+  onUnpublish?: (providerId: string, modelKey: string) => Promise<void>;
 }) {
   const [form] = Form.useForm<PricingPolicyInput>();
+  const activeCatalog = catalogs.find(
+    (catalog) => catalog.status === "published",
+  );
+  const publishedModels = new Set(
+    (activeCatalog?.rules ?? []).map(
+      (rule) => `${rule.provider_id}/${rule.model_key}`,
+    ),
+  );
   return (
     <Space direction="vertical" style={{ width: "100%" }}>
       <Card title="默认安全规则">
@@ -52,23 +81,65 @@ export default function PricingRules({
             { title: "倍数", dataIndex: "multiplier_decimal" },
             { title: "版本", dataIndex: "revision" },
             {
+              title: "状态",
+              render: (_, policy: PricingPolicy) => {
+                const identity = modelIdentity(policy);
+                if (!identity) return "—";
+                return publishedModels.has(policy.scope_key) ? (
+                  <Tag color="green">已上架</Tag>
+                ) : (
+                  <Tag>已下架</Tag>
+                );
+              },
+            },
+            {
               title: "操作",
-              render: (_, policy: PricingPolicy) => (
-                <Button
-                  disabled={disabled}
-                  onClick={() =>
-                    form.setFieldsValue({
-                      scope_type: policy.scope_type,
-                      scope_key: policy.scope_key,
-                      multiplier_decimal: policy.multiplier_decimal,
-                      settings: policy.settings ?? {},
-                      expected_revision: policy.revision,
-                    } as never)
-                  }
-                >
-                  编辑
-                </Button>
-              ),
+              render: (_, policy: PricingPolicy) => {
+                const identity = modelIdentity(policy);
+                const isPublished = Boolean(
+                  identity && publishedModels.has(policy.scope_key),
+                );
+                return (
+                  <Space>
+                    <Button
+                      disabled={disabled}
+                      onClick={() =>
+                        form.setFieldsValue({
+                          scope_type: policy.scope_type,
+                          scope_key: policy.scope_key,
+                          multiplier_decimal: policy.multiplier_decimal,
+                          settings: policy.settings ?? {},
+                          expected_revision: policy.revision,
+                        } as never)
+                      }
+                    >
+                      编辑
+                    </Button>
+                    {identity && isPublished ? (
+                      <Popconfirm
+                        title={`确认下架 ${policy.scope_key}？`}
+                        description="下架后客户页面将不再显示该模型，新请求也会被拒绝。历史账单和价格快照不受影响。"
+                        okText="确认下架"
+                        cancelText="取消"
+                        onConfirm={() =>
+                          onUnpublish?.(
+                            identity.provider_id,
+                            identity.model_key,
+                          )
+                        }
+                      >
+                        <Button
+                          danger
+                          disabled={disabled}
+                          loading={unpublishingModel === policy.scope_key}
+                        >
+                          下架
+                        </Button>
+                      </Popconfirm>
+                    ) : null}
+                  </Space>
+                );
+              },
             },
           ]}
         />
@@ -107,8 +178,7 @@ export default function PricingRules({
               { required: true },
               {
                 validator: async (_, value) => {
-                  if (Number(value) < 1)
-                    throw new Error("不得低于1倍安全底价");
+                  if (Number(value) < 1) throw new Error("不得低于1倍安全底价");
                 },
               },
             ]}
