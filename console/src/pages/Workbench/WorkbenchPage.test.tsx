@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import {
+  createEvent,
+  fireEvent,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { useLocation } from "react-router-dom";
 import { renderWithProviders } from "@/test/common_setup";
 import WorkbenchPage from "./index";
@@ -15,6 +20,8 @@ const {
   mockSpeechStart,
   mockSpeechStop,
   mockSpeechDestroy,
+  mockIsDesktopRuntime,
+  mockReadDesktopClipboardFiles,
 } = vi.hoisted(() => {
   const store = vi.fn(() => ({
     selectedAgent: "default",
@@ -35,8 +42,15 @@ const {
     mockSpeechStart: vi.fn(),
     mockSpeechStop: vi.fn(),
     mockSpeechDestroy: vi.fn(),
+    mockIsDesktopRuntime: vi.fn(),
+    mockReadDesktopClipboardFiles: vi.fn(),
   };
 });
+
+vi.mock("../../utils/desktopClipboard", () => ({
+  isDesktopRuntime: mockIsDesktopRuntime,
+  readDesktopClipboardFiles: mockReadDesktopClipboardFiles,
+}));
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -124,6 +138,8 @@ describe("WorkbenchPage", () => {
       url: "uploads/report.pdf",
       file_name: "report.pdf",
     });
+    mockIsDesktopRuntime.mockReturnValue(false);
+    mockReadDesktopClipboardFiles.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -256,6 +272,88 @@ describe("WorkbenchPage", () => {
     await waitFor(() => expect(mockUploadFile).toHaveBeenCalledWith(file));
     expect(await screen.findByText("dragged.txt")).toBeInTheDocument();
     expect(mockCreateChat).not.toHaveBeenCalled();
+  });
+
+  it("uploads files pasted into the new-task composer in a browser", async () => {
+    renderWithProviders(<WorkbenchPage />, {
+      initialEntries: ["/workbench"],
+    });
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "保留草稿" } });
+    const document = new File(["document"], "客户资料.pdf", {
+      type: "application/pdf",
+    });
+    const pasteEvent = createEvent.paste(input, {
+      clipboardData: {
+        items: [{ kind: "file", getAsFile: () => document }],
+        files: [document],
+      },
+    });
+
+    fireEvent(input, pasteEvent);
+
+    expect(pasteEvent.defaultPrevented).toBe(true);
+    await waitFor(() => expect(mockUploadFile).toHaveBeenCalledWith(document));
+    expect(await screen.findByText("客户资料.pdf")).toBeInTheDocument();
+    expect(input).toHaveValue("保留草稿");
+  });
+
+  it("uses native clipboard files in the desktop new-task composer", async () => {
+    mockIsDesktopRuntime.mockReturnValue(true);
+    const spreadsheet = new File(["sheet"], "客户名单.xlsx", {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    mockReadDesktopClipboardFiles.mockResolvedValue([spreadsheet]);
+    renderWithProviders(<WorkbenchPage />, {
+      initialEntries: ["/workbench"],
+    });
+    const input = screen.getByRole("textbox");
+    const pasteEvent = createEvent.paste(input, {
+      clipboardData: { items: [], files: [], getData: () => "" },
+    });
+
+    fireEvent(input, pasteEvent);
+
+    expect(pasteEvent.defaultPrevented).toBe(true);
+    await waitFor(() =>
+      expect(mockReadDesktopClipboardFiles).toHaveBeenCalledTimes(1),
+    );
+    await waitFor(() =>
+      expect(mockUploadFile).toHaveBeenCalledWith(spreadsheet),
+    );
+  });
+
+  it("keeps text-only paste behavior in browser and desktop composers", async () => {
+    const { rerender } = renderWithProviders(<WorkbenchPage />, {
+      initialEntries: ["/workbench"],
+    });
+    let input = screen.getByRole("textbox") as HTMLTextAreaElement;
+    const browserPaste = createEvent.paste(input, {
+      clipboardData: {
+        items: [{ kind: "string", getAsFile: () => null }],
+        files: [],
+      },
+    });
+    fireEvent(input, browserPaste);
+    expect(browserPaste.defaultPrevented).toBe(false);
+
+    mockIsDesktopRuntime.mockReturnValue(true);
+    rerender(<WorkbenchPage />);
+    input = screen.getByRole("textbox") as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "前后" } });
+    input.setSelectionRange(1, 1);
+    const desktopPaste = createEvent.paste(input, {
+      clipboardData: {
+        items: [{ kind: "string", getAsFile: () => null }],
+        files: [],
+        getData: () => "文字",
+      },
+    });
+    fireEvent(input, desktopPaste);
+
+    expect(desktopPaste.defaultPrevented).toBe(true);
+    await waitFor(() => expect(input).toHaveValue("前文字后"));
+    expect(mockUploadFile).not.toHaveBeenCalled();
   });
 
   it("starts and stops dictation without sending the task", async () => {

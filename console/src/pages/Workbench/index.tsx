@@ -25,6 +25,10 @@ import { buildWorkbenchPrompt } from "./promptTemplates";
 import { resizeTextareaToContent } from "../../utils/textareaAutosize";
 import { savePendingTaskIntent } from "../../utils/pendingTaskIntent";
 import {
+  isDesktopRuntime,
+  readDesktopClipboardFiles,
+} from "../../utils/desktopClipboard";
+import {
   RealtimeSpeechController,
   type RealtimeSpeechState,
 } from "../../features/realtimeSpeech/RealtimeSpeechController";
@@ -87,6 +91,16 @@ const createUploadId = (file: File) =>
 
 const hasDraggedFiles = (event: React.DragEvent<HTMLElement>) =>
   Array.from(event.dataTransfer.types || []).includes("Files");
+
+const getClipboardFiles = (event: React.ClipboardEvent<HTMLElement>) => {
+  const itemFiles = Array.from(event.clipboardData.items || [])
+    .filter((item) => item.kind === "file")
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => file !== null);
+  return itemFiles.length > 0
+    ? itemFiles
+    : Array.from(event.clipboardData.files || []);
+};
 
 const joinSpeechText = (prefix: string, transcript: string) => {
   if (!prefix || !transcript) return `${prefix}${transcript}`;
@@ -384,6 +398,49 @@ export default function WorkbenchPage() {
   const handleDeleteAttachment = useCallback((fileId: string) => {
     setUploadedFiles((prev) => prev.filter((file) => file.id !== fileId));
   }, []);
+
+  const handlePaste = useCallback(
+    async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const webFiles = getClipboardFiles(event);
+      if (webFiles.length > 0) {
+        event.preventDefault();
+        void uploadFiles(webFiles);
+        return;
+      }
+
+      if (!isDesktopRuntime()) return;
+
+      const textarea = event.currentTarget;
+      const selectionStart = textarea.selectionStart ?? textarea.value.length;
+      const selectionEnd = textarea.selectionEnd ?? selectionStart;
+      const pastedText = event.clipboardData.getData?.("text/plain") ?? "";
+      event.preventDefault();
+      try {
+        const nativeFiles = await readDesktopClipboardFiles();
+        if (nativeFiles.length > 0) {
+          void uploadFiles(nativeFiles);
+          return;
+        }
+      } catch (error) {
+        console.warn("Unable to read desktop clipboard attachments:", error);
+      }
+
+      if (!pastedText) return;
+      setInputValue(
+        (currentValue) =>
+          `${currentValue.slice(
+            0,
+            selectionStart,
+          )}${pastedText}${currentValue.slice(selectionEnd)}`,
+      );
+      requestAnimationFrame(() => {
+        const nextPosition = selectionStart + pastedText.length;
+        textarea.focus();
+        textarea.setSelectionRange(nextPosition, nextPosition);
+      });
+    },
+    [uploadFiles],
+  );
 
   const handleDragEnter = useCallback(
     (event: React.DragEvent<HTMLDivElement>) => {
@@ -741,6 +798,7 @@ export default function WorkbenchPage() {
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           disabled={speechState !== "idle"}
           rows={2}
         />
