@@ -89,6 +89,31 @@ class CreditAlertRepository:
             conn, credit_alert_events, values, ["user_id", "tier", "cycle_number"],
         )
 
+    def record_submission_result(
+        self,
+        conn: Connection,
+        *,
+        event_id: str,
+        status: str,
+        provider_message_id: str | None,
+        provider_error: str | None,
+        attempted: bool,
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        values: dict[str, Any] = {
+            "sms_status": status,
+            "provider_message_id": provider_message_id,
+            "provider_error": provider_error,
+            "updated_at": now,
+        }
+        if attempted:
+            values["attempt_count"] = credit_alert_events.c.attempt_count + 1
+        if status == "submitted":
+            values["submitted_at"] = now
+        conn.execute(update(credit_alert_events).where(
+            credit_alert_events.c.id == event_id,
+        ).values(**values))
+
     @staticmethod
     def _insert_ignore(
         conn: Connection, table: Any, values: dict[str, Any], conflict_columns: list[str],

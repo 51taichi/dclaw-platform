@@ -7,7 +7,12 @@ from uuid import uuid4
 
 from sqlalchemy.engine import Connection, Engine
 
-from ..notifications.sms import DisabledSmsSender, SmsAlert, SmsSender
+from ..notifications.sms import (
+    SmsAlert,
+    SmsSender,
+    SmsSubmissionResult,
+    get_sms_sender,
+)
 from ..storage.repos.billing_repo import BillingRepository
 from ..storage.repos.credit_alert_repo import CreditAlertRepository
 
@@ -32,7 +37,7 @@ class CreditAlertService:
     ) -> None:
         self.engine = engine
         self.repository = repository or CreditAlertRepository()
-        self.sender = sender or DisabledSmsSender()
+        self.sender = sender
         self._lock = RLock()
 
     def get(self, user_id: int, available: int) -> dict[str, Any]:
@@ -185,20 +190,54 @@ class CreditAlertService:
             identity = self.repository.identity(conn, user_id) or {}
             phone = identity.get("phone_number_e164")
             event_id = str(uuid4())
-            if phone is None:
-                status = "skipped_missing_phone"
-            else:
-                result = self.sender.send(SmsAlert(
+            if not phone:
+                self.repository.create_event(
+                    conn, event_id=event_id, user_id=user_id, tier=selected,
+                    cycle_number=cycle, available=available,
+                    threshold=thresholds[selected],
+                    display_name=identity.get("display_name"),
+                    phone_number=None, sms_status="skipped_missing_phone",
+                )
+                return
+            created = self.repository.create_event(
+                conn, event_id=event_id, user_id=user_id, tier=selected,
+                cycle_number=cycle, available=available,
+                threshold=thresholds[selected],
+                display_name=identity.get("display_name"), phone_number=phone,
+                sms_status="pending",
+            )
+            if not created:
+                return
+            try:
+                sender = self.sender or get_sms_sender()
+                result = sender.send(SmsAlert(
                     event_id=event_id, phone_number=phone,
                     display_name=identity.get("display_name"), tier=selected,
                     available=available, threshold=thresholds[selected],
                 ))
-                status = result.status
-            self.repository.create_event(
-                conn, event_id=event_id, user_id=user_id, tier=selected, cycle_number=cycle,
-                available=available, threshold=thresholds[selected],
-                display_name=identity.get("display_name"), phone_number=phone,
-                sms_status=status,
+            except Exception as exc:  # noqa: BLE001 - alerts cannot abort billing
+                result = SmsSubmissionResult(
+                    status="failed",
+                    provider_error=(
+                        f"{type(exc).__name__}: {exc}"
+                    )[:2000],
+                    attempted=True,
+                )
+            if result.status not in {
+                "skipped_unconfigured", "submitted", "failed",
+            }:
+                result = SmsSubmissionResult(
+                    status="failed",
+                    provider_error=f"invalid_sender_status:{result.status}"[:2000],
+                    attempted=result.attempted,
+                )
+            self.repository.record_submission_result(
+                conn,
+                event_id=event_id,
+                status=result.status,
+                provider_message_id=result.provider_message_id,
+                provider_error=result.provider_error,
+                attempted=result.attempted,
             )
 
     def _locked_wallet_context(

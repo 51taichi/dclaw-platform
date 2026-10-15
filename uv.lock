@@ -365,6 +365,19 @@ wheels = [
 ]
 
 [[package]]
+name = "alibabacloud-dysmsapi20170525"
+version = "4.6.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "alibabacloud-tea-openapi" },
+    { name = "darabonba-core" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/dd/ae/83abc8039064e835b7812095b4f30ab80ab68292df09fc2fdd9db2df841a/alibabacloud_dysmsapi20170525-4.6.0.tar.gz", hash = "sha256:b3b8ab78f00bcdbfb28a85c01eddcc908b5ca3ddade5fad36c4b41ea0abbb75e", size = 121608, upload-time = "2026-07-01T13:58:18.238Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2d/f0/c7a342da7936e38727ad8958687d5aee40fa84588b5a492d2ef681df9acc/alibabacloud_dysmsapi20170525-4.6.0-py3-none-any.whl", hash = "sha256:76fe3dff1bacea0f026bd0e7473655c328b4ecbfc2ada009f2806b09c77e14b2", size = 320356, upload-time = "2026-07-01T13:58:17.017Z" },
+]
+
+[[package]]
 name = "alibabacloud-endpoint-util"
 version = "0.0.4"
 source = { registry = "https://pypi.org/simple" }
@@ -5276,6 +5289,7 @@ dependencies = [
     { name = "agentscope-runtime" },
     { name = "aiofiles" },
     { name = "alibabacloud-dingtalk" },
+    { name = "alibabacloud-dysmsapi20170525" },
     { name = "alibabacloud-tea-openapi" },
     { name = "anyio" },
     { name = "apscheduler" },
@@ -5367,6 +5381,7 @@ requires-dist = [
     { name = "agentscope-runtime", specifier = "==1.1.4" },
     { name = "aiofiles", specifier = ">=24.1.0" },
     { name = "alibabacloud-dingtalk", specifier = ">=2.2.42" },
+    { name = "alibabacloud-dysmsapi20170525", specifier = ">=4.6.0" },
     { name = "alibabacloud-tea-openapi", specifier = ">=0.4.4" },
     { name = "anyio", specifier = ">=4.0.0,<4.13.0" },
     { name = "apscheduler", specifier = ">=3.11.2,<4" },

@@ -6,7 +6,11 @@ import pytest
 from sqlalchemy import insert, select
 
 from qwenpaw.app.billing.credit_alerts import CreditAlertService
-from qwenpaw.app.notifications.sms import DisabledSmsSender, SmsAlert
+from qwenpaw.app.notifications.sms import (
+    DisabledSmsSender,
+    SmsAlert,
+    SmsSubmissionResult,
+)
 from qwenpaw.app.storage.engine import create_engine_from_settings
 from qwenpaw.app.storage.repos.billing_repo import BillingRepository
 from qwenpaw.app.storage.repos.credit_alert_repo import CreditAlertRepository
@@ -128,6 +132,63 @@ def test_disabled_sender_is_pure_and_returns_disabled_result():
     ))
     assert result.status == "skipped_unconfigured"
     assert result.provider_message_id is None
+    assert result.attempted is False
+
+
+def test_submission_result_is_persisted(alert_env):
+    engine, _ = alert_env
+
+    class SubmittedSender:
+        def send(self, alert):
+            assert alert.available == 5000
+            assert alert.threshold == 5000
+            return SmsSubmissionResult(
+                status="submitted",
+                provider_message_id="aliyun-biz-id",
+                attempted=True,
+            )
+
+    service = CreditAlertService(engine, sender=SubmittedSender())
+    reconcile(engine, service, "wallet-1", 6000, "reconciliation")
+    reconcile(engine, service, "wallet-1", 5000)
+
+    event = events(engine)[0]
+    assert event["sms_status"] == "submitted"
+    assert event["provider_message_id"] == "aliyun-biz-id"
+    assert event["provider_error"] is None
+    assert event["attempt_count"] == 1
+    assert event["submitted_at"] is not None
+
+
+def test_sender_exception_records_failure_without_rolling_back_wallet(
+    alert_env, monkeypatch,
+):
+    engine, _ = alert_env
+
+    class ExplodingSender:
+        def send(self, alert):
+            raise RuntimeError(f"provider unavailable for {alert.event_id}")
+
+    monkeypatch.setattr(
+        "qwenpaw.app.billing.credit_alerts.get_sms_sender",
+        lambda: ExplodingSender(),
+    )
+    billing = BillingRepository(engine)
+    billing.grant(
+        "wallet-1", credits=6000, credit_type="purchased", expires_at=None,
+        idempotency_key="sms-failure-seed",
+    )
+    balance = billing.hold(
+        "wallet-1", credits=1000, business_key="sms-failure-hold",
+        idempotency_key="sms-failure-hold",
+    )
+
+    event = events(engine)[0]
+    assert balance.available == 5000
+    assert billing.balance("wallet-1").available == 5000
+    assert event["sms_status"] == "failed"
+    assert event["provider_error"].startswith("RuntimeError: provider unavailable")
+    assert event["attempt_count"] == 1
 
 
 def test_concurrent_reconciliation_records_one_event(alert_env):
