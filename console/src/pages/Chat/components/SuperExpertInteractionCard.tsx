@@ -1,6 +1,7 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Check, LoaderCircle, Sparkles } from "lucide-react";
 import { openExternalLink } from "../../../utils/openExternalLink";
+import { isDesktopApp } from "../../../utils/env";
 import { isTrustedLocalToolActionUrl } from "./localToolAction";
 import styles from "./SuperExpertInteractionCard.module.less";
 
@@ -175,7 +176,7 @@ function ChoiceInteractionCard({
       !pending ||
       autoSubmittedRef.current ||
       !action?.actionUrl ||
-      !window.pywebview?.api?.open_external_link
+      !isDesktopApp()
     ) {
       return;
     }

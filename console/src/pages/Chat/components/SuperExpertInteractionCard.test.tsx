@@ -1,11 +1,14 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { open } from "@tauri-apps/plugin-shell";
 import {
   type ChoiceInteractionProjection,
   type QuestionFormInteractionProjection,
   SuperExpertInteractionCard,
 } from "./SuperExpertInteractionCard";
 import { isTrustedLocalToolActionUrl } from "./localToolAction";
+
+vi.mock("@tauri-apps/plugin-shell", () => ({ open: vi.fn() }));
 
 function single(
   overrides: Partial<ChoiceInteractionProjection> = {},
@@ -135,6 +138,47 @@ describe("SuperExpertInteractionCard", () => {
     await waitFor(() => expect(openExternal).toHaveBeenCalledWith(actionUrl));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     Reflect.deleteProperty(window, "pywebview");
+  });
+
+  it("uses the Tauri shell for the production desktop runtime", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: {},
+    });
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const actionUrl =
+      "https://dclaw.deepmega.cn/api/bootstrap/tauri-token/connect";
+
+    render(
+      <SuperExpertInteractionCard
+        projection={single({
+          interactionId: "tauri-launch",
+          options: [
+            {
+              id: "launch-local-tool",
+              text: "启动本地助手",
+              description: null,
+              recommended: true,
+              defaultSelected: true,
+              actionUrl,
+              autoSubmitOnDesktop: true,
+            },
+            {
+              id: "later",
+              text: "稍后处理",
+              description: null,
+              recommended: false,
+              defaultSelected: false,
+            },
+          ],
+        })}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    await waitFor(() => expect(open).toHaveBeenCalledWith(actionUrl));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
   });
 
   it("shows only actionable choice content without repeating the prompt", () => {
