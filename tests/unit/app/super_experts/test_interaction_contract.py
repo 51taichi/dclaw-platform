@@ -194,6 +194,48 @@ def test_single_select_rejects_two_defaults():
     ]
 
 
+def test_single_select_accepts_one_trusted_desktop_action():
+    card = validate_card(
+        "single_select",
+        {
+            "title": "正在启动本地助手",
+            "options": [
+                {
+                    "id": "launch",
+                    "text": "启动本地助手",
+                    "default_selected": True,
+                    "action_url": "https://relay.example.test/api/bootstrap/token/connect",
+                    "auto_submit_on_desktop": True,
+                },
+                {"id": "later", "text": "稍后处理"},
+            ],
+        },
+    )
+
+    assert card.options[0].auto_submit_on_desktop is True
+    assert card.options[0].action_url.endswith("/connect")
+
+
+@pytest.mark.parametrize(
+    "option",
+    [
+        {
+            "text": "启动",
+            "default_selected": True,
+            "action_url": "dclaw-local-tool://connect?bootstrap=x",
+            "auto_submit_on_desktop": True,
+        },
+        {"text": "启动", "auto_submit_on_desktop": True},
+    ],
+)
+def test_desktop_action_rejects_untrusted_or_incomplete_options(option):
+    with pytest.raises(InteractionValidationError):
+        validate_card(
+            "single_select",
+            {"title": "启动", "options": [option, {"text": "稍后"}]},
+        )
+
+
 @pytest.mark.parametrize(
     ("options", "issue"),
     [

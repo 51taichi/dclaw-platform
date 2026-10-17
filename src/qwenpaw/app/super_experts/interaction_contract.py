@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import (
     BaseModel,
@@ -87,12 +88,50 @@ class InteractionOption(_StrictFrozenModel):
     description: str | None = Field(default=None, max_length=1000)
     recommended: bool = False
     default_selected: bool = False
+    action_url: str | None = Field(default=None, max_length=2048)
+    auto_submit_on_desktop: bool = False
 
     _clean_id = field_validator("id", mode="before")(_strip_optional)
     _clean_text = field_validator("text", mode="before")(_strip_required)
     _clean_description = field_validator("description", mode="before")(
         _strip_optional
     )
+
+    @field_validator("action_url", mode="before")
+    @classmethod
+    def validate_action_url(cls, value: Any) -> str | None:
+        value = _strip_optional(value)
+        if value is None:
+            return None
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.fragment
+        ):
+            raise ValueError("action URL must be a credential-free HTTPS URL")
+        return value
+
+    @model_validator(mode="after")
+    def validate_desktop_action(self) -> "InteractionOption":
+        if self.auto_submit_on_desktop and (
+            self.action_url is None or not self.default_selected
+        ):
+            raise ValueError(
+                "desktop auto-submit requires a default-selected action URL"
+            )
+        return self
+
+    @model_serializer(mode="wrap")
+    def serialize_optional_action(self, handler: Any) -> dict[str, Any]:
+        payload = handler(self)
+        if self.action_url is None:
+            payload.pop("action_url", None)
+        if not self.auto_submit_on_desktop:
+            payload.pop("auto_submit_on_desktop", None)
+        return payload
 
 
 class InteractionSupplement(_StrictFrozenModel):
@@ -125,6 +164,12 @@ class _ChoiceCard(_StrictFrozenModel):
     _clean_description = field_validator("description", mode="before")(
         _strip_optional
     )
+
+    @model_validator(mode="after")
+    def validate_desktop_auto_submit(self) -> "_ChoiceCard":
+        if sum(option.auto_submit_on_desktop for option in self.options) > 1:
+            raise ValueError("only one desktop auto-submit option is allowed")
+        return self
 
 
 class SingleSelectCard(_ChoiceCard):
