@@ -53,6 +53,8 @@ function projectInteraction(
       description: option.description,
       recommended: option.recommended,
       defaultSelected: option.default_selected,
+      actionUrl: option.action_url ?? null,
+      autoSubmitOnDesktop: option.auto_submit_on_desktop === true,
     })),
     supplement: {
       enabled: record.card.supplement.enabled,

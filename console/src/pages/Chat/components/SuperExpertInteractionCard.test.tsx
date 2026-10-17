@@ -5,6 +5,7 @@ import {
   type QuestionFormInteractionProjection,
   SuperExpertInteractionCard,
 } from "./SuperExpertInteractionCard";
+import { isTrustedLocalToolActionUrl } from "./localToolAction";
 
 function single(
   overrides: Partial<ChoiceInteractionProjection> = {},
@@ -83,6 +84,59 @@ function questionForm(
 }
 
 describe("SuperExpertInteractionCard", () => {
+  it("only trusts DClaw bootstrap connection actions", () => {
+    expect(
+      isTrustedLocalToolActionUrl(
+        "https://dclaw.deepmega.cn/api/bootstrap/token/connect",
+      ),
+    ).toBe(true);
+    expect(isTrustedLocalToolActionUrl("https://evil.test/api/bootstrap/token/connect"))
+      .toBe(false);
+    expect(isTrustedLocalToolActionUrl("dclaw-local-tool://connect?token=x"))
+      .toBe(false);
+  });
+
+  it("opens and submits a trusted desktop launch action once", async () => {
+    const openExternal = vi.fn();
+    Object.defineProperty(window, "pywebview", {
+      configurable: true,
+      value: { api: { open_external_link: openExternal } },
+    });
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const actionUrl =
+      "https://dclaw.deepmega.cn/api/bootstrap/token/connect";
+
+    render(
+      <SuperExpertInteractionCard
+        projection={single({
+          options: [
+            {
+              id: "launch-local-tool",
+              text: "启动本地助手",
+              description: null,
+              recommended: true,
+              defaultSelected: true,
+              actionUrl,
+              autoSubmitOnDesktop: true,
+            },
+            {
+              id: "later",
+              text: "稍后处理",
+              description: null,
+              recommended: false,
+              defaultSelected: false,
+            },
+          ],
+        })}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    await waitFor(() => expect(openExternal).toHaveBeenCalledWith(actionUrl));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    Reflect.deleteProperty(window, "pywebview");
+  });
+
   it("shows only actionable choice content without repeating the prompt", () => {
     render(
       <SuperExpertInteractionCard projection={single()} onSubmit={vi.fn()} />,

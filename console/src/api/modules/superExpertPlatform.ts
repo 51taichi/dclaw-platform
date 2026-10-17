@@ -136,6 +136,8 @@ export interface InteractionOption {
   description: string | null;
   recommended: boolean;
   default_selected: boolean;
+  action_url?: string | null;
+  auto_submit_on_desktop?: boolean;
 }
 
 export interface InteractionSupplement {

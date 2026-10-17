@@ -1,5 +1,7 @@
-import { FormEvent, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Check, LoaderCircle, Sparkles } from "lucide-react";
+import { openExternalLink } from "../../../utils/openExternalLink";
+import { isTrustedLocalToolActionUrl } from "./localToolAction";
 import styles from "./SuperExpertInteractionCard.module.less";
 
 export type InteractionCardStatus =
@@ -29,6 +31,8 @@ export interface ChoiceInteractionProjection extends InteractionProjectionBase {
     description: string | null;
     recommended: boolean;
     defaultSelected: boolean;
+    actionUrl?: string | null;
+    autoSubmitOnDesktop?: boolean;
   }>;
   supplement: {
     enabled: boolean;
@@ -138,11 +142,52 @@ function ChoiceInteractionCard({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const submittingRef = useRef(false);
+  const autoSubmittedRef = useRef(false);
   const pending = projection.status === "PENDING";
   const submissionInFlight = projection.submissionInFlight === true;
   const submissionFailed = projection.submissionFailed === true;
   const busy = submitting || submissionInFlight;
   const actionable = pending || submissionInFlight || submissionFailed;
+
+  const submitSelection = useCallback(async () => {
+    const options = projection.options.filter((option) =>
+      selected.has(optionKey(option)),
+    );
+    const action = options.find((option) => option.actionUrl);
+    if (action?.actionUrl) {
+      if (!isTrustedLocalToolActionUrl(action.actionUrl)) {
+        throw new Error("untrusted local tool action URL");
+      }
+      openExternalLink(action.actionUrl);
+    }
+    await onSubmit({
+      version: projection.version,
+      selected: options.map((option) => ({ id: option.id, text: option.text })),
+      supplement: supplement.trim() || null,
+    });
+  }, [onSubmit, projection.options, projection.version, selected, supplement]);
+
+  useEffect(() => {
+    const action = projection.options.find(
+      (option) => option.autoSubmitOnDesktop && option.defaultSelected,
+    );
+    if (
+      !pending ||
+      autoSubmittedRef.current ||
+      !action?.actionUrl ||
+      !window.pywebview?.api?.open_external_link
+    ) {
+      return;
+    }
+    autoSubmittedRef.current = true;
+    submittingRef.current = true;
+    setSubmitting(true);
+    void submitSelection().catch(() => {
+      setError("本地助手未能自动启动，请点击“提交选择”重试");
+      submittingRef.current = false;
+      setSubmitting(false);
+    });
+  }, [pending, projection.interactionId, projection.options, submitSelection]);
 
   const toggle = (option: ChoiceInteractionProjection["options"][number]) => {
     if (!pending || submittingRef.current) return;
@@ -180,13 +225,7 @@ function ChoiceInteractionCard({
     setSubmitting(true);
     setError("");
     try {
-      await onSubmit({
-        version: projection.version,
-        selected: projection.options
-          .filter((option) => selected.has(optionKey(option)))
-          .map((option) => ({ id: option.id, text: option.text })),
-        supplement: normalizedSupplement || null,
-      });
+      await submitSelection();
     } catch {
       setError("提交失败，请重试");
       submittingRef.current = false;
