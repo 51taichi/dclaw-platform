@@ -38,13 +38,6 @@ export interface InstallPluginResult {
   message: string;
 }
 
-export interface PluginStatus {
-  id: string;
-  loaded: boolean;
-  enabled: boolean;
-  version?: string;
-}
-
 /**
  * Fetch the list of loaded plugins from the backend.
  */
@@ -118,22 +111,4 @@ export async function uninstallPlugin(pluginId: string): Promise<void> {
     const body = await response.json().catch(() => ({}));
     throw new Error(body.detail ?? `Uninstall failed (${response.status})`);
   }
-}
-
-/**
- * Fetch the runtime status of a single plugin.
- */
-export async function fetchPluginStatus(
-  pluginId: string,
-): Promise<PluginStatus> {
-  const response = await fetch(getApiUrl(`/admin/plugins/${pluginId}/status`), {
-    headers: buildAuthHeaders(),
-  });
-
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(body.detail ?? `Status fetch failed (${response.status})`);
-  }
-
-  return response.json();
 }
