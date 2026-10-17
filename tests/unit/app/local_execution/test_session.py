@@ -15,7 +15,12 @@ SECRET = "local-execution-session-secret-32-bytes"
 
 def test_ordinary_agent_context_is_unchanged_without_signer(monkeypatch):
     monkeypatch.delenv("DCLAW_LOCAL_EXECUTION_SESSION_SECRET", raising=False)
-    context = {"user_id": "u1", "session_id": "s1", "agent_id": "ordinary"}
+    context = {
+        "user_id": "u1",
+        "session_id": "s1",
+        "agent_id": "ordinary",
+        "agent_name": "普通 Agent",
+    }
 
     assert inject_local_execution_session(
         context,
@@ -25,7 +30,12 @@ def test_ordinary_agent_context_is_unchanged_without_signer(monkeypatch):
 
 
 def test_authorized_agent_receives_relay_compatible_session():
-    context = {"user_id": "u1", "session_id": "s1", "agent_id": "super_agent"}
+    context = {
+        "user_id": "u1",
+        "session_id": "s1",
+        "agent_id": "super_agent",
+        "agent_name": "测试超级专家",
+    }
     enriched = inject_local_execution_session(
         context,
         granted_capabilities={LOCAL_EXECUTION_SESSION_CAPABILITY: "1"},
@@ -34,7 +44,12 @@ def test_authorized_agent_receives_relay_compatible_session():
         now=1_000,
     )
 
-    assert context == {"user_id": "u1", "session_id": "s1", "agent_id": "super_agent"}
+    assert context == {
+        "user_id": "u1",
+        "session_id": "s1",
+        "agent_id": "super_agent",
+        "agent_name": "测试超级专家",
+    }
     assert verify_local_execution_session(
         enriched["local_execution_session_token"], secret=SECRET, now=1_001
     ) == {
@@ -42,6 +57,7 @@ def test_authorized_agent_receives_relay_compatible_session():
         "u": "u1",
         "s": "s1",
         "a": "super_agent",
+        "n": "测试超级专家",
         "i": "invocation-1",
         "iat": 1_000,
         "exp": 1_600,
@@ -53,6 +69,7 @@ def test_tampered_and_expired_sessions_are_rejected():
         user_id="u1",
         session_id="s1",
         agent_id="super_agent",
+        agent_name="测试超级专家",
         invocation_id="invocation-1",
         secret=SECRET,
         now=1_000,
@@ -69,7 +86,12 @@ def test_authorized_agent_fails_closed_without_signer(monkeypatch):
 
     with pytest.raises(LocalExecutionSessionError):
         inject_local_execution_session(
-            {"user_id": "u1", "session_id": "s1", "agent_id": "super_agent"},
+            {
+                "user_id": "u1",
+                "session_id": "s1",
+                "agent_id": "super_agent",
+                "agent_name": "测试超级专家",
+            },
             granted_capabilities={LOCAL_EXECUTION_SESSION_CAPABILITY: "1"},
             invocation_id="invocation-1",
         )

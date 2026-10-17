@@ -50,6 +50,7 @@ def issue_local_execution_session(
     user_id: str,
     session_id: str,
     agent_id: str,
+    agent_name: str,
     invocation_id: str,
     secret: str | bytes | None = None,
     now: int | None = None,
@@ -58,7 +59,7 @@ def issue_local_execution_session(
     """Create a Relay-compatible credential bound to one DClaw invocation."""
     if not 1 <= lifetime_seconds <= MAX_SESSION_LIFETIME_SECONDS:
         raise LocalExecutionSessionError("invalid local execution session lifetime")
-    values = (user_id, session_id, agent_id, invocation_id)
+    values = (user_id, session_id, agent_id, agent_name, invocation_id)
     if not all(isinstance(value, str) and value for value in values):
         raise LocalExecutionSessionError("trusted session context is incomplete")
     issued_at = int(time.time()) if now is None else int(now)
@@ -67,6 +68,7 @@ def issue_local_execution_session(
         "u": user_id,
         "s": session_id,
         "a": agent_id,
+        "n": agent_name,
         "i": invocation_id,
         "iat": issued_at,
         "exp": issued_at + lifetime_seconds,
@@ -106,7 +108,7 @@ def verify_local_execution_session(
     except Exception as exc:
         raise LocalExecutionSessionError("invalid local execution session") from exc
     current = int(time.time()) if now is None else int(now)
-    required = ("u", "s", "a", "i")
+    required = ("u", "s", "a", "n", "i")
     if (
         not isinstance(payload, dict)
         or payload.get("v") != 1
@@ -137,6 +139,7 @@ def inject_local_execution_session(
         user_id=str(context.get("user_id") or ""),
         session_id=str(context.get("session_id") or ""),
         agent_id=str(context.get("agent_id") or ""),
+        agent_name=str(context.get("agent_name") or ""),
         invocation_id=invocation_id,
         secret=secret,
         now=now,

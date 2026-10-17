@@ -683,6 +683,7 @@ async def run_workspace_orchestration_turn(
                 "user_id": str(request.user_id),
                 "channel": str(request.channel),
                 "agent_id": agent_id,
+                "agent_name": str(getattr(agent, "name", "") or agent_id),
                 "normalized_input": {"messages": serialized_messages},
                 "history": serialized_history,
             },
