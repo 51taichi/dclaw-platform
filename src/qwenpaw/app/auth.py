@@ -995,27 +995,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         return await call_next(request)
 
-        token = self._extract_token(request)
-        if not token:
-            return Response(
-                content=json.dumps({"detail": "Not authenticated"}),
-                status_code=401,
-                media_type="application/json",
-            )
-
-        user = verify_token(token)
-        if user is None:
-            return Response(
-                content=json.dumps(
-                    {"detail": "Invalid or expired token"},
-                ),
-                status_code=401,
-                media_type="application/json",
-            )
-
-        request.state.user = user
-        return await call_next(request)
-
     @staticmethod
     def _should_skip_auth(request: Request) -> bool:
         """Return ``True`` when the request does not require auth."""
