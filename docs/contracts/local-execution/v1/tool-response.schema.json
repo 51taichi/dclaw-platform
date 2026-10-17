@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/contracts/local-execution/v1/tool-response.schema.json",
+  "title": "DClaw local execution MCP tool response v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["standard", "ok", "trace_id"],
+  "properties": {
+    "standard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {
+        "id": {"const": "dclaw.local-execution"},
+        "version": {"const": "1.0"}
+      }
+    },
+    "ok": {"type": "boolean"},
+    "trace_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._:-]{8,128}$"
+    },
+    "data": {"type": "object"},
+    "error": {
+      "$ref": "error-envelope.schema.json"
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {"ok": {"const": true}},
+      "required": ["data"],
+      "not": {"required": ["error"]}
+    },
+    {
+      "properties": {"ok": {"const": false}},
+      "required": ["error"],
+      "not": {"required": ["data"]}
+    }
+  ]
+}
