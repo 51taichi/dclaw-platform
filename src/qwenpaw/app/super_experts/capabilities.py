@@ -60,6 +60,7 @@ PLATFORM_CAPABILITY_CATALOG_V1 = {
         _definition("card.update", "card", dependencies=("card.create",)),
         _definition("aigc.capabilities.list/1", "aigc"),
         _definition("interaction.capabilities.list/1", "interaction"),
+        _definition("local.execution.session/1", "local_execution"),
         _definition(
             "interaction.card.create/1",
             "interaction",
