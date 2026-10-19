@@ -59,6 +59,12 @@ import PreparingOverlay from "../Chat/components/PreparingOverlay";
 import { TaskArtifactCard } from "../Chat/components/TaskArtifactCard";
 import { SuperExpertAigcCards } from "../Chat/components/SuperExpertAigcCards";
 import { InlineSuperExpertInteractionCards } from "../Chat/components/SuperExpertInteractionCards";
+import {
+  ATTACHMENT_FILES_CARD,
+  AttachmentFilesCard,
+  UserRequestCard,
+  type UserRequestCardProps,
+} from "../../components/UserRequestCard";
 import { scheduleArtifactCardScans } from "../Chat/utils/artifactCardScanScheduler";
 import { createRoot } from "react-dom/client";
 import { shouldRedirectAfterAgentChange } from "./agentRoutePolicy";
@@ -2071,6 +2077,14 @@ export default function ChatPage() {
       customToolRenderConfig:
         Object.keys(toolRenderConfig).length > 0 ? toolRenderConfig : undefined,
       cards: {
+        AgentScopeRuntimeRequestCard: (cardProps: UserRequestCardProps) => (
+          <UserRequestCard
+            {...cardProps}
+            chatId={chatId || window.currentSessionId || ""}
+            agentId={selectedAgent}
+          />
+        ),
+        [ATTACHMENT_FILES_CARD]: AttachmentFilesCard,
         AgentScopeRuntimeResponseCard: (cardProps: any) => (
           <RuntimeProgressCard
             {...cardProps}

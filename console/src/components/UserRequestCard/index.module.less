@@ -1,0 +1,53 @@
+.attachmentList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.attachmentRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.attachmentName {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: inherit;
+}
+
+.openButton {
+  display: inline-flex;
+  flex: 0 0 28px;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: #64748b;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.openButton:hover {
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.openButton:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+:global(.dark-mode) .openButton {
+  color: #cbd5e1;
+}
+
+:global(.dark-mode) .openButton:hover {
+  color: #93c5fd;
+  background: rgba(147, 197, 253, 0.12);
+}

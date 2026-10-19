@@ -63,6 +63,12 @@ import {
 } from "./components/SuperExpertAigcTaskCard";
 import { superExpertPlatformApi } from "../../api/modules/superExpertPlatform";
 import { InlineSuperExpertInteractionCards } from "./components/SuperExpertInteractionCards";
+import {
+  ATTACHMENT_FILES_CARD,
+  AttachmentFilesCard,
+  UserRequestCard,
+  type UserRequestCardProps,
+} from "../../components/UserRequestCard";
 
 interface ApprovalMessageData {
   requestId: string;
@@ -2019,6 +2025,14 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
       customToolRenderConfig:
         Object.keys(toolRenderConfig).length > 0 ? toolRenderConfig : undefined,
       cards: {
+        AgentScopeRuntimeRequestCard: (cardProps: UserRequestCardProps) => (
+          <UserRequestCard
+            {...cardProps}
+            chatId={window.currentSessionId || chatId || ""}
+            agentId={selectedAgent}
+          />
+        ),
+        [ATTACHMENT_FILES_CARD]: AttachmentFilesCard,
         AgentScopeRuntimeResponseCard: (cardProps: any) => (
           <RuntimeProgressCard
             {...cardProps}
