@@ -6,13 +6,15 @@
 
 当前版本：`1.1`
 
+面向第三方开发者的完整开发、密封、上传和协作流程见 [DClaw 第三方超级 Agent 开发、密封与协作标准 V1](super-agent-development-standard-v1.zh-CN.md)。本文只定义本地执行边界与协议。
+
 ## 1. 目标
 
 本标准定义超级 Agent 如何通过公共本地能力网关调用 DClaw 本地助手。它只标准化公共通信、任务生命周期、错误定位、能力包和兼容规则，不规定任何行业业务流程。
 
 满足本标准的超级 Agent 可以拥有自己的业务 MCP Server、第三方 API、业务规则和本地能力包，同时复用同一个 DClaw 平台、本地能力网关和本地助手。
 
-新建超级专家或从 WorkBuddy、豆包等平台迁移 Agent 时，以 [超级专家开发与跨平台迁移操作标准 V1](super-expert-porting-playbook-v1.zh-CN.md) 作为新任务会话的唯一人工入口。
+从零开发第三方超级 Agent 时，以 [DClaw 第三方超级 Agent 开发、密封与协作标准 V1](super-agent-development-standard-v1.zh-CN.md) 作为入口；从 WorkBuddy、豆包等平台迁移时，再按 [超级专家开发与跨平台迁移操作标准 V1](super-expert-porting-playbook-v1.zh-CN.md) 执行迁移阶段。
 
 ```mermaid
 flowchart LR
