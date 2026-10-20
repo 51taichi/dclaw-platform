@@ -139,6 +139,7 @@ users = Table(
     Column("role", String, server_default="user"),
     Column("display_name", String(100), nullable=True),
     Column("phone_number_e164", String(32), nullable=True),
+    Column("ai_customer_service_url", String(2048), nullable=True),
     Column(
         "billing_overdraft_enabled",
         Boolean,
@@ -1783,6 +1784,11 @@ def _ensure_user_identity_columns(engine: Engine) -> None:
         statements.append("ALTER TABLE users ADD COLUMN display_name VARCHAR(100)")
     if "phone_number_e164" not in existing:
         statements.append("ALTER TABLE users ADD COLUMN phone_number_e164 VARCHAR(32)")
+    if "ai_customer_service_url" not in existing:
+        statements.append(
+            "ALTER TABLE users ADD COLUMN "
+            "ai_customer_service_url VARCHAR(2048)",
+        )
     if statements:
         with engine.begin() as conn:
             for statement in statements:

@@ -73,6 +73,7 @@ class UserRepository(Protocol):
         role: str,
         display_name: str | None = None,
         phone_number_e164: str | None = None,
+        ai_customer_service_url: str | None = None,
     ) -> dict[str, Any]:
         ...
 
@@ -88,6 +89,13 @@ class UserRepository(Protocol):
         self,
         user_id: int,
         phone_number_e164: str,
+    ) -> dict[str, Any] | None:
+        ...
+
+    def update_user_ai_customer_service_url(
+        self,
+        user_id: int,
+        url: str | None,
     ) -> dict[str, Any] | None:
         ...
 
@@ -120,7 +128,15 @@ class SqlAlchemyUserRepository:
     def get_user_by_id(self, user_id: int) -> dict[str, Any] | None:
         with self.engine.connect() as conn:
             row = conn.execute(
-                select(users.c.id, users.c.username, users.c.role, users.c.display_name, users.c.phone_number_e164, users.c.created_at).where(
+                select(
+                    users.c.id,
+                    users.c.username,
+                    users.c.role,
+                    users.c.display_name,
+                    users.c.phone_number_e164,
+                    users.c.ai_customer_service_url,
+                    users.c.created_at,
+                ).where(
                     users.c.id == user_id,
                 ),
             ).mappings().first()
@@ -129,7 +145,14 @@ class SqlAlchemyUserRepository:
     def get_user_by_username(self, username: str) -> dict[str, Any] | None:
         with self.engine.connect() as conn:
             row = conn.execute(
-                select(users.c.id, users.c.username, users.c.role, users.c.display_name, users.c.phone_number_e164).where(
+                select(
+                    users.c.id,
+                    users.c.username,
+                    users.c.role,
+                    users.c.display_name,
+                    users.c.phone_number_e164,
+                    users.c.ai_customer_service_url,
+                ).where(
                     users.c.username == username,
                 ),
             ).mappings().first()
@@ -194,7 +217,15 @@ class SqlAlchemyUserRepository:
     def list_users(self) -> list[dict[str, Any]]:
         with self.engine.connect() as conn:
             rows = conn.execute(
-                select(users.c.id, users.c.username, users.c.role, users.c.display_name, users.c.phone_number_e164, users.c.created_at).order_by(
+                select(
+                    users.c.id,
+                    users.c.username,
+                    users.c.role,
+                    users.c.display_name,
+                    users.c.phone_number_e164,
+                    users.c.ai_customer_service_url,
+                    users.c.created_at,
+                ).order_by(
                     desc(users.c.created_at),
                 ),
             ).mappings().all()
@@ -209,6 +240,7 @@ class SqlAlchemyUserRepository:
         role: str,
         display_name: str | None = None,
         phone_number_e164: str | None = None,
+        ai_customer_service_url: str | None = None,
     ) -> dict[str, Any]:
         with self.engine.begin() as conn:
             result = conn.execute(
@@ -219,6 +251,7 @@ class SqlAlchemyUserRepository:
                     role=role,
                     display_name=display_name,
                     phone_number_e164=phone_number_e164,
+                    ai_customer_service_url=ai_customer_service_url,
                 ),
             )
             user_id = int(result.inserted_primary_key[0])
@@ -251,6 +284,21 @@ class SqlAlchemyUserRepository:
                 update(users)
                 .where(users.c.id == user_id)
                 .values(phone_number_e164=phone_number_e164),
+            )
+        if not result.rowcount:
+            return None
+        return self.get_user_by_id(user_id)
+
+    def update_user_ai_customer_service_url(
+        self,
+        user_id: int,
+        url: str | None,
+    ) -> dict[str, Any] | None:
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                update(users)
+                .where(users.c.id == user_id)
+                .values(ai_customer_service_url=url),
             )
         if not result.rowcount:
             return None
@@ -394,15 +442,27 @@ class SqliteUserRepository:
         role: str,
         display_name: str | None = None,
         phone_number_e164: str | None = None,
+        ai_customer_service_url: str | None = None,
     ) -> dict[str, Any]:
         conn = db.get_db()
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO users (username, password_hash, password_salt, role, display_name, phone_number_e164)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO users (
+                username, password_hash, password_salt, role, display_name,
+                phone_number_e164, ai_customer_service_url
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (username, password_hash, password_salt, role, display_name, phone_number_e164),
+            (
+                username,
+                password_hash,
+                password_salt,
+                role,
+                display_name,
+                phone_number_e164,
+                ai_customer_service_url,
+            ),
         )
         conn.commit()
         user = self.get_user_by_id(int(cursor.lastrowid))
@@ -435,6 +495,22 @@ class SqliteUserRepository:
         cursor.execute(
             "UPDATE users SET phone_number_e164 = ? WHERE id = ?",
             (phone_number_e164, user_id),
+        )
+        conn.commit()
+        if cursor.rowcount == 0:
+            return None
+        return self.get_user_by_id(user_id)
+
+    def update_user_ai_customer_service_url(
+        self,
+        user_id: int,
+        url: str | None,
+    ) -> dict[str, Any] | None:
+        conn = db.get_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE users SET ai_customer_service_url = ? WHERE id = ?",
+            (url, user_id),
         )
         conn.commit()
         if cursor.rowcount == 0:
@@ -499,6 +575,7 @@ def _sqlite_user_dict(row: Any) -> dict[str, Any] | None:
     if value is not None:
         value.setdefault("display_name", None)
         value.setdefault("phone_number_e164", None)
+        value.setdefault("ai_customer_service_url", None)
     return value
 
 

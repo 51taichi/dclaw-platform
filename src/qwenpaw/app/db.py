@@ -48,6 +48,7 @@ def init_db():
             role TEXT DEFAULT 'user',
             display_name TEXT,
             phone_number_e164 TEXT,
+            ai_customer_service_url TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """
@@ -57,6 +58,10 @@ def init_db():
         cursor.execute("ALTER TABLE users ADD COLUMN display_name TEXT")
     if "phone_number_e164" not in user_columns:
         cursor.execute("ALTER TABLE users ADD COLUMN phone_number_e164 TEXT")
+    if "ai_customer_service_url" not in user_columns:
+        cursor.execute(
+            "ALTER TABLE users ADD COLUMN ai_customer_service_url TEXT",
+        )
 
     # 2. User Connections table (for MCP Connectors)
     cursor.execute(

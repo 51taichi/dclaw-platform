@@ -148,7 +148,7 @@ async def auth_status():
 async def verify(request: Request):
     """Verify that the caller's Bearer token is still valid."""
     if not is_auth_enabled():
-        return {"valid": True, "username": ""}
+        return {"valid": True, "username": "", "scenes": []}
 
     auth_header = request.headers.get("Authorization", "")
     token = auth_header[7:] if auth_header.startswith("Bearer ") else ""
@@ -166,10 +166,22 @@ async def verify(request: Request):
     if user is None:
         raise HTTPException(status_code=401, detail="User no longer exists")
 
+    scenes = []
+    scene_url = str(user.get("ai_customer_service_url") or "").strip()
+    if scene_url:
+        scenes.append(
+            {
+                "key": "ai-customer-service",
+                "title": "AI客服",
+                "url": scene_url,
+            },
+        )
+
     return {
         "valid": True,
         "username": username,
         "role": user.get("role", "user"),
+        "scenes": scenes,
     }
 
 

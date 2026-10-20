@@ -65,6 +65,7 @@ def test_sqlalchemy_user_repo_creates_lists_and_updates_users(repo):
     assert created["role"] == "admin"
     assert created["display_name"] is None
     assert created["phone_number_e164"] is None
+    assert created["ai_customer_service_url"] is None
     assert repo.count_users() == 1
     assert repo.count_admins() == 1
     assert repo.get_user_by_username("alice")["id"] == 1
@@ -89,12 +90,30 @@ def test_sqlalchemy_user_repo_round_trips_identity(repo):
         role="user",
         display_name="Alice Chen",
         phone_number_e164="+8613800138000",
+        ai_customer_service_url=(
+            "https://service.example.com/console/?workspace=alice"
+        ),
     )
 
     assert created["display_name"] == "Alice Chen"
     assert created["phone_number_e164"] == "+8613800138000"
+    assert created["ai_customer_service_url"] == (
+        "https://service.example.com/console/?workspace=alice"
+    )
     assert repo.get_user_by_username("alice")["display_name"] == "Alice Chen"
     assert repo.list_users()[0]["phone_number_e164"] == "+8613800138000"
+
+    updated = repo.update_user_ai_customer_service_url(
+        created["id"],
+        "https://service.example.com/console/?workspace=updated",
+    )
+    assert updated["ai_customer_service_url"] == (
+        "https://service.example.com/console/?workspace=updated"
+    )
+    assert repo.update_user_ai_customer_service_url(created["id"], None)[
+        "ai_customer_service_url"
+    ] is None
+    assert repo.update_user_ai_customer_service_url(999, None) is None
 
 
 def test_sqlalchemy_user_repo_ensure_and_update_legacy_user(repo):

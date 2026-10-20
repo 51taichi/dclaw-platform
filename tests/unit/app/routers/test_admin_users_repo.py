@@ -21,6 +21,7 @@ class FakeUserRepository:
                 "password_salt": "old-salt",
                 "display_name": None,
                 "phone_number_e164": None,
+                "ai_customer_service_url": None,
             }
         }
         self.next_id = 2
@@ -35,6 +36,7 @@ class FakeUserRepository:
                 "created_at": row["created_at"],
                 "display_name": row.get("display_name"),
                 "phone_number_e164": row.get("phone_number_e164"),
+                "ai_customer_service_url": row.get("ai_customer_service_url"),
             }
             for row in self.users.values()
         ]
@@ -58,6 +60,7 @@ class FakeUserRepository:
     def create_user(
         self, *, username, password_hash, password_salt, role,
         display_name=None, phone_number_e164=None,
+        ai_customer_service_url=None,
     ):
         user_id = self.next_id
         self.next_id += 1
@@ -70,6 +73,7 @@ class FakeUserRepository:
             "password_salt": password_salt,
             "display_name": display_name,
             "phone_number_e164": phone_number_e164,
+            "ai_customer_service_url": ai_customer_service_url,
         }
         self.users[user_id] = row
         return row
@@ -81,6 +85,13 @@ class FakeUserRepository:
         row["password_hash"] = password_hash
         row["password_salt"] = password_salt
         return True
+
+    def update_user_ai_customer_service_url(self, user_id, url):
+        row = self.users.get(user_id)
+        if row is None:
+            return None
+        row["ai_customer_service_url"] = url
+        return row
 
     def delete_user_cascade(self, user_id):
         if user_id not in self.users:
@@ -132,6 +143,7 @@ async def test_admin_user_routes_use_user_repository(
     assert created.username == "alice"
     assert created.display_name is None
     assert created.phone_number is None
+    assert created.ai_customer_service_url is None
     stored = fake_repo.get_user_by_username("alice")
     assert verify_password(
         "new-password",
@@ -168,6 +180,57 @@ async def test_admin_create_user_normalizes_identity(fake_repo, fake_wallet_serv
     stored = fake_repo.get_user_by_username("alice")
     assert stored["display_name"] == "Alice Chen"
     assert stored["phone_number_e164"] == "+8613800138000"
+
+
+@pytest.mark.asyncio
+async def test_admin_user_routes_manage_ai_customer_service_url(
+    fake_repo,
+    fake_wallet_service,
+):
+    created = await admin_users.create_user(admin_users.CreateUserRequest(
+        username="alice",
+        password="password",
+        ai_customer_service_url=(
+            "  https://service.example.com/console/?workspace=alice  "
+        ),
+    ))
+
+    assert created.ai_customer_service_url == (
+        "https://service.example.com/console/?workspace=alice"
+    )
+
+    updated = await admin_users.update_ai_customer_service(
+        created.id,
+        admin_users.AiCustomerServiceRequest(
+            url="https://service.example.com/console/?workspace=updated",
+        ),
+    )
+    assert updated.ai_customer_service_url == (
+        "https://service.example.com/console/?workspace=updated"
+    )
+
+    removed = await admin_users.update_ai_customer_service(
+        created.id,
+        admin_users.AiCustomerServiceRequest(url=None),
+    )
+    assert removed.ai_customer_service_url is None
+
+
+@pytest.mark.asyncio
+async def test_admin_user_routes_reject_unsafe_ai_customer_service_url(
+    fake_repo,
+    fake_wallet_service,
+):
+    with pytest.raises(HTTPException) as error:
+        await admin_users.create_user(admin_users.CreateUserRequest(
+            username="alice",
+            password="password",
+            ai_customer_service_url="http://service.example.com/console/",
+        ))
+
+    assert error.value.status_code == 422
+    assert fake_repo.get_user_by_username("alice") is None
+    assert fake_wallet_service.wallet_users == []
 
 
 @pytest.mark.asyncio

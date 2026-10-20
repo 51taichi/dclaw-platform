@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import List
+from urllib.parse import urlsplit
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -21,6 +22,7 @@ class UserSpec(BaseModel):
     created_at: str
     display_name: str | None = None
     phone_number: str | None = None
+    ai_customer_service_url: str | None = None
 
 
 class CreateUserRequest(BaseModel):
@@ -29,10 +31,33 @@ class CreateUserRequest(BaseModel):
     role: str = "user"
     display_name: str | None = Field(default=None, max_length=100)
     phone_number: str | None = Field(default=None, max_length=32)
+    ai_customer_service_url: str | None = Field(default=None, max_length=2048)
 
 
 class ResetPasswordRequest(BaseModel):
     new_password: str
+
+
+class AiCustomerServiceRequest(BaseModel):
+    url: str | None = Field(default=None, max_length=2048)
+
+
+def _normalize_ai_customer_service_url(value: str | None) -> str | None:
+    url = (value or "").strip()
+    if not url:
+        return None
+    parsed = urlsplit(url)
+    if (
+        parsed.scheme.lower() != "https"
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="AI customer service URL must be a valid HTTPS URL",
+        )
+    return url
 
 
 @router.get("", response_model=List[UserSpec])
@@ -46,6 +71,7 @@ async def list_users():
             created_at=str(row["created_at"]),
             display_name=row.get("display_name"),
             phone_number=row.get("phone_number_e164"),
+            ai_customer_service_url=row.get("ai_customer_service_url"),
         )
         for row in get_user_repository().list_users()
     ]
@@ -73,6 +99,9 @@ async def create_user(req: CreateUserRequest):
         phone_number = normalize_cn_mobile(req.phone_number)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    ai_customer_service_url = _normalize_ai_customer_service_url(
+        req.ai_customer_service_url,
+    )
     existing = get_user_repository().get_user_by_username(username)
     if existing:
         # Repair a prior user-created/wallet-failed attempt before returning
@@ -92,6 +121,7 @@ async def create_user(req: CreateUserRequest):
             role=req.role,
             display_name=display_name,
             phone_number_e164=phone_number,
+            ai_customer_service_url=ai_customer_service_url,
         )
         # New users get an empty wallet. Trial credits are deliberately not
         # granted here because a username is not verified-mobile evidence.
@@ -103,6 +133,7 @@ async def create_user(req: CreateUserRequest):
             created_at=str(row["created_at"]),
             display_name=row.get("display_name"),
             phone_number=row.get("phone_number_e164"),
+            ai_customer_service_url=row.get("ai_customer_service_url"),
         )
     except Exception as e:
         raise HTTPException(
@@ -136,6 +167,31 @@ async def reset_password(user_id: int, req: ResetPasswordRequest):
             status_code=500,
             detail=f"Failed to reset password: {e}",
         ) from e
+
+
+@router.put("/{user_id}/ai-customer-service", response_model=UserSpec)
+async def update_ai_customer_service(
+    user_id: int,
+    req: AiCustomerServiceRequest,
+):
+    """Configure or remove the user's independent AI customer-service entry."""
+    repo = get_user_repository()
+    if not repo.get_user_by_id(user_id):
+        raise HTTPException(status_code=404, detail="User not found")
+
+    url = _normalize_ai_customer_service_url(req.url)
+    row = repo.update_user_ai_customer_service_url(user_id, url)
+    if row is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return UserSpec(
+        id=row["id"],
+        username=row["username"],
+        role=row["role"],
+        created_at=str(row["created_at"]),
+        display_name=row.get("display_name"),
+        phone_number=row.get("phone_number_e164"),
+        ai_customer_service_url=row.get("ai_customer_service_url"),
+    )
 
 
 @router.delete("/{user_id}")
