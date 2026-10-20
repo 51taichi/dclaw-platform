@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import importlib.util
 import json
 import sys
@@ -150,6 +151,30 @@ def _runtime(plugin_module, tmp_path):
     return store, signer, broker, service_cls(store, signer, broker)
 
 
+def test_store_migrates_legacy_waiting_task_status(plugin_module, tmp_path):
+    path = tmp_path / "state.sqlite3"
+    store = plugin_module.StateStore(path)
+    task, _created = store.create_task(
+        user_id="user-1",
+        agent_id="agent-1",
+        agent_name="Agent",
+        invocation_id="invocation-1",
+        capability_id="example.video.compose",
+        task_input={},
+        idempotency_key="legacy-task",
+        device_id="device-1",
+        max_concurrency=1,
+    )
+    store.update_task(task["task_id"], status="waiting_for_input")
+
+    migrated = plugin_module.StateStore(path).get_task(
+        task["task_id"], "user-1"
+    )
+
+    assert migrated is not None
+    assert migrated["status"] == "awaiting_input"
+
+
 def test_mcp_endpoint_exposes_exact_standard_tool_set(plugin_module, tmp_path):
     store, signer, broker, service = _runtime(plugin_module, tmp_path)
     del store, signer, broker
@@ -274,6 +299,175 @@ class _FakeWebSocket:
 
     async def close(self, **_kwargs):
         return None
+
+
+@pytest.mark.asyncio
+async def test_environment_catalog_and_runtime_prepare_contract(
+    plugin_module,
+    tmp_path,
+):
+    store, signer, _broker, service = _runtime(plugin_module, tmp_path)
+    token = signer.issue(
+        user_id="user-1",
+        session_id="session-1",
+        agent_id="agent-1",
+        agent_name="Video Agent",
+        installation_id="install-1",
+        release_id="release-1",
+        invocation_id="invocation-1",
+    )
+    environment = {
+        "agent_protocol_version": "1",
+        "bootstrap_session_id": "bootstrap-1",
+        "wait_seconds": 0,
+        "dclaw_session_token": token,
+    }
+
+    missing = await service.call("local_environment_status", environment)
+    assert missing["data"] == {
+        "state": "device_not_ready",
+        "reason": "no_paired_device",
+        "protocol_version": "1",
+        "compatible": True,
+        "minimum_runner_version": "1.0.0",
+        "bootstrap_session_id": "bootstrap-1",
+        "user_action": "open_dclaw",
+        "devices": [],
+    }
+
+    store.upsert_device(
+        device_id="device-1",
+        user_id="user-1",
+        display_name="Windows",
+        runner_version="0.9.0",
+        protocol_version="1",
+        device_token="device-token",
+    )
+    websocket = _FakeWebSocket()
+    await service.attach("device-1", websocket)
+    outdated = await service.call("local_environment_status", environment)
+    assert outdated["data"]["state"] == "runner_update_required"
+    assert outdated["data"]["reason"] == "runner_version_too_old"
+    assert outdated["data"]["user_action"] == "update_dclaw"
+
+    store.upsert_device(
+        device_id="device-1",
+        user_id="user-1",
+        display_name="Windows",
+        runner_version="1.0.0",
+        protocol_version="1",
+        capabilities=[],
+    )
+    ready = await service.call("local_environment_status", environment)
+    assert ready["data"]["state"] == "ready"
+    assert ready["data"]["bootstrap_session_id"] == "bootstrap-1"
+    assert ready["data"]["devices"][0]["online"] is True
+
+    catalog = await service.call(
+        "local_capabilities_list",
+        {"dclaw_session_token": token},
+    )
+    assert catalog["data"] == {
+        "catalog_version": "1",
+        "availability": "available",
+        "capabilities": [],
+        "device_count": 1,
+    }
+
+    descriptor = {
+        "capability_id": "example.video.compose",
+        "package_id": "example.video.package",
+        "package_version": "1.2.0",
+        "min_runner_version": "1.0.0",
+        "schemas": {
+            name: {"document": {"type": "object"}}
+            for name in ("input", "result", "checkpoint")
+        },
+        "limits": {"max_concurrency": 1},
+    }
+    store.register_package(descriptor, signer_id="test", signature="test")
+    preparing = await service.call(
+        "local_runtime_prepare",
+        {
+            "capability": "example.video.compose",
+            "dclaw_session_token": token,
+        },
+    )
+    assert preparing["data"] == {
+        "capability_id": "example.video.compose",
+        "package_id": "example.video.package",
+        "package_version": "1.2.0",
+        "min_runner_version": "1.0.0",
+        "state": "preparing",
+        "device_id": "device-1",
+        "runner_version": "1.0.0",
+        "user_action": "wait",
+    }
+    assert websocket.messages[-1]["type"] == "runtime.prepare"
+
+    store.update_device_capabilities(
+        "device-1",
+        [
+            {
+                "capability_id": "example.video.compose",
+                "version": "1",
+                "package_id": "example.video.package",
+                "package_version": "1.2.0",
+            }
+        ],
+    )
+    runtime_ready = await service.call(
+        "local_runtime_prepare",
+        {
+            "capability": "example.video.compose",
+            "dclaw_session_token": token,
+        },
+    )
+    assert runtime_ready["data"]["state"] == "ready"
+    assert runtime_ready["data"]["user_action"] == "none"
+
+
+@pytest.mark.asyncio
+async def test_environment_waits_for_automatic_client_connection(
+    plugin_module,
+    tmp_path,
+):
+    store, signer, _broker, service = _runtime(plugin_module, tmp_path)
+    token = signer.issue(
+        user_id="user-1",
+        session_id="session-1",
+        agent_id="agent-1",
+        agent_name="Agent",
+        installation_id="install-1",
+        release_id="release-1",
+        invocation_id="invocation-1",
+    )
+
+    async def connect():
+        await asyncio.sleep(0.01)
+        store.upsert_device(
+            device_id="device-1",
+            user_id="user-1",
+            display_name="Windows",
+            runner_version="1.0.0",
+            protocol_version="1",
+            device_token="token",
+        )
+        await service.attach("device-1", _FakeWebSocket())
+
+    connection = asyncio.create_task(connect())
+    result = await service.call(
+        "local_environment_status",
+        {
+            "agent_protocol_version": "1",
+            "bootstrap_session_id": "wait-1",
+            "wait_seconds": 1,
+            "dclaw_session_token": token,
+        },
+    )
+    await connection
+    assert result["data"]["state"] == "ready"
+    assert result["data"]["bootstrap_session_id"] == "wait-1"
 
 
 @pytest.mark.asyncio
@@ -441,6 +635,50 @@ async def test_local_task_is_idempotent_and_completes_from_device_event(
     assert invalid_result["data"]["error"]["code"] == (
         "CAPABILITY.INVALID_PAYLOAD"
     )
+
+    third = await service.call(
+        "local_task_start",
+        {**arguments, "idempotency_key": "turn-3"},
+    )
+    third_id = third["data"]["task_id"]
+    await service.handle_device_message(
+        "device-1",
+        "user-1",
+        {
+            "type": "task.event",
+            "task_id": third_id,
+            "sequence": 1,
+            "event_type": "started",
+            "payload": {},
+        },
+    )
+    await service.handle_device_message(
+        "device-1",
+        "user-1",
+        {
+            "type": "task.event",
+            "task_id": third_id,
+            "sequence": 2,
+            "event_type": "checkpoint",
+            "payload": {"checkpoint_id": "checkpoint-1"},
+        },
+    )
+    waiting = await service.call(
+        "local_task_status",
+        {"task_id": third_id, "dclaw_session_token": token},
+    )
+    assert waiting["data"]["status"] == "awaiting_input"
+    continued = await service.call(
+        "local_task_continue",
+        {
+            "task_id": third_id,
+            "checkpoint_id": "checkpoint-1",
+            "input": {"confirmed": True},
+            "dclaw_session_token": token,
+        },
+    )
+    assert continued["data"]["status"] == "running"
+    assert websocket.messages[-1]["type"] == "task.continue"
 
 
 def test_credential_broker_never_stores_plaintext(plugin_module, tmp_path):

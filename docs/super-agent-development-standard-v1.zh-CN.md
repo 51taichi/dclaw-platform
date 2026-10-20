@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`1.8`
+当前版本：`1.9`
 
 发布日期：`2026-10-20`
 
@@ -455,14 +455,14 @@ stateDiagram-v2
 
 能力出现在 manifest 目录、文档或 Schema 中，只证明平台识别该能力声明，不证明对应运行服务已经生产可用。开发方必须同时核对目标环境的能力可用状态、生产入口和最低组件版本；平台未发布这些信息时不得自行猜测地址或把业务参考实现当作公共平台。
 
-截至 2026-10-20，`dclaw.super-agent-support` `1.0.0` 的源码实现和自动合同测试已经进入 `dclaw-server`：插件注册 `local.execution.session/1`、可信工作区上下文、八个 `local_*` MCP 工具、设备配对与 WebSocket 调度、持久任务状态、能力包验签注册、凭证引用以及通用 Windows 本地助手核心。DClaw Windows 客户端 `2.5.3` 已加入自动设备配对、助手启动、单实例、心跳、断进程恢复、退出登录停止和可见错误提示；Windows 安装包构建从插件源码编译自包含助手并作为客户端资源携带。DClaw 核心只保留通用 ASGI 子应用、动态平台能力、可信上下文增强和可选内置插件目录 SPI；卸载插件会同时移除路由、能力和上下文处理器。历史 `src/qwenpaw/app/local_execution` 只为旧版本测试与兼容保留，新路径不得调用它。
+截至 2026-10-20，`dclaw.super-agent-support` `1.1.0` 的源码实现和自动合同测试已经进入 `dclaw-server`：插件注册 `local.execution.session/1`、可信工作区上下文、八个 `local_*` MCP 工具、设备配对与 WebSocket 调度、持久任务状态、能力包验签注册、凭证引用以及通用 Windows 本地助手核心。DClaw Windows 客户端 `2.5.3` 已加入自动设备配对、助手启动、单实例、心跳、断进程恢复、退出登录停止和可见错误提示；Windows 安装包构建从插件源码编译自包含助手并作为客户端资源携带。DClaw 核心只保留通用 ASGI 子应用、动态平台能力、可信上下文增强和可选内置插件目录 SPI；卸载插件会同时移除路由、能力和上下文处理器。历史 `src/qwenpaw/app/local_execution` 只为旧版本测试与兼容保留，新路径不得调用它。
 
 当前交付状态是 `source-complete`，还不是 `uploaded`、`active` 或 `e2e-verified`。正式入口和最低版本如下：
 
 | 项目 | V1 值 |
 |---|---|
-| 插件 ID / 版本 | `dclaw.super-agent-support` / `1.0.0` |
-| 最低 DClaw | `1.1.10` 且包含本标准 1.8 对应提交 |
+| 插件 ID / 版本 | `dclaw.super-agent-support` / `1.1.0` |
+| 最低 DClaw | `1.1.10` 且包含本标准 1.9 对应提交 |
 | 最低 Windows 客户端 | `2.5.3` |
 | 本地执行 MCP | `/api/super-agent-support/mcp/`，Streamable HTTP |
 | 客户端配对 | `POST /api/super-agent-support/device-bootstrap` |
@@ -602,9 +602,9 @@ DClaw 平台负责卡片持久化、渲染、提交和可信回传；开发方�
 - 密钥轮换不修改签名包内容；
 - 日志、trace、错误和管理 API 只返回脱敏状态。
 
-截至 2026-10-20，DClaw 的通用 MCP 客户端已有 OAuth 2.1 PKCE 授权流程和 Bearer Header 注入，但其现有 Agent 配置存储仍不构成密封全局超级专家的按用户 OAuth 合同。`dclaw.super-agent-support` `1.0.0` 新增的凭证引用只解决客户凭证向已授权本地能力包注入：密文按用户、安装、Agent 和 scope 绑定，Agent 只传不透明 `credential_ref`，明文只通过已认证设备通道送入本地助手并在子进程结束后删除，管理 API 支持撤销。
+截至 2026-10-20，DClaw 的通用 MCP 客户端已有 OAuth 2.1 PKCE 授权流程和 Bearer Header 注入，但其现有 Agent 配置存储仍不构成密封全局超级专家的按用户 OAuth 合同。`dclaw.super-agent-support` `1.1.0` 的凭证引用只解决客户凭证向已授权本地能力包注入：密文按用户、安装、Agent 和 scope 绑定，Agent 只传不透明 `credential_ref`，明文只通过已认证设备通道送入本地助手并在子进程结束后删除，管理 API 支持撤销。
 
-开发方业务服务自身调用 TikHub 等第三方 API 时，长期 Token 属于开发方业务服务，应保存在开发方 Secret 管理系统；不需要上传 DClaw，也不需要经过 DClaw Credential Broker。若业务 MCP 必须使用每位客户自己的 OAuth 身份，当前 `1.0.0` 仍未发布按用户 OAuth 刷新和 MCP 运输层注入，开发方必须保持生产构建失败关闭并提交通用能力申请，不能把 Token 写回密封包。
+开发方业务服务自身调用 TikHub 等第三方 API 时，长期 Token 属于开发方业务服务，应保存在开发方 Secret 管理系统；不需要上传 DClaw，也不需要经过 DClaw Credential Broker。若业务 MCP 必须使用每位客户自己的 OAuth 身份，当前插件 `1.1.0` 仍未发布按用户 OAuth 刷新和 MCP 运输层注入，开发方必须保持生产构建失败关闭并提交通用能力申请，不能把 Token 写回密封包。
 
 在所需鉴权方式尚未正式发布前：
 
@@ -675,6 +675,52 @@ V1 固定流程：
 
 顶层 `ok=true` 只表示工具调用成功。若 `data.status=failed`，本地任务仍然失败，超级专家必须读取 `data.error`，禁止对客户宣称已完成。
 
+### 15.4 V1.1 环境与准备合同
+
+DClaw 客户端负责安装、携带、启动、绑定、重连和升级通用本地助手。超级专家不得下载安装器、展示绑定码、拼接 Runner 连接地址或建立第二套安装流程。`local_environment_status` 只返回状态和客户下一步动作：
+
+| `state` | `reason` | `user_action` | 含义 |
+|---|---|---|---|
+| `ready` | `none` | `none` | 至少一个已登录客户的兼容 Runner 在线 |
+| `device_not_ready` | `no_paired_device` | `open_dclaw` | 客户端尚未完成自动设备配对 |
+| `device_not_ready` | `device_offline` | `open_dclaw` | 已有设备记录但当前没有在线连接 |
+| `runner_update_required` | `runner_version_too_old` | `update_dclaw` | 在线 Runner 低于平台最低版本；通过更新 DClaw 客户端处理 |
+| `protocol_incompatible` | `protocol_version_mismatch` | `contact_administrator` | Agent 请求的本地执行协议与平台不兼容 |
+
+环境响应固定包含 `state`、`reason`、`protocol_version`、`compatible`、`minimum_runner_version`、`bootstrap_session_id`、`user_action` 和 `devices`。每个设备摘要固定包含 `device_id`、`display_name`、`runner_version`、`online` 和 `last_seen`。
+
+`wait_seconds` 为 0 到 25 秒的设备连接长轮询；没有在线设备时，插件在期限内等待 DClaw 客户端自动连接。`bootstrap_session_id` 只是由调用方提供并由响应原样回传的兼容关联值，不授予身份、配对或安装权限。`compatible` 只表示请求的协议版本是否与平台协议一致，不表示设备当前在线。V1.1 不返回 `installer`、`connect_url`、绑定码或任何下载地址。
+
+历史大字报 Relay 的 `runner_required`、`binding_required` 和顶层 `device_offline` 不是平台状态枚举。旧实现中的 `device_offline` 只对应上述 `device_not_ready` + `reason=device_offline`。
+
+`local_capabilities_list` 响应固定包含：
+
+- `catalog_version="1"`；
+- `availability="available"|"device_not_ready"`；
+- `capabilities`，每项包含 `capability_id`、合同 `version`、`package_id`、`package_version`；
+- `device_count`，表示本次查询命中的在线设备数。
+
+`local_runtime_prepare` 状态固定为：
+
+| `state` | `user_action` | 含义 |
+|---|---|---|
+| `ready` | `none` | 目标签名能力包的准确版本已安装 |
+| `preparing` | `wait` | Runner 正在自动下载、验证并原子安装目标版本 |
+| `device_not_ready` | `open_dclaw` | 当前没有在线设备 |
+| `runner_update_required` | `update_dclaw` | Runner 低于能力包声明的 `min_runner_version` |
+
+准备响应固定包含 `state`、`capability_id`、`package_id`、`package_version`、`min_runner_version`、`device_id`、`runner_version` 和 `user_action`。平台不使用旧 Relay 的 `runtime_update_required`：能力包准备无需客户另行确认，版本不一致时返回 `preparing` 并由 Runner 自动更新。
+
+### 15.5 V1.1 任务状态
+
+本地任务公开状态只允许：
+
+```text
+queued | running | awaiting_input | cancelling | succeeded | failed | cancelled
+```
+
+检查点事件必须把任务置为 `awaiting_input`。`local_task_continue` 只接受该状态且 `checkpoint_id` 与最新检查点一致的任务，受理后恢复为 `running`。历史内部值 `waiting_for_input` 在插件状态库初始化时迁移为 `awaiting_input`；标准正文旧称 `waiting_user` 只描述产品状态机，不得作为工具响应值。
+
 ## 16. 本地能力包标准
 
 每个能力包必须包含：
@@ -718,7 +764,7 @@ V1 固定流程：
 
 浏览器登录、滑块验证、验证码、文件选择等需要客户操作时，能力包必须：
 
-1. 保持任务为 `waiting_user`，不得报为失败或完成。
+1. 保持任务为 `awaiting_input`，不得报为失败或完成。
 2. 返回稳定 `checkpoint_id`、安全说明和允许的继续输入 Schema。
 3. 保持或可恢复所需浏览器和任务上下文。
 4. 客户完成后由超级专家调用 `local_task_continue`。
@@ -1392,6 +1438,15 @@ Agent 名称：<中文显示名称>
 - Windows 客户端适配：`dclaw-client/console/src/desktop/localHelper.ts` 与 `dclaw-client/console/src-tauri/src/lib.rs`
 
 ## 34. 版本记录
+
+### 1.9 - 2026-10-20
+
+- 将 `dclaw.super-agent-support` 更新到 `1.1.0`，冻结环境、能力目录、运行时准备和任务状态的准确响应字段与枚举。
+- 确认 DClaw 客户端独立负责 Runner 安装、启动、绑定和升级；Agent 不接收安装器、绑定码或连接 URL。
+- 实现 `local_environment_status.wait_seconds` 设备连接长轮询，并将 `bootstrap_session_id` 定义为无授权语义的兼容关联值。
+- 增加 `catalog_version`、`availability`、Runner 最低版本判断、能力包准确版本判断和可执行 `user_action`。
+- 将检查点任务状态统一为 `awaiting_input`，并自动迁移未部署源码期间产生的 `waiting_for_input` 记录。
+- 明确旧大字报 Relay 的 `runner_required`、`binding_required`、`runtime_update_required`、安装器和连接地址不进入通用平台合同。
 
 ### 1.8 - 2026-10-20
 

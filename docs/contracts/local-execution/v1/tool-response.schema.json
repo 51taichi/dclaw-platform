@@ -20,7 +20,14 @@
       "type": "string",
       "pattern": "^[A-Za-z0-9._:-]{8,128}$"
     },
-    "data": {"type": "object"},
+    "data": {
+      "oneOf": [
+        {"$ref": "#/$defs/EnvironmentStatusData"},
+        {"$ref": "#/$defs/CapabilitiesListData"},
+        {"$ref": "#/$defs/RuntimePrepareData"},
+        {"$ref": "#/$defs/TaskData"}
+      ]
+    },
     "error": {
       "$ref": "error-envelope.schema.json"
     }
@@ -36,5 +43,97 @@
       "required": ["error"],
       "not": {"required": ["data"]}
     }
-  ]
+  ],
+  "$defs": {
+    "Device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device_id", "display_name", "runner_version", "online", "last_seen"],
+      "properties": {
+        "device_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "display_name": {"type": "string", "minLength": 1, "maxLength": 256},
+        "runner_version": {"type": "string", "minLength": 1, "maxLength": 64},
+        "online": {"type": "boolean"},
+        "last_seen": {"type": "integer", "minimum": 0}
+      }
+    },
+    "EnvironmentStatusData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state", "reason", "protocol_version", "compatible",
+        "minimum_runner_version", "bootstrap_session_id", "user_action", "devices"
+      ],
+      "properties": {
+        "state": {"enum": ["ready", "device_not_ready", "runner_update_required", "protocol_incompatible"]},
+        "reason": {"enum": ["none", "no_paired_device", "device_offline", "runner_version_too_old", "protocol_version_mismatch"]},
+        "protocol_version": {"const": "1"},
+        "compatible": {"type": "boolean"},
+        "minimum_runner_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "bootstrap_session_id": {"type": ["string", "null"], "maxLength": 128},
+        "user_action": {"enum": ["none", "open_dclaw", "update_dclaw", "contact_administrator"]},
+        "devices": {"type": "array", "items": {"$ref": "#/$defs/Device"}}
+      }
+    },
+    "Capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capability_id", "version", "package_id", "package_version"],
+      "properties": {
+        "capability_id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*)+$", "maxLength": 128},
+        "version": {"type": "string", "minLength": 1, "maxLength": 32},
+        "package_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "package_version": {"type": "string", "minLength": 1, "maxLength": 64}
+      }
+    },
+    "CapabilitiesListData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["catalog_version", "availability", "capabilities", "device_count"],
+      "properties": {
+        "catalog_version": {"const": "1"},
+        "availability": {"enum": ["available", "device_not_ready"]},
+        "capabilities": {"type": "array", "items": {"$ref": "#/$defs/Capability"}},
+        "device_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "RuntimePrepareData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state", "capability_id", "package_id", "package_version",
+        "min_runner_version", "device_id", "runner_version", "user_action"
+      ],
+      "properties": {
+        "state": {"enum": ["ready", "preparing", "device_not_ready", "runner_update_required"]},
+        "capability_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "package_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "package_version": {"type": "string", "minLength": 1, "maxLength": 64},
+        "min_runner_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "device_id": {"type": ["string", "null"], "maxLength": 128},
+        "runner_version": {"type": ["string", "null"], "maxLength": 64},
+        "user_action": {"enum": ["none", "wait", "open_dclaw", "update_dclaw"]}
+      }
+    },
+    "TaskData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id", "capability_id", "device_id", "status", "checkpoint",
+        "result", "error", "created_at", "updated_at"
+      ],
+      "properties": {
+        "task_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "capability_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "device_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "status": {"enum": ["queued", "running", "awaiting_input", "cancelling", "succeeded", "failed", "cancelled"]},
+        "checkpoint": {"type": ["object", "null"]},
+        "result": {"type": ["object", "null"]},
+        "error": {"type": ["object", "null"]},
+        "created_at": {"type": "integer", "minimum": 0},
+        "updated_at": {"type": "integer", "minimum": 0},
+        "idempotent_replay": {"type": "boolean"}
+      }
+    }
+  }
 }

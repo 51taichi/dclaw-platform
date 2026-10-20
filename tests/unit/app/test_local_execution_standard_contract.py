@@ -39,9 +39,60 @@ def test_local_execution_v1_schemas_are_valid_and_resolve_locally():
             "standard": {"id": "dclaw.local-execution", "version": "1.0"},
             "ok": True,
             "trace_id": "invocation-contract-success",
-            "data": {"state": "ready"},
+            "data": {
+                "state": "device_not_ready",
+                "reason": "no_paired_device",
+                "protocol_version": "1",
+                "compatible": True,
+                "minimum_runner_version": "1.0.0",
+                "bootstrap_session_id": "bootstrap-1",
+                "user_action": "open_dclaw",
+                "devices": [],
+            },
         }
     )
+    success_data = [
+        {
+            "catalog_version": "1",
+            "availability": "available",
+            "capabilities": [],
+            "device_count": 1,
+        },
+        {
+            "state": "preparing",
+            "capability_id": "example.video.compose",
+            "package_id": "example.video.package",
+            "package_version": "1.0.0",
+            "min_runner_version": "1.0.0",
+            "device_id": "device-1",
+            "runner_version": "1.0.0",
+            "user_action": "wait",
+        },
+        {
+            "task_id": "task-1",
+            "capability_id": "example.video.compose",
+            "device_id": "device-1",
+            "status": "awaiting_input",
+            "checkpoint": {"checkpoint_id": "checkpoint-1"},
+            "result": None,
+            "error": None,
+            "created_at": 1,
+            "updated_at": 2,
+            "idempotent_replay": False,
+        },
+    ]
+    for data in success_data:
+        validator.validate(
+            {
+                "standard": {
+                    "id": "dclaw.local-execution",
+                    "version": "1.0",
+                },
+                "ok": True,
+                "trace_id": "invocation-contract-success",
+                "data": data,
+            }
+        )
     call_validator = Draft202012Validator(call_schema)
     call_validator.validate(
         {

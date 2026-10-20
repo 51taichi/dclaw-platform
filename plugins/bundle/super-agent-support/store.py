@@ -126,6 +126,9 @@ class StateStore:
                 db.execute(
                     "ALTER TABLE credentials ADD COLUMN installation_ids_json TEXT NOT NULL DEFAULT '[]'",
                 )
+            db.execute(
+                "UPDATE tasks SET status='awaiting_input' WHERE status='waiting_for_input'",
+            )
 
     def create_pairing(self, user_id: str, ttl_seconds: int = 300) -> str:
         code = "-".join(
@@ -366,7 +369,7 @@ class StateStore:
                 """
                 SELECT COUNT(*) AS count FROM tasks
                 WHERE device_id=? AND capability_id=?
-                    AND status IN ('queued','running','waiting_for_input','cancelling')
+                    AND status IN ('queued','running','awaiting_input','cancelling')
                 """,
                 (device_id, capability_id),
             ).fetchone()["count"]

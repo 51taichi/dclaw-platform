@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 from jsonschema import Draft202012Validator
+from packaging.version import InvalidVersion, Version
 
 from .contracts import ERRORS, PublicError, failure, success, trace_id
 from .credentials import CredentialBroker, CredentialError
@@ -15,7 +17,23 @@ from .store import StateStore
 
 logger = logging.getLogger(__name__)
 TERMINAL_STATES = {"succeeded", "failed", "cancelled"}
-ACTIVE_STATES = {"queued", "running", "waiting_for_input", "cancelling"}
+ACTIVE_STATES = {"queued", "running", "awaiting_input", "cancelling"}
+PROTOCOL_VERSION = "1"
+CATALOG_VERSION = "1"
+MIN_RUNNER_VERSION = "1.0.0"
+
+
+def _parsed_version(value: Any) -> Version | None:
+    try:
+        return Version(str(value))
+    except (InvalidVersion, TypeError):
+        return None
+
+
+def _runner_supports(device: dict[str, Any], minimum: str) -> bool:
+    current = _parsed_version(device.get("runner_version"))
+    required = _parsed_version(minimum)
+    return current is not None and required is not None and current >= required
 
 
 class LocalExecutionService:
@@ -32,12 +50,14 @@ class LocalExecutionService:
         self.credential_broker = credential_broker
         self._connections: dict[str, Any] = {}
         self._task_events: dict[str, asyncio.Event] = {}
+        self._device_event = asyncio.Event()
         self._lock = asyncio.Lock()
 
     async def attach(self, device_id: str, websocket: Any) -> None:
         async with self._lock:
             previous = self._connections.get(device_id)
             self._connections[device_id] = websocket
+            self._device_event.set()
         if previous is not None and previous is not websocket:
             try:
                 await previous.close(code=4001, reason="device_reconnected")
@@ -49,6 +69,7 @@ class LocalExecutionService:
             if self._connections.get(device_id) is websocket:
                 self._connections.pop(device_id, None)
                 self.store.set_device_status(device_id, "offline")
+                self._device_event.set()
 
     async def _send(self, device_id: str, message: dict[str, Any]) -> None:
         async with self._lock:
@@ -120,26 +141,85 @@ class LocalExecutionService:
 
     async def _local_environment_status(self, arguments, identity, _trace):
         requested = arguments.get("agent_protocol_version")
-        if not isinstance(requested, str) or not requested:
+        if not isinstance(requested, str) or not 1 <= len(requested) <= 32:
+            raise ERRORS["INVALID_ARGUMENTS"]
+        bootstrap_session_id = arguments.get("bootstrap_session_id")
+        wait_seconds = arguments.get("wait_seconds", 0)
+        if (
+            bootstrap_session_id is not None
+            and (
+                not isinstance(bootstrap_session_id, str)
+                or len(bootstrap_session_id) > 128
+            )
+        ) or type(wait_seconds) is not int or not 0 <= wait_seconds <= 25:
             raise ERRORS["INVALID_ARGUMENTS"]
         devices = self._online_devices(identity["u"])
+        if not devices and wait_seconds:
+            deadline = time.monotonic() + wait_seconds
+            while not devices:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._device_event.clear()
+                devices = self._online_devices(identity["u"])
+                if devices:
+                    break
+                try:
+                    await asyncio.wait_for(
+                        self._device_event.wait(), timeout=remaining
+                    )
+                except asyncio.TimeoutError:
+                    break
+                devices = self._online_devices(identity["u"])
+        known_devices = self.store.list_devices(identity["u"])
+        online_ids = {item["device_id"] for item in devices}
+        compatible_devices = [
+            item
+            for item in devices
+            if _runner_supports(item, MIN_RUNNER_VERSION)
+        ]
+        if requested != PROTOCOL_VERSION:
+            state = "protocol_incompatible"
+            reason = "protocol_version_mismatch"
+            user_action = "contact_administrator"
+        elif compatible_devices:
+            state = "ready"
+            reason = "none"
+            user_action = "none"
+        elif devices:
+            state = "runner_update_required"
+            reason = "runner_version_too_old"
+            user_action = "update_dclaw"
+        else:
+            state = "device_not_ready"
+            reason = "device_offline" if known_devices else "no_paired_device"
+            user_action = "open_dclaw"
         return {
-            "state": "ready" if devices else "device_not_ready",
-            "protocol_version": "1",
-            "compatible": requested == "1",
+            "state": state,
+            "reason": reason,
+            "protocol_version": PROTOCOL_VERSION,
+            "compatible": requested == PROTOCOL_VERSION,
+            "minimum_runner_version": MIN_RUNNER_VERSION,
+            "bootstrap_session_id": bootstrap_session_id,
+            "user_action": user_action,
             "devices": [
                 {
                     "device_id": item["device_id"],
                     "display_name": item["display_name"],
                     "runner_version": item["runner_version"],
+                    "online": item["device_id"] in online_ids,
                     "last_seen": item["last_seen"],
                 }
-                for item in devices
+                for item in known_devices
             ],
         }
 
     async def _local_capabilities_list(self, arguments, identity, _trace):
         requested_device = arguments.get("device_id")
+        if requested_device is not None and not isinstance(
+            requested_device, str
+        ):
+            raise ERRORS["INVALID_ARGUMENTS"]
         devices = self._online_devices(identity["u"])
         if requested_device:
             devices = [
@@ -161,7 +241,18 @@ class LocalExecutionService:
                     continue
                 seen.add(key)
                 capabilities.append(capability)
-        return {"capabilities": capabilities, "device_count": len(devices)}
+        capabilities.sort(
+            key=lambda item: (
+                str(item.get("capability_id") or ""),
+                str(item.get("version") or ""),
+            )
+        )
+        return {
+            "catalog_version": CATALOG_VERSION,
+            "availability": "available" if devices else "device_not_ready",
+            "capabilities": capabilities,
+            "device_count": len(devices),
+        }
 
     async def _local_runtime_prepare(self, arguments, identity, _trace):
         capability_id = arguments.get("capability")
@@ -170,38 +261,64 @@ class LocalExecutionService:
         package = self.store.get_package_for_capability(capability_id)
         if package is None:
             raise ERRORS["CAPABILITY_NOT_FOUND"]
+        descriptor = package["descriptor"]
+        common = {
+            "capability_id": capability_id,
+            "package_id": descriptor["package_id"],
+            "package_version": descriptor["package_version"],
+            "min_runner_version": descriptor["min_runner_version"],
+        }
         online = self._online_devices(identity["u"])
         if not online:
-            raise ERRORS["DEVICE_NOT_READY"]
-        for device in online:
+            return common | {
+                "state": "device_not_ready",
+                "device_id": None,
+                "runner_version": None,
+                "user_action": "open_dclaw",
+            }
+        compatible = [
+            device
+            for device in online
+            if _runner_supports(device, descriptor["min_runner_version"])
+        ]
+        if not compatible:
+            device = online[0]
+            return common | {
+                "state": "runner_update_required",
+                "device_id": device["device_id"],
+                "runner_version": device["runner_version"],
+                "user_action": "update_dclaw",
+            }
+        for device in compatible:
             installed = any(
                 item.get("capability_id") == capability_id
+                and item.get("package_id") == descriptor["package_id"]
+                and item.get("package_version")
+                == descriptor["package_version"]
                 for item in device["capabilities"]
                 if isinstance(item, dict)
             )
             if installed:
-                return {
+                return common | {
                     "state": "ready",
                     "device_id": device["device_id"],
-                    "capability_id": capability_id,
-                    "package_version": package["descriptor"][
-                        "package_version"
-                    ],
+                    "runner_version": device["runner_version"],
+                    "user_action": "none",
                 }
-        device = online[0]
+        device = compatible[0]
         await self._send(
             device["device_id"],
             {
                 "type": "runtime.prepare",
-                "protocol_version": "1",
+                "protocol_version": PROTOCOL_VERSION,
                 "capability_package": package,
             },
         )
-        return {
+        return common | {
             "state": "preparing",
             "device_id": device["device_id"],
-            "capability_id": capability_id,
-            "package_version": package["descriptor"]["package_version"],
+            "runner_version": device["runner_version"],
+            "user_action": "wait",
         }
 
     def _runtime_credentials(
@@ -299,7 +416,7 @@ class LocalExecutionService:
         checkpoint = task.get("checkpoint") or {}
         if checkpoint.get("checkpoint_id") != checkpoint_id:
             raise ERRORS["CHECKPOINT_MISMATCH"]
-        if task["status"] != "waiting_for_input" or not isinstance(
+        if task["status"] != "awaiting_input" or not isinstance(
             continuation, dict
         ):
             raise ERRORS["TASK_NOT_ACTIVE"]
@@ -438,7 +555,7 @@ class LocalExecutionService:
                 "failed",
                 "cancelled",
             },
-            "waiting_for_input": {"cancelled", "failed"},
+            "awaiting_input": {"cancelled", "failed"},
             "cancelling": {"completed", "failed", "cancelled"},
         }
         if event_type not in allowed_events.get(task["status"], set()):
@@ -474,7 +591,7 @@ class LocalExecutionService:
         status_map = {
             "started": "running",
             "progress": "running",
-            "checkpoint": "waiting_for_input",
+            "checkpoint": "awaiting_input",
             "completed": "succeeded",
             "failed": "failed",
             "cancelled": "cancelled",
