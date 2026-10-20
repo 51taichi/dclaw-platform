@@ -25,6 +25,14 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
+      - name: Check out compatible local helper source
+        uses: actions/checkout@v4
+        with:
+          repository: 51taichi/dclaw-server
+          ref: 1d2117a565bce578253753ed5a7fdf31296e2f91
+          path: dclaw-server
+          token: ${{ secrets.DCLAW_SERVER_READ_TOKEN || github.token }}
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -36,6 +44,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
 
       - name: Cache Rust build
         uses: swatinem/rust-cache@v2
@@ -51,6 +64,7 @@ jobs:
       - name: Build NSIS and MSI installers
         run: npm run desktop:build:cn
         env:
+          DCLAW_SERVER_SOURCE_DIR: ${{ github.workspace }}\dclaw-server
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_CN }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD_CN }}
 

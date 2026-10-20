@@ -34,6 +34,8 @@ import { lazyImportWithRetry } from "./utils/lazyWithRetry";
 const LoginPage = lazyImportWithRetry("./pages/Login/index");
 import { languageApi } from "./api/modules/language";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
+import { useLocalHelperLifecycle } from "./desktop/useLocalHelperLifecycle";
+import { LOCAL_HELPER_ERROR_EVENT } from "./desktop/localHelper";
 
 import "./styles/layout.css";
 import "./styles/form-override.css";
@@ -75,6 +77,20 @@ const FullScreenLoading = () => (
   </div>
 );
 
+function LocalHelperNotice() {
+  const { message } = AntdApp.useApp();
+  useEffect(() => {
+    const handleError = (event: Event) => {
+      const detail = (event as CustomEvent<{ message?: string }>).detail;
+      if (detail?.message) void message.warning(detail.message);
+    };
+    window.addEventListener(LOCAL_HELPER_ERROR_EVENT, handleError);
+    return () =>
+      window.removeEventListener(LOCAL_HELPER_ERROR_EVENT, handleError);
+  }, [message]);
+  return null;
+}
+
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const { status } = useAuth();
 
@@ -115,6 +131,8 @@ function AppInner() {
   const { i18n } = useTranslation();
   const { isDark } = useTheme();
   const { loading: pluginsLoading } = usePlugins();
+  const { status: authStatus } = useAuth();
+  useLocalHelperLifecycle(authStatus);
   const selectedTheme = isDark ? bailianDarkTheme : bailianTheme;
   const lang = i18n.resolvedLanguage || i18n.language || "en";
   const [antdLocale, setAntdLocale] = useState<Locale>(
@@ -195,6 +213,7 @@ function AppInner() {
         }}
       >
         <AntdApp>
+          <LocalHelperNotice />
           <RuntimeEventProvider>
             <ApprovalProvider>
               <Routes>

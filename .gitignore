@@ -27,6 +27,8 @@ pnpm-debug.log*
 # Tauri / Rust build outputs
 console/src-tauri/target/
 target/
+console/src-tauri/resources/local-helper/*
+!console/src-tauri/resources/local-helper/README.txt
 
 # WeChat / miniapp local files
 miniapp/project.private.config.json
