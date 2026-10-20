@@ -1,10 +1,14 @@
 # DClaw 超级 Agent 本地执行标准 V1
 
-状态：`stable`
+状态：`contract-stable`
 
 标准标识：`dclaw.local-execution`
 
-当前版本：`1.1`
+当前版本：`1.2`
+
+平台实现状态：`pending`
+
+截至 2026-10-20，`dclaw-server` 已实现 `local.execution.session/1` 的能力授权、短期会话令牌和本标准的机器 Schema，但尚未实现八个 `local_*` 工具的公共生产网关、通用设备任务服务或通用 Windows 本地助手。大字报仓库中的 Relay 与 `Dazibao.Runner` 属于业务参考和旧版兼容实现，不是新 Agent 可直接使用的平台公共生产能力。平台正式发布生产入口、最低版本和能力包注册流程前，新 Agent 不得根据本文猜测生产地址或宣称已接通公共本地执行链路。
 
 面向第三方开发者的完整开发、密封、上传和协作流程见 [DClaw 第三方超级 Agent 开发、密封与协作标准 V1](super-agent-development-standard-v1.zh-CN.md)。本文只定义本地执行边界与协议。
 
