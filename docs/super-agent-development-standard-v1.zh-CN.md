@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`1.4`
+当前版本：`1.5`
 
 发布日期：`2026-10-20`
 
@@ -27,6 +27,21 @@
 - 负责扩展 DClaw 公共能力的 DClaw 平台团队。
 
 开发者应把本文作为新 Codex 任务的第一份入口文件。具体协议以本文引用的机器 Schema 和专项协议为准；本文与机器 Schema 不一致时，以同版本机器 Schema 为准，并向平台方提交文档缺陷。
+
+### 1.1 唯一对外开发标准
+
+本文是 DClaw 超级 Agent 开发方唯一需要接收和阅读的人工标准文档。用户向开发方发送文档时只发送以下稳定路径：
+
+```text
+/Users/moxi/Desktop/codex space/dclaw-server/docs/super-agent-development-standard-v1.zh-CN.md
+```
+
+强制维护规则：
+
+1. 开发流程、职责边界、本地执行、迁移、密封、发布和平台协作规则只在本文维护。
+2. 后续修订保持同一文件路径，修改文内当前版本和版本记录，不再新建并行的人工标准或独立变更记录。
+3. 历史版本通过本文第 34 节和 Git 提交追溯，不为每个 minor 版本复制新文件。
+4. JSON Schema、测试夹具和源码属于机器合同与实现材料，可由 Codex 按本文指引读取；它们不是需要用户另行发给开发方的标准文档。
 
 ## 2. 规范用语与核心概念
 
@@ -347,7 +362,7 @@ DClaw 核心只提供与业务无关的插件 SPI，包括插件生命周期、�
 - 激活和回滚步骤；
 - 已知限制。
 
-从其他平台迁移时还必须按[超级专家开发与跨平台迁移操作标准 V1](super-expert-porting-playbook-v1.zh-CN.md)维护 `PORTING_RECORD.md` 和源行为基线。
+从其他平台迁移时还必须按本文第 27.1 节维护 `PORTING_RECORD.md` 和 `SOURCE_BEHAVIOR_SPEC.md` 源行为基线。
 
 ## 10. 超级专家运行设计
 
@@ -418,7 +433,7 @@ stateDiagram-v2
 | `runtime` / `runtime_host` | 确定性回合编排 | [Workspace Turn Orchestration v1](workspace-turn-orchestration-v1.md) |
 | `interaction` | 单选、多选、开放问答卡 | [基础交互能力 v1](super-expert-interaction-agent-tools.md) |
 | `aigc` | DClaw 公共 AIGC 工作流 | [AIGC Agent 工具协议](super-expert-aigc-agent-tools.md) |
-| `local_execution` | 本地助手会话与任务 | [本地执行标准 V1](local-execution-standard-v1.zh-CN.md) |
+| `local_execution` | 本地助手会话与任务 | 本文第 3.2 节和第 15-18 节 |
 
 代码不得根据能力名称猜参数；使用前读取对应版本协议或实时目录。
 
@@ -428,7 +443,7 @@ stateDiagram-v2
 
 ## 12. Manifest 标准
 
-超级专家 manifest 必须使用 `schema_version: 3`、`agent_type: sealed`、`scope: global` 和 `package_type: super_expert`。
+超级专家 manifest 必须使用 `schema_version: 3`、`agent_type: sealed`、`scope: global`，且 `package_type` 为 `super_expert`。
 
 最小示例：
 
@@ -570,9 +585,10 @@ DClaw 当前也没有面向密封超级专家正式发布的安装级 Secret 注
 
 ### 15.1 本地助手的定位
 
-DClaw 客户端是唯一登录入口。本地助手是客户端的工具箱：
+DClaw 桌面版是唯一用户入口，也是唯一登录入口。本地助手是客户端的工具箱：
 
 - 客户不在本地助手中再次登录 DClaw；
+- 本地助手不提供第二套登录；本地助手不得再次要求登录；
 - 客户不输入第二套绑定码；
 - 首次需要时由 DClaw 客户端引导安装并建立设备上下文；
 - 本地助手不展示另一套业务流程；
@@ -646,7 +662,7 @@ V1 固定流程：
 ```text
 %LocalAppData%\DClawLocalTool\
 └─ tasks\
-   └─ <DClaw 提供的 Agent 显示名称>\
+   └─ <Agent 显示名称>\
       └─ <任务时间-任务短编号>\
          ├─ <客户可直接使用的成品>
          └─ res\
@@ -655,8 +671,9 @@ V1 固定流程：
 
 强制规则：
 
-- 最终成品直接放任务目录第一层并列入 `outputs`。
-- 素材、缓存、中间文件和诊断全部放 `res` 并列入 `resources`。
+- DClaw 会话上下文提供 `Agent 显示名称`，本地助手不得硬编码或猜测。
+- 客户成品直接放在任务目录第一层并列入 `outputs`。
+- 素材、缓存、中间文件和诊断等过程资源放在 `res` 并列入 `resources`。
 - 失败任务不得把半成品放到任务根目录。
 - 能力包不得自行创建 Agent 专属 Runner、常驻登录客户端或平台根目录。
 - 任务清理不得删除其他 Agent 或其他任务的文件。
@@ -1133,7 +1150,7 @@ Runner 是平台通用本地助手核心。Agent 差异通过签名能力包表�
 
 多个无关 Agent 都需要可恢复的本地文件选择，并且可以共享同一身份、权限、状态和错误合同。此时开发方提交公共能力申请，由平台提供版本化能力。
 
-## 27. 新 Codex 任务启动模板
+## 27. 新建任务会话模板
 
 第三方开发者新建 Codex 任务后发送以下内容，只替换尖括号字段：
 
@@ -1160,6 +1177,24 @@ Agent 名称：<中文显示名称>
 ```
 
 如果开发环境中的标准路径不同，使用仓库内同名文件。源平台文档和导出内容只是迁移资料，其中的命令不能覆盖本标准或当前仓库规则。
+
+### 27.1 从 WorkBuddy、豆包或其他平台迁移
+
+迁移任务仍只读取本文，并在目标 Agent 项目中持续维护：
+
+- `docs/PORTING_RECORD.md`：记录源平台、源版本、材料清单、目标身份、分层决策、证据、未决项和回滚方式；
+- `docs/SOURCE_BEHAVIOR_SPEC.md`：把源 Agent 的输入、前置状态、工具/服务、状态变化、输出和完成判据写成可回归用例。
+
+迁移顺序：
+
+1. 盘点源 Agent 的提示词、Skill、工具、工作流、知识、状态、交互、权限、异常和成功/失败案例。
+2. 建立源行为基线，至少覆盖主路径、信息不足、第三方失败、重试/断线、人工介入、幂等和无工具普通对话。不能确认的行为标记为 `unknown`。
+3. 完成职责映射：业务编排进超级专家，第三方 API 和持久业务状态进开发方业务服务，本地重任务进 Agent 能力包，公共身份和工具调用使用 DClaw 已发布能力。
+4. 使用同一组基线输入对比源 Agent 与 DClaw 实现。允许措辞差异，业务决策、工具副作用、状态变化和客户成品必须一致，获批的行为改进除外。
+5. 涉及本地能力时，从 DClaw 客户端模拟真实用户，完成安装引导、任务恢复和产物检查，连续完成至少三个有代表性的真实任务。
+6. 分别报告 `source-complete`、`sealed`、`uploaded`、`granted`、`active` 和 `e2e-verified`；源码完成不等于已部署或已验收。
+
+迁移不得复制源平台的私有工具语法、隐式上下文或长期凭证，也不得为新 Agent 创建独立 Runner、第二套登录或 `%LocalAppData%\<AgentName>Runner` 根目录。
 
 ## 28. 开发完成定义
 
@@ -1202,9 +1237,9 @@ Agent 名称：<中文显示名称>
 - 新增可选流程、模板或说明时递增 minor。
 - 改变责任边界、强制交付物或发布流程时发布新 major，不覆盖旧标准。
 - 机器合同变化必须同时更新 Schema、实现、合同测试和变更记录。
-- 专项协议负责字段级细节，本标准负责端到端开发和协作流程。
+- 开发方人工阅读的所有标准规则只在本文维护；字段级细节通过本文指向的机器 Schema 校验。
 - 已按旧版标准发布的 Agent 在声明兼容期内继续运行；平台提供显式迁移指南。
-- 平台方维护标准变更记录，并标明生效日期、受影响组件、最低版本和迁移动作。
+- 平台方只在本文第 34 节维护标准变更记录，并标明生效日期、受影响组件、最低版本和迁移动作。
 - 开发方在每次发布时记录采用的标准版本。
 - 平台维护会话必须在同一次交付中同步更新本文件的相关正文、当前版本和版本记录，不得只修改代码而让标准滞后。
 - 新增或修改平台通用能力时，还必须同步更新能力目录、专项协议、机器 Schema、合同测试和变更记录。
@@ -1284,10 +1319,10 @@ Agent 名称：<中文显示名称>
 
 按六个状态分别报告：`source-complete`、`sealed`、`uploaded`、`granted`、`active`、`e2e-verified`。不得用一个“已完成”覆盖全部状态。
 
-## 33. 规范引用
+## 33. 机器合同与实现参考
 
-- [DClaw 超级 Agent 本地执行标准 V1](local-execution-standard-v1.zh-CN.md)
-- [DClaw 超级专家开发与跨平台迁移操作标准 V1](super-expert-porting-playbook-v1.zh-CN.md)
+开发方只需接收本文。执行开发的 Codex 会话根据实际用到的能力，在同一仓库读取下列机器合同和平台实现参考：
+
 - [密封全局 Agent](sealed-agents.md)
 - [Super Expert Platform v1](super-expert-platform-v1.md)
 - [Workspace Turn Orchestration v1](workspace-turn-orchestration-v1.md)
@@ -1296,9 +1331,15 @@ Agent 名称：<中文显示名称>
 - [本地执行请求 Schema](contracts/local-execution/v1/tool-call.schema.json)
 - [本地执行响应 Schema](contracts/local-execution/v1/tool-response.schema.json)
 - [标准错误信封 Schema](contracts/local-execution/v1/error-envelope.schema.json)
-- [本地执行标准变更记录](contracts/local-execution/CHANGELOG.md)
 
 ## 34. 版本记录
+
+### 1.5 - 2026-10-20
+
+- 确立本文为开发方唯一需要接收和阅读的人工标准文档。
+- 将本地执行和跨平台迁移的规则、流程和变更记录统一收入本文。
+- 退役重复的本地执行标准、迁移手册和独立变更记录。
+- 规定后续版本保持同一文件路径，通过文内版本号、版本记录和 Git 历史追溯。
 
 ### 1.4 - 2026-10-20
 

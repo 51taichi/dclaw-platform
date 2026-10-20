@@ -11,7 +11,11 @@ from referencing import Registry, Resource
 CONTRACT_ROOT = (
     Path(__file__).parents[3] / "docs" / "contracts" / "local-execution" / "v1"
 )
-STANDARD_DOC = Path(__file__).parents[3] / "docs" / "local-execution-standard-v1.zh-CN.md"
+STANDARD_DOC = (
+    Path(__file__).parents[3]
+    / "docs"
+    / "super-agent-development-standard-v1.zh-CN.md"
+)
 
 
 def _load(name: str) -> dict:
@@ -120,10 +124,10 @@ def test_local_execution_standard_defines_desktop_owned_toolbox_and_workspace():
         "DClaw 桌面版是唯一用户入口",
         "本地助手不提供第二套登录",
         "%LocalAppData%\\DClawLocalTool",
-        "<Agent 在 DClaw 中的显示名称>",
-        "最终 MP4、图片、文档等客户成品直接放在任务目录第一层",
-        "全部放在 `res`",
-        "不得把这些检查扩展为业务审核或重复状态机",
+        "<Agent 显示名称>",
+        "客户成品直接放在任务目录第一层",
+        "过程资源放在 `res`",
+        "本地助手不理解业务字段",
     )
     for phrase in required:
         assert phrase in text
@@ -134,10 +138,21 @@ def test_local_execution_standard_requires_optional_plugin_isolation():
 
     required = (
         "`dclaw.local-execution` 插件套件",
-        "DClaw 核心不得导入插件内部模块",
-        "未安装、禁用、失败或卸载插件时",
-        "由插件动态注册",
-        "不加载该插件时通过核心回归测试",
+        "DClaw 核心不得导入或调用本地执行插件的内部模块",
+        "未安装、禁用、升级失败或卸载该插件时",
+        "由插件安装时注册",
+        "其他平台能力仍可正常使用",
     )
     for phrase in required:
         assert phrase in text
+
+
+def test_super_agent_standard_is_the_only_human_development_standard():
+    text = STANDARD_DOC.read_text(encoding="utf-8")
+    root = Path(__file__).parents[3]
+
+    assert "唯一需要接收和阅读的人工标准文档" in text
+    assert "不再新建并行的人工标准" in text
+    assert not (root / "docs" / "local-execution-standard-v1.zh-CN.md").exists()
+    assert not (root / "docs" / "super-expert-porting-playbook-v1.zh-CN.md").exists()
+    assert not (root / "docs" / "contracts" / "local-execution" / "CHANGELOG.md").exists()
