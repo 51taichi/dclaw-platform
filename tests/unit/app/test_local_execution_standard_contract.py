@@ -137,8 +137,11 @@ def test_local_execution_standard_requires_optional_plugin_isolation():
     text = STANDARD_DOC.read_text(encoding="utf-8")
 
     required = (
-        "`dclaw.local-execution` 插件套件",
-        "DClaw 核心不得导入或调用本地执行插件的内部模块",
+        "`dclaw.super-agent-support` 插件包",
+        "`local-execution` 模块",
+        "`credential-broker` 模块",
+        "`capability-packages` 模块",
+        "DClaw 核心不得导入或调用 `dclaw.super-agent-support` 插件的内部模块",
         "未安装、禁用、升级失败或卸载该插件时",
         "由插件安装时注册",
         "其他平台能力仍可正常使用",
