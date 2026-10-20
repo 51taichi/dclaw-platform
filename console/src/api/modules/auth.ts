@@ -11,6 +11,19 @@ export interface AuthStatusResponse {
   has_users: boolean;
 }
 
+export interface ClientScene {
+  key: string;
+  title: string;
+  url: string;
+}
+
+export interface AuthVerifyResponse {
+  valid: boolean;
+  username: string;
+  role?: string;
+  scenes?: ClientScene[];
+}
+
 export class AuthApiError extends Error {
   readonly status: number;
   readonly retryAfterSeconds: number | null;

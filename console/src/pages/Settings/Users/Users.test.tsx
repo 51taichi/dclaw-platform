@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { adminUsersApi } from "../../../api/modules/adminUsers";
@@ -9,6 +9,7 @@ vi.mock("../../../api/modules/adminUsers", () => ({
     listUsers: vi.fn(),
     createUser: vi.fn(),
     resetPassword: vi.fn(),
+    updateAiCustomerServiceUrl: vi.fn(),
     deleteUser: vi.fn(),
   },
 }));
@@ -32,6 +33,8 @@ describe("UsersPage", () => {
         username: "dingmai",
         display_name: "丁麦",
         phone_number: "+8613800138000",
+        ai_customer_service_url:
+          "https://service.example.com/console/?workspace=dingmai",
         role: "user",
         created_at: "2026-08-28T12:53:23Z",
       },
@@ -50,15 +53,25 @@ describe("UsersPage", () => {
     expect(await screen.findByText("dingmai")).toBeInTheDocument();
     expect(screen.getByText("丁麦")).toBeInTheDocument();
     expect(screen.getByText("+8613800138000")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /重置密码/ })).toBeInTheDocument();
+    expect(screen.getByText("已开通")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /AI客服入口/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /重置密码/ }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /删除/ })).toBeInTheDocument();
   });
 
   it("requires and submits login id, name, and mainland mobile", async () => {
     const user = userEvent.setup();
     vi.mocked(adminUsersApi.createUser).mockResolvedValue({
-      id: 25, username: "alice", display_name: "Alice Chen",
-      phone_number: "+8613900139000", role: "user", created_at: "2026-09-29T00:00:00Z",
+      id: 25,
+      username: "alice",
+      display_name: "Alice Chen",
+      phone_number: "+8613900139000",
+      role: "user",
+      created_at: "2026-09-29T00:00:00Z",
     });
     render(<UsersPage />);
     await user.click(screen.getByRole("button", { name: /创建用户/ }));
@@ -70,15 +83,62 @@ describe("UsersPage", () => {
     expect(await screen.findByText("请输入姓名！")).toBeInTheDocument();
     expect(screen.getByText("请输入手机号！")).toBeInTheDocument();
 
-    await user.type(screen.getByLabelText("登录 ID"), "alice");
-    await user.type(screen.getByLabelText("姓名"), "  Alice Chen  ");
-    await user.type(screen.getByLabelText("手机号"), "13900139000");
-    await user.type(screen.getByLabelText("密码"), "secret");
+    fireEvent.change(screen.getByLabelText("登录 ID"), {
+      target: { value: "alice" },
+    });
+    fireEvent.change(screen.getByLabelText("姓名"), {
+      target: { value: "  Alice Chen  " },
+    });
+    fireEvent.change(screen.getByLabelText("手机号"), {
+      target: { value: "13900139000" },
+    });
+    fireEvent.change(screen.getByLabelText("密码"), {
+      target: { value: "secret" },
+    });
+    fireEvent.change(screen.getByLabelText("AI 客服工作区 URL（选填）"), {
+      target: {
+        value: "https://service.example.com/console/?workspace=alice",
+      },
+    });
     await user.click(modalCreateButton());
-    await waitFor(() => expect(adminUsersApi.createUser).toHaveBeenCalledWith({
-      username: "alice", display_name: "Alice Chen", phone_number: "13900139000",
-      password: "secret", role: "user",
-    }));
+    await waitFor(() =>
+      expect(adminUsersApi.createUser).toHaveBeenCalledWith({
+        username: "alice",
+        display_name: "Alice Chen",
+        phone_number: "13900139000",
+        password: "secret",
+        role: "user",
+        ai_customer_service_url:
+          "https://service.example.com/console/?workspace=alice",
+      }),
+    );
+  });
+
+  it("can remove an existing AI customer service entry", async () => {
+    const user = userEvent.setup();
+    vi.mocked(adminUsersApi.updateAiCustomerServiceUrl).mockResolvedValue({
+      id: 24,
+      username: "dingmai",
+      role: "user",
+      created_at: "2026-08-28T12:53:23Z",
+      ai_customer_service_url: null,
+    });
+    render(<UsersPage />);
+    await user.click(await screen.findByRole("button", { name: /AI客服入口/ }));
+
+    const input = screen.getByLabelText("工作区 URL");
+    expect(input).toHaveValue(
+      "https://service.example.com/console/?workspace=dingmai",
+    );
+    fireEvent.change(input, { target: { value: "" } });
+    await user.click(screen.getByRole("button", { name: /保\s*存/ }));
+
+    await waitFor(() =>
+      expect(adminUsersApi.updateAiCustomerServiceUrl).toHaveBeenCalledWith(
+        24,
+        null,
+      ),
+    );
   });
 
   it("rejects a malformed mainland mobile", async () => {
@@ -87,7 +147,9 @@ describe("UsersPage", () => {
     await user.click(screen.getByRole("button", { name: /创建用户/ }));
     await user.type(screen.getByLabelText("手机号"), "12345");
     await user.click(modalCreateButton());
-    expect(await screen.findByText("请输入有效的中国大陆手机号！")).toBeInTheDocument();
+    expect(
+      await screen.findByText("请输入有效的中国大陆手机号！"),
+    ).toBeInTheDocument();
     expect(adminUsersApi.createUser).not.toHaveBeenCalled();
   });
 });

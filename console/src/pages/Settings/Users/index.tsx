@@ -13,7 +13,7 @@ import {
 } from "antd";
 import { useAppMessage } from "../../../hooks/useAppMessage";
 import { adminUsersApi, type AdminUser } from "../../../api/modules/adminUsers";
-import { KeyRound, Trash2, UserPlus, Users } from "lucide-react";
+import { Headset, KeyRound, Trash2, UserPlus, Users } from "lucide-react";
 import { PageHeader } from "../../../components/PageHeader";
 import dayjs from "dayjs";
 import styles from "./index.module.less";
@@ -24,10 +24,15 @@ interface CreateUserFormValues {
   phone_number: string;
   password: string;
   role?: "admin" | "user";
+  ai_customer_service_url?: string;
 }
 
 interface ResetPasswordFormValues {
   new_password: string;
+}
+
+interface SceneFormValues {
+  ai_customer_service_url?: string;
 }
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -40,10 +45,12 @@ export default function UsersPage() {
   const [loading, setLoading] = useState(false);
   const [createModalVisible, setCreateModalVisible] = useState(false);
   const [resetModalVisible, setResetModalVisible] = useState(false);
+  const [sceneModalVisible, setSceneModalVisible] = useState(false);
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
 
   const [createForm] = Form.useForm();
   const [resetForm] = Form.useForm();
+  const [sceneForm] = Form.useForm<SceneFormValues>();
 
   const fetchUsers = useCallback(async () => {
     setLoading(true);
@@ -63,19 +70,39 @@ export default function UsersPage() {
 
   const handleCreateUser = async (values: CreateUserFormValues) => {
     try {
-      await adminUsersApi.createUser({
+      const input = {
         username: values.username,
         display_name: values.display_name.trim(),
         phone_number: values.phone_number.trim(),
         password: values.password,
         role: values.role || "user",
-      });
+        ...(values.ai_customer_service_url?.trim()
+          ? { ai_customer_service_url: values.ai_customer_service_url.trim() }
+          : {}),
+      };
+      await adminUsersApi.createUser(input);
       message.success("用户创建成功");
       setCreateModalVisible(false);
       createForm.resetFields();
       fetchUsers();
     } catch (error: unknown) {
       message.error(getErrorMessage(error, "创建用户失败"));
+    }
+  };
+
+  const handleSceneUpdate = async (values: SceneFormValues) => {
+    if (selectedUserId === null) return;
+    try {
+      await adminUsersApi.updateAiCustomerServiceUrl(
+        selectedUserId,
+        values.ai_customer_service_url?.trim() || null,
+      );
+      message.success("AI 客服入口已更新");
+      setSceneModalVisible(false);
+      sceneForm.resetFields();
+      fetchUsers();
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, "更新 AI 客服入口失败"));
     }
   };
 
@@ -140,6 +167,14 @@ export default function UsersPage() {
       ),
     },
     {
+      title: "AI 客服",
+      dataIndex: "ai_customer_service_url",
+      key: "ai_customer_service_url",
+      width: 120,
+      render: (value: string | null) =>
+        value ? <Tag color="blue">已开通</Tag> : <Tag>未开通</Tag>,
+    },
+    {
       title: "创建时间",
       dataIndex: "created_at",
       key: "created_at",
@@ -149,9 +184,23 @@ export default function UsersPage() {
     {
       title: "操作",
       key: "actions",
-      width: 220,
+      width: 340,
       render: (_: unknown, record: AdminUser) => (
         <Space className={styles.actions}>
+          <Button
+            type="text"
+            icon={<Headset size={16} />}
+            onClick={() => {
+              setSelectedUserId(record.id);
+              sceneForm.setFieldsValue({
+                ai_customer_service_url:
+                  record.ai_customer_service_url || undefined,
+              });
+              setSceneModalVisible(true);
+            }}
+          >
+            AI客服入口
+          </Button>
           <Button
             type="text"
             icon={<KeyRound size={16} />}
@@ -211,7 +260,7 @@ export default function UsersPage() {
             rowKey="id"
             loading={loading}
             size="middle"
-            scroll={{ x: 1120 }}
+            scroll={{ x: 1360 }}
             pagination={{ pageSize: 20, showSizeChanger: false }}
           />
         </Card>
@@ -233,14 +282,18 @@ export default function UsersPage() {
           <Form.Item
             name="username"
             label="登录 ID"
-            rules={[{ required: true, whitespace: true, message: "请输入登录 ID！" }]}
+            rules={[
+              { required: true, whitespace: true, message: "请输入登录 ID！" },
+            ]}
           >
             <Input />
           </Form.Item>
           <Form.Item
             name="display_name"
             label="姓名"
-            rules={[{ required: true, whitespace: true, message: "请输入姓名！" }]}
+            rules={[
+              { required: true, whitespace: true, message: "请输入姓名！" },
+            ]}
           >
             <Input maxLength={100} />
           </Form.Item>
@@ -249,7 +302,10 @@ export default function UsersPage() {
             label="手机号"
             rules={[
               { required: true, whitespace: true, message: "请输入手机号！" },
-              { pattern: /^(?:\+86)?1[3-9]\d{9}$/, message: "请输入有效的中国大陆手机号！" },
+              {
+                pattern: /^(?:\+86)?1[3-9]\d{9}$/,
+                message: "请输入有效的中国大陆手机号！",
+              },
             ]}
           >
             <Input maxLength={14} />
@@ -266,6 +322,57 @@ export default function UsersPage() {
               <Select.Option value="admin">管理员 (admin)</Select.Option>
               <Select.Option value="user">普通用户 (user)</Select.Option>
             </Select>
+          </Form.Item>
+          <Form.Item
+            name="ai_customer_service_url"
+            label="AI 客服工作区 URL（选填）"
+            rules={[
+              { type: "url", message: "请输入有效的 URL！" },
+              {
+                validator: async (_, value) => {
+                  if (!value || String(value).trim().startsWith("https://")) {
+                    return;
+                  }
+                  throw new Error("AI 客服入口必须使用 HTTPS！");
+                },
+              },
+            ]}
+          >
+            <Input placeholder="https://customer-service.example.com/console/?workspace=..." />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="AI 客服入口"
+        width={560}
+        open={sceneModalVisible}
+        onCancel={() => {
+          setSceneModalVisible(false);
+          sceneForm.resetFields();
+        }}
+        onOk={() => sceneForm.submit()}
+        okText="保存"
+        cancelText="取消"
+      >
+        <Form form={sceneForm} layout="vertical" onFinish={handleSceneUpdate}>
+          <Form.Item
+            name="ai_customer_service_url"
+            label="工作区 URL"
+            extra="留空保存将从该账号移除 AI 客服场景 Tab。"
+            rules={[
+              { type: "url", message: "请输入有效的 URL！" },
+              {
+                validator: async (_, value) => {
+                  if (!value || String(value).trim().startsWith("https://")) {
+                    return;
+                  }
+                  throw new Error("AI 客服入口必须使用 HTTPS！");
+                },
+              },
+            ]}
+          >
+            <Input placeholder="https://customer-service.example.com/console/?workspace=..." />
           </Form.Item>
         </Form>
       </Modal>

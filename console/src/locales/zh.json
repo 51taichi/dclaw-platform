@@ -2111,6 +2111,10 @@
     "github": "GitHub",
     "updateAvailable": "有可用更新"
   },
+  "scenes": {
+    "label": "场景",
+    "workbench": "工作台"
+  },
   "theme": {
     "dark": "深色",
     "light": "浅色",

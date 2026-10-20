@@ -2262,6 +2262,10 @@
     "github": "GitHub",
     "updateAvailable": "Update Available"
   },
+  "scenes": {
+    "label": "Scenes",
+    "workbench": "Workbench"
+  },
   "theme": {
     "dark": "Dark",
     "light": "Light",

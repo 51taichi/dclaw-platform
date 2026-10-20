@@ -1,9 +1,11 @@
 import { createContext, useContext, useState, useEffect } from "react";
 import { authApi } from "../api/modules/auth";
+import type { ClientScene } from "../api/modules/auth";
 import { getApiToken, getApiUrl, clearAuthToken } from "../api/config";
 
 interface AuthContextType {
   role: string | null;
+  scenes: ClientScene[];
   status: "loading" | "auth-required" | "ok";
   setRole: (role: string | null) => void;
   logout: () => void;
@@ -12,6 +14,7 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType>({
   role: null,
+  scenes: [],
   status: "loading",
   setRole: () => {},
   logout: () => {},
@@ -19,8 +22,13 @@ const AuthContext = createContext<AuthContextType>({
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [role, setRoleState] = useState<string | null>(() => localStorage.getItem("qwenpaw_user_role"));
-  const [status, setStatus] = useState<"loading" | "auth-required" | "ok">("loading");
+  const [role, setRoleState] = useState<string | null>(() =>
+    localStorage.getItem("qwenpaw_user_role"),
+  );
+  const [scenes, setScenes] = useState<ClientScene[]>([]);
+  const [status, setStatus] = useState<"loading" | "auth-required" | "ok">(
+    "loading",
+  );
 
   const setRole = (newRole: string | null) => {
     setRoleState(newRole);
@@ -34,6 +42,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = () => {
     clearAuthToken();
     setRole(null);
+    setScenes([]);
     setStatus("auth-required");
   };
 
@@ -43,11 +52,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const res = await authApi.getStatus();
       if (!res.enabled) {
         setRole("admin");
+        setScenes([]);
         setStatus("ok");
         return;
       }
       const token = getApiToken();
       if (!token) {
+        setRole(null);
+        setScenes([]);
         setStatus("auth-required");
         return;
       }
@@ -60,6 +72,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (data.role) {
             setRole(data.role);
           }
+          setScenes(Array.isArray(data.scenes) ? data.scenes : []);
           setStatus("ok");
         } else {
           logout();
@@ -70,6 +83,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {
       clearAuthToken();
       setRole(null);
+      setScenes([]);
       setStatus("auth-required");
     }
   };
@@ -79,7 +93,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ role, status, setRole, logout, checkAuth }}>
+    <AuthContext.Provider
+      value={{ role, scenes, status, setRole, logout, checkAuth }}
+    >
       {children}
     </AuthContext.Provider>
   );

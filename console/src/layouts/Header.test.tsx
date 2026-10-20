@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import Header from "./Header";
 
 const { authState, themeState } = vi.hoisted(() => ({
@@ -79,5 +80,33 @@ describe("Header brand logo", () => {
     expect(
       screen.getByRole("button", { name: "并发监控" }),
     ).toBeInTheDocument();
+  });
+
+  it("shows configured desktop scenes and switches between them", async () => {
+    const user = userEvent.setup();
+    const onSceneChange = vi.fn();
+    render(
+      <MemoryRouter>
+        <Header
+          showSceneTabs
+          activeSceneKey="workbench"
+          onSceneChange={onSceneChange}
+          scenes={[
+            {
+              key: "ai-customer-service",
+              title: "AI客服",
+              url: "https://service.example.com/console/?workspace=alice",
+            },
+          ]}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("tab", { name: "工作台" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await user.click(screen.getByRole("tab", { name: "AI客服" }));
+    expect(onSceneChange).toHaveBeenCalledWith("ai-customer-service");
   });
 });
