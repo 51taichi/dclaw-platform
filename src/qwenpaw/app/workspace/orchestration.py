@@ -25,10 +25,7 @@ from typing import Any, Awaitable, Callable
 from pydantic import BaseModel, ConfigDict, Field
 
 from qwenpaw.config.config import OrchestrationConfig
-from qwenpaw.app.local_execution import (
-    LocalExecutionSessionError,
-    inject_local_execution_session,
-)
+from qwenpaw.plugins.registry import PluginRegistry
 from qwenpaw.app.sealed_agents.models import SealedAgentRecord
 from qwenpaw.app.sealed_agents.registry import get_sealed_agent_registry
 from qwenpaw.app.sealed_agents.package import (
@@ -677,20 +674,23 @@ async def run_workspace_orchestration_turn(
         _message_dict(message) for message in (conversation_history or [])
     ]
     try:
-        trusted_context = inject_local_execution_session(
+        trusted_context = await PluginRegistry().enrich_workspace_context(
             {
                 "session_id": str(request.session_id),
                 "user_id": str(request.user_id),
                 "channel": str(request.channel),
                 "agent_id": agent_id,
                 "agent_name": str(getattr(agent, "name", "") or agent_id),
+                "installation_id": authorization.installation_id,
+                "release_id": authorization.release_id,
                 "normalized_input": {"messages": serialized_messages},
                 "history": serialized_history,
             },
             granted_capabilities=authorization.granted_capabilities,
             invocation_id=invocation_id,
         )
-    except LocalExecutionSessionError as exc:
+    except Exception as exc:
+        logger.exception("Plugin workspace context enrichment failed")
         raise WorkspaceOrchestrationError("orchestration_error") from exc
     turn_request = WorkspaceTurnRequest(
         invocation_id=invocation_id,

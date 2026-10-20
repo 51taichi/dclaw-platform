@@ -448,13 +448,6 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
 
     async def _background_startup():  # pylint: disable=too-many-statements
         try:
-            _reconcile_sealed_agent_profiles()
-
-            # Start all configured agents (truly parallel now)
-            await multi_agent_manager.start_all_configured_agents()
-
-            provider_manager.start_local_model_resume(local_model_manager)
-
             # ---- Plugin System ----
             logger.debug("Initializing plugin system...")
 
@@ -465,6 +458,11 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
             plugin_dirs = [
                 get_plugins_dir(),
             ]
+            bundled_plugins_dir = os.environ.get(
+                "QWENPAW_BUNDLED_PLUGINS_DIR",
+            )
+            if bundled_plugins_dir:
+                plugin_dirs.append(Path(bundled_plugins_dir).expanduser())
 
             plugin_loader = PluginLoader(plugin_dirs)
 
@@ -505,6 +503,15 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
 
             app.state.plugin_loader = plugin_loader
             app.state.plugin_registry = plugin_loader.registry
+
+            # Plugin capabilities and providers must exist before sealed
+            # releases are reconciled and Agent configurations are loaded.
+            _reconcile_sealed_agent_profiles()
+
+            # Start all configured agents (truly parallel now)
+            await multi_agent_manager.start_all_configured_agents()
+
+            provider_manager.start_local_model_resume(local_model_manager)
 
             # ---- Plugin Control Commands ----
             logger.debug("Registering plugin control commands...")

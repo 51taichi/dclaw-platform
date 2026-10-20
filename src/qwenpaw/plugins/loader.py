@@ -7,6 +7,7 @@ import inspect
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -18,6 +19,11 @@ from .api import PluginApi
 from .registry import PluginRegistry
 
 logger = logging.getLogger(__name__)
+
+
+def _plugin_module_name(plugin_id: str) -> str:
+    """Return an import-safe private module name for any valid plugin id."""
+    return "plugin_" + re.sub(r"[^A-Za-z0-9_]", "_", plugin_id)
 
 
 class PluginLoader:
@@ -150,10 +156,10 @@ class PluginLoader:
                 f"— loading as frontend-only plugin",
             )
         else:
+            module_name = _plugin_module_name(plugin_id)
             try:
                 # Dynamic import of plugin module
                 # Use unique module name to avoid conflicts
-                module_name = f"plugin_{plugin_id.replace('-', '_')}"
                 plugin_dir_str = str(source_path)
 
                 # submodule_search_locations enables relative imports
@@ -218,6 +224,11 @@ class PluginLoader:
                     )
 
             except Exception as e:
+                self.registry.unregister_plugin(plugin_id)
+                prefix = module_name + "."
+                for key in list(sys.modules):
+                    if key == module_name or key.startswith(prefix):
+                        sys.modules.pop(key, None)
                 logger.error(
                     f"Failed to load plugin '{plugin_id}': {e}",
                     exc_info=True,
@@ -530,7 +541,7 @@ class PluginLoader:
 
         # Remove Python module and all sub-modules so the next import
         # gets a fresh copy (e.g. plugin_foo.utils must not be reused).
-        module_name = f"plugin_{plugin_id.replace('-', '_')}"
+        module_name = _plugin_module_name(plugin_id)
         prefix = module_name + "."
         stale = [
             k for k in sys.modules if k == module_name or k.startswith(prefix)

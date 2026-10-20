@@ -12,7 +12,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from qwenpaw.app.sealed_agents.models import SealedReleaseRecord
-from qwenpaw.app.super_experts.capabilities import PLATFORM_CAPABILITY_CATALOG_V1
+from qwenpaw.app.super_experts.capabilities import get_platform_capability_catalog
 
 
 class SuperExpertGrantError(ValueError):
@@ -83,8 +83,9 @@ class SuperExpertGrantRepository:
             raise SuperExpertGrantError("release is not a super expert package")
         if not release.capability_digest or not release.declared_capabilities:
             raise SuperExpertGrantError("super expert capability declaration is missing")
+        catalog = get_platform_capability_catalog()
         for capability_id, contract_version in release.declared_capabilities:
-            definition = PLATFORM_CAPABILITY_CATALOG_V1.get(capability_id)
+            definition = catalog.get(capability_id)
             if definition is None or definition.contract_version != contract_version:
                 raise SuperExpertGrantError(
                     f"platform capability is unavailable: {capability_id}",

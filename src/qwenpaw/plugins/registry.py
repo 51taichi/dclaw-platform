@@ -2,7 +2,7 @@
 # pylint:disable=too-many-nested-blocks
 """Central plugin registry."""
 
-from typing import Any, Callable, Dict, List, Optional, Type
+from typing import Any, Callable, Dict, List, Mapping, Optional, Type
 from dataclasses import dataclass, field
 import logging
 
@@ -92,6 +92,36 @@ class HttpRouterRegistration:
     routes: List[Any]
 
 
+@dataclass
+class AsgiAppRegistration:
+    """ASGI application mounted by a plugin under ``/api``."""
+
+    plugin_id: str
+    prefix: str
+    route: Any
+
+
+@dataclass(frozen=True)
+class PlatformCapabilityRegistration:
+    """Versioned platform capability contributed by a plugin."""
+
+    plugin_id: str
+    capability_id: str
+    contract_version: str
+    group: str
+    dependencies: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class WorkspaceContextEnricherRegistration:
+    """Trusted workspace-context callback contributed by a plugin."""
+
+    plugin_id: str
+    name: str
+    callback: Callable
+    priority: int = 100
+
+
 class PluginRegistry:  # pylint:disable=too-many-public-methods
     """Central plugin registry (Singleton).
 
@@ -123,7 +153,14 @@ class PluginRegistry:  # pylint:disable=too-many-public-methods
         self._plugin_manifests: Dict[str, Dict[str, Any]] = {}
         self._plugin_http_app: Optional[Any] = None
         self._http_router_registrations: List[HttpRouterRegistration] = []
+        self._asgi_app_registrations: List[AsgiAppRegistration] = []
         self._http_prefix_to_plugin: Dict[str, str] = {}
+        self._platform_capabilities: Dict[
+            str, PlatformCapabilityRegistration
+        ] = {}
+        self._workspace_context_enrichers: List[
+            WorkspaceContextEnricherRegistration
+        ] = []
 
         self._initialized = True
 
@@ -216,6 +253,148 @@ class PluginRegistry:  # pylint:disable=too-many-public-methods
         """Return a copy of HTTP router registrations (for diagnostics)."""
         return list(self._http_router_registrations)
 
+    @staticmethod
+    def _normalize_http_prefix(prefix: str) -> str:
+        normalized = prefix.strip()
+        if not normalized.startswith("/"):
+            normalized = "/" + normalized
+        normalized = normalized.rstrip("/") or "/"
+        if normalized == "/":
+            raise ValueError(
+                "Plugin HTTP prefix must not be '/' alone; use a path "
+                "segment such as '/pets'.",
+            )
+        return normalized
+
+    def register_asgi_app(
+        self,
+        plugin_id: str,
+        asgi_app: Any,
+        *,
+        prefix: str,
+        name: Optional[str] = None,
+    ) -> None:
+        """Mount a plugin-owned ASGI application below ``/api``."""
+        http_app = self._plugin_http_app
+        if http_app is None:
+            raise RuntimeError(
+                "Cannot register plugin ASGI app: FastAPI app was not "
+                "configured (internal setup error).",
+            )
+        normalized = self._normalize_http_prefix(prefix)
+        if normalized in self._http_prefix_to_plugin:
+            owner = self._http_prefix_to_plugin[normalized]
+            raise ValueError(
+                f"Plugin HTTP prefix '{normalized}' is already registered "
+                f"by plugin '{owner}'",
+            )
+
+        routes = http_app.router.routes
+        spa_idx = _find_console_spa_route_index(http_app)
+        http_app.mount(
+            f"/api{normalized}",
+            asgi_app,
+            name=name or f"plugin:{plugin_id}",
+        )
+        route = routes.pop()
+        if spa_idx is None:
+            routes.append(route)
+        else:
+            routes.insert(spa_idx, route)
+        http_app.openapi_schema = None
+        self._asgi_app_registrations.append(
+            AsgiAppRegistration(plugin_id, normalized, route),
+        )
+        self._http_prefix_to_plugin[normalized] = plugin_id
+
+    def register_platform_capability(
+        self,
+        plugin_id: str,
+        capability_id: str,
+        contract_version: str,
+        group: str,
+        dependencies: tuple[str, ...] = (),
+    ) -> None:
+        """Publish a versioned capability through the generic plugin SPI."""
+        if capability_id in self._platform_capabilities:
+            owner = self._platform_capabilities[capability_id].plugin_id
+            raise ValueError(
+                f"Platform capability '{capability_id}' is already registered "
+                f"by plugin '{owner}'",
+            )
+        self._platform_capabilities[
+            capability_id
+        ] = PlatformCapabilityRegistration(
+            plugin_id=plugin_id,
+            capability_id=capability_id,
+            contract_version=contract_version,
+            group=group,
+            dependencies=tuple(dependencies),
+        )
+
+    def get_platform_capabilities(
+        self,
+    ) -> Dict[str, PlatformCapabilityRegistration]:
+        return self._platform_capabilities.copy()
+
+    def register_workspace_context_enricher(
+        self,
+        plugin_id: str,
+        name: str,
+        callback: Callable,
+        priority: int = 100,
+    ) -> None:
+        """Register a callback that may add trusted runtime-only context."""
+        if any(
+            item.plugin_id == plugin_id and item.name == name
+            for item in self._workspace_context_enrichers
+        ):
+            raise ValueError(
+                f"Workspace context enricher '{name}' is already registered "
+                f"by plugin '{plugin_id}'",
+            )
+        self._workspace_context_enrichers.append(
+            WorkspaceContextEnricherRegistration(
+                plugin_id=plugin_id,
+                name=name,
+                callback=callback,
+                priority=priority,
+            ),
+        )
+        self._workspace_context_enrichers.sort(key=lambda item: item.priority)
+
+    def get_workspace_context_enrichers(
+        self,
+    ) -> List[WorkspaceContextEnricherRegistration]:
+        return list(self._workspace_context_enrichers)
+
+    async def enrich_workspace_context(
+        self,
+        context: Mapping[str, Any],
+        *,
+        granted_capabilities: Mapping[str, str],
+        invocation_id: str,
+    ) -> dict[str, Any]:
+        """Run trusted context enrichers in deterministic priority order."""
+        import inspect
+
+        current = dict(context)
+        for registration in self._workspace_context_enrichers:
+            result = registration.callback(
+                current,
+                granted_capabilities=granted_capabilities,
+                invocation_id=invocation_id,
+            )
+            if inspect.isawaitable(result):
+                result = await result
+            if not isinstance(result, Mapping):
+                raise TypeError(
+                    "Workspace context enricher must return a mapping: "
+                    f"{registration.plugin_id}:{registration.name}",
+                )
+            current = dict(result)
+        return current
+
     def _unregister_plugin_http_routes(self, plugin_id: str) -> None:
         http_app = self._plugin_http_app
         if http_app is None:
@@ -245,6 +424,27 @@ class PluginRegistry:  # pylint:disable=too-many-public-methods
             for r in self._http_router_registrations
             if r.plugin_id != plugin_id
         ]
+        asgi_to_drop = [
+            reg
+            for reg in self._asgi_app_registrations
+            if reg.plugin_id == plugin_id
+        ]
+        for reg in asgi_to_drop:
+            self._http_prefix_to_plugin.pop(reg.prefix, None)
+            try:
+                routes.remove(reg.route)
+            except ValueError:
+                logger.warning(
+                    "Could not remove plugin ASGI mount %r for '%s'",
+                    reg.prefix,
+                    plugin_id,
+                )
+        self._asgi_app_registrations = [
+            reg
+            for reg in self._asgi_app_registrations
+            if reg.plugin_id != plugin_id
+        ]
+        http_app.openapi_schema = None
 
     def register_provider(
         self,
@@ -497,6 +697,16 @@ class PluginRegistry:  # pylint:disable=too-many-public-methods
         ]
         self._control_commands = [
             c for c in self._control_commands if c.plugin_id != plugin_id
+        ]
+        self._platform_capabilities = {
+            capability_id: registration
+            for capability_id, registration in self._platform_capabilities.items()
+            if registration.plugin_id != plugin_id
+        }
+        self._workspace_context_enrichers = [
+            item
+            for item in self._workspace_context_enrichers
+            if item.plugin_id != plugin_id
         ]
         logger.info(
             f"Unregistered all entries for plugin '{plugin_id}'",

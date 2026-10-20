@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`1.6`
+当前版本：`1.8`
 
 发布日期：`2026-10-20`
 
@@ -113,7 +113,7 @@ DClaw 平台 -> 密封超级专家
 超级 Agent 开发、密封 Agent 调用开发方业务 MCP、本地能力包和本地助手所需的新增平台支持，必须统一作为可选的 `dclaw.super-agent-support` 插件包实现，不得把这些能力写入 DClaw 核心业务模块。该插件包包含：
 
 - `local-execution` 模块：对外使用 `dclaw.local-execution` 公共合同，注册八个 `local_*` 工具，实现设备路由、任务、检查点、产物、错误和追踪；
-- `credential-broker` 模块：按租户、用户、Agent 安装和目标 MCP 隔离 OAuth/Secret，完成加密存储、刷新、撤销和运行时受控注入；
+- `credential-broker` 模块：把需要由 DClaw 管理的客户凭证加密保存为不透明引用，按用户、Agent 安装和权限范围隔离，支持撤销，并只在已授权本地能力执行时受控注入；开发方业务服务自身使用的供应商 Token 仍由开发方 Secret 管理系统持有；
 - `capability-packages` 模块：实现能力描述符、Schema、签名验证、注册、安装、版本、授权和回滚；
 - DClaw 客户端插件适配：在已登录客户端内完成安装、更新、连接和用户交互引导；
 - 通用 Windows 本地助手：作为插件套件的配套客户端组件独立发布，执行受信能力包；
@@ -455,7 +455,25 @@ stateDiagram-v2
 
 能力出现在 manifest 目录、文档或 Schema 中，只证明平台识别该能力声明，不证明对应运行服务已经生产可用。开发方必须同时核对目标环境的能力可用状态、生产入口和最低组件版本；平台未发布这些信息时不得自行猜测地址或把业务参考实现当作公共平台。
 
-截至 2026-10-20，`dclaw-server` 已实现 `local.execution.session/1` 的授权、短期会话令牌和 V1 请求/响应 Schema，但尚未提供八个 `local_*` 工具的公共生产网关、通用设备任务服务或通用 Windows 本地助手。现有会话能力声明和令牌实现仍位于 DClaw 核心源码，只是未完成的过渡实现，不符合本版本要求的插件隔离目标，必须在正式上线前迁入 `dclaw.super-agent-support` 插件包的 `local-execution` 模块，并仅通过公开 SPI 接入。大字报仓库中的 Relay 和 `Dazibao.Runner` 是现有业务参考及兼容实现，不是可供新 Agent 使用的平台公共生产能力。平台完成插件化通用实现并发布正式地址、版本和能力包注册流程前，新 Agent 只能完成合同开发和本地参考测试，不能宣称公共本地执行链路已上线。
+截至 2026-10-20，`dclaw.super-agent-support` `1.0.0` 的源码实现和自动合同测试已经进入 `dclaw-server`：插件注册 `local.execution.session/1`、可信工作区上下文、八个 `local_*` MCP 工具、设备配对与 WebSocket 调度、持久任务状态、能力包验签注册、凭证引用以及通用 Windows 本地助手核心。DClaw Windows 客户端 `2.5.3` 已加入自动设备配对、助手启动、单实例、心跳、断进程恢复、退出登录停止和可见错误提示；Windows 安装包构建从插件源码编译自包含助手并作为客户端资源携带。DClaw 核心只保留通用 ASGI 子应用、动态平台能力、可信上下文增强和可选内置插件目录 SPI；卸载插件会同时移除路由、能力和上下文处理器。历史 `src/qwenpaw/app/local_execution` 只为旧版本测试与兼容保留，新路径不得调用它。
+
+当前交付状态是 `source-complete`，还不是 `uploaded`、`active` 或 `e2e-verified`。正式入口和最低版本如下：
+
+| 项目 | V1 值 |
+|---|---|
+| 插件 ID / 版本 | `dclaw.super-agent-support` / `1.0.0` |
+| 最低 DClaw | `1.1.10` 且包含本标准 1.8 对应提交 |
+| 最低 Windows 客户端 | `2.5.3` |
+| 本地执行 MCP | `/api/super-agent-support/mcp/`，Streamable HTTP |
+| 客户端配对 | `POST /api/super-agent-support/device-bootstrap` |
+| 本地助手通道 | `/api/super-agent-support/devices/connect`，WebSocket 协议 `1` |
+| 能力包注册 | `POST /api/super-agent-support/capability-packages/register` |
+| 凭证绑定 / 撤销 | `POST /api/super-agent-support/credentials` / `DELETE /api/super-agent-support/credentials/{credential_ref}` |
+| 最低通用 Runner | `1.0.0` |
+
+上述入口只有在插件安装并启用后存在。当前源码尚未构建或部署新的服务端镜像，也未构建、签名或发布 Windows 客户端 `2.5.3` 安装包。完成服务端镜像部署、插件 Secret 与签名公钥配置、客户端发布、正式能力包注册并连续完成三个真实任务后，状态才能依次进入 `active` 和 `e2e-verified`。大字报仓库中的历史 Relay、`Dazibao.Runner`、`dzb_*` 和 `video.s1.compose` 继续作为冻结兼容路径，不得被新发布回退使用。
+
+生产安装必须把插件 `state_dir` 放在持久卷，并通过平台 Secret 配置稳定的 `master_key_base64`；容器可使用 `DCLAW_SUPER_AGENT_SUPPORT_MASTER_KEY_BASE64`，该值解码后至少 32 字节，不得写入仓库、镜像或 Agent 包。`trusted_package_signers` 是 `signer_id` 到原始 Ed25519 公钥 Base64 的映射。未配置受信公钥时，插件仍可启动和提供环境状态，但所有能力包注册必须失败关闭。
 
 ## 12. Manifest 标准
 
@@ -584,11 +602,11 @@ DClaw 平台负责卡片持久化、渲染、提交和可信回传；开发方�
 - 密钥轮换不修改签名包内容；
 - 日志、trace、错误和管理 API 只返回脱敏状态。
 
-截至 2026-10-20，DClaw 的通用 MCP 客户端已有 OAuth 2.1 PKCE 授权流程和 Bearer Header 注入，但当前实现把 Access Token 与 Refresh Token 明文保存到 Agent 的 `agent.json`，授权状态属于 Agent 配置，并且尚未实现自动刷新。该实现适用于受控普通 Agent 的现有配置场景，不构成密封全局超级专家的按用户 OAuth 合同。
+截至 2026-10-20，DClaw 的通用 MCP 客户端已有 OAuth 2.1 PKCE 授权流程和 Bearer Header 注入，但其现有 Agent 配置存储仍不构成密封全局超级专家的按用户 OAuth 合同。`dclaw.super-agent-support` `1.0.0` 新增的凭证引用只解决客户凭证向已授权本地能力包注入：密文按用户、安装、Agent 和 scope 绑定，Agent 只传不透明 `credential_ref`，明文只通过已认证设备通道送入本地助手并在子进程结束后删除，管理 API 支持撤销。
 
-DClaw 当前也没有面向密封超级专家正式发布的安装级 Secret 注入、Secret 引用或开发方服务短期凭证交换能力。该缺口属于 `dclaw.super-agent-support` 插件包的 `credential-broker` 模块，不得在 DClaw 核心或单个 Agent 中实现特例。MCP Header 中的环境变量展开只是现有运行实现细节，不是可由第三方超级 Agent 依赖的公共安全合同。
+开发方业务服务自身调用 TikHub 等第三方 API 时，长期 Token 属于开发方业务服务，应保存在开发方 Secret 管理系统；不需要上传 DClaw，也不需要经过 DClaw Credential Broker。若业务 MCP 必须使用每位客户自己的 OAuth 身份，当前 `1.0.0` 仍未发布按用户 OAuth 刷新和 MCP 运输层注入，开发方必须保持生产构建失败关闭并提交通用能力申请，不能把 Token 写回密封包。
 
-在上述公共鉴权能力正式发布前：
+在所需鉴权方式尚未正式发布前：
 
 1. 需要业务 MCP 鉴权的新超级专家不得进行生产构建和上传。
 2. 开发方可以保留不含 Token 的 OAuth `client_id`、`scope` 等声明并完成合同测试。
@@ -663,7 +681,9 @@ V1 固定流程：
 
 - 稳定 `package_id`、`capability_id` 和语义版本；
 - 输入 Schema、结果 Schema 和检查点 Schema；
-- `minimum_runner_version`、本地执行合同版本和所需特性；
+- `min_runner_version`、本地执行合同版本和所需特性；
+- `artifact.url`、`artifact.sha256`、`artifact.size_bytes` 和可执行入口；
+- 输入、结果、检查点 Schema 的相对路径和 SHA-256；
 - 操作系统和硬件要求；
 - 文件、进程、网络、浏览器、摄像头等权限声明；
 - 网络域名或地址允许列表；
@@ -704,6 +724,24 @@ V1 固定流程：
 4. 客户完成后由超级专家调用 `local_task_continue`。
 5. 继续前重新验证真实状态，不能只相信“已完成”文字。
 6. 超时后给出明确恢复或重新开始方式。
+
+### 16.3 V1 描述符与签名
+
+正式能力包描述符必须通过 `plugins/bundle/super-agent-support/schemas/capability-descriptor.schema.json`。候选状态、缺少下载地址、缺少包 SHA-256、缺少 Schema SHA-256、缺少入口程序或最低 Runner 版本的描述符不能注册。
+
+签名输入是完整描述符的 UTF-8 JSON：对象键按字典序排序，分隔符固定为 `,` 和 `:`，不含额外空白。开发方用已入驻的 Ed25519 私钥签名并把签名编码为 Base64；平台用 `trusted_package_signers[signer_id]` 验证。三个 `schemas.*.document` 是签名合同，服务端用它们校验任务输入、检查点和结果；`artifact.sha256` 验证下载 ZIP，三个 `schemas.*.sha256` 验证包内合同文件，Runner 还必须确认文件解析后的 JSON 与签名 `document` 一致，并且只能从已校验 ZIP 的安全相对路径启动 `entrypoint`。
+
+注册请求只提交描述符、`signer_id` 和签名：
+
+```json
+{
+  "descriptor": {"descriptor_version":"1", "capability_id":"example.video.compose"},
+  "signer_id": "example-developer",
+  "signature": "<base64-ed25519-signature>"
+}
+```
+
+示例只展示外层信封，`descriptor` 必须包含 Schema 要求的全部字段。注册成功不等于客户端已安装；超级专家先调用 `local_runtime_prepare`，Runner 校验下载大小和 SHA-256、阻止 ZIP 路径穿越并原子安装，然后通过 `capabilities.report` 报告可用版本。
 
 ## 17. 幂等、恢复与取消
 
@@ -1347,8 +1385,29 @@ Agent 名称：<中文显示名称>
 - [本地执行请求 Schema](contracts/local-execution/v1/tool-call.schema.json)
 - [本地执行响应 Schema](contracts/local-execution/v1/tool-response.schema.json)
 - [标准错误信封 Schema](contracts/local-execution/v1/error-envelope.schema.json)
+- [能力包描述符 Schema](../plugins/bundle/super-agent-support/schemas/capability-descriptor.schema.json)
+- [本地助手消息 Schema](../plugins/bundle/super-agent-support/schemas/device-message.schema.json)
+- [凭证绑定 Schema](../plugins/bundle/super-agent-support/schemas/credential-binding.schema.json)
+- 插件实现：`plugins/bundle/super-agent-support/`
+- Windows 客户端适配：`dclaw-client/console/src/desktop/localHelper.ts` 与 `dclaw-client/console/src-tauri/src/lib.rs`
 
 ## 34. 版本记录
+
+### 1.8 - 2026-10-20
+
+- DClaw Windows 客户端 `2.5.3` 加入已登录用户自动配对、助手后台启动、单实例心跳、进程恢复和退出登录停止。
+- Windows 安装包构建改为从 `dclaw.super-agent-support` 固定源码版本编译自包含 Runner，并把生成物作为客户端资源打包；生成的二进制不进入 Git。
+- 服务端镜像源码加入通用内置插件目录，使插件可以随镜像交付且仍通过公开插件 SPI 加载；插件状态固定到持久卷。
+- 设备引导接口支持复用当前用户已有设备，避免每次客户端启动产生新的配对记录，并阻止跨用户复用。
+- 明确当前仍是 `source-complete`：服务端镜像和 Windows 安装包均未构建、发布或部署。
+
+### 1.7 - 2026-10-20
+
+- 实现 `dclaw.super-agent-support` `1.0.0` 源码、三个通用核心 SPI 和卸载隔离。
+- 发布八个 `local_*` 的正式 Streamable HTTP MCP 入口、设备配对与 WebSocket 协议、持久任务和标准错误链路。
+- 发布能力包描述符、设备消息和凭证绑定 Schema，以及验签注册、加密凭证引用和通用 Windows 本地助手核心。
+- 给出 DClaw、插件、Runner、入口和发布状态矩阵；明确源码完成后仍需镜像、客户端集成、插件安装、签名注册和三个真实任务验收。
+- 明确开发方服务自己的第三方 Token 由开发方 Secret 管理系统持有，不经过 DClaw；客户自有 OAuth 的 MCP 注入仍是后续通用能力。
 
 ### 1.6 - 2026-10-20
 

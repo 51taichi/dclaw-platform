@@ -47,7 +47,7 @@ def test_local_execution_v1_schemas_are_valid_and_resolve_locally():
         {
             "tool": "local_task_start",
             "arguments": {
-                "capability_id": "video.s1.compose",
+                "capability_id": "example.video.compose",
                 "input": {"gate_text": "confirmed"},
                 "idempotency_key": "conversation-turn-1",
             },
@@ -62,7 +62,7 @@ def test_local_execution_v1_schemas_are_valid_and_resolve_locally():
         {"tool": "local_capabilities_list", "arguments": {}},
         {
             "tool": "local_runtime_prepare",
-            "arguments": {"capability": "video.s1.compose"},
+            "arguments": {"capability": "example.video.compose"},
         },
         {
             "tool": "local_task_continue",

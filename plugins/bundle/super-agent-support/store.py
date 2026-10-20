@@ -1,0 +1,553 @@
+"""Plugin-owned durable SQLite state."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import secrets
+import sqlite3
+import threading
+import time
+import uuid
+from pathlib import Path
+from typing import Any
+
+
+def _json(value: Any) -> str:
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+
+
+class StateStore:
+    """Durable records for devices, packages, tasks, and credentials."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.RLock()
+        self._initialize()
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.path, timeout=10)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys=ON")
+        return connection
+
+    def _initialize(self) -> None:
+        with self._connect() as db:
+            db.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS pairings (
+                    code_hash TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    expires_at INTEGER NOT NULL,
+                    used_at INTEGER
+                );
+                CREATE TABLE IF NOT EXISTS devices (
+                    device_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    token_hash TEXT,
+                    display_name TEXT NOT NULL,
+                    runner_version TEXT NOT NULL,
+                    protocol_version TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    capabilities_json TEXT NOT NULL DEFAULT '[]',
+                    last_seen INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_devices_user ON devices(user_id);
+                CREATE TABLE IF NOT EXISTS packages (
+                    package_id TEXT NOT NULL,
+                    package_version TEXT NOT NULL,
+                    capability_id TEXT NOT NULL,
+                    signer_id TEXT NOT NULL,
+                    descriptor_json TEXT NOT NULL,
+                    signature TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    registered_at INTEGER NOT NULL,
+                    PRIMARY KEY(package_id, package_version)
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_packages_active_capability
+                    ON packages(capability_id) WHERE status='active';
+                CREATE TABLE IF NOT EXISTS tasks (
+                    task_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    agent_name TEXT NOT NULL,
+                    invocation_id TEXT NOT NULL,
+                    capability_id TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL,
+                    input_hash TEXT NOT NULL,
+                    input_json TEXT NOT NULL,
+                    device_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    checkpoint_json TEXT,
+                    result_json TEXT,
+                    error_json TEXT,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    UNIQUE(user_id, agent_id, idempotency_key)
+                );
+                CREATE INDEX IF NOT EXISTS idx_tasks_user ON tasks(user_id, updated_at);
+                CREATE TABLE IF NOT EXISTS task_events (
+                    event_id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL REFERENCES tasks(task_id),
+                    sequence INTEGER NOT NULL,
+                    event_type TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    UNIQUE(task_id, sequence)
+                );
+                CREATE TABLE IF NOT EXISTS credentials (
+                    credential_ref TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    ciphertext BLOB NOT NULL,
+                    scopes_json TEXT NOT NULL,
+                    agent_ids_json TEXT NOT NULL,
+                    installation_ids_json TEXT NOT NULL DEFAULT '[]',
+                    updated_at INTEGER NOT NULL
+                );
+                """,
+            )
+            columns = {
+                row[1]
+                for row in db.execute("PRAGMA table_info(devices)").fetchall()
+            }
+            if "token_hash" not in columns:
+                db.execute("ALTER TABLE devices ADD COLUMN token_hash TEXT")
+            credential_columns = {
+                row[1]
+                for row in db.execute(
+                    "PRAGMA table_info(credentials)"
+                ).fetchall()
+            }
+            if "installation_ids_json" not in credential_columns:
+                db.execute(
+                    "ALTER TABLE credentials ADD COLUMN installation_ids_json TEXT NOT NULL DEFAULT '[]'",
+                )
+
+    def create_pairing(self, user_id: str, ttl_seconds: int = 300) -> str:
+        code = "-".join(
+            (secrets.token_hex(2).upper(), secrets.token_hex(2).upper()),
+        )
+        digest = hashlib.sha256(code.encode()).hexdigest()
+        now = int(time.time())
+        with self._lock, self._connect() as db:
+            db.execute(
+                "DELETE FROM pairings WHERE expires_at <= ? OR used_at IS NOT NULL",
+                (now,),
+            )
+            db.execute(
+                "INSERT INTO pairings(code_hash,user_id,expires_at) VALUES(?,?,?)",
+                (digest, user_id, now + ttl_seconds),
+            )
+        return code
+
+    def consume_pairing(self, code: str) -> str | None:
+        digest = hashlib.sha256(code.encode()).hexdigest()
+        now = int(time.time())
+        with self._lock, self._connect() as db:
+            row = db.execute(
+                "SELECT user_id,expires_at,used_at FROM pairings WHERE code_hash=?",
+                (digest,),
+            ).fetchone()
+            if (
+                row is None
+                or row["used_at"] is not None
+                or row["expires_at"] <= now
+            ):
+                return None
+            changed = db.execute(
+                "UPDATE pairings SET used_at=? WHERE code_hash=? AND used_at IS NULL",
+                (now, digest),
+            ).rowcount
+            return str(row["user_id"]) if changed == 1 else None
+
+    def upsert_device(
+        self,
+        *,
+        device_id: str,
+        user_id: str,
+        display_name: str,
+        runner_version: str,
+        protocol_version: str,
+        device_token: str | None = None,
+        status: str = "online",
+        capabilities: list[dict[str, Any]] | None = None,
+    ) -> None:
+        now = int(time.time())
+        with self._lock, self._connect() as db:
+            db.execute(
+                """
+                INSERT INTO devices(device_id,user_id,token_hash,display_name,runner_version,
+                    protocol_version,status,capabilities_json,last_seen)
+                VALUES(?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(device_id) DO UPDATE SET
+                    user_id=excluded.user_id,
+                    token_hash=COALESCE(excluded.token_hash,devices.token_hash),
+                    display_name=excluded.display_name,
+                    runner_version=excluded.runner_version,
+                    protocol_version=excluded.protocol_version,
+                    status=excluded.status,
+                    capabilities_json=CASE WHEN excluded.capabilities_json='[]'
+                        THEN devices.capabilities_json ELSE excluded.capabilities_json END,
+                    last_seen=excluded.last_seen
+                """,
+                (
+                    device_id,
+                    user_id,
+                    hashlib.sha256(device_token.encode()).hexdigest()
+                    if device_token
+                    else None,
+                    display_name,
+                    runner_version,
+                    protocol_version,
+                    status,
+                    _json(capabilities or []),
+                    now,
+                ),
+            )
+
+    def authenticate_device(
+        self, device_id: str, device_token: str
+    ) -> dict[str, Any] | None:
+        digest = hashlib.sha256(device_token.encode()).hexdigest()
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM devices WHERE device_id=? AND token_hash=?",
+                (device_id, digest),
+            ).fetchone()
+        return self._device(row) if row is not None else None
+
+    def update_device_capabilities(
+        self,
+        device_id: str,
+        capabilities: list[dict[str, Any]],
+    ) -> None:
+        with self._lock, self._connect() as db:
+            db.execute(
+                "UPDATE devices SET capabilities_json=?,last_seen=?,status='online' WHERE device_id=?",
+                (_json(capabilities), int(time.time()), device_id),
+            )
+
+    def set_device_status(self, device_id: str, status: str) -> None:
+        with self._lock, self._connect() as db:
+            db.execute(
+                "UPDATE devices SET status=?,last_seen=? WHERE device_id=?",
+                (status, int(time.time()), device_id),
+            )
+
+    def list_devices(self, user_id: str) -> list[dict[str, Any]]:
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT * FROM devices WHERE user_id=? ORDER BY last_seen DESC",
+                (user_id,),
+            ).fetchall()
+        return [self._device(row) for row in rows]
+
+    def get_device_for_user(
+        self,
+        device_id: str,
+        user_id: str,
+    ) -> dict[str, Any] | None:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM devices WHERE device_id=? AND user_id=?",
+                (device_id, user_id),
+            ).fetchone()
+        return self._device(row) if row is not None else None
+
+    @staticmethod
+    def _device(row: sqlite3.Row) -> dict[str, Any]:
+        result = dict(row)
+        result.pop("token_hash", None)
+        result["capabilities"] = json.loads(result.pop("capabilities_json"))
+        return result
+
+    def register_package(
+        self,
+        descriptor: dict[str, Any],
+        *,
+        signer_id: str,
+        signature: str,
+    ) -> None:
+        now = int(time.time())
+        with self._lock, self._connect() as db:
+            db.execute(
+                "UPDATE packages SET status='superseded' WHERE capability_id=? AND status='active'",
+                (descriptor["capability_id"],),
+            )
+            db.execute(
+                """
+                INSERT INTO packages(package_id,package_version,capability_id,signer_id,
+                    descriptor_json,signature,status,registered_at)
+                VALUES(?,?,?,?,?,?,?,?)
+                ON CONFLICT(package_id,package_version) DO UPDATE SET
+                    descriptor_json=excluded.descriptor_json,
+                    signature=excluded.signature,
+                    signer_id=excluded.signer_id,
+                    status='active',
+                    registered_at=excluded.registered_at
+                """,
+                (
+                    descriptor["package_id"],
+                    descriptor["package_version"],
+                    descriptor["capability_id"],
+                    signer_id,
+                    _json(descriptor),
+                    signature,
+                    "active",
+                    now,
+                ),
+            )
+
+    def get_package_for_capability(
+        self, capability_id: str
+    ) -> dict[str, Any] | None:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT descriptor_json,signer_id,signature FROM packages WHERE capability_id=? AND status='active'",
+                (capability_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "descriptor": json.loads(row["descriptor_json"]),
+            "signer_id": row["signer_id"],
+            "signature": row["signature"],
+        }
+
+    def list_packages(self) -> list[dict[str, Any]]:
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT descriptor_json,signer_id,signature,status FROM packages ORDER BY registered_at DESC",
+            ).fetchall()
+        return [
+            {
+                "descriptor": json.loads(row["descriptor_json"]),
+                "signer_id": row["signer_id"],
+                "signature": row["signature"],
+                "status": row["status"],
+            }
+            for row in rows
+        ]
+
+    def create_task(
+        self,
+        *,
+        user_id: str,
+        agent_id: str,
+        agent_name: str,
+        invocation_id: str,
+        capability_id: str,
+        task_input: dict[str, Any],
+        idempotency_key: str,
+        device_id: str,
+        max_concurrency: int,
+    ) -> tuple[dict[str, Any], bool]:
+        encoded_input = _json(task_input)
+        input_hash = hashlib.sha256(encoded_input.encode()).hexdigest()
+        now = int(time.time())
+        task_id = uuid.uuid4().hex
+        with self._lock, self._connect() as db:
+            existing = db.execute(
+                "SELECT * FROM tasks WHERE user_id=? AND agent_id=? AND idempotency_key=?",
+                (user_id, agent_id, idempotency_key),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    existing["input_hash"] != input_hash
+                    or existing["capability_id"] != capability_id
+                ):
+                    raise ValueError("idempotency_conflict")
+                return self._task(existing), False
+            active = db.execute(
+                """
+                SELECT COUNT(*) AS count FROM tasks
+                WHERE device_id=? AND capability_id=?
+                    AND status IN ('queued','running','waiting_for_input','cancelling')
+                """,
+                (device_id, capability_id),
+            ).fetchone()["count"]
+            if int(active) >= max_concurrency:
+                raise ValueError("capacity")
+            db.execute(
+                """
+                INSERT INTO tasks(task_id,user_id,agent_id,agent_name,invocation_id,
+                    capability_id,idempotency_key,input_hash,input_json,device_id,status,
+                    created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    task_id,
+                    user_id,
+                    agent_id,
+                    agent_name,
+                    invocation_id,
+                    capability_id,
+                    idempotency_key,
+                    input_hash,
+                    encoded_input,
+                    device_id,
+                    "queued",
+                    now,
+                    now,
+                ),
+            )
+            row = db.execute(
+                "SELECT * FROM tasks WHERE task_id=?", (task_id,)
+            ).fetchone()
+        return self._task(row), True
+
+    def get_task(self, task_id: str, user_id: str) -> dict[str, Any] | None:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM tasks WHERE task_id=? AND user_id=?",
+                (task_id, user_id),
+            ).fetchone()
+        return self._task(row) if row is not None else None
+
+    def current_task(
+        self, user_id: str, agent_id: str
+    ) -> dict[str, Any] | None:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM tasks WHERE user_id=? AND agent_id=? ORDER BY updated_at DESC LIMIT 1",
+                (user_id, agent_id),
+            ).fetchone()
+        return self._task(row) if row is not None else None
+
+    def update_task(
+        self,
+        task_id: str,
+        *,
+        status: str,
+        checkpoint: dict[str, Any] | None = None,
+        result: dict[str, Any] | None = None,
+        error: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        with self._lock, self._connect() as db:
+            db.execute(
+                """
+                UPDATE tasks SET status=?,checkpoint_json=?,result_json=?,error_json=?,updated_at=?
+                WHERE task_id=?
+                """,
+                (
+                    status,
+                    _json(checkpoint) if checkpoint is not None else None,
+                    _json(result) if result is not None else None,
+                    _json(error) if error is not None else None,
+                    int(time.time()),
+                    task_id,
+                ),
+            )
+            row = db.execute(
+                "SELECT * FROM tasks WHERE task_id=?", (task_id,)
+            ).fetchone()
+        return self._task(row) if row is not None else None
+
+    def append_event(
+        self,
+        task_id: str,
+        sequence: int,
+        event_type: str,
+        payload: dict[str, Any],
+    ) -> bool:
+        with self._lock, self._connect() as db:
+            latest = db.execute(
+                "SELECT MAX(sequence) AS latest FROM task_events WHERE task_id=?",
+                (task_id,),
+            ).fetchone()["latest"]
+            if latest is not None and sequence <= int(latest):
+                return False
+            try:
+                db.execute(
+                    "INSERT INTO task_events VALUES(?,?,?,?,?,?)",
+                    (
+                        uuid.uuid4().hex,
+                        task_id,
+                        sequence,
+                        event_type,
+                        _json(payload),
+                        int(time.time()),
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                return False
+        return True
+
+    @staticmethod
+    def _task(row: sqlite3.Row) -> dict[str, Any]:
+        result = dict(row)
+        for source, target in (
+            ("input_json", "input"),
+            ("checkpoint_json", "checkpoint"),
+            ("result_json", "result"),
+            ("error_json", "error"),
+        ):
+            raw = result.pop(source)
+            result[target] = json.loads(raw) if raw else None
+        result.pop("input_hash", None)
+        return result
+
+    def put_credential(
+        self,
+        *,
+        credential_ref: str,
+        user_id: str,
+        provider: str,
+        ciphertext: bytes,
+        scopes: list[str],
+        agent_ids: list[str],
+        installation_ids: list[str],
+    ) -> None:
+        with self._lock, self._connect() as db:
+            db.execute(
+                """
+                INSERT INTO credentials(credential_ref,user_id,provider,ciphertext,
+                    scopes_json,agent_ids_json,installation_ids_json,updated_at)
+                VALUES(?,?,?,?,?,?,?,?)
+                ON CONFLICT(credential_ref) DO UPDATE SET
+                    ciphertext=excluded.ciphertext,scopes_json=excluded.scopes_json,
+                    agent_ids_json=excluded.agent_ids_json,
+                    installation_ids_json=excluded.installation_ids_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    credential_ref,
+                    user_id,
+                    provider,
+                    ciphertext,
+                    _json(scopes),
+                    _json(agent_ids),
+                    _json(installation_ids),
+                    int(time.time()),
+                ),
+            )
+
+    def get_credential(self, credential_ref: str) -> dict[str, Any] | None:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM credentials WHERE credential_ref=?",
+                (credential_ref,),
+            ).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["scopes"] = json.loads(result.pop("scopes_json"))
+        result["agent_ids"] = json.loads(result.pop("agent_ids_json"))
+        result["installation_ids"] = json.loads(
+            result.pop("installation_ids_json"),
+        )
+        return result
+
+    def delete_credential(self, credential_ref: str, user_id: str) -> bool:
+        with self._lock, self._connect() as db:
+            return (
+                db.execute(
+                    "DELETE FROM credentials WHERE credential_ref=? AND user_id=?",
+                    (credential_ref, user_id),
+                ).rowcount
+                == 1
+            )

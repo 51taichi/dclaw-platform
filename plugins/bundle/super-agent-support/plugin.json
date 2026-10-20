@@ -1,0 +1,23 @@
+{
+  "id": "dclaw.super-agent-support",
+  "name": "DClaw Super Agent Support",
+  "version": "1.0.0",
+  "type": "general",
+  "description": "Generic local execution, credential broker, capability package, client adapter, and Windows helper platform support for Super Agents.",
+  "author": "DClaw",
+  "entry": {
+    "backend": "plugin.py"
+  },
+  "dependencies": [],
+  "min_version": "1.1.10",
+  "meta": {
+    "standard": "dclaw.super-agent-support/1",
+    "modules": [
+      "local-execution",
+      "credential-broker",
+      "capability-packages",
+      "client-adapter",
+      "windows-helper"
+    ]
+  }
+}

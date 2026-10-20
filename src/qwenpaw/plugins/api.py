@@ -219,6 +219,56 @@ class PluginApi:
                 tags=tags,
             )
 
+    def register_asgi_app(
+        self,
+        asgi_app: Any,
+        *,
+        prefix: str,
+        name: Optional[str] = None,
+    ) -> None:
+        """Mount a plugin-owned ASGI application below ``/api``."""
+        if self._registry:
+            self._registry.register_asgi_app(
+                self.plugin_id,
+                asgi_app,
+                prefix=prefix,
+                name=name,
+            )
+
+    def register_platform_capability(
+        self,
+        capability_id: str,
+        contract_version: str,
+        group: str,
+        *,
+        dependencies: tuple[str, ...] = (),
+    ) -> None:
+        """Publish one platform capability through the generic SPI."""
+        if self._registry:
+            self._registry.register_platform_capability(
+                self.plugin_id,
+                capability_id,
+                contract_version,
+                group,
+                dependencies,
+            )
+
+    def register_workspace_context_enricher(
+        self,
+        name: str,
+        callback: Callable,
+        *,
+        priority: int = 100,
+    ) -> None:
+        """Register a trusted workspace-context enrichment callback."""
+        if self._registry:
+            self._registry.register_workspace_context_enricher(
+                self.plugin_id,
+                name,
+                callback,
+                priority,
+            )
+
     def register_control_command(
         self,
         handler: Any,

@@ -60,7 +60,6 @@ PLATFORM_CAPABILITY_CATALOG_V1 = {
         _definition("card.update", "card", dependencies=("card.create",)),
         _definition("aigc.capabilities.list/1", "aigc"),
         _definition("interaction.capabilities.list/1", "interaction"),
-        _definition("local.execution.session/1", "local_execution"),
         _definition(
             "interaction.card.create/1",
             "interaction",
@@ -86,6 +85,31 @@ PLATFORM_CAPABILITY_CATALOG_V1 = {
         _definition("aigc.review.complete", "aigc", dependencies=("aigc.task.create",)),
     )
 }
+
+
+def get_platform_capability_catalog() -> dict[
+    str, PlatformCapabilityDefinition
+]:
+    """Return core capabilities plus currently loaded plugin capabilities."""
+    catalog = dict(PLATFORM_CAPABILITY_CATALOG_V1)
+    try:
+        from qwenpaw.plugins.registry import PluginRegistry
+
+        registrations = PluginRegistry().get_platform_capabilities()
+    except Exception:  # pragma: no cover - plugin registry is optional at boot
+        return catalog
+    for capability_id, registration in registrations.items():
+        if capability_id in catalog:
+            raise CapabilityManifestError(
+                f"duplicate platform capability: {capability_id}",
+            )
+        catalog[capability_id] = PlatformCapabilityDefinition(
+            capability_id=registration.capability_id,
+            contract_version=registration.contract_version,
+            group=registration.group,
+            dependencies=registration.dependencies,
+        )
+    return catalog
 
 
 def _as_payload(value: Mapping[str, Any] | SealedPackageManifest) -> dict[str, Any]:
@@ -129,6 +153,7 @@ def validate_super_expert_manifest(
     trust_store: SuperExpertTrustStore,
 ) -> SuperExpertManifest:
     """Validate official provenance and the package-specific capability closure."""
+    catalog = get_platform_capability_catalog()
     try:
         package.validate_supported_contract()
     except ValueError as exc:
@@ -153,7 +178,7 @@ def validate_super_expert_manifest(
     if len(by_id) != len(declarations):
         raise CapabilityManifestError("duplicate capability declaration")
     for capability_id, declaration in by_id.items():
-        definition = PLATFORM_CAPABILITY_CATALOG_V1.get(capability_id)
+        definition = catalog.get(capability_id)
         if definition is None:
             raise CapabilityManifestError(f"unknown capability: {capability_id}")
         if declaration.contract_version != definition.contract_version:
@@ -178,7 +203,7 @@ def validate_super_expert_manifest(
             )
 
     used_groups = {
-        PLATFORM_CAPABILITY_CATALOG_V1[item.capability_id].group
+        catalog[item.capability_id].group
         for item in declarations
     }
     for group in used_groups:
