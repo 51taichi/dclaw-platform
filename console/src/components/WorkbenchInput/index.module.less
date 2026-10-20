@@ -73,15 +73,6 @@
   backdrop-filter: blur(6px);
 }
 
-.inputToolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
-  margin-bottom: 8px;
-}
-
 .toolbarBtn {
   display: flex;
   align-items: center;
@@ -131,8 +122,17 @@
 .footerLeftWrapper {
   display: flex;
   align-items: center;
+  min-width: 0;
   margin-left: -12px;
   margin-top: -4px;
+}
+
+.footerUtilityActions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  margin-left: 4px;
 }
 
 .footerLeftWrapper :global(.qwenpaw-chat-toolbar) {
@@ -248,10 +248,6 @@
 
 :global(.dark-mode) .inputField::placeholder {
   color: rgba(255, 255, 255, 0.25);
-}
-
-:global(.dark-mode) .inputToolbar {
-  border-color: rgba(255, 255, 255, 0.08);
 }
 
 :global(.dark-mode) .toolbarBtn,

@@ -149,6 +149,18 @@ describe("WorkbenchPage", () => {
     vi.clearAllMocks();
   });
 
+  it("places mention and attachment actions in the bottom toolbar", () => {
+    const { container } = renderWithProviders(<WorkbenchPage />, {
+      initialEntries: ["/workbench"],
+    });
+    const footer = container.querySelector('[class*="inputFooter"]');
+
+    expect(footer).not.toBeNull();
+    expect(footer).toContainElement(screen.getByTitle("@"));
+    expect(footer).toContainElement(screen.getByTitle("添加附件"));
+    expect(container.querySelector('[class*="inputToolbar"]')).toBeNull();
+  });
+
   it("creates workbench tasks on the console channel even after visiting Claw", async () => {
     const user = userEvent.setup();
     const { container } = renderWithProviders(

@@ -23,6 +23,18 @@ vi.mock("../../utils/desktopClipboard", () => ({
 }));
 
 describe("WorkbenchInput file drop", () => {
+  it("places mention and attachment actions in the bottom toolbar", () => {
+    const { container } = renderWithProviders(
+      <WorkbenchInput onSubmit={vi.fn()} />,
+    );
+    const footer = container.querySelector('[class*="inputFooter"]');
+
+    expect(footer).not.toBeNull();
+    expect(footer).toContainElement(screen.getByTitle("添加文件作为回答背景"));
+    expect(footer).toContainElement(screen.getByTitle("添加附件"));
+    expect(container.querySelector('[class*="inputToolbar"]')).toBeNull();
+  });
+
   it("clears the file hint on cancellation and ignores text drags", () => {
     const { container } = renderWithProviders(
       <WorkbenchInput onSubmit={vi.fn()} />,

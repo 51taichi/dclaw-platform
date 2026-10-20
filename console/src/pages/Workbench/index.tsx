@@ -727,27 +727,6 @@ export default function WorkbenchPage() {
             <span>{t("workbench.input.dropFiles", "松开即可上传附件")}</span>
           </div>
         )}
-        <div className={styles.inputToolbar}>
-          <button className={styles.toolbarBtn} title="@">
-            <AtSign size={16} />
-          </button>
-          <button
-            className={styles.toolbarBtn}
-            title={t("workbench.input.attachFile", "添加附件")}
-            onClick={handleAttachClick}
-            disabled={sending}
-          >
-            <Paperclip size={16} />
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            className={styles.hiddenFileInput}
-            onChange={handleFileChange}
-          />
-        </div>
-
         {uploadedFiles.length > 0 && (
           <div className={styles.attachmentsArea}>
             {uploadedFiles.map((file) => (
@@ -810,6 +789,26 @@ export default function WorkbenchPage() {
           >
             {/* Render ChatToolbar inline */}
             <ChatToolbar />
+            <div className={styles.footerUtilityActions}>
+              <button className={styles.toolbarBtn} title="@">
+                <AtSign size={16} />
+              </button>
+              <button
+                className={styles.toolbarBtn}
+                title={t("workbench.input.attachFile", "添加附件")}
+                onClick={handleAttachClick}
+                disabled={sending}
+              >
+                <Paperclip size={16} />
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className={styles.hiddenFileInput}
+                onChange={handleFileChange}
+              />
+            </div>
           </div>
 
           <div className={styles.footerRight}>

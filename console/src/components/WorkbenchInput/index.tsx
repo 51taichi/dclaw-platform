@@ -702,70 +702,6 @@ export default function WorkbenchInput({
             <span>{t("workbench.input.dropFiles", "松开即可上传附件")}</span>
           </div>
         )}
-        <div className={styles.inputToolbar}>
-          <button
-            className={styles.toolbarBtn}
-            title="添加文件作为回答背景"
-            disabled={disabled}
-            onClick={(e) => {
-              if (disabled) return;
-              e.preventDefault();
-              setMentionQuery("");
-              if (workspaceFiles.length === 0 && !isFetchingFiles) {
-                setIsFetchingFiles(true);
-                workspaceApi
-                  .listAllFiles(chatId)
-                  .then((tree) => {
-                    const flatFiles: { name: string; path: string }[] = [];
-                    const flatten = (nodes: WorkspaceFileNode[]) => {
-                      for (const node of nodes) {
-                        if (node.isDir) {
-                          if (node.children) flatten(node.children);
-                        } else {
-                          flatFiles.push({ name: node.name, path: node.path });
-                        }
-                      }
-                    };
-                    flatten(tree);
-                    setWorkspaceFiles(flatFiles);
-                  })
-                  .finally(() => setIsFetchingFiles(false));
-              }
-              // Focus the textarea so typing filters the list
-              if (customInputRef.current) {
-                customInputRef.current.focus();
-                // Append @ if not there
-                if (!customInputValue.endsWith("@")) {
-                  const spacing =
-                    customInputValue && !customInputValue.endsWith(" ")
-                      ? " "
-                      : "";
-                  setCustomInputValue((prev) => prev + spacing + "@");
-                }
-              }
-            }}
-          >
-            <AtSign size={16} />
-          </button>
-
-          <button
-            className={styles.toolbarBtn}
-            title={t("workbench.input.attachFile", "添加附件")}
-            disabled={disabled}
-            onClick={handleAttachClick}
-          >
-            <Paperclip size={16} />
-          </button>
-          <input
-            type="file"
-            ref={fileInputRef}
-            multiple
-            disabled={disabled}
-            style={{ display: "none" }}
-            onChange={handleFileChange}
-          />
-        </div>
-
         {/* Uploaded Attachments & Mentions Preview Section */}
         {(uploadedFiles.length > 0 || mentionedFiles.length > 0) && (
           <div className={styles.attachmentsArea}>
@@ -903,6 +839,69 @@ export default function WorkbenchInput({
               onAgentChange={onAgentChange}
               onModeChange={onModeChange}
             />
+            <div className={styles.footerUtilityActions}>
+              <button
+                className={styles.toolbarBtn}
+                title="添加文件作为回答背景"
+                disabled={disabled}
+                onClick={(e) => {
+                  if (disabled) return;
+                  e.preventDefault();
+                  setMentionQuery("");
+                  if (workspaceFiles.length === 0 && !isFetchingFiles) {
+                    setIsFetchingFiles(true);
+                    workspaceApi
+                      .listAllFiles(chatId)
+                      .then((tree) => {
+                        const flatFiles: { name: string; path: string }[] = [];
+                        const flatten = (nodes: WorkspaceFileNode[]) => {
+                          for (const node of nodes) {
+                            if (node.isDir) {
+                              if (node.children) flatten(node.children);
+                            } else {
+                              flatFiles.push({
+                                name: node.name,
+                                path: node.path,
+                              });
+                            }
+                          }
+                        };
+                        flatten(tree);
+                        setWorkspaceFiles(flatFiles);
+                      })
+                      .finally(() => setIsFetchingFiles(false));
+                  }
+                  if (customInputRef.current) {
+                    customInputRef.current.focus();
+                    if (!customInputValue.endsWith("@")) {
+                      const spacing =
+                        customInputValue && !customInputValue.endsWith(" ")
+                          ? " "
+                          : "";
+                      setCustomInputValue((prev) => prev + spacing + "@");
+                    }
+                  }
+                }}
+              >
+                <AtSign size={16} />
+              </button>
+              <button
+                className={styles.toolbarBtn}
+                title={t("workbench.input.attachFile", "添加附件")}
+                disabled={disabled}
+                onClick={handleAttachClick}
+              >
+                <Paperclip size={16} />
+              </button>
+              <input
+                type="file"
+                ref={fileInputRef}
+                multiple
+                disabled={disabled}
+                style={{ display: "none" }}
+                onChange={handleFileChange}
+              />
+            </div>
           </div>
 
           <div className={styles.footerRight}>
