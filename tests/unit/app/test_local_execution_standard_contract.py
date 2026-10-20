@@ -127,3 +127,17 @@ def test_local_execution_standard_defines_desktop_owned_toolbox_and_workspace():
     )
     for phrase in required:
         assert phrase in text
+
+
+def test_local_execution_standard_requires_optional_plugin_isolation():
+    text = STANDARD_DOC.read_text(encoding="utf-8")
+
+    required = (
+        "`dclaw.local-execution` 插件套件",
+        "DClaw 核心不得导入插件内部模块",
+        "未安装、禁用、失败或卸载插件时",
+        "由插件动态注册",
+        "不加载该插件时通过核心回归测试",
+    )
+    for phrase in required:
+        assert phrase in text
