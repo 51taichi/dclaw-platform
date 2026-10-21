@@ -35,3 +35,20 @@ def test_runtime_image_has_no_sealed_entrypoint_mode_or_bubblewrap() -> None:
 
     assert "QWENPAW_SEALED_ENTRYPOINT_EXECUTION_MODE" not in dockerfile
     assert "bubblewrap" not in dockerfile
+
+
+def test_runtime_image_autoloads_only_super_agent_support() -> None:
+    dockerfile = (ROOT / "deploy" / "Dockerfile").read_text(
+        encoding="utf-8",
+    )
+
+    assert (
+        "ENV QWENPAW_BUNDLED_PLUGINS_DIR=/app/plugins/auto-load"
+        in dockerfile
+    )
+    assert (
+        "COPY plugins/bundle/super-agent-support "
+        "./plugins/auto-load/super-agent-support"
+    ) in dockerfile
+    assert "COPY plugins/bundle ./plugins/bundle" not in dockerfile
+    assert "COPY plugins/bundle/cloudpaw" not in dockerfile

@@ -4,9 +4,9 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`1.9`
+当前版本：`1.10`
 
-发布日期：`2026-10-20`
+发布日期：`2026-10-21`
 
 ## 1. 文档目的
 
@@ -128,6 +128,7 @@ DClaw 核心只提供与业务无关的插件 SPI，包括插件生命周期、�
 3. 核心不得硬编码 `local_*`、Runner 版本、能力包类型或任何 Agent 的业务名称；目录和工具由插件安装时注册。
 4. 插件即使与 DClaw 核心暂时运行在同一进程，也必须保持独立包、单向依赖和可单独发布；同进程不等于允许写入核心。
 5. 超级 Agent 开发方只依赖已发布的 MCP 凭证、`local_*` 和能力包公开合同，不得导入 DClaw 核心或插件内部代码。
+6. 服务端镜像必须使用明确的自动加载白名单交付平台插件。源码仓库中的插件目录只是候选目录，禁止把整个目录设为自动加载路径；未获平台方明确启用的插件不得注册 Agent、工具、路由或修改持久工作区。
 
 ### 3.3 开发方问题的插件交付范围
 
@@ -462,7 +463,7 @@ stateDiagram-v2
 | 项目 | V1 值 |
 |---|---|
 | 插件 ID / 版本 | `dclaw.super-agent-support` / `1.1.0` |
-| 最低 DClaw | `1.1.10` 且包含本标准 1.9 对应提交 |
+| 最低 DClaw | `1.1.10` 且包含本标准 1.10 对应提交 |
 | 最低 Windows 客户端 | `2.5.3` |
 | 本地执行 MCP | `/api/super-agent-support/mcp/`，Streamable HTTP |
 | 客户端配对 | `POST /api/super-agent-support/device-bootstrap` |
@@ -1438,6 +1439,13 @@ Agent 名称：<中文显示名称>
 - Windows 客户端适配：`dclaw-client/console/src/desktop/localHelper.ts` 与 `dclaw-client/console/src-tauri/src/lib.rs`
 
 ## 34. 版本记录
+
+### 1.10 - 2026-10-21
+
+- 将服务端镜像的插件交付改为明确自动加载目录，只复制并加载 `dclaw.super-agent-support`，禁止扫描整个源码候选插件目录。
+- 修复 `CloudPaw` 因共享 `plugins/bundle` 自动加载而未经授权创建三个普通 Agent 的问题；CloudPaw 继续作为可选源码存在，只有管理员明确安装或启用时才可运行。
+- 要求受影响环境在部署修复镜像前先卸载当前 CloudPaw 插件，以调用其插件自有清理流程删除 `cloud-orchestrator`、`cloud-executor`、`cloud-verifier` 及相应工作区；新镜像不得再次创建它们。
+- 本版本不改变 1.9 已冻结的 `local_*` 请求、响应、错误或任务状态合同，开发方无需修改已完成的 1.9 对接代码。
 
 ### 1.9 - 2026-10-20
 

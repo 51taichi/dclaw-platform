@@ -34,7 +34,7 @@ ENV WORKSPACE_DIR=/app
 ENV QWENPAW_WORKING_DIR=/app/working
 ENV QWENPAW_SECRET_DIR=/app/working.secret
 ENV QWENPAW_BACKUP_DIR=/app/working.backups
-ENV QWENPAW_BUNDLED_PLUGINS_DIR=/app/plugins/bundle
+ENV QWENPAW_BUNDLED_PLUGINS_DIR=/app/plugins/auto-load
 ENV DCLAW_SUPER_AGENT_SUPPORT_STATE_DIR=/app/working/plugin-data/super-agent-support
 ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 ENV UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
@@ -168,7 +168,7 @@ COPY scripts/db ./scripts/db
 COPY deploy/pricing ./deploy/pricing
 COPY scripts/perf ./scripts/perf
 COPY src ./src
-COPY plugins/bundle ./plugins/bundle
+COPY plugins/bundle/super-agent-support ./plugins/auto-load/super-agent-support
 COPY website/public/docs/ ./src/qwenpaw/docs/
 # Inject console dist from build stage (repo does not commit dist). Remove any
 # stale checked-in console assets first so old hashed bundles cannot linger.
