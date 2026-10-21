@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ClientLayout from "./ClientLayout";
@@ -12,6 +12,9 @@ const authState = vi.hoisted(() => ({
     icon?: string;
   }>,
 }));
+const tauriInvoke = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: tauriInvoke }));
 
 vi.mock("../contexts/AuthContext", () => ({
   useAuth: () => authState,
@@ -37,6 +40,7 @@ vi.mock("./Header", () => ({
     onSceneChange?: (key: string) => void;
   }) => (
     <div data-active-scene={activeSceneKey} data-testid="header">
+      <button onClick={() => onSceneChange?.("workbench")}>工作台</button>
       {scenes.map((scene) => (
         <button key={scene.key} onClick={() => onSceneChange?.(scene.key)}>
           {scene.title}
@@ -179,9 +183,22 @@ describe("ClientLayout routing", () => {
     );
   });
 
-  it("renders a configured scene inside the client when its tab is selected", async () => {
+  it("hosts configured scenes separately without replacing workbench routing", async () => {
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ =
       {};
+    const bounds = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue({
+        x: 8,
+        y: 64,
+        top: 64,
+        left: 8,
+        right: 1008,
+        bottom: 764,
+        width: 1000,
+        height: 700,
+        toJSON: () => ({}),
+      });
     authState.scenes = [
       {
         key: "customer-service",
@@ -193,12 +210,32 @@ describe("ClientLayout routing", () => {
     renderAt("/workbench");
     fireEvent.click(await screen.findByRole("button", { name: "AI客服" }));
 
-    const scene = await screen.findByTitle("AI客服");
-    expect(scene).toHaveAttribute("src", "https://service.example.com/console");
-    expect(screen.getByTestId("header")).toHaveAttribute(
+    expect(await screen.findByTestId("header")).toHaveAttribute(
       "data-active-scene",
       "customer-service",
     );
+    expect(
+      document.querySelector('[data-scene-webview="customer-service"]'),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(tauriInvoke).toHaveBeenCalledWith("show_scene_webview", {
+        sceneKey: "customer-service",
+        url: "https://service.example.com/console",
+        bounds: { x: 9, y: 65, width: 998, height: 698 },
+      }),
+    );
+    expect(document.querySelector("iframe")).not.toBeInTheDocument();
     expect(screen.queryByTestId("workbench-page")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "工作台" }));
+    expect(screen.getByTestId("header")).toHaveAttribute(
+      "data-active-scene",
+      "workbench",
+    );
+    expect(await screen.findByTestId("workbench-page")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(tauriInvoke).toHaveBeenCalledWith("hide_scene_webviews"),
+    );
+    bounds.mockRestore();
   });
 });

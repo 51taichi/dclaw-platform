@@ -20,6 +20,7 @@ import CreditAlertBanner from "../../features/billing/CreditAlertBanner";
 import { useAuth } from "../../contexts/AuthContext";
 import { isDesktopApp } from "../../utils/env";
 import { isSafeSceneUrl } from "./sceneNavigation";
+import SceneWebviewHost from "./SceneWebviewHost";
 
 // ── Ecosystem pages (WorkBuddy-style) ─────────────────────────────────────────
 const ExpertsPage = lazyImportWithRetry("../../pages/Experts");
@@ -107,14 +108,7 @@ export default function ClientLayout() {
       />
       {activeScene ? (
         <Content className={styles.sceneContent}>
-          <iframe
-            key={activeScene.url}
-            className={styles.sceneFrame}
-            src={activeScene.url}
-            title={activeScene.title}
-            sandbox="allow-downloads allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
-            referrerPolicy="strict-origin-when-cross-origin"
-          />
+          <SceneWebviewHost scene={activeScene} />
         </Content>
       ) : (
         <Layout>

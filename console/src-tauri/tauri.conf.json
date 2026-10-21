@@ -14,7 +14,6 @@
       {
         "title": "AI超级流量专家",
         "label": "main",
-        "create": false,
         "dragDropEnabled": false,
         "width": 1280,
         "height": 860,
