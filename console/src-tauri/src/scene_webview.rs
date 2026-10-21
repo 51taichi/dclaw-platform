@@ -11,7 +11,7 @@ use tauri_plugin_shell::ShellExt;
 
 const SCENE_WEBVIEW_PREFIX: &str = "scene-";
 #[cfg(target_os = "macos")]
-const MACOS_TITLEBAR_MIN_HEIGHT: f64 = 30.0;
+const MACOS_TITLEBAR_MIN_HEIGHT: f64 = 32.0;
 static POPUP_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Deserialize)]
