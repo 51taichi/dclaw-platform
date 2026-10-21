@@ -84,7 +84,9 @@
 
 .sceneRow {
   display: grid;
-  grid-template-columns: minmax(150px, 0.8fr) minmax(280px, 2fr) 32px;
+  grid-template-columns:
+    minmax(130px, 0.65fr) minmax(150px, 0.8fr) minmax(280px, 2fr)
+    32px;
   align-items: start;
   gap: 12px;
   padding: 12px;
@@ -94,6 +96,13 @@
   :global(.ant-form-item) {
     margin-bottom: 0;
   }
+}
+
+.sceneIconLabel {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
 }
 
 .removeSceneButton {
@@ -112,7 +121,7 @@
   .sceneRow {
     grid-template-columns: 1fr 32px;
 
-    :global(.ant-form-item:nth-child(2)) {
+    :global(.ant-form-item) {
       grid-column: 1;
     }
 

@@ -39,6 +39,7 @@ describe("UsersPage", () => {
           {
             title: "AI客服",
             url: "https://service.example.com/console/?workspace=dingmai",
+            icon: "headset",
           },
         ],
         role: "user",
@@ -114,6 +115,8 @@ describe("UsersPage", () => {
       screen.queryByText("登录客户端后按这里的顺序显示，允许不配置。"),
     ).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "添加 Tab" }));
+    await user.click(screen.getByLabelText("图标"));
+    await user.click(screen.getByRole("option", { name: "机器人" }));
     fireEvent.change(screen.getByLabelText("Tab 1 名称"), {
       target: { value: "AI客服" },
     });
@@ -134,6 +137,7 @@ describe("UsersPage", () => {
           {
             title: "AI客服",
             url: "https://service.example.com/console/?workspace=alice",
+            icon: "bot",
           },
         ],
       }),

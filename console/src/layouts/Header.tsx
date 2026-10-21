@@ -1,5 +1,5 @@
 import { Layout, Space } from "antd";
-import { BriefcaseBusiness, ExternalLink, Gauge } from "lucide-react";
+import { BriefcaseBusiness, Gauge } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
 import LanguageSwitcher from "../components/LanguageSwitcher/index";
@@ -11,6 +11,7 @@ import ConcurrencyMonitorButton from "../features/concurrency/ConcurrencyMonitor
 import styles from "./index.module.less";
 import { DesktopVersion } from "../components/DesktopVersion";
 import type { ClientScene } from "../api/modules/auth";
+import { SceneIcon } from "../features/scenes/sceneIcons";
 
 const { Header: AntHeader } = Layout;
 
@@ -75,7 +76,7 @@ export default function Header({
               }`}
               onClick={() => onSceneChange?.(scene.key)}
             >
-              <ExternalLink size={16} />
+              <SceneIcon name={scene.icon} />
               <span>{scene.title}</span>
             </button>
           ))}

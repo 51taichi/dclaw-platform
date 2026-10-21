@@ -15,6 +15,7 @@ export interface ClientScene {
   key: string;
   title: string;
   url: string;
+  icon?: string;
 }
 
 export interface AuthVerifyResponse {

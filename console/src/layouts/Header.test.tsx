@@ -100,6 +100,7 @@ describe("Header brand logo", () => {
               key: "ai-customer-service",
               title: "AI客服",
               url: "https://service.example.com/console/?workspace=alice",
+              icon: "headset",
             },
           ]}
         />
@@ -110,8 +111,38 @@ describe("Header brand logo", () => {
       "aria-selected",
       "true",
     );
+    expect(
+      screen
+        .getByRole("tab", { name: "AI客服" })
+        .querySelector('[data-scene-icon="headset"]'),
+    ).toBeInTheDocument();
     await user.click(screen.getByRole("tab", { name: "AI客服" }));
     expect(onSceneChange).toHaveBeenCalledWith("ai-customer-service");
+  });
+
+  it("falls back to the external-link icon for unknown icon names", () => {
+    render(
+      <MemoryRouter>
+        <Header
+          showSceneTabs
+          activeSceneKey="unknown-scene"
+          scenes={[
+            {
+              key: "unknown-scene",
+              title: "旧场景",
+              url: "https://legacy.example.com",
+              icon: "legacy-icon",
+            },
+          ]}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(
+      screen
+        .getByRole("tab", { name: "旧场景" })
+        .querySelector('[data-scene-icon="external-link"]'),
+    ).toBeInTheDocument();
   });
 
   it("places the admin console after configured scene tabs", () => {

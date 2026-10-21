@@ -14,6 +14,7 @@ export interface AdminUser {
 export interface SceneTabInput {
   title: string;
   url: string;
+  icon?: string;
 }
 
 export interface CreateAdminUserInput {

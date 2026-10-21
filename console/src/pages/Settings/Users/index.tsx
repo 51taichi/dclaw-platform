@@ -29,6 +29,12 @@ import {
 import { PageHeader } from "../../../components/PageHeader";
 import dayjs from "dayjs";
 import styles from "./index.module.less";
+import {
+  DEFAULT_SCENE_ICON,
+  SCENE_ICON_OPTIONS,
+  normalizeSceneIcon,
+} from "../../../features/scenes/sceneIconConfig";
+import { SceneIcon } from "../../../features/scenes/sceneIcons";
 
 interface CreateUserFormValues {
   username: string;
@@ -55,13 +61,25 @@ function normalizeSceneTabs(sceneTabs: SceneTabInput[] | undefined) {
   return (sceneTabs || []).map((scene) => ({
     title: scene.title.trim(),
     url: scene.url.trim(),
+    icon: normalizeSceneIcon(scene.icon),
   }));
 }
 
 function getUserSceneTabs(user: AdminUser): SceneTabInput[] {
-  if (Array.isArray(user.scene_tabs)) return user.scene_tabs;
+  if (Array.isArray(user.scene_tabs)) {
+    return user.scene_tabs.map((scene) => ({
+      ...scene,
+      icon: normalizeSceneIcon(scene.icon),
+    }));
+  }
   return user.ai_customer_service_url
-    ? [{ title: "AI客服", url: user.ai_customer_service_url }]
+    ? [
+        {
+          title: "AI客服",
+          url: user.ai_customer_service_url,
+          icon: DEFAULT_SCENE_ICON,
+        },
+      ]
     : [];
 }
 
@@ -75,13 +93,29 @@ function SceneTabsFields() {
             <Button
               type="dashed"
               icon={<Plus size={15} />}
-              onClick={() => add({ title: "", url: "" })}
+              onClick={() =>
+                add({ title: "", url: "", icon: DEFAULT_SCENE_ICON })
+              }
             >
               添加 Tab
             </Button>
           </div>
           {fields.map(({ key, name, ...field }, index) => (
             <div className={styles.sceneRow} key={key}>
+              <Form.Item {...field} name={[name, "icon"]} label="图标">
+                <Select
+                  virtual={false}
+                  options={SCENE_ICON_OPTIONS.map((option) => ({
+                    value: option.value,
+                    label: (
+                      <span className={styles.sceneIconLabel}>
+                        <SceneIcon name={option.value} />
+                        <span>{option.label}</span>
+                      </span>
+                    ),
+                  }))}
+                />
+              </Form.Item>
               <Form.Item
                 {...field}
                 name={[name, "title"]}
@@ -372,7 +406,7 @@ export default function UsersPage() {
 
       <Modal
         title="创建用户"
-        width={760}
+        width={920}
         open={createModalVisible}
         onCancel={() => {
           setCreateModalVisible(false);
@@ -484,7 +518,7 @@ export default function UsersPage() {
 
       <Modal
         title="编辑场景 Tab"
-        width={760}
+        width={920}
         open={sceneModalVisible}
         onCancel={() => {
           setSceneModalVisible(false);
