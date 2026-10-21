@@ -58,7 +58,10 @@ export default function ClientLayout() {
       showSceneTabs ? scenes.filter((scene) => isSafeSceneUrl(scene.url)) : [],
     [scenes, showSceneTabs],
   );
-  const [activeSceneKey, setActiveSceneKey] = useState("workbench");
+  const requestedSceneKey = new URLSearchParams(location.search).get("scene");
+  const [activeSceneKey, setActiveSceneKey] = useState(
+    requestedSceneKey || "workbench",
+  );
   const activeScene = availableScenes.find(
     (scene) => scene.key === activeSceneKey,
   );
@@ -71,6 +74,15 @@ export default function ClientLayout() {
       setActiveSceneKey("workbench");
     }
   }, [activeSceneKey, availableScenes]);
+
+  useEffect(() => {
+    if (
+      requestedSceneKey &&
+      availableScenes.some((scene) => scene.key === requestedSceneKey)
+    ) {
+      setActiveSceneKey(requestedSceneKey);
+    }
+  }, [availableScenes, requestedSceneKey]);
 
   // Resolve selected key: check static routes first, then plugin routes
   let selectedKey = pathToKey[currentPath] || "";

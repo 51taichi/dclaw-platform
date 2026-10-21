@@ -6,8 +6,14 @@ export interface AdminUser {
   display_name?: string | null;
   phone_number?: string | null;
   ai_customer_service_url?: string | null;
+  scene_tabs?: SceneTabInput[];
   role: string;
   created_at: string;
+}
+
+export interface SceneTabInput {
+  title: string;
+  url: string;
 }
 
 export interface CreateAdminUserInput {
@@ -15,6 +21,7 @@ export interface CreateAdminUserInput {
   display_name?: string;
   phone_number?: string;
   ai_customer_service_url?: string;
+  scene_tabs?: SceneTabInput[];
   password: string;
   role: "admin" | "user";
 }
@@ -64,24 +71,21 @@ export const adminUsersApi = {
     }
   },
 
-  async updateAiCustomerServiceUrl(
+  async updateSceneTabs(
     userId: number,
-    url: string | null,
+    scene_tabs: SceneTabInput[],
   ): Promise<AdminUser> {
-    const res = await fetch(
-      getApiUrl(`/admin/users/${userId}/ai-customer-service`),
-      {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${getApiToken()}`,
-        },
-        body: JSON.stringify({ url }),
+    const res = await fetch(getApiUrl(`/admin/users/${userId}/scene-tabs`), {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${getApiToken()}`,
       },
-    );
+      body: JSON.stringify({ scene_tabs }),
+    });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || "Failed to update AI customer service URL");
+      throw new Error(err.detail || "Failed to update scene tabs");
     }
     return res.json();
   },

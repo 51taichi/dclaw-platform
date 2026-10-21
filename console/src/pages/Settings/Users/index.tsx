@@ -12,8 +12,19 @@ import {
   Card,
 } from "antd";
 import { useAppMessage } from "../../../hooks/useAppMessage";
-import { adminUsersApi, type AdminUser } from "../../../api/modules/adminUsers";
-import { Headset, KeyRound, Trash2, UserPlus, Users } from "lucide-react";
+import {
+  adminUsersApi,
+  type AdminUser,
+  type SceneTabInput,
+} from "../../../api/modules/adminUsers";
+import {
+  KeyRound,
+  PanelsTopLeft,
+  Plus,
+  Trash2,
+  UserPlus,
+  Users,
+} from "lucide-react";
 import { PageHeader } from "../../../components/PageHeader";
 import dayjs from "dayjs";
 import styles from "./index.module.less";
@@ -24,7 +35,7 @@ interface CreateUserFormValues {
   phone_number: string;
   password: string;
   role?: "admin" | "user";
-  ai_customer_service_url?: string;
+  scene_tabs?: SceneTabInput[];
 }
 
 interface ResetPasswordFormValues {
@@ -32,11 +43,101 @@ interface ResetPasswordFormValues {
 }
 
 interface SceneFormValues {
-  ai_customer_service_url?: string;
+  scene_tabs?: SceneTabInput[];
 }
 
 function getErrorMessage(error: unknown, fallback: string) {
   return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function normalizeSceneTabs(sceneTabs: SceneTabInput[] | undefined) {
+  return (sceneTabs || []).map((scene) => ({
+    title: scene.title.trim(),
+    url: scene.url.trim(),
+  }));
+}
+
+function getUserSceneTabs(user: AdminUser): SceneTabInput[] {
+  if (Array.isArray(user.scene_tabs)) return user.scene_tabs;
+  return user.ai_customer_service_url
+    ? [{ title: "AI客服", url: user.ai_customer_service_url }]
+    : [];
+}
+
+function SceneTabsFields() {
+  return (
+    <Form.List name="scene_tabs">
+      {(fields, { add, remove }) => (
+        <div className={styles.sceneEditor}>
+          <div className={styles.sceneEditorHeader}>
+            <div>
+              <div className={styles.sceneEditorTitle}>外链场景 Tab</div>
+              <div className={styles.sceneEditorHint}>
+                登录客户端后按这里的顺序显示，允许不配置。
+              </div>
+            </div>
+            <Button
+              type="dashed"
+              icon={<Plus size={15} />}
+              onClick={() => add({ title: "", url: "" })}
+            >
+              添加 Tab
+            </Button>
+          </div>
+          {fields.map((field, index) => (
+            <div className={styles.sceneRow} key={field.key}>
+              <Form.Item
+                {...field}
+                name={[field.name, "title"]}
+                label={`Tab ${index + 1} 名称`}
+                rules={[
+                  {
+                    required: true,
+                    whitespace: true,
+                    message: "请输入 Tab 名称！",
+                  },
+                  { max: 40, message: "Tab 名称不能超过 40 个字符！" },
+                ]}
+              >
+                <Input placeholder="例如：AI客服" maxLength={40} />
+              </Form.Item>
+              <Form.Item
+                {...field}
+                name={[field.name, "url"]}
+                label="HTTPS URL"
+                rules={[
+                  { required: true, whitespace: true, message: "请输入 URL！" },
+                  { type: "url", message: "请输入有效的 URL！" },
+                  {
+                    validator: async (_, value) => {
+                      if (
+                        String(value || "")
+                          .trim()
+                          .startsWith("https://")
+                      ) {
+                        return;
+                      }
+                      throw new Error("外链必须使用 HTTPS！");
+                    },
+                  },
+                ]}
+              >
+                <Input placeholder="https://example.com/workspace/..." />
+              </Form.Item>
+              <Button
+                className={styles.removeSceneButton}
+                type="text"
+                danger
+                icon={<Trash2 size={16} />}
+                aria-label={`删除 Tab ${index + 1}`}
+                onClick={() => remove(field.name)}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+    </Form.List>
+  );
 }
 
 export default function UsersPage() {
@@ -76,9 +177,7 @@ export default function UsersPage() {
         phone_number: values.phone_number.trim(),
         password: values.password,
         role: values.role || "user",
-        ...(values.ai_customer_service_url?.trim()
-          ? { ai_customer_service_url: values.ai_customer_service_url.trim() }
-          : {}),
+        scene_tabs: normalizeSceneTabs(values.scene_tabs),
       };
       await adminUsersApi.createUser(input);
       message.success("用户创建成功");
@@ -93,16 +192,16 @@ export default function UsersPage() {
   const handleSceneUpdate = async (values: SceneFormValues) => {
     if (selectedUserId === null) return;
     try {
-      await adminUsersApi.updateAiCustomerServiceUrl(
+      await adminUsersApi.updateSceneTabs(
         selectedUserId,
-        values.ai_customer_service_url?.trim() || null,
+        normalizeSceneTabs(values.scene_tabs),
       );
-      message.success("AI 客服入口已更新");
+      message.success("场景 Tab 已更新");
       setSceneModalVisible(false);
       sceneForm.resetFields();
       fetchUsers();
     } catch (error: unknown) {
-      message.error(getErrorMessage(error, "更新 AI 客服入口失败"));
+      message.error(getErrorMessage(error, "更新场景 Tab 失败"));
     }
   };
 
@@ -167,12 +266,17 @@ export default function UsersPage() {
       ),
     },
     {
-      title: "AI 客服",
-      dataIndex: "ai_customer_service_url",
-      key: "ai_customer_service_url",
+      title: "场景 Tab",
+      key: "scene_tabs",
       width: 120,
-      render: (value: string | null) =>
-        value ? <Tag color="blue">已开通</Tag> : <Tag>未开通</Tag>,
+      render: (_: unknown, record: AdminUser) => {
+        const count = getUserSceneTabs(record).length;
+        return count ? (
+          <Tag color="blue">{count} 个 Tab</Tag>
+        ) : (
+          <Tag>未配置</Tag>
+        );
+      },
     },
     {
       title: "创建时间",
@@ -189,17 +293,16 @@ export default function UsersPage() {
         <Space className={styles.actions}>
           <Button
             type="text"
-            icon={<Headset size={16} />}
+            icon={<PanelsTopLeft size={16} />}
             onClick={() => {
               setSelectedUserId(record.id);
               sceneForm.setFieldsValue({
-                ai_customer_service_url:
-                  record.ai_customer_service_url || undefined,
+                scene_tabs: getUserSceneTabs(record),
               });
               setSceneModalVisible(true);
             }}
           >
-            AI客服入口
+            编辑场景 Tab
           </Button>
           <Button
             type="text"
@@ -268,7 +371,7 @@ export default function UsersPage() {
 
       <Modal
         title="创建用户"
-        width={480}
+        width={760}
         open={createModalVisible}
         onCancel={() => {
           setCreateModalVisible(false);
@@ -323,29 +426,13 @@ export default function UsersPage() {
               <Select.Option value="user">普通用户 (user)</Select.Option>
             </Select>
           </Form.Item>
-          <Form.Item
-            name="ai_customer_service_url"
-            label="AI 客服工作区 URL（选填）"
-            rules={[
-              { type: "url", message: "请输入有效的 URL！" },
-              {
-                validator: async (_, value) => {
-                  if (!value || String(value).trim().startsWith("https://")) {
-                    return;
-                  }
-                  throw new Error("AI 客服入口必须使用 HTTPS！");
-                },
-              },
-            ]}
-          >
-            <Input placeholder="https://customer-service.example.com/console/?workspace=..." />
-          </Form.Item>
+          <SceneTabsFields />
         </Form>
       </Modal>
 
       <Modal
-        title="AI 客服入口"
-        width={560}
+        title="编辑场景 Tab"
+        width={760}
         open={sceneModalVisible}
         onCancel={() => {
           setSceneModalVisible(false);
@@ -356,24 +443,7 @@ export default function UsersPage() {
         cancelText="取消"
       >
         <Form form={sceneForm} layout="vertical" onFinish={handleSceneUpdate}>
-          <Form.Item
-            name="ai_customer_service_url"
-            label="工作区 URL"
-            extra="留空保存将从该账号移除 AI 客服场景 Tab。"
-            rules={[
-              { type: "url", message: "请输入有效的 URL！" },
-              {
-                validator: async (_, value) => {
-                  if (!value || String(value).trim().startsWith("https://")) {
-                    return;
-                  }
-                  throw new Error("AI 客服入口必须使用 HTTPS！");
-                },
-              },
-            ]}
-          >
-            <Input placeholder="https://customer-service.example.com/console/?workspace=..." />
-          </Form.Item>
+          <SceneTabsFields />
         </Form>
       </Modal>
 

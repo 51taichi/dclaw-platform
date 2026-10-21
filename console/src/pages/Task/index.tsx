@@ -2167,6 +2167,7 @@ export default function ChatPage() {
               />
             ) : null}
             <WorkbenchInput
+              wide
               disabled={interactionBlocked}
               inFlow
               isGenerating={isGenerating}

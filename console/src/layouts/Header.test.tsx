@@ -80,6 +80,10 @@ describe("Header brand logo", () => {
     expect(
       screen.getByRole("button", { name: "并发监控" }),
     ).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "管理后台" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
   });
 
   it("shows configured desktop scenes and switches between them", async () => {
@@ -108,5 +112,35 @@ describe("Header brand logo", () => {
     );
     await user.click(screen.getByRole("tab", { name: "AI客服" }));
     expect(onSceneChange).toHaveBeenCalledWith("ai-customer-service");
+  });
+
+  it("places the admin console after configured scene tabs", () => {
+    authState.role = "admin";
+    render(
+      <MemoryRouter>
+        <Header
+          showSceneTabs
+          scenes={[
+            {
+              key: "customer-service",
+              title: "AI客服",
+              url: "https://service.example.com/alice",
+            },
+            {
+              key: "agent-site",
+              title: "Agent官网",
+              url: "https://site.example.com/alice",
+            },
+          ]}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "工作台",
+      "AI客服",
+      "Agent官网",
+      "管理后台",
+    ]);
   });
 });

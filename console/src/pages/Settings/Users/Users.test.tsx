@@ -9,7 +9,7 @@ vi.mock("../../../api/modules/adminUsers", () => ({
     listUsers: vi.fn(),
     createUser: vi.fn(),
     resetPassword: vi.fn(),
-    updateAiCustomerServiceUrl: vi.fn(),
+    updateSceneTabs: vi.fn(),
     deleteUser: vi.fn(),
   },
 }));
@@ -35,6 +35,12 @@ describe("UsersPage", () => {
         phone_number: "+8613800138000",
         ai_customer_service_url:
           "https://service.example.com/console/?workspace=dingmai",
+        scene_tabs: [
+          {
+            title: "AI客服",
+            url: "https://service.example.com/console/?workspace=dingmai",
+          },
+        ],
         role: "user",
         created_at: "2026-08-28T12:53:23Z",
       },
@@ -53,9 +59,9 @@ describe("UsersPage", () => {
     expect(await screen.findByText("dingmai")).toBeInTheDocument();
     expect(screen.getByText("丁麦")).toBeInTheDocument();
     expect(screen.getByText("+8613800138000")).toBeInTheDocument();
-    expect(screen.getByText("已开通")).toBeInTheDocument();
+    expect(screen.getByText("1 个 Tab")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /AI客服入口/ }),
+      screen.getByRole("button", { name: /编辑场景 Tab/ }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /重置密码/ }),
@@ -70,6 +76,7 @@ describe("UsersPage", () => {
       username: "alice",
       display_name: "Alice Chen",
       phone_number: "+8613900139000",
+      scene_tabs: [],
       role: "user",
       created_at: "2026-09-29T00:00:00Z",
     });
@@ -95,7 +102,11 @@ describe("UsersPage", () => {
     fireEvent.change(screen.getByLabelText("密码"), {
       target: { value: "secret" },
     });
-    fireEvent.change(screen.getByLabelText("AI 客服工作区 URL（选填）"), {
+    await user.click(screen.getByRole("button", { name: "添加 Tab" }));
+    fireEvent.change(screen.getByLabelText("Tab 1 名称"), {
+      target: { value: "AI客服" },
+    });
+    fireEvent.change(screen.getByLabelText("HTTPS URL"), {
       target: {
         value: "https://service.example.com/console/?workspace=alice",
       },
@@ -108,36 +119,40 @@ describe("UsersPage", () => {
         phone_number: "13900139000",
         password: "secret",
         role: "user",
-        ai_customer_service_url:
-          "https://service.example.com/console/?workspace=alice",
+        scene_tabs: [
+          {
+            title: "AI客服",
+            url: "https://service.example.com/console/?workspace=alice",
+          },
+        ],
       }),
     );
   });
 
-  it("can remove an existing AI customer service entry", async () => {
+  it("can remove all existing scene tabs", async () => {
     const user = userEvent.setup();
-    vi.mocked(adminUsersApi.updateAiCustomerServiceUrl).mockResolvedValue({
+    vi.mocked(adminUsersApi.updateSceneTabs).mockResolvedValue({
       id: 24,
       username: "dingmai",
       role: "user",
       created_at: "2026-08-28T12:53:23Z",
       ai_customer_service_url: null,
+      scene_tabs: [],
     });
     render(<UsersPage />);
-    await user.click(await screen.findByRole("button", { name: /AI客服入口/ }));
+    await user.click(
+      await screen.findByRole("button", { name: /编辑场景 Tab/ }),
+    );
 
-    const input = screen.getByLabelText("工作区 URL");
-    expect(input).toHaveValue(
+    expect(screen.getByLabelText("Tab 1 名称")).toHaveValue("AI客服");
+    expect(screen.getByLabelText("HTTPS URL")).toHaveValue(
       "https://service.example.com/console/?workspace=dingmai",
     );
-    fireEvent.change(input, { target: { value: "" } });
+    await user.click(screen.getByRole("button", { name: "删除 Tab 1" }));
     await user.click(screen.getByRole("button", { name: /保\s*存/ }));
 
     await waitFor(() =>
-      expect(adminUsersApi.updateAiCustomerServiceUrl).toHaveBeenCalledWith(
-        24,
-        null,
-      ),
+      expect(adminUsersApi.updateSceneTabs).toHaveBeenCalledWith(24, []),
     );
   });
 

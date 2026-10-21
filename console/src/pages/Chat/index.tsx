@@ -2159,6 +2159,7 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
               />
             ) : null}
             <WorkbenchInput
+              wide
               disabled={interactionBlocked}
               isClawMode={isClawMode}
               isGenerating={isGenerating}
