@@ -115,6 +115,12 @@ def test_sqlalchemy_user_repo_round_trips_identity(repo):
     ] is None
     assert repo.update_user_ai_customer_service_url(999, None) is None
 
+    scenes = '[{"title":"AI客服","url":"https://service.example.com"}]'
+    updated = repo.update_user_scene_tabs(created["id"], scenes)
+    assert updated["scene_tabs_json"] == scenes
+    assert updated["ai_customer_service_url"] is None
+    assert repo.update_user_scene_tabs(999, "[]") is None
+
 
 def test_sqlalchemy_user_repo_ensure_and_update_legacy_user(repo):
     ensured = repo.ensure_user(

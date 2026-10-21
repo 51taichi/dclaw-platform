@@ -140,6 +140,7 @@ users = Table(
     Column("display_name", String(100), nullable=True),
     Column("phone_number_e164", String(32), nullable=True),
     Column("ai_customer_service_url", String(2048), nullable=True),
+    Column("scene_tabs_json", Text, nullable=True),
     Column(
         "billing_overdraft_enabled",
         Boolean,
@@ -1789,6 +1790,8 @@ def _ensure_user_identity_columns(engine: Engine) -> None:
             "ALTER TABLE users ADD COLUMN "
             "ai_customer_service_url VARCHAR(2048)",
         )
+    if "scene_tabs_json" not in existing:
+        statements.append("ALTER TABLE users ADD COLUMN scene_tabs_json TEXT")
     if statements:
         with engine.begin() as conn:
             for statement in statements:

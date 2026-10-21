@@ -74,6 +74,7 @@ class UserRepository(Protocol):
         display_name: str | None = None,
         phone_number_e164: str | None = None,
         ai_customer_service_url: str | None = None,
+        scene_tabs_json: str | None = None,
     ) -> dict[str, Any]:
         ...
 
@@ -96,6 +97,13 @@ class UserRepository(Protocol):
         self,
         user_id: int,
         url: str | None,
+    ) -> dict[str, Any] | None:
+        ...
+
+    def update_user_scene_tabs(
+        self,
+        user_id: int,
+        scene_tabs_json: str,
     ) -> dict[str, Any] | None:
         ...
 
@@ -135,6 +143,7 @@ class SqlAlchemyUserRepository:
                     users.c.display_name,
                     users.c.phone_number_e164,
                     users.c.ai_customer_service_url,
+                    users.c.scene_tabs_json,
                     users.c.created_at,
                 ).where(
                     users.c.id == user_id,
@@ -152,6 +161,7 @@ class SqlAlchemyUserRepository:
                     users.c.display_name,
                     users.c.phone_number_e164,
                     users.c.ai_customer_service_url,
+                    users.c.scene_tabs_json,
                 ).where(
                     users.c.username == username,
                 ),
@@ -224,6 +234,7 @@ class SqlAlchemyUserRepository:
                     users.c.display_name,
                     users.c.phone_number_e164,
                     users.c.ai_customer_service_url,
+                    users.c.scene_tabs_json,
                     users.c.created_at,
                 ).order_by(
                     desc(users.c.created_at),
@@ -241,6 +252,7 @@ class SqlAlchemyUserRepository:
         display_name: str | None = None,
         phone_number_e164: str | None = None,
         ai_customer_service_url: str | None = None,
+        scene_tabs_json: str | None = None,
     ) -> dict[str, Any]:
         with self.engine.begin() as conn:
             result = conn.execute(
@@ -252,6 +264,7 @@ class SqlAlchemyUserRepository:
                     display_name=display_name,
                     phone_number_e164=phone_number_e164,
                     ai_customer_service_url=ai_customer_service_url,
+                    scene_tabs_json=scene_tabs_json,
                 ),
             )
             user_id = int(result.inserted_primary_key[0])
@@ -298,7 +311,28 @@ class SqlAlchemyUserRepository:
             result = conn.execute(
                 update(users)
                 .where(users.c.id == user_id)
-                .values(ai_customer_service_url=url),
+                .values(
+                    ai_customer_service_url=url,
+                    scene_tabs_json=None,
+                ),
+            )
+        if not result.rowcount:
+            return None
+        return self.get_user_by_id(user_id)
+
+    def update_user_scene_tabs(
+        self,
+        user_id: int,
+        scene_tabs_json: str,
+    ) -> dict[str, Any] | None:
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                update(users)
+                .where(users.c.id == user_id)
+                .values(
+                    scene_tabs_json=scene_tabs_json,
+                    ai_customer_service_url=None,
+                ),
             )
         if not result.rowcount:
             return None
@@ -443,6 +477,7 @@ class SqliteUserRepository:
         display_name: str | None = None,
         phone_number_e164: str | None = None,
         ai_customer_service_url: str | None = None,
+        scene_tabs_json: str | None = None,
     ) -> dict[str, Any]:
         conn = db.get_db()
         cursor = conn.cursor()
@@ -450,9 +485,9 @@ class SqliteUserRepository:
             """
             INSERT INTO users (
                 username, password_hash, password_salt, role, display_name,
-                phone_number_e164, ai_customer_service_url
+                phone_number_e164, ai_customer_service_url, scene_tabs_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 username,
@@ -462,6 +497,7 @@ class SqliteUserRepository:
                 display_name,
                 phone_number_e164,
                 ai_customer_service_url,
+                scene_tabs_json,
             ),
         )
         conn.commit()
@@ -509,8 +545,26 @@ class SqliteUserRepository:
         conn = db.get_db()
         cursor = conn.cursor()
         cursor.execute(
-            "UPDATE users SET ai_customer_service_url = ? WHERE id = ?",
+            "UPDATE users SET ai_customer_service_url = ?, "
+            "scene_tabs_json = NULL WHERE id = ?",
             (url, user_id),
+        )
+        conn.commit()
+        if cursor.rowcount == 0:
+            return None
+        return self.get_user_by_id(user_id)
+
+    def update_user_scene_tabs(
+        self,
+        user_id: int,
+        scene_tabs_json: str,
+    ) -> dict[str, Any] | None:
+        conn = db.get_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE users SET scene_tabs_json = ?, "
+            "ai_customer_service_url = NULL WHERE id = ?",
+            (scene_tabs_json, user_id),
         )
         conn.commit()
         if cursor.rowcount == 0:
@@ -576,6 +630,7 @@ def _sqlite_user_dict(row: Any) -> dict[str, Any] | None:
         value.setdefault("display_name", None)
         value.setdefault("phone_number_e164", None)
         value.setdefault("ai_customer_service_url", None)
+        value.setdefault("scene_tabs_json", None)
     return value
 
 

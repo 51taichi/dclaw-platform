@@ -56,3 +56,29 @@ async def test_verify_omits_unconfigured_scene(monkeypatch):
     result = await auth_router.verify(_request())
 
     assert result["scenes"] == []
+
+
+@pytest.mark.asyncio
+async def test_verify_returns_ordered_configured_scene_tabs(monkeypatch):
+    monkeypatch.setattr(auth_router, "is_auth_enabled", lambda: True)
+    monkeypatch.setattr(auth_router, "verify_token", lambda token: "alice")
+    monkeypatch.setattr(
+        auth_router,
+        "resolve_authenticated_user",
+        lambda username: {
+            "role": "admin",
+            "ai_customer_service_url": None,
+            "scene_tabs_json": (
+                '[{"title":"AI客服","url":"https://service.example.com"},'
+                '{"title":"Agent官网","url":"https://site.example.com"}]'
+            ),
+        },
+    )
+
+    result = await auth_router.verify(_request())
+
+    assert [(scene["title"], scene["url"]) for scene in result["scenes"]] == [
+        ("AI客服", "https://service.example.com"),
+        ("Agent官网", "https://site.example.com"),
+    ]
+    assert len({scene["key"] for scene in result["scenes"]}) == 2

@@ -68,6 +68,7 @@ def test_schema_upgrades_legacy_users_and_creates_credit_alert_tables(tmp_path):
     assert user_columns["display_name"]["nullable"] is True
     assert user_columns["phone_number_e164"]["nullable"] is True
     assert user_columns["ai_customer_service_url"]["nullable"] is True
+    assert user_columns["scene_tabs_json"]["nullable"] is True
     assert {
         "credit_alert_preferences",
         "credit_alert_states",
@@ -81,11 +82,12 @@ def test_schema_upgrades_legacy_users_and_creates_credit_alert_tables(tmp_path):
     with engine.connect() as conn:
         row = conn.execute(text(
             "SELECT username, display_name, phone_number_e164, "
-            "ai_customer_service_url FROM users WHERE id = 7"
+            "ai_customer_service_url, scene_tabs_json FROM users WHERE id = 7"
         )).mappings().one()
     assert dict(row) == {
         "username": "legacy",
         "display_name": None,
         "phone_number_e164": None,
         "ai_customer_service_url": None,
+        "scene_tabs_json": None,
     }

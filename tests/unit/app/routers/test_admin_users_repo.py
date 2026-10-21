@@ -22,6 +22,7 @@ class FakeUserRepository:
                 "display_name": None,
                 "phone_number_e164": None,
                 "ai_customer_service_url": None,
+                "scene_tabs_json": None,
             }
         }
         self.next_id = 2
@@ -37,6 +38,7 @@ class FakeUserRepository:
                 "display_name": row.get("display_name"),
                 "phone_number_e164": row.get("phone_number_e164"),
                 "ai_customer_service_url": row.get("ai_customer_service_url"),
+                "scene_tabs_json": row.get("scene_tabs_json"),
             }
             for row in self.users.values()
         ]
@@ -61,6 +63,7 @@ class FakeUserRepository:
         self, *, username, password_hash, password_salt, role,
         display_name=None, phone_number_e164=None,
         ai_customer_service_url=None,
+        scene_tabs_json=None,
     ):
         user_id = self.next_id
         self.next_id += 1
@@ -74,6 +77,7 @@ class FakeUserRepository:
             "display_name": display_name,
             "phone_number_e164": phone_number_e164,
             "ai_customer_service_url": ai_customer_service_url,
+            "scene_tabs_json": scene_tabs_json,
         }
         self.users[user_id] = row
         return row
@@ -91,6 +95,15 @@ class FakeUserRepository:
         if row is None:
             return None
         row["ai_customer_service_url"] = url
+        row["scene_tabs_json"] = None
+        return row
+
+    def update_user_scene_tabs(self, user_id, scene_tabs_json):
+        row = self.users.get(user_id)
+        if row is None:
+            return None
+        row["scene_tabs_json"] = scene_tabs_json
+        row["ai_customer_service_url"] = None
         return row
 
     def delete_user_cascade(self, user_id):
@@ -144,6 +157,7 @@ async def test_admin_user_routes_use_user_repository(
     assert created.display_name is None
     assert created.phone_number is None
     assert created.ai_customer_service_url is None
+    assert created.scene_tabs == []
     stored = fake_repo.get_user_by_username("alice")
     assert verify_password(
         "new-password",
@@ -214,6 +228,39 @@ async def test_admin_user_routes_manage_ai_customer_service_url(
         admin_users.AiCustomerServiceRequest(url=None),
     )
     assert removed.ai_customer_service_url is None
+
+
+@pytest.mark.asyncio
+async def test_admin_user_routes_manage_multiple_scene_tabs(
+    fake_repo,
+    fake_wallet_service,
+):
+    created = await admin_users.create_user(admin_users.CreateUserRequest(
+        username="alice",
+        password="password",
+        scene_tabs=[
+            admin_users.SceneTabInput(
+                title=" AI客服 ",
+                url=" https://service.example.com/alice ",
+            ),
+            admin_users.SceneTabInput(
+                title="Agent官网",
+                url="https://site.example.com/alice",
+            ),
+        ],
+    ))
+
+    assert [scene.model_dump() for scene in created.scene_tabs] == [
+        {"title": "AI客服", "url": "https://service.example.com/alice"},
+        {"title": "Agent官网", "url": "https://site.example.com/alice"},
+    ]
+    assert created.ai_customer_service_url is None
+
+    updated = await admin_users.update_scene_tabs(
+        created.id,
+        admin_users.SceneTabsRequest(scene_tabs=[]),
+    )
+    assert updated.scene_tabs == []
 
 
 @pytest.mark.asyncio

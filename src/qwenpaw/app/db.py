@@ -49,6 +49,7 @@ def init_db():
             display_name TEXT,
             phone_number_e164 TEXT,
             ai_customer_service_url TEXT,
+            scene_tabs_json TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """
@@ -62,6 +63,8 @@ def init_db():
         cursor.execute(
             "ALTER TABLE users ADD COLUMN ai_customer_service_url TEXT",
         )
+    if "scene_tabs_json" not in user_columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN scene_tabs_json TEXT")
 
     # 2. User Connections table (for MCP Connectors)
     cursor.execute(

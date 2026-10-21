@@ -2,7 +2,7 @@
 """Admin Users management API endpoints."""
 from __future__ import annotations
 
-from typing import List
+from typing import Any, List
 from urllib.parse import urlsplit
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -11,8 +11,14 @@ from ..auth import _hash_password
 from ..billing.service import get_wallet_service
 from ..storage.repos.user_repo import get_user_repository
 from ..user_identity import normalize_cn_mobile
+from ..user_scenes import decode_scene_tabs, encode_scene_tabs
 
 router = APIRouter(prefix="/users", tags=["admin_users"])
+
+
+class SceneTabSpec(BaseModel):
+    title: str
+    url: str
 
 
 class UserSpec(BaseModel):
@@ -23,6 +29,12 @@ class UserSpec(BaseModel):
     display_name: str | None = None
     phone_number: str | None = None
     ai_customer_service_url: str | None = None
+    scene_tabs: list[SceneTabSpec] = Field(default_factory=list)
+
+
+class SceneTabInput(BaseModel):
+    title: str = Field(min_length=1, max_length=40)
+    url: str = Field(max_length=2048)
 
 
 class CreateUserRequest(BaseModel):
@@ -32,6 +44,7 @@ class CreateUserRequest(BaseModel):
     display_name: str | None = Field(default=None, max_length=100)
     phone_number: str | None = Field(default=None, max_length=32)
     ai_customer_service_url: str | None = Field(default=None, max_length=2048)
+    scene_tabs: list[SceneTabInput] | None = None
 
 
 class ResetPasswordRequest(BaseModel):
@@ -42,7 +55,11 @@ class AiCustomerServiceRequest(BaseModel):
     url: str | None = Field(default=None, max_length=2048)
 
 
-def _normalize_ai_customer_service_url(value: str | None) -> str | None:
+class SceneTabsRequest(BaseModel):
+    scene_tabs: list[SceneTabInput] = Field(default_factory=list)
+
+
+def _normalize_external_url(value: str | None) -> str | None:
     url = (value or "").strip()
     if not url:
         return None
@@ -55,26 +72,52 @@ def _normalize_ai_customer_service_url(value: str | None) -> str | None:
     ):
         raise HTTPException(
             status_code=422,
-            detail="AI customer service URL must be a valid HTTPS URL",
+            detail="Scene tab URL must be a valid HTTPS URL",
         )
     return url
+
+
+def _normalize_scene_tabs(
+    scene_tabs: list[SceneTabInput],
+) -> list[dict[str, str]]:
+    result = []
+    for scene in scene_tabs:
+        title = scene.title.strip()
+        if not title:
+            raise HTTPException(
+                status_code=422,
+                detail="Scene tab title cannot be empty",
+            )
+        url = _normalize_external_url(scene.url)
+        if url is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Scene tab URL cannot be empty",
+            )
+        result.append({"title": title, "url": url})
+    return result
+
+
+def _user_spec(row: dict[str, Any]) -> UserSpec:
+    return UserSpec(
+        id=row["id"],
+        username=row["username"],
+        role=row["role"],
+        created_at=str(row["created_at"]),
+        display_name=row.get("display_name"),
+        phone_number=row.get("phone_number_e164"),
+        ai_customer_service_url=row.get("ai_customer_service_url"),
+        scene_tabs=decode_scene_tabs(
+            row.get("scene_tabs_json"),
+            row.get("ai_customer_service_url"),
+        ),
+    )
 
 
 @router.get("", response_model=List[UserSpec])
 async def list_users():
     """List all registered users."""
-    return [
-        UserSpec(
-            id=row["id"],
-            username=row["username"],
-            role=row["role"],
-            created_at=str(row["created_at"]),
-            display_name=row.get("display_name"),
-            phone_number=row.get("phone_number_e164"),
-            ai_customer_service_url=row.get("ai_customer_service_url"),
-        )
-        for row in get_user_repository().list_users()
-    ]
+    return [_user_spec(row) for row in get_user_repository().list_users()]
 
 
 @router.post("", response_model=UserSpec)
@@ -99,9 +142,15 @@ async def create_user(req: CreateUserRequest):
         phone_number = normalize_cn_mobile(req.phone_number)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    ai_customer_service_url = _normalize_ai_customer_service_url(
+    ai_customer_service_url = _normalize_external_url(
         req.ai_customer_service_url,
     )
+    scene_tabs_json = None
+    if req.scene_tabs is not None:
+        scene_tabs_json = encode_scene_tabs(
+            _normalize_scene_tabs(req.scene_tabs),
+        )
+        ai_customer_service_url = None
     existing = get_user_repository().get_user_by_username(username)
     if existing:
         # Repair a prior user-created/wallet-failed attempt before returning
@@ -122,19 +171,12 @@ async def create_user(req: CreateUserRequest):
             display_name=display_name,
             phone_number_e164=phone_number,
             ai_customer_service_url=ai_customer_service_url,
+            scene_tabs_json=scene_tabs_json,
         )
         # New users get an empty wallet. Trial credits are deliberately not
         # granted here because a username is not verified-mobile evidence.
         get_wallet_service().get_or_create_personal_wallet(row["id"])
-        return UserSpec(
-            id=row["id"],
-            username=row["username"],
-            role=row["role"],
-            created_at=str(row["created_at"]),
-            display_name=row.get("display_name"),
-            phone_number=row.get("phone_number_e164"),
-            ai_customer_service_url=row.get("ai_customer_service_url"),
-        )
+        return _user_spec(row)
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -179,19 +221,25 @@ async def update_ai_customer_service(
     if not repo.get_user_by_id(user_id):
         raise HTTPException(status_code=404, detail="User not found")
 
-    url = _normalize_ai_customer_service_url(req.url)
+    url = _normalize_external_url(req.url)
     row = repo.update_user_ai_customer_service_url(user_id, url)
     if row is None:
         raise HTTPException(status_code=404, detail="User not found")
-    return UserSpec(
-        id=row["id"],
-        username=row["username"],
-        role=row["role"],
-        created_at=str(row["created_at"]),
-        display_name=row.get("display_name"),
-        phone_number=row.get("phone_number_e164"),
-        ai_customer_service_url=row.get("ai_customer_service_url"),
-    )
+    return _user_spec(row)
+
+
+@router.put("/{user_id}/scene-tabs", response_model=UserSpec)
+async def update_scene_tabs(user_id: int, req: SceneTabsRequest):
+    """Replace a user's ordered external scene-tab configuration."""
+    repo = get_user_repository()
+    if not repo.get_user_by_id(user_id):
+        raise HTTPException(status_code=404, detail="User not found")
+
+    value = encode_scene_tabs(_normalize_scene_tabs(req.scene_tabs))
+    row = repo.update_user_scene_tabs(user_id, value)
+    if row is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return _user_spec(row)
 
 
 @router.delete("/{user_id}")

@@ -21,6 +21,7 @@ from ..auth import (
     update_credentials,
     verify_token,
 )
+from ..user_scenes import scene_tabs_for_client
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -166,16 +167,10 @@ async def verify(request: Request):
     if user is None:
         raise HTTPException(status_code=401, detail="User no longer exists")
 
-    scenes = []
-    scene_url = str(user.get("ai_customer_service_url") or "").strip()
-    if scene_url:
-        scenes.append(
-            {
-                "key": "ai-customer-service",
-                "title": "AI客服",
-                "url": scene_url,
-            },
-        )
+    scenes = scene_tabs_for_client(
+        user.get("scene_tabs_json"),
+        user.get("ai_customer_service_url"),
+    )
 
     return {
         "valid": True,
