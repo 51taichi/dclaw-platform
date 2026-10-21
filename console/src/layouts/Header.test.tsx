@@ -145,7 +145,7 @@ describe("Header brand logo", () => {
     ).toBeInTheDocument();
   });
 
-  it("places the admin console after configured scene tabs", () => {
+  it("places system tabs before configured scenes with a divider", () => {
     authState.role = "admin";
     render(
       <MemoryRouter>
@@ -169,9 +169,44 @@ describe("Header brand logo", () => {
 
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
       "工作台",
+      "管理后台",
       "AI客服",
       "Agent官网",
-      "管理后台",
     ]);
+    expect(screen.getByRole("separator")).toHaveAttribute(
+      "aria-orientation",
+      "vertical",
+    );
+    expect(
+      screen
+        .getByRole("tab", { name: "管理后台" })
+        .querySelector(".lucide-settings"),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps only the workbench system tab for non-admin users", () => {
+    render(
+      <MemoryRouter>
+        <Header
+          showSceneTabs
+          scenes={[
+            {
+              key: "customer-service",
+              title: "AI客服",
+              url: "https://service.example.com/alice",
+            },
+          ]}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "工作台",
+      "AI客服",
+    ]);
+    expect(
+      screen.queryByRole("tab", { name: "管理后台" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("separator")).toBeInTheDocument();
   });
 });

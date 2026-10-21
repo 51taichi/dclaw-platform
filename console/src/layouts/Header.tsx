@@ -1,5 +1,5 @@
 import { Layout, Space } from "antd";
-import { BriefcaseBusiness, Gauge } from "lucide-react";
+import { BriefcaseBusiness, Settings } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
 import LanguageSwitcher from "../components/LanguageSwitcher/index";
@@ -65,21 +65,6 @@ export default function Header({
             <BriefcaseBusiness size={16} />
             <span>{t("scenes.workbench", "工作台")}</span>
           </button>
-          {scenes.map((scene) => (
-            <button
-              key={scene.key}
-              type="button"
-              role="tab"
-              aria-selected={activeSceneKey === scene.key}
-              className={`${styles.sceneTab}${
-                activeSceneKey === scene.key ? ` ${styles.sceneTabActive}` : ""
-              }`}
-              onClick={() => onSceneChange?.(scene.key)}
-            >
-              <SceneIcon name={scene.icon} />
-              <span>{scene.title}</span>
-            </button>
-          ))}
           {isAdminRole && (
             <button
               type="button"
@@ -92,10 +77,30 @@ export default function Header({
               }`}
               onClick={() => navigate("/admin/agents")}
             >
-              <Gauge size={16} />
+              <Settings size={16} />
               <span>{t("header.adminConsole", "管理后台")}</span>
             </button>
           )}
+          {scenes.length > 0 && (
+            <span
+              className={styles.sceneTabDivider}
+              role="separator"
+              aria-orientation="vertical"
+            />
+          )}
+          {scenes.map((scene) => (
+            <button
+              key={scene.key}
+              type="button"
+              role="tab"
+              aria-selected={false}
+              className={styles.sceneTab}
+              onClick={() => onSceneChange?.(scene.key)}
+            >
+              <SceneIcon name={scene.icon} />
+              <span>{scene.title}</span>
+            </button>
+          ))}
         </nav>
       )}
       <Space size="middle" className={styles.headerActions}>
