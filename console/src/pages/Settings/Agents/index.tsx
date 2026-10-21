@@ -6,7 +6,7 @@ import {
   useMemo,
   type ChangeEvent,
 } from "react";
-import { Alert, Card, Button, Form, Modal } from "antd";
+import { Card, Button, Form, Modal } from "antd";
 import { useAppMessage } from "../../../hooks/useAppMessage";
 import { PlusOutlined, TeamOutlined, UploadOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
@@ -387,14 +387,6 @@ export default function AgentsPage() {
             </Button>
           </div>
         }
-      />
-
-      <Alert
-        className={styles.expertTeamHint}
-        type="info"
-        showIcon
-        message="专家团不是单个智能体"
-        description="这里维护单个智能体。专家团是由多个智能体、角色分工和 workflow 组成的组合模板，请到「专家团」页面维护。"
       />
 
       <Card className={styles.tableCard}>
