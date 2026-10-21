@@ -829,10 +829,10 @@ html.dark-mode [class*="chat-anywhere"] [class*="message"] a {
   background: #fff !important;
 }
 
-/* Let conversation content use the available workspace width. */
+/* Keep wide conversations readable while still using most of the workspace. */
 .qwenpaw-chat-anywhere-message-list .qwenpaw-bubble-list {
-  width: calc(100% - 32px);
-  max-width: none !important;
+  width: min(calc(100% - 32px), 88%);
+  max-width: 1600px !important;
 }
 
 @media (max-width: 768px) {
