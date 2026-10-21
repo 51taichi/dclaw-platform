@@ -13,9 +13,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
+    webview::{NewWindowResponse, WebviewWindowBuilder},
     AppHandle, Manager, State,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogResult};
+use tauri_plugin_shell::ShellExt;
 
 #[derive(Debug, PartialEq, Eq)]
 enum CloseAction {
@@ -27,6 +29,10 @@ enum CloseAction {
 const CHAT_ATTACHMENT_MAX_BYTES: u64 = 25 * 1024 * 1024;
 const CLIPBOARD_ATTACHMENT_LIMIT: usize = 20;
 const LOCAL_HELPER_HEARTBEAT_MAX_AGE_SECONDS: u64 = 45;
+
+fn is_external_web_url(url: &tauri::Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
+}
 
 #[derive(Default)]
 struct LocalHelperProcessState {
@@ -408,6 +414,25 @@ pub fn run() {
             Some(vec!["--hidden"]),
         ))
         .setup(|app| {
+            let main_window_config = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|window| window.label == "main")
+                .cloned()
+                .ok_or("缺少主窗口配置")?;
+            let app_handle = app.handle().clone();
+            let main_window = WebviewWindowBuilder::from_config(app, &main_window_config)?
+                .on_new_window(move |url, _features| {
+                    if is_external_web_url(&url) {
+                        #[allow(deprecated)]
+                        let _ = app_handle.shell().open(url.as_str(), None);
+                    }
+                    NewWindowResponse::Deny
+                })
+                .build()?;
+
             // ── Logging (debug only) ─────────────────────────────────
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -464,7 +489,6 @@ pub fn run() {
                 .build(app)?;
 
             // ── Ask whether to keep running or quit ─────────────────
-            let main_window = app.get_webview_window("main").unwrap();
             let close_window = main_window.clone();
             let close_dialog_open = Arc::new(AtomicBool::new(false));
             main_window.on_window_event(move |event| {
@@ -525,7 +549,10 @@ fn get_app_status() -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{attachments_from_paths, close_action, config_has_device_token, CloseAction};
+    use super::{
+        attachments_from_paths, close_action, config_has_device_token, is_external_web_url,
+        CloseAction,
+    };
     use std::{fs, time::SystemTime};
     use tauri_plugin_dialog::MessageDialogResult;
 
@@ -577,5 +604,19 @@ mod tests {
         fs::write(&path, r#"{"deviceId":"device-1","deviceToken":"secret"}"#).unwrap();
         assert!(config_has_device_token(&path));
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn only_http_links_can_leave_the_embedded_scene() {
+        assert!(is_external_web_url(
+            &"https://example.com/help".parse().unwrap()
+        ));
+        assert!(is_external_web_url(
+            &"http://example.com/help".parse().unwrap()
+        ));
+        assert!(!is_external_web_url(
+            &"javascript:alert(1)".parse().unwrap()
+        ));
+        assert!(!is_external_web_url(&"file:///tmp/help".parse().unwrap()));
     }
 }

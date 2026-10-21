@@ -3,6 +3,20 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ClientLayout from "./ClientLayout";
 
+const authState = vi.hoisted(() => ({
+  role: null as string | null,
+  scenes: [] as Array<{
+    key: string;
+    title: string;
+    url: string;
+    icon?: string;
+  }>,
+}));
+
+vi.mock("../contexts/AuthContext", () => ({
+  useAuth: () => authState,
+}));
+
 vi.mock("../api/modules/superExpertPlatform", () => ({
   superExpertPlatformApi: {
     getConversationRoute: vi.fn(async (id: string) => ({
@@ -13,7 +27,23 @@ vi.mock("../api/modules/superExpertPlatform", () => ({
 }));
 
 vi.mock("./Header", () => ({
-  default: () => <div data-testid="header" />,
+  default: ({
+    scenes = [],
+    activeSceneKey,
+    onSceneChange,
+  }: {
+    scenes?: Array<{ key: string; title: string }>;
+    activeSceneKey?: string;
+    onSceneChange?: (key: string) => void;
+  }) => (
+    <div data-active-scene={activeSceneKey} data-testid="header">
+      {scenes.map((scene) => (
+        <button key={scene.key} onClick={() => onSceneChange?.(scene.key)}>
+          {scene.title}
+        </button>
+      ))}
+    </div>
+  ),
 }));
 
 vi.mock("./Sidebar", () => ({
@@ -35,7 +65,12 @@ vi.mock("../api/modules/billing", () => ({
     getCreditAlerts: vi.fn(async () => ({
       preferences: { warning_threshold: 5000, critical_threshold: 1000 },
       available: 4500,
-      alert: { tier: "warning", threshold: 5000, available: 4500, triggered_at: "2026-09-29T00:00:00Z" },
+      alert: {
+        tier: "warning",
+        threshold: 5000,
+        available: 4500,
+        triggered_at: "2026-09-29T00:00:00Z",
+      },
     })),
     dismissCreditAlert: vi.fn(),
   },
@@ -95,13 +130,22 @@ function renderAt(pathname: string) {
 }
 
 describe("ClientLayout routing", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    authState.role = null;
+    authState.scenes = [];
+    delete (window as Window & { __TAURI_INTERNALS__?: unknown })
+      .__TAURI_INTERNALS__;
+  });
 
   it("mounts the persistent alert above routed content", async () => {
     renderAt("/workbench");
     const banner = await screen.findByText("积分不足提醒");
     const content = await screen.findByTestId("workbench-page");
-    expect(banner.compareDocumentPosition(content) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      banner.compareDocumentPosition(content) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
   it("retains the active runtime while a draft becomes a persisted task", async () => {
     renderAt("/task");
@@ -133,5 +177,28 @@ describe("ClientLayout routing", () => {
       "data-selected-key",
       "wallet",
     );
+  });
+
+  it("renders a configured scene inside the client when its tab is selected", async () => {
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ =
+      {};
+    authState.scenes = [
+      {
+        key: "customer-service",
+        title: "AI客服",
+        url: "https://service.example.com/console",
+      },
+    ];
+
+    renderAt("/workbench");
+    fireEvent.click(await screen.findByRole("button", { name: "AI客服" }));
+
+    const scene = await screen.findByTitle("AI客服");
+    expect(scene).toHaveAttribute("src", "https://service.example.com/console");
+    expect(screen.getByTestId("header")).toHaveAttribute(
+      "data-active-scene",
+      "customer-service",
+    );
+    expect(screen.queryByTestId("workbench-page")).not.toBeInTheDocument();
   });
 });

@@ -19,10 +19,7 @@ import { useAgentStore } from "../../stores/agentStore";
 import { canInspectAgent } from "../../utils/agentCapabilities";
 import { useAuth } from "../../contexts/AuthContext";
 import { isDesktopApp } from "../../utils/env";
-import {
-  isSafeSceneUrl,
-  openSceneInExternalBrowser,
-} from "../ClientLayout/sceneNavigation";
+import { isSafeSceneUrl } from "../ClientLayout/sceneNavigation";
 
 // All other pages are lazily loaded with automatic retry on chunk failure
 const AgentConfigPage = lazyImportWithRetry("../../pages/Agent/Config");
@@ -169,7 +166,7 @@ export default function AdminLayout() {
             navigate("/workbench");
             return;
           }
-          openSceneInExternalBrowser(availableScenes, key);
+          navigate(`/workbench?scene=${encodeURIComponent(key)}`);
         }}
       />
       <Layout>

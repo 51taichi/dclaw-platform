@@ -93,8 +93,10 @@ export default function Header({
               key={scene.key}
               type="button"
               role="tab"
-              aria-selected={false}
-              className={styles.sceneTab}
+              aria-selected={activeSceneKey === scene.key}
+              className={`${styles.sceneTab}${
+                activeSceneKey === scene.key ? ` ${styles.sceneTabActive}` : ""
+              }`}
               onClick={() => onSceneChange?.(scene.key)}
             >
               <SceneIcon name={scene.icon} />
