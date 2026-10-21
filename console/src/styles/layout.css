@@ -835,6 +835,28 @@ html.dark-mode [class*="chat-anywhere"] [class*="message"] a {
   max-width: 1600px !important;
 }
 
+.qwenpaw-chat-anywhere-message-list
+  .qwenpaw-bubble-start
+  .qwenpaw-bubble-content,
+.qwenpaw-chat-anywhere-message-list .qwenpaw-bubble-start .qwenpaw-markdown {
+  width: 100%;
+}
+
+.qwenpaw-chat-anywhere-message-list
+  :is(.qwenpaw-bubble-end, .qwenpaw-bubble-user)
+  .qwenpaw-bubble-content {
+  max-width: min(92%, 1200px) !important;
+}
+
+.qwenpaw-chat-anywhere-header {
+  background: rgba(255, 255, 255, 0.9) !important;
+  backdrop-filter: blur(20px) !important;
+}
+
+html.dark-mode .qwenpaw-chat-anywhere-header {
+  background: rgba(20, 20, 20, 0.9) !important;
+}
+
 @media (max-width: 768px) {
   .qwenpaw-chat-anywhere-message-list .qwenpaw-bubble-list {
     width: calc(100% - 16px);
