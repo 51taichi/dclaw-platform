@@ -57,6 +57,13 @@
   padding-top: 4px;
 }
 
+.accountFieldsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  column-gap: 20px;
+}
+
 .sceneEditor {
   display: flex;
   flex-direction: column;
@@ -73,12 +80,6 @@
 .sceneEditorTitle {
   color: var(--ag-ant-color-text, rgba(0, 0, 0, 0.88));
   font-weight: 500;
-}
-
-.sceneEditorHint {
-  margin-top: 2px;
-  color: var(--ag-ant-color-text-secondary, rgba(0, 0, 0, 0.45));
-  font-size: 12px;
 }
 
 .sceneRow {
@@ -102,6 +103,10 @@
 @media (max-width: 760px) {
   .page {
     padding: 16px;
+  }
+
+  .accountFieldsGrid {
+    grid-template-columns: 1fr;
   }
 
   .sceneRow {

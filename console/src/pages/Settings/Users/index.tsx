@@ -71,12 +71,7 @@ function SceneTabsFields() {
       {(fields, { add, remove }) => (
         <div className={styles.sceneEditor}>
           <div className={styles.sceneEditorHeader}>
-            <div>
-              <div className={styles.sceneEditorTitle}>外链场景 Tab</div>
-              <div className={styles.sceneEditorHint}>
-                登录客户端后按这里的顺序显示，允许不配置。
-              </div>
-            </div>
+            <div className={styles.sceneEditorTitle}>外链场景 Tab</div>
             <Button
               type="dashed"
               icon={<Plus size={15} />}
@@ -407,7 +402,9 @@ export default function UsersPage() {
                 key: "account",
                 label: "基本信息",
                 children: (
-                  <div className={styles.createTabContent}>
+                  <div
+                    className={`${styles.createTabContent} ${styles.accountFieldsGrid}`}
+                  >
                     <Form.Item
                       name="username"
                       label="登录 ID"
@@ -420,6 +417,16 @@ export default function UsersPage() {
                       ]}
                     >
                       <Input />
+                    </Form.Item>
+                    <Form.Item name="role" label="角色" initialValue="user">
+                      <Select>
+                        <Select.Option value="admin">
+                          管理员 (admin)
+                        </Select.Option>
+                        <Select.Option value="user">
+                          普通用户 (user)
+                        </Select.Option>
+                      </Select>
                     </Form.Item>
                     <Form.Item
                       name="display_name"
@@ -453,20 +460,10 @@ export default function UsersPage() {
                     </Form.Item>
                     <Form.Item
                       name="password"
-                      label="密码"
+                      label="初始密码"
                       rules={[{ required: true, message: "请输入密码！" }]}
                     >
                       <Input.Password />
-                    </Form.Item>
-                    <Form.Item name="role" label="角色" initialValue="user">
-                      <Select>
-                        <Select.Option value="admin">
-                          管理员 (admin)
-                        </Select.Option>
-                        <Select.Option value="user">
-                          普通用户 (user)
-                        </Select.Option>
-                      </Select>
                     </Form.Item>
                   </div>
                 ),

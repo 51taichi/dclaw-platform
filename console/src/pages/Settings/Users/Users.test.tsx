@@ -106,10 +106,13 @@ describe("UsersPage", () => {
     fireEvent.change(screen.getByLabelText("手机号"), {
       target: { value: "13900139000" },
     });
-    fireEvent.change(screen.getByLabelText("密码"), {
+    fireEvent.change(screen.getByLabelText("初始密码"), {
       target: { value: "secret" },
     });
     fireEvent.click(screen.getByRole("tab", { name: "外链 Tab（选填）" }));
+    expect(
+      screen.queryByText("登录客户端后按这里的顺序显示，允许不配置。"),
+    ).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "添加 Tab" }));
     fireEvent.change(screen.getByLabelText("Tab 1 名称"), {
       target: { value: "AI客服" },
