@@ -68,13 +68,47 @@ fn hide_other_scene_webviews(app: &AppHandle, active_label: Option<&str>) {
     }
 }
 
+fn scene_webview_position(
+    bounds: &SceneWebviewBounds,
+    origin: LogicalPosition<f64>,
+) -> LogicalPosition<f64> {
+    LogicalPosition::new(origin.x + bounds.x, origin.y + bounds.y)
+}
+
+fn main_webview_origin(app: &AppHandle) -> Result<LogicalPosition<f64>, String> {
+    let main_webview = app
+        .get_webview("main")
+        .ok_or_else(|| "DClaw 主页面不可用".to_owned())?;
+    let main_window = app
+        .get_window("main")
+        .ok_or_else(|| "DClaw 主窗口不可用".to_owned())?;
+    let scale_factor = main_window
+        .scale_factor()
+        .map_err(|error| format!("无法读取主窗口缩放比例: {error}"))?;
+    let webview_position = main_webview
+        .position()
+        .map_err(|error| format!("无法读取主页面位置: {error}"))?
+        .to_logical::<f64>(scale_factor);
+    let window_position = main_window
+        .outer_position()
+        .map_err(|error| format!("无法读取主窗口位置: {error}"))?
+        .to_logical::<f64>(scale_factor);
+
+    Ok(LogicalPosition::new(
+        webview_position.x - window_position.x,
+        webview_position.y - window_position.y,
+    ))
+}
+
 fn set_scene_webview_bounds(
+    app: &AppHandle,
     webview: &tauri::Webview,
     bounds: &SceneWebviewBounds,
 ) -> Result<(), String> {
     bounds.validate()?;
+    let position = scene_webview_position(bounds, main_webview_origin(app)?);
     webview
-        .set_position(LogicalPosition::new(bounds.x, bounds.y))
+        .set_position(position)
         .map_err(|error| format!("无法定位外链场景: {error}"))?;
     webview
         .set_size(LogicalSize::new(bounds.width, bounds.height))
@@ -134,7 +168,7 @@ pub(crate) async fn show_scene_webview(
     hide_other_scene_webviews(&app, Some(&label));
 
     if let Some(webview) = app.get_webview(&label) {
-        set_scene_webview_bounds(&webview, &bounds)?;
+        set_scene_webview_bounds(&app, &webview, &bounds)?;
         webview
             .show()
             .map_err(|error| format!("无法显示外链场景: {error}"))?;
@@ -150,10 +184,11 @@ pub(crate) async fn show_scene_webview(
     let popup_app = app.clone();
     let webview_builder = WebviewBuilder::new(label, WebviewUrl::External(url))
         .on_new_window(move |url, features| open_scene_popup(&popup_app, url, features));
+    let position = scene_webview_position(&bounds, main_webview_origin(&app)?);
     let webview = main_window
         .add_child(
             webview_builder,
-            LogicalPosition::new(bounds.x, bounds.y),
+            position,
             LogicalSize::new(bounds.width, bounds.height),
         )
         .map_err(|error| format!("无法创建外链场景: {error}"))?;
@@ -172,7 +207,7 @@ pub(crate) async fn resize_scene_webview(
     let url = scene_webview_url(&url)?;
     let label = scene_webview_label(&scene_key, &url)?;
     if let Some(webview) = app.get_webview(&label) {
-        set_scene_webview_bounds(&webview, &bounds)?;
+        set_scene_webview_bounds(&app, &webview, &bounds)?;
     }
     Ok(())
 }
@@ -185,8 +220,10 @@ pub(crate) fn hide_scene_webviews(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_external_web_url, scene_webview_label, scene_webview_url, SCENE_WEBVIEW_PREFIX,
+        is_external_web_url, scene_webview_label, scene_webview_position, scene_webview_url,
+        SceneWebviewBounds, SCENE_WEBVIEW_PREFIX,
     };
+    use tauri::LogicalPosition;
 
     #[test]
     fn only_http_links_can_leave_the_embedded_scene() {
@@ -211,5 +248,21 @@ mod tests {
         assert!(!label.contains("customer/service"));
         assert!(scene_webview_url("http://service.example.com").is_err());
         assert!(scene_webview_url("javascript:alert(1)").is_err());
+    }
+
+    #[test]
+    fn scene_bounds_are_offset_from_the_main_webview_origin() {
+        let bounds = SceneWebviewBounds {
+            x: 8.0,
+            y: 56.0,
+            width: 1200.0,
+            height: 700.0,
+        };
+
+        let position = scene_webview_position(&bounds, LogicalPosition::new(0.0_f64, 28.0_f64));
+
+        assert_eq!(position, LogicalPosition::new(8.0, 84.0));
+        assert_eq!(bounds.width, 1200.0);
+        assert_eq!(bounds.height, 700.0);
     }
 }
