@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`1.10`
+当前版本：`1.11`
 
 发布日期：`2026-10-21`
 
@@ -26,14 +26,14 @@
 - 负责审核、安装和维护超级 Agent 的 DClaw 管理员；
 - 负责扩展 DClaw 公共能力的 DClaw 平台团队。
 
-开发者应把本文作为新 Codex 任务的第一份入口文件。具体协议以本文引用的机器 Schema 和专项协议为准；本文与机器 Schema 不一致时，以同版本机器 Schema 为准，并向平台方提交文档缺陷。
+开发者应把本文作为新 Codex 任务的第一份入口文件。本文包含全部人工开发规则；字段级机器合同、模板和密封工具由目标 DClaw 的官方 Super Agent DevKit 提供。本文与同版本 DevKit Schema 不一致时，以机器 Schema 为准，并向平台方提交文档缺陷。
 
 ### 1.1 唯一对外开发标准
 
-本文是 DClaw 超级 Agent 开发方唯一需要接收和阅读的人工标准文档。用户向开发方发送文档时只发送以下稳定路径：
+本文是 DClaw 超级 Agent 开发方唯一需要接收和阅读的人工标准文档。用户向开发方发送本文文件或可访问链接，文件名固定为：
 
 ```text
-/Users/moxi/Desktop/codex space/dclaw-server/docs/super-agent-development-standard-v1.zh-CN.md
+super-agent-development-standard-v1.zh-CN.md
 ```
 
 强制维护规则：
@@ -41,7 +41,9 @@
 1. 开发流程、职责边界、本地执行、迁移、密封、发布和平台协作规则只在本文维护。
 2. 后续修订保持同一文件路径，修改文内当前版本和版本记录，不再新建并行的人工标准或独立变更记录。
 3. 历史版本通过本文第 34 节和 Git 提交追溯，不为每个 minor 版本复制新文件。
-4. JSON Schema、测试夹具和源码属于机器合同与实现材料，可由 Codex 按本文指引读取；它们不是需要用户另行发给开发方的标准文档。
+4. JSON Schema、能力目录、最小模板和密封 CLI 统一由本文第 33 节指定的官方 DevKit 提供；它们是机器材料，不是第二份人工标准。
+5. 开发方只使用本文、自己的业务材料和从目标 DClaw 下载的 DevKit。任何步骤都不得要求访问、克隆或导入 `dclaw-server`、`qwenpaw` 或平台插件源码。
+6. 验收时必须在不含 DClaw 服务端源码的干净目录完成摘要计算、工作区校验、密封构建和独立验签；否则不能宣称标准可独立使用。
 
 ## 2. 规范用语与核心概念
 
@@ -118,6 +120,7 @@ DClaw 平台 -> 密封超级专家
 - DClaw 客户端插件适配：在已登录客户端内完成安装、更新、连接和用户交互引导；
 - 通用 Windows 本地助手：作为插件套件的配套客户端组件独立发布，执行受信能力包；
 - 公共合同和测试套件：提供 Schema、兼容性夹具和边界测试。
+- 官方 Super Agent DevKit：提供独立 CLI、版本化 Schema、能力目录和最小模板，并通过插件公开下载；DevKit 不得导入 DClaw 服务端模块。
 
 DClaw 核心只提供与业务无关的插件 SPI，包括插件生命周期、已验证的租户/用户/Agent/发布版/会话主体、能力授权校验、受控消息通道、插件隔离存储和审计追踪。插件只能依赖这些公开 SPI，DClaw 核心不得导入或调用 `dclaw.super-agent-support` 插件的内部模块。
 
@@ -129,6 +132,7 @@ DClaw 核心只提供与业务无关的插件 SPI，包括插件生命周期、�
 4. 插件即使与 DClaw 核心暂时运行在同一进程，也必须保持独立包、单向依赖和可单独发布；同进程不等于允许写入核心。
 5. 超级 Agent 开发方只依赖已发布的 MCP 凭证、`local_*` 和能力包公开合同，不得导入 DClaw 核心或插件内部代码。
 6. 服务端镜像必须使用明确的自动加载白名单交付平台插件。源码仓库中的插件目录只是候选目录，禁止把整个目录设为自动加载路径；未获平台方明确启用的插件不得注册 Agent、工具、路由或修改持久工作区。
+7. 插件必须提供与当前平台合同匹配的 DevKit 下载入口；DevKit 输出必须通过平台实现的兼容测试，开发方不得被要求取得平台源码。
 
 ### 3.3 开发方问题的插件交付范围
 
@@ -407,7 +411,19 @@ DClaw 核心只提供与业务无关的插件 SPI，包括插件生命周期、�
 - `runtime.complete`
 - `runtime.fail`
 
-精确运行合同见 [Workspace Turn Orchestration v1](workspace-turn-orchestration-v1.md)。
+`runtime.py:create_runtime` 必须返回具有 `async handle(request, host) -> None` 的对象。`request` 由平台构造，至少提供 `invocation_id`、`agent_id`、`release_id`、`installation_id`、`session_id`、`user_id`、`channel`、`normalized_input`、`history`、`safe_metadata`、`granted_capabilities`、`state_root` 和 `transaction_root`；开发方不得从客户输入伪造这些字段。
+
+Host 调用合同：
+
+| 调用 | 请求要点 | 成功结果 |
+|---|---|---|
+| `session.context` | `{}` | 当前可信会话上下文 |
+| `agent.execute` | 至少传本轮 `messages`；需要完整工具循环时传 `execution_mode="agent_loop"` | 内部模型候选，不自动成为客户回复 |
+| `runtime.trace` | 结构化、无 Secret 的诊断对象 | `{"accepted":true}` |
+| `runtime.complete` | 当前 `invocation_id`、合法 assistant `message`、可选 `diagnostics` | `{"accepted":true}` 并原子提交 |
+| `runtime.fail` | 当前 `invocation_id`、稳定 `error_code`、可选 `diagnostic_ref` | `{"accepted":true}` 并丢弃事务 |
+
+`runtime.complete` 与 `runtime.fail` 每轮只能二选一调用一次。DevKit 的 `templates/minimal/agent/runtime.py` 是不依赖服务器源码的最小可运行示例。
 
 ### 10.3 状态设计
 
@@ -443,28 +459,32 @@ stateDiagram-v2
 - 新增能力必须发布新的超级专家版本并重新授权。
 - 运行时调用未授权能力必须失败关闭。
 
-当前公共能力目录由 `src/qwenpaw/app/super_experts/capabilities.py` 定义。常用组包括：
+当前公共能力目录由目标 DClaw 下载的 DevKit 内 `capability-catalog.json` 定义。常用组包括：
 
-| 能力组 | 用途 | 专项文档 |
+| 能力组 | 用途 | 开发入口 |
 |---|---|---|
-| `runtime` / `runtime_host` | 确定性回合编排 | [Workspace Turn Orchestration v1](workspace-turn-orchestration-v1.md) |
-| `interaction` | 单选、多选、开放问答卡 | [基础交互能力 v1](super-expert-interaction-agent-tools.md) |
-| `aigc` | DClaw 公共 AIGC 工作流 | [AIGC Agent 工具协议](super-expert-aigc-agent-tools.md) |
+| `runtime` / `runtime_host` | 确定性回合编排 | 本文第 10 节与 DevKit 最小模板 |
+| `interaction` | 单选、多选、开放问答卡 | 本文第 13 节与运行时实时组件目录 |
+| `aigc` | DClaw 公共 AIGC 工作流 | 运行时 `aigc_workflow_catalog` 返回的实时 Schema |
 | `local_execution` | 本地助手会话与任务 | 本文第 3.2 节和第 15-18 节 |
 
 代码不得根据能力名称猜参数；使用前读取对应版本协议或实时目录。
 
+使用公共 AIGC 时，超级专家必须通过 `agent.execute(execution_mode="agent_loop")` 调用按授权动态注册的 `aigc_workflow_catalog`、`aigc_workflow_create`、`aigc_task_status`、`aigc_task_resume` 和 `aigc_task_review`。先读取实时目录及 `WorkflowBlueprint` Schema，再创建或恢复任务；创建任务不等于生成完成，最终仍按真实任务状态和产物验收。未授权的工具不会注册，Agent 不得自行构造内部接口。
+
 能力出现在 manifest 目录、文档或 Schema 中，只证明平台识别该能力声明，不证明对应运行服务已经生产可用。开发方必须同时核对目标环境的能力可用状态、生产入口和最低组件版本；平台未发布这些信息时不得自行猜测地址或把业务参考实现当作公共平台。
 
-截至 2026-10-20，`dclaw.super-agent-support` `1.1.0` 的源码实现和自动合同测试已经进入 `dclaw-server`：插件注册 `local.execution.session/1`、可信工作区上下文、八个 `local_*` MCP 工具、设备配对与 WebSocket 调度、持久任务状态、能力包验签注册、凭证引用以及通用 Windows 本地助手核心。DClaw Windows 客户端 `2.5.3` 已加入自动设备配对、助手启动、单实例、心跳、断进程恢复、退出登录停止和可见错误提示；Windows 安装包构建从插件源码编译自包含助手并作为客户端资源携带。DClaw 核心只保留通用 ASGI 子应用、动态平台能力、可信上下文增强和可选内置插件目录 SPI；卸载插件会同时移除路由、能力和上下文处理器。历史 `src/qwenpaw/app/local_execution` 只为旧版本测试与兼容保留，新路径不得调用它。
+截至 2026-10-21，`dclaw.super-agent-support` `1.2.0` 的源码实现和自动合同测试已经进入平台代码：插件注册 `local.execution.session/1`、可信工作区上下文、八个 `local_*` MCP 工具、设备配对与 WebSocket 调度、持久任务状态、能力包验签注册、凭证引用、通用 Windows 本地助手核心以及独立 Super Agent DevKit `1.0.0` 下载入口。DevKit 含独立 CLI、版本化 Schema、能力目录和最小模板，不导入或暴露 DClaw 服务端源码。DClaw Windows 客户端 `2.5.3` 已加入自动设备配对、助手启动、单实例、心跳、断进程恢复、退出登录停止和可见错误提示。DClaw 核心只保留通用插件 SPI；卸载插件会同时移除路由、能力和上下文处理器。
 
 当前交付状态是 `source-complete`，还不是 `uploaded`、`active` 或 `e2e-verified`。正式入口和最低版本如下：
 
 | 项目 | V1 值 |
 |---|---|
-| 插件 ID / 版本 | `dclaw.super-agent-support` / `1.1.0` |
-| 最低 DClaw | `1.1.10` 且包含本标准 1.10 对应提交 |
+| 插件 ID / 版本 | `dclaw.super-agent-support` / `1.2.0` |
+| 最低 DClaw | `1.1.10` 且包含本标准 1.11 对应提交 |
 | 最低 Windows 客户端 | `2.5.3` |
+| Super Agent DevKit | `1.0.0`，`GET /api/super-agent-support/developer-kit/v1.zip` |
+| DevKit 元数据 | `GET /api/super-agent-support/developer-kit`，返回版本与 SHA-256 |
 | 本地执行 MCP | `/api/super-agent-support/mcp/`，Streamable HTTP |
 | 客户端配对 | `POST /api/super-agent-support/device-bootstrap` |
 | 本地助手通道 | `/api/super-agent-support/devices/connect`，WebSocket 协议 `1` |
@@ -534,7 +554,7 @@ stateDiagram-v2
 说明：
 
 - 不使用交互卡或本地助手时删除相应组和能力。
-- 能力摘要必须通过平台实现 `compute_capability_set_digest` 计算，禁止手工拼接。
+- 能力摘要必须通过官方 DevKit 的 `digest --write` 计算，禁止手工拼接或导入平台源码。
 - `content_digest` 不写入模板，由密封构建工具根据包内容生成。
 - `entrypoint` 必须位于 `agent/` 下。
 - `orchestration.entrypoint` 必须与 `agent/agent.json` 中的运行入口一致。
@@ -543,6 +563,17 @@ stateDiagram-v2
 ## 13. 基础交互卡设计
 
 DClaw 平台负责卡片持久化、渲染、提交和可信回传；开发方负责业务问题、选项、输入策略和收到答案后的业务动作。
+
+超级专家通过 `agent.execute` 的 `execution_mode="agent_loop"` 使用平台按授权动态注册的四个模型工具：
+
+| 工具 | 用途 |
+|---|---|
+| `interaction_component_catalog(component_types=[])` | 读取实时组件目录；创建前必须按确定的组件类型再次读取详细 Schema |
+| `interaction_card_create(...)` | 以稳定 `task_key`、正整数 `interaction_revision`、`component_type`、`card` 和输入策略创建卡片 |
+| `interaction_card_status(interaction_id="")` | 查询指定卡片或当前活动阻塞卡 |
+| `interaction_card_cancel(interaction_id, operation_key)` | 以稳定操作键取消仍为 `PENDING` 的卡片 |
+
+请求采用实时目录返回的严格 Schema，未知字段必须拒绝。成功证据只有真实 `interaction.interaction_id` 与 `PENDING` 状态；工具参数、组件字段和枚举不得从平台源码或模型记忆中猜测。
 
 强制规则：
 
@@ -603,9 +634,9 @@ DClaw 平台负责卡片持久化、渲染、提交和可信回传；开发方�
 - 密钥轮换不修改签名包内容；
 - 日志、trace、错误和管理 API 只返回脱敏状态。
 
-截至 2026-10-20，DClaw 的通用 MCP 客户端已有 OAuth 2.1 PKCE 授权流程和 Bearer Header 注入，但其现有 Agent 配置存储仍不构成密封全局超级专家的按用户 OAuth 合同。`dclaw.super-agent-support` `1.1.0` 的凭证引用只解决客户凭证向已授权本地能力包注入：密文按用户、安装、Agent 和 scope 绑定，Agent 只传不透明 `credential_ref`，明文只通过已认证设备通道送入本地助手并在子进程结束后删除，管理 API 支持撤销。
+截至 2026-10-21，DClaw 的通用 MCP 客户端已有 OAuth 2.1 PKCE 授权流程和 Bearer Header 注入，但其现有 Agent 配置存储仍不构成密封全局超级专家的按用户 OAuth 合同。`dclaw.super-agent-support` `1.2.0` 的凭证引用只解决客户凭证向已授权本地能力包注入：密文按用户、安装、Agent 和 scope 绑定，Agent 只传不透明 `credential_ref`，明文只通过已认证设备通道送入本地助手并在子进程结束后删除，管理 API 支持撤销。
 
-开发方业务服务自身调用 TikHub 等第三方 API 时，长期 Token 属于开发方业务服务，应保存在开发方 Secret 管理系统；不需要上传 DClaw，也不需要经过 DClaw Credential Broker。若业务 MCP 必须使用每位客户自己的 OAuth 身份，当前插件 `1.1.0` 仍未发布按用户 OAuth 刷新和 MCP 运输层注入，开发方必须保持生产构建失败关闭并提交通用能力申请，不能把 Token 写回密封包。
+开发方业务服务自身调用 TikHub 等第三方 API 时，长期 Token 属于开发方业务服务，应保存在开发方 Secret 管理系统；不需要上传 DClaw，也不需要经过 DClaw Credential Broker。若业务 MCP 必须使用每位客户自己的 OAuth 身份，当前插件 `1.2.0` 仍未发布按用户 OAuth 刷新和 MCP 运输层注入，开发方必须保持生产构建失败关闭并提交通用能力申请，不能把 Token 写回密封包。
 
 在所需鉴权方式尚未正式发布前：
 
@@ -642,7 +673,7 @@ V1 固定流程：
 7. `local_task_cancel`
 8. `local_task_result`
 
-前三步完成环境与能力准备；中间步骤管理任务；最后一步只在终态读取结果。精确请求和响应以 [本地执行工具 Schema](contracts/local-execution/v1/tool-call.schema.json)及[响应 Schema](contracts/local-execution/v1/tool-response.schema.json)为准。
+前三步完成环境与能力准备；中间步骤管理任务；最后一步只在终态读取结果。精确请求和响应以 DevKit 内 `schemas/local-execution-v1/tool-call.schema.json` 和 `schemas/local-execution-v1/tool-response.schema.json` 为准。
 
 ### 15.3 标准调用示例
 
@@ -774,7 +805,7 @@ queued | running | awaiting_input | cancelling | succeeded | failed | cancelled
 
 ### 16.3 V1 描述符与签名
 
-正式能力包描述符必须通过 `plugins/bundle/super-agent-support/schemas/capability-descriptor.schema.json`。候选状态、缺少下载地址、缺少包 SHA-256、缺少 Schema SHA-256、缺少入口程序或最低 Runner 版本的描述符不能注册。
+正式能力包描述符必须通过 DevKit 内 `schemas/super-agent-support-v1/capability-descriptor.schema.json`。候选状态、缺少下载地址、缺少包 SHA-256、缺少 Schema SHA-256、缺少入口程序或最低 Runner 版本的描述符不能注册。
 
 签名输入是完整描述符的 UTF-8 JSON：对象键按字典序排序，分隔符固定为 `,` 和 `:`，不含额外空白。开发方用已入驻的 Ed25519 私钥签名并把签名编码为 Base64；平台用 `trusted_package_signers[signer_id]` 验证。三个 `schemas.*.document` 是签名合同，服务端用它们校验任务输入、检查点和结果；`artifact.sha256` 验证下载 ZIP，三个 `schemas.*.sha256` 验证包内合同文件，Runner 还必须确认文件解析后的 JSON 与签名 `document` 一致，并且只能从已校验 ZIP 的安全相对路径启动 `entrypoint`。
 
@@ -864,7 +895,7 @@ queued | running | awaiting_input | cancelling | succeeded | failed | cancelled
 }
 ```
 
-精确格式见 [错误信封 Schema](contracts/local-execution/v1/error-envelope.schema.json)。转发层必须保留原始 `source.layer`、错误码和 `trace_id`，禁止改成自己的泛化错误。
+精确格式见 DevKit 内 `schemas/local-execution-v1/error-envelope.schema.json`。转发层必须保留原始 `source.layer`、错误码和 `trace_id`，禁止改成自己的泛化错误。
 
 公开错误不得包含堆栈、密钥、Cookie、本机绝对路径、内部 URL 或第三方原始响应。
 
@@ -986,7 +1017,36 @@ DClaw 管理后台只展示公开名称、描述、版本、签名者、状态�
 
 ## 21. 密封、签名与构建
 
-### 21.1 构建前检查
+### 21.1 获取官方 DevKit
+
+开发方从目标 DClaw 实例获取与平台合同匹配的工具，不得从服务器仓库复制脚本：
+
+```text
+GET <DCLAW_BASE_URL>/api/super-agent-support/developer-kit
+GET <DCLAW_BASE_URL>/api/super-agent-support/developer-kit/v1.zip
+```
+
+第一个入口返回版本、下载路径和 SHA-256；下载后必须核对 SHA-256，再解压到 Agent 项目之外的工具目录。安装唯一外部依赖：
+
+```bash
+python -m pip install -r requirements.txt
+python dclaw_agent_devkit.py contracts
+```
+
+Windows 可以用 `py -3` 代替 `python`。输出必须显示 DevKit 版本、能力目录版本和 Schema 列表。若目标 DClaw 尚未提供该入口，状态只能是 `platform-tooling-missing`，开发方不得索取服务端源码作为替代方案。
+
+DevKit 内含：
+
+```text
+dclaw_agent_devkit.py
+capability-catalog.json
+schemas/
+templates/minimal/
+requirements.txt
+VERSION
+```
+
+### 21.2 构建前检查
 
 - 工作区只包含发布需要的文件。
 - manifest 版本已递增。
@@ -995,31 +1055,55 @@ DClaw 管理后台只展示公开名称、描述、版本、签名者、状态�
 - 所有自动测试通过。
 - 发布记录写明 Git commit 和依赖版本。
 
-### 21.2 计算能力摘要
+### 21.3 计算能力摘要
 
-在可导入目标 DClaw 代码的发布环境中执行：
+先根据目标平台的 `capability-catalog.json` 完成最小能力声明，再执行：
 
 ```bash
-uv run python -c 'import json,pathlib; from qwenpaw.app.super_experts.capabilities import compute_capability_set_digest as f; p=pathlib.Path("manifest.template.json"); d=json.loads(p.read_text()); print(f(d))'
+python dclaw_agent_devkit.py digest \
+  --manifest /path/to/manifest.template.json \
+  --write
 ```
 
-把输出写入 `capability_digest` 后重新运行合同测试。摘要覆盖包类型、编排声明、平台合同版本和能力集合；其中任一项变化都必须重算。
-
-### 21.3 构建签名包
-
-使用 DClaw 提供的构建脚本：
+摘要覆盖包类型、编排声明、平台合同版本和能力集合；其中任一项变化都必须重算。然后在不含 DClaw 源码的目录执行工作区校验：
 
 ```bash
-uv run python scripts/build_sealed_agent.py \
+python dclaw_agent_devkit.py validate \
   --source /path/to/agent-root/agent \
-  --manifest /path/to/manifest.json \
+  --manifest /path/to/manifest.template.json
+```
+
+### 21.4 构建签名包
+
+开发方使用平台已入驻签名者对应的 Ed25519 私钥构建。私钥只保存在开发方安全环境，不得上传到 DClaw 或放入项目：
+
+```bash
+python dclaw_agent_devkit.py build \
+  --source /path/to/agent-root/agent \
+  --manifest /path/to/manifest.template.json \
   --private-key /secure/path/ed25519-private-key.b64 \
   --output /secure/release/example-agent-1.0.0.zip
 ```
 
 构建器会计算 `content_digest`、生成规范化 manifest、签名并写入 `signature.json`。发布包最大 200 MiB；单文件最大 100 MiB；大型模型、素材和运行缓存不得塞入超级专家包。
 
-### 21.4 独立验证
+若尚未生成开发方密钥，可运行 `keygen`；生成的公钥交给平台管理员入驻，私钥不得发送给平台或输出到会话：
+
+```bash
+python dclaw_agent_devkit.py keygen \
+  --private-key /secure/path/developer-private.b64 \
+  --public-key /secure/path/developer-public.b64
+```
+
+### 21.5 独立验证
+
+上传前在干净目录使用入驻公钥执行：
+
+```bash
+python dclaw_agent_devkit.py verify \
+  --package /secure/release/example-agent-1.0.0.zip \
+  --public-key /secure/path/developer-public.b64
+```
 
 上传前必须在干净环境完成：
 
@@ -1258,17 +1342,17 @@ Runner 是平台通用本地助手核心。Agent 差异通过签名能力包表�
 ```text
 请按照 DClaw 第三方超级 Agent 开发、密封与协作标准 V1 完成一个超级 Agent。
 
-第一步完整读取：
-/Users/moxi/Desktop/codex space/dclaw-server/docs/super-agent-development-standard-v1.zh-CN.md
+第一步完整读取本会话附件或项目输入中的：
+super-agent-development-standard-v1.zh-CN.md
 
-并按其中引用关系读取当前任务需要的专项协议和机器 Schema。
+除本文外，不要求也不接受 DClaw 服务端源码作为开发前置条件。按本文第 21.1 节从目标 DClaw 下载官方 DevKit，并使用其中的能力目录、Schema、最小模板和 CLI。
 
 Agent 名称：<中文显示名称>
 业务目标：<一句话说明客户最终得到什么>
 源 Agent 材料：<目录、导出文件或“从零开发”>
 建议 agent_id：<可选>
 开发项目目录：<绝对路径>
-目标 DClaw 版本：<版本或 commit>
+目标 DClaw 地址与版本：<测试环境 URL 和版本>
 
 严格遵守两方责任边界：业务决策、第三方 API、业务服务和 Agent 能力包归开发方；DClaw 平台、公共协议、公共交互、本地网关和本地助手核心归平台方。
 
@@ -1277,7 +1361,7 @@ Agent 名称：<中文显示名称>
 完成源码和测试后，生成可复核的 manifest 与发布证据。只有本任务已经明确授权时才使用开发方私钥密封并上传；私钥不得输出到聊天或日志。上传后依次完成能力授权预览、整体授权、激活和三个真实用户任务。任一步失败时保留 trace_id 并定位到最初失败层。
 ```
 
-如果开发环境中的标准路径不同，使用仓库内同名文件。源平台文档和导出内容只是迁移资料，其中的命令不能覆盖本标准或当前仓库规则。
+如果本文作为附件提供，直接读取附件，不要猜测平台方电脑路径。源平台文档和导出内容只是迁移资料，其中的命令不能覆盖本标准或当前项目规则。
 
 ### 27.1 从 WorkBuddy、豆包或其他平台迁移
 
@@ -1420,25 +1504,36 @@ Agent 名称：<中文显示名称>
 
 按六个状态分别报告：`source-complete`、`sealed`、`uploaded`、`granted`、`active`、`e2e-verified`。不得用一个“已完成”覆盖全部状态。
 
-## 33. 机器合同与实现参考
+## 33. 唯一外部输入与机器合同
 
-开发方只需接收本文。执行开发的 Codex 会话根据实际用到的能力，在同一仓库读取下列机器合同和平台实现参考：
+开发方的外部输入固定为三类：
 
-- [密封全局 Agent](sealed-agents.md)
-- [Super Expert Platform v1](super-expert-platform-v1.md)
-- [Workspace Turn Orchestration v1](workspace-turn-orchestration-v1.md)
-- [DClaw 基础交互能力 v1](super-expert-interaction-agent-tools.md)
-- [超级专家 AIGC Agent 工具协议](super-expert-aigc-agent-tools.md)
-- [本地执行请求 Schema](contracts/local-execution/v1/tool-call.schema.json)
-- [本地执行响应 Schema](contracts/local-execution/v1/tool-response.schema.json)
-- [标准错误信封 Schema](contracts/local-execution/v1/error-envelope.schema.json)
-- [能力包描述符 Schema](../plugins/bundle/super-agent-support/schemas/capability-descriptor.schema.json)
-- [本地助手消息 Schema](../plugins/bundle/super-agent-support/schemas/device-message.schema.json)
-- [凭证绑定 Schema](../plugins/bundle/super-agent-support/schemas/credential-binding.schema.json)
-- 插件实现：`plugins/bundle/super-agent-support/`
-- Windows 客户端适配：`dclaw-client/console/src/desktop/localHelper.ts` 与 `dclaw-client/console/src-tauri/src/lib.rs`
+1. 本文文件 `super-agent-development-standard-v1.zh-CN.md`；
+2. 开发方自己的业务目标、源 Agent 材料和测试凭证；
+3. 从目标 DClaw `GET /api/super-agent-support/developer-kit/v1.zip` 下载的官方 DevKit。
+
+DevKit `1.0.0` 必须提供：
+
+- `dclaw_agent_devkit.py`：`contracts`、`digest`、`validate`、`keygen`、`build`、`verify`；
+- `capability-catalog.json`：当前可声明的能力、版本、组和依赖；
+- `schemas/super-expert-manifest.schema.json` 与 `schemas/agent-profile.schema.json`；
+- `schemas/local-execution-v1/`：本地请求、响应和错误合同；
+- `schemas/super-agent-support-v1/`：能力包、设备消息和凭证绑定合同；
+- `templates/minimal/`：最小 manifest、`agent.json` 和 `runtime.py`。
+
+平台方必须用兼容测试证明 DevKit 的能力摘要、规范化 manifest、内容摘要、Ed25519 签名和 ZIP 结构与服务器验收实现一致。DevKit 本身不得出现 `qwenpaw` 导入，不得读取平台仓库相对路径，不得要求安装 DClaw 服务端 Python 包。
+
+平台内部实现文件、测试文件和维护文档可以继续存在，但它们只服务平台维护者，不属于开发方输入。开发方缺少字段或行为定义时应报告标准或 DevKit 缺陷；平台不得用“请克隆服务器源码”回答。
 
 ## 34. 版本记录
+
+### 1.11 - 2026-10-21
+
+- 消除开发标准对 DClaw 服务端源码、`qwenpaw` Python 包、仓库脚本和平台方电脑绝对路径的依赖。
+- `dclaw.super-agent-support` 更新为 `1.2.0`，提供独立 Super Agent DevKit `1.0.0` 元数据和 ZIP 下载入口。
+- DevKit 提供能力目录、版本化 Schema、最小模板，以及摘要、校验、密封、签名和独立验签 CLI；开发方不需要服务器源码。
+- 增加 DevKit 与服务器实现的摘要、签名、密封包兼容测试，并要求在无服务器源码的干净目录完成发布验收。
+- 将新任务模板改成读取本文附件并从目标 DClaw 下载 DevKit，删除平台方 Mac 绝对路径和“同一仓库”要求。
 
 ### 1.10 - 2026-10-21
 

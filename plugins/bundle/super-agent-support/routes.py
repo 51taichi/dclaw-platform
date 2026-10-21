@@ -1,12 +1,15 @@
-"""Authenticated client adapter, device channel, package, and credential APIs."""
+"""Authenticated client, device, package, credential, and DevKit APIs."""
 
 from __future__ import annotations
 
+import io
+import hashlib
 import json
 import secrets
 import uuid
 from pathlib import Path
 from typing import Any
+import zipfile
 
 from fastapi import (
     FastAPI,
@@ -15,6 +18,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
+from fastapi.responses import Response
 from jsonschema import Draft202012Validator
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -61,6 +65,53 @@ def _require_admin(request: Request) -> None:
         raise HTTPException(status_code=403, detail="administrator required")
 
 
+def _developer_kit_archive() -> tuple[bytes, str]:
+    root = Path(__file__).parent / "devkit"
+    version = (root / "VERSION").read_text(encoding="utf-8").strip()
+    prefix = f"dclaw-super-agent-devkit-{version}"
+    output = io.BytesIO()
+    with zipfile.ZipFile(
+        output,
+        "w",
+        compression=zipfile.ZIP_DEFLATED,
+    ) as archive:
+        for path in sorted(root.rglob("*")):
+            if not path.is_file() or "__pycache__" in path.parts:
+                continue
+            archive.write(
+                path,
+                f"{prefix}/{path.relative_to(root).as_posix()}",
+            )
+    return output.getvalue(), version
+
+
+def _register_developer_kit_routes(app: FastAPI) -> None:
+    @app.get("/developer-kit")
+    async def developer_kit_metadata() -> dict[str, Any]:
+        archive, version = _developer_kit_archive()
+        return {
+            "name": "dclaw-super-agent-devkit",
+            "version": version,
+            "download_path": "/api/super-agent-support/developer-kit/v1.zip",
+            "sha256": hashlib.sha256(archive).hexdigest(),
+            "server_source_required": False,
+        }
+
+    @app.get("/developer-kit/v1.zip")
+    async def download_developer_kit() -> Response:
+        archive, version = _developer_kit_archive()
+        return Response(
+            archive,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": (
+                    "attachment; filename="
+                    f'"dclaw-super-agent-devkit-{version}.zip"'
+                ),
+            },
+        )
+
+
 def create_app(
     *,
     store: StateStore,
@@ -69,8 +120,11 @@ def create_app(
     packages: CapabilityPackageRegistry,
     credentials: CredentialBroker,
 ) -> FastAPI:
+    # pylint: disable=too-many-statements
     app = FastAPI(
-        title="DClaw Super Agent Support", docs_url=None, redoc_url=None
+        title="DClaw Super Agent Support",
+        docs_url=None,
+        redoc_url=None,
     )
     app.mount("/mcp", mcp.app, name="local-execution-mcp")
     device_message_validator = Draft202012Validator(
@@ -88,9 +142,11 @@ def create_app(
         return {
             "status": "ok",
             "plugin": "dclaw.super-agent-support",
-            "version": "1.1.0",
+            "version": "1.2.0",
             "protocols": {"local_execution": "1.0", "device": "1"},
         }
+
+    _register_developer_kit_routes(app)
 
     @app.post("/device-bootstrap")
     async def device_bootstrap(
@@ -138,7 +194,8 @@ def create_app(
                 issued_token = secrets.token_urlsafe(32)
         if not user_id:
             await websocket.close(
-                code=4401, reason="device authentication failed"
+                code=4401,
+                reason="device authentication failed",
             )
             return
         await websocket.accept()
@@ -164,7 +221,7 @@ def create_app(
                 message = await websocket.receive_json()
                 if isinstance(message, dict):
                     errors = list(
-                        device_message_validator.iter_errors(message)
+                        device_message_validator.iter_errors(message),
                     )
                     if errors:
                         await websocket.send_json(
@@ -175,7 +232,9 @@ def create_app(
                         )
                         continue
                     await service.handle_device_message(
-                        device_id, user_id, message
+                        device_id,
+                        user_id,
+                        message,
                     )
         except WebSocketDisconnect:
             pass

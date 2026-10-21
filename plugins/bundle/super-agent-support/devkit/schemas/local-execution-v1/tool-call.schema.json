@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/contracts/local-execution/v1/tool-call.schema.json",
+  "title": "DClaw local execution MCP tool call v1",
+  "oneOf": [
+    {"$ref": "#/$defs/EnvironmentStatusCall"},
+    {"$ref": "#/$defs/CapabilitiesListCall"},
+    {"$ref": "#/$defs/RuntimePrepareCall"},
+    {"$ref": "#/$defs/TaskStartCall"},
+    {"$ref": "#/$defs/TaskContinueCall"},
+    {"$ref": "#/$defs/TaskStatusCall"},
+    {"$ref": "#/$defs/TaskCancelCall"},
+    {"$ref": "#/$defs/TaskResultCall"}
+  ],
+  "$defs": {
+    "SessionToken": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "TaskId": {"type": "string", "minLength": 1, "maxLength": 128},
+    "CapabilityId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*)+$",
+      "maxLength": 128
+    },
+    "EnvironmentStatusCall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "arguments"],
+      "properties": {
+        "tool": {"const": "local_environment_status"},
+        "arguments": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["agent_protocol_version"],
+          "properties": {
+            "agent_protocol_version": {"type": "string", "minLength": 1, "maxLength": 32},
+            "bootstrap_session_id": {
+              "type": ["string", "null"],
+              "maxLength": 128,
+              "description": "Optional correlation value echoed unchanged by the platform. It grants no identity, pairing, installation, or session authority."
+            },
+            "wait_seconds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 25,
+              "description": "Maximum seconds to wait for the signed-in user's DClaw client to connect automatically."
+            },
+            "dclaw_session_token": {"$ref": "#/$defs/SessionToken"}
+          }
+        }
+      }
+    },
+    "CapabilitiesListCall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "arguments"],
+      "properties": {
+        "tool": {"const": "local_capabilities_list"},
+        "arguments": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "output_type": {"type": "string", "minLength": 1, "maxLength": 64},
+            "device_id": {"type": "string", "minLength": 1, "maxLength": 128},
+            "dclaw_session_token": {"$ref": "#/$defs/SessionToken"}
+          }
+        }
+      }
+    },
+    "RuntimePrepareCall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "arguments"],
+      "properties": {
+        "tool": {"const": "local_runtime_prepare"},
+        "arguments": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["capability"],
+          "properties": {
+            "capability": {"$ref": "#/$defs/CapabilityId"},
+            "dclaw_session_token": {"$ref": "#/$defs/SessionToken"}
+          }
+        }
+      }
+    },
+    "TaskStartCall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "arguments"],
+      "properties": {
+        "tool": {"const": "local_task_start"},
+        "arguments": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["capability_id", "input", "idempotency_key"],
+          "properties": {
+            "capability_id": {"$ref": "#/$defs/CapabilityId"},
+            "input": {"type": "object"},
+            "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 128},
+            "dclaw_session_token": {"$ref": "#/$defs/SessionToken"}
+          }
+        }
+      }
+    },
+    "TaskContinueCall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "arguments"],
+      "properties": {
+        "tool": {"const": "local_task_continue"},
+        "arguments": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["task_id", "checkpoint_id", "input"],
+          "properties": {
+            "task_id": {"$ref": "#/$defs/TaskId"},
+            "checkpoint_id": {"type": "string", "minLength": 1, "maxLength": 128},
+            "input": {"type": "object"},
+            "dclaw_session_token": {"$ref": "#/$defs/SessionToken"}
+          }
+        }
+      }
+    },
+    "TaskStatusCall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "arguments"],
+      "properties": {
+        "tool": {"const": "local_task_status"},
+        "arguments": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "task_id": {"$ref": "#/$defs/TaskId"},
+            "current_task": {"type": "boolean"},
+            "wait_seconds": {"type": "integer", "minimum": 0, "maximum": 25},
+            "dclaw_session_token": {"$ref": "#/$defs/SessionToken"}
+          },
+          "oneOf": [
+            {
+              "required": ["task_id"],
+              "properties": {"current_task": {"const": false}}
+            },
+            {
+              "required": ["current_task"],
+              "properties": {"current_task": {"const": true}},
+              "not": {"required": ["task_id"]}
+            }
+          ]
+        }
+      }
+    },
+    "TaskCancelCall": {"$ref": "#/$defs/TaskIdOnlyCall", "unevaluatedProperties": false, "properties": {"tool": {"const": "local_task_cancel"}}},
+    "TaskResultCall": {"$ref": "#/$defs/TaskIdOnlyCall", "unevaluatedProperties": false, "properties": {"tool": {"const": "local_task_result"}}},
+    "TaskIdOnlyCall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "arguments"],
+      "properties": {
+        "tool": {"type": "string"},
+        "arguments": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["task_id"],
+          "properties": {
+            "task_id": {"$ref": "#/$defs/TaskId"},
+            "dclaw_session_token": {"$ref": "#/$defs/SessionToken"}
+          }
+        }
+      }
+    }
+  }
+}

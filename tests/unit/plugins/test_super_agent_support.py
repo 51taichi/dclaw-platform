@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import base64
 import asyncio
+import hashlib
 import importlib.util
+import io
 import json
 import sys
 from pathlib import Path
+import zipfile
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -168,7 +171,8 @@ def test_store_migrates_legacy_waiting_task_status(plugin_module, tmp_path):
     store.update_task(task["task_id"], status="waiting_for_input")
 
     migrated = plugin_module.StateStore(path).get_task(
-        task["task_id"], "user-1"
+        task["task_id"],
+        "user-1",
     )
 
     assert migrated is not None
@@ -223,6 +227,53 @@ def test_mcp_endpoint_exposes_exact_standard_tool_set(plugin_module, tmp_path):
         "local_task_cancel",
         "local_task_result",
     }
+
+
+def test_developer_kit_is_downloadable_without_server_source(
+    plugin_module,
+    tmp_path,
+):
+    store, _signer, broker, service = _runtime(plugin_module, tmp_path)
+    mcp_cls = sys.modules[
+        "test_dclaw_super_agent_support.mcp_server"
+    ].LocalExecutionMcp
+    package_cls = sys.modules[
+        "test_dclaw_super_agent_support.packages"
+    ].CapabilityPackageRegistry
+    routes = sys.modules["test_dclaw_super_agent_support.routes"]
+    plugin_app = routes.create_app(
+        store=store,
+        service=service,
+        mcp=mcp_cls(service),
+        packages=package_cls(
+            store,
+            PLUGIN_ROOT / "schemas" / "capability-descriptor.schema.json",
+            {},
+        ),
+        credentials=broker,
+    )
+
+    with TestClient(plugin_app) as client:
+        metadata = client.get("/developer-kit")
+        downloaded = client.get("/developer-kit/v1.zip")
+
+    assert metadata.status_code == 200
+    assert metadata.json()["name"] == "dclaw-super-agent-devkit"
+    assert metadata.json()["version"] == "1.0.0"
+    assert metadata.json()["download_path"] == (
+        "/api/super-agent-support/developer-kit/v1.zip"
+    )
+    assert metadata.json()["server_source_required"] is False
+    assert downloaded.status_code == 200
+    assert downloaded.headers["content-type"] == "application/zip"
+    assert (
+        metadata.json()["sha256"]
+        == hashlib.sha256(downloaded.content).hexdigest()
+    )
+    with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
+        names = set(archive.namelist())
+    assert "dclaw-super-agent-devkit-1.0.0/dclaw_agent_devkit.py" in names
+    assert all("qwenpaw" not in name for name in names)
 
 
 def test_device_bootstrap_reuses_only_current_users_device(
@@ -413,7 +464,7 @@ async def test_environment_catalog_and_runtime_prepare_contract(
                 "version": "1",
                 "package_id": "example.video.package",
                 "package_version": "1.2.0",
-            }
+            },
         ],
     )
     runtime_ready = await service.call(
@@ -556,7 +607,7 @@ async def test_local_task_is_idempotent_and_completes_from_device_event(
                 item
                 for item in websocket.messages
                 if item["type"] == "task.start"
-            ]
+            ],
         )
         == 1
     )
@@ -788,5 +839,7 @@ def test_capability_descriptor_schema_and_signature(plugin_module, tmp_path):
     ] = "candidate_library_pending_platform_runner_adapter"
     with pytest.raises(Exception, match="invalid capability descriptor"):
         registry.register(
-            candidate, signer_id="developer-1", signature=signature
+            candidate,
+            signer_id="developer-1",
+            signature=signature,
         )

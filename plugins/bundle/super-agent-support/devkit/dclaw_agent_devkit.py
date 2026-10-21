@@ -1,0 +1,759 @@
+#!/usr/bin/env python3
+"""Standalone DClaw Super Agent development, validation, and sealing CLI."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import hashlib
+import io
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import stat
+import struct
+import unicodedata
+import zipfile
+
+
+DEVKIT_VERSION = "1.0.0"
+MAX_PACKAGE_BYTES = 200 * 1024 * 1024
+MAX_EXPANDED_BYTES = 400 * 1024 * 1024
+MAX_FILE_BYTES = 100 * 1024 * 1024
+MAX_MEMBERS = 4096
+MAX_COMPRESSION_RATIO = 200
+HOST_CAPABILITIES = {
+    "agent.execute",
+    "session.context",
+    "runtime.trace",
+    "runtime.complete",
+    "runtime.fail",
+}
+MANIFEST_FIELDS = {
+    "schema_version",
+    "agent_id",
+    "name",
+    "version",
+    "agent_type",
+    "scope",
+    "entrypoint",
+    "public_metadata",
+    "runtime",
+    "package_type",
+    "orchestration",
+    "platform_contract_versions",
+    "capabilities",
+    "capability_digest",
+    "signer_id",
+    "content_digest",
+}
+
+
+class DevKitError(ValueError):
+    pass
+
+
+def _root() -> Path:
+    return Path(__file__).resolve().parent
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise DevKitError(f"invalid JSON file: {path}") from exc
+    if not isinstance(value, dict):
+        raise DevKitError(f"JSON root must be an object: {path}")
+    return value
+
+
+def _write_json(path: Path, value: dict) -> None:
+    path.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _canonical_json(value: dict) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _normalize_member_path(value: str) -> str:
+    normalized = unicodedata.normalize("NFC", value.replace("\\", "/"))
+    path = PurePosixPath(normalized)
+    if (
+        not normalized
+        or normalized.startswith("/")
+        or path.is_absolute()
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
+        raise DevKitError("unsafe package path")
+    return path.as_posix()
+
+
+def _payload_digest(files: dict[str, bytes]) -> str:
+    digest = hashlib.sha256()
+    normalized: list[tuple[bytes, bytes]] = []
+    seen: set[str] = set()
+    for raw_path, data in files.items():
+        path = _normalize_member_path(raw_path)
+        if path in {"manifest.json", "signature.json"}:
+            continue
+        if path in seen:
+            raise DevKitError("duplicate normalized package path")
+        seen.add(path)
+        normalized.append((path.encode("utf-8"), data))
+    for path_bytes, data in sorted(normalized, key=lambda item: item[0]):
+        digest.update(struct.pack(">Q", len(path_bytes)))
+        digest.update(path_bytes)
+        digest.update(struct.pack(">Q", len(data)))
+        digest.update(data)
+    return f"sha256:{digest.hexdigest()}"
+
+
+def compute_capability_digest(manifest: dict) -> str:
+    declarations = [
+        {
+            "capability_id": item["capability_id"],
+            "contract_version": item["contract_version"],
+        }
+        for item in manifest.get("capabilities", [])
+    ]
+    authority = {
+        "package_type": manifest.get("package_type"),
+        "orchestration": manifest.get("orchestration"),
+        "platform_contract_versions": manifest.get(
+            "platform_contract_versions",
+            {},
+        ),
+        "capabilities": sorted(
+            declarations,
+            key=lambda item: item["capability_id"],
+        ),
+    }
+    return f"sha256:{hashlib.sha256(_canonical_json(authority)).hexdigest()}"
+
+
+def _catalog() -> dict[str, dict]:
+    payload = _read_json(_root() / "capability-catalog.json")
+    return {item["capability_id"]: item for item in payload["capabilities"]}
+
+
+def _require_string(
+    value: object,
+    field: str,
+    pattern: str | None = None,
+) -> str:
+    if not isinstance(value, str) or not value:
+        raise DevKitError(f"manifest field is invalid: {field}")
+    if pattern and re.fullmatch(pattern, value) is None:
+        raise DevKitError(f"manifest field is invalid: {field}")
+    return value
+
+
+def _validate_public_metadata(metadata: object) -> None:
+    if metadata is None:
+        return
+    if not isinstance(metadata, dict) or set(metadata) - {
+        "description",
+        "icon",
+        "tags",
+    }:
+        raise DevKitError("manifest field is invalid: public_metadata")
+    description = metadata.get("description", "")
+    icon = metadata.get("icon")
+    tags = metadata.get("tags", [])
+    valid_description = (
+        isinstance(description, str) and len(description) <= 2000
+    )
+    valid_icon = icon is None or isinstance(icon, str)
+    valid_tags = (
+        isinstance(tags, list)
+        and len(tags) <= 50
+        and all(isinstance(tag, str) for tag in tags)
+    )
+    if not all((valid_description, valid_icon, valid_tags)):
+        raise DevKitError("manifest field is invalid: public_metadata")
+
+
+def _validate_runtime(runtime: object) -> None:
+    if runtime is None:
+        return
+    if not isinstance(runtime, dict) or set(runtime) - {
+        "adapter",
+        "contract_version",
+        "failure_policy",
+    }:
+        raise DevKitError("manifest field is invalid: runtime")
+    _require_string(
+        runtime.get("adapter"),
+        "runtime.adapter",
+        r"[a-z][a-z0-9_]{0,63}",
+    )
+    _require_string(
+        runtime.get("contract_version"),
+        "runtime.contract_version",
+        r"[1-9][0-9]{0,7}",
+    )
+    if runtime.get("failure_policy", "fail_closed") != "fail_closed":
+        raise DevKitError("manifest field is invalid: runtime.failure_policy")
+
+
+def _validate_orchestration(orchestration: object) -> dict:
+    if not isinstance(orchestration, dict) or set(orchestration) != {
+        "capability_id",
+        "contract_version",
+        "entrypoint",
+        "required_host_capabilities",
+    }:
+        raise DevKitError("manifest orchestration declaration is invalid")
+    if (
+        orchestration["capability_id"] != "workspace.turn.orchestrate/1"
+        or orchestration["contract_version"] != "1"
+    ):
+        raise DevKitError("manifest orchestration declaration is invalid")
+    _require_string(
+        orchestration["entrypoint"],
+        "orchestration.entrypoint",
+        r"[A-Za-z0-9_./-]+\.py:[A-Za-z_][A-Za-z0-9_]*",
+    )
+    host = orchestration["required_host_capabilities"]
+    if (
+        not isinstance(host, list)
+        or len(host) != len(set(host))
+        or set(host) != HOST_CAPABILITIES
+    ):
+        raise DevKitError("required host capability set is incomplete")
+    return orchestration
+
+
+def _validate_capability_declarations(
+    manifest: dict,
+    orchestration: dict,
+) -> None:
+    versions = manifest.get("platform_contract_versions")
+    if not isinstance(versions, dict) or not all(
+        isinstance(key, str) and isinstance(value, str)
+        for key, value in versions.items()
+    ):
+        raise DevKitError("platform contract versions are invalid")
+    capabilities = manifest.get("capabilities")
+    if not isinstance(capabilities, list) or not capabilities:
+        raise DevKitError("capability declarations are missing")
+    catalog = _catalog()
+    declared: dict[str, dict] = {}
+    for item in capabilities:
+        _add_capability_declaration(item, catalog, declared)
+    _validate_capability_dependencies(declared, versions)
+    if orchestration["capability_id"] not in declared:
+        raise DevKitError("orchestration capability is not declared")
+    missing_host = HOST_CAPABILITIES - set(declared)
+    if missing_host:
+        raise DevKitError(
+            f"missing host capability declaration: {sorted(missing_host)[0]}",
+        )
+    capability_digest = manifest.get("capability_digest")
+    if capability_digest != compute_capability_digest(manifest):
+        raise DevKitError("capability digest mismatch")
+
+
+def _add_capability_declaration(
+    item: object,
+    catalog: dict[str, dict],
+    declared: dict[str, dict],
+) -> None:
+    if not isinstance(item, dict) or set(item) != {
+        "capability_id",
+        "contract_version",
+    }:
+        raise DevKitError("invalid capability declaration")
+    capability_id = _require_string(
+        item.get("capability_id"),
+        "capability_id",
+        r"[a-z][a-z0-9_.-]*(?:/[1-9][0-9]*)?",
+    )
+    if capability_id in declared:
+        raise DevKitError("duplicate capability declaration")
+    definition = catalog.get(capability_id)
+    if definition is None:
+        raise DevKitError(f"unknown capability: {capability_id}")
+    if item.get("contract_version") != definition["contract_version"]:
+        raise DevKitError(f"unsupported capability version: {capability_id}")
+    declared[capability_id] = definition
+
+
+def _validate_capability_dependencies(
+    declared: dict[str, dict],
+    versions: dict,
+) -> None:
+    for definition in declared.values():
+        for dependency in definition["dependencies"]:
+            if dependency not in declared:
+                raise DevKitError(
+                    f"missing capability dependency: {dependency}",
+                )
+        group = definition["group"]
+        if versions.get(group) != "1":
+            raise DevKitError(
+                f"unsupported platform contract version: {group}",
+            )
+
+
+def validate_manifest(manifest: dict, *, require_content_digest: bool) -> None:
+    extra = set(manifest) - MANIFEST_FIELDS
+    if extra:
+        raise DevKitError(f"unknown manifest field: {sorted(extra)[0]}")
+    expected = {
+        "schema_version": 3,
+        "agent_type": "sealed",
+        "scope": "global",
+        "package_type": "super_expert",
+    }
+    for key, value in expected.items():
+        if manifest.get(key) != value:
+            raise DevKitError(f"manifest field is invalid: {key}")
+    _require_string(
+        manifest.get("agent_id"),
+        "agent_id",
+        r"[A-Za-z0-9_-]{1,128}",
+    )
+    name = _require_string(manifest.get("name"), "name")
+    if len(name) > 200:
+        raise DevKitError("manifest field is invalid: name")
+    _require_string(
+        manifest.get("version"),
+        "version",
+        r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?",
+    )
+    entrypoint = _require_string(manifest.get("entrypoint"), "entrypoint")
+    if not _normalize_member_path(entrypoint).startswith("agent/"):
+        raise DevKitError("entrypoint must be inside agent/")
+    _require_string(
+        manifest.get("signer_id"),
+        "signer_id",
+        r"[A-Za-z0-9_.-]{1,128}",
+    )
+    _validate_public_metadata(manifest.get("public_metadata"))
+    _validate_runtime(manifest.get("runtime"))
+    orchestration = _validate_orchestration(manifest.get("orchestration"))
+    _validate_capability_declarations(manifest, orchestration)
+    content_digest = manifest.get("content_digest")
+    if require_content_digest:
+        if (
+            not isinstance(content_digest, str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", content_digest) is None
+        ):
+            raise DevKitError("content digest is invalid")
+    elif content_digest is not None:
+        raise DevKitError(
+            "content_digest must not be present in the source manifest",
+        )
+
+
+def validate_workspace(source: Path, manifest: dict) -> dict:
+    try:
+        root = source.resolve(strict=True)
+    except OSError as exc:
+        raise DevKitError("workspace_missing") from exc
+    if not root.is_dir():
+        raise DevKitError("workspace_missing")
+    config_path = root / "agent.json"
+    if config_path.is_symlink():
+        raise DevKitError("unsafe_agent_config")
+    try:
+        config_resolved = config_path.resolve(strict=True)
+    except OSError as exc:
+        raise DevKitError("agent_config_missing") from exc
+    if (
+        not config_resolved.is_relative_to(root)
+        or not config_resolved.is_file()
+    ):
+        raise DevKitError("unsafe_agent_config")
+    config = _read_json(config_resolved)
+    if not isinstance(config.get("id"), str) or not isinstance(
+        config.get("name"),
+        str,
+    ):
+        raise DevKitError("agent_config_invalid")
+    if config["id"] != manifest["agent_id"]:
+        raise DevKitError("agent_id_mismatch")
+    orchestration = config.get("orchestration")
+    if (
+        not isinstance(orchestration, dict)
+        or orchestration.get("enabled") is not True
+    ):
+        raise DevKitError("agent orchestration is not enabled")
+    if orchestration.get("contract_version", "1") != "1":
+        raise DevKitError("agent orchestration contract is unsupported")
+    if (
+        orchestration.get("entrypoint")
+        != manifest["orchestration"]["entrypoint"]
+    ):
+        raise DevKitError("orchestration entrypoint mismatch")
+    required = orchestration.get("required_host_capabilities")
+    if (
+        not isinstance(required, list)
+        or len(required) != len(set(required))
+        or set(required) != HOST_CAPABILITIES
+    ):
+        raise DevKitError("required host capability set is incomplete")
+    module_path = orchestration["entrypoint"].split(":", 1)[0]
+    runtime_path = (root / module_path).resolve()
+    if not runtime_path.is_relative_to(root) or not runtime_path.is_file():
+        raise DevKitError("orchestration entrypoint file is missing")
+    return config
+
+
+def _collect_source(source: Path) -> dict[str, bytes]:
+    files: dict[str, bytes] = {}
+    for path in source.rglob("*"):
+        if path.is_symlink():
+            raise DevKitError(f"workspace contains a symlink: {path.name}")
+        if path.is_file():
+            relative = path.relative_to(source).as_posix()
+            data = path.read_bytes()
+            if len(data) > MAX_FILE_BYTES:
+                raise DevKitError(
+                    f"workspace file exceeds size limit: {relative}",
+                )
+            files[f"agent/{relative}"] = data
+    if len(files) > MAX_MEMBERS - 2:
+        raise DevKitError("workspace contains too many files")
+    return files
+
+
+def _load_private_key(path: Path):
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+            Ed25519PrivateKey,
+        )
+
+        raw = base64.b64decode(
+            path.read_text(encoding="utf-8").strip(),
+            validate=True,
+        )
+        return Ed25519PrivateKey.from_private_bytes(raw)
+    except ImportError as exc:
+        raise DevKitError("install requirements.txt before signing") from exc
+    except (OSError, ValueError) as exc:
+        raise DevKitError("invalid Ed25519 private key") from exc
+
+
+def _load_public_key(path: Path):
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+            Ed25519PublicKey,
+        )
+
+        raw = base64.b64decode(
+            path.read_text(encoding="utf-8").strip(),
+            validate=True,
+        )
+        return Ed25519PublicKey.from_public_bytes(raw)
+    except ImportError as exc:
+        raise DevKitError(
+            "install requirements.txt before verification",
+        ) from exc
+    except (OSError, ValueError) as exc:
+        raise DevKitError("invalid Ed25519 public key") from exc
+
+
+def build_package(
+    source: Path,
+    manifest_path: Path,
+    private_key_path: Path,
+) -> bytes:
+    manifest = _read_json(manifest_path)
+    metadata = manifest.setdefault("public_metadata", {})
+    if isinstance(metadata, dict):
+        metadata.setdefault("description", "")
+        metadata.setdefault("icon", None)
+        metadata.setdefault("tags", [])
+    manifest.setdefault("runtime", None)
+    runtime = manifest.get("runtime")
+    if isinstance(runtime, dict):
+        runtime.setdefault("failure_policy", "fail_closed")
+    manifest["capability_digest"] = compute_capability_digest(manifest)
+    validate_workspace(source, manifest)
+    files = _collect_source(source)
+    manifest["content_digest"] = _payload_digest(files)
+    validate_manifest(manifest, require_content_digest=True)
+    canonical = _canonical_json(manifest)
+    private_key = _load_private_key(private_key_path)
+    signature = {
+        "signer_id": manifest["signer_id"],
+        "algorithm": "ed25519",
+        "signature": base64.b64encode(private_key.sign(canonical)).decode(
+            "ascii",
+        ),
+    }
+    output = io.BytesIO()
+    with zipfile.ZipFile(
+        output,
+        "w",
+        compression=zipfile.ZIP_DEFLATED,
+    ) as archive:
+        archive.writestr("manifest.json", canonical)
+        for path in sorted(files):
+            archive.writestr(path, files[path])
+        archive.writestr("signature.json", _canonical_json(signature))
+    if output.tell() > MAX_PACKAGE_BYTES:
+        raise DevKitError("sealed package exceeds size limit")
+    return output.getvalue()
+
+
+def _read_package_files(data: bytes) -> dict[str, bytes]:
+    if len(data) > MAX_PACKAGE_BYTES or not zipfile.is_zipfile(
+        io.BytesIO(data),
+    ):
+        raise DevKitError("invalid sealed package")
+    files: dict[str, bytes] = {}
+    expanded = 0
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        if len(archive.infolist()) > MAX_MEMBERS:
+            raise DevKitError("sealed package contains too many files")
+        for info in archive.infolist():
+            path = _normalize_member_path(info.filename)
+            if path in files:
+                raise DevKitError("duplicate normalized package path")
+            if stat.S_ISLNK(info.external_attr >> 16):
+                raise DevKitError("sealed package contains a symlink")
+            if info.file_size > MAX_FILE_BYTES:
+                raise DevKitError("sealed package member exceeds size limit")
+            if (
+                info.compress_size
+                and info.file_size > info.compress_size * MAX_COMPRESSION_RATIO
+            ):
+                raise DevKitError("sealed package compression ratio is unsafe")
+            expanded += info.file_size
+            if expanded > MAX_EXPANDED_BYTES:
+                raise DevKitError("sealed package expands beyond size limit")
+            files[path] = archive.read(info)
+    return files
+
+
+def _verify_package_signature(
+    manifest: dict,
+    signature: dict,
+    public_key_path: Path,
+) -> None:
+    if (
+        signature.get("signer_id") != manifest["signer_id"]
+        or signature.get("algorithm") != "ed25519"
+    ):
+        raise DevKitError("sealed package signer mismatch")
+    try:
+        encoded_signature = base64.b64decode(
+            signature.get("signature", ""),
+            validate=True,
+        )
+        _load_public_key(public_key_path).verify(
+            encoded_signature,
+            _canonical_json(manifest),
+        )
+    except Exception as exc:
+        if isinstance(exc, DevKitError):
+            raise
+        raise DevKitError("sealed package signature is invalid") from exc
+
+
+def verify_package(package_path: Path, public_key_path: Path) -> dict:
+    files = _read_package_files(package_path.read_bytes())
+    if "manifest.json" not in files or "signature.json" not in files:
+        raise DevKitError("sealed package metadata is missing")
+    try:
+        manifest = json.loads(files["manifest.json"])
+        signature = json.loads(files["signature.json"])
+    except json.JSONDecodeError as exc:
+        raise DevKitError("sealed package metadata is invalid") from exc
+    if not isinstance(manifest, dict) or not isinstance(signature, dict):
+        raise DevKitError("sealed package metadata is invalid")
+    validate_manifest(manifest, require_content_digest=True)
+    _verify_package_signature(manifest, signature, public_key_path)
+    payload = {
+        key: value
+        for key, value in files.items()
+        if key not in {"manifest.json", "signature.json"}
+    }
+    if manifest["content_digest"] != _payload_digest(payload):
+        raise DevKitError("sealed package payload digest mismatch")
+    if manifest["entrypoint"] not in payload:
+        raise DevKitError("sealed package entrypoint is missing")
+    return manifest
+
+
+def _json_result(**values: object) -> None:
+    print(
+        json.dumps(
+            values,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    )
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="dclaw-agent-devkit")
+    parser.add_argument("--version", action="version", version=DEVKIT_VERSION)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    digest = subparsers.add_parser("digest")
+    digest.add_argument("--manifest", type=Path, required=True)
+    digest.add_argument("--write", action="store_true")
+    validate = subparsers.add_parser("validate")
+    validate.add_argument("--source", type=Path, required=True)
+    validate.add_argument("--manifest", type=Path, required=True)
+    keygen = subparsers.add_parser("keygen")
+    keygen.add_argument("--private-key", type=Path, required=True)
+    keygen.add_argument("--public-key", type=Path, required=True)
+    keygen.add_argument("--force", action="store_true")
+    build = subparsers.add_parser("build")
+    build.add_argument("--source", type=Path, required=True)
+    build.add_argument("--manifest", type=Path, required=True)
+    build.add_argument("--private-key", type=Path, required=True)
+    build.add_argument("--output", type=Path, required=True)
+    verify = subparsers.add_parser("verify")
+    verify.add_argument("--package", type=Path, required=True)
+    verify.add_argument("--public-key", type=Path, required=True)
+    subparsers.add_parser("contracts")
+    return parser
+
+
+def _command_digest(args: argparse.Namespace) -> None:
+    manifest = _read_json(args.manifest)
+    digest = compute_capability_digest(manifest)
+    if args.write:
+        manifest["capability_digest"] = digest
+        _write_json(args.manifest, manifest)
+    _json_result(
+        status="ok",
+        capability_digest=digest,
+        updated=bool(args.write),
+    )
+
+
+def _command_validate(args: argparse.Namespace) -> None:
+    manifest = _read_json(args.manifest)
+    validate_manifest(manifest, require_content_digest=False)
+    validate_workspace(args.source, manifest)
+    _json_result(
+        status="valid",
+        agent_id=manifest["agent_id"],
+        devkit_version=DEVKIT_VERSION,
+    )
+
+
+def _command_keygen(args: argparse.Namespace) -> None:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+        Ed25519PrivateKey,
+    )
+
+    for path in (args.private_key, args.public_key):
+        if path.exists() and not args.force:
+            raise DevKitError(f"refusing to overwrite key: {path}")
+    private = Ed25519PrivateKey.generate()
+    private_raw = private.private_bytes(
+        serialization.Encoding.Raw,
+        serialization.PrivateFormat.Raw,
+        serialization.NoEncryption(),
+    )
+    public_raw = private.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    args.private_key.parent.mkdir(parents=True, exist_ok=True)
+    args.public_key.parent.mkdir(parents=True, exist_ok=True)
+    args.private_key.write_text(
+        base64.b64encode(private_raw).decode("ascii") + "\n",
+        encoding="utf-8",
+    )
+    args.public_key.write_text(
+        base64.b64encode(public_raw).decode("ascii") + "\n",
+        encoding="utf-8",
+    )
+    try:
+        os.chmod(args.private_key, 0o600)
+    except OSError:
+        pass
+    _json_result(
+        status="ok",
+        private_key=str(args.private_key),
+        public_key=str(args.public_key),
+    )
+
+
+def _command_build(args: argparse.Namespace) -> None:
+    package = build_package(
+        args.source.resolve(),
+        args.manifest,
+        args.private_key,
+    )
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_bytes(package)
+    _json_result(
+        status="built",
+        output=str(args.output),
+        bytes=len(package),
+        devkit_version=DEVKIT_VERSION,
+    )
+
+
+def _command_verify(args: argparse.Namespace) -> None:
+    manifest = verify_package(args.package, args.public_key)
+    _json_result(
+        status="valid",
+        agent_id=manifest["agent_id"],
+        version=manifest["version"],
+        signer_id=manifest["signer_id"],
+    )
+
+
+def _command_contracts(_args: argparse.Namespace) -> None:
+    catalog = _read_json(_root() / "capability-catalog.json")
+    _json_result(
+        status="ok",
+        devkit_version=DEVKIT_VERSION,
+        catalog_version=catalog["catalog_version"],
+        schemas=sorted(
+            path.relative_to(_root()).as_posix()
+            for path in (_root() / "schemas").rglob("*.json")
+        ),
+    )
+
+
+COMMANDS = {
+    "digest": _command_digest,
+    "validate": _command_validate,
+    "keygen": _command_keygen,
+    "build": _command_build,
+    "verify": _command_verify,
+    "contracts": _command_contracts,
+}
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    try:
+        COMMANDS[args.command](args)
+    except (
+        DevKitError,
+        OSError,
+        KeyError,
+        TypeError,
+        ValueError,
+        ImportError,
+    ) as exc:
+        _json_result(status="invalid", error=str(exc))
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

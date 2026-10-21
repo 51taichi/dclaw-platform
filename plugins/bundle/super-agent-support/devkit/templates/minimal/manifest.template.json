@@ -1,0 +1,40 @@
+{
+  "schema_version": 3,
+  "agent_id": "example-business-agent",
+  "name": "Example Business Agent",
+  "version": "1.0.0",
+  "agent_type": "sealed",
+  "scope": "global",
+  "entrypoint": "agent/agent.json",
+  "package_type": "super_expert",
+  "orchestration": {
+    "capability_id": "workspace.turn.orchestrate/1",
+    "contract_version": "1",
+    "entrypoint": "runtime.py:create_runtime",
+    "required_host_capabilities": [
+      "agent.execute",
+      "session.context",
+      "runtime.trace",
+      "runtime.complete",
+      "runtime.fail"
+    ]
+  },
+  "platform_contract_versions": {
+    "runtime": "1",
+    "runtime_host": "1"
+  },
+  "capabilities": [
+    {"capability_id":"workspace.turn.orchestrate/1","contract_version":"1"},
+    {"capability_id":"agent.execute","contract_version":"1"},
+    {"capability_id":"session.context","contract_version":"1"},
+    {"capability_id":"runtime.trace","contract_version":"1"},
+    {"capability_id":"runtime.complete","contract_version":"1"},
+    {"capability_id":"runtime.fail","contract_version":"1"}
+  ],
+  "capability_digest": "sha256:replace-with-devkit-digest-command",
+  "signer_id": "replace-with-approved-signer-id",
+  "public_metadata": {
+    "description": "Replace with the customer-visible description",
+    "tags": []
+  }
+}

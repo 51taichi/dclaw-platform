@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/plugins/super-agent-support/v1/device-message.schema.json",
+  "title": "DClaw local helper to platform message v1",
+  "oneOf": [
+    {"type": "object", "additionalProperties": false, "required": ["type"], "properties": {"type": {"const": "heartbeat"}}},
+    {
+      "type": "object", "additionalProperties": false, "required": ["type", "capabilities"],
+      "properties": {
+        "type": {"const": "capabilities.report"},
+        "capabilities": {"type": "array", "items": {"$ref": "#/$defs/Capability"}}
+      }
+    },
+    {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "task_id", "sequence", "event_type", "payload"],
+      "properties": {
+        "type": {"const": "task.event"},
+        "task_id": {"type": "string", "pattern": "^[a-f0-9]{32}$"},
+        "sequence": {"type": "integer", "minimum": 1},
+        "event_type": {"enum": ["started", "progress", "checkpoint", "completed", "failed", "cancelled"]},
+        "payload": {"type": "object"}
+      }
+    }
+  ],
+  "$defs": {
+    "Capability": {
+      "type": "object", "additionalProperties": false,
+      "required": ["capability_id", "version", "package_id", "package_version"],
+      "properties": {
+        "capability_id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*)+$"},
+        "version": {"type": "string", "minLength": 1, "maxLength": 32},
+        "package_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "package_version": {"type": "string", "minLength": 1, "maxLength": 64}
+      }
+    }
+  }
+}

@@ -30,7 +30,8 @@ def test_local_execution_v1_schemas_are_valid_and_resolve_locally():
     Draft202012Validator.check_schema(response_schema)
     Draft202012Validator.check_schema(call_schema)
     registry = Registry().with_resource(
-        error_schema["$id"], Resource.from_contents(error_schema)
+        error_schema["$id"],
+        Resource.from_contents(error_schema),
     )
     validator = Draft202012Validator(response_schema, registry=registry)
 
@@ -49,7 +50,7 @@ def test_local_execution_v1_schemas_are_valid_and_resolve_locally():
                 "user_action": "open_dclaw",
                 "devices": [],
             },
-        }
+        },
     )
     success_data = [
         {
@@ -91,7 +92,7 @@ def test_local_execution_v1_schemas_are_valid_and_resolve_locally():
                 "ok": True,
                 "trace_id": "invocation-contract-success",
                 "data": data,
-            }
+            },
         )
     call_validator = Draft202012Validator(call_schema)
     call_validator.validate(
@@ -102,7 +103,7 @@ def test_local_execution_v1_schemas_are_valid_and_resolve_locally():
                 "input": {"gate_text": "confirmed"},
                 "idempotency_key": "conversation-turn-1",
             },
-        }
+        },
     )
 
     valid_calls = [
@@ -135,14 +136,14 @@ def test_local_execution_v1_schemas_are_valid_and_resolve_locally():
 
     with pytest.raises(ValidationError):
         call_validator.validate(
-            {"tool": "dzb_task_result", "arguments": {"task_id": "task-1"}}
+            {"tool": "dzb_task_result", "arguments": {"task_id": "task-1"}},
         )
     with pytest.raises(ValidationError):
         call_validator.validate(
             {
                 "tool": "local_task_status",
                 "arguments": {"task_id": "task-1", "current_task": True},
-            }
+            },
         )
     validator.validate(
         {
@@ -164,11 +165,11 @@ def test_local_execution_v1_schemas_are_valid_and_resolve_locally():
                 "public_message": "DClaw 本地助手尚未连接。",
                 "trace_id": "invocation-contract-failure",
             },
-        }
+        },
     )
 
 
-def test_local_execution_standard_defines_desktop_owned_toolbox_and_workspace():
+def test_standard_defines_desktop_owned_toolbox_and_workspace():
     text = STANDARD_DOC.read_text(encoding="utf-8")
 
     required = (
@@ -207,6 +208,18 @@ def test_super_agent_standard_is_the_only_human_development_standard():
 
     assert "唯一需要接收和阅读的人工标准文档" in text
     assert "不再新建并行的人工标准" in text
-    assert not (root / "docs" / "local-execution-standard-v1.zh-CN.md").exists()
-    assert not (root / "docs" / "super-expert-porting-playbook-v1.zh-CN.md").exists()
-    assert not (root / "docs" / "contracts" / "local-execution" / "CHANGELOG.md").exists()
+    assert "任何步骤都不得要求访问、克隆或导入" in text
+    assert "developer-kit/v1.zip" in text
+    assert "dclaw_agent_devkit.py" in text
+    assert "/Users/moxi/" not in text
+    assert "from qwenpaw" not in text
+    assert "scripts/build_sealed_agent.py" not in text
+    assert not (
+        root / "docs" / "local-execution-standard-v1.zh-CN.md"
+    ).exists()
+    assert not (
+        root / "docs" / "super-expert-porting-playbook-v1.zh-CN.md"
+    ).exists()
+    assert not (
+        root / "docs" / "contracts" / "local-execution" / "CHANGELOG.md"
+    ).exists()
