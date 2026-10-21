@@ -10,6 +10,8 @@ use tauri::{
 use tauri_plugin_shell::ShellExt;
 
 const SCENE_WEBVIEW_PREFIX: &str = "scene-";
+#[cfg(target_os = "macos")]
+const MACOS_TITLEBAR_MIN_HEIGHT: f64 = 30.0;
 static POPUP_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Deserialize)]
@@ -79,6 +81,17 @@ fn scene_webview_rect(
     })
 }
 
+#[cfg(target_os = "macos")]
+fn macos_window_content_origin(
+    inner_position: LogicalPosition<f64>,
+    outer_position: LogicalPosition<f64>,
+) -> LogicalPosition<f64> {
+    LogicalPosition::new(
+        (inner_position.x - outer_position.x).max(0.0),
+        (inner_position.y - outer_position.y).max(MACOS_TITLEBAR_MIN_HEIGHT),
+    )
+}
+
 fn main_window_content_origin(_app: &AppHandle) -> Result<LogicalPosition<f64>, String> {
     #[cfg(target_os = "macos")]
     {
@@ -97,10 +110,7 @@ fn main_window_content_origin(_app: &AppHandle) -> Result<LogicalPosition<f64>, 
             .map_err(|error| format!("无法读取主窗口外框位置: {error}"))?
             .to_logical::<f64>(scale_factor);
 
-        Ok(LogicalPosition::new(
-            (inner_position.x - outer_position.x).max(0.0),
-            (inner_position.y - outer_position.y).max(0.0),
-        ))
+        Ok(macos_window_content_origin(inner_position, outer_position))
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -232,6 +242,9 @@ mod tests {
     };
     use tauri::{LogicalPosition, LogicalSize, Position, Size};
 
+    #[cfg(target_os = "macos")]
+    use super::{macos_window_content_origin, MACOS_TITLEBAR_MIN_HEIGHT};
+
     #[test]
     fn only_http_links_can_leave_the_embedded_scene() {
         assert!(is_external_web_url(
@@ -273,5 +286,17 @@ mod tests {
             Position::Logical(LogicalPosition::new(8.0, 84.0))
         );
         assert_eq!(rect.size, Size::Logical(LogicalSize::new(1200.0, 700.0)));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_scene_origin_keeps_a_titlebar_clearance() {
+        let origin = macos_window_content_origin(
+            LogicalPosition::new(200.0, 100.0),
+            LogicalPosition::new(200.0, 100.0),
+        );
+
+        assert_eq!(origin.x, 0.0);
+        assert_eq!(origin.y, MACOS_TITLEBAR_MIN_HEIGHT);
     }
 }
