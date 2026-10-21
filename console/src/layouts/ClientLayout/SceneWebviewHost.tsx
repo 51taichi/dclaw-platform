@@ -56,7 +56,7 @@ export default function SceneWebviewHost({ scene }: { scene: ClientScene }) {
         });
     }
 
-    const observer = new ResizeObserver(() => {
+    const syncBounds = () => {
       cancelAnimationFrame(resizeFrame);
       resizeFrame = requestAnimationFrame(() => {
         const bounds = measureHost(host);
@@ -67,13 +67,18 @@ export default function SceneWebviewHost({ scene }: { scene: ClientScene }) {
           });
         }
       });
-    });
+    };
+    const observer = new ResizeObserver(syncBounds);
     observer.observe(host);
+    window.addEventListener("resize", syncBounds);
+    window.visualViewport?.addEventListener("resize", syncBounds);
 
     return () => {
       disposed = true;
       cancelAnimationFrame(resizeFrame);
       observer.disconnect();
+      window.removeEventListener("resize", syncBounds);
+      window.visualViewport?.removeEventListener("resize", syncBounds);
     };
   }, [scene.key, scene.url]);
 

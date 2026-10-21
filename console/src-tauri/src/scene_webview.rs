@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tauri::{
     webview::{NewWindowResponse, WebviewBuilder},
-    AppHandle, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder,
+    AppHandle, LogicalPosition, LogicalSize, Manager, Rect, WebviewUrl, WebviewWindowBuilder,
 };
 use tauri_plugin_shell::ShellExt;
 
@@ -68,51 +68,21 @@ fn hide_other_scene_webviews(app: &AppHandle, active_label: Option<&str>) {
     }
 }
 
-fn scene_webview_position(
-    bounds: &SceneWebviewBounds,
-    origin: LogicalPosition<f64>,
-) -> LogicalPosition<f64> {
-    LogicalPosition::new(origin.x + bounds.x, origin.y + bounds.y)
-}
-
-fn main_webview_origin(app: &AppHandle) -> Result<LogicalPosition<f64>, String> {
-    let main_webview = app
-        .get_webview("main")
-        .ok_or_else(|| "DClaw 主页面不可用".to_owned())?;
-    let main_window = app
-        .get_window("main")
-        .ok_or_else(|| "DClaw 主窗口不可用".to_owned())?;
-    let scale_factor = main_window
-        .scale_factor()
-        .map_err(|error| format!("无法读取主窗口缩放比例: {error}"))?;
-    let webview_position = main_webview
-        .position()
-        .map_err(|error| format!("无法读取主页面位置: {error}"))?
-        .to_logical::<f64>(scale_factor);
-    let window_position = main_window
-        .outer_position()
-        .map_err(|error| format!("无法读取主窗口位置: {error}"))?
-        .to_logical::<f64>(scale_factor);
-
-    Ok(LogicalPosition::new(
-        webview_position.x - window_position.x,
-        webview_position.y - window_position.y,
-    ))
+fn scene_webview_rect(bounds: &SceneWebviewBounds) -> Result<Rect, String> {
+    bounds.validate()?;
+    Ok(Rect {
+        position: LogicalPosition::new(bounds.x, bounds.y).into(),
+        size: LogicalSize::new(bounds.width, bounds.height).into(),
+    })
 }
 
 fn set_scene_webview_bounds(
-    app: &AppHandle,
     webview: &tauri::Webview,
     bounds: &SceneWebviewBounds,
 ) -> Result<(), String> {
-    bounds.validate()?;
-    let position = scene_webview_position(bounds, main_webview_origin(app)?);
     webview
-        .set_position(position)
-        .map_err(|error| format!("无法定位外链场景: {error}"))?;
-    webview
-        .set_size(LogicalSize::new(bounds.width, bounds.height))
-        .map_err(|error| format!("无法调整外链场景大小: {error}"))
+        .set_bounds(scene_webview_rect(bounds)?)
+        .map_err(|error| format!("无法调整外链场景显示区域: {error}"))
 }
 
 fn open_scene_popup(
@@ -168,7 +138,7 @@ pub(crate) async fn show_scene_webview(
     hide_other_scene_webviews(&app, Some(&label));
 
     if let Some(webview) = app.get_webview(&label) {
-        set_scene_webview_bounds(&app, &webview, &bounds)?;
+        set_scene_webview_bounds(&webview, &bounds)?;
         webview
             .show()
             .map_err(|error| format!("无法显示外链场景: {error}"))?;
@@ -184,11 +154,10 @@ pub(crate) async fn show_scene_webview(
     let popup_app = app.clone();
     let webview_builder = WebviewBuilder::new(label, WebviewUrl::External(url))
         .on_new_window(move |url, features| open_scene_popup(&popup_app, url, features));
-    let position = scene_webview_position(&bounds, main_webview_origin(&app)?);
     let webview = main_window
         .add_child(
             webview_builder,
-            position,
+            LogicalPosition::new(bounds.x, bounds.y),
             LogicalSize::new(bounds.width, bounds.height),
         )
         .map_err(|error| format!("无法创建外链场景: {error}"))?;
@@ -207,7 +176,7 @@ pub(crate) async fn resize_scene_webview(
     let url = scene_webview_url(&url)?;
     let label = scene_webview_label(&scene_key, &url)?;
     if let Some(webview) = app.get_webview(&label) {
-        set_scene_webview_bounds(&app, &webview, &bounds)?;
+        set_scene_webview_bounds(&webview, &bounds)?;
     }
     Ok(())
 }
@@ -220,10 +189,10 @@ pub(crate) fn hide_scene_webviews(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_external_web_url, scene_webview_label, scene_webview_position, scene_webview_url,
+        is_external_web_url, scene_webview_label, scene_webview_rect, scene_webview_url,
         SceneWebviewBounds, SCENE_WEBVIEW_PREFIX,
     };
-    use tauri::LogicalPosition;
+    use tauri::{LogicalPosition, LogicalSize, Position, Size};
 
     #[test]
     fn only_http_links_can_leave_the_embedded_scene() {
@@ -251,7 +220,7 @@ mod tests {
     }
 
     #[test]
-    fn scene_bounds_are_offset_from_the_main_webview_origin() {
+    fn scene_bounds_stay_relative_to_the_main_webview() {
         let bounds = SceneWebviewBounds {
             x: 8.0,
             y: 56.0,
@@ -259,10 +228,12 @@ mod tests {
             height: 700.0,
         };
 
-        let position = scene_webview_position(&bounds, LogicalPosition::new(0.0_f64, 28.0_f64));
+        let rect = scene_webview_rect(&bounds).unwrap();
 
-        assert_eq!(position, LogicalPosition::new(8.0, 84.0));
-        assert_eq!(bounds.width, 1200.0);
-        assert_eq!(bounds.height, 700.0);
+        assert_eq!(
+            rect.position,
+            Position::Logical(LogicalPosition::new(8.0, 56.0))
+        );
+        assert_eq!(rect.size, Size::Logical(LogicalSize::new(1200.0, 700.0)));
     }
 }

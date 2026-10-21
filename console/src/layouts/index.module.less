@@ -1,5 +1,7 @@
 // ─── MainLayout ───────────────────────────────────────────────────────────────
 .mainLayout {
+  --client-header-height: 56px;
+
   height: 100vh;
   min-height: 0;
   overflow: hidden;
@@ -11,7 +13,7 @@
 
 // ─── Header ───────────────────────────────────────────────────────────────────
 .header {
-  height: 56px;
+  height: var(--client-header-height);
   padding: 0 28px;
   display: flex;
   align-items: center;
@@ -87,11 +89,16 @@
 }
 
 .sceneWebviewHost {
+  position: fixed;
+  top: var(--client-header-height);
+  right: 8px;
+  bottom: 8px;
+  left: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 100%;
-  height: 100%;
+  width: auto;
+  height: auto;
   border: 1px solid #eae9e7;
   border-radius: 8px;
   background: #fff;
