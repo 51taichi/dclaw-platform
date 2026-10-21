@@ -843,7 +843,7 @@ dependencies = [
 
 [[package]]
 name = "dclaw"
-version = "2.6.1"
+version = "2.6.2"
 dependencies = [
  "base64 0.22.1",
  "clipboard-rs",
