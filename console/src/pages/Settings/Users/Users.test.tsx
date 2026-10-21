@@ -86,6 +86,13 @@ describe("UsersPage", () => {
     expect(screen.getByLabelText("登录 ID")).toBeInTheDocument();
     expect(screen.getByLabelText("姓名")).toBeInTheDocument();
     expect(screen.getByLabelText("手机号")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "基本信息" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(
+      screen.queryByRole("button", { name: "添加 Tab" }),
+    ).not.toBeInTheDocument();
     await user.click(modalCreateButton());
     expect(await screen.findByText("请输入姓名！")).toBeInTheDocument();
     expect(screen.getByText("请输入手机号！")).toBeInTheDocument();
@@ -102,7 +109,8 @@ describe("UsersPage", () => {
     fireEvent.change(screen.getByLabelText("密码"), {
       target: { value: "secret" },
     });
-    await user.click(screen.getByRole("button", { name: "添加 Tab" }));
+    fireEvent.click(screen.getByRole("tab", { name: "外链 Tab（选填）" }));
+    fireEvent.click(screen.getByRole("button", { name: "添加 Tab" }));
     fireEvent.change(screen.getByLabelText("Tab 1 名称"), {
       target: { value: "AI客服" },
     });

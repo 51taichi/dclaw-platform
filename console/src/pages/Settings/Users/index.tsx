@@ -10,6 +10,7 @@ import {
   Popconfirm,
   Select,
   Card,
+  Tabs,
 } from "antd";
 import { useAppMessage } from "../../../hooks/useAppMessage";
 import {
@@ -84,11 +85,11 @@ function SceneTabsFields() {
               添加 Tab
             </Button>
           </div>
-          {fields.map((field, index) => (
-            <div className={styles.sceneRow} key={field.key}>
+          {fields.map(({ key, name, ...field }, index) => (
+            <div className={styles.sceneRow} key={key}>
               <Form.Item
                 {...field}
-                name={[field.name, "title"]}
+                name={[name, "title"]}
                 label={`Tab ${index + 1} 名称`}
                 rules={[
                   {
@@ -103,7 +104,7 @@ function SceneTabsFields() {
               </Form.Item>
               <Form.Item
                 {...field}
-                name={[field.name, "url"]}
+                name={[name, "url"]}
                 label="HTTPS URL"
                 rules={[
                   { required: true, whitespace: true, message: "请输入 URL！" },
@@ -130,7 +131,7 @@ function SceneTabsFields() {
                 danger
                 icon={<Trash2 size={16} />}
                 aria-label={`删除 Tab ${index + 1}`}
-                onClick={() => remove(field.name)}
+                onClick={() => remove(name)}
               />
             </div>
           ))}
@@ -148,6 +149,7 @@ export default function UsersPage() {
   const [resetModalVisible, setResetModalVisible] = useState(false);
   const [sceneModalVisible, setSceneModalVisible] = useState(false);
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
+  const [createTabKey, setCreateTabKey] = useState("account");
 
   const [createForm] = Form.useForm();
   const [resetForm] = Form.useForm();
@@ -182,6 +184,7 @@ export default function UsersPage() {
       await adminUsersApi.createUser(input);
       message.success("用户创建成功");
       setCreateModalVisible(false);
+      setCreateTabKey("account");
       createForm.resetFields();
       fetchUsers();
     } catch (error: unknown) {
@@ -338,7 +341,10 @@ export default function UsersPage() {
           <Button
             type="primary"
             icon={<UserPlus size={16} />}
-            onClick={() => setCreateModalVisible(true)}
+            onClick={() => {
+              setCreateTabKey("account");
+              setCreateModalVisible(true);
+            }}
           >
             创建用户
           </Button>
@@ -375,58 +381,107 @@ export default function UsersPage() {
         open={createModalVisible}
         onCancel={() => {
           setCreateModalVisible(false);
+          setCreateTabKey("account");
           createForm.resetFields();
         }}
         onOk={() => createForm.submit()}
         okText="创建"
         cancelText="取消"
       >
-        <Form form={createForm} layout="vertical" onFinish={handleCreateUser}>
-          <Form.Item
-            name="username"
-            label="登录 ID"
-            rules={[
-              { required: true, whitespace: true, message: "请输入登录 ID！" },
-            ]}
-          >
-            <Input />
-          </Form.Item>
-          <Form.Item
-            name="display_name"
-            label="姓名"
-            rules={[
-              { required: true, whitespace: true, message: "请输入姓名！" },
-            ]}
-          >
-            <Input maxLength={100} />
-          </Form.Item>
-          <Form.Item
-            name="phone_number"
-            label="手机号"
-            rules={[
-              { required: true, whitespace: true, message: "请输入手机号！" },
+        <Form
+          form={createForm}
+          layout="vertical"
+          onFinish={handleCreateUser}
+          onFinishFailed={({ errorFields }) => {
+            const hasAccountError = errorFields.some(
+              ({ name }) => name[0] !== "scene_tabs",
+            );
+            setCreateTabKey(hasAccountError ? "account" : "scenes");
+          }}
+        >
+          <Tabs
+            activeKey={createTabKey}
+            onChange={setCreateTabKey}
+            items={[
               {
-                pattern: /^(?:\+86)?1[3-9]\d{9}$/,
-                message: "请输入有效的中国大陆手机号！",
+                key: "account",
+                label: "基本信息",
+                children: (
+                  <div className={styles.createTabContent}>
+                    <Form.Item
+                      name="username"
+                      label="登录 ID"
+                      rules={[
+                        {
+                          required: true,
+                          whitespace: true,
+                          message: "请输入登录 ID！",
+                        },
+                      ]}
+                    >
+                      <Input />
+                    </Form.Item>
+                    <Form.Item
+                      name="display_name"
+                      label="姓名"
+                      rules={[
+                        {
+                          required: true,
+                          whitespace: true,
+                          message: "请输入姓名！",
+                        },
+                      ]}
+                    >
+                      <Input maxLength={100} />
+                    </Form.Item>
+                    <Form.Item
+                      name="phone_number"
+                      label="手机号"
+                      rules={[
+                        {
+                          required: true,
+                          whitespace: true,
+                          message: "请输入手机号！",
+                        },
+                        {
+                          pattern: /^(?:\+86)?1[3-9]\d{9}$/,
+                          message: "请输入有效的中国大陆手机号！",
+                        },
+                      ]}
+                    >
+                      <Input maxLength={14} />
+                    </Form.Item>
+                    <Form.Item
+                      name="password"
+                      label="密码"
+                      rules={[{ required: true, message: "请输入密码！" }]}
+                    >
+                      <Input.Password />
+                    </Form.Item>
+                    <Form.Item name="role" label="角色" initialValue="user">
+                      <Select>
+                        <Select.Option value="admin">
+                          管理员 (admin)
+                        </Select.Option>
+                        <Select.Option value="user">
+                          普通用户 (user)
+                        </Select.Option>
+                      </Select>
+                    </Form.Item>
+                  </div>
+                ),
+              },
+              {
+                key: "scenes",
+                label: "外链 Tab（选填）",
+                children: (
+                  <div className={styles.createTabContent}>
+                    <SceneTabsFields />
+                  </div>
+                ),
               },
             ]}
-          >
-            <Input maxLength={14} />
-          </Form.Item>
-          <Form.Item
-            name="password"
-            label="密码"
-            rules={[{ required: true, message: "请输入密码！" }]}
-          >
-            <Input.Password />
-          </Form.Item>
-          <Form.Item name="role" label="角色" initialValue="user">
-            <Select>
-              <Select.Option value="admin">管理员 (admin)</Select.Option>
-              <Select.Option value="user">普通用户 (user)</Select.Option>
-            </Select>
-          </Form.Item>
-          <SceneTabsFields />
+          />
         </Form>
       </Modal>
 
