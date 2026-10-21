@@ -41,12 +41,14 @@ interface CreateUserFormValues {
   display_name: string;
   phone_number: string;
   password: string;
+  confirm_password: string;
   role?: "admin" | "user";
   scene_tabs?: SceneTabInput[];
 }
 
 interface ResetPasswordFormValues {
   new_password: string;
+  confirm_new_password: string;
 }
 
 interface SceneFormValues {
@@ -180,8 +182,8 @@ export default function UsersPage() {
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
   const [createTabKey, setCreateTabKey] = useState("account");
 
-  const [createForm] = Form.useForm();
-  const [resetForm] = Form.useForm();
+  const [createForm] = Form.useForm<CreateUserFormValues>();
+  const [resetForm] = Form.useForm<ResetPasswordFormValues>();
   const [sceneForm] = Form.useForm<SceneFormValues>();
 
   const fetchUsers = useCallback(async () => {
@@ -406,7 +408,7 @@ export default function UsersPage() {
 
       <Modal
         title="创建用户"
-        width={920}
+        width={780}
         open={createModalVisible}
         onCancel={() => {
           setCreateModalVisible(false);
@@ -497,7 +499,27 @@ export default function UsersPage() {
                       label="初始密码"
                       rules={[{ required: true, message: "请输入密码！" }]}
                     >
-                      <Input.Password />
+                      <Input.Password autoComplete="new-password" />
+                    </Form.Item>
+                    <Form.Item
+                      name="confirm_password"
+                      label="确认密码"
+                      dependencies={["password"]}
+                      rules={[
+                        { required: true, message: "请再次输入密码！" },
+                        ({ getFieldValue }) => ({
+                          validator(_, value) {
+                            if (!value || getFieldValue("password") === value) {
+                              return Promise.resolve();
+                            }
+                            return Promise.reject(
+                              new Error("两次输入的密码不一致！"),
+                            );
+                          },
+                        }),
+                      ]}
+                    >
+                      <Input.Password autoComplete="new-password" />
                     </Form.Item>
                   </div>
                 ),
@@ -551,7 +573,25 @@ export default function UsersPage() {
             label="新密码"
             rules={[{ required: true, message: "请输入新密码！" }]}
           >
-            <Input.Password />
+            <Input.Password autoComplete="new-password" />
+          </Form.Item>
+          <Form.Item
+            name="confirm_new_password"
+            label="确认新密码"
+            dependencies={["new_password"]}
+            rules={[
+              { required: true, message: "请再次输入新密码！" },
+              ({ getFieldValue }) => ({
+                validator(_, value) {
+                  if (!value || getFieldValue("new_password") === value) {
+                    return Promise.resolve();
+                  }
+                  return Promise.reject(new Error("两次输入的密码不一致！"));
+                },
+              }),
+            ]}
+          >
+            <Input.Password autoComplete="new-password" />
           </Form.Item>
         </Form>
       </Modal>

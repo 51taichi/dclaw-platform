@@ -110,6 +110,9 @@ describe("UsersPage", () => {
     fireEvent.change(screen.getByLabelText("初始密码"), {
       target: { value: "secret" },
     });
+    fireEvent.change(screen.getByLabelText("确认密码"), {
+      target: { value: "secret" },
+    });
     fireEvent.click(screen.getByRole("tab", { name: "外链 Tab（选填）" }));
     expect(
       screen.queryByText("登录客户端后按这里的顺序显示，允许不配置。"),
@@ -181,5 +184,36 @@ describe("UsersPage", () => {
       await screen.findByText("请输入有效的中国大陆手机号！"),
     ).toBeInTheDocument();
     expect(adminUsersApi.createUser).not.toHaveBeenCalled();
+  });
+
+  it("requires the initial password confirmation to match", async () => {
+    const user = userEvent.setup();
+    render(<UsersPage />);
+    await user.click(screen.getByRole("button", { name: /创建用户/ }));
+
+    await user.type(screen.getByLabelText("初始密码"), "secret");
+    await user.type(screen.getByLabelText("确认密码"), "different");
+    await user.click(modalCreateButton());
+
+    expect(
+      await screen.findByText("两次输入的密码不一致！"),
+    ).toBeInTheDocument();
+    expect(adminUsersApi.createUser).not.toHaveBeenCalled();
+  });
+
+  it("requires the reset password confirmation to match", async () => {
+    const user = userEvent.setup();
+    render(<UsersPage />);
+    await user.click(await screen.findByRole("button", { name: /重置密码/ }));
+
+    await user.type(screen.getByLabelText("新密码"), "new-secret");
+    await user.type(screen.getByLabelText("确认新密码"), "different");
+    const resetButtons = screen.getAllByRole("button", { name: /重\s*置/ });
+    await user.click(resetButtons[resetButtons.length - 1]);
+
+    expect(
+      await screen.findByText("两次输入的密码不一致！"),
+    ).toBeInTheDocument();
+    expect(adminUsersApi.resetPassword).not.toHaveBeenCalled();
   });
 });
