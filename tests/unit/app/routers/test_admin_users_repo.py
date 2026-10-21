@@ -242,6 +242,7 @@ async def test_admin_user_routes_manage_multiple_scene_tabs(
             admin_users.SceneTabInput(
                 title=" AI客服 ",
                 url=" https://service.example.com/alice ",
+                icon="headset",
             ),
             admin_users.SceneTabInput(
                 title="Agent官网",
@@ -251,8 +252,16 @@ async def test_admin_user_routes_manage_multiple_scene_tabs(
     ))
 
     assert [scene.model_dump() for scene in created.scene_tabs] == [
-        {"title": "AI客服", "url": "https://service.example.com/alice"},
-        {"title": "Agent官网", "url": "https://site.example.com/alice"},
+        {
+            "title": "AI客服",
+            "url": "https://service.example.com/alice",
+            "icon": "headset",
+        },
+        {
+            "title": "Agent官网",
+            "url": "https://site.example.com/alice",
+            "icon": "external-link",
+        },
     ]
     assert created.ai_customer_service_url is None
 
@@ -261,6 +270,31 @@ async def test_admin_user_routes_manage_multiple_scene_tabs(
         admin_users.SceneTabsRequest(scene_tabs=[]),
     )
     assert updated.scene_tabs == []
+
+
+@pytest.mark.asyncio
+async def test_admin_user_routes_reject_unsupported_scene_icon(
+    fake_repo,
+    fake_wallet_service,
+):
+    with pytest.raises(HTTPException) as error:
+        await admin_users.create_user(
+            admin_users.CreateUserRequest(
+                username="alice",
+                password="password",
+                scene_tabs=[
+                    admin_users.SceneTabInput(
+                        title="AI客服",
+                        url="https://service.example.com/alice",
+                        icon="arbitrary-icon",
+                    ),
+                ],
+            ),
+        )
+
+    assert error.value.status_code == 422
+    assert fake_repo.get_user_by_username("alice") is None
+    assert fake_wallet_service.wallet_users == []
 
 
 @pytest.mark.asyncio

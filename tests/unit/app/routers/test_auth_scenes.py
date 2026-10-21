@@ -39,6 +39,7 @@ async def test_verify_returns_configured_ai_customer_service_scene(
             "key": "ai-customer-service",
             "title": "AI客服",
             "url": "https://service.example.com/console/?workspace=alice",
+            "icon": "external-link",
         },
     ]
 
@@ -69,8 +70,10 @@ async def test_verify_returns_ordered_configured_scene_tabs(monkeypatch):
             "role": "admin",
             "ai_customer_service_url": None,
             "scene_tabs_json": (
-                '[{"title":"AI客服","url":"https://service.example.com"},'
-                '{"title":"Agent官网","url":"https://site.example.com"}]'
+                '[{"title":"AI客服","url":"https://service.example.com",'
+                '"icon":"headset"},'
+                '{"title":"Agent官网","url":"https://site.example.com",'
+                '"icon":"legacy-icon"}]'
             ),
         },
     )
@@ -82,3 +85,7 @@ async def test_verify_returns_ordered_configured_scene_tabs(monkeypatch):
         ("Agent官网", "https://site.example.com"),
     ]
     assert len({scene["key"] for scene in result["scenes"]}) == 2
+    assert [scene["icon"] for scene in result["scenes"]] == [
+        "headset",
+        "external-link",
+    ]

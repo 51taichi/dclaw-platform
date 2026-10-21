@@ -6,6 +6,29 @@ import hashlib
 import json
 from typing import Any
 
+DEFAULT_SCENE_ICON = "external-link"
+SCENE_ICON_NAMES = frozenset(
+    {
+        DEFAULT_SCENE_ICON,
+        "headset",
+        "bot",
+        "globe",
+        "contact",
+        "building",
+        "shopping-bag",
+        "briefcase",
+        "book-open",
+        "chart",
+        "messages",
+        "life-buoy",
+    },
+)
+
+
+def scene_icon_or_default(value: Any) -> str:
+    icon = str(value or "").strip()
+    return icon if icon in SCENE_ICON_NAMES else DEFAULT_SCENE_ICON
+
 
 def encode_scene_tabs(scene_tabs: list[dict[str, str]]) -> str:
     return json.dumps(scene_tabs, ensure_ascii=False, separators=(",", ":"))
@@ -17,7 +40,11 @@ def decode_scene_tabs(
 ) -> list[dict[str, str]]:
     if scene_tabs_json is None:
         url = str(legacy_url or "").strip()
-        return [{"title": "AI客服", "url": url}] if url else []
+        return (
+            [{"title": "AI客服", "url": url, "icon": DEFAULT_SCENE_ICON}]
+            if url
+            else []
+        )
 
     try:
         value = json.loads(str(scene_tabs_json))
@@ -33,7 +60,13 @@ def decode_scene_tabs(
         title = str(item.get("title") or "").strip()
         url = str(item.get("url") or "").strip()
         if title and url:
-            result.append({"title": title, "url": url})
+            result.append(
+                {
+                    "title": title,
+                    "url": url,
+                    "icon": scene_icon_or_default(item.get("icon")),
+                },
+            )
     return result
 
 
@@ -44,7 +77,14 @@ def scene_tabs_for_client(
     if scene_tabs_json is None:
         url = str(legacy_url or "").strip()
         return (
-            [{"key": "ai-customer-service", "title": "AI客服", "url": url}]
+            [
+                {
+                    "key": "ai-customer-service",
+                    "title": "AI客服",
+                    "url": url,
+                    "icon": DEFAULT_SCENE_ICON,
+                },
+            ]
             if url
             else []
         )
@@ -58,6 +98,7 @@ def scene_tabs_for_client(
                 "key": f"external-{index}-{digest}",
                 "title": item["title"],
                 "url": item["url"],
+                "icon": item["icon"],
             },
         )
     return result

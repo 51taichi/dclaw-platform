@@ -11,7 +11,12 @@ from ..auth import _hash_password
 from ..billing.service import get_wallet_service
 from ..storage.repos.user_repo import get_user_repository
 from ..user_identity import normalize_cn_mobile
-from ..user_scenes import decode_scene_tabs, encode_scene_tabs
+from ..user_scenes import (
+    DEFAULT_SCENE_ICON,
+    SCENE_ICON_NAMES,
+    decode_scene_tabs,
+    encode_scene_tabs,
+)
 
 router = APIRouter(prefix="/users", tags=["admin_users"])
 
@@ -19,6 +24,7 @@ router = APIRouter(prefix="/users", tags=["admin_users"])
 class SceneTabSpec(BaseModel):
     title: str
     url: str
+    icon: str = DEFAULT_SCENE_ICON
 
 
 class UserSpec(BaseModel):
@@ -35,6 +41,7 @@ class UserSpec(BaseModel):
 class SceneTabInput(BaseModel):
     title: str = Field(min_length=1, max_length=40)
     url: str = Field(max_length=2048)
+    icon: str = Field(default=DEFAULT_SCENE_ICON, max_length=40)
 
 
 class CreateUserRequest(BaseModel):
@@ -94,7 +101,13 @@ def _normalize_scene_tabs(
                 status_code=422,
                 detail="Scene tab URL cannot be empty",
             )
-        result.append({"title": title, "url": url})
+        icon = scene.icon.strip()
+        if icon not in SCENE_ICON_NAMES:
+            raise HTTPException(
+                status_code=422,
+                detail="Scene tab icon is not supported",
+            )
+        result.append({"title": title, "url": url, "icon": icon})
     return result
 
 
