@@ -46,7 +46,9 @@ export async function ensureLocalHelper(): Promise<LocalHelperEnsureResult> {
   const status = await getLocalHelperStatus();
   if (!status) return { available: false, status: null };
   if (!status.installed) {
-    throw new Error("当前 DClaw 安装包未包含通用本地助手，请升级客户端。");
+    throw new Error(
+      "当前设备未安装通用本地助手，请安装或升级 DClaw 客户端后重试。",
+    );
   }
 
   const response = await fetch(

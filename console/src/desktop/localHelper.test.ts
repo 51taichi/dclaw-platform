@@ -107,4 +107,21 @@ describe("local helper desktop bridge", () => {
     });
     expect(invokeMock).toHaveBeenCalledTimes(1);
   });
+
+  it("prompts for installation only when an on-demand check finds no helper", async () => {
+    invokeMock.mockResolvedValueOnce({
+      supported: true,
+      installed: false,
+      running: false,
+      connected: false,
+      paired: false,
+      deviceId: null,
+      runnerVersion: "1.0.0",
+    });
+
+    await expect(ensureLocalHelper()).rejects.toThrow(
+      "当前设备未安装通用本地助手，请安装或升级 DClaw 客户端后重试。",
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
 });

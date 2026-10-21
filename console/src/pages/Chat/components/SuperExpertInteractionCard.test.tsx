@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { open } from "@tauri-apps/plugin-shell";
 import {
   type ChoiceInteractionProjection,
@@ -9,6 +9,10 @@ import {
 import { isTrustedLocalToolActionUrl } from "./localToolAction";
 
 vi.mock("@tauri-apps/plugin-shell", () => ({ open: vi.fn() }));
+const { ensureLocalHelper } = vi.hoisted(() => ({
+  ensureLocalHelper: vi.fn(),
+}));
+vi.mock("../../../desktop/localHelper", () => ({ ensureLocalHelper }));
 
 function single(
   overrides: Partial<ChoiceInteractionProjection> = {},
@@ -87,16 +91,25 @@ function questionForm(
 }
 
 describe("SuperExpertInteractionCard", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ensureLocalHelper.mockResolvedValue({ available: false, status: null });
+  });
+
   it("only trusts DClaw bootstrap connection actions", () => {
     expect(
       isTrustedLocalToolActionUrl(
         "https://dclaw.deepmega.cn/api/bootstrap/token/connect",
       ),
     ).toBe(true);
-    expect(isTrustedLocalToolActionUrl("https://evil.test/api/bootstrap/token/connect"))
-      .toBe(false);
-    expect(isTrustedLocalToolActionUrl("dclaw-local-tool://connect?token=x"))
-      .toBe(false);
+    expect(
+      isTrustedLocalToolActionUrl(
+        "https://evil.test/api/bootstrap/token/connect",
+      ),
+    ).toBe(false);
+    expect(
+      isTrustedLocalToolActionUrl("dclaw-local-tool://connect?token=x"),
+    ).toBe(false);
   });
 
   it("opens and submits a trusted desktop launch action once", async () => {
@@ -106,8 +119,7 @@ describe("SuperExpertInteractionCard", () => {
       value: { api: { open_external_link: openExternal } },
     });
     const onSubmit = vi.fn().mockResolvedValue(undefined);
-    const actionUrl =
-      "https://dclaw.deepmega.cn/api/bootstrap/token/connect";
+    const actionUrl = "https://dclaw.deepmega.cn/api/bootstrap/token/connect";
 
     render(
       <SuperExpertInteractionCard
@@ -140,7 +152,7 @@ describe("SuperExpertInteractionCard", () => {
     Reflect.deleteProperty(window, "pywebview");
   });
 
-  it("uses the Tauri shell for the production desktop runtime", async () => {
+  it("starts the bundled helper for the production desktop runtime", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", {
       configurable: true,
       value: {},
@@ -148,6 +160,18 @@ describe("SuperExpertInteractionCard", () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     const actionUrl =
       "https://dclaw.deepmega.cn/api/bootstrap/tauri-token/connect";
+    ensureLocalHelper.mockResolvedValue({
+      available: true,
+      status: {
+        supported: true,
+        installed: true,
+        running: true,
+        connected: true,
+        paired: true,
+        deviceId: "device-1",
+        runnerVersion: "1.0.0",
+      },
+    });
 
     render(
       <SuperExpertInteractionCard
@@ -176,8 +200,50 @@ describe("SuperExpertInteractionCard", () => {
       />,
     );
 
-    await waitFor(() => expect(open).toHaveBeenCalledWith(actionUrl));
+    await waitFor(() => expect(ensureLocalHelper).toHaveBeenCalledTimes(1));
+    expect(open).not.toHaveBeenCalled();
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+  });
+
+  it("reports a missing helper only when a local expert action runs", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: {},
+    });
+    ensureLocalHelper.mockRejectedValue(
+      new Error(
+        "当前设备未安装通用本地助手，请安装或升级 DClaw 客户端后重试。",
+      ),
+    );
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <SuperExpertInteractionCard
+        projection={single({
+          interactionId: "missing-helper",
+          options: [
+            {
+              id: "launch-local-tool",
+              text: "启动本地助手",
+              description: null,
+              recommended: true,
+              defaultSelected: true,
+              actionUrl:
+                "https://dclaw.deepmega.cn/api/bootstrap/missing/connect",
+              autoSubmitOnDesktop: true,
+            },
+          ],
+        })}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "当前设备未安装通用本地助手，请安装或升级 DClaw 客户端后重试。",
+    );
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
     Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
   });
 

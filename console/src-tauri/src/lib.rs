@@ -219,7 +219,7 @@ fn start_local_helper(
     }
     let executable = local_helper_executable(&app)?;
     if !executable.is_file() {
-        return Err("当前 DClaw 安装包未包含通用本地助手，请升级客户端。".to_owned());
+        return Err("当前设备未安装通用本地助手，请安装或升级 DClaw 客户端后重试。".to_owned());
     }
 
     let helper_directory = local_helper_directory(&app)?;

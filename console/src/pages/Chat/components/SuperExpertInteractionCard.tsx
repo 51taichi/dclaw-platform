@@ -2,6 +2,7 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Check, LoaderCircle, Sparkles } from "lucide-react";
 import { openExternalLink } from "../../../utils/openExternalLink";
 import { isDesktopApp } from "../../../utils/env";
+import { ensureLocalHelper } from "../../../desktop/localHelper";
 import { isTrustedLocalToolActionUrl } from "./localToolAction";
 import styles from "./SuperExpertInteractionCard.module.less";
 
@@ -129,6 +130,13 @@ const responsiveCardSize = {
   maxWidth: "100%",
 } as const;
 
+function localHelperActionError(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message.includes("本地助手")) {
+    return error.message;
+  }
+  return fallback;
+}
+
 function ChoiceInteractionCard({
   projection,
   onSubmit,
@@ -159,7 +167,10 @@ function ChoiceInteractionCard({
       if (!isTrustedLocalToolActionUrl(action.actionUrl)) {
         throw new Error("untrusted local tool action URL");
       }
-      openExternalLink(action.actionUrl);
+      const helper = await ensureLocalHelper();
+      if (!helper.available) {
+        openExternalLink(action.actionUrl);
+      }
     }
     await onSubmit({
       version: projection.version,
@@ -183,8 +194,13 @@ function ChoiceInteractionCard({
     autoSubmittedRef.current = true;
     submittingRef.current = true;
     setSubmitting(true);
-    void submitSelection().catch(() => {
-      setError("本地助手未能自动启动，请点击“提交选择”重试");
+    void submitSelection().catch((error) => {
+      setError(
+        localHelperActionError(
+          error,
+          "本地助手未能自动启动，请点击“提交选择”重试",
+        ),
+      );
       submittingRef.current = false;
       setSubmitting(false);
     });
@@ -227,8 +243,8 @@ function ChoiceInteractionCard({
     setError("");
     try {
       await submitSelection();
-    } catch {
-      setError("提交失败，请重试");
+    } catch (error) {
+      setError(localHelperActionError(error, "提交失败，请重试"));
       submittingRef.current = false;
       setSubmitting(false);
     }
