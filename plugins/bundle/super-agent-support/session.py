@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from typing import Any
 
 CAPABILITY_ID = "local.execution.session/1"
+PREFLIGHT_CAPABILITY_ID = "local.environment.preflight/1"
 CONTEXT_KEY = "local_execution_session_token"
 MAX_LIFETIME_SECONDS = 600
 

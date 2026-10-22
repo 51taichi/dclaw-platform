@@ -90,6 +90,7 @@ class AgentSummary(BaseModel):
     open_api_enabled: bool = False
     avatar: str | None = None
     usage_count: int = 0
+    declared_capabilities: list[str] = Field(default_factory=list)
     capabilities: AgentCapabilities = Field(
         default_factory=AgentCapabilities.for_standard,
     )
@@ -332,6 +333,11 @@ async def list_agents(exclude_open_api: bool = False) -> AgentListResponse:
                 open_api_enabled=sealed.agent_id in open_api_agent_ids,
                 avatar=sealed.avatar,
                 usage_count=usage_counts.get(sealed.agent_id, 0),
+                declared_capabilities=(
+                    [item[0] for item in active_release.declared_capabilities]
+                    if active_release
+                    else []
+                ),
                 capabilities=AgentCapabilities.for_sealed_global(),
             ),
         )

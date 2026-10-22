@@ -142,11 +142,18 @@ def create_app(
         return {
             "status": "ok",
             "plugin": "dclaw.super-agent-support",
-            "version": "1.2.0",
+            "version": "1.3.0",
             "protocols": {"local_execution": "1.0", "device": "1"},
         }
 
     _register_developer_kit_routes(app)
+
+    @app.get("/environment-status")
+    async def environment_status(request: Request) -> dict[str, Any]:
+        return await service.environment_status(
+            user_id=_user_id(request),
+            agent_protocol_version="1",
+        )
 
     @app.post("/device-bootstrap")
     async def device_bootstrap(

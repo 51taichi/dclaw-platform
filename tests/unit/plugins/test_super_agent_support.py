@@ -64,6 +64,10 @@ async def test_plugin_load_and_unload_are_isolated(tmp_path):
         )
         assert record.manifest.id == "dclaw.super-agent-support"
         assert "local.execution.session/1" in get_platform_capability_catalog()
+        assert (
+            "local.environment.preflight/1"
+            in get_platform_capability_catalog()
+        )
         assert any(
             getattr(route, "path", None) == "/api/super-agent-support"
             for route in app.routes
@@ -86,6 +90,10 @@ async def test_plugin_load_and_unload_are_isolated(tmp_path):
 
         assert (
             "local.execution.session/1"
+            not in get_platform_capability_catalog()
+        )
+        assert (
+            "local.environment.preflight/1"
             not in get_platform_capability_catalog()
         )
         assert not any(
@@ -259,7 +267,7 @@ def test_developer_kit_is_downloadable_without_server_source(
 
     assert metadata.status_code == 200
     assert metadata.json()["name"] == "dclaw-super-agent-devkit"
-    assert metadata.json()["version"] == "1.0.0"
+    assert metadata.json()["version"] == "1.1.0"
     assert metadata.json()["download_path"] == (
         "/api/super-agent-support/developer-kit/v1.zip"
     )
@@ -272,7 +280,7 @@ def test_developer_kit_is_downloadable_without_server_source(
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    assert "dclaw-super-agent-devkit-1.0.0/dclaw_agent_devkit.py" in names
+    assert "dclaw-super-agent-devkit-1.1.0/dclaw_agent_devkit.py" in names
     assert all("qwenpaw" not in name for name in names)
 
 
@@ -317,6 +325,9 @@ def test_device_bootstrap_reuses_only_current_users_device(
 
     root.mount("/api/super-agent-support", plugin_app)
     with TestClient(root) as client:
+        environment = client.get(
+            "/api/super-agent-support/environment-status",
+        )
         reused = client.post(
             "/api/super-agent-support/device-bootstrap",
             json={"device_id": "device-1"},
@@ -327,6 +338,9 @@ def test_device_bootstrap_reuses_only_current_users_device(
             json={"device_id": "device-1"},
         )
 
+    assert environment.status_code == 200
+    assert environment.json()["state"] == "device_not_ready"
+    assert environment.json()["reason"] == "device_offline"
     assert reused.status_code == 200
     assert reused.json() == {
         "paired": True,

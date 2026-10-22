@@ -4,9 +4,9 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`1.11`
+当前版本：`1.12`
 
-发布日期：`2026-10-21`
+发布日期：`2026-10-22`
 
 ## 1. 文档目的
 
@@ -474,18 +474,19 @@ stateDiagram-v2
 
 能力出现在 manifest 目录、文档或 Schema 中，只证明平台识别该能力声明，不证明对应运行服务已经生产可用。开发方必须同时核对目标环境的能力可用状态、生产入口和最低组件版本；平台未发布这些信息时不得自行猜测地址或把业务参考实现当作公共平台。
 
-截至 2026-10-21，`dclaw.super-agent-support` `1.2.0` 的源码实现和自动合同测试已经进入平台代码：插件注册 `local.execution.session/1`、可信工作区上下文、八个 `local_*` MCP 工具、设备配对与 WebSocket 调度、持久任务状态、能力包验签注册、凭证引用、通用 Windows 本地助手核心以及独立 Super Agent DevKit `1.0.0` 下载入口。DevKit 含独立 CLI、版本化 Schema、能力目录和最小模板，不导入或暴露 DClaw 服务端源码。DClaw Windows 客户端 `2.5.3` 已加入自动设备配对、助手启动、单实例、心跳、断进程恢复、退出登录停止和可见错误提示。DClaw 核心只保留通用插件 SPI；卸载插件会同时移除路由、能力和上下文处理器。
+截至 2026-10-22，`dclaw.super-agent-support` `1.3.0` 的源码实现和自动合同测试已经进入平台代码：插件注册 `local.execution.session/1` 与 `local.environment.preflight/1`、可信工作区上下文、八个 `local_*` MCP 工具、设备配对与 WebSocket 调度、持久任务状态、能力包验签注册、凭证引用、通用 Windows 本地助手核心以及独立 Super Agent DevKit `1.1.0` 下载入口。DevKit 含独立 CLI、版本化 Schema、能力目录和最小模板，不导入或暴露 DClaw 服务端源码。DClaw Windows 客户端源码已加入按专家声明自动预检和顶部手动检测入口。DClaw 核心只保留通用插件 SPI；卸载插件会同时移除路由、能力和上下文处理器。
 
 当前交付状态是 `source-complete`，还不是 `uploaded`、`active` 或 `e2e-verified`。正式入口和最低版本如下：
 
 | 项目 | V1 值 |
 |---|---|
-| 插件 ID / 版本 | `dclaw.super-agent-support` / `1.2.0` |
-| 最低 DClaw | `1.1.10` 且包含本标准 1.11 对应提交 |
-| 最低 Windows 客户端 | `2.5.3` |
-| Super Agent DevKit | `1.0.0`，`GET /api/super-agent-support/developer-kit/v1.zip` |
+| 插件 ID / 版本 | `dclaw.super-agent-support` / `1.3.0` |
+| 最低 DClaw | `1.1.10` 且包含本标准 1.12 对应提交 |
+| 最低 Windows 客户端 | `2.6.12` |
+| Super Agent DevKit | `1.1.0`，`GET /api/super-agent-support/developer-kit/v1.zip` |
 | DevKit 元数据 | `GET /api/super-agent-support/developer-kit`，返回版本与 SHA-256 |
 | 本地执行 MCP | `/api/super-agent-support/mcp/`，Streamable HTTP |
+| 客户端环境检测 | `GET /api/super-agent-support/environment-status` |
 | 客户端配对 | `POST /api/super-agent-support/device-bootstrap` |
 | 本地助手通道 | `/api/super-agent-support/devices/connect`，WebSocket 协议 `1` |
 | 能力包注册 | `POST /api/super-agent-support/capability-packages/register` |
@@ -539,8 +540,7 @@ stateDiagram-v2
     {"capability_id":"runtime.fail","contract_version":"1"},
     {"capability_id":"interaction.capabilities.list/1","contract_version":"1"},
     {"capability_id":"interaction.card.create/1","contract_version":"1"},
-    {"capability_id":"interaction.card.cancel/1","contract_version":"1"},
-    {"capability_id":"local.execution.session/1","contract_version":"1"}
+    {"capability_id":"interaction.card.cancel/1","contract_version":"1"}
   ],
   "capability_digest": "sha256:<由工具计算的64位十六进制摘要>",
   "signer_id": "approved-developer-signer",
@@ -553,7 +553,9 @@ stateDiagram-v2
 
 说明：
 
-- 不使用交互卡或本地助手时删除相应组和能力。
+- 不使用交互卡时删除相应组和能力；不使用本地助手是默认行为，不声明任何 `local.*` 能力。
+- 可选使用本地助手时声明 `local.execution.session/1`；只有实际调用本地能力前才检查。
+- 必须使用本地助手时同时声明 `local.execution.session/1` 与 `local.environment.preflight/1`；后者依赖前者，客户端在进入该专家时统一预检。
 - 能力摘要必须通过官方 DevKit 的 `digest --write` 计算，禁止手工拼接或导入平台源码。
 - `content_digest` 不写入模板，由密封构建工具根据包内容生成。
 - `entrypoint` 必须位于 `agent/` 下。
@@ -634,9 +636,9 @@ DClaw 平台负责卡片持久化、渲染、提交和可信回传；开发方�
 - 密钥轮换不修改签名包内容；
 - 日志、trace、错误和管理 API 只返回脱敏状态。
 
-截至 2026-10-21，DClaw 的通用 MCP 客户端已有 OAuth 2.1 PKCE 授权流程和 Bearer Header 注入，但其现有 Agent 配置存储仍不构成密封全局超级专家的按用户 OAuth 合同。`dclaw.super-agent-support` `1.2.0` 的凭证引用只解决客户凭证向已授权本地能力包注入：密文按用户、安装、Agent 和 scope 绑定，Agent 只传不透明 `credential_ref`，明文只通过已认证设备通道送入本地助手并在子进程结束后删除，管理 API 支持撤销。
+截至 2026-10-22，DClaw 的通用 MCP 客户端已有 OAuth 2.1 PKCE 授权流程和 Bearer Header 注入，但其现有 Agent 配置存储仍不构成密封全局超级专家的按用户 OAuth 合同。`dclaw.super-agent-support` `1.3.0` 的凭证引用只解决客户凭证向已授权本地能力包注入：密文按用户、安装、Agent 和 scope 绑定，Agent 只传不透明 `credential_ref`，明文只通过已认证设备通道送入本地助手并在子进程结束后删除，管理 API 支持撤销。
 
-开发方业务服务自身调用 TikHub 等第三方 API 时，长期 Token 属于开发方业务服务，应保存在开发方 Secret 管理系统；不需要上传 DClaw，也不需要经过 DClaw Credential Broker。若业务 MCP 必须使用每位客户自己的 OAuth 身份，当前插件 `1.2.0` 仍未发布按用户 OAuth 刷新和 MCP 运输层注入，开发方必须保持生产构建失败关闭并提交通用能力申请，不能把 Token 写回密封包。
+开发方业务服务自身调用 TikHub 等第三方 API 时，长期 Token 属于开发方业务服务，应保存在开发方 Secret 管理系统；不需要上传 DClaw，也不需要经过 DClaw Credential Broker。若业务 MCP 必须使用每位客户自己的 OAuth 身份，当前插件 `1.3.0` 仍未发布按用户 OAuth 刷新和 MCP 运输层注入，开发方必须保持生产构建失败关闭并提交通用能力申请，不能把 Token 写回密封包。
 
 在所需鉴权方式尚未正式发布前：
 
@@ -661,6 +663,18 @@ DClaw 桌面版是唯一用户入口，也是唯一登录入口。本地助手�
 - 本地助手不理解业务字段，不选择第三方 API，不判断业务结果。
 
 ### 15.2 八个公共工具
+
+每个超级专家通过签名能力清单声明本地助手需求，平台不根据专家名称或业务描述猜测：
+
+| 声明 | 模式 | 客户端行为 |
+|---|---|---|
+| 不声明 `local.*` | `none`，默认值 | 不检测、不启动本地助手 |
+| 只声明 `local.execution.session/1` | `optional` | 实际调用本地能力前检测 |
+| 再声明 `local.environment.preflight/1` | `required` | 进入该专家时由客户端统一检测、配对并启动 |
+
+旧版超级专家没有 `local.environment.preflight/1` 时保持兼容：未声明本地会话能力视为 `none`，只声明本地会话能力视为 `optional`。`local.environment.preflight/1` 只表达运行前要求，不增加业务工具，也不替代 `local_environment_status`。客户端顶部必须提供“检测本地助手”手动入口，供客户随时检查安装、启动、连接和 Runner 版本；手动检测不改变任何专家的声明或授权。
+
+旧版中实际无法脱离本地助手运行的专家必须发布新版本，增加 `local.environment.preflight/1`，重新计算能力摘要并由管理员重新授权；平台不得根据旧专家名称自动提升为 `required`。陆羽大字报等强依赖本地素材处理的专家属于这一类。
 
 V1 固定流程：
 
@@ -1512,7 +1526,7 @@ Agent 名称：<中文显示名称>
 2. 开发方自己的业务目标、源 Agent 材料和测试凭证；
 3. 从目标 DClaw `GET /api/super-agent-support/developer-kit/v1.zip` 下载的官方 DevKit。
 
-DevKit `1.0.0` 必须提供：
+DevKit `1.1.0` 必须提供：
 
 - `dclaw_agent_devkit.py`：`contracts`、`digest`、`validate`、`keygen`、`build`、`verify`；
 - `capability-catalog.json`：当前可声明的能力、版本、组和依赖；
@@ -1526,6 +1540,13 @@ DevKit `1.0.0` 必须提供：
 平台内部实现文件、测试文件和维护文档可以继续存在，但它们只服务平台维护者，不属于开发方输入。开发方缺少字段或行为定义时应报告标准或 DevKit 缺陷；平台不得用“请克隆服务器源码”回答。
 
 ## 34. 版本记录
+
+### 1.12 - 2026-10-22
+
+- 将本地助手需求定义为签名能力声明：默认 `none`，`local.execution.session/1` 表示 `optional`，增加依赖该能力的 `local.environment.preflight/1` 表示 `required`。
+- `dclaw.super-agent-support` 更新为 `1.3.0`，Super Agent DevKit 更新为 `1.1.0`，能力目录和依赖校验同步发布。
+- 专家列表公开返回当前发布版的通用能力声明，Windows 客户端据此只对 `required` 专家自动预检；旧专家无需迁移即可继续运行。
+- 插件增加登录用户环境检测接口；DClaw 客户端顶部增加本地助手手动检测入口，统一反馈未安装、插件不可用、启动中、未连接、版本和已连接状态。
 
 ### 1.11 - 2026-10-21
 

@@ -13,7 +13,7 @@ from .mcp_server import LocalExecutionMcp
 from .packages import CapabilityPackageRegistry
 from .routes import create_app
 from .service import LocalExecutionService
-from .session import CAPABILITY_ID, SessionSigner
+from .session import CAPABILITY_ID, PREFLIGHT_CAPABILITY_ID, SessionSigner
 from .store import StateStore
 
 
@@ -95,6 +95,11 @@ class SuperAgentSupportPlugin:
         )
         api.register_platform_capability(
             CAPABILITY_ID,
+            "1",
+            "local_execution",
+        )
+        api.register_platform_capability(
+            PREFLIGHT_CAPABILITY_ID,
             "1",
             "local_execution",
         )

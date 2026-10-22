@@ -12,7 +12,10 @@ from qwenpaw.config.config import (
     Config,
 )
 from qwenpaw.app.routers import agents as agents_router
-from qwenpaw.app.sealed_agents.models import SealedAgentRecord
+from qwenpaw.app.sealed_agents.models import (
+    SealedAgentRecord,
+    SealedReleaseRecord,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -183,13 +186,25 @@ async def test_list_agents_merges_sealed_agents_without_exposing_workspace(
             return agent_id == "luyu"
 
         def list_agents(self):
+            release = SealedReleaseRecord(
+                release_id="release-1",
+                version="1.0.0",
+                content_digest="sha256:" + "a" * 64,
+                signer_id="official",
+                package_type="super_expert",
+                declared_capabilities=(
+                    ("local.execution.session/1", "1"),
+                    ("local.environment.preflight/1", "1"),
+                ),
+            )
             return [
                 SealedAgentRecord(
                     agent_id="luyu",
                     name="陆羽",
                     description="茶文化专家",
                     enabled=True,
-                    active_release_id=None,
+                    active_release_id=release.release_id,
+                    releases=[release],
                 ),
             ]
 
@@ -210,6 +225,10 @@ async def test_list_agents_merges_sealed_agents_without_exposing_workspace(
     assert sealed.workspace_dir is None
     assert sealed.capabilities.invoke is True
     assert sealed.capabilities.download is False
+    assert sealed.declared_capabilities == [
+        "local.execution.session/1",
+        "local.environment.preflight/1",
+    ]
 
 
 @pytest.mark.asyncio

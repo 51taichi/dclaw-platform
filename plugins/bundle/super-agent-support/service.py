@@ -153,7 +153,23 @@ class LocalExecutionService:
             )
         ) or type(wait_seconds) is not int or not 0 <= wait_seconds <= 25:
             raise ERRORS["INVALID_ARGUMENTS"]
-        devices = self._online_devices(identity["u"])
+        return await self.environment_status(
+            user_id=identity["u"],
+            agent_protocol_version=requested,
+            bootstrap_session_id=bootstrap_session_id,
+            wait_seconds=wait_seconds,
+        )
+
+    async def environment_status(
+        self,
+        *,
+        user_id: str,
+        agent_protocol_version: str,
+        bootstrap_session_id: str | None = None,
+        wait_seconds: int = 0,
+    ) -> dict[str, Any]:
+        """Return the authenticated user's Runner compatibility status."""
+        devices = self._online_devices(user_id)
         if not devices and wait_seconds:
             deadline = time.monotonic() + wait_seconds
             while not devices:
@@ -161,7 +177,7 @@ class LocalExecutionService:
                 if remaining <= 0:
                     break
                 self._device_event.clear()
-                devices = self._online_devices(identity["u"])
+                devices = self._online_devices(user_id)
                 if devices:
                     break
                 try:
@@ -170,15 +186,15 @@ class LocalExecutionService:
                     )
                 except asyncio.TimeoutError:
                     break
-                devices = self._online_devices(identity["u"])
-        known_devices = self.store.list_devices(identity["u"])
+                devices = self._online_devices(user_id)
+        known_devices = self.store.list_devices(user_id)
         online_ids = {item["device_id"] for item in devices}
         compatible_devices = [
             item
             for item in devices
             if _runner_supports(item, MIN_RUNNER_VERSION)
         ]
-        if requested != PROTOCOL_VERSION:
+        if agent_protocol_version != PROTOCOL_VERSION:
             state = "protocol_incompatible"
             reason = "protocol_version_mismatch"
             user_action = "contact_administrator"
@@ -198,7 +214,7 @@ class LocalExecutionService:
             "state": state,
             "reason": reason,
             "protocol_version": PROTOCOL_VERSION,
-            "compatible": requested == PROTOCOL_VERSION,
+            "compatible": agent_protocol_version == PROTOCOL_VERSION,
             "minimum_runner_version": MIN_RUNNER_VERSION,
             "bootstrap_session_id": bootstrap_session_id,
             "user_action": user_action,

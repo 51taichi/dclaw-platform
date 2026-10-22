@@ -9,6 +9,7 @@ import subprocess
 import sys
 import zipfile
 
+import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from jsonschema import Draft202012Validator
@@ -82,7 +83,7 @@ def test_devkit_has_no_server_source_import_and_runs_standalone():
     )
     result = json.loads(completed.stdout)
     assert result["status"] == "ok"
-    assert result["devkit_version"] == "1.0.0"
+    assert result["devkit_version"] == "1.1.0"
     assert "schemas/super-expert-manifest.schema.json" in result["schemas"]
     assert (
         "schemas/local-execution-v1/tool-call.schema.json" in result["schemas"]
@@ -101,7 +102,7 @@ def test_devkit_catalog_and_digest_match_platform_contract():
             tuple(item["dependencies"]),
         )
         for item in catalog["capabilities"]
-        if item["capability_id"] != "local.execution.session/1"
+        if item["group"] != "local_execution"
     }
     server_core = {
         capability_id: (
@@ -119,6 +120,37 @@ def test_devkit_catalog_and_digest_match_platform_contract():
     digest = devkit.compute_capability_digest(manifest)
     assert digest == compute_capability_set_digest(manifest)
     manifest["capability_digest"] = digest
+    devkit.validate_manifest(manifest, require_content_digest=False)
+
+
+def test_required_local_helper_preflight_requires_local_session():
+    devkit = _devkit()
+    manifest = json.loads(
+        (FIXTURE / "manifest.template.json").read_text(encoding="utf-8"),
+    )
+    manifest["platform_contract_versions"]["local_execution"] = "1"
+    manifest["capabilities"].append(
+        {
+            "capability_id": "local.environment.preflight/1",
+            "contract_version": "1",
+        },
+    )
+    manifest["capability_digest"] = devkit.compute_capability_digest(manifest)
+
+    with pytest.raises(
+        devkit.DevKitError,
+        match="missing capability dependency: local.execution.session/1",
+    ):
+        devkit.validate_manifest(manifest, require_content_digest=False)
+
+    manifest["capabilities"].append(
+        {
+            "capability_id": "local.execution.session/1",
+            "contract_version": "1",
+        },
+    )
+    manifest["capability_digest"] = devkit.compute_capability_digest(manifest)
+
     devkit.validate_manifest(manifest, require_content_digest=False)
 
 
