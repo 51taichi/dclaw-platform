@@ -35,6 +35,10 @@ vi.mock("../components/ThemeToggleButton", () => ({
   default: () => <button type="button">Theme</button>,
 }));
 
+vi.mock("../features/localHelper/LocalHelperStatusButton", () => ({
+  default: () => <button type="button">Local helper</button>,
+}));
+
 describe("Header brand logo", () => {
   beforeEach(() => {
     authState.role = "user";

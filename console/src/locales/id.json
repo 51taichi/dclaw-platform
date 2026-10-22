@@ -71,7 +71,17 @@
     "tutorial": "Tutorial",
     "faq": "FAQ",
     "github": "GitHub",
-    "updateAvailable": "Pembaruan Tersedia"
+    "updateAvailable": "Pembaruan Tersedia",
+    "localHelperCheck": "Periksa bantuan lokal",
+    "localHelperChecking": "Memeriksa bantuan lokal",
+    "localHelperReady": "Bantuan lokal terhubung",
+    "localHelperReadyWithVersion": "Bantuan lokal terhubung · v{{version}}",
+    "localHelperRetry": "Bantuan lokal bermasalah, klik untuk mencoba lagi",
+    "localHelperPluginUnavailable": "Dukungan bantuan lokal belum diaktifkan di server ini. Hubungi administrator.",
+    "localHelperWindowsOnly": "Periksa bantuan lokal di klien DClaw Windows.",
+    "localHelperConnectFailed": "Bantuan lokal telah dimulai tetapi belum terhubung ke DClaw. Coba lagi sebentar lagi.",
+    "localHelperUpdateRequired": "Versi bantuan lokal terlalu lama. Tingkatkan DClaw ke versi yang mendukung Runner v{{version}}.",
+    "localHelperProtocolIncompatible": "Protokol bantuan lokal tidak kompatibel. Hubungi administrator."
   },
   "theme": {
     "dark": "Gelap",

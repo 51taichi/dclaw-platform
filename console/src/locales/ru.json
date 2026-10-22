@@ -1512,7 +1512,17 @@
     "tutorial": "Руководство",
     "faq": "FAQ",
     "github": "GitHub",
-    "updateAvailable": "Доступно обновление"
+    "updateAvailable": "Доступно обновление",
+    "localHelperCheck": "Проверить локальный помощник",
+    "localHelperChecking": "Проверка локального помощника",
+    "localHelperReady": "Локальный помощник подключён",
+    "localHelperReadyWithVersion": "Локальный помощник подключён · v{{version}}",
+    "localHelperRetry": "Локальный помощник недоступен, нажмите для повтора",
+    "localHelperPluginUnavailable": "Поддержка локального помощника не включена на сервере. Обратитесь к администратору.",
+    "localHelperWindowsOnly": "Проверьте локальный помощник в клиенте DClaw для Windows.",
+    "localHelperConnectFailed": "Локальный помощник запущен, но ещё не подключён к DClaw. Повторите попытку позже.",
+    "localHelperUpdateRequired": "Локальный помощник устарел. Обновите DClaw до версии с поддержкой Runner v{{version}}.",
+    "localHelperProtocolIncompatible": "Протокол локального помощника несовместим. Обратитесь к администратору."
   },
   "theme": {
     "dark": "Тёмная",

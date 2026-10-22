@@ -2260,7 +2260,17 @@
     "tutorial": "Tutorial",
     "faq": "FAQ",
     "github": "GitHub",
-    "updateAvailable": "Update Available"
+    "updateAvailable": "Update Available",
+    "localHelperCheck": "Check local helper",
+    "localHelperChecking": "Checking local helper",
+    "localHelperReady": "Local helper connected",
+    "localHelperReadyWithVersion": "Local helper connected · v{{version}}",
+    "localHelperRetry": "Local helper unavailable, click to retry",
+    "localHelperPluginUnavailable": "Local helper support is not enabled on this server. Contact the administrator.",
+    "localHelperWindowsOnly": "Check the local helper in the Windows DClaw client.",
+    "localHelperConnectFailed": "The local helper started but has not connected to DClaw. Try again shortly.",
+    "localHelperUpdateRequired": "The local helper is outdated. Upgrade DClaw to a version that supports Runner v{{version}}.",
+    "localHelperProtocolIncompatible": "The local helper protocol is incompatible. Contact the administrator."
   },
   "scenes": {
     "label": "Scenes",

@@ -2109,7 +2109,17 @@
     "tutorial": "教程",
     "faq": "常见问题",
     "github": "GitHub",
-    "updateAvailable": "有可用更新"
+    "updateAvailable": "有可用更新",
+    "localHelperCheck": "检测本地助手",
+    "localHelperChecking": "正在检测本地助手",
+    "localHelperReady": "本地助手已连接",
+    "localHelperReadyWithVersion": "本地助手已连接 · v{{version}}",
+    "localHelperRetry": "本地助手异常，点击重试",
+    "localHelperPluginUnavailable": "平台尚未启用本地助手支持，请联系管理员。",
+    "localHelperWindowsOnly": "请在 Windows DClaw 客户端中检测本地助手。",
+    "localHelperConnectFailed": "本地助手已启动，但尚未连接到 DClaw，请稍后重试。",
+    "localHelperUpdateRequired": "本地助手版本过低，请将 DClaw 客户端升级到支持 Runner v{{version}} 的版本。",
+    "localHelperProtocolIncompatible": "本地助手协议不兼容，请联系管理员。"
   },
   "scenes": {
     "label": "场景",

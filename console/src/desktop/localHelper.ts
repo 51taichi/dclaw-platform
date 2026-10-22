@@ -28,6 +28,45 @@ export interface LocalHelperEnsureResult {
   status: LocalHelperStatus | null;
 }
 
+export interface LocalEnvironmentStatus {
+  state:
+    | "ready"
+    | "device_not_ready"
+    | "runner_update_required"
+    | "protocol_incompatible";
+  reason: string;
+  protocol_version: string;
+  compatible: boolean;
+  minimum_runner_version: string;
+  user_action: string;
+}
+
+export async function getLocalEnvironmentStatus(): Promise<LocalEnvironmentStatus> {
+  const response = await fetch(
+    getApiUrl("/super-agent-support/environment-status"),
+    { headers: buildAuthHeaders() },
+  );
+  if (!response.ok) {
+    throw new Error(`本地助手服务检测失败 (${response.status})`);
+  }
+  return response.json() as Promise<LocalEnvironmentStatus>;
+}
+
+export async function waitForLocalHelperConnection(
+  maxAttempts = 20,
+  intervalMs = 250,
+): Promise<LocalHelperStatus | null> {
+  let status: LocalHelperStatus | null = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    status = await getLocalHelperStatus();
+    if (!status || status.connected) return status;
+    if (attempt < maxAttempts - 1) {
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+  }
+  return status;
+}
+
 export function toWebSocketUrl(path: string): string {
   const configuredBase = getApiBaseUrl();
   const base = configuredBase || window.location.origin;

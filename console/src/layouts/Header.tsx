@@ -8,6 +8,7 @@ import { useTheme } from "../contexts/ThemeContext";
 import ThemeToggleButton from "../components/ThemeToggleButton";
 import BalanceBadge from "../features/billing/BalanceBadge";
 import ConcurrencyMonitorButton from "../features/concurrency/ConcurrencyMonitorButton";
+import LocalHelperStatusButton from "../features/localHelper/LocalHelperStatusButton";
 import styles from "./index.module.less";
 import { DesktopVersion } from "../components/DesktopVersion";
 import type { ClientScene } from "../api/modules/auth";
@@ -107,6 +108,7 @@ export default function Header({
       )}
       <Space size="middle" className={styles.headerActions}>
         {!isAdminMode && <BalanceBadge />}
+        {!isAdminMode && <LocalHelperStatusButton />}
         {isAdminRole && isAdminMode && <ConcurrencyMonitorButton />}
         <LanguageSwitcher />
         <ThemeToggleButton />

@@ -15,6 +15,7 @@ export interface AgentSummary {
   open_api_enabled?: boolean;
   avatar?: string | null;
   usage_count?: number;
+  declared_capabilities?: string[];
   capabilities?: AgentCapabilities;
   active_model?: ModelSlotConfig | null;
 }

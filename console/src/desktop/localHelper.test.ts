@@ -14,7 +14,12 @@ vi.mock("@/api/config", () => ({
   getApiUrl: (path: string) => `https://dclaw.example/api${path}`,
 }));
 
-import { ensureLocalHelper, toWebSocketUrl } from "./localHelper";
+import {
+  ensureLocalHelper,
+  getLocalEnvironmentStatus,
+  toWebSocketUrl,
+  waitForLocalHelperConnection,
+} from "./localHelper";
 
 describe("local helper desktop bridge", () => {
   beforeEach(() => {
@@ -123,5 +128,60 @@ describe("local helper desktop bridge", () => {
       "当前设备未安装通用本地助手，请安装或升级 DClaw 客户端后重试。",
     );
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("waits until the helper reports a real server connection", async () => {
+    invokeMock
+      .mockResolvedValueOnce({
+        supported: true,
+        installed: true,
+        running: true,
+        connected: false,
+        paired: true,
+        deviceId: "device-1",
+        runnerVersion: "1.0.0",
+      })
+      .mockResolvedValueOnce({
+        supported: true,
+        installed: true,
+        running: true,
+        connected: true,
+        paired: true,
+        deviceId: "device-1",
+        runnerVersion: "1.0.0",
+      });
+
+    const status = await waitForLocalHelperConnection(2, 0);
+
+    expect(status?.connected).toBe(true);
+    expect(invokeMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads the authenticated server-side Runner compatibility status", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            state: "ready",
+            reason: "none",
+            protocol_version: "1",
+            compatible: true,
+            minimum_runner_version: "1.0.0",
+            user_action: "none",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+
+    await expect(getLocalEnvironmentStatus()).resolves.toMatchObject({
+      state: "ready",
+      minimum_runner_version: "1.0.0",
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      "https://dclaw.example/api/super-agent-support/environment-status",
+      { headers: { Authorization: "Bearer token" } },
+    );
   });
 });

@@ -1497,7 +1497,17 @@
     "tutorial": "チュートリアル",
     "faq": "よくある質問",
     "github": "GitHub",
-    "updateAvailable": "利用可能な更新"
+    "updateAvailable": "利用可能な更新",
+    "localHelperCheck": "ローカルヘルパーを確認",
+    "localHelperChecking": "ローカルヘルパーを確認中",
+    "localHelperReady": "ローカルヘルパーに接続済み",
+    "localHelperReadyWithVersion": "ローカルヘルパーに接続済み · v{{version}}",
+    "localHelperRetry": "ローカルヘルパーに問題があります。クリックして再試行",
+    "localHelperPluginUnavailable": "このサーバーではローカルヘルパーが有効になっていません。管理者に連絡してください。",
+    "localHelperWindowsOnly": "Windows版DClawクライアントでローカルヘルパーを確認してください。",
+    "localHelperConnectFailed": "ローカルヘルパーは起動しましたが、DClawに接続されていません。しばらくしてから再試行してください。",
+    "localHelperUpdateRequired": "ローカルヘルパーのバージョンが古いため、Runner v{{version}}に対応するDClawへ更新してください。",
+    "localHelperProtocolIncompatible": "ローカルヘルパーのプロトコルに互換性がありません。管理者に連絡してください。"
   },
   "theme": {
     "dark": "ダーク",
