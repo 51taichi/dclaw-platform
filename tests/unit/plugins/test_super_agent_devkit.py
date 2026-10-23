@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import importlib.util
 import io
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import zipfile
@@ -83,11 +85,59 @@ def test_devkit_has_no_server_source_import_and_runs_standalone():
     )
     result = json.loads(completed.stdout)
     assert result["status"] == "ok"
-    assert result["devkit_version"] == "1.1.0"
+    assert result["devkit_version"] == "1.2.0"
+    assert result["dependency_mode"] == "bundled-wheelhouse"
+    assert result["cryptography_version"] == "46.0.3"
     assert "schemas/super-expert-manifest.schema.json" in result["schemas"]
     assert (
         "schemas/local-execution-v1/tool-call.schema.json" in result["schemas"]
     )
+
+
+def test_devkit_bundles_and_verifies_locked_encryption_dependencies():
+    devkit = _devkit()
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(DEVKIT_SCRIPT),
+            "doctor",
+            "--wheelhouse-only",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    result = json.loads(completed.stdout)
+    assert result["status"] == "ok"
+    assert result["devkit_version"] == "1.2.0"
+    assert result["wheelhouse_verified"] is True
+    assert result["wheelhouse_files"] == 26
+
+    checksum_digests = {
+        line.split("  ", 1)[0]
+        for line in (DEVKIT_ROOT / "CHECKSUMS.sha256")
+        .read_text(encoding="ascii")
+        .splitlines()
+        if line
+    }
+    lock_text = (DEVKIT_ROOT / "requirements.lock").read_text(
+        encoding="utf-8",
+    )
+    lock_digests = {
+        match.group(1)
+        for match in re.finditer(
+            r"--hash=sha256:([0-9a-f]{64})",
+            lock_text,
+        )
+    }
+    assert checksum_digests == lock_digests
+    for line in (DEVKIT_ROOT / "CHECKSUMS.sha256").read_text(
+        encoding="ascii",
+    ).splitlines():
+        digest, relative = line.split("  ", 1)
+        actual = hashlib.sha256((DEVKIT_ROOT / relative).read_bytes())
+        assert actual.hexdigest() == digest
+    assert devkit._verify_wheelhouse() == 26
 
 
 def test_devkit_catalog_and_digest_match_platform_contract():

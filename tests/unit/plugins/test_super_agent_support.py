@@ -267,11 +267,17 @@ def test_developer_kit_is_downloadable_without_server_source(
 
     assert metadata.status_code == 200
     assert metadata.json()["name"] == "dclaw-super-agent-devkit"
-    assert metadata.json()["version"] == "1.1.0"
+    assert metadata.json()["version"] == "1.2.0"
     assert metadata.json()["download_path"] == (
         "/api/super-agent-support/developer-kit/v1.zip"
     )
     assert metadata.json()["server_source_required"] is False
+    assert metadata.json()["dependency_mode"] == "bundled-wheelhouse"
+    assert metadata.json()["offline_bootstrap"] is True
+    assert metadata.json()["supported_python"] == ">=3.10,<3.14"
+    assert "windows-x86_64" in metadata.json()["supported_platforms"]
+    assert len(metadata.json()["requirements_lock_sha256"]) == 64
+    assert len(metadata.json()["wheelhouse_manifest_sha256"]) == 64
     assert downloaded.status_code == 200
     assert downloaded.headers["content-type"] == "application/zip"
     assert (
@@ -280,7 +286,13 @@ def test_developer_kit_is_downloadable_without_server_source(
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    assert "dclaw-super-agent-devkit-1.1.0/dclaw_agent_devkit.py" in names
+    prefix = "dclaw-super-agent-devkit-1.2.0"
+    assert f"{prefix}/dclaw_agent_devkit.py" in names
+    assert f"{prefix}/bootstrap.ps1" in names
+    assert f"{prefix}/bootstrap.sh" in names
+    assert f"{prefix}/requirements.lock" in names
+    assert f"{prefix}/CHECKSUMS.sha256" in names
+    assert len([name for name in names if "/wheelhouse/" in name]) == 26
     assert all("qwenpaw" not in name for name in names)
 
 

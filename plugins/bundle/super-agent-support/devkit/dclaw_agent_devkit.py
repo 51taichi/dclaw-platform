@@ -9,15 +9,27 @@ import hashlib
 import io
 import json
 import os
+import platform
 from pathlib import Path, PurePosixPath
 import re
 import stat
 import struct
+import sys
 import unicodedata
 import zipfile
 
 
-DEVKIT_VERSION = "1.1.0"
+DEVKIT_VERSION = "1.2.0"
+CRYPTOGRAPHY_VERSION = "46.0.3"
+SUPPORTED_PYTHON = ">=3.10,<3.14"
+SUPPORTED_PLATFORMS = {
+    ("darwin", "arm64"): "macos-arm64",
+    ("darwin", "x86_64"): "macos-x86_64",
+    ("linux", "aarch64"): "linux-glibc-aarch64",
+    ("linux", "x86_64"): "linux-glibc-x86_64",
+    ("windows", "amd64"): "windows-x86_64",
+    ("windows", "x86_64"): "windows-x86_64",
+}
 MAX_PACKAGE_BYTES = 200 * 1024 * 1024
 MAX_EXPANDED_BYTES = 400 * 1024 * 1024
 MAX_FILE_BYTES = 100 * 1024 * 1024
@@ -66,6 +78,63 @@ def _read_json(path: Path) -> dict:
     if not isinstance(value, dict):
         raise DevKitError(f"JSON root must be an object: {path}")
     return value
+
+
+def _development_platform() -> str:
+    if not ((3, 10) <= sys.version_info[:2] < (3, 14)):
+        raise DevKitError(
+            f"unsupported Python {platform.python_version()}; "
+            f"expected {SUPPORTED_PYTHON}",
+        )
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+    platform_id = SUPPORTED_PLATFORMS.get((system, machine))
+    if platform_id is None:
+        raise DevKitError(
+            f"unsupported development platform: {system}-{machine}",
+        )
+    if system == "linux" and platform.libc_ver()[0].lower() != "glibc":
+        raise DevKitError("Linux DevKit wheels require glibc")
+    return platform_id
+
+
+def _verify_wheelhouse() -> int:
+    checksum_path = _root() / "CHECKSUMS.sha256"
+    wheelhouse = _root() / "wheelhouse"
+    try:
+        lines = checksum_path.read_text(encoding="ascii").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise DevKitError("missing or invalid CHECKSUMS.sha256") from exc
+    expected: dict[str, str] = {}
+    for line in lines:
+        if not line.strip():
+            continue
+        parts = line.split("  ", 1)
+        if len(parts) != 2 or not re.fullmatch(r"[0-9a-f]{64}", parts[0]):
+            raise DevKitError("invalid CHECKSUMS.sha256 entry")
+        relative = PurePosixPath(parts[1])
+        if (
+            relative.is_absolute()
+            or ".." in relative.parts
+            or relative.parts[:1] != ("wheelhouse",)
+            or relative.suffix != ".whl"
+        ):
+            raise DevKitError("invalid wheelhouse checksum path")
+        name = relative.as_posix()
+        if name in expected:
+            raise DevKitError(f"duplicate wheelhouse checksum: {name}")
+        expected[name] = parts[0]
+    actual = {
+        path.relative_to(_root()).as_posix()
+        for path in wheelhouse.glob("*.whl")
+        if path.is_file()
+    }
+    if not expected or actual != set(expected):
+        raise DevKitError("wheelhouse contents do not match CHECKSUMS.sha256")
+    for name, digest in expected.items():
+        if hashlib.sha256((_root() / name).read_bytes()).hexdigest() != digest:
+            raise DevKitError(f"wheelhouse checksum mismatch: {name}")
+    return len(expected)
 
 
 def _write_json(path: Path, value: dict) -> None:
@@ -603,6 +672,8 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="dclaw-agent-devkit")
     parser.add_argument("--version", action="version", version=DEVKIT_VERSION)
     subparsers = parser.add_subparsers(dest="command", required=True)
+    doctor = subparsers.add_parser("doctor")
+    doctor.add_argument("--wheelhouse-only", action="store_true")
     digest = subparsers.add_parser("digest")
     digest.add_argument("--manifest", type=Path, required=True)
     digest.add_argument("--write", action="store_true")
@@ -623,6 +694,31 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--public-key", type=Path, required=True)
     subparsers.add_parser("contracts")
     return parser
+
+
+def _command_doctor(args: argparse.Namespace) -> None:
+    platform_id = _development_platform()
+    wheel_count = _verify_wheelhouse()
+    cryptography_version = None
+    if not args.wheelhouse_only:
+        import cryptography
+
+        cryptography_version = cryptography.__version__
+        if cryptography_version != CRYPTOGRAPHY_VERSION:
+            raise DevKitError(
+                "unexpected cryptography version: "
+                f"{cryptography_version}; expected {CRYPTOGRAPHY_VERSION}",
+            )
+    _json_result(
+        status="ok",
+        devkit_version=DEVKIT_VERSION,
+        python=platform.python_version(),
+        supported_python=SUPPORTED_PYTHON,
+        platform=platform_id,
+        wheelhouse_files=wheel_count,
+        wheelhouse_verified=True,
+        cryptography_version=cryptography_version,
+    )
 
 
 def _command_digest(args: argparse.Namespace) -> None:
@@ -721,6 +817,10 @@ def _command_contracts(_args: argparse.Namespace) -> None:
         status="ok",
         devkit_version=DEVKIT_VERSION,
         catalog_version=catalog["catalog_version"],
+        dependency_mode="bundled-wheelhouse",
+        cryptography_version=CRYPTOGRAPHY_VERSION,
+        supported_python=SUPPORTED_PYTHON,
+        supported_platforms=sorted(set(SUPPORTED_PLATFORMS.values())),
         schemas=sorted(
             path.relative_to(_root()).as_posix()
             for path in (_root() / "schemas").rglob("*.json")
@@ -729,6 +829,7 @@ def _command_contracts(_args: argparse.Namespace) -> None:
 
 
 COMMANDS = {
+    "doctor": _command_doctor,
     "digest": _command_digest,
     "validate": _command_validate,
     "keygen": _command_keygen,

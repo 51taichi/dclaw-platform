@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`1.16`
+当前版本：`1.17`
 
 发布日期：`2026-10-23`
 
@@ -487,15 +487,15 @@ stateDiagram-v2
 
 能力出现在 manifest 目录、文档或 Schema 中，只证明平台识别该能力声明，不证明对应运行服务已经生产可用。开发方必须同时核对目标环境的能力可用状态、生产入口和最低组件版本；平台未发布这些信息时不得自行猜测地址或把业务参考实现当作公共平台。
 
-截至 2026-10-23，`dclaw.super-agent-support` `1.3.0` 的源码实现和自动合同测试已经进入平台代码：插件注册 `local.execution.session/1` 与 `local.environment.preflight/1`、可信工作区上下文、八个 `local_*` MCP 工具、设备配对与 WebSocket 调度、持久任务状态、能力包验签注册、凭证引用、通用 Windows 本地助手核心以及独立 Super Agent DevKit `1.1.0` 下载入口。DevKit 含独立 CLI、版本化 Schema、能力目录和最小模板，不导入或暴露 DClaw 服务端源码。DClaw Windows 客户端源码已加入按专家声明自动预检和顶部手动检测入口。DClaw 核心只保留通用插件 SPI；卸载插件会同时移除路由、能力和上下文处理器。
+截至 2026-10-23，`dclaw.super-agent-support` `1.4.0` 的源码实现和自动合同测试已经进入平台代码：插件注册 `local.execution.session/1` 与 `local.environment.preflight/1`、可信工作区上下文、八个 `local_*` MCP 工具、设备配对与 WebSocket 调度、持久任务状态、能力包验签注册、凭证引用、通用 Windows 本地助手核心以及独立 Super Agent DevKit `1.2.0` 下载入口。DevKit 含独立 CLI、版本化 Schema、能力目录、最小模板、离线引导脚本和带哈希锁定的加密依赖 wheelhouse，不导入或暴露 DClaw 服务端源码。DClaw Windows 客户端源码已加入按专家声明自动预检和顶部手动检测入口。DClaw 核心只保留通用插件 SPI；卸载插件会同时移除路由、能力和上下文处理器。
 
-本标准 `1.15` 的正式开发与发布门禁如下。版本必须作为一个兼容组合核对，不能只满足其中一项：
+本标准 `1.17` 的正式开发与发布门禁如下。版本必须作为一个兼容组合核对，不能只满足其中一项：
 
 | 项目 | 本标准要求 | 2026-10-23 正式环境核对 | 结论 |
 |---|---|---|---|
 | DClaw 核心 | 至少 `1.1.10` | 核心源码版本 `1.1.10`，仍须以目标实例 `/api/version` 为准 | 待实例核对 |
-| 支持插件 | `dclaw.super-agent-support` `1.3.0` | `1.1.0` | 不满足，先部署升级 |
-| Super Agent DevKit | `1.1.0`，且由目标实例认证下载 | 正式域名认证会话下下载入口返回 `404`；实例内部未认证探测返回 `401` | 不可用，密封失败关闭 |
+| 支持插件 | `dclaw.super-agent-support` `1.4.0` | `1.1.0` | 不满足，先部署升级 |
+| Super Agent DevKit | `1.2.0`，且由目标实例认证下载 | 正式域名认证会话下下载入口返回 `404`；实例内部未认证探测返回 `401` | 不可用，密封失败关闭 |
 | Windows 客户端 | 至少 `2.6.12` | `2.6.11` | 不满足，先发布并升级客户端 |
 | 通用 Runner | 至少 `1.0.0` | 随兼容客户端核对 | 待客户端升级后核对 |
 
@@ -515,7 +515,7 @@ stateDiagram-v2
 
 上述接口属于认证后的目标 DClaw，不是匿名公共下载站。`401` 表示尚未携带有效身份，不能据此断言接口缺失；有效身份下 `404`、插件版本低于要求、返回的 DevKit 版本不匹配或 ZIP SHA-256 与元数据不一致，均表示当前目标环境未达到发布门禁。开发方只能继续源码和离线测试，状态标记为 `platform-tooling-missing`，不得使用平台仓库内源码副本、旧兼容构建器、历史签名包或其他环境下载的 DevKit 替代。
 
-当前 `1.3.0` 源码存在不等于正式环境已经部署。正式环境的 `1.1.0` 插件、`2.6.11` 客户端和不可用 DevKit 下载属于平台版本/部署缺口，不是新的 Agent 业务能力需求。平台方完成镜像与客户端发布、认证路由恢复、插件 Secret 与信任库配置后，开发方才能继续正式密封、能力包注册和真实验收。任何历史 Agent 专属 Relay、Runner、工具前缀和能力 ID 只作为冻结兼容路径，不得被新发布复制或回退使用。
+当前 `1.4.0` 源码存在不等于正式环境已经部署。正式环境的 `1.1.0` 插件、`2.6.11` 客户端和不可用 DevKit 下载属于平台版本/部署缺口，不是新的 Agent 业务能力需求。平台方完成镜像与客户端发布、认证路由恢复、插件 Secret 与信任库配置后，开发方才能继续正式密封、能力包注册和真实验收。任何历史 Agent 专属 Relay、Runner、工具前缀和能力 ID 只作为冻结兼容路径，不得被新发布复制或回退使用。
 
 生产安装必须把插件 `state_dir` 放在持久卷，并通过平台 Secret 配置稳定的 `master_key_base64`；容器可使用 `DCLAW_SUPER_AGENT_SUPPORT_MASTER_KEY_BASE64`，该值解码后至少 32 字节，不得写入仓库、镜像或 Agent 包。`trusted_package_signers` 是 `signer_id` 到原始 Ed25519 公钥 Base64 的映射。未配置受信公钥时，插件仍可启动和提供环境状态，但所有能力包注册必须失败关闭。
 
@@ -677,9 +677,9 @@ DClaw 平台负责卡片持久化、渲染、提交和可信回传；开发方�
 - 密钥轮换不修改签名包内容；
 - 日志、trace、错误和管理 API 只返回脱敏状态。
 
-截至 2026-10-22，DClaw 的通用 MCP 客户端已有 OAuth 2.1 PKCE 授权流程和 Bearer Header 注入，但其现有 Agent 配置存储仍不构成密封全局超级专家的按用户 OAuth 合同。`dclaw.super-agent-support` `1.3.0` 的凭证引用只解决客户凭证向已授权本地能力包注入：密文按用户、安装、Agent 和 scope 绑定，Agent 只传不透明 `credential_ref`，明文只通过已认证设备通道送入本地助手并在子进程结束后删除，管理 API 支持撤销。
+截至 2026-10-23，DClaw 的通用 MCP 客户端已有 OAuth 2.1 PKCE 授权流程和 Bearer Header 注入，但其现有 Agent 配置存储仍不构成密封全局超级专家的按用户 OAuth 合同。`dclaw.super-agent-support` `1.4.0` 的凭证引用只解决客户凭证向已授权本地能力包注入：密文按用户、安装、Agent 和 scope 绑定，Agent 只传不透明 `credential_ref`，明文只通过已认证设备通道送入本地助手并在子进程结束后删除，管理 API 支持撤销。
 
-开发方业务服务自身调用第三方 API 时，长期 Token 属于开发方业务服务，应保存在开发方 Secret 管理系统；不需要上传 DClaw，也不需要经过 DClaw Credential Broker。若业务 MCP 必须使用每位客户自己的 OAuth 身份，当前插件 `1.3.0` 仍未发布按用户 OAuth 刷新和 MCP 运输层注入，开发方必须保持生产构建失败关闭并提交通用能力申请，不能把 Token 写回密封包。
+开发方业务服务自身调用第三方 API 时，长期 Token 属于开发方业务服务，应保存在开发方 Secret 管理系统；不需要上传 DClaw，也不需要经过 DClaw Credential Broker。若业务 MCP 必须使用每位客户自己的 OAuth 身份，当前插件 `1.4.0` 仍未发布按用户 OAuth 刷新和 MCP 运输层注入，开发方必须保持生产构建失败关闭并提交通用能力申请，不能把 Token 写回密封包。
 
 在所需鉴权方式尚未正式发布前：
 
@@ -702,7 +702,7 @@ DClaw 平台负责卡片持久化、渲染、提交和可信回传；开发方�
 1. 管理员把 Secret 绑定到具体租户、Agent、安装、目标服务和 scope，DClaw 运输层在请求边界注入，模型、超级专家工作区和本地任务不可读取明文；或
 2. DClaw 使用平台签名的安装断言向开发方服务交换短时访问令牌，令牌限制目标服务、scope、安装、有效期和重放窗口，并支持轮换、撤销与审计。
 
-静态服务 Bearer、客户端密钥或长期 Token 禁止进入 manifest、Agent 配置、提示词、卡片和本地任务输入。截至插件 `1.3.0` / DevKit `1.1.0` 的已核对材料，尚无可供开发方独立使用的安装级业务服务身份能力 ID 与 Schema。依赖该身份的新 Agent 可以完成源码、业务服务和合同测试，但生产密封与上传必须失败关闭，并按第 25 节提交通用能力申请；开发方不得直接修改平台或以内嵌 Secret 绕过门禁。
+静态服务 Bearer、客户端密钥或长期 Token 禁止进入 manifest、Agent 配置、提示词、卡片和本地任务输入。截至插件 `1.4.0` / DevKit `1.2.0` 的已核对材料，尚无可供开发方独立使用的安装级业务服务身份能力 ID 与 Schema。依赖该身份的新 Agent 可以完成源码、业务服务和合同测试，但生产密封与上传必须失败关闭，并按第 25 节提交通用能力申请；开发方不得直接修改平台或以内嵌 Secret 绕过门禁。
 
 ## 15. 本地助手协作标准
 
@@ -1190,7 +1190,7 @@ GET <DCLAW_BASE_URL>/api/super-agent-support/developer-kit
 GET <DCLAW_BASE_URL>/api/super-agent-support/developer-kit/v1.zip
 ```
 
-两个请求都必须携带目标 DClaw 接受的已认证开发者或管理员会话。先读取插件健康和元数据，确认插件 `1.3.0`、DevKit `1.1.0` 与本标准版本门禁一致；再使用元数据返回的 `download_path` 下载 ZIP。下载后必须以流式 SHA-256 与元数据中的值逐字比较，匹配后才能解压到 Agent 项目之外的工具目录。不得只根据文件名、HTTP 200 或本地已有 ZIP 推断工具有效。
+两个请求都必须携带目标 DClaw 接受的已认证开发者或管理员会话。先读取插件健康和元数据，确认插件 `1.4.0`、DevKit `1.2.0` 与本标准版本门禁一致；再使用元数据返回的 `download_path` 下载 ZIP。下载后必须以流式 SHA-256 与元数据中的值逐字比较，匹配后才能解压到 Agent 项目之外的工具目录。不得只根据文件名、HTTP 200 或本地已有 ZIP 推断工具有效。
 
 认证和失败语义：
 
@@ -1199,14 +1199,14 @@ GET <DCLAW_BASE_URL>/api/super-agent-support/developer-kit/v1.zip
 - `404`：目标环境未安装/启用正确插件或路由尚未部署，记录为平台版本/部署缺口。
 - 元数据版本不匹配、ZIP 摘要不匹配或 `contracts` 输出不完整：立即删除本次下载并失败关闭。
 
-校验通过后安装 DevKit 自带的唯一外部依赖：
+校验通过后使用 DevKit 自带脚本创建隔离环境并离线安装加密依赖：
 
-```bash
-python -m pip install -r requirements.txt
-python dclaw_agent_devkit.py contracts
+```text
+bootstrap.ps1    # Windows PowerShell
+./bootstrap.sh   # macOS / Linux
 ```
 
-Windows 可以用 `py -3` 代替 `python`。输出必须显示 DevKit 版本、能力目录版本和 Schema 列表。若目标 DClaw 尚未提供可认证下载入口，状态只能是 `platform-tooling-missing`，开发方不得索取服务端源码、使用仓库内 DevKit 副本或调用服务端内部构建器作为替代方案。
+引导脚本只使用包内 `wheelhouse/`，执行 `--no-index --require-hashes`，并在安装前后运行 `doctor`；不得联网解析或替换依赖。输出必须显示 DevKit 版本、开发平台、Python 版本、wheelhouse 校验结果和固定的加密库版本。随后使用隔离环境中的 Python 执行 `contracts`。若目标 DClaw 尚未提供可认证下载入口，状态只能是 `platform-tooling-missing`，开发方不得索取服务端源码、使用仓库内 DevKit 副本或调用服务端内部构建器作为替代方案。
 
 DevKit 内含：
 
@@ -1215,7 +1215,13 @@ dclaw_agent_devkit.py
 capability-catalog.json
 schemas/
 templates/minimal/
+bootstrap.ps1
+bootstrap.sh
+requirements.lock
 requirements.txt
+CHECKSUMS.sha256
+wheelhouse/
+THIRD_PARTY_LICENSES.md
 VERSION
 ```
 
@@ -1419,7 +1425,7 @@ flowchart LR
 
 `401` 首先是认证缺失，`403` 首先是权限配置，不能直接判断能力不存在。有效身份下 `404` 且插件版本低于标准、DevKit 版本不匹配、客户端低于门禁或插件未启用，都属于版本/部署缺口。只有在满足目标版本并核对最新能力目录后，仍然没有所需通用合同，才可能是真正的平台能力缺失。
 
-2026-10-23 正式环境的插件 `1.1.0`、Windows 客户端 `2.6.11` 和认证后 DevKit 路由不可用，属于版本/部署缺口。安装级业务服务身份在插件 `1.3.0` / DevKit `1.1.0` 已核对合同中仍无能力 ID 和 Schema，属于可提交评审的通用能力缺口。这两类问题必须分别报告。
+2026-10-23 正式环境的插件 `1.1.0`、Windows 客户端 `2.6.11` 和认证后 DevKit 路由不可用，属于版本/部署缺口。安装级业务服务身份在插件 `1.4.0` / DevKit `1.2.0` 已核对合同中仍无能力 ID 和 Schema，属于可提交评审的通用能力缺口。这两类问题必须分别报告。
 
 ### 25.2 申请材料
 
@@ -1794,20 +1800,29 @@ Agent 名称：<可选，中文显示名称>
 2. 开发方自己的业务目标、源 Agent 材料和测试凭证；
 3. 从目标 DClaw 认证调用元数据接口并按其 `download_path` 下载、核对 SHA-256 的官方 DevKit。
 
-DevKit `1.1.0` 必须提供：
+DevKit `1.2.0` 必须提供：
 
-- `dclaw_agent_devkit.py`：`contracts`、`digest`、`validate`、`keygen`、`build`、`verify`；
+- `dclaw_agent_devkit.py`：`doctor`、`contracts`、`digest`、`validate`、`keygen`、`build`、`verify`；
 - `capability-catalog.json`：当前可声明的能力、版本、组和依赖；
 - `schemas/super-expert-manifest.schema.json` 与 `schemas/agent-profile.schema.json`；
 - `schemas/local-execution-v1/`：本地请求、响应和错误合同；
 - `schemas/super-agent-support-v1/`：能力包、设备消息和凭证绑定合同；
 - `templates/minimal/`：最小 manifest、`agent.json` 和 `runtime.py`。
+- `bootstrap.ps1`、`bootstrap.sh`、`requirements.lock`、`CHECKSUMS.sha256` 和 `wheelhouse/`：在支持平台离线创建隔离环境，逐文件校验并安装固定加密依赖；
+- `THIRD_PARTY_LICENSES.md`：列出随 DevKit 分发的依赖、版本和许可证。
 
 平台方必须用兼容测试证明 DevKit 的能力摘要、规范化 manifest、内容摘要、Ed25519 签名和 ZIP 结构与服务器验收实现一致。DevKit 本身不得出现 `qwenpaw` 导入，不得读取平台仓库相对路径，不得要求安装 DClaw 服务端 Python 包。
 
 平台内部实现文件、测试文件和维护文档可以继续存在，但它们只服务平台维护者，不属于开发方输入。开发方缺少字段或行为定义时应报告标准或 DevKit 缺陷；平台不得用“请克隆服务器源码”回答。
 
 ## 34. 版本记录
+
+### 1.17 - 2026-10-23
+
+- `dclaw.super-agent-support` 更新为 `1.4.0`，Super Agent DevKit 更新为 `1.2.0`。
+- DevKit 增加 Windows、macOS 和 Linux 的离线加密依赖 wheelhouse、固定版本锁文件、逐文件 SHA-256 清单和第三方许可证记录。
+- 增加 `bootstrap.ps1`、`bootstrap.sh` 与 `doctor`，在隔离环境中使用 `--no-index --require-hashes` 安装并验证依赖，不读取或复制签名私钥。
+- DevKit 元数据增加依赖模式、离线引导、支持平台、Python 版本以及锁文件和 wheelhouse 清单摘要。
 
 ### 1.16 - 2026-10-23
 

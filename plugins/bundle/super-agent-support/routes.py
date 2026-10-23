@@ -89,12 +89,29 @@ def _register_developer_kit_routes(app: FastAPI) -> None:
     @app.get("/developer-kit")
     async def developer_kit_metadata() -> dict[str, Any]:
         archive, version = _developer_kit_archive()
+        devkit_root = Path(__file__).parent / "devkit"
         return {
             "name": "dclaw-super-agent-devkit",
             "version": version,
             "download_path": "/api/super-agent-support/developer-kit/v1.zip",
             "sha256": hashlib.sha256(archive).hexdigest(),
             "server_source_required": False,
+            "dependency_mode": "bundled-wheelhouse",
+            "offline_bootstrap": True,
+            "supported_python": ">=3.10,<3.14",
+            "supported_platforms": [
+                "linux-glibc-aarch64",
+                "linux-glibc-x86_64",
+                "macos-arm64",
+                "macos-x86_64",
+                "windows-x86_64",
+            ],
+            "requirements_lock_sha256": hashlib.sha256(
+                (devkit_root / "requirements.lock").read_bytes(),
+            ).hexdigest(),
+            "wheelhouse_manifest_sha256": hashlib.sha256(
+                (devkit_root / "CHECKSUMS.sha256").read_bytes(),
+            ).hexdigest(),
         }
 
     @app.get("/developer-kit/v1.zip")
@@ -142,7 +159,7 @@ def create_app(
         return {
             "status": "ok",
             "plugin": "dclaw.super-agent-support",
-            "version": "1.3.0",
+            "version": "1.4.0",
             "protocols": {"local_execution": "1.0", "device": "1"},
         }
 
