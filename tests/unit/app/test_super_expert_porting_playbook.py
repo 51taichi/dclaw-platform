@@ -55,3 +55,23 @@ def test_porting_playbook_references_existing_machine_and_platform_contracts():
 
     for path in expected_paths:
         assert path.exists(), path
+
+
+def test_luyu_vlog_porting_baseline_is_fully_decided():
+    text = PLAYBOOK.read_text(encoding="utf-8")
+
+    required = (
+        "### 27.3 当前陆羽 AI Vlog 迁移基线",
+        "`luyu-dclaw-vlog-agent`",
+        "`陆羽 AI Vlog创作`",
+        "`0.1.0`",
+        "不创建独立 Git 仓库，不配置远端",
+        "/Users/moxi/Desktop/codex space/agent create/agents/超级专家/移植前",
+        "Windows x64；本地助手为 `required`",
+        "正常流程由业务服务通过 TikHub/小红书来源自动检索",
+        "迁入业务服务 Secret 管理",
+        "FFmpeg/FFprobe、Whisper、抽帧、字幕、音频、时间轴、剪辑、转码和技术质检",
+        "使用源包三个案例并补充三个 DClaw 客户端真实链路",
+    )
+    for phrase in required:
+        assert phrase in text

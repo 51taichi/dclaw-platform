@@ -179,7 +179,7 @@ def test_standard_defines_desktop_owned_toolbox_and_workspace():
         "<Agent 显示名称>",
         "客户成品直接放在任务目录第一层",
         "过程资源放在 `res`",
-        "本地助手不理解业务字段",
+        "Runner 核心不理解业务字段",
     )
     for phrase in required:
         assert phrase in text
@@ -211,7 +211,11 @@ def test_super_agent_standard_is_the_only_human_development_standard():
     assert "任何步骤都不得要求访问、克隆或导入" in text
     assert "developer-kit/v1.zip" in text
     assert "dclaw_agent_devkit.py" in text
-    assert "/Users/moxi/" not in text
+    migration_staging_root = (
+        "/Users/moxi/Desktop/codex space/agent create/agents/超级专家/移植前"
+    )
+    assert text.count(migration_staging_root) == 2
+    assert "/Users/moxi/" not in text.replace(migration_staging_root, "")
     assert "from qwenpaw" not in text
     assert "scripts/build_sealed_agent.py" not in text
     assert not (
