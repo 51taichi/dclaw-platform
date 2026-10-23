@@ -1,7 +1,7 @@
 {
   "id": "douyin-engagement-agent",
-  "name": "Douyin Engagement Agent",
-  "description": "Generates validated Douyin comment plans, plan repairs, recovery plans, and private-message replies.",
+  "name": "抖音互动超级专家",
+  "description": "生成并校验抖音评论剧本、修复与恢复方案，完成私信任务归因、回复和线索判断。",
   "orchestration": {
     "enabled": true,
     "contract_version": "1",
