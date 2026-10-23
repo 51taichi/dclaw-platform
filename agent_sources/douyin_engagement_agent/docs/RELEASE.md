@@ -7,7 +7,7 @@
 - 包类型：`super_expert`
 - 标准：`dclaw.super-agent-development` 1.12
 - DevKit 要求：1.1.0
-- Git commit：密封时填写已推送到 `origin/main` 的源提交
+- Git source commit：`039e075556e6717959c364e3e31d178f9b4dfa12`
 - 签名者：密封时填写平台已入驻的 `signer_id`
 
 ## 组件与能力

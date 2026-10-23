@@ -25,6 +25,7 @@
 
 ## 证据与未决项
 
+- 源码提交：`039e075556e6717959c364e3e31d178f9b4dfa12`。
 - 自动测试记录写入 `docs/RELEASE.md`。
 - 目标 DClaw `http://192.168.0.5:4312` 在 2026-10-23 对
   `/api/super-agent-support/developer-kit` 返回 404，当前状态为 `platform-tooling-missing`。
