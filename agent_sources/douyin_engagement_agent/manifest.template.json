@@ -1,7 +1,7 @@
 {
   "schema_version": 3,
   "agent_id": "douyin-engagement-agent",
-  "name": "抖音互动超级专家",
+  "name": "Douyin Engagement Agent",
   "version": "1.0.0",
   "agent_type": "sealed",
   "scope": "global",
@@ -32,9 +32,5 @@
     {"capability_id": "runtime.fail", "contract_version": "1"}
   ],
   "capability_digest": "sha256:56e7b25f5688cd9544f68f8a9e7d6f5150f4d23b3f9ab8b9e41b14a6b39b79b3",
-  "signer_id": "replace-with-approved-signer-id",
-  "public_metadata": {
-    "description": "生成并校验抖音评论剧本、修复与恢复方案，完成私信任务归因、回复和线索判断。",
-    "tags": ["douyin", "engagement", "planning"]
-  }
+  "signer_id": "replace-with-approved-signer-id"
 }

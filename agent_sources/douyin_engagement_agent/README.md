@@ -1,27 +1,46 @@
-# 抖音互动超级专家
+# Douyin Engagement Agent source
 
-本目录是从普通 DClaw Agent 迁移得到的密封超级专家项目。发布目标是 `agent/` 与
-`manifest.template.json`；`workspace/` 只保留为源行为证据，不进入密封包。
+`workspace/` is the deployable ordinary DClaw Agent used by the DClaw Bot comment and private-message workflows. It follows the same workspace model as other business Agents: `agent.json`, prompt files, `skill.json`, and local Skills. It is not a sealed Agent and does not require a signer or a sealed-Agent installation. Private-message attribution uses the bundled TypeSafe Skill and the opt-in `jev-private-routing` plugin.
 
-超级专家接受七种严格操作：健康检查、评论剧本生成、剧本修复、依赖丢失恢复、
-私信任务归因、私信回复和线索规则判断。它只产出经过确定性校验的 JSON，不直接
-操作抖音，不管理 Bot、配额或调度，也不宣称消息已经送达。
-
-全部业务判断均在密封超级专家内完成。发布版不依赖 Jev 平台插件、业务 MCP、
-本地能力包或 DClaw 本地助手，也不声明任何 `local.*` 能力。
+The older `agent/` orchestration runtime and `manifest.template.json` remain only as contract-test reference material. They are not the deployment target.
 
 ## Local validation
 
 ```bash
-python -m pytest tests -q
+uv run pytest \
+  tests/unit/app/test_douyin_engagement_standard_agent.py \
+  tests/unit/app/test_jev_private_routing.py \
+  tests/unit/app/sealed_agents/test_douyin_engagement_contracts.py \
+  tests/unit/app/sealed_agents/test_douyin_engagement_runtime.py \
+  tests/contract/test_douyin_engagement_fixtures.py -q
 ```
 
-密封、签名和独立验签必须使用目标 DClaw 下载的官方 Super Agent DevKit。禁止手工
-打 ZIP，也禁止从 DClaw 服务端仓库复制 DevKit 脚本。具体命令与管理员流程见
-`docs/RELEASE.md`。
+The sealed-runtime tests remain in the gate because they exercise the existing wire contracts consumed by Bot Server. Passing them does not make the ordinary workspace a sealed Agent.
+
+## Package
+
+Create a ZIP whose single wrapper directory contains the contents of `workspace/`. DClaw's normal Agent import page accepts that package and discovers `agent.json` plus the local Skill.
+
+```bash
+mkdir -p /tmp/douyin-engagement-agent-package/douyin-engagement-agent
+cp -R agent_sources/douyin_engagement_agent/workspace/. \
+  /tmp/douyin-engagement-agent-package/douyin-engagement-agent/
+(cd /tmp/douyin-engagement-agent-package && \
+  zip -qr /path/to/douyin-engagement-agent-v1.0.0.zip douyin-engagement-agent)
+```
+
+The package contains no model key, OpenAPI key, Bot credential, or customer data.
 
 ## Operator handoff
 
-管理员只上传官方 DevKit 生成且验签通过的 `super_expert` ZIP，并整体核对六项基础能力。
-无需安装本地助手或 Jev 插件。上传、授权、激活和真实任务验收是独立状态，不能用
-源码测试替代。
+After the local gates pass, the operator performs the live steps with credentials they control:
+
+1. Install `plugins/tool/jev-private-routing` on DClaw and set `TYPESAFE_API_KEY` in the DClaw server environment. Restart DClaw so the plugin tool is registered.
+2. In the server DClaw Agent page, import the ZIP as a normal Agent and select an available model. Confirm only `read_agent_skill` and `route_private_message_jev` are enabled.
+3. Test `HEALTH_CHECK` in a fresh conversation and confirm the response is exactly `{"ok":true,"capabilityVersion":"2"}`.
+4. In **Open API**, publish the Agent as a target. Enable it, grant `messages:create`, bind a dedicated application/API key, and copy the stable Public ID.
+5. Send the DClaw base URL, Public ID, and dedicated API key to the Bot Server operator through a secure channel. Task-aware private replies and routing use isolated attempts with explicit recent history; legacy private replies remain persistent.
+6. In Bot Server, save the Agent configuration and use **测试连接** before enabling an Agent-backed private strategy.
+7. Start with controlled test accounts. Verify attribution, unresolved greetings, task-specific replies, request audit, error alarms, and quota behavior before production use.
+
+Source validation and fixture tests do not upload, import, publish, or call a live Agent. The first server import and OpenAPI publication remain explicitly user-operated.

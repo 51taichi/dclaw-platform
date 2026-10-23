@@ -9,7 +9,6 @@ from .contracts import (
     AgentOperationRequest,
     ContractError,
     parse_operation_message,
-    validate_operation_request,
     validate_operation_response,
 )
 from .prompts import build_agent_messages
@@ -63,36 +62,20 @@ def _repair_message(error: ContractError) -> dict[str, str]:
 class DouyinEngagementRuntime:
     async def handle(self, request: Any, host: Any) -> None:
         invocation_id = getattr(request, "invocation_id", "")
+        await host.call("session.context", {})
         try:
-            await host.call("session.context", {})
-            operation_request = validate_operation_request(
-                parse_operation_message(_latest_user_content(request))
-            )
+            operation_request = parse_operation_message(_latest_user_content(request))
         except ContractError as exc:
-            await self._safe_trace(
-                host,
+            await host.call(
+                "runtime.trace",
                 {"event": "douyin.operation.rejected", "error_code": exc.code},
             )
             await self._fail(host, invocation_id, "invalid_operation_message")
             return
-        except Exception:  # noqa: BLE001 - Host failures must still reach a terminal state.
-            await self._safe_trace(host, {"event": "douyin.context.unavailable"})
-            await self._fail(host, invocation_id, "session_context_unavailable")
-            return
-
-        if operation_request.operation.value == "HEALTH_CHECK":
-            await self._complete(
-                host,
-                invocation_id,
-                operation_request,
-                {"ok": True, "capabilityVersion": "2"},
-                0,
-            )
-            return
 
         messages = build_agent_messages(operation_request)
-        await self._safe_trace(
-            host,
+        await host.call(
+            "runtime.trace",
             {
                 "event": "douyin.operation.prepared",
                 "operation": operation_request.operation.value,
@@ -100,25 +83,13 @@ class DouyinEngagementRuntime:
         )
         last_error: ContractError | None = None
         for attempt in (1, 2):
-            try:
-                candidate = await host.call("agent.execute", {"messages": messages})
-            except Exception:  # noqa: BLE001 - Host failures must still reach a terminal state.
-                await self._safe_trace(
-                    host,
-                    {
-                        "event": "douyin.model.unavailable",
-                        "operation": operation_request.operation.value,
-                        "attempt": attempt,
-                    },
-                )
-                await self._fail(host, invocation_id, "model_unavailable")
-                return
+            candidate = await host.call("agent.execute", {"messages": messages})
             try:
                 validated = _validated_candidate(candidate, operation_request)
             except ContractError as exc:
                 last_error = exc
-                await self._safe_trace(
-                    host,
+                await host.call(
+                    "runtime.trace",
                     {
                         "event": "douyin.output.invalid",
                         "operation": operation_request.operation.value,
@@ -131,15 +102,34 @@ class DouyinEngagementRuntime:
                     continue
                 break
 
-            await self._safe_trace(
-                host,
+            await host.call(
+                "runtime.trace",
                 {
                     "event": "douyin.output.validated",
                     "operation": operation_request.operation.value,
                     "attempt": attempt,
                 },
             )
-            await self._complete(host, invocation_id, operation_request, validated, attempt)
+            await host.call(
+                "runtime.complete",
+                {
+                    "invocation_id": invocation_id,
+                    "message": {
+                        "name": "assistant",
+                        "role": "assistant",
+                        "content": json.dumps(
+                            validated,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        ),
+                    },
+                    "diagnostics": {
+                        "operation": operation_request.operation.value,
+                        "attempts": attempt,
+                    },
+                },
+            )
             return
 
         await self._fail(
@@ -156,42 +146,6 @@ class DouyinEngagementRuntime:
                 "invocation_id": invocation_id,
                 "error_code": "runtime_failed",
                 "diagnostic_ref": diagnostic_ref,
-            },
-        )
-
-    @staticmethod
-    async def _safe_trace(host: Any, payload: dict[str, Any]) -> None:
-        try:
-            await host.call("runtime.trace", payload)
-        except Exception:  # noqa: BLE001 - Trace failure must not mask the business result.
-            return
-
-    @staticmethod
-    async def _complete(
-        host: Any,
-        invocation_id: str,
-        operation_request: AgentOperationRequest,
-        payload: dict[str, Any],
-        attempts: int,
-    ) -> None:
-        await host.call(
-            "runtime.complete",
-            {
-                "invocation_id": invocation_id,
-                "message": {
-                    "name": "assistant",
-                    "role": "assistant",
-                    "content": json.dumps(
-                        payload,
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                        sort_keys=True,
-                    ),
-                },
-                "diagnostics": {
-                    "operation": operation_request.operation.value,
-                    "attempts": attempts,
-                },
             },
         )
 
