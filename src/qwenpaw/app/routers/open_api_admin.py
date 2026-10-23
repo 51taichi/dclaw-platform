@@ -342,8 +342,8 @@ def search_publication_knowledge(
 
 @router.get("/apps")
 def list_external_apps(request: Request) -> list[dict[str, Any]]:
-    owner_user_id = _require_admin(request)
-    return get_open_api_repository().list_external_apps(owner_user_id=owner_user_id)
+    _require_admin(request)
+    return get_open_api_repository().list_external_apps()
 
 
 @router.post("/apps")
@@ -374,17 +374,10 @@ def create_api_key(
     app = repo.get_external_app(payload.app_id)
     if app is None:
         raise HTTPException(status_code=404, detail="Open API app not found")
-    if str(app.get("owner_user_id")) != owner_user_id:
-        raise HTTPException(status_code=404, detail="Open API app not found")
     if app.get("status") != "enabled":
         raise HTTPException(status_code=400, detail="Open API app is disabled")
 
     publication = _owned_publication(payload.publication_id, owner_user_id)
-    if (
-        str(publication.get("owner_user_id"))
-        != str(app.get("owner_user_id"))
-    ):
-        raise HTTPException(status_code=404, detail="Open API publication not found")
     if publication.get("status") != "enabled":
         raise HTTPException(status_code=400, detail="Open API publication is disabled")
 

@@ -583,6 +583,54 @@ def test_create_external_app_uses_admin_owner(monkeypatch):
     assert repo.apps[created["id"]]["quota_policy"] == {"daily": 100}
 
 
+def test_list_external_apps_returns_shared_apps_to_any_admin(monkeypatch):
+    repo = _patch_repo(monkeypatch, FakeOpenApiRepository())
+    repo.apps["app-1"] = {
+        "id": "app-1",
+        "owner_user_id": "admin-1",
+        "status": "enabled",
+    }
+    repo.apps["app-2"] = {
+        "id": "app-2",
+        "owner_user_id": "admin-2",
+        "status": "enabled",
+    }
+
+    rows = open_api_admin.list_external_apps(
+        _request(user_id="admin-3"),
+    )
+
+    assert rows == [repo.apps["app-1"], repo.apps["app-2"]]
+    assert repo.list_external_apps_owner_user_ids == [None]
+
+
+def test_create_api_key_accepts_shared_external_app(monkeypatch):
+    repo = _patch_repo(monkeypatch, FakeOpenApiRepository())
+    repo.apps["app-1"] = {
+        "id": "app-1",
+        "owner_user_id": "admin-2",
+        "status": "enabled",
+    }
+    repo.publications["pub-1"] = {
+        "id": "pub-1",
+        "owner_user_id": "admin-1",
+        "status": "enabled",
+        "allowed_scopes": ["messages:create"],
+    }
+
+    response = open_api_admin.create_api_key(
+        open_api_admin.ApiKeyCreateRequest(
+            app_id="app-1",
+            publication_id="pub-1",
+            scopes=["messages:create"],
+        ),
+        _request(user_id="admin-1"),
+    )
+
+    assert response["key"]["app_id"] == "app-1"
+    assert response["key"]["publication_id"] == "pub-1"
+
+
 def test_create_api_key_returns_plaintext_once_and_stores_safe_active_hash(
     monkeypatch,
 ):
