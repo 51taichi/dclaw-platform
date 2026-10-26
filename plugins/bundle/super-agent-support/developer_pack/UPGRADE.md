@@ -14,6 +14,12 @@
    new Agent patch version. Upgrade never edits business source or an existing
    signed release ZIP.
 
+When upgrading from pack 1.0.x, existing projects may keep the original four
+capability artifact members and unittest discovery without editing their
+configuration. Add `capability-pack/windows-x64/capability-build.json` only when
+the artifact needs more files or a prebuilt ZIP, and add `tests` to
+`project.json` only when selecting pytest or custom test paths and arguments.
+
 ## Rollback
 
 Keep the previous developer pack ZIP, checksum, public key, last accepted Agent

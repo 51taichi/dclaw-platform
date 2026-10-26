@@ -1,10 +1,15 @@
 {
   "schema_version": 1,
   "agent_id": "{{AGENT_ID}}",
-  "developer_pack_version": "1.0.0",
-  "standard": {"id": "dclaw.super-agent-development", "version": "2.1"},
+  "developer_pack_version": "1.1.0",
+  "standard": {"id": "dclaw.super-agent-development", "version": "2.2"},
   "devkit_version": "1.2.0",
   "local_helper": "none",
+  "tests": {
+    "adapter": "unittest",
+    "paths": ["tests"],
+    "arguments": []
+  },
   "declared_platform_capabilities": [
     "workspace.turn.orchestrate/1",
     "agent.execute",

@@ -45,6 +45,34 @@ verifies that signature, and builds the sealed Super Expert package. Use the
 standalone `capability-build` command when the capability artifact must be
 prepared before the Super Expert release.
 
+For a capability with multiple modules, embedded runtimes, FFmpeg, models, or
+other locked resources, list files and directories in
+`capability-pack/windows-x64/capability-build.json`. Each path is validated,
+archived deterministically, and recorded with its size and SHA-256 in the
+artifact inventory. To sign an existing ZIP produced by another deterministic
+builder, set its build manifest source to `prebuilt`, or pass
+`--capability-artifact-file /path/to/artifact.zip`; the CLI validates ZIP paths
+and integrity before binding its digest into the signed descriptor.
+
+The project test adapter is declared in `project.json`:
+
+```json
+{
+  "tests": {
+    "adapter": "pytest",
+    "paths": ["tests"],
+    "arguments": ["-q"]
+  }
+}
+```
+
+Supported adapters are `unittest` and `pytest`. The CLI invokes them without a
+shell and writes the normalized command plus the actual executed test count to
+release evidence. When project test dependencies live in a project virtual
+environment, set `tests.python` to its safe project-relative interpreter path,
+such as `.venv/Scripts/python.exe`. Projects without this field retain unittest
+discovery with the interpreter running the developer CLI.
+
 `build` runs the mandatory release gate, project tests, standalone DevKit
 validation, sealing, signature verification, and evidence generation. It fails
 closed when behavior evidence, approvals, schemas, capability declarations,
@@ -79,6 +107,7 @@ dclaw-super-agent-developer-pack-<version>/
     templates/
     wheelhouse/
   schemas/
+    developer-pack-v1/
   sdk/python/
   templates/project/
     agent/

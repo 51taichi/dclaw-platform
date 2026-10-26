@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.1`
+当前版本：`2.2`
 
 发布日期：`2026-10-26`
 
@@ -492,16 +492,16 @@ stateDiagram-v2
 
 截至 2026-10-26，生产 Server 已运行提交 `f88e5554f9c9b281e47bdbc107b2030ec89b761a`，`dclaw.super-agent-support` `1.4.0` 已成功加载，生产镜像包含 Super Agent DevKit `1.2.0`、离线引导脚本和 26 个带哈希锁定的加密依赖 wheel。插件注册 `local.execution.session/1` 与 `local.environment.preflight/1`、可信工作区上下文、八个 `local_*` MCP 工具、设备配对与 WebSocket 调度、持久任务状态、能力包验签注册、凭证引用和通用 Windows 本地助手核心。DevKit 含独立 CLI、版本化 Schema、能力目录和最小模板，不导入或暴露 DClaw 服务端源码。DClaw Windows 客户端源码已加入按专家声明自动预检和顶部手动检测入口。DClaw 核心只保留通用插件 SPI；卸载插件会同时移除路由、能力和上下文处理器。
 
-开发包 `1.0.0` 与支持插件 `1.5.0` 已在本地源码完成，尚未构建或部署生产镜像。生产环境在 `1.5.0` 部署前仍只提供独立 DevKit `1.2.0` 入口；开发包本地完成、代码推送和生产可下载是三个独立状态，不得混称已上线。
+开发包 `1.1.0` 与支持插件 `1.6.0` 已在本地源码完成，尚未构建或部署生产镜像。生产环境在 `1.6.0` 部署前仍只提供独立 DevKit `1.2.0` 入口；开发包本地完成、代码推送和生产可下载是三个独立状态，不得混称已上线。
 
-本标准 `2.1` 的正式开发与发布门禁如下。版本必须作为一个兼容组合核对，不能只满足其中一项：
+本标准 `2.2` 的正式开发与发布门禁如下。版本必须作为一个兼容组合核对，不能只满足其中一项：
 
 | 项目 | 本标准要求 | 2026-10-26 正式环境核对 | 结论 |
 |---|---|---|---|
 | DClaw 核心 | 至少 `1.1.10` | 公网 `/api/version` 返回 `1.1.10`，运行镜像标记 Server 提交 `f88e555` | 满足 |
 | 支持插件 | `dclaw.super-agent-support` `1.4.0` | 生产启动日志确认 `1.4.0` 成功加载 | 满足 |
 | Super Agent DevKit | `1.2.0`，且由目标实例认证下载 | 生产镜像包含 `1.2.0` 和完整 wheelhouse；匿名访问按设计返回 `401` | 版本满足，开发方下载时仍须认证并核对 SHA-256 |
-| Super Agent 开发包 | `1.0.0`，标准 `2.1`、DevKit `1.2.0` | 本地源码已完成，生产插件仍为 `1.4.0` | 尚未部署；只能本地审查，不能宣称生产可下载 |
+| Super Agent 开发包 | `1.1.0`，标准 `2.2`、DevKit `1.2.0` | 本地源码已完成，生产插件仍为 `1.4.0` | 尚未部署；只能本地审查，不能宣称生产可下载 |
 | Windows 客户端 | 至少 `2.6.12` | `2.6.11` | 不满足，先发布并升级客户端 |
 | 通用 Runner | 至少 `1.0.0` | 随兼容客户端核对 | 待客户端升级后核对 |
 
@@ -1202,7 +1202,7 @@ GET <DCLAW_BASE_URL>/api/super-agent-support/developer-pack/download
 
 开发包元数据必须返回准确的开发包版本、标准标识与版本、DevKit 版本、ZIP SHA-256、文件数、支持平台和稳定下载路径。下载后的顶层目录名带开发包版本，包内 `PACKAGE-MANIFEST.json` 和 `SHA256SUMS` 列出公开资产及摘要；开发者根据元数据判断版本，不得根据稳定下载路径、标准文件名或 ZIP 文件名猜测版本。
 
-开发包 `1.0.0` 包含标准 `2.1`、DevKit `1.2.0`、公开 Schema/SDK、完整项目模板、业务服务模板、本地能力模板、测试夹具、最小离线示例、SBOM、第三方许可证、兼容矩阵、升级和回滚说明。统一命令如下：
+开发包 `1.1.0` 包含标准 `2.2`、DevKit `1.2.0`、公开 Schema/SDK、完整项目模板、业务服务模板、本地能力模板、测试夹具、最小离线示例、SBOM、第三方许可证、兼容矩阵、升级和回滚说明。统一命令如下：
 
 ```text
 python dclaw_developer.py doctor
@@ -1212,7 +1212,15 @@ python dclaw_developer.py test --project <project>
 python dclaw_developer.py build --project <project> --private-key <private.b64> --public-key <public.b64> --output <release.zip>
 ```
 
-声明本地助手的 Agent 在 `build` 时还必须传入 `--capability-artifact-url <https-url>`；同一命令确定性生成本地能力 artifact、绑定大小与 SHA-256、签名能力描述符并验签，然后构建超级专家包。需要提前托管 artifact 时可单独运行 `capability-build`。`build` 必须先执行行为基线、差异批准、Schema、能力最小集合、依赖锁、Secret 扫描、自动测试和全部签名验证门禁；任一项失败时不得产生可宣称正式的发布包。最小示例使用 `demo` 命令在无平台源码、无网络、无生产凭证的目录运行本地能力、生成测试签名包并独立验签。
+声明本地助手的 Agent 在 `build` 时还必须传入 `--capability-artifact-url <https-url>`；同一命令确定性生成本地能力 artifact、绑定大小与 SHA-256、签名能力描述符并验签，然后构建超级专家包。需要提前托管 artifact 时可单独运行 `capability-build`。
+
+本地能力 artifact 的构建由 `capability-pack/<platform>/capability-build.json` 声明，当前 `schema_version=1`。`artifact.source=members` 时，`members` 可以列出任意安全相对文件或目录，并可为单文件声明目标路径与预期 SHA-256；构建器必须递归展开目录、拒绝绝对路径、路径穿越、符号链接和大小写冲突，并在 ZIP 内生成每个文件的大小与 SHA-256 清单。嵌入式 Python、FFmpeg/FFprobe、锁定依赖、资源清单和多个 Python 模块均通过该成员清单进入 Agent 自有能力包，不写入通用 Runner。
+
+已有确定性构建器的项目可以把 `artifact.source` 设为 `prebuilt` 并声明项目内 ZIP，或向 `capability-build`/`build` 传入 `--artifact-file`。官方 CLI 必须先校验 ZIP 完整性、相对路径、重复项、加密项和符号链接，再把原始 ZIP 的大小与 SHA-256 写入签名描述符；不得重新解释或遗漏其成员。未声明构建清单的旧项目继续使用 `runner.py` 和三个 Schema 的历史四文件默认值。
+
+自动测试由 `project.json.tests` 声明受控适配器，当前至少支持 `unittest` 与 `pytest`，并允许安全相对测试路径、参数及项目内 Python 虚拟环境解释器。CLI 必须直接调用所选 Python 模块而不经过 shell，通过 unittest 汇总或 pytest JUnit 结果取得真实执行数量，并把适配器、规范化命令、数量和结果写入发布证据；禁止用新增的一项 unittest 代替项目已存在的完整 pytest 套件。未声明 `tests` 的旧项目继续使用 `python -m unittest discover -s tests -v`。
+
+`build` 必须先执行行为基线、差异批准、Schema、能力最小集合、依赖锁、Secret 扫描、完整自动测试和全部签名验证门禁；任一项失败时不得产生可宣称正式的发布包。最小示例使用 `demo` 命令在无平台源码、无网络、无生产凭证的目录运行本地能力、生成测试签名包并独立验签。
 
 为兼容已建立的自动化，独立 DevKit 入口继续保留：
 
@@ -1853,13 +1861,15 @@ Agent 名称：<可选，中文显示名称>
 2. 开发方自己的业务目标、源 Agent 材料和测试凭证；
 3. 从目标 DClaw 认证调用元数据接口并按其 `download_path` 下载、核对 SHA-256 的官方开发包；兼容自动化可以继续单独下载同版本官方 DevKit。
 
-开发包 `1.0.0` 是推荐的单一离线移交物，必须提供：
+开发包 `1.1.0` 是推荐的单一离线移交物，必须提供：
 
 - 唯一标准文件与明确的标准版本，不复制第二套人工规则；
 - 官方 DevKit `1.2.0` 及其完整离线加密依赖；
 - `dclaw_developer.py` 的 `doctor`、`info`、`init`、`validate`、`test`、`keygen`、`capability-build`、`build`、`upgrade` 和 `demo`；
 - 超级专家、业务服务和本地能力包模板，以及职责边界示例；
 - 公共业务服务、本地执行和能力包 Schema/SDK；
+- 版本化能力构建清单、任意资源的确定性归档与安全预构建 ZIP 导入；
+- 受控 `unittest`/`pytest` 测试适配器以及真实命令和测试数量证据；
 - 行为基线、差异批准、能力越权、依赖完整性、Secret、测试、密封和验签失败关闭门禁；
 - 最小无网络演练、测试夹具、兼容矩阵、升级/回滚说明、SBOM、许可证清单、包清单和逐文件 SHA-256；
 - 可重复归档构建器；相同源码、版本和固定时间戳必须生成相同 ZIP 字节。
@@ -1882,6 +1892,14 @@ DevKit `1.2.0` 必须提供：
 平台内部实现文件、测试文件和维护文档可以继续存在，但它们只服务平台维护者，不属于开发方输入。开发方缺少字段或行为定义时应报告标准或 DevKit 缺陷；平台不得用“请克隆服务器源码”回答。
 
 ## 34. 版本记录
+
+### 2.2 - 2026-10-26
+
+- Super Agent 开发包升级为 `1.1.0`，支持 `capability-build.json` `schema_version=1` 声明任意安全相对文件、目录、嵌入式运行时和锁定依赖，并生成逐文件摘要清单。
+- 支持导入外部确定性能力 ZIP；CLI 校验 ZIP 安全与完整性后绑定原始摘要并签名能力描述符，不要求开发方放弃已有候选构建器。
+- `project.json.tests` 新增受控 `unittest`/`pytest` 适配器；发布证据记录规范化命令和真实执行数量，完整 pytest 套件不会被一项兼容 unittest 替代。
+- 支持插件源码升级为 `1.6.0`；DevKit 和密封格式保持 `1.2.0`，旧开发包、旧构建默认值和已签名 Agent 继续按原合同有效。
+- 本次只完成源码、公开 Schema、测试和开发包产物，不构建或部署生产镜像，不重启服务。
 
 ### 2.1 - 2026-10-26
 

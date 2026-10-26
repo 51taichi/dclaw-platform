@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.0 - 2026-10-26
+
+- Adds the versioned `capability-build.json` contract for deterministic
+  capability artifacts containing arbitrary files, directories, runtimes, and
+  locked dependencies.
+- Adds safe import of a prebuilt capability ZIP through the build manifest or
+  `--artifact-file`, followed by digest binding and descriptor signing.
+- Adds controlled `unittest` and `pytest` adapters in `project.json`; release
+  evidence now records the adapter, normalized command, and actual test count.
+- Keeps the 1.0 defaults when an upgraded project omits the new declarations.
+
 ## 1.0.0 - 2026-10-26
 
 - First offline developer pack for development standard 2.1.

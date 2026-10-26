@@ -33,16 +33,16 @@ def test_developer_pack_archive_is_complete_and_reproducible():
     second, repeated = archive.build_archive(PLUGIN_ROOT)
     assert first == second
     assert metadata == repeated
-    assert metadata["version"] == "1.0.0"
+    assert metadata["version"] == "1.1.0"
     assert metadata["standard"] == {
         "id": "dclaw.super-agent-development",
-        "version": "2.1",
+        "version": "2.2",
     }
     assert metadata["devkit_version"] == "1.2.0"
     assert metadata["server_source_required"] is False
     assert metadata["sha256"] == hashlib.sha256(first).hexdigest()
 
-    prefix = "dclaw-super-agent-developer-pack-1.0.0/"
+    prefix = "dclaw-super-agent-developer-pack-1.1.0/"
     with zipfile.ZipFile(io.BytesIO(first)) as package:
         names = set(package.namelist())
         manifest = json.loads(package.read(prefix + "PACKAGE-MANIFEST.json"))
@@ -56,14 +56,17 @@ def test_developer_pack_archive_is_complete_and_reproducible():
         "standard/super-agent-development-standard-v1.zh-CN.md",
         "devkit/dclaw_agent_devkit.py",
         "schemas/business-mcp-v1/request.schema.json",
+        "schemas/developer-pack-v1/capability-build.schema.json",
+        "schemas/developer-pack-v1/project.schema.json",
         "sdk/python/dclaw_local_capability.py",
         "templates/project/agent/runtime.py",
         "templates/project/business-service/server.py",
         "templates/project/capability-pack/windows-x64/runner.py",
+        "templates/project/capability-pack/windows-x64/capability-build.json",
         "examples/minimal-local/example.json",
     }
     assert {prefix + name for name in expected} <= names
-    assert manifest["version"] == "1.0.0"
+    assert manifest["version"] == "1.1.0"
     assert "devkit/wheelhouse/cryptography-46.0.3" in checksums
     assert not any("src/qwenpaw" in name or "tests/unit" in name for name in names)
     for path in list(PACK_ROOT.rglob("*.py")) + list(
@@ -187,3 +190,161 @@ def test_release_gate_rejects_unapproved_behavior_difference(tmp_path):
     )
     with pytest.raises(cli.DeveloperPackError, match="unapproved behavior"):
         cli.release_gate(project)
+
+
+def _make_release_ready(cli, project: Path) -> None:
+    manifest_path = project / "manifest.template.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["signer_id"] = "approved-test-signer"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    (project / "docs" / "SOURCE_BEHAVIOR_SPEC.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "status": "verified",
+                "cases": [
+                    {
+                        "id": "case-1",
+                        "input": {},
+                        "expected_steps": ["execute"],
+                        "expected_outcome": {"ok": True},
+                        "evidence": ["tests"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (project / "docs" / "PORTING_RECORD.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source": "test",
+                "differences": [],
+                "pending": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_capability_build_manifest_packages_arbitrary_resources_deterministically(
+    tmp_path,
+):
+    cli = _module("developer_pack_capability_members_test", PACK_CLI)
+    project = tmp_path / "agent"
+    cli.initialize_project(project, "test-agent", "Test Agent", "required")
+    _make_release_ready(cli, project)
+    root = project / "capability-pack" / "windows-x64"
+    (root / "modules").mkdir()
+    (root / "modules" / "worker.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (root / "runtime").mkdir()
+    (root / "runtime" / "ffmpeg.exe").write_bytes(b"ffmpeg-test")
+    build_manifest = json.loads(
+        (root / "capability-build.json").read_text(encoding="utf-8")
+    )
+    build_manifest["artifact"]["members"].extend(["modules", "runtime"])
+    (root / "capability-build.json").write_text(
+        json.dumps(build_manifest), encoding="utf-8"
+    )
+    private_key = tmp_path / "private.b64"
+    public_key = tmp_path / "public.b64"
+    cli._devkit_command(
+        "keygen",
+        "--private-key",
+        str(private_key),
+        "--public-key",
+        str(public_key),
+    )
+
+    first = cli.build_local_capability(
+        project,
+        "https://developer.example.test/capability.zip",
+        private_key,
+    )
+    second = cli.build_local_capability(
+        project,
+        "https://developer.example.test/capability.zip",
+        private_key,
+    )
+
+    assert first["artifact_mode"] == "members"
+    assert first["artifact_files"] == 6
+    assert first["artifact_sha256"] == second["artifact_sha256"]
+    with zipfile.ZipFile(root / "artifact.zip") as archive:
+        names = set(archive.namelist())
+        inventory = json.loads(archive.read("DCLAW-CAPABILITY-MANIFEST.json"))
+    assert "modules/worker.py" in names
+    assert "runtime/ffmpeg.exe" in names
+    assert len(inventory["files"]) == 6
+    assert all(item["sha256"] for item in inventory["files"])
+
+
+def test_capability_build_imports_prebuilt_zip_and_rejects_unsafe_paths(tmp_path):
+    cli = _module("developer_pack_prebuilt_test", PACK_CLI)
+    project = tmp_path / "agent"
+    cli.initialize_project(project, "test-agent", "Test Agent", "required")
+    _make_release_ready(cli, project)
+    private_key = tmp_path / "private.b64"
+    public_key = tmp_path / "public.b64"
+    cli._devkit_command(
+        "keygen",
+        "--private-key",
+        str(private_key),
+        "--public-key",
+        str(public_key),
+    )
+    prebuilt = tmp_path / "prebuilt.zip"
+    with zipfile.ZipFile(prebuilt, "w") as archive:
+        archive.writestr("app/main.py", "print('ok')\n")
+        archive.writestr("runtime/python.exe", b"python-test")
+    expected = hashlib.sha256(prebuilt.read_bytes()).hexdigest()
+
+    result = cli.build_local_capability(
+        project,
+        "https://developer.example.test/prebuilt.zip",
+        private_key,
+        prebuilt,
+    )
+
+    assert result["artifact_mode"] == "prebuilt"
+    assert result["artifact_files"] == 2
+    assert result["artifact_sha256"] == expected
+
+    unsafe = tmp_path / "unsafe.zip"
+    with zipfile.ZipFile(unsafe, "w") as archive:
+        archive.writestr("../escape.py", "bad")
+    with pytest.raises(cli.DeveloperPackError, match="safe POSIX relative path"):
+        cli.build_local_capability(
+            project,
+            "https://developer.example.test/unsafe.zip",
+            private_key,
+            unsafe,
+        )
+
+
+def test_pytest_adapter_records_actual_test_count_and_command(tmp_path):
+    cli = _module("developer_pack_pytest_adapter_test", PACK_CLI)
+    project = tmp_path / "agent"
+    cli.initialize_project(project, "test-agent", "Test Agent", "none")
+    _make_release_ready(cli, project)
+    metadata_path = project / "project.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["tests"] = {
+        "adapter": "pytest",
+        "paths": ["tests"],
+        "arguments": ["-q"],
+    }
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    (project / "tests" / "test_more.py").write_text(
+        "def test_one():\n    assert True\n\ndef test_two():\n    assert True\n",
+        encoding="utf-8",
+    )
+
+    result = cli.run_tests(project)
+
+    assert result["test_status"] == "passed"
+    assert result["test_adapter"] == "pytest"
+    assert result["tests"] == 3
+    assert result["test_commands"][0][0] == "<python>"
+    assert "--junitxml=<evidence.xml>" in result["test_commands"][0]

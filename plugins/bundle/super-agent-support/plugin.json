@@ -1,7 +1,7 @@
 {
   "id": "dclaw.super-agent-support",
   "name": "DClaw Super Agent Support",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "type": "general",
   "description": "Generic local execution, credential broker, capability package, offline developer pack and DevKit, client adapter, and Windows helper platform support for Super Agents.",
   "author": "DClaw",
