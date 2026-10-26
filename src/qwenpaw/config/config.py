@@ -1087,7 +1087,7 @@ class OrchestrationConfig(BaseModel):
     agent_loop_enabled: bool | None = Field(
         default=None,
         description=(
-            "Whether this super expert declares full Agent Loop support"
+            "Whether this extension Agent declares full Agent Loop support"
         ),
     )
 

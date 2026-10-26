@@ -265,6 +265,9 @@ def test_local_execution_standard_requires_optional_plugin_isolation():
         "未安装、禁用、升级失败或卸载该插件时",
         "由插件安装时注册",
         "其他平台能力仍可正常使用",
+        "核心残留审计",
+        "历史兼容壳只能加载并转发插件公开对象",
+        "普通登录、普通对话、普通 Agent",
     )
     for phrase in required:
         assert phrase in text

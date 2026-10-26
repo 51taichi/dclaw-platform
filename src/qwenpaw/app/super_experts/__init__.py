@@ -1,2 +1,1 @@
-"""Generic DClaw platform capabilities for signed super experts."""
-
+"""Compatibility package for implementations owned by super-agent-support."""

@@ -1287,12 +1287,13 @@ def test_environment_cannot_bypass_explicit_enforced_activation(
     assert runtime.usage_service.mode == "shadow"
 
 
-def test_base_entrypoints_default_to_2048_and_super_expert_to_4096(
+def test_base_entrypoints_default_to_2048_and_extension_to_4096(
     monkeypatch,
     reporting,
 ):
     _service, _repository, engine = reporting
     monkeypatch.delenv("DCLAW_OPEN_API_DEFAULT_OUTPUT_TOKENS", raising=False)
+    monkeypatch.delenv("DCLAW_EXTENSION_DEFAULT_OUTPUT_TOKENS", raising=False)
     monkeypatch.delenv(
         "DCLAW_SUPER_EXPERT_DEFAULT_OUTPUT_TOKENS",
         raising=False,
@@ -1300,12 +1301,12 @@ def test_base_entrypoints_default_to_2048_and_super_expert_to_4096(
     monkeypatch.setattr(open_api_runtime, "get_app_engine", lambda: engine)
 
     regular = open_api_runtime.create_open_api_billing_runtime()
-    super_expert = open_api_runtime.create_open_api_billing_runtime(
+    extension = open_api_runtime.create_open_api_billing_runtime(
         output_profile="extended",
     )
 
     assert regular.default_max_output_tokens == 2048
-    assert super_expert.default_max_output_tokens == 4096
+    assert extension.default_max_output_tokens == 4096
     from qwenpaw.app.billing.model_meter import BillingModelMeter
 
     console = BillingModelMeter(regular.usage_service)
@@ -1313,22 +1314,38 @@ def test_base_entrypoints_default_to_2048_and_super_expert_to_4096(
     assert console.platform_max_output_tokens == 2048
 
 
-def test_super_expert_output_profile_has_its_own_environment_override(
+def test_extension_output_profile_has_its_own_environment_override(
     monkeypatch,
     reporting,
 ):
     _service, _repository, engine = reporting
     monkeypatch.setenv("DCLAW_OPEN_API_DEFAULT_OUTPUT_TOKENS", "1536")
-    monkeypatch.setenv("DCLAW_SUPER_EXPERT_DEFAULT_OUTPUT_TOKENS", "6144")
+    monkeypatch.setenv("DCLAW_EXTENSION_DEFAULT_OUTPUT_TOKENS", "6144")
     monkeypatch.setattr(open_api_runtime, "get_app_engine", lambda: engine)
 
     regular = open_api_runtime.create_open_api_billing_runtime()
-    super_expert = open_api_runtime.create_open_api_billing_runtime(
+    extension = open_api_runtime.create_open_api_billing_runtime(
         output_profile="extended",
     )
 
     assert regular.default_max_output_tokens == 1536
-    assert super_expert.default_max_output_tokens == 6144
+    assert extension.default_max_output_tokens == 6144
+
+
+def test_extension_output_profile_accepts_legacy_environment_override(
+    monkeypatch,
+    reporting,
+):
+    _service, _repository, engine = reporting
+    monkeypatch.delenv("DCLAW_EXTENSION_DEFAULT_OUTPUT_TOKENS", raising=False)
+    monkeypatch.setenv("DCLAW_SUPER_EXPERT_DEFAULT_OUTPUT_TOKENS", "5120")
+    monkeypatch.setattr(open_api_runtime, "get_app_engine", lambda: engine)
+
+    runtime = open_api_runtime.create_open_api_billing_runtime(
+        output_profile="extended",
+    )
+
+    assert runtime.default_max_output_tokens == 5120
 
 
 def _reporting_client(monkeypatch, service, repository) -> TestClient:

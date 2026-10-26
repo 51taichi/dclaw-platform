@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.0 - 2026-10-26
+
+- Bundles development standard 2.5 and its mandatory core-residue audit.
+- Keeps every Super Agent-only implementation in the support plugin while
+  retaining thin historical Python import paths for existing signed Agents.
+- Keeps DevKit 1.3.0 and all signed package and local execution contracts
+  compatible.
+
 ## 1.3.0 - 2026-10-26
 
 - Bundles development standard 2.4 with the explicit Super Agent plugin

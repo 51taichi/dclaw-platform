@@ -1,4 +1,4 @@
-"""Platform-owned local execution integration."""
+"""Compatibility exports for plugin-owned local execution integration."""
 
 from .session import (
     LOCAL_EXECUTION_SESSION_CAPABILITY,

@@ -90,4 +90,4 @@ def test_porting_requires_explicitly_approved_behavior_equivalence():
     for phrase in required:
         assert phrase in text
 
-    assert "当前版本：`2.4`" in text
+    assert "当前版本：`2.5`" in text

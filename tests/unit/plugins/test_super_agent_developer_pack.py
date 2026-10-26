@@ -34,16 +34,16 @@ def test_developer_pack_archive_is_complete_and_reproducible():
     second, repeated = archive.build_archive(PLUGIN_ROOT)
     assert first == second
     assert metadata == repeated
-    assert metadata["version"] == "1.3.0"
+    assert metadata["version"] == "1.4.0"
     assert metadata["standard"] == {
         "id": "dclaw.super-agent-development",
-        "version": "2.4",
+        "version": "2.5",
     }
     assert metadata["devkit_version"] == "1.3.0"
     assert metadata["server_source_required"] is False
     assert metadata["sha256"] == hashlib.sha256(first).hexdigest()
 
-    prefix = "dclaw-super-agent-developer-pack-1.3.0/"
+    prefix = "dclaw-super-agent-developer-pack-1.4.0/"
     with zipfile.ZipFile(io.BytesIO(first)) as package:
         names = set(package.namelist())
         manifest = json.loads(package.read(prefix + "PACKAGE-MANIFEST.json"))
@@ -67,7 +67,7 @@ def test_developer_pack_archive_is_complete_and_reproducible():
         "examples/minimal-local/example.json",
     }
     assert {prefix + name for name in expected} <= names
-    assert manifest["version"] == "1.3.0"
+    assert manifest["version"] == "1.4.0"
     assert "devkit/wheelhouse/cryptography-46.0.3" in checksums
     assert not any(
         "src/qwenpaw" in name or "tests/unit" in name for name in names

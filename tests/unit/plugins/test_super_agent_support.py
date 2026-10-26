@@ -168,15 +168,71 @@ def test_core_uses_generic_spi_and_legacy_imports_resolve_to_plugin():
     assert "..super_experts" not in runner
 
     import qwenpaw.app.routers.super_expert_platform as legacy_router
+    import qwenpaw.app.local_execution.session as legacy_local_execution
     import qwenpaw.app.super_experts.capabilities as legacy_capabilities
     import qwenpaw.app.workspace.orchestration as legacy_orchestration
 
     for module in (
         legacy_router,
+        legacy_local_execution,
         legacy_capabilities,
         legacy_orchestration,
     ):
         assert str(module.__file__).startswith(str(PLUGIN_ROOT))
+
+
+def test_core_contains_only_thin_super_agent_compatibility_modules():
+    core = ROOT / "src" / "qwenpaw"
+    compatibility_files = {
+        *(core / "app" / "super_experts").glob("*.py"),
+        core / "app" / "routers" / "super_expert_platform.py",
+        core / "app" / "integration_delivery" / "signer_provisioning.py",
+        core / "app" / "local_execution" / "session.py",
+        *(
+            core / "app" / "workspace" / name
+            for name in (
+                "aigc_tools.py",
+                "empty_reply.py",
+                "flow_engine.py",
+                "flow_runtime.py",
+                "interaction_tools.py",
+                "media_delivery.py",
+                "media_review_context.py",
+                "orchestration.py",
+                "orchestration_contract.py",
+                "public_stream.py",
+            )
+        ),
+    }
+    compatibility_files.discard(core / "app" / "super_experts" / "__init__.py")
+    for path in compatibility_files:
+        source = path.read_text(encoding="utf-8")
+        assert "reexport_bundled_plugin_module" in source, path
+        assert "\ndef " not in source, path
+        assert "\nclass " not in source, path
+
+    forbidden_dependencies = (
+        "qwenpaw.app.super_experts",
+        "from ..super_experts",
+        "from ...app.super_experts",
+        "qwenpaw.app.local_execution",
+        "from ..local_execution",
+        "workspace.aigc_tools",
+        "workspace.empty_reply",
+        "workspace.flow_engine",
+        "workspace.flow_runtime",
+        "workspace.interaction_tools",
+        "workspace.media_delivery",
+        "workspace.media_review_context",
+        "workspace.orchestration",
+        "workspace.public_stream",
+    )
+    for path in core.rglob("*.py"):
+        if path in compatibility_files:
+            continue
+        source = path.read_text(encoding="utf-8")
+        for dependency in forbidden_dependencies:
+            assert dependency not in source, (path, dependency)
 
 
 @pytest.mark.asyncio
@@ -467,20 +523,20 @@ def test_developer_pack_is_downloadable_and_self_describing(
 
     assert metadata.status_code == 200
     payload = metadata.json()
-    assert payload["version"] == "1.3.0"
-    assert payload["standard"]["version"] == "2.4"
+    assert payload["version"] == "1.4.0"
+    assert payload["standard"]["version"] == "2.5"
     assert payload["devkit_version"] == "1.3.0"
     assert payload["server_source_required"] is False
     assert payload["download_path"].endswith("/developer-pack/download")
     assert payload["sha256"] == hashlib.sha256(downloaded.content).hexdigest()
     assert payload["content_sha256"] == payload["sha256"]
     assert downloaded.status_code == 200
-    assert "dclaw-super-agent-developer-pack-1.3.0.zip" in (
+    assert "dclaw-super-agent-developer-pack-1.4.0.zip" in (
         downloaded.headers["content-disposition"]
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-developer-pack-1.3.0"
+    prefix = "dclaw-super-agent-developer-pack-1.4.0"
     assert f"{prefix}/PACKAGE-MANIFEST.json" in names
     assert f"{prefix}/SHA256SUMS" in names
     assert f"{prefix}/dclaw_developer.py" in names
@@ -939,13 +995,14 @@ async def test_presigned_upload_is_dispatched_to_device_without_file_bytes(
         device_id="device-1",
         expires_at=9999999999,
     )
+    upload_base = "https://uploads.example.test"
     pending = asyncio.create_task(
         service.call(
             "local_file_upload",
             {
                 "local_file_ref": reference,
                 "upload": {
-                    "url": "https://uploads.example.test/object?signature=secret",
+                    "url": f"{upload_base}/object?signature=secret",
                     "method": "PUT",
                     "allowed_domains": ["uploads.example.test"],
                     "max_size_bytes": 20,
