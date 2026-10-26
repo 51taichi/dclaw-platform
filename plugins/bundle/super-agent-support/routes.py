@@ -23,6 +23,7 @@ from jsonschema import Draft202012Validator
 from pydantic import BaseModel, ConfigDict, Field
 
 from .credentials import CredentialBroker, CredentialError
+from .developer_pack.archive import build_archive as build_developer_pack_archive
 from .mcp_server import LocalExecutionMcp
 from .packages import CapabilityPackageRegistry, PackageError
 from .service import LocalExecutionService
@@ -128,6 +129,38 @@ def _register_developer_kit_routes(app: FastAPI) -> None:
             },
         )
 
+    @app.get("/developer-pack")
+    async def developer_pack_metadata() -> dict[str, Any]:
+        archive, metadata = build_developer_pack_archive(Path(__file__).parent)
+        return {
+            **metadata,
+            "download_path": "/api/super-agent-support/developer-pack/download",
+            "content_sha256": hashlib.sha256(archive).hexdigest(),
+            "offline": True,
+            "supported_python": ">=3.10,<3.14",
+            "supported_platforms": [
+                "linux-glibc-aarch64",
+                "linux-glibc-x86_64",
+                "macos-arm64",
+                "macos-x86_64",
+                "windows-x86_64",
+            ],
+        }
+
+    @app.get("/developer-pack/download")
+    async def download_developer_pack() -> Response:
+        archive, metadata = build_developer_pack_archive(Path(__file__).parent)
+        return Response(
+            archive,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": (
+                    "attachment; filename="
+                    f'"{metadata["archive_prefix"]}.zip"'
+                ),
+            },
+        )
+
 
 def create_app(
     *,
@@ -159,7 +192,7 @@ def create_app(
         return {
             "status": "ok",
             "plugin": "dclaw.super-agent-support",
-            "version": "1.4.0",
+            "version": "1.5.0",
             "protocols": {"local_execution": "1.0", "device": "1"},
         }
 

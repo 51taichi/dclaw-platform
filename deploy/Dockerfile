@@ -169,6 +169,7 @@ COPY deploy/pricing ./deploy/pricing
 COPY scripts/perf ./scripts/perf
 COPY src ./src
 COPY plugins/bundle/super-agent-support ./plugins/auto-load/super-agent-support
+COPY docs/super-agent-development-standard-v1.zh-CN.md ./plugins/auto-load/super-agent-support/developer_pack/standard/super-agent-development-standard-v1.zh-CN.md
 COPY website/public/docs/ ./src/qwenpaw/docs/
 # Inject console dist from build stage (repo does not commit dist). Remove any
 # stale checked-in console assets first so old hashed bundles cannot linger.

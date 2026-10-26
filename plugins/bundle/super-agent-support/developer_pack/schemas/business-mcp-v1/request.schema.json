@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/contracts/business-mcp/v1/request.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["operation", "request_id", "input"],
+  "properties": {
+    "operation": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,127}$"},
+    "request_id": {"type": "string", "minLength": 8, "maxLength": 128},
+    "trace_id": {"type": ["string", "null"], "maxLength": 128},
+    "input": {"type": "object"}
+  }
+}

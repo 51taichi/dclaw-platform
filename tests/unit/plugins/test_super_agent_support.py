@@ -296,6 +296,60 @@ def test_developer_kit_is_downloadable_without_server_source(
     assert all("qwenpaw" not in name for name in names)
 
 
+def test_developer_pack_is_downloadable_and_self_describing(
+    plugin_module,
+    tmp_path,
+):
+    store, _signer, broker, service = _runtime(plugin_module, tmp_path)
+    mcp_cls = sys.modules[
+        "test_dclaw_super_agent_support.mcp_server"
+    ].LocalExecutionMcp
+    package_cls = sys.modules[
+        "test_dclaw_super_agent_support.packages"
+    ].CapabilityPackageRegistry
+    routes = sys.modules["test_dclaw_super_agent_support.routes"]
+    plugin_app = routes.create_app(
+        store=store,
+        service=service,
+        mcp=mcp_cls(service),
+        packages=package_cls(
+            store,
+            PLUGIN_ROOT / "schemas" / "capability-descriptor.schema.json",
+            {},
+        ),
+        credentials=broker,
+    )
+
+    with TestClient(plugin_app) as client:
+        metadata = client.get("/developer-pack")
+        downloaded = client.get("/developer-pack/download")
+
+    assert metadata.status_code == 200
+    payload = metadata.json()
+    assert payload["version"] == "1.0.0"
+    assert payload["standard"]["version"] == "2.1"
+    assert payload["devkit_version"] == "1.2.0"
+    assert payload["server_source_required"] is False
+    assert payload["download_path"].endswith("/developer-pack/download")
+    assert payload["sha256"] == hashlib.sha256(downloaded.content).hexdigest()
+    assert payload["content_sha256"] == payload["sha256"]
+    assert downloaded.status_code == 200
+    assert "dclaw-super-agent-developer-pack-1.0.0.zip" in (
+        downloaded.headers["content-disposition"]
+    )
+    with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
+        names = set(archive.namelist())
+    prefix = "dclaw-super-agent-developer-pack-1.0.0"
+    assert f"{prefix}/PACKAGE-MANIFEST.json" in names
+    assert f"{prefix}/SHA256SUMS" in names
+    assert f"{prefix}/dclaw_developer.py" in names
+    assert f"{prefix}/devkit/dclaw_agent_devkit.py" in names
+    assert (
+        f"{prefix}/standard/super-agent-development-standard-v1.zh-CN.md"
+        in names
+    )
+
+
 def test_device_bootstrap_reuses_only_current_users_device(
     plugin_module,
     tmp_path,

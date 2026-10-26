@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.0`
+当前版本：`2.1`
 
 发布日期：`2026-10-26`
 
@@ -26,7 +26,7 @@
 - 负责审核、安装和维护超级 Agent 的 DClaw 管理员；
 - 负责扩展 DClaw 公共能力的 DClaw 平台团队。
 
-开发者应把本文作为新 Codex 任务的第一份入口文件。本文包含全部人工开发规则；字段级机器合同、模板和密封工具由目标 DClaw 的官方 Super Agent DevKit 提供。本文与同版本 DevKit Schema 不一致时，以机器 Schema 为准，并向平台方提交文档缺陷。
+开发者应把本文作为新 Codex 任务的第一份入口文件。本文包含全部人工开发规则；字段级机器合同、模板和密封工具由目标 DClaw 的官方 Super Agent DevKit 提供。平台发布的 DClaw 超级 Agent 开发包把本文、DevKit、公开 SDK、模板、夹具和离线演练组合为一个带独立版本与校验和的交付物。本文与同版本 DevKit Schema 不一致时，以机器 Schema 为准，并向平台方提交文档缺陷。
 
 ### 1.1 唯一对外开发标准
 
@@ -44,6 +44,7 @@ super-agent-development-standard-v1.zh-CN.md
 4. JSON Schema、能力目录、最小模板和密封 CLI 统一由本文第 33 节指定的官方 DevKit 提供；它们是机器材料，不是第二份人工标准。
 5. 开发方只使用本文、自己的业务材料和从目标 DClaw 下载的 DevKit。任何步骤都不得要求访问、克隆或导入 `dclaw-server`、`qwenpaw` 或平台插件源码。
 6. 验收时必须在不含 DClaw 服务端源码的干净目录完成摘要计算、工作区校验、密封构建和独立验签；否则不能宣称标准可独立使用。
+7. 第三方开发者优先取得官方 DClaw 超级 Agent 开发包；开发包必须包含本文的准确版本和官方 DevKit，不得维护第二份人工规则。单独 DevKit 下载入口在兼容期内继续可用。
 
 迁移开发者应先执行第 27.2 节的“默认优先、最少提问”规则。收到本文和源包即可开始安全盘点与源码迁移；不要求用户先填写项目身份、Git、操作系统、依赖、卡片、签名和验收问卷。
 
@@ -491,13 +492,16 @@ stateDiagram-v2
 
 截至 2026-10-26，生产 Server 已运行提交 `f88e5554f9c9b281e47bdbc107b2030ec89b761a`，`dclaw.super-agent-support` `1.4.0` 已成功加载，生产镜像包含 Super Agent DevKit `1.2.0`、离线引导脚本和 26 个带哈希锁定的加密依赖 wheel。插件注册 `local.execution.session/1` 与 `local.environment.preflight/1`、可信工作区上下文、八个 `local_*` MCP 工具、设备配对与 WebSocket 调度、持久任务状态、能力包验签注册、凭证引用和通用 Windows 本地助手核心。DevKit 含独立 CLI、版本化 Schema、能力目录和最小模板，不导入或暴露 DClaw 服务端源码。DClaw Windows 客户端源码已加入按专家声明自动预检和顶部手动检测入口。DClaw 核心只保留通用插件 SPI；卸载插件会同时移除路由、能力和上下文处理器。
 
-本标准 `2.0` 的正式开发与发布门禁如下。版本必须作为一个兼容组合核对，不能只满足其中一项：
+开发包 `1.0.0` 与支持插件 `1.5.0` 已在本地源码完成，尚未构建或部署生产镜像。生产环境在 `1.5.0` 部署前仍只提供独立 DevKit `1.2.0` 入口；开发包本地完成、代码推送和生产可下载是三个独立状态，不得混称已上线。
+
+本标准 `2.1` 的正式开发与发布门禁如下。版本必须作为一个兼容组合核对，不能只满足其中一项：
 
 | 项目 | 本标准要求 | 2026-10-26 正式环境核对 | 结论 |
 |---|---|---|---|
 | DClaw 核心 | 至少 `1.1.10` | 公网 `/api/version` 返回 `1.1.10`，运行镜像标记 Server 提交 `f88e555` | 满足 |
 | 支持插件 | `dclaw.super-agent-support` `1.4.0` | 生产启动日志确认 `1.4.0` 成功加载 | 满足 |
 | Super Agent DevKit | `1.2.0`，且由目标实例认证下载 | 生产镜像包含 `1.2.0` 和完整 wheelhouse；匿名访问按设计返回 `401` | 版本满足，开发方下载时仍须认证并核对 SHA-256 |
+| Super Agent 开发包 | `1.0.0`，标准 `2.1`、DevKit `1.2.0` | 本地源码已完成，生产插件仍为 `1.4.0` | 尚未部署；只能本地审查，不能宣称生产可下载 |
 | Windows 客户端 | 至少 `2.6.12` | `2.6.11` | 不满足，先发布并升级客户端 |
 | 通用 Runner | 至少 `1.0.0` | 随兼容客户端核对 | 待客户端升级后核对 |
 
@@ -508,6 +512,8 @@ stateDiagram-v2
 | 插件健康与版本 | `GET /api/super-agent-support/health` |
 | DevKit 元数据 | `GET /api/super-agent-support/developer-kit`，返回 `version`、`download_path` 和 `sha256` |
 | DevKit ZIP | `GET /api/super-agent-support/developer-kit/v1.zip` |
+| 开发包元数据 | `GET /api/super-agent-support/developer-pack` |
+| 开发包稳定下载 | `GET /api/super-agent-support/developer-pack/download` |
 | 本地执行 MCP | `/api/super-agent-support/mcp/`，Streamable HTTP |
 | 客户端环境检测 | `GET /api/super-agent-support/environment-status` |
 | 客户端配对 | `POST /api/super-agent-support/device-bootstrap` |
@@ -1185,16 +1191,37 @@ API 调用次数、费用和超时先沿用源包已有约束。源包未定义�
 
 ## 21. 密封、签名与构建
 
-### 21.1 获取官方 DevKit
+### 21.1 获取官方开发包与 DevKit
 
-开发方从目标 DClaw 实例获取与平台合同匹配的工具，不得从服务器仓库复制脚本：
+开发方优先从目标 DClaw 实例取得与平台合同匹配的完整开发包，不得从服务器仓库复制脚本：
+
+```text
+GET <DCLAW_BASE_URL>/api/super-agent-support/developer-pack
+GET <DCLAW_BASE_URL>/api/super-agent-support/developer-pack/download
+```
+
+开发包元数据必须返回准确的开发包版本、标准标识与版本、DevKit 版本、ZIP SHA-256、文件数、支持平台和稳定下载路径。下载后的顶层目录名带开发包版本，包内 `PACKAGE-MANIFEST.json` 和 `SHA256SUMS` 列出公开资产及摘要；开发者根据元数据判断版本，不得根据稳定下载路径、标准文件名或 ZIP 文件名猜测版本。
+
+开发包 `1.0.0` 包含标准 `2.1`、DevKit `1.2.0`、公开 Schema/SDK、完整项目模板、业务服务模板、本地能力模板、测试夹具、最小离线示例、SBOM、第三方许可证、兼容矩阵、升级和回滚说明。统一命令如下：
+
+```text
+python dclaw_developer.py doctor
+python dclaw_developer.py init --target <project> --agent-id <id> --name <name> --local-helper <none|optional|required>
+python dclaw_developer.py validate --project <project>
+python dclaw_developer.py test --project <project>
+python dclaw_developer.py build --project <project> --private-key <private.b64> --public-key <public.b64> --output <release.zip>
+```
+
+声明本地助手的 Agent 在 `build` 时还必须传入 `--capability-artifact-url <https-url>`；同一命令确定性生成本地能力 artifact、绑定大小与 SHA-256、签名能力描述符并验签，然后构建超级专家包。需要提前托管 artifact 时可单独运行 `capability-build`。`build` 必须先执行行为基线、差异批准、Schema、能力最小集合、依赖锁、Secret 扫描、自动测试和全部签名验证门禁；任一项失败时不得产生可宣称正式的发布包。最小示例使用 `demo` 命令在无平台源码、无网络、无生产凭证的目录运行本地能力、生成测试签名包并独立验签。
+
+为兼容已建立的自动化，独立 DevKit 入口继续保留：
 
 ```text
 GET <DCLAW_BASE_URL>/api/super-agent-support/developer-kit
 GET <DCLAW_BASE_URL>/api/super-agent-support/developer-kit/v1.zip
 ```
 
-两个请求都必须携带目标 DClaw 接受的已认证开发者或管理员会话。先读取插件健康和元数据，确认插件 `1.4.0`、DevKit `1.2.0` 与本标准版本门禁一致；再使用元数据返回的 `download_path` 下载 ZIP。下载后必须以流式 SHA-256 与元数据中的值逐字比较，匹配后才能解压到 Agent 项目之外的工具目录。不得只根据文件名、HTTP 200 或本地已有 ZIP 推断工具有效。
+开发包和独立 DevKit 请求都必须携带目标 DClaw 接受的已认证开发者或管理员会话。先读取插件健康和元数据，核对插件、开发包、标准和 DevKit 版本；再使用元数据返回的 `download_path` 下载 ZIP。下载后必须以流式 SHA-256 与元数据中的值逐字比较，匹配后才能解压到 Agent 项目之外的工具目录。不得只根据文件名、HTTP 200 或本地已有 ZIP 推断工具有效。
 
 认证和失败语义：
 
@@ -1822,9 +1849,22 @@ Agent 名称：<可选，中文显示名称>
 
 开发方的外部输入固定为三类：
 
-1. 本文文件 `super-agent-development-standard-v1.zh-CN.md`；
+1. 本文文件 `super-agent-development-standard-v1.zh-CN.md`，通常随官方开发包交付；
 2. 开发方自己的业务目标、源 Agent 材料和测试凭证；
-3. 从目标 DClaw 认证调用元数据接口并按其 `download_path` 下载、核对 SHA-256 的官方 DevKit。
+3. 从目标 DClaw 认证调用元数据接口并按其 `download_path` 下载、核对 SHA-256 的官方开发包；兼容自动化可以继续单独下载同版本官方 DevKit。
+
+开发包 `1.0.0` 是推荐的单一离线移交物，必须提供：
+
+- 唯一标准文件与明确的标准版本，不复制第二套人工规则；
+- 官方 DevKit `1.2.0` 及其完整离线加密依赖；
+- `dclaw_developer.py` 的 `doctor`、`info`、`init`、`validate`、`test`、`keygen`、`capability-build`、`build`、`upgrade` 和 `demo`；
+- 超级专家、业务服务和本地能力包模板，以及职责边界示例；
+- 公共业务服务、本地执行和能力包 Schema/SDK；
+- 行为基线、差异批准、能力越权、依赖完整性、Secret、测试、密封和验签失败关闭门禁；
+- 最小无网络演练、测试夹具、兼容矩阵、升级/回滚说明、SBOM、许可证清单、包清单和逐文件 SHA-256；
+- 可重复归档构建器；相同源码、版本和固定时间戳必须生成相同 ZIP 字节。
+
+开发包本身不得包含平台管理员凭据、生产地址、签名私钥、供应商 Secret、客户数据或 DClaw 私有实现。包内公开工具不得导入 `qwenpaw` 或要求开发者克隆服务器仓库。
 
 DevKit `1.2.0` 必须提供：
 
@@ -1842,6 +1882,15 @@ DevKit `1.2.0` 必须提供：
 平台内部实现文件、测试文件和维护文档可以继续存在，但它们只服务平台维护者，不属于开发方输入。开发方缺少字段或行为定义时应报告标准或 DevKit 缺陷；平台不得用“请克隆服务器源码”回答。
 
 ## 34. 版本记录
+
+### 2.1 - 2026-10-26
+
+- 新增 DClaw 超级 Agent 开发包 `1.0.0`，把唯一标准、DevKit `1.2.0`、公开 SDK/Schema、模板、夹具、SBOM、许可证和离线演练组合为一个版本化交付物。
+- 新增 `doctor`、`init`、`validate`、`test`、`build`、`upgrade` 和 `demo` 统一命令；`build` 强制执行行为基线、差异批准、Schema、能力、依赖、Secret、测试、密封和验签门禁。
+- 新增开发包认证元数据和稳定下载接口；独立 DevKit 接口继续保留，旧 Agent 和 DevKit `1.2.x` 签名格式不变。
+- 明确开发包、标准和 DevKit 各自独立版本，版本只能来自元数据与包清单，不得根据稳定路径或保留文件名猜测。
+- 支持插件源码递增为 `1.5.0`；当前仅完成本地源码和测试，未构建或部署生产镜像，生产仍为插件 `1.4.0`。
+- 本次只增加向后兼容的交付与校验工具，不改变职责边界、现有机器合同或旧签名包含义，按第 30 节递增 minor。
 
 ### 2.0 - 2026-10-26
 

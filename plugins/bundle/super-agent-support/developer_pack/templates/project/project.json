@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "agent_id": "{{AGENT_ID}}",
+  "developer_pack_version": "1.0.0",
+  "standard": {"id": "dclaw.super-agent-development", "version": "2.1"},
+  "devkit_version": "1.2.0",
+  "local_helper": "none",
+  "declared_platform_capabilities": [
+    "workspace.turn.orchestrate/1",
+    "agent.execute",
+    "session.context",
+    "runtime.trace",
+    "runtime.complete",
+    "runtime.fail"
+  ]
+}
