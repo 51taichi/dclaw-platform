@@ -71,3 +71,22 @@ def test_standard_does_not_fix_any_agent_project_identity():
 
     assert "标准不得固定任何开发者姓名、机器目录或某个 Agent 的项目路径" in text
     assert "不得写入本通用标准" in text
+
+
+def test_porting_requires_explicitly_approved_behavior_equivalence():
+    text = PLAYBOOK.read_text(encoding="utf-8")
+
+    required = (
+        "行为等价迁移铁律",
+        "真实可执行行为为唯一业务基线",
+        "严禁删除、合并、重排、增加或自动跳过源业务步骤",
+        "不得改成模型推断、自动绑定、静默补值或隐式默认",
+        "不得删除步骤、降级语义、伪造成功或以替代流程绕过",
+        "取得用户对每项差异的明确批准",
+        "未记录的差异一律视为未批准",
+        "逐步行为等价对照",
+    )
+    for phrase in required:
+        assert phrase in text
+
+    assert "当前版本：`2.0`" in text
