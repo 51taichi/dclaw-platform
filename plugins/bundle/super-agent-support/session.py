@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Short-lived, invocation-bound local execution sessions."""
 
 from __future__ import annotations
@@ -7,7 +8,7 @@ import hashlib
 import hmac
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 CAPABILITY_ID = "local.execution.session/1"
@@ -37,7 +38,7 @@ class SessionSigner:
     def __init__(self, secret: bytes) -> None:
         if len(secret) < 32:
             raise ValueError(
-                "local execution session key must be at least 32 bytes"
+                "local execution session key must be at least 32 bytes",
             )
         self._secret = secret
 
@@ -51,9 +52,14 @@ class SessionSigner:
         installation_id: str,
         release_id: str,
         invocation_id: str,
+        tenant_id: str = "local",
+        capability_ids: Iterable[str] = (),
         now: int | None = None,
     ) -> str:
+        tenant_id = tenant_id or "local"
+        capabilities = sorted(set(capability_ids))
         values = (
+            tenant_id,
             user_id,
             session_id,
             agent_id,
@@ -62,11 +68,16 @@ class SessionSigner:
             release_id,
             invocation_id,
         )
-        if not all(isinstance(value, str) and value for value in values):
+        if not all(
+            isinstance(value, str) and value for value in values
+        ) or not all(
+            isinstance(value, str) and value for value in capabilities
+        ):
             raise SessionError("trusted session context is incomplete")
         issued_at = int(time.time()) if now is None else int(now)
         payload = {
             "v": 1,
+            "t": tenant_id,
             "u": user_id,
             "s": session_id,
             "a": agent_id,
@@ -74,12 +85,15 @@ class SessionSigner:
             "g": installation_id,
             "r": release_id,
             "i": invocation_id,
+            "c": capabilities,
             "iat": issued_at,
             "exp": issued_at + MAX_LIFETIME_SECONDS,
         }
         encoded = _encode(
             json.dumps(
-                payload, sort_keys=True, separators=(",", ":")
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
             ).encode(),
         )
         signature = hmac.new(
@@ -110,6 +124,20 @@ class SessionSigner:
         if (
             not isinstance(payload, dict)
             or payload.get("v") != 1
+            or (
+                "t" in payload
+                and not (isinstance(payload.get("t"), str) and payload["t"])
+            )
+            or (
+                "c" in payload
+                and not (
+                    isinstance(payload.get("c"), list)
+                    and all(
+                        isinstance(value, str) and value
+                        for value in payload["c"]
+                    )
+                )
+            )
             or not all(
                 isinstance(payload.get(key), str) and payload[key]
                 for key in required
@@ -121,6 +149,8 @@ class SessionSigner:
             or payload["exp"] - payload["iat"] > MAX_LIFETIME_SECONDS
         ):
             raise SessionError("invalid or expired local execution session")
+        payload.setdefault("t", "local")
+        payload.setdefault("c", [])
         return payload
 
     def enrich(
@@ -141,5 +171,7 @@ class SessionSigner:
             installation_id=str(context.get("installation_id") or ""),
             release_id=str(context.get("release_id") or ""),
             invocation_id=invocation_id,
+            tenant_id=str(context.get("tenant_id") or "local"),
+            capability_ids=granted_capabilities,
         )
         return result

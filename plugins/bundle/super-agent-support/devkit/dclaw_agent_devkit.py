@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """Standalone DClaw Super Agent development, validation, and sealing CLI."""
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ import unicodedata
 import zipfile
 
 
-DEVKIT_VERSION = "1.2.0"
+DEVKIT_VERSION = "1.3.0"
 CRYPTOGRAPHY_VERSION = "46.0.3"
 SUPPORTED_PYTHON = ">=3.10,<3.14"
 SUPPORTED_PLATFORMS = {

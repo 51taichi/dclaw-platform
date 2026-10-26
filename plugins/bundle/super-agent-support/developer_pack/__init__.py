@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Standalone DClaw Super Agent developer pack sources."""
 
-PACK_VERSION = "1.1.0"
+PACK_VERSION = "1.2.0"

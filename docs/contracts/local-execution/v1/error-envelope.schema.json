@@ -15,7 +15,7 @@
     "trace_id"
   ],
   "properties": {
-    "standard_version": {"const": "1.0"},
+    "standard_version": {"const": "1.1"},
     "code": {
       "type": "string",
       "pattern": "^[A-Z][A-Z0-9_]*\\.[A-Z][A-Z0-9_]*$",
@@ -58,6 +58,8 @@
         "invalid_request",
         "authentication",
         "authorization",
+        "permission",
+        "unsupported",
         "compatibility",
         "connection",
         "state_conflict",
@@ -80,6 +82,12 @@
         "complete_local_action",
         "reconnect_runner",
         "update_runner",
+        "update_dclaw",
+        "select_file_again",
+        "select_different_file",
+        "select_smaller_file",
+        "select_fewer_files",
+        "use_original_device",
         "contact_administrator",
         "start_new_task"
       ]

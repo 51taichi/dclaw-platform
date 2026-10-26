@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Request-local model tools for DClaw's basic interaction catalog.
 
 The tools expose platform contracts and trusted card operations only. Business
@@ -48,7 +49,11 @@ def _identity(*parts: Any) -> str:
 
 def _validation_issues(error: ValidationError) -> list[dict[str, str]]:
     issues: list[dict[str, str]] = []
-    for item in error.errors(include_url=False, include_context=False, include_input=False):
+    for item in error.errors(
+        include_url=False,
+        include_context=False,
+        include_input=False,
+    ):
         path = ""
         for part in item["loc"]:
             if isinstance(part, int):
@@ -91,23 +96,30 @@ def build_interaction_tools(
     def authorized(capability: str) -> bool:
         return grants.get(capability) == "1"
 
-    async def dispatch(capability: str, arguments: dict[str, Any]) -> ToolResponse:
+    async def dispatch(
+        capability: str,
+        arguments: dict[str, Any],
+    ) -> ToolResponse:
         if not authorized(capability):
-            return _response({"error": "CAPABILITY_UNAVAILABLE", "retryable": False})
+            return _response(
+                {"error": "CAPABILITY_UNAVAILABLE", "retryable": False},
+            )
         try:
             return _response(await business_call(capability, arguments))
         except InteractionError as exc:
             return _domain_error(exc)
         except Exception:
-            return _response({
-                "error": "PLATFORM_OPERATION_UNCONFIRMED",
-                "retryable": True,
-                "guidance": (
-                    "Read the current interaction status before retrying and retain "
-                    "the same task_key, interaction_revision, and operation key. "
-                    "Do not claim that a card exists."
-                ),
-            })
+            return _response(
+                {
+                    "error": "PLATFORM_OPERATION_UNCONFIRMED",
+                    "retryable": True,
+                    "guidance": (
+                        "Read the current interaction status before retrying and retain "
+                        "the same task_key, interaction_revision, and operation key. "
+                        "Do not claim that a card exists."
+                    ),
+                },
+            )
 
     async def interaction_component_catalog(
         component_types: list[str] = [],
@@ -116,20 +128,25 @@ def build_interaction_tools(
 
         不传类型时返回精简决策索引；确定类型后只请求该类型的详细
         Schema、默认值、限制、返回结构和正反例。完整闭集使用选择组件，
-        答案无法预先列全的开放式事实问题使用 question_form。
+        答案无法预先列全的开放式事实问题使用 question_form；需要客户从已配对
+        本地设备选择文件时使用 file_selector。
 
         Args:
-            component_types: 精确类型列表：single_select、multi_select 或 question_form。
+            component_types: 精确类型列表：single_select、multi_select、question_form 或 file_selector。
         """
-        if (
-            not isinstance(component_types, list)
-            or any(not isinstance(item, str) or not item.strip() for item in component_types)
+        if not isinstance(component_types, list) or any(
+            not isinstance(item, str) or not item.strip()
+            for item in component_types
         ):
-            return _response({
-                "error": "INVALID_CATALOG_REQUEST",
-                "issues": [{"field": "component_types", "code": "INVALID_VALUE"}],
-                "retryable": True,
-            })
+            return _response(
+                {
+                    "error": "INVALID_CATALOG_REQUEST",
+                    "issues": [
+                        {"field": "component_types", "code": "INVALID_VALUE"},
+                    ],
+                    "retryable": True,
+                },
+            )
         return await dispatch(
             CATALOG,
             {"component_types": [item.strip() for item in component_types]},
@@ -142,7 +159,9 @@ def build_interaction_tools(
             "single_select",
             "multi_select",
             "question_form",
-        ] | None = None,
+            "file_selector",
+        ]
+        | None = None,
         card: Any = None,
         input_policy: Literal[
             "card_only",
@@ -159,6 +178,8 @@ def build_interaction_tools(
         只能选一个时使用 single_select；允许多个同时成立时使用 multi_select。
         只有答案无法预先列全、必须由客户自由填写时才使用 question_form；
         其中每个开放问题对应一个 items 项，不能把可枚举问题降级为填空。
+        需要客户选择本地文件时使用 file_selector；该类型还要求安装授权
+        interaction.file.select/1，且 Agent 永远不会获得本地绝对路径或文件内容。
         option.id 可选但 text 必填；稳定业务候选同时传 ID 和文本，临时文本项
         可以只传文本。recommended 只显示“AI 推荐”，default_selected 才会预选，
         两者不得混用。补充信息默认关闭，开启后 required 默认 false。
@@ -167,24 +188,26 @@ def build_interaction_tools(
         Args:
             task_key: 当前逻辑问题的稳定名称，重试时保持不变，最长 160 字符。
             interaction_revision: 正整数；问题或选项实质变化时递增。
-            component_type: single_select、multi_select 或 question_form，必须与 card Schema 一致。
+            component_type: single_select、multi_select、question_form 或 file_selector，必须与 card Schema 一致。
             card: 完整类型化卡片对象，以实时目录的详细 Schema 为准。
             input_policy: card_only、card_or_text 或 concurrent；默认 card_only。
             replaces_interaction_id: 显式替换当前阻塞卡时传其真实 ID，否则留空。
             expires_at: 可选 RFC 3339 时区时间；留空表示不自动过期。
         """
         if unexpected:
-            return _response({
-                "error": "INVALID_INTERACTION_REQUEST",
-                "issues": [
-                    {"field": field, "code": "FIELD_NOT_ALLOWED"}
-                    for field in sorted(unexpected)
-                ],
-                "retryable": True,
-                "guidance": (
-                    "Remove fields that are not declared by the selected catalog schema."
-                ),
-            })
+            return _response(
+                {
+                    "error": "INVALID_INTERACTION_REQUEST",
+                    "issues": [
+                        {"field": field, "code": "FIELD_NOT_ALLOWED"}
+                        for field in sorted(unexpected)
+                    ],
+                    "retryable": True,
+                    "guidance": (
+                        "Remove fields that are not declared by the selected catalog schema."
+                    ),
+                },
+            )
         raw = {
             "task_key": task_key,
             "interaction_revision": interaction_revision,
@@ -197,19 +220,23 @@ def build_interaction_tools(
         try:
             request = InteractionCreateRequest.model_validate(raw)
         except InteractionValidationError as exc:
-            return _response({
-                "error": exc.code,
-                "issues": exc.issues,
-                "retryable": exc.retryable,
-                "guidance": "Refresh the selected component contract and correct these fields.",
-            })
+            return _response(
+                {
+                    "error": exc.code,
+                    "issues": exc.issues,
+                    "retryable": exc.retryable,
+                    "guidance": "Refresh the selected component contract and correct these fields.",
+                },
+            )
         except ValidationError as exc:
-            return _response({
-                "error": "INVALID_INTERACTION_REQUEST",
-                "issues": _validation_issues(exc),
-                "retryable": True,
-                "guidance": "Refresh the selected component contract and correct these fields.",
-            })
+            return _response(
+                {
+                    "error": "INVALID_INTERACTION_REQUEST",
+                    "issues": _validation_issues(exc),
+                    "retryable": True,
+                    "guidance": "Refresh the selected component contract and correct these fields.",
+                },
+            )
         operation = "interaction-create-" + _identity(
             installation_id,
             conversation_id,
@@ -224,7 +251,9 @@ def build_interaction_tools(
             },
         )
 
-    async def interaction_card_status(interaction_id: str = "") -> ToolResponse:
+    async def interaction_card_status(
+        interaction_id: str = "",
+    ) -> ToolResponse:
         """读取当前会话的一张交互卡；省略 ID 时读取当前活动阻塞卡。
 
         状态用于确认创建、提交、替换、取消或过期结果。不存在或不属于当前
@@ -234,10 +263,14 @@ def build_interaction_tools(
             interaction_id: 创建回执中的真实交互 ID；省略表示当前活动阻塞卡。
         """
         if read_card is None:
-            return _response({"error": "INTERACTION_NOT_FOUND", "retryable": False})
+            return _response(
+                {"error": "INTERACTION_NOT_FOUND", "retryable": False},
+            )
         card_value = read_card(interaction_id.strip())
         if card_value is None:
-            return _response({"error": "INTERACTION_NOT_FOUND", "retryable": False})
+            return _response(
+                {"error": "INTERACTION_NOT_FOUND", "retryable": False},
+            )
         return _response({"interaction": card_value})
 
     async def interaction_card_cancel(
@@ -260,11 +293,13 @@ def build_interaction_tools(
             or not operation_key.strip()
             or len(operation_key) > 160
         ):
-            return _response({
-                "error": "INVALID_INTERACTION_REQUEST",
-                "retryable": True,
-                "guidance": "Pass a real interaction ID and a stable non-empty operation key.",
-            })
+            return _response(
+                {
+                    "error": "INVALID_INTERACTION_REQUEST",
+                    "retryable": True,
+                    "guidance": "Pass a real interaction ID and a stable non-empty operation key.",
+                },
+            )
         operation = "interaction-cancel-" + _identity(
             installation_id,
             conversation_id,

@@ -1,4 +1,5 @@
-"""Official Streamable HTTP MCP endpoint for the eight local tools."""
+# -*- coding: utf-8 -*-
+"""Official Streamable HTTP MCP endpoint for generic local tools."""
 
 from __future__ import annotations
 
@@ -47,7 +48,7 @@ class LocalExecutionMcp:
         service = self.service
 
         @self.server.tool(
-            description="Check local helper connection and protocol compatibility."
+            description="Check local helper connection and protocol compatibility.",
         )
         async def local_environment_status(
             agent_protocol_version: str,
@@ -58,7 +59,7 @@ class LocalExecutionMcp:
             return await service.call("local_environment_status", locals())
 
         @self.server.tool(
-            description="List generic capabilities reported by the user's local helper."
+            description="List generic capabilities reported by the user's local helper.",
         )
         async def local_capabilities_list(
             dclaw_session_token: str,
@@ -68,7 +69,7 @@ class LocalExecutionMcp:
             return await service.call("local_capabilities_list", locals())
 
         @self.server.tool(
-            description="Prepare a signed capability package on the local helper."
+            description="Prepare a signed capability package on the local helper.",
         )
         async def local_runtime_prepare(
             capability: str,
@@ -77,29 +78,69 @@ class LocalExecutionMcp:
             return await service.call("local_runtime_prepare", locals())
 
         @self.server.tool(
-            description="Start one schema-validated local capability task."
+            description="Start one schema-validated local capability task.",
         )
         async def local_task_start(
             capability_id: str,
             input: dict[str, Any],
             idempotency_key: str,
             dclaw_session_token: str,
+            local_file_bindings: dict[str, Any] | None = None,
         ) -> dict[str, Any]:
             return await service.call("local_task_start", locals())
 
         @self.server.tool(
-            description="Continue a waiting local task at its current checkpoint."
+            description="Select local files and return opaque references only.",
+        )
+        async def local_file_select(
+            interaction_id: str,
+            selector: dict[str, Any],
+            dclaw_session_token: str,
+        ) -> dict[str, Any]:
+            return await service.call("local_file_select", locals())
+
+        @self.server.tool(
+            description="Upload a referenced file directly to a constrained presigned URL.",
+        )
+        async def local_file_upload(
+            local_file_ref: str,
+            upload: dict[str, Any],
+            dclaw_session_token: str,
+        ) -> dict[str, Any]:
+            return await service.call("local_file_upload", locals())
+
+        @self.server.tool(
+            description="List persistent managed local artifacts.",
+        )
+        async def managed_artifacts_list(
+            dclaw_session_token: str,
+        ) -> dict[str, Any]:
+            return await service.call("managed_artifacts_list", locals())
+
+        @self.server.tool(
+            description="Preview, select, reveal, or delete a managed artifact.",
+        )
+        async def managed_artifact_action(
+            artifact_id: str,
+            action: str,
+            dclaw_session_token: str,
+        ) -> dict[str, Any]:
+            return await service.call("managed_artifact_action", locals())
+
+        @self.server.tool(
+            description="Continue a waiting local task at its current checkpoint.",
         )
         async def local_task_continue(
             task_id: str,
             checkpoint_id: str,
             input: dict[str, Any],
             dclaw_session_token: str,
+            local_file_bindings: dict[str, Any] | None = None,
         ) -> dict[str, Any]:
             return await service.call("local_task_continue", locals())
 
         @self.server.tool(
-            description="Read durable task status without advancing the task."
+            description="Read durable task status without advancing the task.",
         )
         async def local_task_status(
             dclaw_session_token: str,
@@ -117,7 +158,7 @@ class LocalExecutionMcp:
             return await service.call("local_task_cancel", locals())
 
         @self.server.tool(
-            description="Read terminal result, error, and local artifact metadata."
+            description="Read terminal result, error, and local artifact metadata.",
         )
         async def local_task_result(
             task_id: str,

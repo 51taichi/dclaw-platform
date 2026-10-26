@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Super-expert application service; independent of HTTP route modules."""
 
 from __future__ import annotations
@@ -12,7 +13,10 @@ from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from pydantic import BaseModel, ConfigDict, Field
 from qwenpaw.aigc.operation_contract import load_operation_catalog
 from qwenpaw.aigc.workflow_compiler import (
-    AvailableWorkflowModel, WorkflowCompileError, compile_workflow, plan_manual_workflow,
+    AvailableWorkflowModel,
+    WorkflowCompileError,
+    compile_workflow,
+    plan_manual_workflow,
 )
 from qwenpaw.aigc.workflow_contract import WorkflowBlueprint
 from ..aigc.workflow_execution import AigcWorkflowExecutionService
@@ -23,12 +27,17 @@ from .events import SuperExpertEventEnvelope, SuperExpertEventRepository
 from .interaction_cards import InteractionError, InteractionService
 from .interaction_contract import InteractionCreateRequest
 from .interaction_events import InteractionEventEnvelope
+
 if TYPE_CHECKING:
     from .grants import SuperExpertGrantRepository
 from .models import (
-    AigcTaskBinding, AigcTaskScope, AigcTaskStatus,
-    AigcWorkflowDefinition, AigcWorkflowGuideEvent,
+    AigcTaskBinding,
+    AigcTaskScope,
+    AigcTaskStatus,
+    AigcWorkflowDefinition,
+    AigcWorkflowGuideEvent,
 )
+
 
 class SuperExpertPlatformError(ValueError):
     """A public-safe capability invocation failure."""
@@ -90,7 +99,9 @@ class SuperExpertPlatformService:
         self.task_repository = task_repository
         self.event_repository = event_repository
         self.event_bus = event_bus
-        self.event_session_resolver = event_session_resolver or (lambda value: value)
+        self.event_session_resolver = event_session_resolver or (
+            lambda value: value
+        )
         self.workflow_execution_service = workflow_execution_service
         self.aigc = aigc_adapter
         self.interactions = interaction_service
@@ -100,7 +111,10 @@ class SuperExpertPlatformService:
     def get_task(self, material_task_id: str):
         return self.task_repository.get(material_task_id)
 
-    def latest_task_review(self, material_task_id: str) -> dict[str, str] | None:
+    def latest_task_review(
+        self,
+        material_task_id: str,
+    ) -> dict[str, str] | None:
         """Return the latest persisted review attached to a task transition."""
         task = self.task_repository.get(material_task_id)
         if task is None:
@@ -175,7 +189,10 @@ class SuperExpertPlatformService:
         return self._review_locks.setdefault(event_id, asyncio.Lock())
 
     def interaction_lock(self, interaction_id: str) -> asyncio.Lock:
-        return self._interaction_locks.setdefault(interaction_id, asyncio.Lock())
+        return self._interaction_locks.setdefault(
+            interaction_id,
+            asyncio.Lock(),
+        )
 
     async def execute_interaction(
         self,
@@ -198,12 +215,27 @@ class SuperExpertPlatformService:
         if not decision.allowed:
             raise SuperExpertPlatformError("capability is not authorized")
         if self.interactions is None:
-            raise SuperExpertPlatformError("interaction service is unavailable")
+            raise SuperExpertPlatformError(
+                "interaction service is unavailable",
+            )
         try:
             if capability == "interaction.card.create/1":
                 if set(arguments) != {"request"}:
                     raise InteractionError("INVALID_INTERACTION_REQUEST")
-                request = InteractionCreateRequest.model_validate(arguments["request"])
+                request = InteractionCreateRequest.model_validate(
+                    arguments["request"],
+                )
+                if request.component_type.value == "file_selector":
+                    file_decision = self.grant_repository.authorize_capability(
+                        installation_id,
+                        "interaction.file.select/1",
+                        "1",
+                        tenant_id=tenant_id,
+                    )
+                    if not file_decision.allowed:
+                        raise SuperExpertPlatformError(
+                            "file selection capability is not authorized",
+                        )
                 card = self.interactions.create(
                     installation_id=installation_id,
                     conversation_id=conversation_id,
@@ -225,8 +257,12 @@ class SuperExpertPlatformService:
                 raise SuperExpertPlatformError("capability is not supported")
         except InteractionError:
             raise
+        except SuperExpertPlatformError:
+            raise
         except Exception as exc:
-            raise SuperExpertPlatformError("interaction request is invalid") from exc
+            raise SuperExpertPlatformError(
+                "interaction request is invalid",
+            ) from exc
         await self.publish_interaction_event(card, event_type=event_type)
         return {"interaction": card.model_dump(mode="json")}
 
@@ -316,16 +352,27 @@ class SuperExpertPlatformService:
                 )
             else:
                 try:
-                    binding = AigcTaskBinding.model_validate(arguments.get("binding"))
+                    binding = AigcTaskBinding.model_validate(
+                        arguments.get("binding"),
+                    )
                 except Exception as exc:
-                    raise SuperExpertPlatformError("command binding is invalid") from exc
+                    raise SuperExpertPlatformError(
+                        "command binding is invalid",
+                    ) from exc
                 if binding.installation_id != installation_id:
                     raise SuperExpertPlatformError("command binding mismatch")
-                if capability == "aigc.asset.submit" and asset_validator is not None:
+                if (
+                    capability == "aigc.asset.submit"
+                    and asset_validator is not None
+                ):
                     asset_id = str(arguments.get("asset_id") or "")
-                    current_task = self.task_repository.get(binding.material_task_id)
+                    current_task = self.task_repository.get(
+                        binding.material_task_id,
+                    )
                     if not asset_id or current_task is None:
-                        raise SuperExpertPlatformError("submitted asset is unavailable")
+                        raise SuperExpertPlatformError(
+                            "submitted asset is unavailable",
+                        )
                     if current_task.status == AigcTaskStatus.IN_PROGRESS:
                         await asset_validator(binding, asset_id, current_task)
                 result = self._apply_capability(
@@ -338,7 +385,9 @@ class SuperExpertPlatformService:
         except (AigcTaskError, ValueError) as exc:
             raise SuperExpertPlatformError(str(exc)) from exc
         task = result.get("task")
-        asset_id = task.asset_id if task is not None else arguments.get("asset_id")
+        asset_id = (
+            task.asset_id if task is not None else arguments.get("asset_id")
+        )
         event_payload = dict(result.get("payload", {}))
         if task is not None:
             event_payload["task_status"] = task.status.value
@@ -356,7 +405,9 @@ class SuperExpertPlatformService:
             event_type=_EVENT_TYPES[capability],
             payload=event_payload,
         )
-        runtime_session_id = self.event_session_resolver(binding.conversation_id)
+        runtime_session_id = self.event_session_resolver(
+            binding.conversation_id,
+        )
         if self.event_repository.append(envelope):
             await self.event_bus.publish(
                 RuntimeEvent(
@@ -365,7 +416,11 @@ class SuperExpertPlatformService:
                     scope="session",
                     session_id=runtime_session_id,
                     job_id=binding.material_task_id,
-                    status=(task.status.value if task is not None else result.get("card_status")),
+                    status=(
+                        task.status.value
+                        if task is not None
+                        else result.get("card_status")
+                    ),
                     payload={"envelope": envelope.model_dump(mode="json")},
                 ),
             )
@@ -397,9 +452,13 @@ class SuperExpertPlatformService:
             raise SuperExpertPlatformError("task owner is unavailable")
         try:
             scope = AigcTaskScope.model_validate(arguments.get("scope"))
-            operation = AigcCreateOperation.model_validate(arguments.get("operation"))
+            operation = AigcCreateOperation.model_validate(
+                arguments.get("operation"),
+            )
         except Exception as exc:
-            raise SuperExpertPlatformError("create v2 arguments are invalid") from exc
+            raise SuperExpertPlatformError(
+                "create v2 arguments are invalid",
+            ) from exc
         if scope.installation_id != installation_id:
             raise SuperExpertPlatformError("command binding mismatch")
         catalog_path = _operation_catalog_path()
@@ -408,15 +467,21 @@ class SuperExpertPlatformService:
                 operation.operation_id,
             )
         except KeyError as exc:
-            raise SuperExpertPlatformError("AIGC operation is unavailable") from exc
+            raise SuperExpertPlatformError(
+                "AIGC operation is unavailable",
+            ) from exc
         if definition.version != operation.operation_version:
-            raise SuperExpertPlatformError("AIGC operation version is unavailable")
+            raise SuperExpertPlatformError(
+                "AIGC operation version is unavailable",
+            )
         try:
             Draft202012Validator(definition.arguments_schema).validate(
                 operation.arguments,
             )
         except JsonSchemaValidationError as exc:
-            raise SuperExpertPlatformError("AIGC operation arguments are invalid") from exc
+            raise SuperExpertPlatformError(
+                "AIGC operation arguments are invalid",
+            ) from exc
 
         current = self.task_repository.get(scope.material_task_id)
         provisioned_canvas_id: str | None = None
@@ -498,11 +563,14 @@ class SuperExpertPlatformService:
                 current.binding.model_dump(
                     include=set(AigcTaskScope.model_fields),
                     mode="json",
-                )
+                ),
             )
             if current_scope != request.scope:
                 raise SuperExpertPlatformError("BINDING_MISMATCH")
-            if current.workflow is None or current.workflow.blueprint != request.workflow:
+            if (
+                current.workflow is None
+                or current.workflow.blueprint != request.workflow
+            ):
                 raise SuperExpertPlatformError("IDEMPOTENCY_CONFLICT")
             task = self.task_repository.apply(
                 AigcTaskCommand(
@@ -517,16 +585,21 @@ class SuperExpertPlatformService:
                 "task": task,
                 "payload": {
                     "workflow_id": current.workflow.workflow_id,
-                    "workflow_binding": current.binding.model_dump(mode="json"),
+                    "workflow_binding": current.binding.model_dump(
+                        mode="json",
+                    ),
                 },
             }, current.binding
 
         recovered = None
         if self.workflow_execution_service is not None:
             recovered = self.workflow_execution_service.resume(
-                user_id, f"workflow/{installation_id}/{idempotency_key}",
+                user_id,
+                f"workflow/{installation_id}/{idempotency_key}",
                 command=arguments,
-                meta={"super_expert_material_task_id": request.scope.material_task_id},
+                meta={
+                    "super_expert_material_task_id": request.scope.material_task_id,
+                },
             )
         if recovered is None:
             catalog = await self.aigc.capability_catalog()
@@ -542,7 +615,10 @@ class SuperExpertPlatformService:
                     model_id=model_id,
                     capabilities=frozenset(capabilities),
                 )
-                for (provider_id, model_id), capabilities in model_capabilities.items()
+                for (
+                    provider_id,
+                    model_id,
+                ), capabilities in model_capabilities.items()
             )
 
         id_factory = lambda prefix: f"{prefix}-{uuid.uuid4()}"
@@ -617,9 +693,13 @@ class SuperExpertPlatformService:
                 provisioned_canvas_id = canvas.id
             else:
                 canvas, compiled = self.workflow_execution_service.create(
-                    user_id, f"workflow/{installation_id}/{idempotency_key}",
-                    command=arguments, compiled=compiled,
-                    meta={"super_expert_material_task_id": request.scope.material_task_id},
+                    user_id,
+                    f"workflow/{installation_id}/{idempotency_key}",
+                    command=arguments,
+                    compiled=compiled,
+                    meta={
+                        "super_expert_material_task_id": request.scope.material_task_id,
+                    },
                 )
                 # The core operation is durably APPLIED. A failed outer card
                 # write retries that same resource rather than deleting it and
@@ -687,21 +767,45 @@ class SuperExpertPlatformService:
             if current is None:
                 if card.get("card_type") == "aigc_material_task":
                     raise SuperExpertPlatformError("card task is unavailable")
-                return {"payload": {key: value for key, value in card.items()
-                                    if key not in {"task_status", "task_version"}}}
+                return {
+                    "payload": {
+                        key: value
+                        for key, value in card.items()
+                        if key not in {"task_status", "task_version"}
+                    },
+                }
             # Card commands do not mutate the material task or start a Job.
             # They carry their own trusted status so an earlier SSE is optional.
             reserved = {"task_status", "task_version"}
-            card = {key: value for key, value in card.items() if key not in reserved}
+            card = {
+                key: value
+                for key, value in card.items()
+                if key not in reserved
+            }
             prior = self.event_repository.get(event_id)
             if prior is not None:
-                prior_card = {key: value for key, value in prior.payload.items() if key not in reserved}
-                if prior_card != card or prior.event_type != _EVENT_TYPES[capability]:
-                    raise SuperExpertPlatformError("card event id is already bound")
+                prior_card = {
+                    key: value
+                    for key, value in prior.payload.items()
+                    if key not in reserved
+                }
+                if (
+                    prior_card != card
+                    or prior.event_type != _EVENT_TYPES[capability]
+                ):
+                    raise SuperExpertPlatformError(
+                        "card event id is already bound",
+                    )
                 # Preserve the original event snapshot after task progress.
                 # append(envelope) still validates every original binding field.
-                return {"payload": dict(prior.payload), "card_status": prior.payload.get("task_status")}
-            card.update(task_status=current.status.value, task_version=current.version)
+                return {
+                    "payload": dict(prior.payload),
+                    "card_status": prior.payload.get("task_status"),
+                }
+            card.update(
+                task_status=current.status.value,
+                task_version=current.version,
+            )
             return {"payload": card, "card_status": current.status.value}
         current = self.task_repository.get(binding.material_task_id)
         if capability == "aigc.task.create":
@@ -709,7 +813,8 @@ class SuperExpertPlatformService:
         elif capability == "aigc.task.resume":
             action = (
                 "start"
-                if current and current.status == AigcTaskStatus.WAITING_TO_START
+                if current
+                and current.status == AigcTaskStatus.WAITING_TO_START
                 else "resume"
             )
         elif capability == "aigc.task.cancel":
@@ -726,14 +831,16 @@ class SuperExpertPlatformService:
                 }
             guide = arguments.get("guide")
             if not isinstance(guide, dict):
-                raise SuperExpertPlatformError("workflow guide event is invalid")
+                raise SuperExpertPlatformError(
+                    "workflow guide event is invalid",
+                )
             try:
                 guide_event = AigcWorkflowGuideEvent.model_validate(
-                    {"event_id": event_id, **guide}
+                    {"event_id": event_id, **guide},
                 )
             except Exception as exc:
                 raise SuperExpertPlatformError(
-                    "workflow guide event is invalid"
+                    "workflow guide event is invalid",
                 ) from exc
             task = self.task_repository.apply(
                 AigcTaskCommand(
@@ -744,12 +851,18 @@ class SuperExpertPlatformService:
                 ),
                 idempotency_key=idempotency_key,
             )
-            return {"task": task, "payload": guide_event.model_dump(mode="json")}
+            return {
+                "task": task,
+                "payload": guide_event.model_dump(mode="json"),
+            }
         elif capability == "aigc.review.complete":
             if current is None or current.binding != binding:
                 raise SuperExpertPlatformError("task binding mismatch")
             supplied_asset = arguments.get("asset_id")
-            if supplied_asset is not None and supplied_asset != current.asset_id:
+            if (
+                supplied_asset is not None
+                and supplied_asset != current.asset_id
+            ):
                 raise SuperExpertPlatformError("asset binding mismatch")
             if current.status == AigcTaskStatus.SUBMITTED:
                 current = self.task_repository.apply(
@@ -769,7 +882,9 @@ class SuperExpertPlatformService:
                 action=action,
                 event_id=event_id,
                 binding=binding,
-                review_assets=arguments.get("review_assets", ()) if capability == "aigc.asset.submit" else (),
+                review_assets=arguments.get("review_assets", ())
+                if capability == "aigc.asset.submit"
+                else (),
                 asset_id=(
                     arguments.get("asset_id")
                     if capability == "aigc.asset.submit"
@@ -780,7 +895,9 @@ class SuperExpertPlatformService:
         )
         payload = dict(arguments.get("payload") or {})
         if task.review_assets:
-            payload["review_assets"] = [item.model_dump(mode="json") for item in task.review_assets]
+            payload["review_assets"] = [
+                item.model_dump(mode="json") for item in task.review_assets
+            ]
         return {"task": task, "payload": payload}
 
 

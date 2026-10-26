@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -12,47 +13,70 @@ from qwenpaw.app.super_experts.interaction_cards import (
     InteractionCardRepository,
     InteractionService,
 )
-from qwenpaw.app.super_experts.interaction_contract import InteractionCreateRequest
+from qwenpaw.app.super_experts.interaction_contract import (
+    InteractionCreateRequest,
+)
 
 
 def _request():
-    return InteractionCreateRequest.model_validate({
-        "task_key": "pick-plan",
-        "interaction_revision": 1,
-        "component_type": "single_select",
-        "card": {
-            "title": "请选择方案",
-            "options": [
-                {"id": "a", "text": "方案甲", "recommended": True},
-                {"text": "方案乙"},
-            ],
-            "supplement": {"enabled": True, "required": False},
+    return InteractionCreateRequest.model_validate(
+        {
+            "task_key": "pick-plan",
+            "interaction_revision": 1,
+            "component_type": "single_select",
+            "card": {
+                "title": "请选择方案",
+                "options": [
+                    {"id": "a", "text": "方案甲", "recommended": True},
+                    {"text": "方案乙"},
+                ],
+                "supplement": {"enabled": True, "required": False},
+            },
         },
-    })
+    )
 
 
 def _question_request(task_key: str = "business-context"):
-    return InteractionCreateRequest.model_validate({
-        "task_key": task_key,
-        "interaction_revision": 1,
-        "component_type": "question_form",
-        "card": {
-            "title": "请补充以下信息",
-            "items": [
-                {
-                    "id": "scope",
-                    "question": "服务范围？",
-                    "required": True,
-                    "max_length": 20,
-                },
-                {"question": "其他情况？", "required": False},
-            ],
+    return InteractionCreateRequest.model_validate(
+        {
+            "task_key": task_key,
+            "interaction_revision": 1,
+            "component_type": "question_form",
+            "card": {
+                "title": "请补充以下信息",
+                "items": [
+                    {
+                        "id": "scope",
+                        "question": "服务范围？",
+                        "required": True,
+                        "max_length": 20,
+                    },
+                    {"question": "其他情况？", "required": False},
+                ],
+            },
         },
-    })
+    )
+
+
+def _file_request():
+    return InteractionCreateRequest.model_validate(
+        {
+            "task_key": "source-file",
+            "interaction_revision": 1,
+            "component_type": "file_selector",
+            "card": {
+                "title": "请选择源视频",
+                "accept_extensions": [".mp4"],
+                "max_file_size_bytes": 100,
+                "max_total_size_bytes": 100,
+            },
+        },
+    )
 
 
 class _GrantRepository:
-    def __init__(self):
+    def __init__(self, *, file_select: bool = False):
+        self.file_select = file_select
         self.grant = SimpleNamespace(
             installation_id="installation-1",
             tenant_id="local",
@@ -66,29 +90,44 @@ class _GrantRepository:
         return [self.grant]
 
     def authorize_capability(
-        self, installation_id, capability, contract_version, *, tenant_id,
+        self,
+        installation_id,
+        capability,
+        contract_version,
+        *,
+        tenant_id,
     ):
         return SimpleNamespace(
             allowed=(
                 installation_id == "installation-1"
                 and tenant_id == "local"
                 and contract_version == "1"
-                and capability in {
+                and capability
+                in {
                     "interaction.card.create/1",
                     "interaction.card.cancel/1",
                 }
+                | (
+                    {"interaction.file.select/1"}
+                    if self.file_select
+                    else set()
+                )
             ),
         )
 
 
 @pytest.mark.asyncio
-async def test_platform_create_persists_card_and_publishes_separate_event(tmp_path):
+async def test_platform_create_persists_card_and_publishes_separate_event(
+    tmp_path,
+):
     from qwenpaw.app.super_experts.service import SuperExpertPlatformService
     from qwenpaw.app.super_experts.events import SuperExpertEventRepository
     from qwenpaw.app.super_experts.aigc_tasks import AigcTaskRepository
 
     bus = MemoryRuntimeEventBus(max_events=20, max_age_seconds=60)
-    interaction_service = InteractionService(InteractionCardRepository(tmp_path))
+    interaction_service = InteractionService(
+        InteractionCardRepository(tmp_path),
+    )
     service = SuperExpertPlatformService(
         grant_repository=_GrantRepository(),
         task_repository=AigcTaskRepository(tmp_path / "aigc"),
@@ -117,10 +156,61 @@ async def test_platform_create_persists_card_and_publishes_separate_event(tmp_pa
     assert envelope["interaction"]["card"]["options"][0]["text"] == "方案甲"
 
 
+@pytest.mark.asyncio
+async def test_file_selector_requires_dedicated_installation_capability(
+    tmp_path,
+):
+    from qwenpaw.app.super_experts.service import (
+        SuperExpertPlatformError,
+        SuperExpertPlatformService,
+    )
+    from qwenpaw.app.super_experts.events import SuperExpertEventRepository
+    from qwenpaw.app.super_experts.aigc_tasks import AigcTaskRepository
+
+    def build(grants):
+        return SuperExpertPlatformService(
+            grant_repository=grants,
+            task_repository=AigcTaskRepository(tmp_path / "aigc"),
+            event_repository=SuperExpertEventRepository(tmp_path / "aigc"),
+            event_bus=MemoryRuntimeEventBus(max_events=20, max_age_seconds=60),
+            interaction_service=InteractionService(
+                InteractionCardRepository(
+                    tmp_path / grants.__class__.__name__,
+                ),
+            ),
+        )
+
+    denied = build(_GrantRepository(file_select=False))
+    with pytest.raises(SuperExpertPlatformError, match="not authorized"):
+        await denied.execute_interaction(
+            tenant_id="local",
+            installation_id="installation-1",
+            conversation_id="conversation-1",
+            capability="interaction.card.create/1",
+            contract_version="1",
+            arguments={"request": _file_request().model_dump(mode="json")},
+            idempotency_key="file-denied",
+        )
+
+    allowed = build(_GrantRepository(file_select=True))
+    result = await allowed.execute_interaction(
+        tenant_id="local",
+        installation_id="installation-1",
+        conversation_id="conversation-1",
+        capability="interaction.card.create/1",
+        contract_version="1",
+        arguments={"request": _file_request().model_dump(mode="json")},
+        idempotency_key="file-allowed",
+    )
+    assert result["interaction"]["component_type"] == "file_selector"
+
+
 def test_question_form_submission_summary_shows_only_filled_values(tmp_path):
     from qwenpaw.app.routers import super_expert_platform as router_module
 
-    interaction_service = InteractionService(InteractionCardRepository(tmp_path))
+    interaction_service = InteractionService(
+        InteractionCardRepository(tmp_path),
+    )
     card = interaction_service.create(
         installation_id="installation-1",
         conversation_id="conversation-1",
@@ -191,7 +281,8 @@ async def test_submit_returns_trusted_user_input_without_running_the_agent(
         "idempotency_key": "submit-immediately",
     }
     async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test",
+        transport=ASGITransport(app=app),
+        base_url="http://test",
     ) as client:
         submitted = await client.post(
             f"/super-expert-platform/interactions/{card.interaction_id}/submit",
@@ -211,14 +302,14 @@ async def test_submit_returns_trusted_user_input_without_running_the_agent(
         event for event in events if event.type == "super_expert_interaction"
     ]
     assert [
-        event.payload["envelope"]["event_type"]
-        for event in interaction_events
+        event.payload["envelope"]["event_type"] for event in interaction_events
     ] == ["interaction.card.submitted"]
 
 
 @pytest.mark.asyncio
 async def test_restore_and_submit_routes_are_scoped_and_idempotent(
-    monkeypatch, tmp_path,
+    monkeypatch,
+    tmp_path,
 ):
     from qwenpaw.app.routers import super_expert_platform as router_module
 
@@ -291,7 +382,9 @@ async def test_restore_and_submit_routes_are_scoped_and_idempotent(
         )
 
     assert restored.status_code == 200
-    assert [item["interaction_id"] for item in restored.json()["interactions"]] == [
+    assert [
+        item["interaction_id"] for item in restored.json()["interactions"]
+    ] == [
         card.interaction_id,
     ]
     assert submitted.status_code == 200
@@ -302,7 +395,9 @@ async def test_restore_and_submit_routes_are_scoped_and_idempotent(
     assert replayed.status_code == 200
     assert replayed.json()["user_input"] == "方案甲\n补充说明"
     assert conflicting_payload.status_code == 409
-    assert conflicting_payload.json()["detail"]["error"] == "IDEMPOTENCY_CONFLICT"
+    assert (
+        conflicting_payload.json()["detail"]["error"] == "IDEMPOTENCY_CONFLICT"
+    )
     assert new_operation.status_code == 409
     assert new_operation.json()["detail"]["error"] == "INTERACTION_NOT_PENDING"
 

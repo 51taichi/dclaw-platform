@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Atomic persistence and state transitions for basic interaction cards."""
 
 from __future__ import annotations
@@ -11,7 +12,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    model_validator,
+)
 
 from ..storage.json_file_lock import JsonFileLock
 from .interaction_contract import (
@@ -20,10 +27,12 @@ from .interaction_contract import (
     InteractionComponentType,
     InteractionCreateRequest,
     InteractionInputPolicy,
+    InteractionLocalFile,
     InteractionResolvedAnswer,
     InteractionResolvedOption,
     InteractionStatus,
     MultiSelectCard,
+    FileSelectorCard,
     QuestionFormCard,
     SingleSelectCard,
     validate_card,
@@ -91,9 +100,20 @@ class InteractionCardRecord(_StrictFrozenModel):
         if isinstance(component_type, InteractionComponentType):
             component_type = component_type.value
         card = value.get("card")
-        if isinstance(card, (SingleSelectCard, MultiSelectCard, QuestionFormCard)):
+        if isinstance(
+            card,
+            (
+                SingleSelectCard,
+                MultiSelectCard,
+                QuestionFormCard,
+                FileSelectorCard,
+            ),
+        ):
             return value
-        return {**value, "card": validate_card(str(component_type or ""), card)}
+        return {
+            **value,
+            "card": validate_card(str(component_type or ""), card),
+        }
 
 
 class _OperationRecord(BaseModel):
@@ -170,7 +190,10 @@ class InteractionCardRepository:
     ) -> InteractionCardRecord:
         now = _utc(now)
         if not idempotency_key:
-            raise InteractionError("INVALID_OPERATION_KEY", field="idempotency_key")
+            raise InteractionError(
+                "INVALID_OPERATION_KEY",
+                field="idempotency_key",
+            )
         request_payload = request.model_dump(mode="json")
         operation_payload = {
             "installation_id": installation_id,
@@ -202,7 +225,10 @@ class InteractionCardRepository:
                     request,
                 )
                 if expected != candidate:
-                    raise InteractionError("IDEMPOTENCY_CONFLICT", retryable=False)
+                    raise InteractionError(
+                        "IDEMPOTENCY_CONFLICT",
+                        retryable=False,
+                    )
                 document.operations[idempotency_key] = _OperationRecord(
                     operation_digest=digest,
                     interaction_id=interaction_id,
@@ -229,7 +255,8 @@ class InteractionCardRepository:
                     active,
                     action="replace",
                     target=InteractionStatus.REPLACED,
-                    event_id="replace-" + _identity(idempotency_key, active.interaction_id),
+                    event_id="replace-"
+                    + _identity(idempotency_key, active.interaction_id),
                     now=now,
                 )
                 document.cards[active.interaction_id] = replaced
@@ -239,7 +266,9 @@ class InteractionCardRepository:
                     field="replaces_interaction_id",
                 )
 
-            expires_at = _utc(request.expires_at) if request.expires_at else None
+            expires_at = (
+                _utc(request.expires_at) if request.expires_at else None
+            )
             if expires_at is not None and expires_at <= now:
                 raise InteractionError(
                     "INVALID_INTERACTION_REQUEST",
@@ -249,14 +278,16 @@ class InteractionCardRepository:
             binding = InteractionBinding(
                 installation_id=installation_id,
                 conversation_id=conversation_id,
-                agent_task_id="interaction-task-" + _identity(
+                agent_task_id="interaction-task-"
+                + _identity(
                     installation_id,
                     conversation_id,
                     request.task_key,
                 ),
             )
             event = InteractionTransition(
-                event_id="create-" + _identity(idempotency_key, interaction_id),
+                event_id="create-"
+                + _identity(idempotency_key, interaction_id),
                 action="create",
                 from_status=None,
                 to_status=InteractionStatus.PENDING,
@@ -344,6 +375,7 @@ class InteractionCardRepository:
         selected: list[dict[str, Any]] | None = None,
         supplement: str | None = None,
         answers: list[dict[str, Any]] | None = None,
+        files: list[dict[str, Any]] | None = None,
     ) -> InteractionCardRecord:
         now = _utc(now)
         payload = {
@@ -354,6 +386,7 @@ class InteractionCardRepository:
             "selected": selected,
             "supplement": supplement,
             "answers": answers,
+            "files": files,
         }
         digest = _operation_digest("submit", payload)
         with self._lock, self._file_lock.hold(self.path):
@@ -377,11 +410,43 @@ class InteractionCardRepository:
                     "INTERACTION_VERSION_CONFLICT",
                     field="version",
                 )
-            if current.component_type is InteractionComponentType.QUESTION_FORM:
-                if selected is not None or supplement is not None:
+            if (
+                current.component_type
+                is InteractionComponentType.FILE_SELECTOR
+            ):
+                if (
+                    selected is not None
+                    or supplement is not None
+                    or answers is not None
+                ):
                     raise InteractionError(
                         "INVALID_INTERACTION_REQUEST",
-                        field="selected" if selected is not None else "supplement",
+                        field="files",
+                    )
+                answer = InteractionAnswer(
+                    interaction_id=interaction_id,
+                    component_type=current.component_type,
+                    files=self._resolve_files(current, files),
+                    submitted_at=now,
+                )
+            elif (
+                current.component_type
+                is InteractionComponentType.QUESTION_FORM
+            ):
+                if (
+                    selected is not None
+                    or supplement is not None
+                    or files is not None
+                ):
+                    raise InteractionError(
+                        "INVALID_INTERACTION_REQUEST",
+                        field="files"
+                        if files is not None
+                        else (
+                            "selected"
+                            if selected is not None
+                            else "supplement"
+                        ),
                     )
                 resolved_answers = self._resolve_answers(current, answers)
                 answer = InteractionAnswer(
@@ -391,13 +456,16 @@ class InteractionCardRepository:
                     submitted_at=now,
                 )
             else:
-                if answers is not None:
+                if answers is not None or files is not None:
                     raise InteractionError(
                         "INVALID_INTERACTION_REQUEST",
-                        field="answers",
+                        field="files" if files is not None else "answers",
                     )
                 resolved = self._resolve_selection(current, selected)
-                normalized_supplement = self._validate_supplement(current, supplement)
+                normalized_supplement = self._validate_supplement(
+                    current,
+                    supplement,
+                )
                 answer = InteractionAnswer(
                     interaction_id=interaction_id,
                     component_type=current.component_type,
@@ -406,7 +474,8 @@ class InteractionCardRepository:
                     submitted_at=now,
                 )
             event = InteractionTransition(
-                event_id="submit-" + _identity(idempotency_key, interaction_id),
+                event_id="submit-"
+                + _identity(idempotency_key, interaction_id),
                 action="submit",
                 from_status=current.status,
                 to_status=InteractionStatus.SUBMITTED,
@@ -497,7 +566,10 @@ class InteractionCardRepository:
         digest: str,
     ) -> InteractionCardRecord | None:
         if not operation_key:
-            raise InteractionError("INVALID_OPERATION_KEY", field="idempotency_key")
+            raise InteractionError(
+                "INVALID_OPERATION_KEY",
+                field="idempotency_key",
+            )
         existing = document.operations.get(operation_key)
         if existing is None:
             return None
@@ -505,7 +577,10 @@ class InteractionCardRepository:
             raise InteractionError("IDEMPOTENCY_CONFLICT", retryable=False)
         result = document.cards.get(existing.interaction_id)
         if result is None:
-            raise InteractionError("INTERACTION_REPOSITORY_INVALID", retryable=False)
+            raise InteractionError(
+                "INTERACTION_REPOSITORY_INVALID",
+                retryable=False,
+            )
         return result
 
     @staticmethod
@@ -578,7 +653,8 @@ class InteractionCardRepository:
                     card,
                     action="expire",
                     target=InteractionStatus.EXPIRED,
-                    event_id="expire-" + _identity(interaction_id, card.version),
+                    event_id="expire-"
+                    + _identity(interaction_id, card.version),
                     now=now,
                 )
                 dirty = True
@@ -604,12 +680,20 @@ class InteractionCardRepository:
             option = None
             if isinstance(option_id, str) and option_id.strip():
                 option = next(
-                    (candidate for candidate in record.card.options if candidate.id == option_id.strip()),
+                    (
+                        candidate
+                        for candidate in record.card.options
+                        if candidate.id == option_id.strip()
+                    ),
                     None,
                 )
             elif isinstance(option_text, str) and option_text.strip():
                 option = next(
-                    (candidate for candidate in record.card.options if candidate.text == option_text.strip()),
+                    (
+                        candidate
+                        for candidate in record.card.options
+                        if candidate.text == option_text.strip()
+                    ),
                     None,
                 )
             if option is None:
@@ -635,22 +719,100 @@ class InteractionCardRepository:
         return tuple(resolved)
 
     @staticmethod
+    def _resolve_files(
+        record: InteractionCardRecord,
+        files: Any,
+    ) -> tuple[InteractionLocalFile, ...]:
+        if not isinstance(files, list):
+            raise InteractionError(
+                "INVALID_INTERACTION_REQUEST",
+                field="files",
+            )
+        card = record.card
+        if not card.min_files <= len(files) <= card.max_files:
+            raise InteractionError(
+                "FILE_SELECTOR.FILE_COUNT_EXCEEDED",
+                field="files",
+            )
+        resolved: list[InteractionLocalFile] = []
+        seen: set[str] = set()
+        total_size = 0
+        for index, value in enumerate(files):
+            try:
+                item = InteractionLocalFile.model_validate(value)
+            except ValidationError as exc:
+                raise InteractionError(
+                    "INVALID_INTERACTION_REQUEST",
+                    field=f"files[{index}]",
+                ) from exc
+            if item.local_file_ref in seen:
+                raise InteractionError(
+                    "INVALID_INTERACTION_REQUEST",
+                    field="files",
+                )
+            if item.size_bytes > card.max_file_size_bytes:
+                raise InteractionError(
+                    "FILE_SELECTOR.FILE_TOO_LARGE",
+                    field=f"files[{index}].size_bytes",
+                )
+            mime_type = item.mime_type.lower()
+            if card.accept_mime_types and not any(
+                mime_type == accepted
+                or (
+                    accepted.endswith("/*")
+                    and mime_type.startswith(accepted[:-1])
+                )
+                for accepted in card.accept_mime_types
+            ):
+                raise InteractionError(
+                    "FILE_SELECTOR.PERMISSION_DENIED",
+                    field=f"files[{index}].mime_type",
+                )
+            name = item.display_name.lower()
+            if card.accept_extensions and not any(
+                name.endswith(extension)
+                for extension in card.accept_extensions
+            ):
+                raise InteractionError(
+                    "FILE_SELECTOR.PERMISSION_DENIED",
+                    field=f"files[{index}].display_name",
+                )
+            seen.add(item.local_file_ref)
+            total_size += item.size_bytes
+            resolved.append(item)
+        if total_size > card.max_total_size_bytes:
+            raise InteractionError(
+                "FILE_SELECTOR.FILE_TOO_LARGE",
+                field="files",
+            )
+        return tuple(resolved)
+
+    @staticmethod
     def _validate_supplement(
         record: InteractionCardRecord,
         supplement: Any,
     ) -> str | None:
         config = record.card.supplement
         if supplement is not None and not isinstance(supplement, str):
-            raise InteractionError("INVALID_INTERACTION_REQUEST", field="supplement")
+            raise InteractionError(
+                "INVALID_INTERACTION_REQUEST",
+                field="supplement",
+            )
         normalized = supplement.strip() if isinstance(supplement, str) else ""
         if not config.enabled:
             if normalized:
-                raise InteractionError("INVALID_INTERACTION_REQUEST", field="supplement")
+                raise InteractionError(
+                    "INVALID_INTERACTION_REQUEST",
+                    field="supplement",
+                )
             return None
         if config.required and not normalized:
             raise InteractionError("SUPPLEMENT_REQUIRED", field="supplement")
         if len(normalized) > config.max_length:
-            raise InteractionError("INVALID_INTERACTION_REQUEST", field="supplement")
+            raise InteractionError(
+                "INVALID_INTERACTION_REQUEST",
+                field="supplement",
+            )
         return normalized or None
 
     @staticmethod
@@ -704,7 +866,10 @@ class InteractionCardRepository:
                 raise InteractionError("INVALID_ANSWER_REFERENCE", field=field)
             normalized = value.strip() if isinstance(value, str) else ""
             if len(normalized) > item.max_length:
-                raise InteractionError("ANSWER_TOO_LONG", field=f"{field}.value")
+                raise InteractionError(
+                    "ANSWER_TOO_LONG",
+                    field=f"{field}.value",
+                )
             supplied[identity] = normalized or None
 
         resolved: list[InteractionResolvedAnswer] = []
@@ -806,7 +971,11 @@ class InteractionService:
     def submit(self, **kwargs: Any) -> InteractionCardRecord:
         return self.repository.submit(now=self.clock(), **kwargs)
 
-    def get_owned(self, interaction_id: str, **scope: str) -> InteractionCardRecord:
+    def get_owned(
+        self,
+        interaction_id: str,
+        **scope: str,
+    ) -> InteractionCardRecord:
         return self.repository.get_owned(
             interaction_id,
             now=self.clock(),
@@ -833,6 +1002,7 @@ class InteractionService:
             interaction_id,
             now=self.clock(),
         )
+
 
 __all__ = [
     "InteractionBinding",

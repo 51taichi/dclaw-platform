@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import json
@@ -37,7 +38,7 @@ def test_local_execution_v1_schemas_are_valid_and_resolve_locally():
 
     validator.validate(
         {
-            "standard": {"id": "dclaw.local-execution", "version": "1.0"},
+            "standard": {"id": "dclaw.local-execution", "version": "1.1"},
             "ok": True,
             "trace_id": "invocation-contract-success",
             "data": {
@@ -87,7 +88,7 @@ def test_local_execution_v1_schemas_are_valid_and_resolve_locally():
             {
                 "standard": {
                     "id": "dclaw.local-execution",
-                    "version": "1.0",
+                    "version": "1.1",
                 },
                 "ok": True,
                 "trace_id": "invocation-contract-success",
@@ -122,6 +123,12 @@ def test_local_execution_v1_schemas_are_valid_and_resolve_locally():
                 "task_id": "task-1",
                 "checkpoint_id": "checkpoint-1",
                 "input": {},
+                "local_file_bindings": {
+                    "finished_film": {
+                        "local_file_ref": "lfr_" + "b" * 32,
+                        "access": "read",
+                    },
+                },
             },
         },
         {
@@ -130,6 +137,31 @@ def test_local_execution_v1_schemas_are_valid_and_resolve_locally():
         },
         {"tool": "local_task_cancel", "arguments": {"task_id": "task-1"}},
         {"tool": "local_task_result", "arguments": {"task_id": "task-1"}},
+        {
+            "tool": "local_file_select",
+            "arguments": {
+                "interaction_id": "interaction-1",
+                "selector": {"accept_extensions": [".mp4"]},
+            },
+        },
+        {
+            "tool": "local_file_upload",
+            "arguments": {
+                "local_file_ref": "lfr_" + "a" * 32,
+                "upload": {
+                    "url": "https://uploads.example.test/object",
+                    "allowed_domains": ["uploads.example.test"],
+                },
+            },
+        },
+        {"tool": "managed_artifacts_list", "arguments": {}},
+        {
+            "tool": "managed_artifact_action",
+            "arguments": {
+                "artifact_id": "artifact_" + "a" * 32,
+                "action": "preview",
+            },
+        },
     ]
     for call in valid_calls:
         call_validator.validate(call)
@@ -147,11 +179,11 @@ def test_local_execution_v1_schemas_are_valid_and_resolve_locally():
         )
     validator.validate(
         {
-            "standard": {"id": "dclaw.local-execution", "version": "1.0"},
+            "standard": {"id": "dclaw.local-execution", "version": "1.1"},
             "ok": False,
             "trace_id": "invocation-contract-failure",
             "error": {
-                "standard_version": "1.0",
+                "standard_version": "1.1",
                 "code": "LOCAL_GATEWAY.DEVICE_NOT_READY",
                 "legacy_code": "DEVICE_NOT_READY",
                 "source": {
@@ -180,9 +212,45 @@ def test_standard_defines_desktop_owned_toolbox_and_workspace():
         "客户成品直接放在任务目录第一层",
         "过程资源放在 `res`",
         "Runner 核心不理解业务字段",
+        "`res/bindings/<binding>/<display-name>`",
+        "`local_task_continue.local_file_bindings`",
+        "`res/制作文件/...`",
+        "DClaw 服务端不得接收、缓存或中转文件字节",
+        "正式 ZIP 尚未生成",
     )
     for phrase in required:
         assert phrase in text
+
+
+def test_runner_stages_continuation_bindings_as_relative_paths():
+    runner = (
+        Path(__file__).parents[3]
+        / "plugins"
+        / "bundle"
+        / "super-agent-support"
+        / "windows-helper"
+        / "Program.cs"
+    ).read_text(encoding="utf-8")
+
+    continuation = runner.index(
+        "var continuationInput = JsonNode.Parse(",
+    )
+    staging = runner.index(
+        "await StageLocalFileBindingsAsync(\n"
+        "                        taskRoot,\n"
+        "                        continuationInput,",
+        continuation,
+    )
+    write = runner.index(
+        'Path.Combine(taskRoot, "continuation.json")',
+        staging,
+    )
+    assert continuation < staging < write
+    assert 'Path.Combine(taskRoot, "res", "bindings", safeBinding)' in runner
+    assert (
+        "taskInput[binding.Name] = Path.GetRelativePath(taskRoot, destination)"
+        in (runner)
+    )
 
 
 def test_local_execution_standard_requires_optional_plugin_isolation():

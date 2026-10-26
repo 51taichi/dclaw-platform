@@ -1,8 +1,10 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import base64
 import asyncio
 import hashlib
+import hmac
 import importlib.util
 import io
 import json
@@ -162,6 +164,74 @@ def _runtime(plugin_module, tmp_path):
     return store, signer, broker, service_cls(store, signer, broker)
 
 
+def test_session_capability_snapshot_preserves_legacy_tokens(plugin_module):
+    secret = b"s" * 32
+    signer = plugin_module.SessionSigner(secret)
+    context = {
+        "tenant_id": "tenant-1",
+        "user_id": "user-1",
+        "session_id": "session-1",
+        "agent_id": "agent-1",
+        "agent_name": "Agent",
+        "installation_id": "install-1",
+        "release_id": "release-1",
+    }
+    enriched = signer.enrich(
+        context,
+        granted_capabilities={
+            "local.execution.session/1": "1",
+            "interaction.file.select/1": "1",
+        },
+        invocation_id="invocation-1",
+    )
+    verified = signer.verify(enriched["local_execution_session_token"])
+    assert verified["c"] == [
+        "interaction.file.select/1",
+        "local.execution.session/1",
+    ]
+
+    issued_at = 2_000_000_000
+    legacy_payload = {
+        "v": 1,
+        "t": "tenant-1",
+        "u": "user-1",
+        "s": "session-1",
+        "a": "agent-1",
+        "n": "Agent",
+        "g": "install-1",
+        "r": "release-1",
+        "i": "invocation-1",
+        "iat": issued_at,
+        "exp": issued_at + 600,
+    }
+    encoded = (
+        base64.urlsafe_b64encode(
+            json.dumps(
+                legacy_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode(),
+        )
+        .rstrip(b"=")
+        .decode("ascii")
+    )
+    signature = (
+        base64.urlsafe_b64encode(
+            hmac.new(secret, encoded.encode("ascii"), hashlib.sha256).digest(),
+        )
+        .rstrip(b"=")
+        .decode("ascii")
+    )
+
+    assert (
+        signer.verify(
+            f"{encoded}.{signature}",
+            now=issued_at + 1,
+        )["c"]
+        == []
+    )
+
+
 def test_store_migrates_legacy_waiting_task_status(plugin_module, tmp_path):
     path = tmp_path / "state.sqlite3"
     store = plugin_module.StateStore(path)
@@ -234,6 +304,10 @@ def test_mcp_endpoint_exposes_exact_standard_tool_set(plugin_module, tmp_path):
         "local_task_status",
         "local_task_cancel",
         "local_task_result",
+        "local_file_select",
+        "local_file_upload",
+        "managed_artifacts_list",
+        "managed_artifact_action",
     }
 
 
@@ -267,7 +341,7 @@ def test_developer_kit_is_downloadable_without_server_source(
 
     assert metadata.status_code == 200
     assert metadata.json()["name"] == "dclaw-super-agent-devkit"
-    assert metadata.json()["version"] == "1.2.0"
+    assert metadata.json()["version"] == "1.3.0"
     assert metadata.json()["download_path"] == (
         "/api/super-agent-support/developer-kit/v1.zip"
     )
@@ -286,7 +360,7 @@ def test_developer_kit_is_downloadable_without_server_source(
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-devkit-1.2.0"
+    prefix = "dclaw-super-agent-devkit-1.3.0"
     assert f"{prefix}/dclaw_agent_devkit.py" in names
     assert f"{prefix}/bootstrap.ps1" in names
     assert f"{prefix}/bootstrap.sh" in names
@@ -326,20 +400,20 @@ def test_developer_pack_is_downloadable_and_self_describing(
 
     assert metadata.status_code == 200
     payload = metadata.json()
-    assert payload["version"] == "1.1.0"
-    assert payload["standard"]["version"] == "2.2"
-    assert payload["devkit_version"] == "1.2.0"
+    assert payload["version"] == "1.2.0"
+    assert payload["standard"]["version"] == "2.3"
+    assert payload["devkit_version"] == "1.3.0"
     assert payload["server_source_required"] is False
     assert payload["download_path"].endswith("/developer-pack/download")
     assert payload["sha256"] == hashlib.sha256(downloaded.content).hexdigest()
     assert payload["content_sha256"] == payload["sha256"]
     assert downloaded.status_code == 200
-    assert "dclaw-super-agent-developer-pack-1.1.0.zip" in (
+    assert "dclaw-super-agent-developer-pack-1.2.0.zip" in (
         downloaded.headers["content-disposition"]
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-developer-pack-1.1.0"
+    prefix = "dclaw-super-agent-developer-pack-1.2.0"
     assert f"{prefix}/PACKAGE-MANIFEST.json" in names
     assert f"{prefix}/SHA256SUMS" in names
     assert f"{prefix}/dclaw_developer.py" in names
@@ -403,6 +477,12 @@ def test_device_bootstrap_reuses_only_current_users_device(
             headers={"x-test-user": "user-2"},
             json={"device_id": "device-1"},
         )
+        pairing_code = other_user.json()["pairing_code"]
+        with client.websocket_connect(
+            "/api/super-agent-support/devices/connect"
+            f"?pairing_code={pairing_code}&runner_version=1.0.0",
+        ) as socket:
+            legacy_ready = socket.receive_json()
 
     assert environment.status_code == 200
     assert environment.json()["state"] == "device_not_ready"
@@ -419,6 +499,14 @@ def test_device_bootstrap_reuses_only_current_users_device(
     assert other_user.json()["paired"] is False
     assert other_user.json()["device_id"] is None
     assert other_user.json()["pairing_code"]
+    assert legacy_ready["protocol_version"] == "1"
+    assert (
+        store.get_device_for_user(
+            legacy_ready["device_id"],
+            "user-2",
+        )["protocol_version"]
+        == "1"
+    )
 
 
 class _FakeWebSocket:
@@ -430,6 +518,858 @@ class _FakeWebSocket:
 
     async def close(self, **_kwargs):
         return None
+
+
+@pytest.mark.asyncio
+async def test_local_file_refs_are_opaque_scoped_and_bound_to_task_start(
+    plugin_module,
+    tmp_path,
+):
+    store, signer, _broker, service = _runtime(plugin_module, tmp_path)
+    store.upsert_device(
+        device_id="device-1",
+        user_id="user-1",
+        display_name="Windows",
+        runner_version="1.1.0",
+        protocol_version="2",
+        capabilities=[],
+    )
+    websocket = _FakeWebSocket()
+    await service.attach("device-1", websocket)
+    unauthorized_token = signer.issue(
+        user_id="user-1",
+        session_id="session-1",
+        agent_id="agent-1",
+        agent_name="Agent",
+        installation_id="install-1",
+        release_id="release-1",
+        invocation_id="unauthorized-invocation",
+    )
+    unauthorized = await service.call(
+        "local_file_select",
+        {
+            "interaction_id": "interaction-unauthorized",
+            "selector": {},
+            "dclaw_session_token": unauthorized_token,
+        },
+    )
+    assert unauthorized["error"]["code"] == "FILE_SELECTOR.NOT_AUTHORIZED"
+    assert websocket.messages == []
+    token = signer.issue(
+        user_id="user-1",
+        session_id="session-1",
+        agent_id="agent-1",
+        agent_name="Agent",
+        installation_id="install-1",
+        release_id="release-1",
+        invocation_id="invocation-1",
+        capability_ids=["interaction.file.select/1"],
+    )
+
+    selection = asyncio.create_task(
+        service.call(
+            "local_file_select",
+            {
+                "interaction_id": "interaction-1",
+                "selector": {"accept_extensions": [".mp4"]},
+                "dclaw_session_token": token,
+            },
+        ),
+    )
+    await asyncio.sleep(0)
+    command = websocket.messages[-1]
+    assert command["type"] == "file.select"
+    assert "path" not in json.dumps(command)
+    reference = "lfr_" + "a" * 32
+    await service.handle_device_message(
+        "device-1",
+        "user-1",
+        {
+            "type": "file.select.result",
+            "request_id": command["request_id"],
+            "status": "selected",
+            "files": [
+                {
+                    "local_file_ref": reference,
+                    "display_name": "source.mp4",
+                    "mime_type": "video/mp4",
+                    "size_bytes": 12,
+                    "device_id": "device-1",
+                    "last_modified_ms": 1,
+                },
+            ],
+        },
+    )
+    selected = await selection
+    assert selected["ok"] is True
+    assert selected["data"]["files"][0]["local_file_ref"] == reference
+    assert "path" not in json.dumps(selected)
+
+    descriptor = {
+        "capability_id": "example.file.consume",
+        "package_id": "example.file.package",
+        "package_version": "1.0.0",
+        "limits": {"max_concurrency": 2},
+        "schemas": {
+            "input": {"document": {"type": "object"}},
+            "result": {"document": {"type": "object"}},
+            "checkpoint": {"document": {"type": "object"}},
+        },
+    }
+    store.register_package(descriptor, signer_id="test", signature="test")
+    store.update_device_capabilities(
+        "device-1",
+        [
+            {
+                "capability_id": "example.file.consume",
+                "version": "1",
+                "package_id": "example.file.package",
+                "package_version": "1.0.0",
+            },
+        ],
+    )
+    started = await service.call(
+        "local_task_start",
+        {
+            "capability_id": "example.file.consume",
+            "input": {},
+            "local_file_bindings": {
+                "source_video": {
+                    "local_file_ref": reference,
+                    "access": "read",
+                },
+            },
+            "idempotency_key": "file-task-1",
+            "dclaw_session_token": token,
+        },
+    )
+    assert started["ok"] is True
+    task_message = websocket.messages[-1]
+    assert task_message["task"]["local_file_bindings"]["source_video"] == {
+        "local_file_ref": reference,
+        "access": "read",
+    }
+    assert "canonical_path" not in json.dumps(task_message)
+
+    continuation_task = await service.call(
+        "local_task_start",
+        {
+            "capability_id": "example.file.consume",
+            "input": {},
+            "idempotency_key": "file-task-continue",
+            "dclaw_session_token": token,
+        },
+    )
+    continuation_task_id = continuation_task["data"]["task_id"]
+    await service.handle_device_message(
+        "device-1",
+        "user-1",
+        {
+            "type": "task.event",
+            "task_id": continuation_task_id,
+            "sequence": 1,
+            "event_type": "started",
+            "payload": {},
+        },
+    )
+    await service.handle_device_message(
+        "device-1",
+        "user-1",
+        {
+            "type": "task.event",
+            "task_id": continuation_task_id,
+            "sequence": 2,
+            "event_type": "checkpoint",
+            "payload": {"checkpoint_id": "wait-for-film"},
+        },
+    )
+    unauthorized_continue = await service.call(
+        "local_task_continue",
+        {
+            "task_id": continuation_task_id,
+            "checkpoint_id": "wait-for-film",
+            "input": {"confirmed": True},
+            "local_file_bindings": {
+                "finished_film": {
+                    "local_file_ref": reference,
+                    "access": "read",
+                },
+            },
+            "dclaw_session_token": unauthorized_token,
+        },
+    )
+    assert unauthorized_continue["error"]["code"] == (
+        "FILE_SELECTOR.NOT_AUTHORIZED"
+    )
+
+    other_reference = "lfr_" + "b" * 32
+    assert store.save_local_file_ref(
+        {
+            "local_file_ref": other_reference,
+            "display_name": "other.mp4",
+            "mime_type": "video/mp4",
+            "size_bytes": 12,
+            "last_modified_ms": 1,
+        },
+        scope={
+            "user_id": "user-1",
+            "session_id": "session-1",
+            "agent_id": "agent-1",
+            "installation_id": "install-1",
+            "release_id": "release-1",
+            "invocation_id": "invocation-1",
+        },
+        interaction_id="interaction-other-device",
+        device_id="device-2",
+        expires_at=9999999999,
+    )
+    wrong_device = await service.call(
+        "local_task_continue",
+        {
+            "task_id": continuation_task_id,
+            "checkpoint_id": "wait-for-film",
+            "input": {"confirmed": True},
+            "local_file_bindings": {
+                "finished_film": {
+                    "local_file_ref": other_reference,
+                    "access": "read",
+                },
+            },
+            "dclaw_session_token": token,
+        },
+    )
+    assert wrong_device["error"]["code"] == "LOCAL_FILE_REF.WRONG_DEVICE"
+
+    malformed_bindings = await service.call(
+        "local_task_continue",
+        {
+            "task_id": continuation_task_id,
+            "checkpoint_id": "wait-for-film",
+            "input": {"confirmed": True},
+            "local_file_bindings": [],
+            "dclaw_session_token": token,
+        },
+    )
+    assert malformed_bindings["error"]["code"] == (
+        "LOCAL_GATEWAY.INVALID_ARGUMENTS"
+    )
+
+    continued = await service.call(
+        "local_task_continue",
+        {
+            "task_id": continuation_task_id,
+            "checkpoint_id": "wait-for-film",
+            "input": {"confirmed": True},
+            "local_file_bindings": {
+                "finished_film": {
+                    "local_file_ref": reference,
+                    "access": "read",
+                },
+            },
+            "dclaw_session_token": token,
+        },
+    )
+    assert continued["ok"] is True
+    continuation_message = websocket.messages[-1]
+    assert continuation_message["type"] == "task.continue"
+    assert continuation_message["protocol_version"] == "2"
+    assert continuation_message["local_file_bindings"] == {
+        "finished_film": {"local_file_ref": reference, "access": "read"},
+    }
+    assert continuation_message["scope"]["invocation_id"] == "invocation-1"
+    assert "canonical_path" not in json.dumps(continuation_message)
+
+    wrong_scope_token = signer.issue(
+        user_id="user-1",
+        session_id="session-2",
+        agent_id="agent-1",
+        agent_name="Agent",
+        installation_id="install-1",
+        release_id="release-1",
+        invocation_id="invocation-2",
+        capability_ids=["interaction.file.select/1"],
+    )
+    rejected = await service.call(
+        "local_task_start",
+        {
+            "capability_id": "example.file.consume",
+            "input": {},
+            "local_file_bindings": {
+                "source_video": {
+                    "local_file_ref": reference,
+                    "access": "read",
+                },
+            },
+            "idempotency_key": "file-task-2",
+            "dclaw_session_token": wrong_scope_token,
+        },
+    )
+    assert rejected["error"]["code"] == "LOCAL_FILE_REF.SCOPE_MISMATCH"
+
+    assert store.revoke_local_file_ref(reference, "user-1") is True
+    replayed = await service.call(
+        "local_task_start",
+        {
+            "capability_id": "example.file.consume",
+            "input": {},
+            "local_file_bindings": {
+                "source_video": {
+                    "local_file_ref": reference,
+                    "access": "read",
+                },
+            },
+            "idempotency_key": "file-task-1",
+            "dclaw_session_token": token,
+        },
+    )
+    assert replayed["data"]["idempotent_replay"] is True
+
+
+@pytest.mark.asyncio
+async def test_presigned_upload_is_dispatched_to_device_without_file_bytes(
+    plugin_module,
+    tmp_path,
+):
+    store, signer, _broker, service = _runtime(plugin_module, tmp_path)
+    store.upsert_device(
+        device_id="device-1",
+        user_id="user-1",
+        display_name="Windows",
+        runner_version="1.1.0",
+        protocol_version="2",
+        device_token="token",
+    )
+    websocket = _FakeWebSocket()
+    await service.attach("device-1", websocket)
+    token = signer.issue(
+        user_id="user-1",
+        session_id="session-1",
+        agent_id="agent-1",
+        agent_name="Agent",
+        installation_id="install-1",
+        release_id="release-1",
+        invocation_id="invocation-1",
+        capability_ids=["interaction.file.select/1"],
+    )
+    reference = "lfr_" + "b" * 32
+    store.save_local_file_ref(
+        {
+            "local_file_ref": reference,
+            "display_name": "source.mp4",
+            "mime_type": "video/mp4",
+            "size_bytes": 12,
+            "last_modified_ms": 1,
+        },
+        scope={
+            "user_id": "user-1",
+            "session_id": "session-1",
+            "agent_id": "agent-1",
+            "installation_id": "install-1",
+            "release_id": "release-1",
+            "invocation_id": "invocation-1",
+        },
+        interaction_id="interaction-1",
+        device_id="device-1",
+        expires_at=9999999999,
+    )
+    pending = asyncio.create_task(
+        service.call(
+            "local_file_upload",
+            {
+                "local_file_ref": reference,
+                "upload": {
+                    "url": "https://uploads.example.test/object?signature=secret",
+                    "method": "PUT",
+                    "allowed_domains": ["uploads.example.test"],
+                    "max_size_bytes": 20,
+                },
+                "dclaw_session_token": token,
+            },
+        ),
+    )
+    await asyncio.sleep(0)
+    command = websocket.messages[-1]
+    assert command["type"] == "file.upload"
+    serialized_command = json.dumps(command)
+    assert "file_bytes" not in serialized_command
+    assert "canonical_path" not in serialized_command
+    assert '"path"' not in serialized_command
+    await service.handle_device_message(
+        "device-1",
+        "user-1",
+        {
+            "type": "file.upload.result",
+            "request_id": command["request_id"],
+            "status": "uploaded",
+            "size_bytes": 12,
+        },
+    )
+    result = await pending
+    assert result["data"] == {
+        "status": "uploaded",
+        "local_file_ref": reference,
+        "size_bytes": 12,
+    }
+
+
+@pytest.mark.asyncio
+async def test_file_bindings_require_protocol_two_but_legacy_tasks_still_run(
+    plugin_module,
+    tmp_path,
+):
+    store, signer, _broker, service = _runtime(plugin_module, tmp_path)
+    descriptor = {
+        "capability_id": "example.file.consume",
+        "package_id": "example.file.package",
+        "package_version": "1.0.0",
+        "limits": {"max_concurrency": 2},
+        "schemas": {
+            name: {"document": {"type": "object"}}
+            for name in ("input", "result", "checkpoint")
+        },
+    }
+    store.register_package(descriptor, signer_id="test", signature="test")
+    capability = [
+        {
+            "capability_id": "example.file.consume",
+            "version": "1",
+            "package_id": "example.file.package",
+            "package_version": "1.0.0",
+        },
+    ]
+    store.upsert_device(
+        device_id="legacy-device",
+        user_id="user-1",
+        display_name="Legacy",
+        runner_version="1.0.0",
+        protocol_version="1",
+        capabilities=capability,
+    )
+    websocket = _FakeWebSocket()
+    await service.attach("legacy-device", websocket)
+    token = signer.issue(
+        user_id="user-1",
+        session_id="session-1",
+        agent_id="agent-1",
+        agent_name="Agent",
+        installation_id="install-1",
+        release_id="release-1",
+        invocation_id="invocation-1",
+        capability_ids=["interaction.file.select/1"],
+    )
+
+    legacy = await service.call(
+        "local_task_start",
+        {
+            "capability_id": "example.file.consume",
+            "input": {},
+            "idempotency_key": "legacy-task",
+            "dclaw_session_token": token,
+        },
+    )
+    assert legacy["ok"] is True
+    assert websocket.messages[-1]["protocol_version"] == "1"
+    assert "local_file_bindings" not in websocket.messages[-1]["task"]
+    assert "scope" not in websocket.messages[-1]["task"]
+
+    legacy_task_id = legacy["data"]["task_id"]
+    await service.handle_device_message(
+        "legacy-device",
+        "user-1",
+        {
+            "type": "task.event",
+            "task_id": legacy_task_id,
+            "sequence": 1,
+            "event_type": "started",
+            "payload": {},
+        },
+    )
+    await service.handle_device_message(
+        "legacy-device",
+        "user-1",
+        {
+            "type": "task.event",
+            "task_id": legacy_task_id,
+            "sequence": 2,
+            "event_type": "checkpoint",
+            "payload": {"checkpoint_id": "legacy-checkpoint"},
+        },
+    )
+    legacy_continued = await service.call(
+        "local_task_continue",
+        {
+            "task_id": legacy_task_id,
+            "checkpoint_id": "legacy-checkpoint",
+            "input": {"confirmed": True},
+            "dclaw_session_token": token,
+        },
+    )
+    assert legacy_continued["ok"] is True
+    legacy_command = websocket.messages[-1]
+    assert legacy_command["type"] == "task.continue"
+    assert legacy_command["protocol_version"] == "1"
+    assert "local_file_bindings" not in legacy_command
+    assert "scope" not in legacy_command
+
+    reference = "lfr_" + "c" * 32
+    assert store.save_local_file_ref(
+        {
+            "local_file_ref": reference,
+            "display_name": "source.mp4",
+            "mime_type": "video/mp4",
+            "size_bytes": 12,
+            "last_modified_ms": 1,
+        },
+        scope={
+            "user_id": "user-1",
+            "session_id": "session-1",
+            "agent_id": "agent-1",
+            "installation_id": "install-1",
+            "release_id": "release-1",
+            "invocation_id": "invocation-1",
+        },
+        interaction_id="interaction-1",
+        device_id="legacy-device",
+        expires_at=9999999999,
+    )
+    with_binding = await service.call(
+        "local_task_start",
+        {
+            "capability_id": "example.file.consume",
+            "input": {},
+            "local_file_bindings": {
+                "source": {
+                    "local_file_ref": reference,
+                    "access": "read",
+                },
+            },
+            "idempotency_key": "file-task",
+            "dclaw_session_token": token,
+        },
+    )
+    assert with_binding["error"]["code"] == "LOCAL_GATEWAY.DEVICE_NOT_READY"
+
+
+@pytest.mark.asyncio
+async def test_file_selection_revalidates_device_metadata_against_limits(
+    plugin_module,
+    tmp_path,
+):
+    store, signer, _broker, service = _runtime(plugin_module, tmp_path)
+    store.upsert_device(
+        device_id="device-1",
+        user_id="user-1",
+        display_name="Windows",
+        runner_version="1.1.0",
+        protocol_version="2",
+        device_token="token",
+    )
+    websocket = _FakeWebSocket()
+    await service.attach("device-1", websocket)
+    token = signer.issue(
+        user_id="user-1",
+        session_id="session-1",
+        agent_id="agent-1",
+        agent_name="Agent",
+        installation_id="install-1",
+        release_id="release-1",
+        invocation_id="invocation-1",
+        capability_ids=["interaction.file.select/1"],
+    )
+    pending = asyncio.create_task(
+        service.call(
+            "local_file_select",
+            {
+                "interaction_id": "interaction-1",
+                "selector": {
+                    "accept_mime_types": ["video/mp4"],
+                    "accept_extensions": [".mp4"],
+                    "max_file_size_bytes": 10,
+                    "max_total_size_bytes": 10,
+                },
+                "dclaw_session_token": token,
+            },
+        ),
+    )
+    await asyncio.sleep(0)
+    command = websocket.messages[-1]
+    await service.handle_device_message(
+        "device-1",
+        "user-1",
+        {
+            "type": "file.select.result",
+            "request_id": command["request_id"],
+            "status": "selected",
+            "files": [
+                {
+                    "local_file_ref": "lfr_" + "d" * 32,
+                    "display_name": "source.mp4",
+                    "mime_type": "video/mp4",
+                    "size_bytes": 11,
+                    "device_id": "device-1",
+                    "last_modified_ms": 1,
+                },
+            ],
+        },
+    )
+    assert (await pending)["error"]["code"] == "FILE_SELECTOR.FILE_TOO_LARGE"
+
+
+@pytest.mark.asyncio
+async def test_device_request_response_must_come_from_expected_device(
+    plugin_module,
+    tmp_path,
+):
+    store, signer, _broker, service = _runtime(plugin_module, tmp_path)
+    for device_id in ("device-1", "device-2"):
+        store.upsert_device(
+            device_id=device_id,
+            user_id="user-1",
+            display_name=device_id,
+            runner_version="1.1.0",
+            protocol_version="2",
+            device_token="token",
+        )
+        await service.attach(device_id, _FakeWebSocket())
+    token = signer.issue(
+        user_id="user-1",
+        session_id="session-1",
+        agent_id="agent-1",
+        agent_name="Agent",
+        installation_id="install-1",
+        release_id="release-1",
+        invocation_id="invocation-1",
+        capability_ids=["interaction.file.select/1"],
+    )
+    pending = asyncio.create_task(
+        service.call(
+            "local_file_select",
+            {
+                "interaction_id": "interaction-1",
+                "selector": {},
+                "dclaw_session_token": token,
+            },
+        ),
+    )
+    await asyncio.sleep(0)
+    expected_device_id = next(
+        device_id
+        for device_id, socket in service._connections.items()
+        if socket.messages
+    )
+    other_device_id = (
+        "device-2" if expected_device_id == "device-1" else "device-1"
+    )
+    command = service._connections[expected_device_id].messages[-1]
+    cancelled = {
+        "type": "file.select.result",
+        "request_id": command["request_id"],
+        "status": "cancelled",
+        "files": [],
+    }
+    await service.handle_device_message(other_device_id, "user-1", cancelled)
+    await asyncio.sleep(0)
+    assert not pending.done()
+    await service.handle_device_message(
+        expected_device_id,
+        "user-1",
+        cancelled,
+    )
+    assert (await pending)["data"] == {"status": "cancelled", "files": []}
+
+
+@pytest.mark.asyncio
+async def test_managed_artifact_list_select_and_delete_are_user_scoped(
+    plugin_module,
+    tmp_path,
+):
+    store, signer, _broker, service = _runtime(plugin_module, tmp_path)
+    store.upsert_device(
+        device_id="device-1",
+        user_id="user-1",
+        display_name="Windows",
+        runner_version="1.1.0",
+        protocol_version="2",
+        device_token="token",
+    )
+    websocket = _FakeWebSocket()
+    await service.attach("device-1", websocket)
+    token = signer.issue(
+        user_id="user-1",
+        session_id="session-1",
+        agent_id="agent-1",
+        agent_name="Agent",
+        installation_id="install-1",
+        release_id="release-1",
+        invocation_id="invocation-1",
+        tenant_id="tenant-1",
+        capability_ids=["interaction.file.select/1"],
+    )
+    unauthorized_token = signer.issue(
+        user_id="user-1",
+        session_id="session-1",
+        agent_id="agent-1",
+        agent_name="Agent",
+        installation_id="install-1",
+        release_id="release-1",
+        invocation_id="unauthorized",
+        tenant_id="tenant-1",
+    )
+    unauthorized = await service.call(
+        "managed_artifacts_list",
+        {"dclaw_session_token": unauthorized_token},
+    )
+    assert unauthorized["error"]["code"] == "FILE_SELECTOR.NOT_AUTHORIZED"
+    artifact_id = "artifact_" + "e" * 32
+
+    listing = asyncio.create_task(
+        service.call(
+            "managed_artifacts_list",
+            {"dclaw_session_token": token},
+        ),
+    )
+    await asyncio.sleep(0)
+    command = websocket.messages[-1]
+    await service.handle_device_message(
+        "device-1",
+        "user-1",
+        {
+            "type": "managed_artifacts.result",
+            "request_id": command["request_id"],
+            "artifacts": [
+                {
+                    "artifact_id": artifact_id,
+                    "task_id": "task-1",
+                    "display_name": "result.mp4",
+                    "mime_type": "video/mp4",
+                    "size_bytes": 12,
+                    "created_at": 1,
+                },
+            ],
+        },
+    )
+    listed = await listing
+    assert listed["data"]["artifacts"][0]["artifact_id"] == artifact_id
+    assert "path" not in json.dumps(listed)
+
+    selecting = asyncio.create_task(
+        service.call(
+            "managed_artifact_action",
+            {
+                "artifact_id": artifact_id,
+                "action": "select",
+                "dclaw_session_token": token,
+            },
+        ),
+    )
+    await asyncio.sleep(0)
+    command = websocket.messages[-1]
+    reference = "lfr_" + "f" * 32
+    await service.handle_device_message(
+        "device-1",
+        "user-1",
+        {
+            "type": "managed_artifact.result",
+            "request_id": command["request_id"],
+            "status": "ok",
+            "artifact_id": artifact_id,
+            "action": "select",
+            "file": {
+                "local_file_ref": reference,
+                "display_name": "result.mp4",
+                "mime_type": "video/mp4",
+                "size_bytes": 12,
+                "device_id": "device-1",
+                "last_modified_ms": 1,
+            },
+        },
+    )
+    selected = await selecting
+    assert selected["data"]["file"]["local_file_ref"] == reference
+    assert store.get_local_file_ref(reference)["tenant_id"] == "tenant-1"
+
+    other_token = signer.issue(
+        user_id="user-2",
+        session_id="session-2",
+        agent_id="agent-1",
+        agent_name="Agent",
+        installation_id="install-1",
+        release_id="release-1",
+        invocation_id="invocation-2",
+        tenant_id="tenant-1",
+        capability_ids=["interaction.file.select/1"],
+    )
+    denied = await service.call(
+        "managed_artifact_action",
+        {
+            "artifact_id": artifact_id,
+            "action": "delete",
+            "dclaw_session_token": other_token,
+        },
+    )
+    assert denied["error"]["code"] == "LOCAL_GATEWAY.TASK_NOT_FOUND"
+
+    deleting = asyncio.create_task(
+        service.call(
+            "managed_artifact_action",
+            {
+                "artifact_id": artifact_id,
+                "action": "delete",
+                "dclaw_session_token": token,
+            },
+        ),
+    )
+    await asyncio.sleep(0)
+    command = websocket.messages[-1]
+    await service.handle_device_message(
+        "device-1",
+        "user-1",
+        {
+            "type": "managed_artifact.result",
+            "request_id": command["request_id"],
+            "status": "ok",
+            "artifact_id": artifact_id,
+            "action": "delete",
+        },
+    )
+    assert (await deleting)["data"]["status"] == "ok"
+    assert (
+        store.get_managed_artifact(
+            artifact_id,
+            "tenant-1",
+            "user-1",
+        )
+        is None
+    )
+
+
+def test_public_and_devkit_contract_schemas_are_byte_identical():
+    pairs = [
+        (
+            ROOT / "docs" / "contracts" / "local-execution" / "v1" / name,
+            PLUGIN_ROOT / "devkit" / "schemas" / "local-execution-v1" / name,
+        )
+        for name in (
+            "error-envelope.schema.json",
+            "tool-call.schema.json",
+            "tool-response.schema.json",
+        )
+    ] + [
+        (
+            PLUGIN_ROOT / "schemas" / name,
+            PLUGIN_ROOT
+            / "devkit"
+            / "schemas"
+            / "super-agent-support-v1"
+            / name,
+        )
+        for name in (
+            "device-command.schema.json",
+            "device-message.schema.json",
+        )
+    ]
+    for public, bundled in pairs:
+        assert public.read_bytes() == bundled.read_bytes()
 
 
 @pytest.mark.asyncio
@@ -810,6 +1750,8 @@ async def test_local_task_is_idempotent_and_completes_from_device_event(
     )
     assert continued["data"]["status"] == "running"
     assert websocket.messages[-1]["type"] == "task.continue"
+    assert "local_file_bindings" not in websocket.messages[-1]
+    assert "scope" not in websocket.messages[-1]
 
 
 def test_credential_broker_never_stores_plaintext(plugin_module, tmp_path):

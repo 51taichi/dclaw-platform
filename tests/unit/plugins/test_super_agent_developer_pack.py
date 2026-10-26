@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import hashlib
@@ -33,16 +34,16 @@ def test_developer_pack_archive_is_complete_and_reproducible():
     second, repeated = archive.build_archive(PLUGIN_ROOT)
     assert first == second
     assert metadata == repeated
-    assert metadata["version"] == "1.1.0"
+    assert metadata["version"] == "1.2.0"
     assert metadata["standard"] == {
         "id": "dclaw.super-agent-development",
-        "version": "2.2",
+        "version": "2.3",
     }
-    assert metadata["devkit_version"] == "1.2.0"
+    assert metadata["devkit_version"] == "1.3.0"
     assert metadata["server_source_required"] is False
     assert metadata["sha256"] == hashlib.sha256(first).hexdigest()
 
-    prefix = "dclaw-super-agent-developer-pack-1.1.0/"
+    prefix = "dclaw-super-agent-developer-pack-1.2.0/"
     with zipfile.ZipFile(io.BytesIO(first)) as package:
         names = set(package.namelist())
         manifest = json.loads(package.read(prefix + "PACKAGE-MANIFEST.json"))
@@ -66,21 +67,23 @@ def test_developer_pack_archive_is_complete_and_reproducible():
         "examples/minimal-local/example.json",
     }
     assert {prefix + name for name in expected} <= names
-    assert manifest["version"] == "1.1.0"
+    assert manifest["version"] == "1.2.0"
     assert "devkit/wheelhouse/cryptography-46.0.3" in checksums
-    assert not any("src/qwenpaw" in name or "tests/unit" in name for name in names)
+    assert not any(
+        "src/qwenpaw" in name or "tests/unit" in name for name in names
+    )
     for path in list(PACK_ROOT.rglob("*.py")) + list(
-        (PLUGIN_ROOT / "devkit").rglob("*.py")
+        (PLUGIN_ROOT / "devkit").rglob("*.py"),
     ):
         source = path.read_text(encoding="utf-8")
         assert "import qwenpaw" not in source
         assert "from qwenpaw" not in source
 
     for schema_path in list((PACK_ROOT / "schemas").rglob("*.json")) + list(
-        (PACK_ROOT / "templates" / "project").rglob("*.schema.json")
+        (PACK_ROOT / "templates" / "project").rglob("*.schema.json"),
     ):
         Draft202012Validator.check_schema(
-            json.loads(schema_path.read_text(encoding="utf-8"))
+            json.loads(schema_path.read_text(encoding="utf-8")),
         )
 
 
@@ -119,24 +122,24 @@ def test_doctor_and_offline_demo_build_a_verified_package(tmp_path):
     assert Path(result["evidence"]).is_file()
     registration = json.loads(
         (workspace / "capability-pack" / "registration.json").read_text(
-            encoding="utf-8"
-        )
+            encoding="utf-8",
+        ),
     )
     descriptor_schema = json.loads(
         (
-            PLUGIN_ROOT
-            / "schemas"
-            / "capability-descriptor.schema.json"
-        ).read_text(encoding="utf-8")
+            PLUGIN_ROOT / "schemas" / "capability-descriptor.schema.json"
+        ).read_text(encoding="utf-8"),
     )
     assert not list(
         Draft202012Validator(descriptor_schema).iter_errors(
-            registration["descriptor"]
-        )
+            registration["descriptor"],
+        ),
     )
 
 
-def test_release_gate_rejects_placeholder_and_missing_behavior_evidence(tmp_path):
+def test_release_gate_rejects_placeholder_and_missing_behavior_evidence(
+    tmp_path,
+):
     cli = _module("developer_pack_cli_test", PACK_CLI)
     project = tmp_path / "agent"
     cli.initialize_project(project, "test-agent", "Test Agent", "none")
@@ -171,9 +174,9 @@ def test_release_gate_rejects_unapproved_behavior_difference(tmp_path):
                         "expected_steps": ["step"],
                         "expected_outcome": {"ok": True},
                         "evidence": ["source:test"],
-                    }
+                    },
                 ],
-            }
+            },
         ),
         encoding="utf-8",
     )
@@ -184,7 +187,7 @@ def test_release_gate_rejects_unapproved_behavior_difference(tmp_path):
                 "source": "example",
                 "differences": [{"id": "diff-1", "approved": False}],
                 "pending": [],
-            }
+            },
         ),
         encoding="utf-8",
     )
@@ -209,9 +212,9 @@ def _make_release_ready(cli, project: Path) -> None:
                         "expected_steps": ["execute"],
                         "expected_outcome": {"ok": True},
                         "evidence": ["tests"],
-                    }
+                    },
                 ],
-            }
+            },
         ),
         encoding="utf-8",
     )
@@ -222,7 +225,7 @@ def _make_release_ready(cli, project: Path) -> None:
                 "source": "test",
                 "differences": [],
                 "pending": [],
-            }
+            },
         ),
         encoding="utf-8",
     )
@@ -237,15 +240,19 @@ def test_capability_build_manifest_packages_arbitrary_resources_deterministicall
     _make_release_ready(cli, project)
     root = project / "capability-pack" / "windows-x64"
     (root / "modules").mkdir()
-    (root / "modules" / "worker.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (root / "modules" / "worker.py").write_text(
+        "VALUE = 1\n",
+        encoding="utf-8",
+    )
     (root / "runtime").mkdir()
     (root / "runtime" / "ffmpeg.exe").write_bytes(b"ffmpeg-test")
     build_manifest = json.loads(
-        (root / "capability-build.json").read_text(encoding="utf-8")
+        (root / "capability-build.json").read_text(encoding="utf-8"),
     )
     build_manifest["artifact"]["members"].extend(["modules", "runtime"])
     (root / "capability-build.json").write_text(
-        json.dumps(build_manifest), encoding="utf-8"
+        json.dumps(build_manifest),
+        encoding="utf-8",
     )
     private_key = tmp_path / "private.b64"
     public_key = tmp_path / "public.b64"
@@ -280,7 +287,9 @@ def test_capability_build_manifest_packages_arbitrary_resources_deterministicall
     assert all(item["sha256"] for item in inventory["files"])
 
 
-def test_capability_build_imports_prebuilt_zip_and_rejects_unsafe_paths(tmp_path):
+def test_capability_build_imports_prebuilt_zip_and_rejects_unsafe_paths(
+    tmp_path,
+):
     cli = _module("developer_pack_prebuilt_test", PACK_CLI)
     project = tmp_path / "agent"
     cli.initialize_project(project, "test-agent", "Test Agent", "required")
@@ -314,7 +323,10 @@ def test_capability_build_imports_prebuilt_zip_and_rejects_unsafe_paths(tmp_path
     unsafe = tmp_path / "unsafe.zip"
     with zipfile.ZipFile(unsafe, "w") as archive:
         archive.writestr("../escape.py", "bad")
-    with pytest.raises(cli.DeveloperPackError, match="safe POSIX relative path"):
+    with pytest.raises(
+        cli.DeveloperPackError,
+        match="safe POSIX relative path",
+    ):
         cli.build_local_capability(
             project,
             "https://developer.example.test/unsafe.zip",

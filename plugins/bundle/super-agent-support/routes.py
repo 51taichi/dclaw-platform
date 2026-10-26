@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Authenticated client, device, package, credential, and DevKit APIs."""
 
 from __future__ import annotations
@@ -23,7 +24,9 @@ from jsonschema import Draft202012Validator
 from pydantic import BaseModel, ConfigDict, Field
 
 from .credentials import CredentialBroker, CredentialError
-from .developer_pack.archive import build_archive as build_developer_pack_archive
+from .developer_pack.archive import (
+    build_archive as build_developer_pack_archive,
+)
 from .mcp_server import LocalExecutionMcp
 from .packages import CapabilityPackageRegistry, PackageError
 from .service import LocalExecutionService
@@ -192,8 +195,8 @@ def create_app(
         return {
             "status": "ok",
             "plugin": "dclaw.super-agent-support",
-            "version": "1.6.0",
-            "protocols": {"local_execution": "1.0", "device": "1"},
+            "version": "1.7.0",
+            "protocols": {"local_execution": "1.1", "device": "2"},
         }
 
     _register_developer_kit_routes(app)
@@ -202,7 +205,7 @@ def create_app(
     async def environment_status(request: Request) -> dict[str, Any]:
         return await service.environment_status(
             user_id=_user_id(request),
-            agent_protocol_version="1",
+            agent_protocol_version="2",
         )
 
     @app.post("/device-bootstrap")
@@ -256,19 +259,22 @@ def create_app(
             )
             return
         await websocket.accept()
+        protocol_version = str(query.get("protocol_version") or "1")
+        if protocol_version not in {"1", "2"}:
+            protocol_version = "1"
         store.upsert_device(
             device_id=device_id,
             user_id=user_id,
             display_name=str(query.get("display_name") or "Windows device"),
             runner_version=str(query.get("runner_version") or "unknown"),
-            protocol_version=str(query.get("protocol_version") or "1"),
+            protocol_version=protocol_version,
             device_token=issued_token,
         )
         await service.attach(device_id, websocket)
         await websocket.send_json(
             {
                 "type": "connection.ready",
-                "protocol_version": "1",
+                "protocol_version": protocol_version,
                 "device_id": device_id,
                 "device_token": issued_token,
             },

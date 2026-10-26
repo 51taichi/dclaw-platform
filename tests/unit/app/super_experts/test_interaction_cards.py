@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import json
@@ -58,7 +59,9 @@ def _request(
     )
 
 
-def _question_request(task_key: str = "open-questions") -> InteractionCreateRequest:
+def _question_request(
+    task_key: str = "open-questions",
+) -> InteractionCreateRequest:
     return InteractionCreateRequest.model_validate(
         {
             "task_key": task_key,
@@ -85,6 +88,26 @@ def _question_request(task_key: str = "open-questions") -> InteractionCreateRequ
     )
 
 
+def _file_request(task_key: str = "source-files") -> InteractionCreateRequest:
+    return InteractionCreateRequest.model_validate(
+        {
+            "task_key": task_key,
+            "interaction_revision": 1,
+            "component_type": "file_selector",
+            "input_policy": "card_only",
+            "card": {
+                "title": "请选择源视频",
+                "accept_extensions": [".mp4"],
+                "multiple": True,
+                "min_files": 1,
+                "max_files": 2,
+                "max_file_size_bytes": 100,
+                "max_total_size_bytes": 150,
+            },
+        },
+    )
+
+
 @pytest.fixture
 def service(tmp_path):
     clock = {"now": NOW}
@@ -105,7 +128,9 @@ def _create(service, request, key="create-1"):
     )
 
 
-def test_create_is_deterministic_and_identical_replay_returns_same_card(service):
+def test_create_is_deterministic_and_identical_replay_returns_same_card(
+    service,
+):
     request = _request("question")
 
     first = _create(service, request)
@@ -116,6 +141,75 @@ def test_create_is_deterministic_and_identical_replay_returns_same_card(service)
     assert first.binding.agent_task_id.startswith("interaction-task-")
     assert first.status is InteractionStatus.PENDING
     assert first.version == 1
+
+
+def test_file_selector_submission_persists_only_safe_metadata(service):
+    card = _create(service, _file_request())
+    submitted = service.submit(
+        interaction_id=card.interaction_id,
+        installation_id="install-1",
+        conversation_id="chat-1",
+        version=card.version,
+        files=[
+            {
+                "local_file_ref": "lfr_" + "a" * 32,
+                "display_name": "source.mp4",
+                "mime_type": "video/mp4",
+                "size_bytes": 80,
+                "device_id": "device-1",
+                "last_modified_ms": 1,
+            },
+        ],
+        idempotency_key="submit-files-1",
+    )
+
+    payload = submitted.model_dump(mode="json")
+    assert submitted.status is InteractionStatus.SUBMITTED
+    assert payload["answer"]["files"][0]["display_name"] == "source.mp4"
+    assert "path" not in json.dumps(payload["answer"])
+
+
+def test_file_selector_rejection_does_not_consume_pending_card(service):
+    card = _create(service, _file_request())
+    with pytest.raises(InteractionError, match="FILE_SELECTOR.FILE_TOO_LARGE"):
+        service.submit(
+            interaction_id=card.interaction_id,
+            installation_id="install-1",
+            conversation_id="chat-1",
+            version=card.version,
+            files=[
+                {
+                    "local_file_ref": "lfr_" + "b" * 32,
+                    "display_name": "large.mp4",
+                    "mime_type": "video/mp4",
+                    "size_bytes": 101,
+                    "device_id": "device-1",
+                    "last_modified_ms": 1,
+                },
+            ],
+            idempotency_key="submit-files-too-large",
+        )
+
+    current = service.get_owned(
+        card.interaction_id,
+        installation_id="install-1",
+        conversation_id="chat-1",
+    )
+    assert current.status is InteractionStatus.PENDING
+    assert current.answer is None
+
+
+def test_cancelled_native_file_dialog_leaves_card_pending(service):
+    card = _create(service, _file_request())
+
+    current = service.get_owned(
+        card.interaction_id,
+        installation_id="install-1",
+        conversation_id="chat-1",
+    )
+
+    assert current.status is InteractionStatus.PENDING
+    assert current.transitions[-1].action == "create"
 
 
 def test_legacy_continuation_state_is_discarded_on_the_next_write(tmp_path):
@@ -170,11 +264,14 @@ def test_second_blocking_card_requires_explicit_replacement(service):
         "replace-first",
     )
 
-    assert service.get_owned(
-        first.interaction_id,
-        installation_id="install-1",
-        conversation_id="chat-1",
-    ).status is InteractionStatus.REPLACED
+    assert (
+        service.get_owned(
+            first.interaction_id,
+            installation_id="install-1",
+            conversation_id="chat-1",
+        ).status
+        is InteractionStatus.REPLACED
+    )
     assert second.status is InteractionStatus.PENDING
 
 
@@ -189,11 +286,14 @@ def test_wrong_replacement_id_never_silently_replaces_active_card(service):
         )
 
     assert error.value.code == "ACTIVE_BLOCKING_INTERACTION_EXISTS"
-    assert service.get_owned(
-        first.interaction_id,
-        installation_id="install-1",
-        conversation_id="chat-1",
-    ).status is InteractionStatus.PENDING
+    assert (
+        service.get_owned(
+            first.interaction_id,
+            installation_id="install-1",
+            conversation_id="chat-1",
+        ).status
+        is InteractionStatus.PENDING
+    )
 
 
 def test_non_blocking_cards_can_coexist(service):
@@ -252,7 +352,9 @@ def test_expiry_is_projected_and_releases_blocking_slot(service):
     assert second.status is InteractionStatus.PENDING
 
 
-def test_single_select_submission_resolves_id_and_text_from_stored_card(service):
+def test_single_select_submission_resolves_id_and_text_from_stored_card(
+    service,
+):
     card = _create(service, _request("single"))
 
     submitted = service.submit(
@@ -290,7 +392,9 @@ def test_text_only_option_can_be_submitted_by_exact_text(service):
     assert submitted.answer.selected[0].text == "乙"
 
 
-def test_question_form_submission_resolves_stored_questions_and_optional_null(service):
+def test_question_form_submission_resolves_stored_questions_and_optional_null(
+    service,
+):
     card = _create(service, _question_request(), "create-question-form")
 
     submitted = service.submit(
@@ -365,11 +469,14 @@ def test_question_form_rejects_invalid_answers_without_consuming_card(
         )
 
     assert error.value.code == expected_code
-    assert service.get_owned(
-        card.interaction_id,
-        installation_id="install-1",
-        conversation_id="chat-1",
-    ).status is InteractionStatus.PENDING
+    assert (
+        service.get_owned(
+            card.interaction_id,
+            installation_id="install-1",
+            conversation_id="chat-1",
+        ).status
+        is InteractionStatus.PENDING
+    )
 
 
 def test_submit_rejects_payload_branch_for_another_component(service):
@@ -396,7 +503,11 @@ def test_submit_rejects_payload_branch_for_another_component(service):
         ([{"id": "a"}, {"id": "c"}], "INVALID_SELECTION"),
     ],
 )
-def test_single_select_rejects_invalid_selection_shapes(service, selected, expected_code):
+def test_single_select_rejects_invalid_selection_shapes(
+    service,
+    selected,
+    expected_code,
+):
     card = _create(service, _request("single"))
 
     with pytest.raises(InteractionError) as error:
@@ -411,11 +522,14 @@ def test_single_select_rejects_invalid_selection_shapes(service, selected, expec
         )
 
     assert error.value.code == expected_code
-    assert service.get_owned(
-        card.interaction_id,
-        installation_id="install-1",
-        conversation_id="chat-1",
-    ).status is InteractionStatus.PENDING
+    assert (
+        service.get_owned(
+            card.interaction_id,
+            installation_id="install-1",
+            conversation_id="chat-1",
+        ).status
+        is InteractionStatus.PENDING
+    )
 
 
 def test_multi_select_enforces_minimum_and_maximum(service):
@@ -450,11 +564,14 @@ def test_required_supplement_rejects_blank_without_consuming_card(service):
         )
 
     assert error.value.code == "SUPPLEMENT_REQUIRED"
-    assert service.get_owned(
-        card.interaction_id,
-        installation_id="install-1",
-        conversation_id="chat-1",
-    ).status is InteractionStatus.PENDING
+    assert (
+        service.get_owned(
+            card.interaction_id,
+            installation_id="install-1",
+            conversation_id="chat-1",
+        ).status
+        is InteractionStatus.PENDING
+    )
 
 
 def test_stale_version_and_cross_scope_reads_fail_closed(service):
@@ -529,8 +646,16 @@ def test_submission_replay_is_idempotent(service):
 
 
 def test_list_is_scoped_and_preserves_creation_order(service):
-    first = _create(service, _request("first", input_policy="concurrent"), "one")
-    second = _create(service, _request("second", input_policy="concurrent"), "two")
+    first = _create(
+        service,
+        _request("first", input_policy="concurrent"),
+        "one",
+    )
+    second = _create(
+        service,
+        _request("second", input_policy="concurrent"),
+        "two",
+    )
     service.create(
         installation_id="install-2",
         conversation_id="chat-1",

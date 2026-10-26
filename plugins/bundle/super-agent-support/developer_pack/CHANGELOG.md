@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.0 - 2026-10-26
+
+- Bundles DevKit 1.3.0 public contracts for opaque local file references,
+  read-only task bindings, direct device uploads, and managed artifacts.
+- Allows an awaiting task to receive additional read-only file bindings through
+  `local_task_continue` while preserving its task and checkpoint identity.
+- Keeps the existing sealing format and local execution 1.0 path compatible;
+  file workflows require local execution 1.1 and Runner 1.1.0.
+
 ## 1.1.0 - 2026-10-26
 
 - Adds the versioned `capability-build.json` contract for deterministic

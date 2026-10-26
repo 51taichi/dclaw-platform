@@ -1,11 +1,15 @@
+# -*- coding: utf-8 -*-
 """Generic device routing and durable local task lifecycle."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
+import uuid
 from typing import Any
+from urllib.parse import urlsplit
 
 from jsonschema import Draft202012Validator
 from packaging.version import InvalidVersion, Version
@@ -18,9 +22,19 @@ from .store import StateStore
 logger = logging.getLogger(__name__)
 TERMINAL_STATES = {"succeeded", "failed", "cancelled"}
 ACTIVE_STATES = {"queued", "running", "awaiting_input", "cancelling"}
-PROTOCOL_VERSION = "1"
+PROTOCOL_VERSION = "2"
 CATALOG_VERSION = "1"
-MIN_RUNNER_VERSION = "1.0.0"
+MIN_RUNNER_VERSION = "1.1.0"
+LEGACY_RUNNER_VERSION = "1.0.0"
+LOCAL_FILE_REF_PATTERN = re.compile(r"^lfr_[A-Za-z0-9_-]{32,156}$")
+ARTIFACT_ID_PATTERN = re.compile(r"^artifact_[A-Za-z0-9_-]{32,156}$")
+BINDING_NAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
+FILE_EXTENSION_PATTERN = re.compile(r"^\.[A-Za-z0-9._+-]{1,31}$")
+MIME_TYPE_PATTERN = re.compile(
+    r"^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+*-]+$",
+)
+DEVICE_REQUEST_TIMEOUT_SECONDS = 180
+FILE_CAPABILITY_ID = "interaction.file.select/1"
 
 
 def _parsed_version(value: Any) -> Version | None:
@@ -50,6 +64,10 @@ class LocalExecutionService:
         self.credential_broker = credential_broker
         self._connections: dict[str, Any] = {}
         self._task_events: dict[str, asyncio.Event] = {}
+        self._device_requests: dict[
+            str,
+            tuple[str, asyncio.Future[dict[str, Any]]],
+        ] = {}
         self._device_event = asyncio.Event()
         self._lock = asyncio.Lock()
 
@@ -82,6 +100,38 @@ class LocalExecutionService:
             await self.detach(device_id, websocket)
             raise ERRORS["DEVICE_NOT_READY"] from exc
 
+    @staticmethod
+    def _scope(identity: dict[str, Any]) -> dict[str, str]:
+        return {
+            "tenant_id": str(identity.get("t") or "local"),
+            "user_id": identity["u"],
+            "session_id": identity["s"],
+            "agent_id": identity["a"],
+            "installation_id": identity["g"],
+            "release_id": identity["r"],
+            "invocation_id": identity["i"],
+        }
+
+    async def _request_device(
+        self,
+        device_id: str,
+        message: dict[str, Any],
+    ) -> dict[str, Any]:
+        request_id = uuid.uuid4().hex
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[dict[str, Any]] = loop.create_future()
+        self._device_requests[request_id] = (device_id, future)
+        try:
+            await self._send(device_id, {**message, "request_id": request_id})
+            return await asyncio.wait_for(
+                future,
+                timeout=DEVICE_REQUEST_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError as exc:
+            raise ERRORS["FILE_SELECTOR_DEVICE_OFFLINE"] from exc
+        finally:
+            self._device_requests.pop(request_id, None)
+
     def _identity(self, arguments: dict[str, Any]) -> dict[str, Any]:
         token = arguments.get("dclaw_session_token")
         if not isinstance(token, str) or not token:
@@ -91,8 +141,15 @@ class LocalExecutionService:
         except SessionError as exc:
             raise ERRORS["AUTHENTICATION_FAILED"] from exc
 
+    @staticmethod
+    def _require_file_capability(identity: dict[str, Any]) -> None:
+        if FILE_CAPABILITY_ID not in identity.get("c", []):
+            raise ERRORS["FILE_SELECTOR_NOT_AUTHORIZED"]
+
     async def call(
-        self, name: str, arguments: dict[str, Any]
+        self,
+        name: str,
+        arguments: dict[str, Any],
     ) -> dict[str, Any]:
         current_trace = trace_id()
         try:
@@ -128,9 +185,24 @@ class LocalExecutionService:
         ]
 
     def _select_device(
-        self, user_id: str, capability_id: str
+        self,
+        user_id: str,
+        capability_id: str,
+        *,
+        require_file_support: bool = False,
+        required_device_id: str | None = None,
     ) -> dict[str, Any]:
         for device in self._online_devices(user_id):
+            if (
+                required_device_id is not None
+                and device["device_id"] != required_device_id
+            ):
+                continue
+            if require_file_support and (
+                device.get("protocol_version") != PROTOCOL_VERSION
+                or not _runner_supports(device, MIN_RUNNER_VERSION)
+            ):
+                continue
             if any(
                 item.get("capability_id") == capability_id
                 for item in device["capabilities"]
@@ -139,6 +211,28 @@ class LocalExecutionService:
                 return device
         raise ERRORS["DEVICE_NOT_READY"]
 
+    def _task_protocol(self, task: dict[str, Any], user_id: str) -> str:
+        if task.get("local_file_bindings"):
+            return PROTOCOL_VERSION
+        device = self.store.get_device_for_user(task["device_id"], user_id)
+        return str((device or {}).get("protocol_version") or "1")
+
+    def _require_file_device(
+        self,
+        user_id: str,
+        device_id: str,
+    ) -> dict[str, Any]:
+        device = self.store.get_device_for_user(device_id, user_id)
+        if (
+            device is None
+            or device.get("status") != "online"
+            or device_id not in self._connections
+            or device.get("protocol_version") != PROTOCOL_VERSION
+            or not _runner_supports(device, MIN_RUNNER_VERSION)
+        ):
+            raise ERRORS["FILE_SELECTOR_DEVICE_OFFLINE"]
+        return device
+
     async def _local_environment_status(self, arguments, identity, _trace):
         requested = arguments.get("agent_protocol_version")
         if not isinstance(requested, str) or not 1 <= len(requested) <= 32:
@@ -146,12 +240,16 @@ class LocalExecutionService:
         bootstrap_session_id = arguments.get("bootstrap_session_id")
         wait_seconds = arguments.get("wait_seconds", 0)
         if (
-            bootstrap_session_id is not None
-            and (
-                not isinstance(bootstrap_session_id, str)
-                or len(bootstrap_session_id) > 128
+            (
+                bootstrap_session_id is not None
+                and (
+                    not isinstance(bootstrap_session_id, str)
+                    or len(bootstrap_session_id) > 128
+                )
             )
-        ) or type(wait_seconds) is not int or not 0 <= wait_seconds <= 25:
+            or type(wait_seconds) is not int
+            or not 0 <= wait_seconds <= 25
+        ):
             raise ERRORS["INVALID_ARGUMENTS"]
         return await self.environment_status(
             user_id=identity["u"],
@@ -182,19 +280,30 @@ class LocalExecutionService:
                     break
                 try:
                     await asyncio.wait_for(
-                        self._device_event.wait(), timeout=remaining
+                        self._device_event.wait(),
+                        timeout=remaining,
                     )
                 except asyncio.TimeoutError:
                     break
                 devices = self._online_devices(user_id)
         known_devices = self.store.list_devices(user_id)
         online_ids = {item["device_id"] for item in devices}
+        supported_protocol = agent_protocol_version in {"1", PROTOCOL_VERSION}
+        required_runner = (
+            LEGACY_RUNNER_VERSION
+            if agent_protocol_version == "1"
+            else MIN_RUNNER_VERSION
+        )
         compatible_devices = [
             item
             for item in devices
-            if _runner_supports(item, MIN_RUNNER_VERSION)
+            if _runner_supports(item, required_runner)
+            and (
+                agent_protocol_version == "1"
+                or item.get("protocol_version") == PROTOCOL_VERSION
+            )
         ]
-        if agent_protocol_version != PROTOCOL_VERSION:
+        if not supported_protocol:
             state = "protocol_incompatible"
             reason = "protocol_version_mismatch"
             user_action = "contact_administrator"
@@ -213,9 +322,11 @@ class LocalExecutionService:
         return {
             "state": state,
             "reason": reason,
-            "protocol_version": PROTOCOL_VERSION,
-            "compatible": agent_protocol_version == PROTOCOL_VERSION,
-            "minimum_runner_version": MIN_RUNNER_VERSION,
+            "protocol_version": agent_protocol_version
+            if supported_protocol
+            else PROTOCOL_VERSION,
+            "compatible": supported_protocol,
+            "minimum_runner_version": required_runner,
             "bootstrap_session_id": bootstrap_session_id,
             "user_action": user_action,
             "devices": [
@@ -233,7 +344,8 @@ class LocalExecutionService:
     async def _local_capabilities_list(self, arguments, identity, _trace):
         requested_device = arguments.get("device_id")
         if requested_device is not None and not isinstance(
-            requested_device, str
+            requested_device,
+            str,
         ):
             raise ERRORS["INVALID_ARGUMENTS"]
         devices = self._online_devices(identity["u"])
@@ -261,7 +373,7 @@ class LocalExecutionService:
             key=lambda item: (
                 str(item.get("capability_id") or ""),
                 str(item.get("version") or ""),
-            )
+            ),
         )
         return {
             "catalog_version": CATALOG_VERSION,
@@ -326,7 +438,7 @@ class LocalExecutionService:
             device["device_id"],
             {
                 "type": "runtime.prepare",
-                "protocol_version": PROTOCOL_VERSION,
+                "protocol_version": str(device.get("protocol_version") or "1"),
                 "capability_package": package,
             },
         )
@@ -370,20 +482,52 @@ class LocalExecutionService:
         capability_id = arguments.get("capability_id")
         task_input = arguments.get("input")
         idempotency_key = arguments.get("idempotency_key")
+        local_file_bindings = arguments.get("local_file_bindings")
+        if local_file_bindings is None:
+            local_file_bindings = {}
         if (
             not isinstance(capability_id, str)
             or not isinstance(task_input, dict)
             or not isinstance(idempotency_key, str)
             or not idempotency_key
+            or not isinstance(local_file_bindings, dict)
         ):
             raise ERRORS["INVALID_ARGUMENTS"]
+        if local_file_bindings:
+            self._require_file_capability(identity)
         package = self.store.get_package_for_capability(capability_id)
         if package is None:
             raise ERRORS["CAPABILITY_NOT_FOUND"]
         input_schema = package["descriptor"]["schemas"]["input"]["document"]
         if list(Draft202012Validator(input_schema).iter_errors(task_input)):
             raise ERRORS["INVALID_CAPABILITY_PAYLOAD"]
-        device = self._select_device(identity["u"], capability_id)
+        replay = self.store.get_task_by_idempotency(
+            identity["u"],
+            identity["a"],
+            idempotency_key,
+        )
+        if replay is not None:
+            if (
+                replay["capability_id"] != capability_id
+                or replay["input"] != task_input
+                or (replay.get("local_file_bindings") or {})
+                != local_file_bindings
+            ):
+                raise ERRORS["IDEMPOTENCY_CONFLICT"]
+            return self._public_task(replay) | {"idempotent_replay": True}
+        (
+            normalized_bindings,
+            binding_device_id,
+        ) = self._validate_local_file_bindings(
+            local_file_bindings,
+            identity=identity,
+        )
+        device = self._select_device(
+            identity["u"],
+            capability_id,
+            require_file_support=bool(local_file_bindings),
+            required_device_id=binding_device_id,
+        )
         credentials = self._runtime_credentials(
             task_input,
             package["descriptor"],
@@ -400,53 +544,582 @@ class LocalExecutionService:
                 idempotency_key=idempotency_key,
                 device_id=device["device_id"],
                 max_concurrency=int(
-                    package["descriptor"]["limits"]["max_concurrency"]
+                    package["descriptor"]["limits"]["max_concurrency"],
                 ),
+                tenant_id=str(identity.get("t") or "local"),
+                session_id=identity["s"],
+                installation_id=identity["g"],
+                release_id=identity["r"],
+                local_file_bindings=normalized_bindings,
             )
         except ValueError as exc:
             if str(exc) == "capacity":
                 raise ERRORS["RESOURCE_EXHAUSTED"] from exc
             raise ERRORS["IDEMPOTENCY_CONFLICT"] from exc
         if created:
+            task_payload = {
+                "task_id": task["task_id"],
+                "capability_id": capability_id,
+                "input": task_input,
+                "task_root_name": identity["n"],
+            }
+            if normalized_bindings:
+                task_payload.update(
+                    {
+                        "local_file_bindings": normalized_bindings,
+                        "scope": self._scope(identity),
+                    },
+                )
             await self._send(
                 device["device_id"],
                 {
                     "type": "task.start",
-                    "protocol_version": "1",
+                    "protocol_version": (
+                        PROTOCOL_VERSION
+                        if local_file_bindings
+                        else str(device.get("protocol_version") or "1")
+                    ),
                     "trace_id": current_trace,
-                    "task": {
-                        "task_id": task["task_id"],
-                        "capability_id": capability_id,
-                        "input": task_input,
-                        "task_root_name": identity["n"],
-                    },
+                    "task": task_payload,
                     "runtime_credentials": credentials,
                 },
             )
         return self._public_task(task) | {"idempotent_replay": not created}
 
+    def _validate_local_file_bindings(
+        self,
+        bindings: dict[str, Any],
+        *,
+        identity: dict[str, Any],
+    ) -> tuple[dict[str, dict[str, str]], str | None]:
+        if len(bindings) > 20:
+            raise ERRORS["INVALID_ARGUMENTS"]
+        expected_scope = self._scope(identity)
+        normalized: dict[str, dict[str, str]] = {}
+        binding_device_id: str | None = None
+        for name, value in bindings.items():
+            if (
+                not isinstance(name, str)
+                or BINDING_NAME_PATTERN.fullmatch(name) is None
+                or not isinstance(value, dict)
+                or set(value) != {"local_file_ref", "access"}
+                or value.get("access") != "read"
+            ):
+                raise ERRORS["INVALID_ARGUMENTS"]
+            reference = value.get("local_file_ref")
+            if (
+                not isinstance(reference, str)
+                or LOCAL_FILE_REF_PATTERN.fullmatch(reference) is None
+            ):
+                raise ERRORS["INVALID_ARGUMENTS"]
+            record = self.store.get_local_file_ref(reference)
+            if record is None:
+                raise ERRORS["LOCAL_FILE_REF_RESOLVE_FAILED"]
+            if (
+                binding_device_id is not None
+                and record["device_id"] != binding_device_id
+            ):
+                raise ERRORS["LOCAL_FILE_REF_WRONG_DEVICE"]
+            binding_device_id = record["device_id"]
+            if record["revoked_at"] is not None:
+                raise ERRORS["LOCAL_FILE_REF_REVOKED"]
+            if int(record["expires_at"]) <= int(time.time()):
+                raise ERRORS["LOCAL_FILE_REF_EXPIRED"]
+            for field in (
+                "tenant_id",
+                "user_id",
+                "session_id",
+                "agent_id",
+                "installation_id",
+                "release_id",
+                "invocation_id",
+            ):
+                if record[field] != expected_scope[field]:
+                    raise ERRORS["LOCAL_FILE_REF_SCOPE_MISMATCH"]
+            normalized[name] = {
+                "local_file_ref": reference,
+                "access": "read",
+            }
+        return normalized, binding_device_id
+
+    async def _local_file_select(self, arguments, identity, _trace):
+        self._require_file_capability(identity)
+        interaction_id = arguments.get("interaction_id")
+        selector = arguments.get("selector")
+        if (
+            not isinstance(interaction_id, str)
+            or not 1 <= len(interaction_id) <= 160
+            or not isinstance(selector, dict)
+            or set(selector)
+            - {
+                "accept_mime_types",
+                "accept_extensions",
+                "multiple",
+                "min_files",
+                "max_files",
+                "max_file_size_bytes",
+                "max_total_size_bytes",
+            }
+        ):
+            raise ERRORS["INVALID_ARGUMENTS"]
+        minimum = selector.get("min_files", 1)
+        maximum = selector.get("max_files", 1)
+        max_file_size = selector.get("max_file_size_bytes", 536_870_912)
+        max_total_size = selector.get("max_total_size_bytes", 536_870_912)
+        multiple = selector.get("multiple", False)
+        mime_types = selector.get("accept_mime_types", [])
+        extensions = selector.get("accept_extensions", [])
+        if (
+            type(minimum) is not int
+            or type(maximum) is not int
+            or not 1 <= minimum <= maximum <= 20
+            or type(max_file_size) is not int
+            or type(max_total_size) is not int
+            or not 1 <= max_file_size <= max_total_size <= 1_099_511_627_776
+            or type(multiple) is not bool
+            or (not multiple and maximum != 1)
+            or not isinstance(mime_types, list)
+            or len(mime_types) > 32
+            or not all(
+                isinstance(item, str)
+                and 3 <= len(item) <= 255
+                and MIME_TYPE_PATTERN.fullmatch(item) is not None
+                for item in mime_types
+            )
+            or not isinstance(extensions, list)
+            or len(extensions) > 32
+            or not all(
+                isinstance(item, str)
+                and FILE_EXTENSION_PATTERN.fullmatch(item)
+                for item in extensions
+            )
+        ):
+            raise ERRORS["INVALID_ARGUMENTS"]
+        devices = [
+            item
+            for item in self._online_devices(identity["u"])
+            if item.get("protocol_version") == PROTOCOL_VERSION
+            and _runner_supports(item, MIN_RUNNER_VERSION)
+        ]
+        if not devices:
+            raise ERRORS["FILE_SELECTOR_DEVICE_OFFLINE"]
+        device = devices[0]
+        response = await self._request_device(
+            device["device_id"],
+            {
+                "type": "file.select",
+                "protocol_version": PROTOCOL_VERSION,
+                "interaction_id": interaction_id,
+                "selector": selector,
+                "scope": self._scope(identity),
+            },
+        )
+        status = response.get("status")
+        if status == "cancelled":
+            return {"status": "cancelled", "files": []}
+        if status != "selected" or not isinstance(response.get("files"), list):
+            self._raise_device_file_error(response.get("error_code"))
+        files = response["files"]
+        if not minimum <= len(files) <= maximum:
+            raise ERRORS["FILE_SELECTOR_FILE_COUNT_EXCEEDED"]
+        expires_at = int(time.time()) + 3600
+        scope = self._scope(identity)
+        safe_files = []
+        seen_references: set[str] = set()
+        total_size = 0
+        for item in files:
+            if not self._safe_file_metadata(item, device["device_id"]):
+                raise ERRORS["LOCAL_FILE_REF_RESOLVE_FAILED"]
+            if item["local_file_ref"] in seen_references:
+                raise ERRORS["LOCAL_FILE_REF_RESOLVE_FAILED"]
+            seen_references.add(item["local_file_ref"])
+            if item["size_bytes"] > max_file_size:
+                raise ERRORS["FILE_SELECTOR_FILE_TOO_LARGE"]
+            total_size += item["size_bytes"]
+            if total_size > max_total_size:
+                raise ERRORS["FILE_SELECTOR_FILE_TOO_LARGE"]
+            if mime_types and not any(
+                self._mime_type_matches(item["mime_type"], accepted)
+                for accepted in mime_types
+            ):
+                raise ERRORS["FILE_SELECTOR_PERMISSION_DENIED"]
+            lower_name = item["display_name"].lower()
+            if extensions and not any(
+                lower_name.endswith(value.lower()) for value in extensions
+            ):
+                raise ERRORS["FILE_SELECTOR_PERMISSION_DENIED"]
+            inserted = self.store.save_local_file_ref(
+                item,
+                scope=scope,
+                interaction_id=interaction_id,
+                device_id=device["device_id"],
+                expires_at=expires_at,
+            )
+            if not inserted:
+                raise ERRORS["LOCAL_FILE_REF_RESOLVE_FAILED"]
+            safe_files.append(item)
+        return {
+            "status": "selected",
+            "files": safe_files,
+            "expires_at": expires_at,
+        }
+
+    async def _local_file_upload(self, arguments, identity, _trace):
+        self._require_file_capability(identity)
+        reference = arguments.get("local_file_ref")
+        upload = arguments.get("upload")
+        if (
+            not isinstance(reference, str)
+            or LOCAL_FILE_REF_PATTERN.fullmatch(reference) is None
+            or not isinstance(upload, dict)
+            or set(upload)
+            - {"url", "method", "headers", "allowed_domains", "max_size_bytes"}
+        ):
+            raise ERRORS["INVALID_ARGUMENTS"]
+        url = upload.get("url")
+        method = upload.get("method", "PUT")
+        domains = upload.get("allowed_domains")
+        headers = upload.get("headers", {})
+        max_size = upload.get("max_size_bytes")
+        parsed = urlsplit(url) if isinstance(url, str) else None
+        if (
+            parsed is None
+            or not 1 <= len(url) <= 8192
+            or parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or method not in {"PUT", "POST"}
+            or not isinstance(domains, list)
+            or not 1 <= len(domains) <= 16
+            or not all(
+                isinstance(domain, str) and 1 <= len(domain) <= 253
+                for domain in domains
+            )
+            or len(set(domains)) != len(domains)
+            or parsed.hostname.lower()
+            not in {domain.lower() for domain in domains}
+            or not isinstance(headers, dict)
+            or len(headers) > 16
+            or not all(
+                isinstance(name, str)
+                and name
+                and self._allowed_upload_header(name)
+                and isinstance(value, str)
+                and len(value) <= 2048
+                and "\r" not in value
+                and "\n" not in value
+                for name, value in headers.items()
+            )
+            or (
+                max_size is not None
+                and (
+                    type(max_size) is not int
+                    or not 1 <= max_size <= 1_099_511_627_776
+                )
+            )
+        ):
+            raise ERRORS["INVALID_ARGUMENTS"]
+        record = self.store.get_local_file_ref(reference)
+        self._validate_ref_scope(record, identity)
+        self._require_file_device(identity["u"], record["device_id"])
+        if max_size is not None and record["size_bytes"] > max_size:
+            raise ERRORS["FILE_SELECTOR_FILE_TOO_LARGE"]
+        response = await self._request_device(
+            record["device_id"],
+            {
+                "type": "file.upload",
+                "protocol_version": PROTOCOL_VERSION,
+                "local_file_ref": reference,
+                "upload": upload,
+                "scope": self._scope(identity),
+            },
+        )
+        if response.get("status") != "uploaded":
+            self._raise_device_file_error(response.get("error_code"))
+        return {
+            "status": "uploaded",
+            "local_file_ref": reference,
+            "size_bytes": int(
+                response.get("size_bytes") or record["size_bytes"],
+            ),
+        }
+
+    async def _managed_artifacts_list(self, arguments, identity, _trace):
+        self._require_file_capability(identity)
+        if arguments:
+            raise ERRORS["INVALID_ARGUMENTS"]
+        devices = self._online_devices(identity["u"])
+        for device in devices:
+            if device.get(
+                "protocol_version",
+            ) != PROTOCOL_VERSION or not _runner_supports(
+                device,
+                MIN_RUNNER_VERSION,
+            ):
+                continue
+            response = await self._request_device(
+                device["device_id"],
+                {
+                    "type": "managed_artifacts.list",
+                    "protocol_version": PROTOCOL_VERSION,
+                },
+            )
+            artifacts = response.get("artifacts")
+            if isinstance(artifacts, list) and all(
+                self._safe_artifact_metadata(item) for item in artifacts
+            ):
+                self.store.replace_managed_artifacts(
+                    str(identity.get("t") or "local"),
+                    identity["u"],
+                    device["device_id"],
+                    artifacts,
+                )
+        return {
+            "artifacts": [
+                {
+                    key: item[key]
+                    for key in (
+                        "artifact_id",
+                        "device_id",
+                        "task_id",
+                        "display_name",
+                        "mime_type",
+                        "size_bytes",
+                        "created_at",
+                    )
+                }
+                for item in self.store.list_managed_artifacts(
+                    str(identity.get("t") or "local"),
+                    identity["u"],
+                )
+            ],
+        }
+
+    async def _managed_artifact_action(self, arguments, identity, _trace):
+        self._require_file_capability(identity)
+        artifact_id = arguments.get("artifact_id")
+        action = arguments.get("action")
+        if (
+            not isinstance(artifact_id, str)
+            or ARTIFACT_ID_PATTERN.fullmatch(artifact_id) is None
+            or action not in {"preview", "select", "open_directory", "delete"}
+        ):
+            raise ERRORS["INVALID_ARGUMENTS"]
+        tenant_id = str(identity.get("t") or "local")
+        artifact = self.store.get_managed_artifact(
+            artifact_id,
+            tenant_id,
+            identity["u"],
+        )
+        if artifact is None:
+            raise ERRORS["TASK_NOT_FOUND"]
+        self._require_file_device(identity["u"], artifact["device_id"])
+        response = await self._request_device(
+            artifact["device_id"],
+            {
+                "type": "managed_artifact.action",
+                "protocol_version": PROTOCOL_VERSION,
+                "artifact_id": artifact_id,
+                "action": action,
+                "scope": self._scope(identity),
+            },
+        )
+        if response.get("status") != "ok":
+            self._raise_device_file_error(response.get("error_code"))
+        if action == "delete":
+            self.store.delete_managed_artifact(
+                artifact_id,
+                tenant_id,
+                identity["u"],
+            )
+        result = {"status": "ok", "artifact_id": artifact_id, "action": action}
+        if action == "select" and not isinstance(response.get("file"), dict):
+            raise ERRORS["LOCAL_FILE_REF_RESOLVE_FAILED"]
+        if action == "select":
+            selected = response["file"]
+            if not self._safe_file_metadata(selected, artifact["device_id"]):
+                raise ERRORS["LOCAL_FILE_REF_RESOLVE_FAILED"]
+            expires_at = int(time.time()) + 3600
+            inserted = self.store.save_local_file_ref(
+                selected,
+                scope=self._scope(identity),
+                interaction_id=f"managed-artifact:{artifact_id}",
+                device_id=artifact["device_id"],
+                expires_at=expires_at,
+            )
+            if not inserted:
+                raise ERRORS["LOCAL_FILE_REF_RESOLVE_FAILED"]
+            result["file"] = selected
+            result["expires_at"] = expires_at
+        return result
+
+    @staticmethod
+    def _safe_file_metadata(value: Any, device_id: str) -> bool:
+        return bool(
+            isinstance(value, dict)
+            and set(value)
+            == {
+                "local_file_ref",
+                "display_name",
+                "mime_type",
+                "size_bytes",
+                "device_id",
+                "last_modified_ms",
+            }
+            and isinstance(value.get("local_file_ref"), str)
+            and LOCAL_FILE_REF_PATTERN.fullmatch(value["local_file_ref"])
+            and isinstance(value.get("display_name"), str)
+            and len(value["display_name"]) <= 255
+            and value["display_name"] not in {"", ".", ".."}
+            and not any(
+                char in value["display_name"] for char in ("/", "\\", "\x00")
+            )
+            and isinstance(value.get("mime_type"), str)
+            and 1 <= len(value["mime_type"]) <= 255
+            and type(value.get("size_bytes")) is int
+            and 0 <= value["size_bytes"] <= 1_099_511_627_776
+            and value.get("device_id") == device_id
+            and len(device_id) <= 128
+            and type(value.get("last_modified_ms")) is int
+            and value["last_modified_ms"] >= 0,
+        )
+
+    @staticmethod
+    def _safe_artifact_metadata(value: Any) -> bool:
+        return bool(
+            isinstance(value, dict)
+            and set(value)
+            == {
+                "artifact_id",
+                "task_id",
+                "display_name",
+                "mime_type",
+                "size_bytes",
+                "created_at",
+            }
+            and isinstance(value.get("artifact_id"), str)
+            and ARTIFACT_ID_PATTERN.fullmatch(value["artifact_id"])
+            and isinstance(value.get("task_id"), str)
+            and 1 <= len(value["task_id"]) <= 128
+            and isinstance(value.get("display_name"), str)
+            and 1 <= len(value["display_name"]) <= 255
+            and isinstance(value.get("mime_type"), str)
+            and 1 <= len(value["mime_type"]) <= 255
+            and not any(
+                char in value["display_name"] for char in ("/", "\\", "\x00")
+            )
+            and type(value.get("size_bytes")) is int
+            and value["size_bytes"] >= 0
+            and type(value.get("created_at")) is int
+            and value["created_at"] >= 0,
+        )
+
+    @staticmethod
+    def _allowed_upload_header(name: str) -> bool:
+        normalized = name.lower()
+        return normalized in {
+            "content-type",
+            "content-md5",
+        } or normalized.startswith(("x-amz-", "x-oss-", "x-goog-"))
+
+    @staticmethod
+    def _mime_type_matches(actual: str, accepted: str) -> bool:
+        actual = actual.lower()
+        accepted = accepted.lower()
+        return actual == accepted or (
+            accepted.endswith("/*") and actual.startswith(accepted[:-1])
+        )
+
+    def _validate_ref_scope(
+        self,
+        record: Any,
+        identity: dict[str, Any],
+    ) -> None:
+        if not isinstance(record, dict):
+            raise ERRORS["LOCAL_FILE_REF_RESOLVE_FAILED"]
+        if record["revoked_at"] is not None:
+            raise ERRORS["LOCAL_FILE_REF_REVOKED"]
+        if int(record["expires_at"]) <= int(time.time()):
+            raise ERRORS["LOCAL_FILE_REF_EXPIRED"]
+        scope = self._scope(identity)
+        for field in (
+            "tenant_id",
+            "user_id",
+            "session_id",
+            "agent_id",
+            "installation_id",
+            "release_id",
+            "invocation_id",
+        ):
+            if record[field] != scope[field]:
+                raise ERRORS["LOCAL_FILE_REF_SCOPE_MISMATCH"]
+
+    @staticmethod
+    def _raise_device_file_error(code: Any) -> None:
+        mapping = {
+            error.code: error
+            for key, error in ERRORS.items()
+            if key.startswith("FILE_SELECTOR_")
+            or key.startswith("LOCAL_FILE_REF_")
+        }
+        raise mapping.get(str(code), ERRORS["LOCAL_FILE_REF_RESOLVE_FAILED"])
+
     async def _local_task_continue(self, arguments, identity, current_trace):
         task = self._owned_task(arguments.get("task_id"), identity["u"])
         checkpoint_id = arguments.get("checkpoint_id")
         continuation = arguments.get("input")
+        local_file_bindings = arguments.get("local_file_bindings")
+        if local_file_bindings is None:
+            local_file_bindings = {}
+        if not isinstance(local_file_bindings, dict):
+            raise ERRORS["INVALID_ARGUMENTS"]
         checkpoint = task.get("checkpoint") or {}
         if checkpoint.get("checkpoint_id") != checkpoint_id:
             raise ERRORS["CHECKPOINT_MISMATCH"]
         if task["status"] != "awaiting_input" or not isinstance(
-            continuation, dict
+            continuation,
+            dict,
         ):
             raise ERRORS["TASK_NOT_ACTIVE"]
-        await self._send(
-            task["device_id"],
-            {
-                "type": "task.continue",
-                "protocol_version": "1",
-                "trace_id": current_trace,
-                "task_id": task["task_id"],
-                "checkpoint_id": checkpoint_id,
-                "input": continuation,
-            },
+        if local_file_bindings:
+            self._require_file_capability(identity)
+        (
+            normalized_bindings,
+            binding_device_id,
+        ) = self._validate_local_file_bindings(
+            local_file_bindings,
+            identity=identity,
         )
+        if binding_device_id is not None:
+            if binding_device_id != task["device_id"]:
+                raise ERRORS["LOCAL_FILE_REF_WRONG_DEVICE"]
+            self._select_device(
+                identity["u"],
+                task["capability_id"],
+                require_file_support=True,
+                required_device_id=task["device_id"],
+            )
+        command = {
+            "type": "task.continue",
+            "protocol_version": (
+                PROTOCOL_VERSION
+                if normalized_bindings
+                else self._task_protocol(task, identity["u"])
+            ),
+            "trace_id": current_trace,
+            "task_id": task["task_id"],
+            "checkpoint_id": checkpoint_id,
+            "input": continuation,
+        }
+        if normalized_bindings:
+            command.update(
+                {
+                    "local_file_bindings": normalized_bindings,
+                    "scope": self._scope(identity),
+                },
+            )
+        await self._send(task["device_id"], command)
         task = (
             self.store.update_task(task["task_id"], status="running") or task
         )
@@ -471,7 +1144,8 @@ class LocalExecutionService:
             and task["status"] in ACTIVE_STATES
         ):
             event = self._task_events.setdefault(
-                task["task_id"], asyncio.Event()
+                task["task_id"],
+                asyncio.Event(),
             )
             event.clear()
             try:
@@ -489,7 +1163,7 @@ class LocalExecutionService:
             task["device_id"],
             {
                 "type": "task.cancel",
-                "protocol_version": "1",
+                "protocol_version": self._task_protocol(task, identity["u"]),
                 "trace_id": current_trace,
                 "task_id": task["task_id"],
             },
@@ -536,6 +1210,20 @@ class LocalExecutionService:
         message: dict[str, Any],
     ) -> None:
         message_type = message.get("type")
+        if message_type in {
+            "file.select.result",
+            "file.upload.result",
+            "managed_artifacts.result",
+            "managed_artifact.result",
+        }:
+            request_id = message.get("request_id")
+            pending = self._device_requests.get(str(request_id))
+            if pending is None:
+                return
+            expected_device_id, future = pending
+            if expected_device_id == device_id and not future.done():
+                future.set_result(message)
+            return
         if message_type == "heartbeat":
             self.store.set_device_status(device_id, "online")
             return
@@ -584,7 +1272,7 @@ class LocalExecutionService:
         }.get(event_type)
         if schema_name:
             package = self.store.get_package_for_capability(
-                task["capability_id"]
+                task["capability_id"],
             )
             schema = (
                 package["descriptor"]["schemas"][schema_name]["document"]
@@ -592,7 +1280,7 @@ class LocalExecutionService:
                 else None
             )
             if schema is None or list(
-                Draft202012Validator(schema).iter_errors(payload)
+                Draft202012Validator(schema).iter_errors(payload),
             ):
                 self.store.update_task(
                     task_id,

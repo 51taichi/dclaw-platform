@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """Offline project workflow for the DClaw Super Agent developer pack."""
 
 from __future__ import annotations
@@ -18,10 +19,10 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 
-PACK_VERSION = "1.1.0"
+PACK_VERSION = "1.2.0"
 STANDARD_ID = "dclaw.super-agent-development"
-STANDARD_VERSION = "2.2"
-DEVKIT_VERSION = "1.2.0"
+STANDARD_VERSION = "2.3"
+DEVKIT_VERSION = "1.3.0"
 PROJECT_SCHEMA_VERSION = 1
 LOCAL_SESSION = "local.execution.session/1"
 LOCAL_PREFLIGHT = "local.environment.preflight/1"
@@ -33,7 +34,7 @@ SECRET_PATTERNS = (
     re.compile(
         r"(?i)(?:api[_-]?key|access[_-]?token|client[_-]?secret|password)"
         r"\s*[:=]\s*['\"]?(?!\$\{|<|replace|change_me|example|test)"
-        r"[A-Za-z0-9+/=_-]{16,}"
+        r"[A-Za-z0-9+/=_-]{16,}",
     ),
 )
 DEFAULT_CAPABILITY_MEMBERS = (
@@ -105,7 +106,12 @@ def _sha256(path: Path) -> str:
 
 
 def _safe_relative_path(value: object, label: str) -> PurePosixPath:
-    if not isinstance(value, str) or not value or "\\" in value or "\x00" in value:
+    if (
+        not isinstance(value, str)
+        or not value
+        or "\\" in value
+        or "\x00" in value
+    ):
         raise DeveloperPackError(f"{label} must be a safe POSIX relative path")
     raw_parts = value.split("/")
     path = PurePosixPath(value)
@@ -123,11 +129,15 @@ def _project_file(root: Path, relative: PurePosixPath, label: str) -> Path:
     for part in relative.parts:
         current = current / part
         if current.is_symlink():
-            raise DeveloperPackError(f"{label} cannot contain symbolic links: {relative}")
+            raise DeveloperPackError(
+                f"{label} cannot contain symbolic links: {relative}",
+            )
     try:
         current.resolve().relative_to(root.resolve())
     except ValueError as exc:
-        raise DeveloperPackError(f"{label} escapes its project root: {relative}") from exc
+        raise DeveloperPackError(
+            f"{label} escapes its project root: {relative}",
+        ) from exc
     return current
 
 
@@ -140,7 +150,10 @@ def _zip_info(name: str) -> zipfile.ZipInfo:
 
 def _devkit():
     path = _devkit_root() / "dclaw_agent_devkit.py"
-    spec = importlib.util.spec_from_file_location("dclaw_embedded_devkit", path)
+    spec = importlib.util.spec_from_file_location(
+        "dclaw_embedded_devkit",
+        path,
+    )
     if spec is None or spec.loader is None:
         raise DeveloperPackError("cannot load bundled DevKit")
     module = importlib.util.module_from_spec(spec)
@@ -161,7 +174,7 @@ def _run(args: list[str], *, cwd: Path | None = None) -> dict:
     if completed.returncode:
         detail = completed.stdout.strip() or completed.stderr.strip()
         raise DeveloperPackError(
-            f"command failed ({completed.returncode}): {' '.join(args)}: {detail}"
+            f"command failed ({completed.returncode}): {' '.join(args)}: {detail}",
         )
     output = completed.stdout.strip()
     if not output:
@@ -189,7 +202,12 @@ def _project_paths(project: Path) -> tuple[Path, Path]:
 def _project(project: Path) -> tuple[Path, dict, Path, dict]:
     project = project.resolve()
     project_path, manifest_path = _project_paths(project)
-    return project, _read_json(project_path), manifest_path, _read_json(manifest_path)
+    return (
+        project,
+        _read_json(project_path),
+        manifest_path,
+        _read_json(manifest_path),
+    )
 
 
 def _capability_ids(manifest: dict) -> list[str]:
@@ -199,29 +217,49 @@ def _capability_ids(manifest: dict) -> list[str]:
     try:
         return [str(item["capability_id"]) for item in values]
     except (KeyError, TypeError) as exc:
-        raise DeveloperPackError("manifest capability declaration is invalid") from exc
+        raise DeveloperPackError(
+            "manifest capability declaration is invalid",
+        ) from exc
 
 
 def _validate_evidence(project: Path) -> dict:
     baseline = _read_json(project / "docs" / "SOURCE_BEHAVIOR_SPEC.json")
     differences = _read_json(project / "docs" / "PORTING_RECORD.json")
     cases = baseline.get("cases")
-    if baseline.get("status") != "verified" or not isinstance(cases, list) or not cases:
-        raise DeveloperPackError("behavior baseline is missing or not verified")
-    required = {"id", "input", "expected_steps", "expected_outcome", "evidence"}
+    if (
+        baseline.get("status") != "verified"
+        or not isinstance(cases, list)
+        or not cases
+    ):
+        raise DeveloperPackError(
+            "behavior baseline is missing or not verified",
+        )
+    required = {
+        "id",
+        "input",
+        "expected_steps",
+        "expected_outcome",
+        "evidence",
+    }
     for case in cases:
         if not isinstance(case, dict) or not required.issubset(case):
             raise DeveloperPackError("behavior baseline case is incomplete")
         if not case["expected_steps"] or not case["evidence"]:
-            raise DeveloperPackError("behavior baseline case lacks steps or evidence")
+            raise DeveloperPackError(
+                "behavior baseline case lacks steps or evidence",
+            )
     items = differences.get("differences")
     if not isinstance(items, list):
         raise DeveloperPackError("behavior differences list is missing")
     for item in items:
         if not isinstance(item, dict) or item.get("approved") is not True:
-            raise DeveloperPackError("unapproved behavior difference blocks release")
+            raise DeveloperPackError(
+                "unapproved behavior difference blocks release",
+            )
         if not str(item.get("approval_reference", "")).strip():
-            raise DeveloperPackError("behavior difference approval reference is missing")
+            raise DeveloperPackError(
+                "behavior difference approval reference is missing",
+            )
     if differences.get("pending"):
         raise DeveloperPackError("pending behavior differences block release")
     return {"behavior_cases": len(cases), "approved_differences": len(items)}
@@ -233,8 +271,13 @@ def _scan_secrets(project: Path) -> int:
     for path in sorted(project.rglob("*")):
         if not path.is_file() or any(part in ignored for part in path.parts):
             continue
-        if path.name in SECRET_FILE_NAMES or path.suffix.lower() in SECRET_SUFFIXES:
-            raise DeveloperPackError(f"secret-like file blocks release: {path}")
+        if (
+            path.name in SECRET_FILE_NAMES
+            or path.suffix.lower() in SECRET_SUFFIXES
+        ):
+            raise DeveloperPackError(
+                f"secret-like file blocks release: {path}",
+            )
         if path.stat().st_size > 2 * 1024 * 1024:
             continue
         try:
@@ -244,7 +287,9 @@ def _scan_secrets(project: Path) -> int:
         scanned += 1
         for pattern in SECRET_PATTERNS:
             if pattern.search(text):
-                raise DeveloperPackError(f"possible embedded secret blocks release: {path}")
+                raise DeveloperPackError(
+                    f"possible embedded secret blocks release: {path}",
+                )
     return scanned
 
 
@@ -269,7 +314,9 @@ def _validate_dependencies(project: Path, mode: str) -> int:
             "capability-pack/windows-x64/descriptor.template.json",
         ):
             if not (project / relative).is_file():
-                raise DeveloperPackError(f"required local capability file is missing: {relative}")
+                raise DeveloperPackError(
+                    f"required local capability file is missing: {relative}",
+                )
     return len(dependencies)
 
 
@@ -284,23 +331,42 @@ def _capability_build_spec(
         return "members", None, list(DEFAULT_CAPABILITY_MEMBERS), "legacy"
     manifest = _read_json(manifest_path)
     if manifest.get("schema_version") != 1:
-        raise DeveloperPackError("capability build manifest schema_version is unsupported")
+        raise DeveloperPackError(
+            "capability build manifest schema_version is unsupported",
+        )
     artifact = manifest.get("artifact")
     if not isinstance(artifact, dict):
-        raise DeveloperPackError("capability build manifest artifact is missing")
+        raise DeveloperPackError(
+            "capability build manifest artifact is missing",
+        )
     source = artifact.get("source")
     if source == "members":
         members = artifact.get("members")
         if not isinstance(members, list) or not members:
-            raise DeveloperPackError("capability build manifest members are missing")
+            raise DeveloperPackError(
+                "capability build manifest members are missing",
+            )
         return "members", None, members, 1
     if source == "prebuilt":
-        relative = _safe_relative_path(artifact.get("path"), "prebuilt artifact path")
-        return "prebuilt", _project_file(root, relative, "prebuilt artifact"), [], 1
-    raise DeveloperPackError("capability artifact source must be members or prebuilt")
+        relative = _safe_relative_path(
+            artifact.get("path"),
+            "prebuilt artifact path",
+        )
+        return (
+            "prebuilt",
+            _project_file(root, relative, "prebuilt artifact"),
+            [],
+            1,
+        )
+    raise DeveloperPackError(
+        "capability artifact source must be members or prebuilt",
+    )
 
 
-def _capability_files(root: Path, members: list[object]) -> list[tuple[Path, str]]:
+def _capability_files(
+    root: Path,
+    members: list[object],
+) -> list[tuple[Path, str]]:
     files: list[tuple[Path, str]] = []
     names: set[str] = set()
     casefolded: set[str] = set()
@@ -314,22 +380,45 @@ def _capability_files(root: Path, members: list[object]) -> list[tuple[Path, str
             target_value = member.get("target", source_value)
             expected_sha256 = member.get("sha256")
             if expected_sha256 is not None and not re.fullmatch(
-                r"[0-9a-f]{64}", str(expected_sha256)
+                r"[0-9a-f]{64}",
+                str(expected_sha256),
             ):
-                raise DeveloperPackError("capability member SHA-256 is invalid")
+                raise DeveloperPackError(
+                    "capability member SHA-256 is invalid",
+                )
         else:
-            raise DeveloperPackError("capability build member must be a path or object")
-        source_relative = _safe_relative_path(source_value, "capability member source")
-        target_relative = _safe_relative_path(target_value, "capability member target")
-        source = _project_file(root, source_relative, "capability member source")
+            raise DeveloperPackError(
+                "capability build member must be a path or object",
+            )
+        source_relative = _safe_relative_path(
+            source_value,
+            "capability member source",
+        )
+        target_relative = _safe_relative_path(
+            target_value,
+            "capability member target",
+        )
+        source = _project_file(
+            root,
+            source_relative,
+            "capability member source",
+        )
         if not source.exists():
-            raise DeveloperPackError(f"local capability source is missing: {source_relative}")
+            raise DeveloperPackError(
+                f"local capability source is missing: {source_relative}",
+            )
         if source.is_dir():
             if expected_sha256 is not None:
-                raise DeveloperPackError("directory capability members cannot declare sha256")
-            candidates = sorted(path for path in source.rglob("*") if path.is_file())
+                raise DeveloperPackError(
+                    "directory capability members cannot declare sha256",
+                )
+            candidates = sorted(
+                path for path in source.rglob("*") if path.is_file()
+            )
             if not candidates:
-                raise DeveloperPackError(f"local capability directory is empty: {source_relative}")
+                raise DeveloperPackError(
+                    f"local capability directory is empty: {source_relative}",
+                )
             expanded = [
                 (
                     path,
@@ -339,13 +428,18 @@ def _capability_files(root: Path, members: list[object]) -> list[tuple[Path, str
                 for path in candidates
             ]
         elif source.is_file():
-            if expected_sha256 is not None and _sha256(source) != expected_sha256:
+            if (
+                expected_sha256 is not None
+                and _sha256(source) != expected_sha256
+            ):
                 raise DeveloperPackError(
-                    f"capability member SHA-256 mismatch: {source_relative}"
+                    f"capability member SHA-256 mismatch: {source_relative}",
                 )
             expanded = [(source, target_relative)]
         else:
-            raise DeveloperPackError(f"unsupported capability member: {source_relative}")
+            raise DeveloperPackError(
+                f"unsupported capability member: {source_relative}",
+            )
         for path, target in expanded:
             _project_file(
                 root,
@@ -355,7 +449,9 @@ def _capability_files(root: Path, members: list[object]) -> list[tuple[Path, str
             name = target.as_posix()
             folded = name.casefold()
             if name == reserved or name in names or folded in casefolded:
-                raise DeveloperPackError(f"duplicate capability artifact path: {name}")
+                raise DeveloperPackError(
+                    f"duplicate capability artifact path: {name}",
+                )
             names.add(name)
             casefolded.add(folded)
             files.append((path, name))
@@ -370,7 +466,9 @@ def _build_capability_archive(
 ) -> int:
     files = _capability_files(root, members)
     if any(path.resolve() == artifact_path.resolve() for path, _name in files):
-        raise DeveloperPackError("capability artifact cannot include its own output ZIP")
+        raise DeveloperPackError(
+            "capability artifact cannot include its own output ZIP",
+        )
     inventory = {
         "schema_version": 1,
         "build_manifest_version": manifest_version,
@@ -384,7 +482,8 @@ def _build_capability_archive(
         ],
     }
     inventory_bytes = (
-        json.dumps(inventory, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        json.dumps(inventory, ensure_ascii=False, indent=2, sort_keys=True)
+        + "\n"
     ).encode("utf-8")
     with zipfile.ZipFile(
         artifact_path,
@@ -394,39 +493,54 @@ def _build_capability_archive(
     ) as archive:
         for source, name in files:
             with source.open("rb") as input_handle, archive.open(
-                _zip_info(name), "w"
+                _zip_info(name),
+                "w",
             ) as output:
                 shutil.copyfileobj(input_handle, output, length=1024 * 1024)
         archive.writestr(
-            _zip_info("DCLAW-CAPABILITY-MANIFEST.json"), inventory_bytes
+            _zip_info("DCLAW-CAPABILITY-MANIFEST.json"),
+            inventory_bytes,
         )
     return len(files)
 
 
 def _inspect_prebuilt_artifact(path: Path) -> int:
     if not path.is_file():
-        raise DeveloperPackError(f"prebuilt capability artifact is missing: {path}")
+        raise DeveloperPackError(
+            f"prebuilt capability artifact is missing: {path}",
+        )
     try:
         with zipfile.ZipFile(path) as archive:
             seen: set[str] = set()
             for info in archive.infolist():
-                relative = _safe_relative_path(info.filename.rstrip("/"), "artifact member")
+                relative = _safe_relative_path(
+                    info.filename.rstrip("/"),
+                    "artifact member",
+                )
                 name = relative.as_posix().casefold()
                 if name in seen:
                     raise DeveloperPackError(
-                        f"duplicate prebuilt capability artifact path: {info.filename}"
+                        f"duplicate prebuilt capability artifact path: {info.filename}",
                     )
                 seen.add(name)
                 if info.flag_bits & 0x1:
-                    raise DeveloperPackError("encrypted capability artifacts are unsupported")
+                    raise DeveloperPackError(
+                        "encrypted capability artifacts are unsupported",
+                    )
                 if (info.external_attr >> 16) & 0o170000 == 0o120000:
-                    raise DeveloperPackError("capability artifacts cannot contain symbolic links")
+                    raise DeveloperPackError(
+                        "capability artifacts cannot contain symbolic links",
+                    )
             bad = archive.testzip()
             if bad:
-                raise DeveloperPackError(f"prebuilt capability artifact is corrupt: {bad}")
+                raise DeveloperPackError(
+                    f"prebuilt capability artifact is corrupt: {bad}",
+                )
             files = sum(not info.is_dir() for info in archive.infolist())
     except zipfile.BadZipFile as exc:
-        raise DeveloperPackError("prebuilt capability artifact must be a valid ZIP") from exc
+        raise DeveloperPackError(
+            "prebuilt capability artifact must be a valid ZIP",
+        ) from exc
     if files < 1:
         raise DeveloperPackError("prebuilt capability artifact is empty")
     return files
@@ -468,7 +582,9 @@ def _validate_local_schemas(project: Path, mode: str) -> int:
     if not required.issubset(descriptor):
         raise DeveloperPackError("local capability descriptor is incomplete")
     if descriptor.get("implementation_status") != "release":
-        raise DeveloperPackError("local capability descriptor is not a release")
+        raise DeveloperPackError(
+            "local capability descriptor is not a release",
+        )
     artifact_path = root / "artifact.zip"
     artifact = descriptor.get("artifact")
     if not artifact_path.is_file() or not isinstance(artifact, dict):
@@ -480,32 +596,42 @@ def _validate_local_schemas(project: Path, mode: str) -> int:
         or str(artifact.get("url", "")).endswith(".invalid/")
         or ".invalid/" in str(artifact.get("url", ""))
     ):
-        raise DeveloperPackError("local capability artifact metadata is incomplete")
+        raise DeveloperPackError(
+            "local capability artifact metadata is incomplete",
+        )
     schemas = descriptor.get("schemas")
     if not isinstance(schemas, dict):
         raise DeveloperPackError("local capability schemas are missing")
     for name in ("input", "result", "checkpoint"):
         entry = schemas.get(name)
         if not isinstance(entry, dict):
-            raise DeveloperPackError(f"local {name} schema declaration is missing")
+            raise DeveloperPackError(
+                f"local {name} schema declaration is missing",
+            )
         path = root / str(entry.get("path", ""))
         document = _read_json(path)
-        if entry.get("sha256") != _sha256(path) or entry.get("document") != document:
-            raise DeveloperPackError(f"local {name} schema digest or document mismatch")
+        if (
+            entry.get("sha256") != _sha256(path)
+            or entry.get("document") != document
+        ):
+            raise DeveloperPackError(
+                f"local {name} schema digest or document mismatch",
+            )
         if (
             document.get("type") != "object"
             or document.get("additionalProperties") is not False
         ):
-            raise DeveloperPackError(f"local {name} schema must be a closed object")
+            raise DeveloperPackError(
+                f"local {name} schema must be a closed object",
+            )
     registration_path = project / "capability-pack" / "registration.json"
     registration = _read_json(registration_path)
     if registration.get("descriptor") != descriptor:
         raise DeveloperPackError("signed local capability descriptor is stale")
     manifest = _read_json(project / "manifest.template.json")
-    if (
-        registration.get("signer_id") != manifest.get("signer_id")
-        or not registration.get("signature")
-    ):
+    if registration.get("signer_id") != manifest.get(
+        "signer_id",
+    ) or not registration.get("signature"):
         raise DeveloperPackError("local capability signature is missing")
     return 3
 
@@ -523,11 +649,15 @@ def build_local_capability(
     _materialize_descriptor(project)
     artifact_path = root / "artifact.zip"
     mode, prebuilt, members, manifest_version = _capability_build_spec(
-        root, artifact_file
+        root,
+        artifact_file,
     )
     if mode == "members":
         file_count = _build_capability_archive(
-            root, artifact_path, members, manifest_version
+            root,
+            artifact_path,
+            members,
+            manifest_version,
         )
     else:
         assert prebuilt is not None
@@ -545,8 +675,8 @@ def build_local_capability(
     devkit = _devkit()
     signature = base64.b64encode(
         devkit._load_private_key(private_key_path.resolve()).sign(
-            devkit._canonical_json(descriptor)
-        )
+            devkit._canonical_json(descriptor),
+        ),
     ).decode("ascii")
     registration = {
         "descriptor": descriptor,
@@ -570,7 +700,9 @@ def verify_local_capability(project_path: Path, public_key_path: Path) -> dict:
     project, metadata, _manifest_path, _manifest = _project(project_path)
     if metadata.get("local_helper") == "none":
         return {"status": "not-required"}
-    registration = _read_json(project / "capability-pack" / "registration.json")
+    registration = _read_json(
+        project / "capability-pack" / "registration.json",
+    )
     descriptor = registration["descriptor"]
     try:
         signature = base64.b64decode(registration["signature"], validate=True)
@@ -579,7 +711,9 @@ def verify_local_capability(project_path: Path, public_key_path: Path) -> dict:
             _devkit()._canonical_json(descriptor),
         )
     except Exception as exc:
-        raise DeveloperPackError("local capability signature is invalid") from exc
+        raise DeveloperPackError(
+            "local capability signature is invalid",
+        ) from exc
     return {
         "status": "valid",
         "capability_id": descriptor["capability_id"],
@@ -596,22 +730,32 @@ def release_gate(project_path: Path) -> dict:
         "id": STANDARD_ID,
         "version": STANDARD_VERSION,
     }:
-        raise DeveloperPackError("project has not adopted the current standard")
+        raise DeveloperPackError(
+            "project has not adopted the current standard",
+        )
     if metadata.get("developer_pack_version") != PACK_VERSION:
-        raise DeveloperPackError("project developer pack version is not current")
+        raise DeveloperPackError(
+            "project developer pack version is not current",
+        )
     if _standard_version() != STANDARD_VERSION:
-        raise DeveloperPackError("developer pack and standard versions do not match")
+        raise DeveloperPackError(
+            "developer pack and standard versions do not match",
+        )
     declared = _capability_ids(manifest)
     expected = metadata.get("declared_platform_capabilities")
     if declared != expected:
-        raise DeveloperPackError("manifest capability declarations exceed project record")
+        raise DeveloperPackError(
+            "manifest capability declarations exceed project record",
+        )
     if len(declared) != len(set(declared)):
         raise DeveloperPackError("manifest contains duplicate capabilities")
     if str(manifest.get("signer_id", "")).startswith("replace-"):
         raise DeveloperPackError("approved signer_id is not configured")
     mode = metadata.get("local_helper")
     if mode not in {"none", "optional", "required"}:
-        raise DeveloperPackError("local_helper must be none, optional, or required")
+        raise DeveloperPackError(
+            "local_helper must be none, optional, or required",
+        )
     local = {item for item in declared if item.startswith("local.")}
     expected_local = {
         "none": set(),
@@ -619,7 +763,9 @@ def release_gate(project_path: Path) -> dict:
         "required": {LOCAL_SESSION, LOCAL_PREFLIGHT},
     }[mode]
     if local != expected_local:
-        raise DeveloperPackError("local helper declaration does not match capability set")
+        raise DeveloperPackError(
+            "local helper declaration does not match capability set",
+        )
     devkit = _devkit()
     manifest["capability_digest"] = devkit.compute_capability_digest(manifest)
     devkit.validate_manifest(manifest, require_content_digest=False)
@@ -650,10 +796,14 @@ def _test_configuration(
     if configured is None:
         return "unittest", sys.executable, ["tests"], []
     if not isinstance(configured, dict):
-        raise DeveloperPackError("project tests configuration must be an object")
+        raise DeveloperPackError(
+            "project tests configuration must be an object",
+        )
     adapter = configured.get("adapter")
     if adapter not in {"unittest", "pytest"}:
-        raise DeveloperPackError("project test adapter must be unittest or pytest")
+        raise DeveloperPackError(
+            "project test adapter must be unittest or pytest",
+        )
     paths = configured.get("paths", ["tests"])
     arguments = configured.get("arguments", [])
     python_value = configured.get("python")
@@ -664,15 +814,25 @@ def _test_configuration(
     ):
         raise DeveloperPackError("project test arguments must be strings")
     safe_paths = [
-        _safe_relative_path(value, "project test path").as_posix() for value in paths
+        _safe_relative_path(value, "project test path").as_posix()
+        for value in paths
     ]
     if python_value is None:
         python_executable = sys.executable
     else:
-        python_relative = _safe_relative_path(python_value, "project test Python")
-        python_path = _project_file(project, python_relative, "project test Python")
+        python_relative = _safe_relative_path(
+            python_value,
+            "project test Python",
+        )
+        python_path = _project_file(
+            project,
+            python_relative,
+            "project test Python",
+        )
         if not python_path.is_file():
-            raise DeveloperPackError(f"project test Python is missing: {python_relative}")
+            raise DeveloperPackError(
+                f"project test Python is missing: {python_relative}",
+            )
         python_executable = str(python_path)
     if adapter == "pytest" and any(
         value == "--junitxml"
@@ -681,7 +841,9 @@ def _test_configuration(
         or value.startswith("--junit-xml=")
         for value in arguments
     ):
-        raise DeveloperPackError("pytest JUnit output is managed by the developer pack")
+        raise DeveloperPackError(
+            "pytest JUnit output is managed by the developer pack",
+        )
     return adapter, python_executable, safe_paths, arguments
 
 
@@ -702,7 +864,8 @@ def run_tests(project_path: Path) -> dict:
     gate = release_gate(project_path)
     project, metadata, _manifest_path, _manifest = _project(project_path)
     adapter, python_executable, paths, arguments = _test_configuration(
-        project, metadata
+        project,
+        metadata,
     )
     commands: list[list[str]] = []
     count = 0
@@ -723,11 +886,17 @@ def run_tests(project_path: Path) -> dict:
             if completed.returncode:
                 raise DeveloperPackError(
                     "project tests failed: "
-                    + (completed.stderr or completed.stdout).strip()
+                    + (completed.stderr or completed.stdout).strip(),
                 )
-            match = re.search(r"^Ran (\d+) tests?", completed.stderr, re.MULTILINE)
+            match = re.search(
+                r"^Ran (\d+) tests?",
+                completed.stderr,
+                re.MULTILINE,
+            )
             if not match:
-                raise DeveloperPackError("unittest did not report an executed test count")
+                raise DeveloperPackError(
+                    "unittest did not report an executed test count",
+                )
             count += int(match.group(1))
     else:
         with tempfile.TemporaryDirectory(prefix="dclaw-pytest-") as temporary:
@@ -745,7 +914,7 @@ def run_tests(project_path: Path) -> dict:
             if completed.returncode:
                 raise DeveloperPackError(
                     "project tests failed: "
-                    + (completed.stdout or completed.stderr).strip()
+                    + (completed.stdout or completed.stderr).strip(),
                 )
             try:
                 root = ET.parse(report).getroot()
@@ -754,11 +923,17 @@ def run_tests(project_path: Path) -> dict:
                     if root.tag == "testsuite"
                     else root.findall(".//testsuite")
                 )
-                count = sum(int(suite.attrib.get("tests", "0")) for suite in suites)
+                count = sum(
+                    int(suite.attrib.get("tests", "0")) for suite in suites
+                )
             except (OSError, ET.ParseError, ValueError) as exc:
-                raise DeveloperPackError("pytest did not produce valid JUnit evidence") from exc
+                raise DeveloperPackError(
+                    "pytest did not produce valid JUnit evidence",
+                ) from exc
     if count < 1:
-        raise DeveloperPackError("project test suite did not execute any tests")
+        raise DeveloperPackError(
+            "project test suite did not execute any tests",
+        )
     evidence_commands = [
         [
             "<python>"
@@ -790,7 +965,12 @@ def _replace_tree(root: Path, replacements: dict[str, str]) -> None:
         path.write_text(text, encoding="utf-8")
 
 
-def initialize_project(target: Path, agent_id: str, name: str, mode: str) -> dict:
+def initialize_project(
+    target: Path,
+    agent_id: str,
+    name: str,
+    mode: str,
+) -> dict:
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", agent_id):
         raise DeveloperPackError("agent_id is invalid")
     if target.exists():
@@ -803,18 +983,20 @@ def initialize_project(target: Path, agent_id: str, name: str, mode: str) -> dic
     capabilities = manifest["capabilities"]
     if mode in {"optional", "required"}:
         capabilities.append(
-            {"capability_id": LOCAL_SESSION, "contract_version": "1"}
+            {"capability_id": LOCAL_SESSION, "contract_version": "1"},
         )
         manifest["platform_contract_versions"]["local_execution"] = "1"
     if mode == "required":
         capabilities.append(
-            {"capability_id": LOCAL_PREFLIGHT, "contract_version": "1"}
+            {"capability_id": LOCAL_PREFLIGHT, "contract_version": "1"},
         )
     metadata["local_helper"] = mode
     metadata["declared_platform_capabilities"] = [
         item["capability_id"] for item in capabilities
     ]
-    manifest["capability_digest"] = _devkit().compute_capability_digest(manifest)
+    manifest["capability_digest"] = _devkit().compute_capability_digest(
+        manifest,
+    )
     _write_json(target / "project.json", metadata)
     _write_json(target / "manifest.template.json", manifest)
     _materialize_descriptor(target)
@@ -826,11 +1008,17 @@ def initialize_project(target: Path, agent_id: str, name: str, mode: str) -> dic
             "devkit_version": DEVKIT_VERSION,
         },
     )
-    return {"status": "initialized", "project": str(target.resolve()), "local_helper": mode}
+    return {
+        "status": "initialized",
+        "project": str(target.resolve()),
+        "local_helper": mode,
+    }
 
 
 def _devkit_command(*args: str) -> dict:
-    return _run([sys.executable, str(_devkit_root() / "dclaw_agent_devkit.py"), *args])
+    return _run(
+        [sys.executable, str(_devkit_root() / "dclaw_agent_devkit.py"), *args],
+    )
 
 
 def build_project(
@@ -846,7 +1034,7 @@ def build_project(
     if project_metadata.get("local_helper") != "none":
         if not capability_artifact_url:
             raise DeveloperPackError(
-                "--capability-artifact-url is required for local helper releases"
+                "--capability-artifact-url is required for local helper releases",
             )
         capability_build = build_local_capability(
             project_path,
@@ -858,7 +1046,11 @@ def build_project(
     project, _metadata, manifest_path, manifest = _project(project_path)
     _devkit_command("digest", "--manifest", str(manifest_path), "--write")
     validation = _devkit_command(
-        "validate", "--source", str(project / "agent"), "--manifest", str(manifest_path)
+        "validate",
+        "--source",
+        str(project / "agent"),
+        "--manifest",
+        str(manifest_path),
     )
     build = _devkit_command(
         "build",
@@ -907,7 +1099,9 @@ def build_project(
             "e2e_verified": False,
         },
     }
-    evidence_path = project / "release-evidence" / f"{manifest['version']}.json"
+    evidence_path = (
+        project / "release-evidence" / f"{manifest['version']}.json"
+    )
     _write_json(evidence_path, evidence)
     evidence["evidence"] = str(evidence_path)
     return evidence
@@ -920,7 +1114,7 @@ def upgrade_project(project_path: Path, accept_standard: bool) -> dict:
     target_major = STANDARD_VERSION.split(".", 1)[0]
     if current_major != target_major and not accept_standard:
         raise DeveloperPackError(
-            "major standard upgrade requires --accept-standard after reviewing UPGRADE.md"
+            "major standard upgrade requires --accept-standard after reviewing UPGRADE.md",
         )
     previous = {
         "developer_pack_version": metadata.get("developer_pack_version"),
@@ -970,9 +1164,14 @@ def demo(workspace: Path) -> dict:
                         "local capability writes the transformed output",
                         "Agent accepts the technical result",
                     ],
-                    "expected_outcome": {"output_text": "DCLAW LOCAL CAPABILITY"},
-                    "evidence": ["tests/test_runtime.py", "offline demo result.txt"],
-                }
+                    "expected_outcome": {
+                        "output_text": "DCLAW LOCAL CAPABILITY",
+                    },
+                    "evidence": [
+                        "tests/test_runtime.py",
+                        "offline demo result.txt",
+                    ],
+                },
             ],
         },
     )
@@ -996,7 +1195,8 @@ def demo(workspace: Path) -> dict:
         str(public_key),
     )
     capability = _run(
-        [sys.executable, "capability-pack/windows-x64/runner.py"], cwd=workspace
+        [sys.executable, "capability-pack/windows-x64/runner.py"],
+        cwd=workspace,
     )
     output = workspace / "release" / "example-local-agent-0.1.0.zip"
     result = build_project(
@@ -1022,7 +1222,9 @@ def _parser() -> argparse.ArgumentParser:
     init.add_argument("--agent-id", required=True)
     init.add_argument("--name", required=True)
     init.add_argument(
-        "--local-helper", choices=("none", "optional", "required"), default="none"
+        "--local-helper",
+        choices=("none", "optional", "required"),
+        default="none",
     )
     validate = commands.add_parser("validate")
     validate.add_argument("--project", type=Path, required=True)
@@ -1069,12 +1271,18 @@ def main(argv: list[str] | None = None) -> int:
             result = {
                 "status": "ok",
                 "developer_pack_version": PACK_VERSION,
-                "standard": {"id": STANDARD_ID, "version": _standard_version()},
+                "standard": {
+                    "id": STANDARD_ID,
+                    "version": _standard_version(),
+                },
                 "devkit_version": DEVKIT_VERSION,
             }
         elif args.command == "init":
             result = initialize_project(
-                args.target, args.agent_id, args.name, args.local_helper
+                args.target,
+                args.agent_id,
+                args.name,
+                args.local_helper,
             )
         elif args.command == "validate":
             result = release_gate(args.project)

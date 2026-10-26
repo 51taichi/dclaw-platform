@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import base64
@@ -85,7 +86,7 @@ def test_devkit_has_no_server_source_import_and_runs_standalone():
     )
     result = json.loads(completed.stdout)
     assert result["status"] == "ok"
-    assert result["devkit_version"] == "1.2.0"
+    assert result["devkit_version"] == "1.3.0"
     assert result["dependency_mode"] == "bundled-wheelhouse"
     assert result["cryptography_version"] == "46.0.3"
     assert "schemas/super-expert-manifest.schema.json" in result["schemas"]
@@ -109,7 +110,7 @@ def test_devkit_bundles_and_verifies_locked_encryption_dependencies():
     )
     result = json.loads(completed.stdout)
     assert result["status"] == "ok"
-    assert result["devkit_version"] == "1.2.0"
+    assert result["devkit_version"] == "1.3.0"
     assert result["wheelhouse_verified"] is True
     assert result["wheelhouse_files"] == 26
 
@@ -131,9 +132,13 @@ def test_devkit_bundles_and_verifies_locked_encryption_dependencies():
         )
     }
     assert checksum_digests == lock_digests
-    for line in (DEVKIT_ROOT / "CHECKSUMS.sha256").read_text(
-        encoding="ascii",
-    ).splitlines():
+    for line in (
+        (DEVKIT_ROOT / "CHECKSUMS.sha256")
+        .read_text(
+            encoding="ascii",
+        )
+        .splitlines()
+    ):
         digest, relative = line.split("  ", 1)
         actual = hashlib.sha256((DEVKIT_ROOT / relative).read_bytes())
         assert actual.hexdigest() == digest

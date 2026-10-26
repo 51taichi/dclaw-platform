@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.2`
+当前版本：`2.3`
 
 发布日期：`2026-10-26`
 
@@ -120,7 +120,7 @@ DClaw 平台 -> 密封超级专家
 
 超级 Agent 开发、密封 Agent 调用开发方业务 MCP、本地能力包和本地助手所需的新增平台支持，必须统一作为可选的 `dclaw.super-agent-support` 插件包实现，不得把这些能力写入 DClaw 核心业务模块。该插件包包含：
 
-- `local-execution` 模块：对外使用 `dclaw.local-execution` 公共合同，注册八个 `local_*` 工具，实现设备路由、任务、检查点、产物、错误和追踪；
+- `local-execution` 模块：对外使用 `dclaw.local-execution` 公共合同，注册十二个通用工具，实现设备路由、任务、检查点、本地文件选择、直传、产物、错误和追踪；
 - `credential-broker` 模块：把需要由 DClaw 管理的客户凭证加密保存为不透明引用，按用户、Agent 安装和权限范围隔离，支持撤销，并只在已授权本地能力执行时受控注入；开发方业务服务自身使用的供应商 Token 仍由开发方 Secret 管理系统持有；
 - `capability-packages` 模块：实现能力描述符、Schema、签名验证、注册、安装、版本、授权和回滚；
 - DClaw 客户端插件适配：在已登录客户端内完成安装、更新、连接和用户交互引导；
@@ -492,18 +492,18 @@ stateDiagram-v2
 
 截至 2026-10-26，生产 Server 已运行提交 `f88e5554f9c9b281e47bdbc107b2030ec89b761a`，`dclaw.super-agent-support` `1.4.0` 已成功加载，生产镜像包含 Super Agent DevKit `1.2.0`、离线引导脚本和 26 个带哈希锁定的加密依赖 wheel。插件注册 `local.execution.session/1` 与 `local.environment.preflight/1`、可信工作区上下文、八个 `local_*` MCP 工具、设备配对与 WebSocket 调度、持久任务状态、能力包验签注册、凭证引用和通用 Windows 本地助手核心。DevKit 含独立 CLI、版本化 Schema、能力目录和最小模板，不导入或暴露 DClaw 服务端源码。DClaw Windows 客户端源码已加入按专家声明自动预检和顶部手动检测入口。DClaw 核心只保留通用插件 SPI；卸载插件会同时移除路由、能力和上下文处理器。
 
-开发包 `1.1.0` 与支持插件 `1.6.0` 已在本地源码完成，尚未构建或部署生产镜像。生产环境在 `1.6.0` 部署前仍只提供独立 DevKit `1.2.0` 入口；开发包本地完成、代码推送和生产可下载是三个独立状态，不得混称已上线。
+开发包 `1.2.0`、支持插件 `1.7.0` 与 DevKit `1.3.0` 已在本地源码完成，尚未构建或部署生产镜像。开发包 `1.2.0` 的正式 ZIP 尚未生成，因此归档 SHA-256、认证下载和正式发布门禁均未通过。生产环境在 `1.7.0` 部署前仍只提供独立 DevKit `1.2.0` 入口；开发包本地完成、代码推送、正式 ZIP 生成和生产可下载是四个独立状态，不得混称已上线。
 
-本标准 `2.2` 的正式开发与发布门禁如下。版本必须作为一个兼容组合核对，不能只满足其中一项：
+本标准 `2.3` 的正式开发与发布门禁如下。版本必须作为一个兼容组合核对，不能只满足其中一项：
 
 | 项目 | 本标准要求 | 2026-10-26 正式环境核对 | 结论 |
 |---|---|---|---|
 | DClaw 核心 | 至少 `1.1.10` | 公网 `/api/version` 返回 `1.1.10`，运行镜像标记 Server 提交 `f88e555` | 满足 |
-| 支持插件 | `dclaw.super-agent-support` `1.4.0` | 生产启动日志确认 `1.4.0` 成功加载 | 满足 |
-| Super Agent DevKit | `1.2.0`，且由目标实例认证下载 | 生产镜像包含 `1.2.0` 和完整 wheelhouse；匿名访问按设计返回 `401` | 版本满足，开发方下载时仍须认证并核对 SHA-256 |
-| Super Agent 开发包 | `1.1.0`，标准 `2.2`、DevKit `1.2.0` | 本地源码已完成，生产插件仍为 `1.4.0` | 尚未部署；只能本地审查，不能宣称生产可下载 |
-| Windows 客户端 | 至少 `2.6.12` | `2.6.11` | 不满足，先发布并升级客户端 |
-| 通用 Runner | 至少 `1.0.0` | 随兼容客户端核对 | 待客户端升级后核对 |
+| 支持插件 | 普通链路至少 `1.4.0`；本地文件链路 `1.7.0` | 生产启动日志确认 `1.4.0` 成功加载 | 普通链路满足；文件链路尚未部署 |
+| Super Agent DevKit | 普通链路 `1.2.0`；本地文件链路 `1.3.0`，且由目标实例认证下载 | 生产镜像包含 `1.2.0` 和完整 wheelhouse；匿名访问按设计返回 `401` | 普通链路版本满足；文件链路尚未部署 |
+| Super Agent 开发包 | `1.2.0`，标准 `2.3`、文件链路 DevKit `1.3.0` | 本地源码已完成，生产插件仍为 `1.4.0` | 尚未部署；只能本地审查，不能宣称生产可下载 |
+| Windows 客户端 | 普通预检至少 `2.6.12`；本地文件链路至少 `2.6.13` | `2.6.11` | 不满足，先发布并升级客户端 |
+| 通用 Runner | 普通链路至少 `1.0.0`；本地文件链路至少 `1.1.0` | 随兼容客户端核对 | 待客户端升级后核对 |
 
 正式公开入口：
 
@@ -523,7 +523,7 @@ stateDiagram-v2
 
 上述接口属于认证后的目标 DClaw，不是匿名公共下载站。`401` 表示尚未携带有效身份，不能据此断言接口缺失；有效身份下 `404`、插件版本低于要求、返回的 DevKit 版本不匹配或 ZIP SHA-256 与元数据不一致，均表示当前目标环境未达到发布门禁。开发方只能继续源码和离线测试，状态标记为 `platform-tooling-missing`，不得使用平台仓库内源码副本、旧兼容构建器、历史签名包或其他环境下载的 DevKit 替代。
 
-生产 Server、插件和 DevKit 已达到上述源码版本，但 Windows 客户端仍低于 `2.6.12` 门禁，Runner 兼容性仍须随客户端核对。开发方必须使用自己的认证会话实际下载 DevKit、核对服务端 SHA-256，并在上传前核对插件 Secret 与相应信任库配置；平台镜像中存在文件不能替代这些发布证据。任何历史 Agent 专属 Relay、Runner、工具前缀和能力 ID 只作为冻结兼容路径，不得被新发布复制或回退使用。
+生产 Server 当前只达到普通本地任务基础链路；文件链路所需的插件 `1.7.0`、DevKit `1.3.0`、Windows 客户端 `2.6.13` 和 Runner `1.1.0` 仍须分别部署并核对。开发方必须使用自己的认证会话实际下载 DevKit、核对服务端 SHA-256，并在上传前核对插件 Secret 与相应信任库配置；平台镜像中存在文件不能替代这些发布证据。任何历史 Agent 专属 Relay、Runner、工具前缀和能力 ID 只作为冻结兼容路径，不得被新发布复制或回退使用。
 
 生产安装必须把插件 `state_dir` 放在持久卷，并通过平台 Secret 配置稳定的 `master_key_base64`；容器可使用 `DCLAW_SUPER_AGENT_SUPPORT_MASTER_KEY_BASE64`，该值解码后至少 32 字节，不得写入仓库、镜像或 Agent 包。`trusted_package_signers` 是 `signer_id` 到原始 Ed25519 公钥 Base64 的映射。未配置受信公钥时，插件仍可启动和提供环境状态，但所有能力包注册必须失败关闭。
 
@@ -768,7 +768,7 @@ DClaw 桌面版是唯一用户入口，也是唯一登录入口。本地助手�
 5. 本地能力包返回成品路径、SHA-256、大小、时长、分辨率和技术状态；超级专家依据业务要求决定接受、重做或更换素材。
 6. 只有超级专家确认业务条件满足后，才向客户报告生成成功。
 
-### 15.3 八个公共工具
+### 15.3 十二个公共工具
 
 每个超级专家通过签名能力清单声明本地助手需求，平台不根据专家名称或业务描述猜测：
 
@@ -790,7 +790,7 @@ DClaw 桌面版是唯一用户入口，也是唯一登录入口。本地助手�
 
 迁移时由开发方根据源包自动判断本地助手模式，不向用户提出抽象选择题。源包出现大文件直接下载、FFmpeg、Whisper、本地 Python 运行时、视频剪辑、桌面软件、浏览器自动化、高 CPU/内存处理或本地成品时，默认判定为 `required`，同时声明 `local.execution.session/1` 和 `local.environment.preflight/1`。目标操作系统先沿用源包已经支持的平台；Windows x64 源包默认只声明 `windows-x64`，后续真实需要其他系统时再发布兼容版本。
 
-V1 固定流程：
+V1 基础任务固定流程：
 
 1. `local_environment_status`
 2. `local_capabilities_list`
@@ -802,6 +802,8 @@ V1 固定流程：
 8. `local_task_result`
 
 前三步完成环境与能力准备；中间步骤管理任务；最后一步只在终态读取结果。精确请求和响应以 DevKit 内 `schemas/local-execution-v1/tool-call.schema.json` 和 `schemas/local-execution-v1/tool-response.schema.json` 为准。
+
+V1.1 另增加四个按需工具：`local_file_select`、`local_file_upload`、`managed_artifacts_list` 和 `managed_artifact_action`。不使用本地文件的旧 Agent 不需要声明或调用这些工具，原八工具链路继续兼容。
 
 ### 15.4 标准调用示例
 
@@ -826,7 +828,7 @@ V1 固定流程：
 
 ```json
 {
-  "standard": {"id": "dclaw.local-execution", "version": "1.0"},
+  "standard": {"id": "dclaw.local-execution", "version": "1.1"},
   "ok": true,
   "trace_id": "trace_01J...",
   "data": {"task_id": "task_01J...", "status": "queued"}
@@ -881,6 +883,18 @@ queued | running | awaiting_input | cancelling | succeeded | failed | cancelled
 
 检查点事件必须把任务置为 `awaiting_input`。`local_task_continue` 只接受该状态且 `checkpoint_id` 与最新检查点一致的任务，受理后恢复为 `running`。历史内部值 `waiting_for_input` 在插件状态库初始化时迁移为 `awaiting_input`；标准正文旧称 `waiting_user` 只描述产品状态机，不得作为工具响应值。
 
+### 15.7 V1.1 本地文件与持久产物
+
+需要客户选择本地文件时，超级专家必须同时声明 `interaction.file.select/1`、`interaction.card.create/1` 和 `local.execution.session/1`，创建 `file_selector` 交互卡，并把卡片的类型、数量、单文件大小和总大小限制原样交给 `local_file_select`。取消系统文件对话框只返回 `cancelled`，不得提交或关闭仍为 `PENDING` 的交互卡。
+
+平台、Agent 和能力包只能看到 `local_file_ref`、显示名称、MIME、大小、设备 ID 和修改时间；本机绝对路径只保存在 Runner 的本地引用注册表。引用绑定租户、用户、会话、Agent、安装、发布、调用和设备，默认一小时过期；过期、撤销、跨范围、跨设备、文件缺失或内容变化必须以稳定 `LOCAL_FILE_REF.*` 错误失败关闭。
+
+`local_task_start.local_file_bindings` 与 `local_task_continue.local_file_bindings` 只接受命名绑定和 `access="read"`。前者用于任务启动前已有的本地文件，后者用于任务在 `awaiting_input` 检查点中途补充的本地文件；继续调用必须使用原 `task_id` 和最新 `checkpoint_id`，绑定引用必须属于原任务设备。Runner 在启动或继续能力包前重新校验范围、有效期、大小、修改时间和 SHA-256，把文件复制到任务目录 `res/bindings/<binding>/<display-name>`，设为只读，并只把相对任务根路径分别写入 `input.json` 或 `continuation.json`。服务端消息、任务记录和公开错误不得出现本机绝对路径或文件字节。旧 Agent 不传该可选字段时继续按原合同运行。
+
+需要上传时，业务服务先生成短时 HTTPS 预签名 URL、允许域、方法、允许请求头和最大大小；`local_file_upload` 只把该上传指令送到原设备，由 Runner 直接读取文件并上传。DClaw 服务端不得接收、缓存或中转文件字节；Runner 禁止重定向、非 HTTPS、带用户信息 URL、域名越界、未允许请求头和超限文件。
+
+成功任务的客户成品由 Runner 复制到持久托管产物目录。`managed_artifacts_list` 只返回安全元数据；`managed_artifact_action` 只允许预览、在资源管理器中定位、重新选择为新的不透明引用或删除该托管产物。删除必须限制在 Runner 管理根目录，禁止接受任意路径。上述文件能力要求设备协议 `2`、Runner `1.1.0` 和 Windows 客户端 `2.6.13`；协议 `1` / Runner `1.0.0` 继续支持不含文件绑定的历史任务。
+
 ## 16. 本地能力包标准
 
 每个能力包必须包含：
@@ -932,6 +946,7 @@ DClaw 服务端只保存描述符、签名、状态和小型元数据。能力�
 - DClaw 会话上下文提供 `Agent 显示名称`，本地助手不得硬编码或猜测。
 - 客户成品直接放在任务目录第一层并列入 `outputs`。
 - 素材、缓存、中间文件和诊断等过程资源放在 `res` 并列入 `resources`。
+- 能力包可以在 `res` 下保留原有业务目录含义，例如迁移旧 `制作文件` 目录时使用 `res/制作文件/...`；不得把过程资源继续放在任务根目录。
 - 失败任务不得把半成品放到任务根目录。
 - 能力包不得自行创建 Agent 专属 Runner、常驻登录客户端或平台根目录。
 - 任务清理不得删除其他 Agent 或其他任务的文件。
@@ -1038,7 +1053,7 @@ V1 的签名对象是完整能力描述符，不是单独对 ZIP 字节再附一
 
 ```json
 {
-  "standard_version": "1.0",
+  "standard_version": "1.1",
   "code": "EXTERNAL_SERVICE.INVALID_TOKEN",
   "source": {
     "layer": "external_service",
@@ -1202,7 +1217,7 @@ GET <DCLAW_BASE_URL>/api/super-agent-support/developer-pack/download
 
 开发包元数据必须返回准确的开发包版本、标准标识与版本、DevKit 版本、ZIP SHA-256、文件数、支持平台和稳定下载路径。下载后的顶层目录名带开发包版本，包内 `PACKAGE-MANIFEST.json` 和 `SHA256SUMS` 列出公开资产及摘要；开发者根据元数据判断版本，不得根据稳定下载路径、标准文件名或 ZIP 文件名猜测版本。
 
-开发包 `1.1.0` 包含标准 `2.2`、DevKit `1.2.0`、公开 Schema/SDK、完整项目模板、业务服务模板、本地能力模板、测试夹具、最小离线示例、SBOM、第三方许可证、兼容矩阵、升级和回滚说明。统一命令如下：
+开发包 `1.2.0` 包含标准 `2.3`、DevKit `1.3.0`、公开 Schema/SDK、完整项目模板、业务服务模板、本地能力模板、测试夹具、最小离线示例、SBOM、第三方许可证、兼容矩阵、升级和回滚说明。统一命令如下：
 
 ```text
 python dclaw_developer.py doctor
@@ -1861,10 +1876,10 @@ Agent 名称：<可选，中文显示名称>
 2. 开发方自己的业务目标、源 Agent 材料和测试凭证；
 3. 从目标 DClaw 认证调用元数据接口并按其 `download_path` 下载、核对 SHA-256 的官方开发包；兼容自动化可以继续单独下载同版本官方 DevKit。
 
-开发包 `1.1.0` 是推荐的单一离线移交物，必须提供：
+开发包 `1.2.0` 是推荐的单一离线移交物，必须提供：
 
 - 唯一标准文件与明确的标准版本，不复制第二套人工规则；
-- 官方 DevKit `1.2.0` 及其完整离线加密依赖；
+- 官方 DevKit `1.3.0` 及其完整离线加密依赖；
 - `dclaw_developer.py` 的 `doctor`、`info`、`init`、`validate`、`test`、`keygen`、`capability-build`、`build`、`upgrade` 和 `demo`；
 - 超级专家、业务服务和本地能力包模板，以及职责边界示例；
 - 公共业务服务、本地执行和能力包 Schema/SDK；
@@ -1876,13 +1891,13 @@ Agent 名称：<可选，中文显示名称>
 
 开发包本身不得包含平台管理员凭据、生产地址、签名私钥、供应商 Secret、客户数据或 DClaw 私有实现。包内公开工具不得导入 `qwenpaw` 或要求开发者克隆服务器仓库。
 
-DevKit `1.2.0` 必须提供：
+DevKit `1.3.0` 必须提供：
 
 - `dclaw_agent_devkit.py`：`doctor`、`contracts`、`digest`、`validate`、`keygen`、`build`、`verify`；
 - `capability-catalog.json`：当前可声明的能力、版本、组和依赖；
 - `schemas/super-expert-manifest.schema.json` 与 `schemas/agent-profile.schema.json`；
 - `schemas/local-execution-v1/`：本地请求、响应和错误合同；
-- `schemas/super-agent-support-v1/`：能力包、设备消息和凭证绑定合同；
+- `schemas/super-agent-support-v1/`：能力包、设备命令、设备消息和凭证绑定合同；
 - `templates/minimal/`：最小 manifest、`agent.json` 和 `runtime.py`。
 - `bootstrap.ps1`、`bootstrap.sh`、`requirements.lock`、`CHECKSUMS.sha256` 和 `wheelhouse/`：在支持平台离线创建隔离环境，逐文件校验并安装固定加密依赖；
 - `THIRD_PARTY_LICENSES.md`：列出随 DevKit 分发的依赖、版本和许可证。
@@ -1892,6 +1907,14 @@ DevKit `1.2.0` 必须提供：
 平台内部实现文件、测试文件和维护文档可以继续存在，但它们只服务平台维护者，不属于开发方输入。开发方缺少字段或行为定义时应报告标准或 DevKit 缺陷；平台不得用“请克隆服务器源码”回答。
 
 ## 34. 版本记录
+
+### 2.3 - 2026-10-26
+
+- Super Agent 开发包升级为 `1.2.0`，支持插件源码升级为 `1.7.0`，DevKit 升级为 `1.3.0`。
+- 新增本地文件选择、不透明引用、只读任务绑定、设备直传和持久产物公开合同，密封格式不变。
+- `local_task_continue` 新增可选只读 `local_file_bindings`，支持在原任务检查点安全补选本地文件；旧调用不传该字段时行为不变。
+- 本地执行合同升级为向后兼容的 `1.1`，文件能力使用设备协议 `2` 和 Runner `1.1.0`；协议 `1` / Runner `1.0.0` 的无文件任务继续有效。
+- 本次只完成源码、公开 Schema 和测试，不构建或部署生产镜像，不重启服务。
 
 ### 2.2 - 2026-10-26
 

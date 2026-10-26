@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Versioned platform-capability catalog and signed-manifest validation."""
 
 from __future__ import annotations
@@ -54,7 +55,11 @@ def _definition(
 PLATFORM_CAPABILITY_CATALOG_V1 = {
     item.capability_id: item
     for item in (
-        _definition("workspace.turn.orchestrate/1", "runtime", dependencies=_HOST),
+        _definition(
+            "workspace.turn.orchestrate/1",
+            "runtime",
+            dependencies=_HOST,
+        ),
         *(_definition(capability, "runtime_host") for capability in _HOST),
         _definition("card.create", "card"),
         _definition("card.update", "card", dependencies=("card.create",)),
@@ -70,6 +75,11 @@ PLATFORM_CAPABILITY_CATALOG_V1 = {
             "interaction",
             dependencies=("interaction.card.create/1",),
         ),
+        _definition(
+            "interaction.file.select/1",
+            "interaction",
+            dependencies=("interaction.card.create/1",),
+        ),
         _definition("aigc.workflow.capabilities.list/1", "aigc"),
         _definition(
             "aigc.workflow.create/1",
@@ -78,18 +88,41 @@ PLATFORM_CAPABILITY_CATALOG_V1 = {
         ),
         _definition("aigc.task.create", "aigc"),
         _definition("aigc.task.create/2", "aigc"),
-        _definition("aigc.task.resume", "aigc", dependencies=("aigc.task.create",)),
-        _definition("aigc.task.cancel", "aigc", dependencies=("aigc.task.create",)),
-        _definition("aigc.guide.update", "aigc", dependencies=("aigc.task.create",)),
-        _definition("aigc.asset.submit", "aigc", dependencies=("aigc.task.create",)),
-        _definition("aigc.review.complete", "aigc", dependencies=("aigc.task.create",)),
+        _definition(
+            "aigc.task.resume",
+            "aigc",
+            dependencies=("aigc.task.create",),
+        ),
+        _definition(
+            "aigc.task.cancel",
+            "aigc",
+            dependencies=("aigc.task.create",),
+        ),
+        _definition(
+            "aigc.guide.update",
+            "aigc",
+            dependencies=("aigc.task.create",),
+        ),
+        _definition(
+            "aigc.asset.submit",
+            "aigc",
+            dependencies=("aigc.task.create",),
+        ),
+        _definition(
+            "aigc.review.complete",
+            "aigc",
+            dependencies=("aigc.task.create",),
+        ),
     )
 }
 
 
-def get_platform_capability_catalog() -> dict[
-    str, PlatformCapabilityDefinition
-]:
+def get_platform_capability_catalog() -> (
+    dict[
+        str,
+        PlatformCapabilityDefinition,
+    ]
+):
     """Return core capabilities plus currently loaded plugin capabilities."""
     catalog = dict(PLATFORM_CAPABILITY_CATALOG_V1)
     try:
@@ -112,7 +145,9 @@ def get_platform_capability_catalog() -> dict[
     return catalog
 
 
-def _as_payload(value: Mapping[str, Any] | SealedPackageManifest) -> dict[str, Any]:
+def _as_payload(
+    value: Mapping[str, Any] | SealedPackageManifest,
+) -> dict[str, Any]:
     if isinstance(value, SealedPackageManifest):
         return value.model_dump(mode="json")
     return dict(value)
@@ -136,8 +171,14 @@ def compute_capability_set_digest(
     authority = {
         "package_type": payload.get("package_type"),
         "orchestration": payload.get("orchestration"),
-        "platform_contract_versions": payload.get("platform_contract_versions", {}),
-        "capabilities": sorted(declarations, key=lambda item: item["capability_id"]),
+        "platform_contract_versions": payload.get(
+            "platform_contract_versions",
+            {},
+        ),
+        "capabilities": sorted(
+            declarations,
+            key=lambda item: item["capability_id"],
+        ),
     }
     encoded = json.dumps(
         authority,
@@ -173,14 +214,18 @@ def validate_super_expert_manifest(
             for item in package.capabilities
         )
     except Exception as exc:
-        raise CapabilityManifestError("invalid capability declaration") from exc
+        raise CapabilityManifestError(
+            "invalid capability declaration",
+        ) from exc
     by_id = {item.capability_id: item for item in declarations}
     if len(by_id) != len(declarations):
         raise CapabilityManifestError("duplicate capability declaration")
     for capability_id, declaration in by_id.items():
         definition = catalog.get(capability_id)
         if definition is None:
-            raise CapabilityManifestError(f"unknown capability: {capability_id}")
+            raise CapabilityManifestError(
+                f"unknown capability: {capability_id}",
+            )
         if declaration.contract_version != definition.contract_version:
             raise CapabilityManifestError(
                 f"unsupported capability version: {capability_id}",
@@ -193,19 +238,20 @@ def validate_super_expert_manifest(
 
     orchestration = package.orchestration
     if orchestration is None or orchestration.capability_id not in by_id:
-        raise CapabilityManifestError("orchestration capability is not declared")
+        raise CapabilityManifestError(
+            "orchestration capability is not declared",
+        )
     if set(orchestration.required_host_capabilities) != set(_HOST):
-        raise CapabilityManifestError("required host capability set is incomplete")
+        raise CapabilityManifestError(
+            "required host capability set is incomplete",
+        )
     for capability_id in orchestration.required_host_capabilities:
         if capability_id not in by_id:
             raise CapabilityManifestError(
                 f"missing host capability declaration: {capability_id}",
             )
 
-    used_groups = {
-        catalog[item.capability_id].group
-        for item in declarations
-    }
+    used_groups = {catalog[item.capability_id].group for item in declarations}
     for group in used_groups:
         if package.platform_contract_versions.get(group) != "1":
             raise CapabilityManifestError(

@@ -1,6 +1,8 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 
 import pytest
 
@@ -28,8 +30,40 @@ def test_catalog_index_is_small_and_points_to_distinct_components():
         "single_select",
         "multi_select",
         "question_form",
+        "file_selector",
     ]
     assert all("schema" not in item for item in catalog["components"])
+
+
+def test_file_selector_catalog_exposes_safe_local_reference_contract():
+    catalog = build_interaction_catalog(["file_selector"])
+    component = catalog["components"][0]
+
+    assert component["required_capability"] == "interaction.file.select/1"
+    assert component["schema"]["additionalProperties"] is False
+    serialized = json.dumps(catalog["answer_schema"], ensure_ascii=False)
+    assert "local_file_ref" in serialized
+    assert "display_name" in serialized
+    assert "absolute_path" not in serialized
+    assert "canonical_path" not in serialized
+
+
+def test_file_selector_rejects_unsafe_or_inconsistent_configuration():
+    with pytest.raises(InteractionValidationError):
+        validate_card(
+            "file_selector",
+            {"title": "选择文件", "multiple": False, "max_files": 2},
+        )
+    with pytest.raises(InteractionValidationError):
+        validate_card(
+            "file_selector",
+            {"title": "选择文件", "accept_extensions": ["../secret"]},
+        )
+    with pytest.raises(InteractionValidationError):
+        validate_card(
+            "file_selector",
+            {"title": "选择文件", "accept_extensions": [".mp4\n.exe"]},
+        )
 
 
 def test_filtered_catalog_exposes_only_requested_detailed_contract():
@@ -291,7 +325,10 @@ def test_multi_select_rejects_default_count_outside_bounds():
         )
 
     assert error.value.issues == [
-        {"field": "card.options", "code": "DEFAULT_SELECTION_COUNT_OUT_OF_RANGE"},
+        {
+            "field": "card.options",
+            "code": "DEFAULT_SELECTION_COUNT_OUT_OF_RANGE",
+        },
     ]
 
 

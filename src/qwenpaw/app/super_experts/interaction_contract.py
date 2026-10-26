@@ -1,7 +1,9 @@
+# -*- coding: utf-8 -*-
 """Immutable v1 contract for DClaw's basic interaction capabilities."""
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
@@ -38,6 +40,7 @@ class InteractionComponentType(str, Enum):
     SINGLE_SELECT = "single_select"
     MULTI_SELECT = "multi_select"
     QUESTION_FORM = "question_form"
+    FILE_SELECTOR = "file_selector"
 
 
 class InteractionInputPolicy(str, Enum):
@@ -82,6 +85,12 @@ def _strip_optional(value: Any) -> str | None:
     return stripped or None
 
 
+_MIME_TYPE_PATTERN = re.compile(
+    r"^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+*-]+$",
+)
+_FILE_EXTENSION_PATTERN = re.compile(r"^\.[A-Za-z0-9._+-]{1,31}$")
+
+
 class InteractionOption(_StrictFrozenModel):
     id: str | None = Field(default=None, min_length=1, max_length=160)
     text: str = Field(min_length=1, max_length=500)
@@ -94,7 +103,7 @@ class InteractionOption(_StrictFrozenModel):
     _clean_id = field_validator("id", mode="before")(_strip_optional)
     _clean_text = field_validator("text", mode="before")(_strip_required)
     _clean_description = field_validator("description", mode="before")(
-        _strip_optional
+        _strip_optional,
     )
 
     @field_validator("action_url", mode="before")
@@ -120,7 +129,7 @@ class InteractionOption(_StrictFrozenModel):
             self.action_url is None or not self.default_selected
         ):
             raise ValueError(
-                "desktop auto-submit requires a default-selected action URL"
+                "desktop auto-submit requires a default-selected action URL",
             )
         return self
 
@@ -147,7 +156,7 @@ class InteractionSupplement(_StrictFrozenModel):
 
     _clean_label = field_validator("label", mode="before")(_strip_required)
     _clean_placeholder = field_validator("placeholder", mode="before")(
-        _strip_required
+        _strip_required,
     )
 
 
@@ -162,7 +171,7 @@ class _ChoiceCard(_StrictFrozenModel):
 
     _clean_title = field_validator("title", mode="before")(_strip_required)
     _clean_description = field_validator("description", mode="before")(
-        _strip_optional
+        _strip_optional,
     )
 
     @model_validator(mode="after")
@@ -204,27 +213,108 @@ class InteractionQuestionItem(_StrictFrozenModel):
     max_length: int = Field(default=2000, ge=1, le=5000)
 
     _clean_id = field_validator("id", mode="before")(_strip_optional)
-    _clean_question = field_validator("question", mode="before")(_strip_required)
+    _clean_question = field_validator("question", mode="before")(
+        _strip_required,
+    )
     _clean_description = field_validator("description", mode="before")(
-        _strip_optional
+        _strip_optional,
     )
     _clean_placeholder = field_validator("placeholder", mode="before")(
-        _strip_required
+        _strip_required,
     )
 
 
 class QuestionFormCard(_StrictFrozenModel):
     title: str = Field(min_length=1, max_length=160)
     description: str | None = Field(default=None, max_length=2000)
-    items: tuple[InteractionQuestionItem, ...] = Field(min_length=1, max_length=20)
+    items: tuple[InteractionQuestionItem, ...] = Field(
+        min_length=1,
+        max_length=20,
+    )
 
     _clean_title = field_validator("title", mode="before")(_strip_required)
     _clean_description = field_validator("description", mode="before")(
-        _strip_optional
+        _strip_optional,
     )
 
 
-InteractionCard = SingleSelectCard | MultiSelectCard | QuestionFormCard
+class FileSelectorCard(_StrictFrozenModel):
+    title: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=2000)
+    button_label: str = Field(default="选择文件", min_length=1, max_length=80)
+    accept_mime_types: tuple[str, ...] = Field(default=(), max_length=32)
+    accept_extensions: tuple[str, ...] = Field(default=(), max_length=32)
+    multiple: bool = False
+    min_files: int = Field(default=1, ge=1, le=20)
+    max_files: int = Field(default=1, ge=1, le=20)
+    max_file_size_bytes: int = Field(
+        default=536_870_912,
+        ge=1,
+        le=1_099_511_627_776,
+    )
+    max_total_size_bytes: int = Field(
+        default=536_870_912,
+        ge=1,
+        le=1_099_511_627_776,
+    )
+
+    _clean_title = field_validator("title", mode="before")(_strip_required)
+    _clean_description = field_validator("description", mode="before")(
+        _strip_optional,
+    )
+    _clean_button_label = field_validator("button_label", mode="before")(
+        _strip_required,
+    )
+
+    @field_validator("accept_mime_types", mode="before")
+    @classmethod
+    def validate_mime_types(cls, value: Any) -> Any:
+        if value is None:
+            return ()
+        if not isinstance(value, (list, tuple)):
+            raise ValueError("accept_mime_types must be an array")
+        result = []
+        for item in value:
+            normalized = _strip_required(item).lower()
+            if (
+                not 3 <= len(normalized) <= 255
+                or _MIME_TYPE_PATTERN.fullmatch(normalized) is None
+            ):
+                raise ValueError("invalid MIME type")
+            if normalized not in result:
+                result.append(normalized)
+        return tuple(result)
+
+    @field_validator("accept_extensions", mode="before")
+    @classmethod
+    def validate_extensions(cls, value: Any) -> Any:
+        if value is None:
+            return ()
+        if not isinstance(value, (list, tuple)):
+            raise ValueError("accept_extensions must be an array")
+        result = []
+        for item in value:
+            normalized = _strip_required(item).lower()
+            if _FILE_EXTENSION_PATTERN.fullmatch(normalized) is None:
+                raise ValueError("invalid file extension")
+            if normalized not in result:
+                result.append(normalized)
+        return tuple(result)
+
+    @model_validator(mode="after")
+    def validate_limits(self) -> "FileSelectorCard":
+        if self.min_files > self.max_files:
+            raise ValueError("file count bounds are invalid")
+        if not self.multiple and self.max_files != 1:
+            raise ValueError("single file selector must have max_files=1")
+        if self.max_total_size_bytes < self.max_file_size_bytes:
+            raise ValueError("total size must allow one maximum-sized file")
+        return self
+
+
+InteractionCard = (
+    SingleSelectCard | MultiSelectCard | QuestionFormCard | FileSelectorCard
+)
 
 
 def _preflight_card(component_type: str, card: Any) -> None:
@@ -247,10 +337,12 @@ def _preflight_card(component_type: str, card: Any) -> None:
                 if normalized in ids:
                     raise InteractionValidationError(
                         "INVALID_INTERACTION_REQUEST",
-                        [{
-                            "field": f"card.options[{index}].id",
-                            "code": "DUPLICATE_OPTION_ID",
-                        }],
+                        [
+                            {
+                                "field": f"card.options[{index}].id",
+                                "code": "DUPLICATE_OPTION_ID",
+                            },
+                        ],
                     )
                 ids.add(normalized)
             option_text = option.get("text")
@@ -259,19 +351,27 @@ def _preflight_card(component_type: str, card: Any) -> None:
                 if normalized in texts:
                     raise InteractionValidationError(
                         "INVALID_INTERACTION_REQUEST",
-                        [{
-                            "field": f"card.options[{index}].text",
-                            "code": "DUPLICATE_OPTION_TEXT",
-                        }],
+                        [
+                            {
+                                "field": f"card.options[{index}].text",
+                                "code": "DUPLICATE_OPTION_TEXT",
+                            },
+                        ],
                     )
                 texts.add(normalized)
             defaults += option.get("default_selected") is True
-        if component_type == InteractionComponentType.SINGLE_SELECT.value and defaults > 1:
+        if (
+            component_type == InteractionComponentType.SINGLE_SELECT.value
+            and defaults > 1
+        ):
             raise InteractionValidationError(
                 "INVALID_INTERACTION_REQUEST",
                 [{"field": "card.options", "code": "TOO_MANY_DEFAULTS"}],
             )
-        if component_type == InteractionComponentType.MULTI_SELECT.value and defaults:
+        if (
+            component_type == InteractionComponentType.MULTI_SELECT.value
+            and defaults
+        ):
             minimum = card.get("min_selections", 1)
             maximum = card.get("max_selections", len(options))
             if (
@@ -281,10 +381,12 @@ def _preflight_card(component_type: str, card: Any) -> None:
             ):
                 raise InteractionValidationError(
                     "INVALID_INTERACTION_REQUEST",
-                    [{
-                        "field": "card.options",
-                        "code": "DEFAULT_SELECTION_COUNT_OUT_OF_RANGE",
-                    }],
+                    [
+                        {
+                            "field": "card.options",
+                            "code": "DEFAULT_SELECTION_COUNT_OUT_OF_RANGE",
+                        },
+                    ],
                 )
     supplement = card.get("supplement")
     if (
@@ -294,10 +396,12 @@ def _preflight_card(component_type: str, card: Any) -> None:
     ):
         raise InteractionValidationError(
             "INVALID_INTERACTION_REQUEST",
-            [{
-                "field": "card.supplement.required",
-                "code": "FIELD_NOT_ALLOWED",
-            }],
+            [
+                {
+                    "field": "card.supplement.required",
+                    "code": "FIELD_NOT_ALLOWED",
+                },
+            ],
         )
     if component_type == InteractionComponentType.QUESTION_FORM.value:
         items = card.get("items")
@@ -313,10 +417,12 @@ def _preflight_card(component_type: str, card: Any) -> None:
                     if normalized_id in ids:
                         raise InteractionValidationError(
                             "INVALID_INTERACTION_REQUEST",
-                            [{
-                                "field": f"card.items[{index}].id",
-                                "code": "DUPLICATE_QUESTION_ID",
-                            }],
+                            [
+                                {
+                                    "field": f"card.items[{index}].id",
+                                    "code": "DUPLICATE_QUESTION_ID",
+                                },
+                            ],
                         )
                     ids.add(normalized_id)
                 question = item.get("question")
@@ -325,17 +431,23 @@ def _preflight_card(component_type: str, card: Any) -> None:
                     if normalized_question in questions:
                         raise InteractionValidationError(
                             "INVALID_INTERACTION_REQUEST",
-                            [{
-                                "field": f"card.items[{index}].question",
-                                "code": "DUPLICATE_QUESTION_TEXT",
-                            }],
+                            [
+                                {
+                                    "field": f"card.items[{index}].question",
+                                    "code": "DUPLICATE_QUESTION_TEXT",
+                                },
+                            ],
                         )
                     questions.add(normalized_question)
 
 
 def _validation_issues(error: ValidationError) -> list[dict[str, str]]:
     issues: list[dict[str, str]] = []
-    for item in error.errors(include_url=False, include_context=False, include_input=False):
+    for item in error.errors(
+        include_url=False,
+        include_context=False,
+        include_input=False,
+    ):
         path = "card"
         for part in item["loc"]:
             path += f"[{part}]" if isinstance(part, int) else f".{part}"
@@ -364,6 +476,7 @@ def validate_card(component_type: str, card: Any) -> InteractionCard:
         InteractionComponentType.SINGLE_SELECT: SingleSelectCard,
         InteractionComponentType.MULTI_SELECT: MultiSelectCard,
         InteractionComponentType.QUESTION_FORM: QuestionFormCard,
+        InteractionComponentType.FILE_SELECTOR: FileSelectorCard,
     }[kind]
     try:
         return model.model_validate(card)
@@ -383,7 +496,9 @@ class InteractionCreateRequest(_StrictFrozenModel):
     replaces_interaction_id: str | None = Field(default=None, min_length=1)
     expires_at: datetime | None = None
 
-    _clean_task_key = field_validator("task_key", mode="before")(_strip_required)
+    _clean_task_key = field_validator("task_key", mode="before")(
+        _strip_required,
+    )
     _clean_replacement = field_validator(
         "replaces_interaction_id",
         mode="before",
@@ -412,32 +527,83 @@ class InteractionResolvedAnswer(_StrictFrozenModel):
     value: str | None = Field(default=None, max_length=5000)
 
 
+class InteractionLocalFile(_StrictFrozenModel):
+    local_file_ref: str = Field(
+        min_length=36,
+        max_length=160,
+        pattern=r"^lfr_[A-Za-z0-9_-]{32,156}$",
+    )
+    display_name: str = Field(min_length=1, max_length=255)
+    mime_type: str = Field(min_length=1, max_length=255)
+    size_bytes: int = Field(ge=0, le=1_099_511_627_776)
+    device_id: str = Field(min_length=1, max_length=128)
+    last_modified_ms: int = Field(ge=0)
+
+    _clean_ref = field_validator("local_file_ref", mode="before")(
+        _strip_required,
+    )
+    _clean_mime = field_validator("mime_type", mode="before")(_strip_required)
+    _clean_device = field_validator("device_id", mode="before")(
+        _strip_required,
+    )
+
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def validate_display_name(cls, value: Any) -> str:
+        normalized = _strip_required(value)
+        if normalized in {".", ".."} or any(
+            char in normalized for char in ("/", "\\", "\x00")
+        ):
+            raise ValueError("display_name must be a base name")
+        return normalized
+
+
 class InteractionAnswer(_StrictFrozenModel):
     interaction_id: str = Field(min_length=1)
     component_type: InteractionComponentType
     selected: tuple[InteractionResolvedOption, ...] = ()
     supplement: str | None = Field(default=None, max_length=5000)
     answers: tuple[InteractionResolvedAnswer, ...] = ()
+    files: tuple[InteractionLocalFile, ...] = ()
     submitted_at: datetime
     schema_version: Literal[1] = 1
 
     @model_validator(mode="after")
     def validate_component_answer(self) -> "InteractionAnswer":
-        if self.component_type is InteractionComponentType.QUESTION_FORM:
-            if self.selected or self.supplement is not None or not self.answers:
+        if self.component_type is InteractionComponentType.FILE_SELECTOR:
+            if (
+                self.selected
+                or self.supplement is not None
+                or self.answers
+                or not self.files
+            ):
+                raise ValueError("file selector answer shape is invalid")
+        elif self.component_type is InteractionComponentType.QUESTION_FORM:
+            if (
+                self.selected
+                or self.supplement is not None
+                or not self.answers
+                or self.files
+            ):
                 raise ValueError("question form answer shape is invalid")
-        elif self.answers:
+        elif self.answers or self.files:
             raise ValueError("choice answer shape is invalid")
         return self
 
     @model_serializer(mode="wrap")
     def serialize_component_answer(self, handler: Any) -> dict[str, Any]:
         payload = handler(self)
-        if self.component_type is InteractionComponentType.QUESTION_FORM:
+        if self.component_type is InteractionComponentType.FILE_SELECTOR:
             payload.pop("selected", None)
             payload.pop("supplement", None)
+            payload.pop("answers", None)
+        elif self.component_type is InteractionComponentType.QUESTION_FORM:
+            payload.pop("selected", None)
+            payload.pop("supplement", None)
+            payload.pop("files", None)
         else:
             payload.pop("answers", None)
+            payload.pop("files", None)
         return payload
 
 
@@ -475,10 +641,25 @@ _COMPONENT_COPY = {
             "需要客户上传素材而不是填写文本",
         ],
     },
+    InteractionComponentType.FILE_SELECTOR: {
+        "summary": "客户从已配对的本地设备选择文件，平台仅接收不透明引用和安全元数据。",
+        "use_when": [
+            "本地能力需要读取客户明确选择的文件",
+            "文件内容必须留在本地设备或由设备直传第三方存储",
+        ],
+        "do_not_use_when": [
+            "只需要客户填写文本或选择预设答案",
+            "需要 Agent 获得本地绝对路径或直接读取文件内容",
+        ],
+    },
 }
 
 
-def _component_entry(kind: InteractionComponentType, *, detailed: bool) -> dict[str, Any]:
+def _component_entry(
+    kind: InteractionComponentType,
+    *,
+    detailed: bool,
+) -> dict[str, Any]:
     entry: dict[str, Any] = {
         "component_type": kind.value,
         "contract_version": "1",
@@ -490,40 +671,83 @@ def _component_entry(kind: InteractionComponentType, *, detailed: bool) -> dict[
         InteractionComponentType.SINGLE_SELECT: SingleSelectCard,
         InteractionComponentType.MULTI_SELECT: MultiSelectCard,
         InteractionComponentType.QUESTION_FORM: QuestionFormCard,
+        InteractionComponentType.FILE_SELECTOR: FileSelectorCard,
     }[kind]
+    if kind is InteractionComponentType.FILE_SELECTOR:
+        entry.update(
+            {
+                "required_capability": "interaction.file.select/1",
+                "defaults": {
+                    "input_policy": "card_only",
+                    "button_label": "选择文件",
+                    "multiple": False,
+                    "min_files": 1,
+                    "max_files": 1,
+                    "max_file_size_bytes": 536_870_912,
+                    "max_total_size_bytes": 536_870_912,
+                },
+                "schema": model.model_json_schema(),
+                "create_example": {
+                    "task_key": "select-source-file",
+                    "interaction_revision": 1,
+                    "component_type": kind.value,
+                    "input_policy": "card_only",
+                    "card": {
+                        "title": "请选择源文件",
+                        "accept_extensions": [".mp4", ".mov"],
+                        "multiple": False,
+                    },
+                },
+                "error_examples": [
+                    {
+                        "error": "FILE_SELECTOR.DEVICE_OFFLINE",
+                        "retryable": True,
+                    },
+                    {
+                        "error": "FILE_SELECTOR.FILE_TOO_LARGE",
+                        "retryable": True,
+                    },
+                ],
+            },
+        )
+        return entry
     if kind is InteractionComponentType.QUESTION_FORM:
-        entry.update({
-            "defaults": {
-                "input_policy": "card_only",
-                "items[].placeholder": "请输入回答",
-                "items[].required": True,
-                "items[].max_length": 2000,
-            },
-            "schema": model.model_json_schema(),
-            "create_example": {
-                "task_key": "customer-open-questions",
-                "interaction_revision": 1,
-                "component_type": kind.value,
-                "input_policy": "card_only",
-                "card": {
-                    "title": "请补充以下信息",
-                    "items": [
-                        {
-                            "id": "business-context",
-                            "question": "请介绍目前的具体业务情况。",
-                            "required": True,
-                        },
-                    ],
+        entry.update(
+            {
+                "defaults": {
+                    "input_policy": "card_only",
+                    "items[].placeholder": "请输入回答",
+                    "items[].required": True,
+                    "items[].max_length": 2000,
                 },
-            },
-            "error_examples": [
-                {
-                    "error": "INVALID_INTERACTION_REQUEST",
-                    "issues": [{"field": "card.items", "code": "INVALID_VALUE"}],
-                    "retryable": True,
+                "schema": model.model_json_schema(),
+                "create_example": {
+                    "task_key": "customer-open-questions",
+                    "interaction_revision": 1,
+                    "component_type": kind.value,
+                    "input_policy": "card_only",
+                    "card": {
+                        "title": "请补充以下信息",
+                        "items": [
+                            {
+                                "id": "business-context",
+                                "question": "请介绍目前的具体业务情况。",
+                                "required": True,
+                            },
+                        ],
+                    },
                 },
-            ],
-        })
+                "error_examples": [
+                    {
+                        "error": "INVALID_INTERACTION_REQUEST",
+                        "issues": [
+                            {"field": "card.items", "code": "INVALID_VALUE"},
+                        ],
+                        "retryable": True,
+                    },
+                ],
+            },
+        )
         return entry
     example: dict[str, Any] = {
         "task_key": "customer-choice",
@@ -531,7 +755,9 @@ def _component_entry(kind: InteractionComponentType, *, detailed: bool) -> dict[
         "component_type": kind.value,
         "input_policy": "card_only",
         "card": {
-            "title": "请选择最贴近的一项" if kind is InteractionComponentType.SINGLE_SELECT else "请选择所有符合项",
+            "title": "请选择最贴近的一项"
+            if kind is InteractionComponentType.SINGLE_SELECT
+            else "请选择所有符合项",
             "options": [
                 {"id": "option-a", "text": "选项甲", "recommended": True},
                 {"text": "选项乙"},
@@ -542,23 +768,27 @@ def _component_entry(kind: InteractionComponentType, *, detailed: bool) -> dict[
     }
     if kind is InteractionComponentType.MULTI_SELECT:
         example["card"].update({"min_selections": 1, "max_selections": 2})
-    entry.update({
-        "defaults": {
-            "input_policy": "card_only",
-            "layout": "auto",
-            "supplement.enabled": False,
-            "supplement.required": False,
-        },
-        "schema": model.model_json_schema(),
-        "create_example": example,
-        "error_examples": [
-            {
-                "error": "INVALID_INTERACTION_REQUEST",
-                "issues": [{"field": "card.options", "code": "INVALID_VALUE"}],
-                "retryable": True,
+    entry.update(
+        {
+            "defaults": {
+                "input_policy": "card_only",
+                "layout": "auto",
+                "supplement.enabled": False,
+                "supplement.required": False,
             },
-        ],
-    })
+            "schema": model.model_json_schema(),
+            "create_example": example,
+            "error_examples": [
+                {
+                    "error": "INVALID_INTERACTION_REQUEST",
+                    "issues": [
+                        {"field": "card.options", "code": "INVALID_VALUE"},
+                    ],
+                    "retryable": True,
+                },
+            ],
+        },
+    )
     return entry
 
 
@@ -577,10 +807,12 @@ def build_interaction_catalog(component_types: list[str]) -> dict[str, Any]:
             except (TypeError, ValueError) as exc:
                 raise InteractionValidationError(
                     "INVALID_CATALOG_REQUEST",
-                    [{
-                        "field": f"component_types[{index}]",
-                        "code": "UNKNOWN_COMPONENT_TYPE",
-                    }],
+                    [
+                        {
+                            "field": f"component_types[{index}]",
+                            "code": "UNKNOWN_COMPONENT_TYPE",
+                        },
+                    ],
                 ) from exc
             if kind not in kinds:
                 kinds.append(kind)
@@ -590,8 +822,7 @@ def build_interaction_catalog(component_types: list[str]) -> dict[str, Any]:
     result = {
         "catalog_version": "1",
         "components": [
-            _component_entry(kind, detailed=detailed)
-            for kind in kinds
+            _component_entry(kind, detailed=detailed) for kind in kinds
         ],
     }
     if detailed:
@@ -605,6 +836,7 @@ __all__ = [
     "InteractionComponentType",
     "InteractionCreateRequest",
     "InteractionInputPolicy",
+    "InteractionLocalFile",
     "InteractionLayout",
     "InteractionOption",
     "InteractionQuestionItem",
@@ -613,6 +845,7 @@ __all__ = [
     "InteractionStatus",
     "InteractionSupplement",
     "InteractionValidationError",
+    "FileSelectorCard",
     "MultiSelectCard",
     "QuestionFormCard",
     "SingleSelectCard",

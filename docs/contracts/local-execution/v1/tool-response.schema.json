@@ -12,7 +12,7 @@
       "required": ["id", "version"],
       "properties": {
         "id": {"const": "dclaw.local-execution"},
-        "version": {"const": "1.0"}
+        "version": {"const": "1.1"}
       }
     },
     "ok": {"type": "boolean"},
@@ -25,7 +25,11 @@
         {"$ref": "#/$defs/EnvironmentStatusData"},
         {"$ref": "#/$defs/CapabilitiesListData"},
         {"$ref": "#/$defs/RuntimePrepareData"},
-        {"$ref": "#/$defs/TaskData"}
+        {"$ref": "#/$defs/TaskData"},
+        {"$ref": "#/$defs/FileSelectionData"},
+        {"$ref": "#/$defs/FileUploadData"},
+        {"$ref": "#/$defs/ManagedArtifactsData"},
+        {"$ref": "#/$defs/ManagedArtifactActionData"}
       ]
     },
     "error": {
@@ -67,7 +71,7 @@
       "properties": {
         "state": {"enum": ["ready", "device_not_ready", "runner_update_required", "protocol_incompatible"]},
         "reason": {"enum": ["none", "no_paired_device", "device_offline", "runner_version_too_old", "protocol_version_mismatch"]},
-        "protocol_version": {"const": "1"},
+        "protocol_version": {"enum": ["1", "2"]},
         "compatible": {"type": "boolean"},
         "minimum_runner_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
         "bootstrap_session_id": {"type": ["string", "null"], "maxLength": 128},
@@ -134,6 +138,12 @@
         "updated_at": {"type": "integer", "minimum": 0},
         "idempotent_replay": {"type": "boolean"}
       }
-    }
+    },
+    "LocalFile": {"type":"object","additionalProperties":false,"required":["local_file_ref","display_name","mime_type","size_bytes","device_id","last_modified_ms"],"properties":{"local_file_ref":{"type":"string","pattern":"^lfr_[A-Za-z0-9_-]{32,156}$"},"display_name":{"type":"string","minLength":1,"maxLength":255,"pattern":"^[^/\\\\\\u0000]+$"},"mime_type":{"type":"string","minLength":1,"maxLength":255},"size_bytes":{"type":"integer","minimum":0,"maximum":1099511627776},"device_id":{"type":"string","minLength":1,"maxLength":128},"last_modified_ms":{"type":"integer","minimum":0}}},
+    "FileSelectionData": {"type":"object","additionalProperties":false,"required":["status","files"],"properties":{"status":{"enum":["selected","cancelled"]},"files":{"type":"array","maxItems":20,"items":{"$ref":"#/$defs/LocalFile"}},"expires_at":{"type":"integer","minimum":0}}},
+    "FileUploadData": {"type":"object","additionalProperties":false,"required":["status","local_file_ref","size_bytes"],"properties":{"status":{"const":"uploaded"},"local_file_ref":{"type":"string","pattern":"^lfr_[A-Za-z0-9_-]{32,156}$"},"size_bytes":{"type":"integer","minimum":0}}},
+    "ManagedArtifact": {"type":"object","additionalProperties":false,"required":["artifact_id","device_id","task_id","display_name","mime_type","size_bytes","created_at"],"properties":{"artifact_id":{"type":"string","pattern":"^artifact_[A-Za-z0-9_-]{32,156}$"},"device_id":{"type":"string","minLength":1,"maxLength":128},"task_id":{"type":"string","minLength":1,"maxLength":128},"display_name":{"type":"string","minLength":1,"maxLength":255,"pattern":"^[^/\\\\\\u0000]+$"},"mime_type":{"type":"string","minLength":1,"maxLength":255},"size_bytes":{"type":"integer","minimum":0,"maximum":1099511627776},"created_at":{"type":"integer","minimum":0}}},
+    "ManagedArtifactsData": {"type":"object","additionalProperties":false,"required":["artifacts"],"properties":{"artifacts":{"type":"array","items":{"$ref":"#/$defs/ManagedArtifact"}}}},
+    "ManagedArtifactActionData": {"type":"object","additionalProperties":false,"required":["status","artifact_id","action"],"properties":{"status":{"const":"ok"},"artifact_id":{"type":"string"},"action":{"enum":["preview","select","open_directory","delete"]},"file":{"$ref":"#/$defs/LocalFile"},"expires_at":{"type":"integer","minimum":0}}}
   }
 }

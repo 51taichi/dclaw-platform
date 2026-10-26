@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Plugin-owned durable SQLite state."""
 
 from __future__ import annotations
@@ -15,7 +16,10 @@ from typing import Any
 
 def _json(value: Any) -> str:
     return json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
     )
 
 
@@ -108,6 +112,39 @@ class StateStore:
                     installation_ids_json TEXT NOT NULL DEFAULT '[]',
                     updated_at INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS local_file_refs (
+                    local_file_ref TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL DEFAULT 'local',
+                    user_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    installation_id TEXT NOT NULL,
+                    release_id TEXT NOT NULL,
+                    invocation_id TEXT NOT NULL,
+                    interaction_id TEXT NOT NULL,
+                    device_id TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    mime_type TEXT NOT NULL,
+                    size_bytes INTEGER NOT NULL,
+                    last_modified_ms INTEGER NOT NULL,
+                    expires_at INTEGER NOT NULL,
+                    revoked_at INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS idx_local_file_refs_scope
+                    ON local_file_refs(user_id,agent_id,installation_id,device_id);
+                CREATE TABLE IF NOT EXISTS managed_artifacts (
+                    artifact_id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL DEFAULT 'local',
+                    user_id TEXT NOT NULL,
+                    device_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    mime_type TEXT NOT NULL,
+                    size_bytes INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_managed_artifacts_user
+                    ON managed_artifacts(tenant_id,user_id,created_at DESC);
                 """,
             )
             columns = {
@@ -119,12 +156,49 @@ class StateStore:
             credential_columns = {
                 row[1]
                 for row in db.execute(
-                    "PRAGMA table_info(credentials)"
+                    "PRAGMA table_info(credentials)",
                 ).fetchall()
             }
             if "installation_ids_json" not in credential_columns:
                 db.execute(
                     "ALTER TABLE credentials ADD COLUMN installation_ids_json TEXT NOT NULL DEFAULT '[]'",
+                )
+            task_columns = {
+                row[1]
+                for row in db.execute("PRAGMA table_info(tasks)").fetchall()
+            }
+            for name, definition in (
+                ("tenant_id", "TEXT NOT NULL DEFAULT 'local'"),
+                ("session_id", "TEXT NOT NULL DEFAULT ''"),
+                ("installation_id", "TEXT NOT NULL DEFAULT ''"),
+                ("release_id", "TEXT NOT NULL DEFAULT ''"),
+                ("local_file_bindings_json", "TEXT NOT NULL DEFAULT '{}'"),
+            ):
+                if name not in task_columns:
+                    db.execute(
+                        f"ALTER TABLE tasks ADD COLUMN {name} {definition}",
+                    )
+            local_file_columns = {
+                row[1]
+                for row in db.execute(
+                    "PRAGMA table_info(local_file_refs)",
+                ).fetchall()
+            }
+            if "tenant_id" not in local_file_columns:
+                db.execute(
+                    "ALTER TABLE local_file_refs "
+                    "ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'local'",
+                )
+            managed_artifact_columns = {
+                row[1]
+                for row in db.execute(
+                    "PRAGMA table_info(managed_artifacts)",
+                ).fetchall()
+            }
+            if "tenant_id" not in managed_artifact_columns:
+                db.execute(
+                    "ALTER TABLE managed_artifacts "
+                    "ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'local'",
                 )
             db.execute(
                 "UPDATE tasks SET status='awaiting_input' WHERE status='waiting_for_input'",
@@ -213,7 +287,9 @@ class StateStore:
             )
 
     def authenticate_device(
-        self, device_id: str, device_token: str
+        self,
+        device_id: str,
+        device_token: str,
     ) -> dict[str, Any] | None:
         digest = hashlib.sha256(device_token.encode()).hexdigest()
         with self._connect() as db:
@@ -306,7 +382,8 @@ class StateStore:
             )
 
     def get_package_for_capability(
-        self, capability_id: str
+        self,
+        capability_id: str,
     ) -> dict[str, Any] | None:
         with self._connect() as db:
             row = db.execute(
@@ -348,9 +425,22 @@ class StateStore:
         idempotency_key: str,
         device_id: str,
         max_concurrency: int,
+        tenant_id: str = "local",
+        session_id: str = "",
+        installation_id: str = "",
+        release_id: str = "",
+        local_file_bindings: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], bool]:
         encoded_input = _json(task_input)
-        input_hash = hashlib.sha256(encoded_input.encode()).hexdigest()
+        encoded_bindings = _json(local_file_bindings or {})
+        input_hash = hashlib.sha256(
+            _json(
+                {
+                    "input": task_input,
+                    "local_file_bindings": local_file_bindings or {},
+                },
+            ).encode(),
+        ).hexdigest()
         now = int(time.time())
         task_id = uuid.uuid4().hex
         with self._lock, self._connect() as db:
@@ -379,8 +469,9 @@ class StateStore:
                 """
                 INSERT INTO tasks(task_id,user_id,agent_id,agent_name,invocation_id,
                     capability_id,idempotency_key,input_hash,input_json,device_id,status,
-                    created_at,updated_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    created_at,updated_at,tenant_id,session_id,installation_id,release_id,
+                    local_file_bindings_json)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     task_id,
@@ -396,10 +487,16 @@ class StateStore:
                     "queued",
                     now,
                     now,
+                    tenant_id,
+                    session_id,
+                    installation_id,
+                    release_id,
+                    encoded_bindings,
                 ),
             )
             row = db.execute(
-                "SELECT * FROM tasks WHERE task_id=?", (task_id,)
+                "SELECT * FROM tasks WHERE task_id=?",
+                (task_id,),
             ).fetchone()
         return self._task(row), True
 
@@ -411,8 +508,24 @@ class StateStore:
             ).fetchone()
         return self._task(row) if row is not None else None
 
+    def get_task_by_idempotency(
+        self,
+        user_id: str,
+        agent_id: str,
+        idempotency_key: str,
+    ) -> dict[str, Any] | None:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM tasks "
+                "WHERE user_id=? AND agent_id=? AND idempotency_key=?",
+                (user_id, agent_id, idempotency_key),
+            ).fetchone()
+        return self._task(row) if row is not None else None
+
     def current_task(
-        self, user_id: str, agent_id: str
+        self,
+        user_id: str,
+        agent_id: str,
     ) -> dict[str, Any] | None:
         with self._connect() as db:
             row = db.execute(
@@ -446,7 +559,8 @@ class StateStore:
                 ),
             )
             row = db.execute(
-                "SELECT * FROM tasks WHERE task_id=?", (task_id,)
+                "SELECT * FROM tasks WHERE task_id=?",
+                (task_id,),
             ).fetchone()
         return self._task(row) if row is not None else None
 
@@ -488,11 +602,144 @@ class StateStore:
             ("checkpoint_json", "checkpoint"),
             ("result_json", "result"),
             ("error_json", "error"),
+            ("local_file_bindings_json", "local_file_bindings"),
         ):
             raw = result.pop(source)
             result[target] = json.loads(raw) if raw else None
         result.pop("input_hash", None)
         return result
+
+    def save_local_file_ref(
+        self,
+        metadata: dict[str, Any],
+        *,
+        scope: dict[str, str],
+        interaction_id: str,
+        device_id: str,
+        expires_at: int,
+    ) -> bool:
+        with self._lock, self._connect() as db:
+            inserted = db.execute(
+                """
+                INSERT OR IGNORE INTO local_file_refs(
+                    local_file_ref,tenant_id,user_id,session_id,agent_id,installation_id,
+                    release_id,invocation_id,interaction_id,device_id,display_name,
+                    mime_type,size_bytes,last_modified_ms,expires_at,revoked_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)
+                """,
+                (
+                    metadata["local_file_ref"],
+                    scope.get("tenant_id", "local"),
+                    scope["user_id"],
+                    scope["session_id"],
+                    scope["agent_id"],
+                    scope["installation_id"],
+                    scope["release_id"],
+                    scope["invocation_id"],
+                    interaction_id,
+                    device_id,
+                    metadata["display_name"],
+                    metadata["mime_type"],
+                    metadata["size_bytes"],
+                    metadata["last_modified_ms"],
+                    expires_at,
+                ),
+            )
+        return inserted.rowcount == 1
+
+    def get_local_file_ref(self, local_file_ref: str) -> dict[str, Any] | None:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM local_file_refs WHERE local_file_ref=?",
+                (local_file_ref,),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def revoke_local_file_ref(self, local_file_ref: str, user_id: str) -> bool:
+        with self._lock, self._connect() as db:
+            return (
+                db.execute(
+                    "UPDATE local_file_refs SET revoked_at=? WHERE local_file_ref=? AND user_id=?",
+                    (int(time.time()), local_file_ref, user_id),
+                ).rowcount
+                == 1
+            )
+
+    def replace_managed_artifacts(
+        self,
+        tenant_id: str,
+        user_id: str,
+        device_id: str,
+        artifacts: list[dict[str, Any]],
+    ) -> None:
+        with self._lock, self._connect() as db:
+            db.execute(
+                "DELETE FROM managed_artifacts "
+                "WHERE tenant_id=? AND user_id=? AND device_id=?",
+                (tenant_id, user_id, device_id),
+            )
+            for item in artifacts:
+                db.execute(
+                    """
+                    INSERT OR IGNORE INTO managed_artifacts(
+                        artifact_id,tenant_id,user_id,device_id,task_id,display_name,
+                        mime_type,size_bytes,created_at) VALUES(?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        item["artifact_id"],
+                        tenant_id,
+                        user_id,
+                        device_id,
+                        item["task_id"],
+                        item["display_name"],
+                        item["mime_type"],
+                        item["size_bytes"],
+                        item["created_at"],
+                    ),
+                )
+
+    def list_managed_artifacts(
+        self,
+        tenant_id: str,
+        user_id: str,
+    ) -> list[dict[str, Any]]:
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT * FROM managed_artifacts "
+                "WHERE tenant_id=? AND user_id=? ORDER BY created_at DESC",
+                (tenant_id, user_id),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_managed_artifact(
+        self,
+        artifact_id: str,
+        tenant_id: str,
+        user_id: str,
+    ) -> dict[str, Any] | None:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM managed_artifacts "
+                "WHERE artifact_id=? AND tenant_id=? AND user_id=?",
+                (artifact_id, tenant_id, user_id),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def delete_managed_artifact(
+        self,
+        artifact_id: str,
+        tenant_id: str,
+        user_id: str,
+    ) -> bool:
+        with self._lock, self._connect() as db:
+            return (
+                db.execute(
+                    "DELETE FROM managed_artifacts "
+                    "WHERE artifact_id=? AND tenant_id=? AND user_id=?",
+                    (artifact_id, tenant_id, user_id),
+                ).rowcount
+                == 1
+            )
 
     def put_credential(
         self,
