@@ -74,6 +74,28 @@ async def test_plugin_load_and_unload_are_isolated(tmp_path):
             getattr(route, "path", None) == "/api/super-agent-support"
             for route in app.routes
         )
+        with TestClient(app) as client:
+            frontend_response = client.get(
+                "/api/super-expert-platform/cards",
+                params={"conversation_id": "conversation-1"},
+            )
+            user_response = client.get(
+                "/api/user/super-expert-platform/cards",
+                params={"conversation_id": "conversation-1"},
+            )
+            assert frontend_response.json()["detail"] == "Chat not found"
+            assert user_response.json()["detail"] == "Chat not found"
+        assert (
+            loader.registry.get_workspace_turn_handler(
+                "workspace.turn.orchestrate/1",
+            )
+            is not None
+        )
+        assert loader.registry.get_aigc_event_consumer_factories()
+        assert loader.registry.get_aigc_canvas_policies()
+        assert (
+            loader.registry.get_sealed_package_type("super_expert") is not None
+        )
         context = await loader.registry.enrich_workspace_context(
             {
                 "user_id": "user-1",
@@ -102,6 +124,28 @@ async def test_plugin_load_and_unload_are_isolated(tmp_path):
             getattr(route, "path", None) == "/api/super-agent-support"
             for route in app.routes
         )
+        with TestClient(app) as client:
+            frontend_response = client.get(
+                "/api/super-expert-platform/cards",
+                params={"conversation_id": "conversation-1"},
+            )
+            user_response = client.get(
+                "/api/user/super-expert-platform/cards",
+                params={"conversation_id": "conversation-1"},
+            )
+            assert frontend_response.status_code == 404
+            assert user_response.status_code == 404
+            assert frontend_response.json()["detail"] == "Not Found"
+            assert user_response.json()["detail"] == "Not Found"
+        assert (
+            loader.registry.get_workspace_turn_handler(
+                "workspace.turn.orchestrate/1",
+            )
+            is None
+        )
+        assert not loader.registry.get_aigc_event_consumer_factories()
+        assert not loader.registry.get_aigc_canvas_policies()
+        assert loader.registry.get_sealed_package_type("super_expert") is None
         unchanged = await loader.registry.enrich_workspace_context(
             {"user_id": "user-1"},
             granted_capabilities={},
@@ -110,6 +154,29 @@ async def test_plugin_load_and_unload_are_isolated(tmp_path):
         assert unchanged == {"user_id": "user-1"}
     finally:
         PluginRegistry._instance = previous
+
+
+def test_core_uses_generic_spi_and_legacy_imports_resolve_to_plugin():
+    core_router = (ROOT / "src/qwenpaw/app/routers/__init__.py").read_text(
+        encoding="utf-8",
+    )
+    runner = (ROOT / "src/qwenpaw/app/runner/runner.py").read_text(
+        encoding="utf-8",
+    )
+    assert "super_expert_platform" not in core_router
+    assert "qwenpaw.app.super_experts" not in runner
+    assert "..super_experts" not in runner
+
+    import qwenpaw.app.routers.super_expert_platform as legacy_router
+    import qwenpaw.app.super_experts.capabilities as legacy_capabilities
+    import qwenpaw.app.workspace.orchestration as legacy_orchestration
+
+    for module in (
+        legacy_router,
+        legacy_capabilities,
+        legacy_orchestration,
+    ):
+        assert str(module.__file__).startswith(str(PLUGIN_ROOT))
 
 
 @pytest.mark.asyncio
@@ -400,20 +467,20 @@ def test_developer_pack_is_downloadable_and_self_describing(
 
     assert metadata.status_code == 200
     payload = metadata.json()
-    assert payload["version"] == "1.2.0"
-    assert payload["standard"]["version"] == "2.3"
+    assert payload["version"] == "1.3.0"
+    assert payload["standard"]["version"] == "2.4"
     assert payload["devkit_version"] == "1.3.0"
     assert payload["server_source_required"] is False
     assert payload["download_path"].endswith("/developer-pack/download")
     assert payload["sha256"] == hashlib.sha256(downloaded.content).hexdigest()
     assert payload["content_sha256"] == payload["sha256"]
     assert downloaded.status_code == 200
-    assert "dclaw-super-agent-developer-pack-1.2.0.zip" in (
+    assert "dclaw-super-agent-developer-pack-1.3.0.zip" in (
         downloaded.headers["content-disposition"]
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-developer-pack-1.2.0"
+    prefix = "dclaw-super-agent-developer-pack-1.3.0"
     assert f"{prefix}/PACKAGE-MANIFEST.json" in names
     assert f"{prefix}/SHA256SUMS" in names
     assert f"{prefix}/dclaw_developer.py" in names

@@ -34,8 +34,18 @@ class Request:
 @pytest.mark.parametrize(
     ("req", "expected"),
     [
-        (Request(path_agent="path-agent", state_agent="state", header_agent="header"), "path-agent"),
-        (Request(state_agent="state-agent", header_agent="header"), "state-agent"),
+        (
+            Request(
+                path_agent="path-agent",
+                state_agent="state",
+                header_agent="header",
+            ),
+            "path-agent",
+        ),
+        (
+            Request(state_agent="state-agent", header_agent="header"),
+            "state-agent",
+        ),
         (Request(header_agent="header-agent"), "header-agent"),
     ],
 )
@@ -48,7 +58,10 @@ def test_asset_guard_denies_sealed_agent_before_resolver_runs(monkeypatch):
     monkeypatch.setattr(
         policy,
         "get_sealed_agent_registry",
-        lambda: SimpleNamespace(is_sealed=lambda agent_id: agent_id == "luyu"),
+        lambda: SimpleNamespace(
+            is_sealed=lambda agent_id: agent_id == "luyu",
+            package_supports=lambda *_args, **_kwargs: False,
+        ),
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -88,7 +101,10 @@ def test_asset_guard_allows_owned_chat_artifact_delivery_for_sealed_agent(
     monkeypatch.setattr(
         policy,
         "get_sealed_agent_registry",
-        lambda: SimpleNamespace(is_sealed=lambda agent_id: agent_id == "luyu"),
+        lambda: SimpleNamespace(
+            is_sealed=lambda agent_id: agent_id == "luyu",
+            package_supports=lambda *_args, **_kwargs: False,
+        ),
     )
 
     policy.deny_sealed_asset_access(
@@ -117,7 +133,12 @@ def test_asset_guard_keeps_other_sealed_workspace_assets_protected(
     monkeypatch.setattr(
         policy,
         "get_sealed_agent_registry",
-        lambda: SimpleNamespace(is_sealed=lambda agent_id: agent_id == "luyu"),
+        lambda: SimpleNamespace(
+            is_sealed=lambda agent_id: agent_id == "luyu",
+            package_supports=lambda agent_id, feature: (
+                agent_id == "luyu" and feature == "mutable_skill_overlay"
+            ),
+        ),
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -139,7 +160,12 @@ def test_skill_asset_guard_allows_global_pool_listing_with_sealed_header(
     monkeypatch.setattr(
         policy,
         "get_sealed_agent_registry",
-        lambda: SimpleNamespace(is_sealed=lambda agent_id: agent_id == "luyu"),
+        lambda: SimpleNamespace(
+            is_sealed=lambda agent_id: agent_id == "luyu",
+            package_supports=lambda agent_id, feature: (
+                agent_id == "luyu" and feature == "mutable_skill_overlay"
+            ),
+        ),
     )
 
     policy.deny_sealed_skill_asset_access(
@@ -155,7 +181,10 @@ def test_skill_asset_guard_still_denies_sealed_workspace_download(monkeypatch):
     monkeypatch.setattr(
         policy,
         "get_sealed_agent_registry",
-        lambda: SimpleNamespace(is_sealed=lambda agent_id: agent_id == "luyu"),
+        lambda: SimpleNamespace(
+            is_sealed=lambda agent_id: agent_id == "luyu",
+            package_supports=lambda *_args, **_kwargs: False,
+        ),
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -173,7 +202,9 @@ def test_skill_asset_guard_still_denies_sealed_workspace_download(monkeypatch):
 def test_skill_asset_guard_allows_super_expert_pool_download(monkeypatch):
     registry = SimpleNamespace(
         is_sealed=lambda agent_id: agent_id == "luyu",
-        is_super_expert=lambda agent_id: agent_id == "luyu",
+        package_supports=lambda agent_id, feature: (
+            agent_id == "luyu" and feature == "mutable_skill_overlay"
+        ),
     )
     monkeypatch.setattr(
         policy,
@@ -193,7 +224,9 @@ def test_skill_asset_guard_allows_super_expert_pool_download(monkeypatch):
 def test_skill_asset_guard_allows_super_expert_overlay_management(monkeypatch):
     registry = SimpleNamespace(
         is_sealed=lambda agent_id: agent_id == "luyu",
-        is_super_expert=lambda agent_id: agent_id == "luyu",
+        package_supports=lambda agent_id, feature: (
+            agent_id == "luyu" and feature == "mutable_skill_overlay"
+        ),
     )
     monkeypatch.setattr(
         policy,
@@ -242,7 +275,10 @@ def test_skill_asset_guard_does_not_overmatch_global_pool_paths(
     monkeypatch.setattr(
         policy,
         "get_sealed_agent_registry",
-        lambda: SimpleNamespace(is_sealed=lambda agent_id: agent_id == "luyu"),
+        lambda: SimpleNamespace(
+            is_sealed=lambda agent_id: agent_id == "luyu",
+            package_supports=lambda *_args, **_kwargs: False,
+        ),
     )
 
     with pytest.raises(HTTPException) as exc_info:

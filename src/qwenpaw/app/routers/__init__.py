@@ -42,10 +42,6 @@ from .open_api_admin import router as open_api_admin_router
 from .open_api import router as open_api_router
 from .open_api_knowledge import router as open_api_knowledge_router
 from .sealed_agents import router as sealed_agents_router
-from .super_expert_platform import (
-    frontend_read_router as super_expert_platform_frontend_read_router,
-)
-from .super_expert_platform import router as super_expert_platform_router
 from .aigc_studio import public_router as public_aigc_studio_router
 from .aigc_studio import router as aigc_studio_router
 from .aigc_model_policy import router as aigc_model_policy_router
@@ -81,12 +77,6 @@ router.include_router(
     open_api_knowledge_router,
     dependencies=[Depends(require_user)],
 )
-# Compatibility mount for the shipped console bundle.  The canonical user API
-# remains under /user/super-expert-platform; both paths enforce the same guard.
-router.include_router(
-    super_expert_platform_frontend_read_router,
-    dependencies=[Depends(require_user)],
-)
 
 # ── User-facing APIs ──────────────────────────────────────────
 user_deps = [Depends(require_user)]
@@ -117,7 +107,6 @@ user_api_router.include_router(user_expert_teams_router)
 user_api_router.include_router(user_mindspace_cloud_router)
 user_api_router.include_router(mobile_router)
 user_api_router.include_router(user_billing_router)
-user_api_router.include_router(super_expert_platform_router)
 
 
 router.include_router(user_api_router)

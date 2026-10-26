@@ -40,17 +40,10 @@ def get_sealed_agent_service() -> SealedAgentService:
     if _service is None:
         root = Path(WORKING_DIR) / "sealed_agents"
         trusted_signers = load_trusted_signers(root / "trusted_signers.json")
-        official_super_expert_signers = load_trusted_signers(
-            root / "official_super_expert_signers.json",
-        )
-        trusted_signers.update(official_super_expert_signers)
         _service = SealedAgentService(
             root=root,
             registry=get_sealed_agent_registry(),
             trusted_signers=trusted_signers,
-            official_super_expert_signer_ids=frozenset(
-                official_super_expert_signers,
-            ),
         )
     return _service
 
@@ -63,13 +56,23 @@ def _active_harness_status(
     record: SealedAgentRecord,
 ) -> dict[str, bool | None] | None:
     active = record.active_release
-    if active is None or active.package_type != "super_expert":
+    if active is None:
         return None
-    config_path = runtime_workspace_root(
-        Path(WORKING_DIR) / "sealed_agents",
-        record.agent_id,
-        active.release_id,
-    ) / "agent.json"
+    from ...plugins.registry import PluginRegistry
+
+    if not PluginRegistry().sealed_package_type_supports(
+        active.package_type,
+        "harness_status",
+    ):
+        return None
+    config_path = (
+        runtime_workspace_root(
+            Path(WORKING_DIR) / "sealed_agents",
+            record.agent_id,
+            active.release_id,
+        )
+        / "agent.json"
+    )
     try:
         payload = json.loads(config_path.read_text(encoding="utf-8"))
         AgentProfileConfig.model_validate(payload)
@@ -78,7 +81,9 @@ def _active_harness_status(
     if not isinstance(payload, dict):
         return None
     tools = payload.get("tools")
-    builtin_tools = tools.get("builtin_tools") if isinstance(tools, dict) else None
+    builtin_tools = (
+        tools.get("builtin_tools") if isinstance(tools, dict) else None
+    )
     skill_reader = (
         builtin_tools.get("read_agent_skill")
         if isinstance(builtin_tools, dict)
@@ -87,7 +92,9 @@ def _active_harness_status(
     orchestration = payload.get("orchestration")
     return {
         "skill_reader_enabled": _explicit_bool(
-            skill_reader.get("enabled") if isinstance(skill_reader, dict) else None,
+            skill_reader.get("enabled")
+            if isinstance(skill_reader, dict)
+            else None,
         ),
         "agent_loop_enabled": _explicit_bool(
             orchestration.get("agent_loop_enabled")
@@ -106,7 +113,7 @@ def _operational_dto(record: SealedAgentRecord) -> dict[str, Any]:
         and active_validation is not None
         and active_validation.status == "valid"
         and active_validation.adapter == "standard"
-        and active_validation.contract_version == "1"
+        and active_validation.contract_version == "1",
     )
     payload = {
         "agent_id": record.agent_id,
@@ -146,7 +153,8 @@ def _operational_dto(record: SealedAgentRecord) -> dict[str, Any]:
                 "installed_at": release.installed_at,
                 "runtime": {
                     "adapter": release.runtime_adapter or "standard",
-                    "contract_version": release.runtime_contract_version or "1",
+                    "contract_version": release.runtime_contract_version
+                    or "1",
                 },
                 "runtime_validation": (
                     release.runtime_validation.model_dump(mode="json")
@@ -183,7 +191,10 @@ def _trusted_actor(request: Request) -> tuple[str, str]:
 @router.get("")
 def list_sealed_agents(request: Request) -> list[dict[str, Any]]:
     _require_admin(request)
-    return [_operational_dto(item) for item in get_sealed_agent_service().list_agents()]
+    return [
+        _operational_dto(item)
+        for item in get_sealed_agent_service().list_agents()
+    ]
 
 
 async def _upload_expert_image(
@@ -226,10 +237,11 @@ async def _upload_expert_image(
         Image.DecompressionBombError,
     ) as exc:
         raise HTTPException(
-            status_code=400, detail="Upload a valid PNG, JPEG or WebP image"
+            status_code=400,
+            detail="Upload a valid PNG, JPEG or WebP image",
         ) from exc
     value = f"data:image/{image_format.lower()};base64," + base64.b64encode(
-        output.getvalue()
+        output.getvalue(),
     ).decode("ascii")
     updated = registry.upsert_agent(record.model_copy(update={field: value}))
     return _operational_dto(updated)
@@ -277,7 +289,10 @@ async def upload_sealed_agent_release(
     _require_admin(request)
     data = await file.read(_MAX_UPLOAD_BYTES + 1)
     if len(data) > _MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=400, detail="Sealed package exceeds size limit")
+        raise HTTPException(
+            status_code=400,
+            detail="Sealed package exceeds size limit",
+        )
     try:
         service = get_sealed_agent_service()
         release = service.install(data)
@@ -287,12 +302,18 @@ async def upload_sealed_agent_release(
         (
             agent
             for agent in service.list_agents()
-            if any(item.release_id == release.release_id for item in agent.releases)
+            if any(
+                item.release_id == release.release_id
+                for item in agent.releases
+            )
         ),
         None,
     )
     if owner is None:
-        raise HTTPException(status_code=500, detail="Installed release owner is unavailable")
+        raise HTTPException(
+            status_code=500,
+            detail="Installed release owner is unavailable",
+        )
     return {
         "agent_id": owner.agent_id,
         "release_id": release.release_id,
@@ -302,12 +323,14 @@ async def upload_sealed_agent_release(
         "state": release.state,
         "package_type": release.package_type,
         "capability_digest": release.capability_digest,
-        "declared_capabilities": [list(item) for item in release.declared_capabilities],
+        "declared_capabilities": [
+            list(item) for item in release.declared_capabilities
+        ],
     }
 
 
 @router.get("/{agent_id}/releases/{release_id}/grant-preview")
-def preview_super_expert_grant(
+def preview_extension_grant(
     agent_id: str,
     release_id: str,
     request: Request,
@@ -326,7 +349,7 @@ def preview_super_expert_grant(
 
 
 @router.post("/{agent_id}/releases/{release_id}/grant")
-def accept_super_expert_grant(
+def accept_extension_grant(
     agent_id: str,
     release_id: str,
     request: Request,
@@ -346,7 +369,7 @@ def accept_super_expert_grant(
 
 
 @router.post("/{agent_id}/releases/{release_id}/grant-cancel")
-def cancel_super_expert_grant(
+def cancel_extension_grant(
     agent_id: str,
     release_id: str,
     request: Request,
@@ -362,6 +385,12 @@ def cancel_super_expert_grant(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"cancelled": True}
+
+
+# Compatibility names for callers that predate generic sealed package types.
+preview_super_expert_grant = preview_extension_grant
+accept_super_expert_grant = accept_extension_grant
+cancel_super_expert_grant = cancel_extension_grant
 
 
 @router.post("/{agent_id}/releases/{release_id}/activate")
@@ -424,13 +453,17 @@ async def _activate_sealed_agent_release_locked(
         save_config(config)
         manager = getattr(request.app.state, "multi_agent_manager", None)
         if manager is None:
-            raise SealedAgentReleaseError("sealed agent runtime is unavailable")
+            raise SealedAgentReleaseError(
+                "sealed agent runtime is unavailable",
+            )
         if manager.is_agent_loaded(agent_id):
             loaded = await manager.reload_agent(agent_id)
         else:
             loaded = await manager.preload_agent(agent_id)
         if not loaded:
-            raise SealedAgentReleaseError("sealed agent runtime validation failed")
+            raise SealedAgentReleaseError(
+                "sealed agent runtime validation failed",
+            )
         return _operational_dto(activated_record)
     except Exception as exc:
         if activated_record is not None and previous_record is not None:
@@ -463,7 +496,10 @@ async def _activate_sealed_agent_release_locked(
 
 
 @router.post("/{agent_id}/disable")
-async def disable_sealed_agent(agent_id: str, request: Request) -> dict[str, Any]:
+async def disable_sealed_agent(
+    agent_id: str,
+    request: Request,
+) -> dict[str, Any]:
     _require_admin(request)
     try:
         record = get_sealed_agent_service().disable(agent_id)
@@ -481,7 +517,10 @@ async def disable_sealed_agent(agent_id: str, request: Request) -> dict[str, Any
 
 
 @router.post("/{agent_id}/enable")
-async def enable_sealed_agent(agent_id: str, request: Request) -> dict[str, Any]:
+async def enable_sealed_agent(
+    agent_id: str,
+    request: Request,
+) -> dict[str, Any]:
     _require_admin(request)
     try:
         record = get_sealed_agent_service().enable(agent_id)
@@ -497,19 +536,25 @@ async def enable_sealed_agent(agent_id: str, request: Request) -> dict[str, Any]
                 if profile is not None:
                     profile.enabled = False
                     save_config(config)
-                raise SealedAgentReleaseError("sealed agent runtime validation failed")
+                raise SealedAgentReleaseError(
+                    "sealed agent runtime validation failed",
+                )
         return _operational_dto(record)
     except SealedAgentReleaseError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.delete("/{agent_id}")
-async def delete_sealed_agent(agent_id: str, request: Request) -> dict[str, Any]:
+async def delete_sealed_agent(
+    agent_id: str,
+    request: Request,
+) -> dict[str, Any]:
     _require_admin(request)
     async with _activation_locks.setdefault(agent_id, asyncio.Lock()):
         try:
             get_sealed_agent_service().delete(
-                agent_id, actor=str(getattr(request.state, "user_id", "admin")),
+                agent_id,
+                actor=str(getattr(request.state, "user_id", "admin")),
             )
         except SealedAgentReleaseError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -519,5 +564,8 @@ async def delete_sealed_agent(agent_id: str, request: Request) -> dict[str, Any]
         manager = getattr(request.app.state, "multi_agent_manager", None)
         if manager is not None and manager.is_agent_loaded(agent_id):
             await manager.stop_agent(agent_id)
-        logger.info("Deleted sealed agent %s (metadata and releases retained)", agent_id)
+        logger.info(
+            "Deleted sealed agent %s (metadata and releases retained)",
+            agent_id,
+        )
         return {"agent_id": agent_id, "deleted": True}

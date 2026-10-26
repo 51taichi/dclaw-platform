@@ -72,13 +72,17 @@ class CapabilityDeclaration(BaseModel):
 class WorkspaceOrchestrationDeclaration(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    capability_id: Literal["workspace.turn.orchestrate/1"]
-    contract_version: Literal["1"]
-    entrypoint: str = Field(pattern=r"^[A-Za-z0-9_./-]+\.py:[A-Za-z_][A-Za-z0-9_]*$")
+    capability_id: str = Field(pattern=r"^[a-z][a-z0-9_.-]*/[1-9][0-9]*$")
+    contract_version: str = Field(pattern=r"^[1-9][0-9]{0,7}$")
+    entrypoint: str = Field(
+        pattern=r"^[A-Za-z0-9_./-]+\.py:[A-Za-z_][A-Za-z0-9_]*$",
+    )
     required_host_capabilities: tuple[str, ...]
 
     @model_validator(mode="after")
-    def host_capabilities_are_unique(self) -> "WorkspaceOrchestrationDeclaration":
+    def host_capabilities_are_unique(
+        self,
+    ) -> "WorkspaceOrchestrationDeclaration":
         if len(set(self.required_host_capabilities)) != len(
             self.required_host_capabilities,
         ):
@@ -92,13 +96,18 @@ class SealedPackageManifest(BaseModel):
     schema_version: int = 1
     agent_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,128}$")
     name: str = Field(min_length=1, max_length=200)
-    version: str = Field(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$")
+    version: str = Field(
+        pattern=r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$",
+    )
     agent_type: str
     scope: str
     entrypoint: str
     public_metadata: PublicMetadata = Field(default_factory=PublicMetadata)
     runtime: SealedRuntimeDeclaration | None = None
-    package_type: Literal["sealed_agent", "super_expert"] = "sealed_agent"
+    package_type: str = Field(
+        default="sealed_agent",
+        pattern=r"^[a-z][a-z0-9_]{0,63}$",
+    )
     orchestration: WorkspaceOrchestrationDeclaration | None = None
     platform_contract_versions: dict[str, str] = Field(default_factory=dict)
     capabilities: tuple[CapabilityDeclaration, ...] = ()
@@ -116,15 +125,16 @@ class SealedPackageManifest(BaseModel):
             raise ValueError("schema version 1 cannot declare runtime")
         if self.agent_type != "sealed" or self.scope != "global":
             raise ValueError("only sealed global agents are supported")
-        if self.package_type == "super_expert":
-            if self.schema_version != 3:
-                raise ValueError("super expert packages require schema version 3")
-            if self.orchestration is None or not self.capabilities:
-                raise ValueError("super expert package declaration is incomplete")
-            if self.capability_digest is None:
-                raise ValueError("super expert capability digest is missing")
-        elif self.orchestration is not None or self.capabilities or self.capability_digest:
-            raise ValueError("sealed agent package cannot declare platform capabilities")
+        if self.package_type == "sealed_agent" and (
+            self.orchestration is not None
+            or self.capabilities
+            or self.capability_digest
+        ):
+            raise ValueError(
+                "sealed agent package cannot declare platform capabilities",
+            )
+        if self.package_type != "sealed_agent" and self.schema_version < 3:
+            raise ValueError("extension packages require schema version 3")
         entrypoint = _normalize_member_path(self.entrypoint)
         if not entrypoint.startswith("agent/"):
             raise ValueError("entrypoint must be inside agent/")
@@ -179,7 +189,9 @@ def inspect_extracted_payload(root: Path) -> tuple[str, frozenset[str]]:
     payload: dict[str, bytes] = {}
     for candidate in resolved_root.rglob("*"):
         if candidate.is_symlink():
-            raise SealedPackageError("sealed package payload contains a symlink")
+            raise SealedPackageError(
+                "sealed package payload contains a symlink",
+            )
         if not candidate.is_file():
             continue
         resolved = candidate.resolve(strict=True)
@@ -220,10 +232,16 @@ def build_signed_package_bytes(
     signature_payload = {
         "signer_id": validated.signer_id,
         "algorithm": "ed25519",
-        "signature": base64.b64encode(private_key.sign(canonical)).decode("ascii"),
+        "signature": base64.b64encode(private_key.sign(canonical)).decode(
+            "ascii",
+        ),
     }
     output = io.BytesIO()
-    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+    with zipfile.ZipFile(
+        output,
+        "w",
+        compression=zipfile.ZIP_DEFLATED,
+    ) as archive:
         archive.writestr("manifest.json", canonical)
         for path in sorted(payload_files):
             archive.writestr(path, payload_files[path])
@@ -253,20 +271,29 @@ def validate_sealed_package(
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             infos, normalized = _validated_members(archive)
             by_name = dict(zip(normalized, infos))
-            if "manifest.json" not in by_name or "signature.json" not in by_name:
+            if (
+                "manifest.json" not in by_name
+                or "signature.json" not in by_name
+            ):
                 raise SealedPackageError("sealed package metadata is missing")
             try:
                 manifest_bytes = archive.read(by_name["manifest.json"])
-                manifest = SealedPackageManifest.model_validate_json(manifest_bytes)
+                manifest = SealedPackageManifest.model_validate_json(
+                    manifest_bytes,
+                )
                 manifest.validate_supported_contract()
                 signature = json.loads(archive.read(by_name["signature.json"]))
             except (ValidationError, ValueError, json.JSONDecodeError) as exc:
-                raise SealedPackageError("invalid sealed package manifest") from exc
+                raise SealedPackageError(
+                    "invalid sealed package manifest",
+                ) from exc
             if signature.get("signer_id") != manifest.signer_id:
                 raise SealedPackageError("sealed package signer mismatch")
             public_key = trusted_signers.get(manifest.signer_id)
             if public_key is None:
-                raise SealedPackageError("sealed package signer is not trusted")
+                raise SealedPackageError(
+                    "sealed package signer is not trusted",
+                )
             try:
                 encoded_signature = base64.b64decode(
                     signature.get("signature", ""),
@@ -277,16 +304,22 @@ def validate_sealed_package(
                     _canonical_manifest(manifest.model_dump(mode="json")),
                 )
             except (InvalidSignature, ValueError, TypeError) as exc:
-                raise SealedPackageError("sealed package signature is invalid") from exc
+                raise SealedPackageError(
+                    "sealed package signature is invalid",
+                ) from exc
 
             payload: dict[str, bytes] = {}
             for path, info in zip(normalized, infos):
                 if path not in {"manifest.json", "signature.json"}:
                     payload[path] = archive.read(info)
             if _payload_digest(payload) != manifest.content_digest:
-                raise SealedPackageError("sealed package content digest mismatch")
+                raise SealedPackageError(
+                    "sealed package content digest mismatch",
+                )
             if manifest.entrypoint not in payload:
-                raise SealedPackageError("sealed package entrypoint is missing")
+                raise SealedPackageError(
+                    "sealed package entrypoint is missing",
+                )
 
             root = destination.resolve()
             for path, content in payload.items():
@@ -323,13 +356,22 @@ def _validated_members(
         mode = info.external_attr >> 16
         file_type = stat.S_IFMT(mode)
         if file_type not in {0, stat.S_IFREG}:
-            raise SealedPackageError("sealed packages may contain regular files only")
+            raise SealedPackageError(
+                "sealed packages may contain regular files only",
+            )
         if info.file_size > MAX_FILE_BYTES:
             raise SealedPackageError("sealed package file exceeds size limit")
         total += info.file_size
         if total > MAX_EXPANDED_BYTES:
-            raise SealedPackageError("sealed package expanded size limit exceeded")
+            raise SealedPackageError(
+                "sealed package expanded size limit exceeded",
+            )
         compressed = max(info.compress_size, 1)
-        if info.file_size > 1024 * 1024 and info.file_size / compressed > MAX_COMPRESSION_RATIO:
-            raise SealedPackageError("sealed package compression ratio is unsafe")
+        if (
+            info.file_size > 1024 * 1024
+            and info.file_size / compressed > MAX_COMPRESSION_RATIO
+        ):
+            raise SealedPackageError(
+                "sealed package compression ratio is unsafe",
+            )
     return infos, normalized

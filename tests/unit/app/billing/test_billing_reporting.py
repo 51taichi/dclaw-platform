@@ -1037,9 +1037,7 @@ def test_order_and_reconciliation_pages_use_constant_query_count(reporting):
         "supplier_reference_present": True,
         "execution_outcome": "succeeded",
     }
-    assert queue_item["created_at"] == (
-        NOW - timedelta(hours=2)
-    ).isoformat()
+    assert queue_item["created_at"] == (NOW - timedelta(hours=2)).isoformat()
     serialized = json.dumps(queue)
     assert "item-alice-reconciling" not in serialized
     assert "call-alice-reconciling" not in serialized
@@ -1295,17 +1293,21 @@ def test_base_entrypoints_default_to_2048_and_super_expert_to_4096(
 ):
     _service, _repository, engine = reporting
     monkeypatch.delenv("DCLAW_OPEN_API_DEFAULT_OUTPUT_TOKENS", raising=False)
-    monkeypatch.delenv("DCLAW_SUPER_EXPERT_DEFAULT_OUTPUT_TOKENS", raising=False)
+    monkeypatch.delenv(
+        "DCLAW_SUPER_EXPERT_DEFAULT_OUTPUT_TOKENS",
+        raising=False,
+    )
     monkeypatch.setattr(open_api_runtime, "get_app_engine", lambda: engine)
 
     regular = open_api_runtime.create_open_api_billing_runtime()
     super_expert = open_api_runtime.create_open_api_billing_runtime(
-        output_profile="super_expert",
+        output_profile="extended",
     )
 
     assert regular.default_max_output_tokens == 2048
     assert super_expert.default_max_output_tokens == 4096
     from qwenpaw.app.billing.model_meter import BillingModelMeter
+
     console = BillingModelMeter(regular.usage_service)
     assert console.default_max_output_tokens == 2048
     assert console.platform_max_output_tokens == 2048
@@ -1322,7 +1324,7 @@ def test_super_expert_output_profile_has_its_own_environment_override(
 
     regular = open_api_runtime.create_open_api_billing_runtime()
     super_expert = open_api_runtime.create_open_api_billing_runtime(
-        output_profile="super_expert",
+        output_profile="extended",
     )
 
     assert regular.default_max_output_tokens == 1536

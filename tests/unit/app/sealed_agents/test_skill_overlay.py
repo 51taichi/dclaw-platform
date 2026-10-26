@@ -18,5 +18,5 @@ def test_super_expert_skill_overlay_survives_release_changes(tmp_path):
 
 @pytest.mark.parametrize("agent_id", ["../escape", "/absolute", ""])
 def test_super_expert_skill_overlay_rejects_path_escape(tmp_path, agent_id):
-    with pytest.raises(ValueError, match="invalid super expert agent id"):
+    with pytest.raises(ValueError, match="invalid sealed extension agent id"):
         super_expert_skill_overlay_root(agent_id, working_dir=tmp_path)

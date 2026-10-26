@@ -49,9 +49,9 @@ from ..storage.repos.open_api_repo import SqlAlchemyOpenApiRepository
 from ..storage.repos.price_catalog_repo import PriceCatalogRepository
 
 
-OpenApiOutputProfile = Literal["default", "super_expert"]
+OpenApiOutputProfile = Literal["default", "extended"]
 _DEFAULT_OPEN_API_OUTPUT_TOKENS = 2048
-_DEFAULT_SUPER_EXPERT_OUTPUT_TOKENS = 4096
+_DEFAULT_EXTENSION_OUTPUT_TOKENS = 4096
 from ..storage.schema import (
     billing_usage_items,
     billing_usage_orders,
@@ -63,6 +63,8 @@ _SAFE_ID_PATTERN = re.compile(r"[^A-Za-z0-9_.:-]+")
 _MAX_EXTERNAL_ID_LENGTH = 128
 _MAX_MESSAGE_LENGTH = 20_000
 _BILLING_MODES = frozenset({"off", "shadow", "observe", "enforced"})
+
+
 class OpenMessageRequest(BaseModel):
     external_user_id: str
     external_session_id: str | None = None
@@ -251,9 +253,12 @@ def create_open_api_billing_runtime(
     output_profile: OpenApiOutputProfile = "default",
 ) -> OpenApiBillingRuntime:
     """Build explicit billing services over the configured durable engine."""
-    if output_profile == "super_expert":
-        output_token_env = "DCLAW_SUPER_EXPERT_DEFAULT_OUTPUT_TOKENS"
-        output_token_default = _DEFAULT_SUPER_EXPERT_OUTPUT_TOKENS
+    if output_profile == "extended":
+        output_token_env = "DCLAW_EXTENSION_DEFAULT_OUTPUT_TOKENS"
+        output_token_default = _non_negative_env(
+            "DCLAW_SUPER_EXPERT_DEFAULT_OUTPUT_TOKENS",
+            _DEFAULT_EXTENSION_OUTPUT_TOKENS,
+        )
     elif output_profile == "default":
         output_token_env = "DCLAW_OPEN_API_DEFAULT_OUTPUT_TOKENS"
         output_token_default = _DEFAULT_OPEN_API_OUTPUT_TOKENS
@@ -662,8 +667,7 @@ async def _prepare_open_chat(
         payload.external_session_id,
     )
     isolated_attempt = (
-        expert_team_id is None
-        and payload.execution_mode == "isolated_attempt"
+        expert_team_id is None and payload.execution_mode == "isolated_attempt"
     )
     if isolated_attempt and not invocation_id:
         raise HTTPException(
@@ -674,7 +678,9 @@ async def _prepare_open_chat(
         scope_suffix = sha256(
             persistent_session_id.encode("utf-8"),
         ).hexdigest()[:24]
-        attempt_suffix = sha256(str(invocation_id).encode("utf-8")).hexdigest()[:24]
+        attempt_suffix = sha256(
+            str(invocation_id).encode("utf-8"),
+        ).hexdigest()[:24]
         session_id = f"open:attempt:{scope_suffix}:{attempt_suffix}"
     else:
         session_id = persistent_session_id

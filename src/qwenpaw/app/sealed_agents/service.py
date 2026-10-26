@@ -6,28 +6,24 @@ import shutil
 import uuid
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from packaging.version import InvalidVersion, Version
 
-from .models import RuntimeValidationRecord, SealedAgentRecord, SealedReleaseRecord
+from .models import (
+    RuntimeValidationRecord,
+    SealedAgentRecord,
+    SealedReleaseRecord,
+)
 from .package import SealedPackageError, validate_sealed_package
 from .registry import SealedAgentRegistry
 from .standard_workspace import (
     StandardWorkspaceError,
     validate_standard_workspace,
 )
-from .signing import SuperExpertTrustStore
 from .runtime_workspace import ensure_runtime_workspace, runtime_workspace_root
-from ..super_experts.capabilities import (
-    CapabilityManifestError,
-    validate_super_expert_manifest,
-)
-from ..super_experts.grants import (
-    SuperExpertGrant,
-    SuperExpertGrantPreview,
-    SuperExpertGrantRepository,
-)
+
 
 class SealedAgentReleaseError(ValueError):
     """Sanitized release lifecycle failure."""
@@ -40,18 +36,65 @@ class SealedAgentService:
         root: Path,
         registry: SealedAgentRegistry,
         trusted_signers: Mapping[str, Ed25519PublicKey],
-        official_super_expert_signer_ids: frozenset[str] = frozenset(),
-        grant_repository: SuperExpertGrantRepository | None = None,
+        package_type_handlers: Mapping[str, Any] | None = None,
     ) -> None:
         self.root = Path(root)
         self.registry = registry
         self.trusted_signers = dict(trusted_signers)
-        self.super_expert_trust_store = SuperExpertTrustStore(
-            official_signer_ids=official_super_expert_signer_ids,
+        self._package_type_handlers = dict(package_type_handlers or {})
+
+    def _current_trusted_signers(self) -> dict[str, Ed25519PublicKey]:
+        """Resolve extension signer trust from currently loaded plugins."""
+        signers = dict(self.trusted_signers)
+        handlers = list(self._package_type_handlers.values())
+        from qwenpaw.plugins.registry import PluginRegistry
+
+        handlers.extend(
+            registration.handler
+            for registration in PluginRegistry()
+            .get_sealed_package_types()
+            .values()
         )
-        self.grant_repository = grant_repository or SuperExpertGrantRepository(
-            self.root,
-        )
+        for handler in handlers:
+            signers.update(dict(getattr(handler, "trusted_signers", {}) or {}))
+        return signers
+
+    def _package_type_handler(self, package_type: str) -> Any | None:
+        handler = self._package_type_handlers.get(package_type)
+        if handler is not None:
+            return handler
+        from qwenpaw.plugins.registry import PluginRegistry
+
+        registration = PluginRegistry().get_sealed_package_type(package_type)
+        return registration.handler if registration is not None else None
+
+    def validate_extension_manifest(self, manifest: Any) -> None:
+        handler = self._package_type_handler(manifest.package_type)
+        if handler is None:
+            if manifest.package_type != "sealed_agent":
+                raise SealedAgentReleaseError(
+                    f"sealed package type is unavailable: {manifest.package_type}",
+                )
+            return
+        try:
+            handler.validate_manifest(manifest)
+        except ValueError as exc:
+            raise SealedAgentReleaseError(str(exc)) from exc
+
+    def is_signer_authorized_for_package_type(
+        self,
+        package_type: str,
+        signer_id: str,
+    ) -> bool:
+        handler = self._package_type_handler(package_type)
+        return bool(handler and handler.is_signer_authorized(signer_id))
+
+    def package_type_requires_installation_grant(
+        self,
+        package_type: str,
+    ) -> bool:
+        handler = self._package_type_handler(package_type)
+        return bool(handler and handler.requires_installation_grant)
 
     def list_agents(self) -> list[SealedAgentRecord]:
         return self.registry.list_agents()
@@ -72,29 +115,29 @@ class SealedAgentService:
     def runtime_workspace_root(self, agent_id: str, release_id: str) -> Path:
         return runtime_workspace_root(self.root, agent_id, release_id)
 
-    def prepare_runtime_workspace(self, agent_id: str, release_id: str) -> Path:
+    def prepare_runtime_workspace(
+        self,
+        agent_id: str,
+        release_id: str,
+    ) -> Path:
         return ensure_runtime_workspace(self.root, agent_id, release_id)
 
     def install(self, data: bytes) -> SealedReleaseRecord:
         try:
             validated = validate_sealed_package(
                 data,
-                trusted_signers=self.trusted_signers,
+                trusted_signers=self._current_trusted_signers(),
                 staging_root=self.root / "staging",
             )
         except SealedPackageError as exc:
             raise SealedAgentReleaseError(str(exc)) from exc
 
         manifest = validated.manifest
-        if manifest.package_type == "super_expert":
-            try:
-                validate_super_expert_manifest(
-                    manifest,
-                    self.super_expert_trust_store,
-                )
-            except CapabilityManifestError as exc:
-                shutil.rmtree(validated.extracted_root, ignore_errors=True)
-                raise SealedAgentReleaseError(str(exc)) from exc
+        try:
+            self.validate_extension_manifest(manifest)
+        except SealedAgentReleaseError:
+            shutil.rmtree(validated.extracted_root, ignore_errors=True)
+            raise
         current = self.registry.get_agent(manifest.agent_id)
         if current is not None and current.deleted_at is not None:
             shutil.rmtree(validated.extracted_root, ignore_errors=True)
@@ -107,13 +150,19 @@ class SealedAgentService:
             ]
         except InvalidVersion as exc:
             shutil.rmtree(validated.extracted_root, ignore_errors=True)
-            raise SealedAgentReleaseError("invalid sealed agent version") from exc
+            raise SealedAgentReleaseError(
+                "invalid sealed agent version",
+            ) from exc
         if incoming_version in existing_versions:
             shutil.rmtree(validated.extracted_root, ignore_errors=True)
-            raise SealedAgentReleaseError("sealed agent version already exists")
+            raise SealedAgentReleaseError(
+                "sealed agent version already exists",
+            )
         if existing_versions and incoming_version < max(existing_versions):
             shutil.rmtree(validated.extracted_root, ignore_errors=True)
-            raise SealedAgentReleaseError("sealed agent version downgrade is denied")
+            raise SealedAgentReleaseError(
+                "sealed agent version downgrade is denied",
+            )
 
         release = SealedReleaseRecord(
             release_id=uuid.uuid4().hex,
@@ -147,7 +196,9 @@ class SealedAgentService:
                 else ()
             ),
             entrypoint=manifest.entrypoint,
-            runtime_adapter=(manifest.runtime.adapter if manifest.runtime else None),
+            runtime_adapter=(
+                manifest.runtime.adapter if manifest.runtime else None
+            ),
             runtime_contract_version=(
                 manifest.runtime.contract_version if manifest.runtime else None
             ),
@@ -168,13 +219,17 @@ class SealedAgentService:
                 avatar=current.avatar if current else None,
                 banner_image=current.banner_image if current else None,
                 enabled=current.enabled if current else True,
-                active_release_id=current.active_release_id if current else None,
+                active_release_id=current.active_release_id
+                if current
+                else None,
                 releases=[*(current.releases if current else []), release],
             )
             self.registry.upsert_agent(record)
         except Exception as exc:
             shutil.rmtree(destination, ignore_errors=True)
-            raise SealedAgentReleaseError("sealed agent installation failed") from exc
+            raise SealedAgentReleaseError(
+                "sealed agent installation failed",
+            ) from exc
         return release
 
     def preview_grant(
@@ -183,9 +238,14 @@ class SealedAgentService:
         release_id: str,
         *,
         tenant_id: str,
-    ) -> SuperExpertGrantPreview:
+    ) -> Any:
         release = self._required_release(agent_id, release_id)
-        return self.grant_repository.preview(
+        handler = self._package_type_handler(release.package_type)
+        if handler is None:
+            raise SealedAgentReleaseError(
+                "package grant handler is unavailable",
+            )
+        return handler.preview_grant(
             agent_id,
             release,
             tenant_id=tenant_id,
@@ -198,14 +258,17 @@ class SealedAgentService:
         *,
         tenant_id: str,
         administrator_id: str,
-    ) -> SuperExpertGrant:
-        preview = self.preview_grant(
+    ) -> Any:
+        release = self._required_release(agent_id, release_id)
+        handler = self._package_type_handler(release.package_type)
+        if handler is None:
+            raise SealedAgentReleaseError(
+                "package grant handler is unavailable",
+            )
+        return handler.grant_installation(
             agent_id,
-            release_id,
+            release,
             tenant_id=tenant_id,
-        )
-        return self.grant_repository.grant_installation(
-            preview,
             administrator_id=administrator_id,
         )
 
@@ -216,9 +279,13 @@ class SealedAgentService:
         *,
         tenant_id: str,
     ) -> None:
-        self.grant_repository.cancel(
-            self.preview_grant(agent_id, release_id, tenant_id=tenant_id),
-        )
+        release = self._required_release(agent_id, release_id)
+        handler = self._package_type_handler(release.package_type)
+        if handler is None:
+            raise SealedAgentReleaseError(
+                "package grant handler is unavailable",
+            )
+        handler.cancel_grant(agent_id, release, tenant_id=tenant_id)
 
     def activate(
         self,
@@ -229,39 +296,57 @@ class SealedAgentService:
     ) -> SealedAgentRecord:
         current = self._required_agent(agent_id)
         target = next(
-            (item for item in current.releases if item.release_id == release_id),
+            (
+                item
+                for item in current.releases
+                if item.release_id == release_id
+            ),
             None,
         )
         if target is None:
             raise SealedAgentReleaseError("sealed agent release not found")
-        if target.package_type == "super_expert" and not (
-            self.grant_repository.is_release_granted(
+        handler = self._package_type_handler(target.package_type)
+        if target.package_type != "sealed_agent" and handler is None:
+            raise SealedAgentReleaseError(
+                f"sealed package type is unavailable: {target.package_type}",
+            )
+        if (
+            handler is not None
+            and handler.requires_installation_grant
+            and not handler.is_release_granted(
                 agent_id,
                 target,
                 tenant_id=tenant_id,
             )
         ):
             raise SealedAgentReleaseError(
-                "super expert installation authorization is required",
+                "package installation authorization is required",
             )
         if (
             target.runtime_validation is None
             or target.runtime_validation.status != "valid"
             or target.runtime_validation.adapter != "standard"
         ):
-            raise SealedAgentReleaseError("sealed agent runtime validation failed")
+            raise SealedAgentReleaseError(
+                "sealed agent runtime validation failed",
+            )
         agent_root = self.release_root(agent_id, release_id) / "agent"
         try:
             validate_standard_workspace(agent_id, agent_root)
-        except StandardWorkspaceError as exc:
-            raise SealedAgentReleaseError("sealed agent release is unavailable")
+        except StandardWorkspaceError:
+            raise SealedAgentReleaseError(
+                "sealed agent release is unavailable",
+            )
 
         releases: list[SealedReleaseRecord] = []
         for item in current.releases:
             state = item.state
             if item.release_id == release_id:
                 state = "active"
-            elif item.release_id == current.active_release_id and state == "active":
+            elif (
+                item.release_id == current.active_release_id
+                and state == "active"
+            ):
                 state = "superseded"
             releases.append(item.model_copy(update={"state": state}))
         updated = current.model_copy(
@@ -280,7 +365,11 @@ class SealedAgentService:
     ) -> RuntimeValidationRecord:
         current = self._required_agent(agent_id)
         target = next(
-            (item for item in current.releases if item.release_id == release_id),
+            (
+                item
+                for item in current.releases
+                if item.release_id == release_id
+            ),
             None,
         )
         if target is None:
@@ -303,7 +392,11 @@ class SealedAgentService:
                 adapter="standard",
                 contract_version="1",
             )
-        return self._persist_runtime_validation(current, release_id, validation)
+        return self._persist_runtime_validation(
+            current,
+            release_id,
+            validation,
+        )
 
     def _persist_runtime_validation(
         self,
@@ -317,7 +410,9 @@ class SealedAgentService:
             else item
             for item in current.releases
         ]
-        self.registry.upsert_agent(current.model_copy(update={"releases": releases}))
+        self.registry.upsert_agent(
+            current.model_copy(update={"releases": releases}),
+        )
         return validation
 
     def delete(self, agent_id: str, *, actor: str) -> SealedAgentRecord:
@@ -331,11 +426,13 @@ class SealedAgentService:
         if current.enabled:
             raise SealedAgentReleaseError("请先停用超级专家，再删除")
         return self.registry.upsert_agent(
-            current.model_copy(update={
-                "enabled": False,
-                "deleted_at": datetime.now(timezone.utc),
-                "deleted_by": actor,
-            }),
+            current.model_copy(
+                update={
+                    "enabled": False,
+                    "deleted_at": datetime.now(timezone.utc),
+                    "deleted_by": actor,
+                },
+            ),
         )
 
     def disable(self, agent_id: str) -> SealedAgentRecord:
@@ -365,7 +462,11 @@ class SealedAgentService:
     ) -> SealedReleaseRecord:
         current = self._required_agent(agent_id)
         release = next(
-            (item for item in current.releases if item.release_id == release_id),
+            (
+                item
+                for item in current.releases
+                if item.release_id == release_id
+            ),
             None,
         )
         if release is None:

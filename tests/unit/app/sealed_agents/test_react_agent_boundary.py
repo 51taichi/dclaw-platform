@@ -9,7 +9,9 @@ from qwenpaw.agents.react_agent import (
 )
 
 
-def test_sealed_runtime_uses_private_source_and_external_session_root(tmp_path):
+def test_sealed_runtime_uses_private_source_and_external_session_root(
+    tmp_path,
+):
     source = tmp_path / "sealed_agents" / "releases" / "luyu" / "v1" / "agent"
     boundary = resolve_agent_runtime_boundary(
         agent_id="luyu",
@@ -21,9 +23,10 @@ def test_sealed_runtime_uses_private_source_and_external_session_root(tmp_path):
 
     assert boundary.prompt_root == source.resolve()
     assert boundary.skills_root == source.resolve()
-    assert boundary.session_root == (
-        tmp_path / "sealed_sessions" / "luyu" / "chat-1"
-    ).resolve()
+    assert (
+        boundary.session_root
+        == (tmp_path / "sealed_sessions" / "luyu" / "chat-1").resolve()
+    )
     assert not boundary.session_root.is_relative_to(source.resolve())
 
 
@@ -43,22 +46,40 @@ def test_standard_runtime_keeps_existing_session_layout(tmp_path):
 def test_sealed_runtime_denies_asset_exfiltration_and_plugin_tools():
     assert "execute_shell_command" in SEALED_DENIED_BUILTIN_TOOLS
     assert not tool_allowed_for_runtime(
-        "read_file", sealed=True, super_expert=False, plugin_tool=False
+        "read_file",
+        sealed=True,
+        unrestricted=False,
+        plugin_tool=False,
     )
     assert not tool_allowed_for_runtime(
-        "send_file_to_user", sealed=True, super_expert=False, plugin_tool=False
+        "send_file_to_user",
+        sealed=True,
+        unrestricted=False,
+        plugin_tool=False,
     )
     assert not tool_allowed_for_runtime(
-        "custom_plugin", sealed=True, super_expert=False, plugin_tool=True
+        "custom_plugin",
+        sealed=True,
+        unrestricted=False,
+        plugin_tool=True,
     )
     assert tool_allowed_for_runtime(
-        "web_search", sealed=True, super_expert=False, plugin_tool=False
+        "web_search",
+        sealed=True,
+        unrestricted=False,
+        plugin_tool=False,
     )
     assert tool_allowed_for_runtime(
-        "read_agent_skill", sealed=True, super_expert=False, plugin_tool=False
+        "read_agent_skill",
+        sealed=True,
+        unrestricted=False,
+        plugin_tool=False,
     )
     assert tool_allowed_for_runtime(
-        "read_file", sealed=False, super_expert=False, plugin_tool=False
+        "read_file",
+        sealed=False,
+        unrestricted=False,
+        plugin_tool=False,
     )
 
 
@@ -66,13 +87,13 @@ def test_super_expert_inherits_ordinary_builtin_and_plugin_tools():
     assert tool_allowed_for_runtime(
         "execute_shell_command",
         sealed=True,
-        super_expert=True,
+        unrestricted=True,
         plugin_tool=False,
     )
     assert tool_allowed_for_runtime(
         "custom_plugin",
         sealed=True,
-        super_expert=True,
+        unrestricted=True,
         plugin_tool=True,
     )
 
@@ -94,7 +115,7 @@ async def test_super_expert_registers_configured_mcp_clients():
 
     agent = QwenPawAgent.__new__(QwenPawAgent)
     agent._sealed_runtime = True
-    agent._super_expert_runtime = True
+    agent._sealed_runtime_features = frozenset({"mcp_client"})
     agent._mcp_clients = [Client()]
     agent.toolkit = Toolkit()
 
@@ -113,7 +134,11 @@ def test_super_expert_registers_packaged_and_platform_skills(
 
     packaged = tmp_path / "release"
     overlay = tmp_path / "overlay"
-    monkeypatch.setattr(react_agent, "ensure_skills_initialized", lambda root: None)
+    monkeypatch.setattr(
+        react_agent,
+        "ensure_skills_initialized",
+        lambda root: None,
+    )
     monkeypatch.setattr(
         react_agent,
         "resolve_effective_skills",

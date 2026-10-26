@@ -162,14 +162,15 @@ def tool_allowed_for_runtime(
     tool_name: str,
     *,
     sealed: bool,
-    super_expert: bool = False,
+    unrestricted: bool = False,
     plugin_tool: bool,
 ) -> bool:
-    if not sealed or super_expert:
+    if not sealed or unrestricted:
         return True
     if plugin_tool:
         return False
     return tool_name in SEALED_ALLOWED_BUILTIN_TOOLS
+
 
 # Valid namesake strategies for tool registration
 NamesakeStrategy = Literal["override", "skip", "raise", "rename"]
@@ -245,33 +246,44 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
         self._namesake_strategy = namesake_strategy
         running_config = agent_config.running
         self._language = agent_config.language
-        
+
         # Determine actual workspace directory (Physical Session Isolation)
         original_workspace_dir = Path(workspace_dir or WORKING_DIR)
         # Skills are runtime instructions owned by the agent workspace, not
         # per-session artifacts. Keep loading them from the root workspace even
         # when file outputs are isolated under sessions_data/<session_id>.
-        agent_id = str(self._request_context.get("agent_id") or agent_config.id)
+        agent_id = str(
+            self._request_context.get("agent_id") or agent_config.id,
+        )
         try:
             from ..app.sealed_agents.registry import get_sealed_agent_registry
 
             sealed_registry = get_sealed_agent_registry()
             self._sealed_runtime = sealed_registry.is_sealed(agent_id)
-            self._super_expert_runtime = (
-                sealed_registry.is_super_expert_workspace(
+            self._sealed_runtime_features = frozenset(
+                feature
+                for feature in (
+                    "mcp_client",
+                    "mutable_skill_overlay",
+                    "unrestricted_tools",
+                )
+                if sealed_registry.package_supports(
                     agent_id,
-                    original_workspace_dir,
+                    feature,
+                    workspace_dir=original_workspace_dir,
                 )
             )
         except Exception:
             logger.exception("Failed to resolve sealed agent runtime policy")
             self._sealed_runtime = False
-            self._super_expert_runtime = False
+            self._sealed_runtime_features = frozenset()
         # Identity/system prompt markdown belongs to the agent profile. Session
         # isolation is for task files, not for replacing the agent persona with
         # default template markdown.
         # Use root_session_id if present (e.g. claw-global-session), otherwise fall back to session_id
-        session_id = self._request_context.get("root_session_id") or self._request_context.get("session_id")
+        session_id = self._request_context.get(
+            "root_session_id",
+        ) or self._request_context.get("session_id")
         boundary = resolve_agent_runtime_boundary(
             agent_id=agent_id,
             session_id=session_id,
@@ -280,33 +292,46 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
         )
         self._skills_workspace_dir = boundary.skills_root
         self._skill_workspace_dirs = [boundary.skills_root]
-        if self._super_expert_runtime:
+        if "mutable_skill_overlay" in self._sealed_runtime_features:
             from ..app.sealed_agents.skill_overlay import (
-                super_expert_skill_overlay_root,
+                sealed_skill_overlay_root,
             )
 
             self._skill_workspace_dirs.append(
-                super_expert_skill_overlay_root(agent_id),
+                sealed_skill_overlay_root(agent_id),
             )
         self._prompt_workspace_dir = boundary.prompt_root
         self._workspace_dir = boundary.session_root
 
         # Automatically create the workspace and copy markdown templates if missing
-        if self._workspace_dir != original_workspace_dir and not self._workspace_dir.exists():
+        if (
+            self._workspace_dir != original_workspace_dir
+            and not self._workspace_dir.exists()
+        ):
             self._workspace_dir.mkdir(parents=True, exist_ok=True)
             try:
-                from .utils.setup_utils import copy_workspace_md_files, normalize_agent_language
+                from .utils.setup_utils import (
+                    copy_workspace_md_files,
+                    normalize_agent_language,
+                )
+
                 # Initialize md files for the agent environment
                 lang = normalize_agent_language(self._language)
                 copy_workspace_md_files(
                     language=lang,
                     workspace_dir=self._workspace_dir,
-                    md_template_id=agent_config.running.md_template_id if hasattr(agent_config.running, 'md_template_id') else None,
-                    only_if_missing=True
+                    md_template_id=agent_config.running.md_template_id
+                    if hasattr(agent_config.running, "md_template_id")
+                    else None,
+                    only_if_missing=True,
                 )
-                logger.info(f"Initialized isolated workspace environment at {self._workspace_dir}")
+                logger.info(
+                    f"Initialized isolated workspace environment at {self._workspace_dir}",
+                )
             except Exception as e:
-                logger.error(f"Failed to copy templates to isolated workspace {self._workspace_dir}: {e}")
+                logger.error(
+                    f"Failed to copy templates to isolated workspace {self._workspace_dir}: {e}",
+                )
 
         self._task_tracker = task_tracker
 
@@ -340,7 +365,9 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
             f"{model_info} (class: {model.__class__.__name__})",
         )
         init_kwargs: dict[str, Any] = {
-            "name": "DClaw" if (not agent_config.name or agent_config.name == "QwenPaw") else agent_config.name,
+            "name": "DClaw"
+            if (not agent_config.name or agent_config.name == "QwenPaw")
+            else agent_config.name,
             "model": model,
             "sys_prompt": sys_prompt,
             "toolkit": toolkit,
@@ -496,12 +523,16 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
             if not tool_allowed_for_runtime(
                 tool_name,
                 sealed=bool(getattr(self, "_sealed_runtime", False)),
-                super_expert=bool(
-                    getattr(self, "_super_expert_runtime", False),
+                unrestricted=(
+                    "unrestricted_tools"
+                    in getattr(self, "_sealed_runtime_features", frozenset())
                 ),
                 plugin_tool=tool_name in plugin_tools,
             ):
-                logger.debug("Skipped tool denied by sealed runtime: %s", tool_name)
+                logger.debug(
+                    "Skipped tool denied by sealed runtime: %s",
+                    tool_name,
+                )
                 continue
             # For plugin tools: skip if not in config (security)
             # For hardcoded tools: default to enabled (backward compatibility)
@@ -623,8 +654,9 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
         if not tool_allowed_for_runtime(
             "read_agent_skill",
             sealed=bool(getattr(self, "_sealed_runtime", False)),
-            super_expert=bool(
-                getattr(self, "_super_expert_runtime", False),
+            unrestricted=(
+                "unrestricted_tools"
+                in getattr(self, "_sealed_runtime_features", frozenset())
             ),
             plugin_tool=False,
         ):
@@ -770,8 +802,9 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
                 Options: "override", "skip", "raise", "rename"
                 (default: "skip")
         """
-        if bool(getattr(self, "_sealed_runtime", False)) and not bool(
-            getattr(self, "_super_expert_runtime", False),
+        if bool(getattr(self, "_sealed_runtime", False)) and (
+            "mcp_client"
+            not in getattr(self, "_sealed_runtime_features", frozenset())
         ):
             logger.info("Skipped MCP tools for sealed agent runtime")
             return
@@ -1615,10 +1648,9 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
         if not workspace_dir.exists():
             return files
 
-        current_session_id = (
-            self._request_context.get("root_session_id")
-            or self._request_context.get("session_id")
-        )
+        current_session_id = self._request_context.get(
+            "root_session_id",
+        ) or self._request_context.get("session_id")
 
         try:
             # We want to traverse all files under workspace_dir recursively
@@ -1642,8 +1674,10 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
                             # 3. Allow if current_session_id is None/empty (fallback scan)
                             if (
                                 not current_session_id
-                                or str(current_session_id) == "claw-global-session"
-                                or str(session_folder) == str(current_session_id)
+                                or str(current_session_id)
+                                == "claw-global-session"
+                                or str(session_folder)
+                                == str(current_session_id)
                             ):
                                 # Valid session file or aggregate session context, do not exclude
                                 pass
@@ -1658,7 +1692,9 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
                         continue
 
                 try:
-                    files[str(p.relative_to(workspace_dir))] = p.stat().st_mtime
+                    files[
+                        str(p.relative_to(workspace_dir))
+                    ] = p.stat().st_mtime
                 except OSError:
                     continue
         except Exception as e:
@@ -1731,7 +1767,11 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
         # Scan files before executing reply
         old_files = self._scan_workspace_files(workspace_dir)
 
-        skill_workspace_dirs = getattr(self, "_skill_workspace_dirs", None) or [
+        skill_workspace_dirs = getattr(
+            self,
+            "_skill_workspace_dirs",
+            None,
+        ) or [
             getattr(self, "_skills_workspace_dir", workspace_dir),
         ]
         with ExitStack() as skill_env_stack:
@@ -1775,7 +1815,9 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
                 cleaned_modified_files.append(f)
 
         # Deduplicate and filter empty paths
-        cleaned_modified_files = list(dict.fromkeys([f for f in cleaned_modified_files if f]))
+        cleaned_modified_files = list(
+            dict.fromkeys([f for f in cleaned_modified_files if f]),
+        )
 
         # The trigger appending logic is safely removed since channel.py appends a visible message with trigger html via SSE flow and api.py recovers it successfully for history using the corrected real_session_id.
 

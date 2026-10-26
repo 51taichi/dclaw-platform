@@ -45,7 +45,10 @@ from ..aigc.workflow_execution import (
 )
 from ..aigc.job_lifecycle import AigcJobLifecycle, _merge_node_output
 from ..aigc.provider_execution import ProviderExecution, execution_command
-from ..aigc.provider_errors import ProviderSubmissionRejected, ProviderTaskFailed
+from ..aigc.provider_errors import (
+    ProviderSubmissionRejected,
+    ProviderTaskFailed,
+)
 from ..aigc.capability_service import (
     _aigc_generation_capabilities_from_model_id,
     _normalized_capability_token,
@@ -170,8 +173,6 @@ AigcCapability = Literal[
     "reference_video",
     "storyboard",
 ]
-
-
 
 
 class AssetSignedUrl(BaseModel):
@@ -615,7 +616,9 @@ DEFAULT_STYLE_TEMPLATES: list[dict[str, Any]] = [
             "cover_url": None,
             "category": "海报场景",
             "tags": ["海报场景", "商用"],
-            "prompt_template": _poster_scene_prompt_template(str(template["title"])),
+            "prompt_template": _poster_scene_prompt_template(
+                str(template["title"]),
+            ),
             "commercial": True,
             "runtime_mode": "prompt_style",
             "use_count": 0,
@@ -634,8 +637,7 @@ REFERENCE_IMAGE_PRESERVATION_PROMPT = (
     "风格只影响背景、光影、版式和氛围，不要把参考图主体替换成无关示意物或重新设计。"
 )
 STYLE_REFERENCE_IMAGE_PROMPT = (
-    "风格参考图使用规则：风格参考图只用于理解整体艺术方向、光影、色彩、材质和氛围，"
-    "不要复制其中的具体人物、产品、文字、标志、构图或场景内容。"
+    "风格参考图使用规则：风格参考图只用于理解整体艺术方向、光影、色彩、材质和氛围，" "不要复制其中的具体人物、产品、文字、标志、构图或场景内容。"
 )
 ANNOTATION_IMAGE_EDITING_PROMPT = (
     "标注使用规则：标注图中的红色圈选、画笔、框选或文字只表示需要编辑的区域和意图，"
@@ -696,7 +698,9 @@ def _delete_json(path: Path) -> None:
         raise _resource_http_error(exc) from exc
 
 
-def _should_refresh_builtin_prompt_template(template: AigcStyleTemplate) -> bool:
+def _should_refresh_builtin_prompt_template(
+    template: AigcStyleTemplate,
+) -> bool:
     prompt_template = template.prompt_template.strip()
     if not prompt_template:
         return True
@@ -728,7 +732,8 @@ def _ensure_default_style_templates() -> None:
                     "last_used_at": existing.last_used_at,
                     "use_count": existing.use_count,
                     "favorite": existing.favorite,
-                    "cover_url": existing.cover_url or payload.get("cover_url"),
+                    "cover_url": existing.cover_url
+                    or payload.get("cover_url"),
                     "prompt_template": (
                         payload.get("prompt_template", "")
                         if _should_refresh_builtin_prompt_template(existing)
@@ -828,7 +833,9 @@ def _matches_style_template_query(
     if commercial_only and not template.commercial:
         return False
     if category and category != "推荐":
-        category_text = " ".join([template.category, *template.tags, template.keywords])
+        category_text = " ".join(
+            [template.category, *template.tags, template.keywords],
+        )
         if category not in category_text:
             return False
     if q:
@@ -860,7 +867,9 @@ def get_aigc_studio_diagnostics() -> dict[str, Any]:
     corrupt_jobs = 0
     for path in _dir("jobs").glob("*.json"):
         try:
-            job_status_counts[str(_read_json(path).get("status") or "unknown")] += 1
+            job_status_counts[
+                str(_read_json(path).get("status") or "unknown")
+            ] += 1
         except HTTPException:
             corrupt_jobs += 1
     return {
@@ -897,16 +906,20 @@ def _canvas_owner_user_id(canvas: Canvas) -> str | None:
 
 def _request_owns_canvas(request: Request, canvas: Canvas) -> bool:
     return AigcCanvasService.can_access(
-        current_user_id(request), canvas,
-        allow_ownerless=current_user_id(request) == "0" or is_admin_request(request),
+        current_user_id(request),
+        canvas,
+        allow_ownerless=current_user_id(request) == "0"
+        or is_admin_request(request),
     )
 
 
 def _load_canvas_for_request(request: Request, canvas_id: str) -> Canvas:
     try:
         return AigcCanvasService(_resource_store(STUDIO_ROOT)).get(
-            current_user_id(request), canvas_id,
-            allow_ownerless=current_user_id(request) == "0" or is_admin_request(request),
+            current_user_id(request),
+            canvas_id,
+            allow_ownerless=current_user_id(request) == "0"
+            or is_admin_request(request),
         )
     except AigcResourceError as exc:
         raise _resource_http_error(exc) from exc
@@ -914,20 +927,27 @@ def _load_canvas_for_request(request: Request, canvas_id: str) -> Canvas:
 
 def _request_can_access_asset(request: Request, asset: AigcAsset) -> bool:
     return AigcAssetService(_resource_store(STUDIO_ROOT)).can_access(
-        current_user_id(request), asset,
-        allow_ownerless=current_user_id(request) == "0" or is_admin_request(request),
+        current_user_id(request),
+        asset,
+        allow_ownerless=current_user_id(request) == "0"
+        or is_admin_request(request),
     )
 
 
 def _load_asset_for_request(request: Request, asset_id: str) -> AigcAsset:
     try:
         return AigcAssetService(_resource_store(STUDIO_ROOT)).get(
-            current_user_id(request), asset_id,
-            allow_ownerless=current_user_id(request) == "0" or is_admin_request(request),
+            current_user_id(request),
+            asset_id,
+            allow_ownerless=current_user_id(request) == "0"
+            or is_admin_request(request),
         )
     except AigcResourceError as exc:
         if exc.code == "RESOURCE_NOT_FOUND":
-            raise HTTPException(status_code=404, detail="Asset not found.") from exc
+            raise HTTPException(
+                status_code=404,
+                detail="Asset not found.",
+            ) from exc
         raise _resource_http_error(exc) from exc
 
 
@@ -972,7 +992,9 @@ async def _find_provider_model(
     if manager is None:
         return None, None
     get_provider = getattr(manager, "get_provider", None)
-    runtime_provider = get_provider(provider_id) if callable(get_provider) else None
+    runtime_provider = (
+        get_provider(provider_id) if callable(get_provider) else None
+    )
     if runtime_provider is not None:
         models = list(getattr(runtime_provider, "models", []) or []) + list(
             getattr(runtime_provider, "extra_models", []) or [],
@@ -1006,45 +1028,61 @@ def _authoritative_workflow_execution_binding(
     try:
         repository = AigcExecutionRepository(get_app_engine())
         binding = repository.get_binding(
-            owner_user_id, canvas_id, node_id,
+            owner_user_id,
+            canvas_id,
+            node_id,
         )
         if binding is None and repository.is_managed_canvas(canvas_id):
-            raise HTTPException(status_code=409, detail="WORKFLOW_NODE_BINDING_REQUIRED")
+            raise HTTPException(
+                status_code=409,
+                detail="WORKFLOW_NODE_BINDING_REQUIRED",
+            )
     except SQLAlchemyError as exc:
-        raise HTTPException(status_code=503, detail="WORKFLOW_EXECUTION_STORE_UNAVAILABLE") from exc
+        raise HTTPException(
+            status_code=503,
+            detail="WORKFLOW_EXECUTION_STORE_UNAVAILABLE",
+        ) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=409, detail="WORKFLOW_OPERATION_INCOMPLETE") from exc
+        raise HTTPException(
+            status_code=409,
+            detail="WORKFLOW_OPERATION_INCOMPLETE",
+        ) from exc
     return binding
 
 
 def _accepted_workflow_allows_unbound_node(canvas: Canvas) -> bool:
-    """Allow normal canvas work after the bound expert task is accepted."""
-    material_task_id = str(
-        canvas.meta.get("super_expert_material_task_id") or ""
-    ).strip()
-    if not material_task_id:
-        return False
-    from ..super_experts.composition import get_super_expert_platform_service
-    from ..super_experts.models import AigcTaskStatus
+    """Allow an unbound managed node only when a plugin policy approves it."""
+    from qwenpaw.plugins.registry import PluginRegistry
 
-    task = get_super_expert_platform_service().get_task(material_task_id)
-    return bool(
-        task is not None
-        and task.binding.canvas_id == canvas.id
-        and task.status == AigcTaskStatus.ACCEPTED
-    )
+    for registration in PluginRegistry().get_aigc_canvas_policies():
+        try:
+            if registration.callback(canvas):
+                return True
+        except Exception:
+            logger.exception(
+                "AIGC canvas policy failed closed: %s:%s",
+                registration.plugin_id,
+                registration.name,
+            )
+    return False
 
 
-def _validate_job_resource_binding(request: Request, body: AigcJobCreate) -> None:
+def _validate_job_resource_binding(
+    request: Request,
+    body: AigcJobCreate,
+) -> None:
     canvas = _load_canvas_for_request(request, body.canvas_id)
-    target_node = next((node for node in canvas.nodes if node.id == body.node_id), None)
+    target_node = next(
+        (node for node in canvas.nodes if node.id == body.node_id),
+        None,
+    )
     if target_node is None:
         raise HTTPException(
             status_code=400,
             detail=f"Node '{body.node_id}' not found in canvas '{body.canvas_id}'.",
         )
     workflow_marker = str(
-        target_node.data.get("workflowLogicalNodeId") or ""
+        target_node.data.get("workflowLogicalNodeId") or "",
     ).strip()
     allow_unbound_node = (
         not workflow_marker and _accepted_workflow_allows_unbound_node(canvas)
@@ -1056,7 +1094,10 @@ def _validate_job_resource_binding(request: Request, body: AigcJobCreate) -> Non
             AigcCanvasService.owner(canvas) or "",
         )
     except HTTPException as exc:
-        if exc.detail != "WORKFLOW_NODE_BINDING_REQUIRED" or not allow_unbound_node:
+        if (
+            exc.detail != "WORKFLOW_NODE_BINDING_REQUIRED"
+            or not allow_unbound_node
+        ):
             raise
         authoritative = None
     if (
@@ -1065,7 +1106,8 @@ def _validate_job_resource_binding(request: Request, body: AigcJobCreate) -> Non
         and not allow_unbound_node
     ):
         raise HTTPException(
-            status_code=409, detail="WORKFLOW_BINDING_MIGRATION_REQUIRED",
+            status_code=409,
+            detail="WORKFLOW_BINDING_MIGRATION_REQUIRED",
         )
     if authoritative is not None:
         try:
@@ -1080,7 +1122,10 @@ def _validate_job_resource_binding(request: Request, body: AigcJobCreate) -> Non
             ) from exc
 
 
-async def _validate_job_submission(request: Request, body: AigcJobCreate) -> None:
+async def _validate_job_submission(
+    request: Request,
+    body: AigcJobCreate,
+) -> None:
     _validate_job_resource_binding(request, body)
     _resolve_job_prompt_binding(request, body)
     await _assert_job_model_policy_allowed(request, body)
@@ -1103,8 +1148,13 @@ async def _validate_job_submission(request: Request, body: AigcJobCreate) -> Non
 def _resolve_job_prompt_binding(request: Request, body: AigcJobCreate) -> None:
     from ..aigc.prompt_binding import PromptBindingError, resolve_prompt
 
-    prompt = str(body.inputs.get("prompt_template") or body.inputs.get("prompt")
-                 or body.parameters.get("prompt") or body.parameters.get("lastRunPrompt") or "")
+    prompt = str(
+        body.inputs.get("prompt_template")
+        or body.inputs.get("prompt")
+        or body.parameters.get("prompt")
+        or body.parameters.get("lastRunPrompt")
+        or "",
+    )
     if "${" not in prompt:
         return
     canvas = _load_canvas_for_request(request, body.canvas_id)
@@ -1112,7 +1162,11 @@ def _resolve_job_prompt_binding(request: Request, body: AigcJobCreate) -> None:
         resolved = resolve_prompt(canvas.model_dump(), body.node_id, prompt)
     except PromptBindingError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    body.inputs = {**body.inputs, "prompt_template": prompt, "prompt": resolved}
+    body.inputs = {
+        **body.inputs,
+        "prompt_template": prompt,
+        "prompt": resolved,
+    }
     body.parameters = {**body.parameters, "lastRunPrompt": resolved}
     if "prompt" in body.parameters:
         body.parameters["prompt"] = resolved
@@ -1151,18 +1205,19 @@ async def _assert_job_model_policy_allowed(
         return
     if not policy or not policy.get("configured", True):
         return
-    published = ModelPublicationService(
-        PriceCatalogRepository(engine)
-    ).effective_pairs() or set()
+    published = (
+        ModelPublicationService(
+            PriceCatalogRepository(engine),
+        ).effective_pairs()
+        or set()
+    )
     manager = getattr(request.app.state, "provider_manager", None)
     effective = await AigcModelPolicyService(
         repository,
         published_pairs=published,
         priced_pairs=published,
     ).effective(category, manager)
-    allowed = {
-        (item.provider_id, item.model_id) for item in effective.models
-    }
+    allowed = {(item.provider_id, item.model_id) for item in effective.models}
     if (body.provider_id, body.model_id) not in allowed:
         raise HTTPException(
             status_code=422,
@@ -1176,7 +1231,8 @@ async def _assert_job_model_policy_allowed(
 
 
 def _create_queued_job(
-    body: AigcJobCreate, extra_logs: list[str] | None = None
+    body: AigcJobCreate,
+    extra_logs: list[str] | None = None,
 ) -> AigcJob:
     now = _now()
     logs = [
@@ -1226,7 +1282,10 @@ async def _publish_job_event(job: AigcJob, message: str) -> None:
 
 
 async def _artifact_root_for_request(request: Request) -> Path:
-    return await _shared_artifact_root_for_request(request, _resource_store(STUDIO_ROOT))
+    return await _shared_artifact_root_for_request(
+        request,
+        _resource_store(STUDIO_ROOT),
+    )
 
 
 def _asset_kind_for_capability(
@@ -1251,7 +1310,11 @@ def _asset_mime_for_kind(kind: str) -> str:
     return "application/json"
 
 
-def _asset_filename_for_kind(job: AigcJob, kind: str, suffix: str | None = None) -> str:
+def _asset_filename_for_kind(
+    job: AigcJob,
+    kind: str,
+    suffix: str | None = None,
+) -> str:
     if suffix:
         return f"{job.node_id}-{job.id}.{suffix.lstrip('.')}"
     if kind == "image":
@@ -1267,7 +1330,7 @@ def _public_base_url() -> str:
     return _clean_text(
         os.environ.get("AIGC_STUDIO_PUBLIC_BASE_URL")
         or os.environ.get("QWENPAW_PUBLIC_BASE_URL")
-        or os.environ.get("PUBLIC_BASE_URL")
+        or os.environ.get("PUBLIC_BASE_URL"),
     ).rstrip("/")
 
 
@@ -1277,7 +1340,9 @@ def _rewrite_url_with_public_base(value: str, public_base: str) -> str:
     path = parsed_value.path or value
     if not path.startswith("/"):
         path = f"/{path}"
-    return urlunparse((base.scheme, base.netloc, path, "", parsed_value.query, ""))
+    return urlunparse(
+        (base.scheme, base.netloc, path, "", parsed_value.query, ""),
+    )
 
 
 def _asset_file_url(request: Request, asset_id: str) -> str | None:
@@ -1319,11 +1384,15 @@ def _signed_cloud_asset_url(
     if not storage:
         return None
     return AigcAssetService.signed_source(
-        asset, storage_client=_cloud_storage_client_or_error(), ttl_seconds=ttl_seconds,
+        asset,
+        storage_client=_cloud_storage_client_or_error(),
+        ttl_seconds=ttl_seconds,
     )
 
 
-def _asset_kind_for_mime(mime_type: str) -> Literal["image", "video", "audio", "file"]:
+def _asset_kind_for_mime(
+    mime_type: str,
+) -> Literal["image", "video", "audio", "file"]:
     if mime_type.startswith("image/"):
         return "image"
     if mime_type.startswith("video/"):
@@ -1355,12 +1424,15 @@ def _direct_upload_token(payload: dict[str, Any]) -> str:
             ensure_ascii=False,
             separators=(",", ":"),
             sort_keys=True,
-        ).encode("utf-8")
+        ).encode("utf-8"),
     ).decode("ascii")
     return f"{encoded_payload}.{_direct_upload_signature(encoded_payload)}"
 
 
-def _verify_direct_upload_token(asset_id: str, token: str) -> dict[str, Any] | None:
+def _verify_direct_upload_token(
+    asset_id: str,
+    token: str,
+) -> dict[str, Any] | None:
     try:
         encoded_payload, provided_signature = token.split(".", 1)
         expected_signature = _direct_upload_signature(encoded_payload)
@@ -1391,12 +1463,13 @@ async def _cloud_asset_file_response(asset: AigcAsset) -> Response | None:
         return None
     try:
         content, media_type = await _cloud_storage_client_or_error().download(
-            str(storage["object_key"])
+            str(storage["object_key"]),
         )
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 404:
             raise HTTPException(
-                status_code=404, detail="Asset file not found."
+                status_code=404,
+                detail="Asset file not found.",
             ) from exc
         raise HTTPException(
             status_code=502,
@@ -1413,17 +1486,29 @@ async def _cloud_asset_file_response(asset: AigcAsset) -> Response | None:
     )
 
 
-async def _asset_file_path_for_request(request: Request, asset: AigcAsset) -> Path:
+async def _asset_file_path_for_request(
+    request: Request,
+    asset: AigcAsset,
+) -> Path:
     artifact_root = await _artifact_root_for_request(request)
     try:
         return AigcAssetService(_resource_store(STUDIO_ROOT)).local_path(
-            asset, artifact_root=artifact_root,
+            asset,
+            artifact_root=artifact_root,
         )
     except AigcResourceError as exc:
         raise _resource_http_error(exc) from exc
 
 
-_GENERATED_ASSET_UPLOAD_RETRYABLE_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
+_GENERATED_ASSET_UPLOAD_RETRYABLE_STATUS_CODES = {
+    408,
+    425,
+    429,
+    500,
+    502,
+    503,
+    504,
+}
 _generated_asset_upload_sleep = asyncio.sleep
 
 
@@ -1490,7 +1575,10 @@ async def _save_generated_asset(
         try:
             review_proxy, review_proxy_meta = build_review_image_proxy(content)
         except (OSError, ValueError):
-            logger.warning("Unable to create review proxy for generated image %s", filename)
+            logger.warning(
+                "Unable to create review proxy for generated image %s",
+                filename,
+            )
     if storage_client is not None:
         storage_meta = await _upload_generated_asset(
             storage_client,
@@ -1498,7 +1586,9 @@ async def _save_generated_asset(
             content=content,
             mime_type=mime_type,
         )
-        asset_path = f"oss://{storage_meta['bucket']}/{storage_meta['object_key']}"
+        asset_path = (
+            f"oss://{storage_meta['bucket']}/{storage_meta['object_key']}"
+        )
         if review_proxy is not None and review_proxy_meta is not None:
             proxy_relative_path = (
                 rel_dir / f"{Path(filename).stem}.review.jpg"
@@ -1570,7 +1660,10 @@ async def _save_generated_asset(
     return asset
 
 
-def _long_image_upstream_nodes(canvas: Canvas, target_node_id: str) -> list[CanvasNode]:
+def _long_image_upstream_nodes(
+    canvas: Canvas,
+    target_node_id: str,
+) -> list[CanvasNode]:
     nodes_by_id = {node.id: node for node in canvas.nodes}
     result: list[CanvasNode] = []
     for edge in canvas.edges:
@@ -1617,7 +1710,7 @@ def _long_image_asset_from_node(node: CanvasNode) -> AigcAsset | None:
     preview_url = _clean_text(
         node.data.get("assetPreviewUrl")
         or node.data.get("referencePreviewUrl")
-        or node.data.get("url")
+        or node.data.get("url"),
     )
     asset_id = _clean_text(node.data.get("assetId")) or (
         _asset_id_from_file_url(preview_url) if preview_url else ""
@@ -1634,7 +1727,10 @@ def _long_image_asset_from_node(node: CanvasNode) -> AigcAsset | None:
     return None
 
 
-def _long_image_sections(canvas: Canvas, target_node_id: str) -> list[dict[str, Any]]:
+def _long_image_sections(
+    canvas: Canvas,
+    target_node_id: str,
+) -> list[dict[str, Any]]:
     sections: list[dict[str, Any]] = []
     for node in _long_image_upstream_nodes(canvas, target_node_id):
         title = _clean_text(node.data.get("title")) or node.type
@@ -1650,7 +1746,7 @@ def _long_image_sections(canvas: Canvas, target_node_id: str) -> list[dict[str, 
                         "title": title,
                         "text": paragraph,
                         "source_node_id": node.id,
-                    }
+                    },
                 )
             continue
 
@@ -1663,7 +1759,7 @@ def _long_image_sections(canvas: Canvas, target_node_id: str) -> list[dict[str, 
                     "title": title,
                     "asset": asset,
                     "source_node_id": node.id,
-                }
+                },
             )
             continue
 
@@ -1679,7 +1775,7 @@ def _long_image_sections(canvas: Canvas, target_node_id: str) -> list[dict[str, 
                         "title": title,
                         "text": paragraph,
                         "source_node_id": node.id,
-                    }
+                    },
                 )
     return sections
 
@@ -1706,7 +1802,12 @@ def _load_long_image_font(size: int):
     return ImageFont.load_default()
 
 
-def _wrap_long_image_text(draw: Any, text: str, font: Any, max_width: int) -> list[str]:
+def _wrap_long_image_text(
+    draw: Any,
+    text: str,
+    font: Any,
+    max_width: int,
+) -> list[str]:
     lines: list[str] = []
     current = ""
     for char in text:
@@ -1736,7 +1837,7 @@ async def _long_image_asset_image(request: Request, asset: AigcAsset):
     storage = _cloud_storage_meta(asset)
     if storage:
         content, _media_type = await _cloud_storage_client_or_error().download(
-            str(storage["object_key"])
+            str(storage["object_key"]),
         )
         return PILImage.open(BytesIO(content)).convert("RGB")
 
@@ -1767,14 +1868,20 @@ async def _render_long_image(
     blocks: list[dict[str, Any]] = []
     y = padding
     header_lines = _wrap_long_image_text(
-        draw, title or "公众号长图", title_font, content_width
+        draw,
+        title or "公众号长图",
+        title_font,
+        content_width,
     )
     y += len(header_lines) * 50 + 28
 
     for section in sections:
         if section["kind"] == "text":
             lines = _wrap_long_image_text(
-                draw, str(section["text"]), body_font, content_width - 40
+                draw,
+                str(section["text"]),
+                body_font,
+                content_width - 40,
             )
             height = 24 + len(lines) * line_height + 28
             blocks.append({**section, "lines": lines, "height": height})
@@ -1801,7 +1908,10 @@ async def _render_long_image(
         draw.text((padding, y), line, fill="#111827", font=title_font)
         y += 50
     draw.text(
-        (padding, y), "自动排版 · 公众号上传切片", fill="#6b7280", font=label_font
+        (padding, y),
+        "自动排版 · 公众号上传切片",
+        fill="#6b7280",
+        font=label_font,
     )
     y += 42
 
@@ -1815,7 +1925,12 @@ async def _render_long_image(
             )
             text_y = y + 24
             for line in block["lines"]:
-                draw.text((padding + 20, text_y), line, fill="#1f2937", font=body_font)
+                draw.text(
+                    (padding + 20, text_y),
+                    line,
+                    fill="#1f2937",
+                    font=body_font,
+                )
                 text_y += line_height
             y += height + gap
             continue
@@ -1823,7 +1938,12 @@ async def _render_long_image(
         loaded = loaded_images.get(block["id"])
         if loaded is None:
             continue
-        draw.text((padding, y), str(block["title"]), fill="#6b7280", font=label_font)
+        draw.text(
+            (padding, y),
+            str(block["title"]),
+            fill="#6b7280",
+            font=label_font,
+        )
         y += 32
         x = padding + max(0, (content_width - loaded.width) // 2)
         image.paste(loaded, (x, y))
@@ -1901,7 +2021,9 @@ async def _create_stub_artifact(request: Request, job: AigcJob) -> AigcAsset:
     """Create a deterministic local artifact for adapter dry-runs and tests."""
     kind = _asset_kind_for_capability(job.capability)
     filename = _asset_filename_for_kind(job, kind)
-    prompt = str(job.inputs.get("prompt") or job.parameters.get("prompt") or "")
+    prompt = str(
+        job.inputs.get("prompt") or job.parameters.get("prompt") or "",
+    )
 
     if kind == "image":
         safe_prompt = escape(prompt[:260])
@@ -2035,13 +2157,15 @@ def _is_text_reference_record(value: dict[str, Any]) -> bool:
         value.get("asset_kind"),
         value.get("role"),
     )
-    if any(_clean_text(marker).lower() in {"prompt", "text"} for marker in markers):
+    if any(
+        _clean_text(marker).lower() in {"prompt", "text"} for marker in markers
+    ):
         return True
     preview = _clean_text(
         value.get("preview_url")
         or value.get("previewUrl")
         or value.get("assetPreviewUrl")
-        or value.get("url")
+        or value.get("url"),
     ).lower()
     return preview == "prompt"
 
@@ -2194,7 +2318,9 @@ def _mxapi_nano2_image_size(parameters: dict[str, Any]) -> str:
 
 def _mxapi_nano2_aspect_ratio(parameters: dict[str, Any]) -> str:
     aspect_ratio = _mxapi_aspect_ratio(parameters)
-    return aspect_ratio if aspect_ratio in _MXAPI_NANO2_ASPECT_RATIOS else "1:1"
+    return (
+        aspect_ratio if aspect_ratio in _MXAPI_NANO2_ASPECT_RATIOS else "1:1"
+    )
 
 
 def _mxapi_gpt_image_resolution(parameters: dict[str, Any]) -> str:
@@ -2204,10 +2330,17 @@ def _mxapi_gpt_image_resolution(parameters: dict[str, Any]) -> str:
 
 def _mxapi_gpt_image_aspect_ratio(parameters: dict[str, Any]) -> str:
     aspect_ratio = _mxapi_aspect_ratio(parameters)
-    return aspect_ratio if aspect_ratio in _MXAPI_GPT_IMAGE_ASPECT_RATIOS else "1:1"
+    return (
+        aspect_ratio
+        if aspect_ratio in _MXAPI_GPT_IMAGE_ASPECT_RATIOS
+        else "1:1"
+    )
 
 
-def _mxapi_quality(parameters: dict[str, Any], channel: str = "default") -> str:
+def _mxapi_quality(
+    parameters: dict[str, Any],
+    channel: str = "default",
+) -> str:
     raw = _clean_text(
         parameters.get("quality")
         or parameters.get("imageQuality")
@@ -2274,8 +2407,14 @@ def _mxapi_reference_candidates(job: AigcJob) -> list[str]:
         values,
         job.parameters.get("annotationSourcePreviewUrl"),
     )
-    _append_reference_candidate(values, job.parameters.get("referencePreviewUrl"))
-    _append_reference_candidate(values, job.parameters.get("annotationPreviewUrl"))
+    _append_reference_candidate(
+        values,
+        job.parameters.get("referencePreviewUrl"),
+    )
+    _append_reference_candidate(
+        values,
+        job.parameters.get("annotationPreviewUrl"),
+    )
     _append_reference_candidate(values, job.inputs.get("reference_images"))
     _append_reference_candidate(values, job.inputs.get("annotations"))
     _append_reference_candidate(values, job.inputs.get("reference_nodes"))
@@ -2308,7 +2447,9 @@ def _mxapi_public_asset_base_url() -> str:
 
 
 def _mxapi_public_asset_url_ttl_seconds() -> int:
-    raw = _clean_text(os.environ.get("AIGC_STUDIO_PUBLIC_ASSET_URL_TTL_SECONDS"))
+    raw = _clean_text(
+        os.environ.get("AIGC_STUDIO_PUBLIC_ASSET_URL_TTL_SECONDS"),
+    )
     try:
         ttl = int(raw)
     except (TypeError, ValueError):
@@ -2393,7 +2534,10 @@ def _public_asset_reference_url(request: Request, asset_id: str) -> str:
     return f"{url}{separator}token={token}"
 
 
-def _external_asset_reference_url(request: Request, asset_id: str) -> str | None:
+def _external_asset_reference_url(
+    request: Request,
+    asset_id: str,
+) -> str | None:
     public_base = _mxapi_public_asset_base_url()
     asset_path = _json_path("assets", asset_id)
     if asset_path.exists():
@@ -2422,7 +2566,7 @@ def _external_asset_reference_url(request: Request, asset_id: str) -> str | None
 def _mxapi_reference_requires_public_url(value: str) -> RuntimeError:
     return RuntimeError(
         "GPT Image 2 reference images must be public image URLs. "
-        f"Current reference is not accessible to MXAPI: {value}"
+        f"Current reference is not accessible to MXAPI: {value}",
     )
 
 
@@ -2430,12 +2574,12 @@ def _mxapi_public_reference_image(request: Request, value: str) -> str:
     if value.startswith("data:"):
         raise RuntimeError(
             "GPT Image 2 through MXAPI does not support base64 reference images. "
-            "Use a public image URL instead."
+            "Use a public image URL instead.",
         )
     if value.startswith("blob:"):
         raise RuntimeError(
             "GPT Image 2 through MXAPI cannot read browser blob reference images. "
-            "Upload the image to a public URL first."
+            "Upload the image to a public URL first.",
         )
 
     asset_id = _asset_id_from_file_url(value)
@@ -2492,7 +2636,11 @@ def _mxapi_http_error_message(response: httpx.Response) -> str:
     except ValueError:
         payload = None
     if isinstance(payload, dict):
-        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        data = (
+            payload.get("data")
+            if isinstance(payload.get("data"), dict)
+            else {}
+        )
         candidates = [
             payload.get("message"),
             payload.get("error"),
@@ -2518,7 +2666,11 @@ def _mxapi_submit_url(provider: Any, adapter: str) -> str:
     return f"{_mxapi_base_url(provider)}/api/v2/{endpoint}"
 
 
-def _mxapi_task_query_urls(provider: Any, task_id: str, adapter: str) -> list[str]:
+def _mxapi_task_query_urls(
+    provider: Any,
+    task_id: str,
+    adapter: str,
+) -> list[str]:
     base_url = _mxapi_base_url(provider)
     if adapter == "mxapi_nano2":
         return [
@@ -2564,30 +2716,53 @@ def _mxapi_submit_body(
 
 
 async def _mxapi_submit_request(
-    url: str, headers: dict[str, str], body: dict[str, Any], *,
-    accepted_codes: set, error_message: str,
-    execution: ProviderExecution | None = None, slot: str, adapter: str,
+    url: str,
+    headers: dict[str, str],
+    body: dict[str, Any],
+    *,
+    accepted_codes: set,
+    error_message: str,
+    execution: ProviderExecution | None = None,
+    slot: str,
+    adapter: str,
 ) -> str:
     """Checkpoint only after local request validation, just before external I/O."""
+
     async def send() -> str:
         timeout = httpx.Timeout(60.0, connect=15.0)
-        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            trust_env=False,
+        ) as client:
             try:
                 response = await client.post(url, headers=headers, json=body)
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
-                error = (ProviderSubmissionRejected if exc.response.status_code in {400, 401, 403, 404, 422, 429}
-                         else RuntimeError)
+                error = (
+                    ProviderSubmissionRejected
+                    if exc.response.status_code
+                    in {400, 401, 403, 404, 422, 429}
+                    else RuntimeError
+                )
                 raise error(_mxapi_http_error_message(exc.response)) from exc
         payload = response.json()
         task_id = _mxapi_task_id(payload)
         if payload.get("code") not in accepted_codes or not task_id:
-            error = (ProviderSubmissionRejected if not task_id and str(payload.get("code")) in {"400", "401", "403", "404", "422", "429"}
-                     else RuntimeError)
+            error = (
+                ProviderSubmissionRejected
+                if not task_id
+                and str(payload.get("code"))
+                in {"400", "401", "403", "404", "422", "429"}
+                else RuntimeError
+            )
             raise error(_clean_text(payload.get("message")) or error_message)
         return task_id
 
-    return await execution.submit(slot, adapter, send) if execution else await send()
+    return (
+        await execution.submit(slot, adapter, send)
+        if execution
+        else await send()
+    )
 
 
 async def _mxapi_submit_task(
@@ -2602,7 +2777,9 @@ async def _mxapi_submit_task(
 ) -> str:
     api_key = _mxapi_config_value(provider, "api_key", "MXAPI_KEY")
     if not api_key:
-        raise RuntimeError(f"Provider '{job.provider_id}' is missing an API key.")
+        raise RuntimeError(
+            f"Provider '{job.provider_id}' is missing an API key.",
+        )
 
     channel = _mxapi_channel(provider, job.parameters)
     body = _mxapi_submit_body(
@@ -2614,9 +2791,18 @@ async def _mxapi_submit_task(
     )
     url = _mxapi_submit_url(provider, adapter)
     return await _mxapi_submit_request(
-        url, {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "X-Channel": channel}, body,
-        accepted_codes={None, 200}, error_message="MXAPI task submission failed.",
-        execution=execution, slot=slot, adapter=adapter,
+        url,
+        {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "X-Channel": channel,
+        },
+        body,
+        accepted_codes={None, 200},
+        error_message="MXAPI task submission failed.",
+        execution=execution,
+        slot=slot,
+        adapter=adapter,
     )
 
 
@@ -2669,7 +2855,11 @@ async def _mxapi_query_task(
                     continue
                 raise
             payload = response.json()
-            data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            data = (
+                payload.get("data")
+                if isinstance(payload.get("data"), dict)
+                else {}
+            )
             status = _clean_text(data.get("status"))
             if status == "completed":
                 image_url = _mxapi_completed_image_url(payload)
@@ -2689,8 +2879,12 @@ def _exception_message(exc: Exception) -> str:
 
 
 async def _mxapi_poll_task(provider: Any, task_id: str, adapter: str) -> str:
-    timeout_seconds = float(os.environ.get("MXAPI_POLL_TIMEOUT_SECONDS") or 240)
-    interval_seconds = float(os.environ.get("MXAPI_POLL_INTERVAL_SECONDS") or 1.5)
+    timeout_seconds = float(
+        os.environ.get("MXAPI_POLL_TIMEOUT_SECONDS") or 240,
+    )
+    interval_seconds = float(
+        os.environ.get("MXAPI_POLL_INTERVAL_SECONDS") or 1.5,
+    )
     loop = asyncio.get_running_loop()
     started_at = loop.time()
     while loop.time() - started_at < timeout_seconds:
@@ -2706,11 +2900,15 @@ def _mxapi_seedance_endpoint(model: Any, job: AigcJob) -> str:
     endpoint = _clean_text(
         job.parameters.get("mxapiVideoEndpoint")
         or job.parameters.get("mxapi_video_endpoint")
-        or model_kwargs.get("mxapi_video_endpoint")
+        or model_kwargs.get("mxapi_video_endpoint"),
     )
     if not endpoint:
-        model_id = str(getattr(model, "id", "") or job.model_id).strip().lower()
-        endpoint = model_id if model_id in _MXAPI_SEEDANCE_ENDPOINTS else "seedance2"
+        model_id = (
+            str(getattr(model, "id", "") or job.model_id).strip().lower()
+        )
+        endpoint = (
+            model_id if model_id in _MXAPI_SEEDANCE_ENDPOINTS else "seedance2"
+        )
     endpoint = endpoint.strip().lower()
     if endpoint not in _MXAPI_SEEDANCE_ENDPOINTS:
         raise RuntimeError(f"Unsupported MXAPI Seedance endpoint: {endpoint}")
@@ -2722,7 +2920,7 @@ def _mxapi_seedance_resolution(parameters: dict[str, Any]) -> str:
         parameters.get("resolution")
         or parameters.get("videoResolution")
         or parameters.get("video_resolution")
-        or "720p"
+        or "720p",
     )
     normalized = raw.strip()
     if normalized.upper() == "4K":
@@ -2738,7 +2936,7 @@ def _mxapi_seedance_ratio(parameters: dict[str, Any]) -> str:
         parameters.get("ratio")
         or parameters.get("aspectRatio")
         or parameters.get("aspect_ratio")
-        or "16:9"
+        or "16:9",
     )
     if not raw or raw.lower() in {"auto", "adaptive"} or raw == "自适应":
         return "adaptive"
@@ -2783,11 +2981,14 @@ def _video_prompt_from_job(job: AigcJob) -> str:
         job.inputs.get("prompt")
         or job.parameters.get("prompt")
         or job.parameters.get("lastRunPrompt")
-        or job.parameters.get("text")
+        or job.parameters.get("text"),
     )
 
 
-def _append_seedance_reference_item(items: list[dict[str, Any]], value: Any) -> None:
+def _append_seedance_reference_item(
+    items: list[dict[str, Any]],
+    value: Any,
+) -> None:
     if value is None:
         return
     if isinstance(value, list):
@@ -2859,7 +3060,7 @@ def _seedance_video_mode(job: AigcJob) -> str:
     return _clean_text(
         job.parameters.get("videoMode")
         or job.parameters.get("activeVideoTab")
-        or job.capability
+        or job.capability,
     ).lower()
 
 
@@ -2886,7 +3087,10 @@ def _seedance_reference_role(
         return "reference_video"
     if mode == "first_last_frames":
         return "last_frame" if image_index == 1 else "first_frame"
-    if mode in {"image_to_video", "first_frame"} or job.capability == "image_to_video":
+    if (
+        mode in {"image_to_video", "first_frame"}
+        or job.capability == "image_to_video"
+    ):
         return "first_frame"
     return "reference_image"
 
@@ -2898,7 +3102,7 @@ def _mxapi_seedance_reference_requires_public_url(
 ) -> RuntimeError:
     return RuntimeError(
         f"{service} reference media must be public media URLs or cloud-signed "
-        f"AIGC assets. Current reference is not accessible to MXAPI: {value}"
+        f"AIGC assets. Current reference is not accessible to MXAPI: {value}",
     )
 
 
@@ -2911,12 +3115,12 @@ def _mxapi_public_reference_media(
     if value.startswith("data:"):
         raise RuntimeError(
             f"{service} through MXAPI does not support base64 reference media. "
-            "Upload the asset and use a public URL instead."
+            "Upload the asset and use a public URL instead.",
         )
     if value.startswith("blob:"):
         raise RuntimeError(
             f"{service} through MXAPI cannot read browser blob reference media. "
-            "Upload the asset before generation."
+            "Upload the asset before generation.",
         )
 
     asset_id = _asset_id_from_file_url(value)
@@ -2992,7 +3196,9 @@ def _mxapi_seedance_reference_content(
         content.append(entry)
         seen.add(dedupe_key)
 
-    if content and all(item.get("role") == "reference_audio" for item in content):
+    if content and all(
+        item.get("role") == "reference_audio" for item in content
+    ):
         raise RuntimeError("Seedance reference audio cannot be used alone.")
 
     mode = _seedance_video_mode(job)
@@ -3000,17 +3206,20 @@ def _mxapi_seedance_reference_content(
     if job.capability == "image_to_video" and mode != "all_reference":
         if "first_frame" not in frame_roles:
             raise RuntimeError(
-                "Seedance image-to-video requires a first-frame image URL."
+                "Seedance image-to-video requires a first-frame image URL.",
             )
         if mode == "first_last_frames" and "last_frame" not in frame_roles:
             raise RuntimeError(
-                "Seedance first-last-frame mode requires a last-frame image URL."
+                "Seedance first-last-frame mode requires a last-frame image URL.",
             )
 
     return content
 
 
-def _mxapi_seedance_submit_body(request: Request, job: AigcJob) -> dict[str, Any]:
+def _mxapi_seedance_submit_body(
+    request: Request,
+    job: AigcJob,
+) -> dict[str, Any]:
     prompt = _video_prompt_from_job(job)
     if not prompt:
         raise RuntimeError("Prompt is required for Seedance video generation.")
@@ -3051,14 +3260,24 @@ async def _mxapi_seedance_submit_task(
 ) -> str:
     api_key = _mxapi_config_value(provider, "api_key", "MXAPI_KEY")
     if not api_key:
-        raise RuntimeError(f"Provider '{job.provider_id}' is missing an API key.")
+        raise RuntimeError(
+            f"Provider '{job.provider_id}' is missing an API key.",
+        )
 
     body = _mxapi_seedance_submit_body(request, job)
     url = _mxapi_seedance_submit_url(provider, model, job)
     return await _mxapi_submit_request(
-        url, {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, body,
-        accepted_codes={None, 200, "200"}, error_message="MXAPI Seedance task submission failed.",
-        execution=execution, slot="video", adapter="mxapi_seedance2",
+        url,
+        {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        body,
+        accepted_codes={None, 200, "200"},
+        error_message="MXAPI Seedance task submission failed.",
+        execution=execution,
+        slot="video",
+        adapter="mxapi_seedance2",
     )
 
 
@@ -3132,7 +3351,9 @@ async def _mxapi_seedance_query_task(
     payload = response.json()
     status = _mxapi_seedance_status(payload)
     video_url = _mxapi_seedance_video_url_from_value(payload)
-    if status in _MXAPI_SEEDANCE_SUCCESS_STATUSES or (not status and video_url):
+    if status in _MXAPI_SEEDANCE_SUCCESS_STATUSES or (
+        not status and video_url
+    ):
         if video_url:
             return "completed", video_url, payload
         raise RuntimeError("MXAPI Seedance completed without a video URL.")
@@ -3149,18 +3370,21 @@ async def _mxapi_seedance_poll_task(
         os.environ.get("AIGC_STUDIO_VIDEO_POLL_TIMEOUT_SECONDS")
         or os.environ.get("MXAPI_SEEDANCE_POLL_TIMEOUT_SECONDS")
         or os.environ.get("MXAPI_POLL_TIMEOUT_SECONDS")
-        or 1800
+        or 1800,
     )
     interval_seconds = float(
         os.environ.get("AIGC_STUDIO_VIDEO_POLL_INTERVAL_SECONDS")
         or os.environ.get("MXAPI_SEEDANCE_POLL_INTERVAL_SECONDS")
         or os.environ.get("MXAPI_POLL_INTERVAL_SECONDS")
-        or 3
+        or 3,
     )
     loop = asyncio.get_running_loop()
     started_at = loop.time()
     while loop.time() - started_at < timeout_seconds:
-        status, video_url, payload = await _mxapi_seedance_query_task(provider, task_id)
+        status, video_url, payload = await _mxapi_seedance_query_task(
+            provider,
+            task_id,
+        )
         if status == "completed" and video_url:
             return video_url, payload
         await _mxapi_sleep(interval_seconds)
@@ -3195,7 +3419,7 @@ def _mxapi_jimeng_aspect_ratio(parameters: dict[str, Any]) -> str:
         parameters.get("aspect_ratio")
         or parameters.get("aspectRatio")
         or parameters.get("ratio")
-        or "16:9"
+        or "16:9",
     )
     if ratio.lower() in {"auto", "adaptive"} or ratio == "自适应":
         return "adaptive"
@@ -3208,7 +3432,7 @@ def _mxapi_jimeng_resolution(parameters: dict[str, Any]) -> str:
         or parameters.get("resolution_name")
         or parameters.get("videoResolution")
         or parameters.get("video_resolution")
-        or "1080p"
+        or "1080p",
     ).lower()
     if resolution not in _MXAPI_JIMENG_VIDEO_RESOLUTIONS:
         return "1080p"
@@ -3241,7 +3465,10 @@ def _mxapi_jimeng_prompt(job: AigcJob) -> str:
     return f"{prompt} --ratio {ratio} --rs {resolution} --dur {duration}"
 
 
-def _mxapi_jimeng_reference_images(request: Request, job: AigcJob) -> list[str]:
+def _mxapi_jimeng_reference_images(
+    request: Request,
+    job: AigcJob,
+) -> list[str]:
     values: list[str] = []
     for item in _seedance_reference_items(job):
         if _is_text_reference_record(item):
@@ -3251,7 +3478,7 @@ def _mxapi_jimeng_reference_images(request: Request, job: AigcJob) -> list[str]:
             continue
         if _seedance_reference_kind(item, raw_url) != "image":
             raise RuntimeError(
-                "Jimeng video generation only supports image references."
+                "Jimeng video generation only supports image references.",
             )
         values.append(raw_url)
 
@@ -3287,9 +3514,13 @@ def _mxapi_jimeng_submit_body(
     is_first_last_model = model_id == "doubao-seedance-1-5-pro-251215"
 
     if is_first_last_model and len(reference_images) != 2:
-        raise RuntimeError("Jimeng Seedance 1.5 Pro requires exactly 2 frame images.")
+        raise RuntimeError(
+            "Jimeng Seedance 1.5 Pro requires exactly 2 frame images.",
+        )
     if not is_first_last_model and len(reference_images) > 1:
-        raise RuntimeError("Jimeng Seedance 1.0 Pro Fast supports at most 1 image.")
+        raise RuntimeError(
+            "Jimeng Seedance 1.0 Pro Fast supports at most 1 image.",
+        )
     if (
         not is_first_last_model
         and job.capability == "image_to_video"
@@ -3313,14 +3544,14 @@ def _mxapi_jimeng_submit_body(
                     "image_url": {"url": reference_images[1]},
                     "role": "last_frame",
                 },
-            ]
+            ],
         )
     elif reference_images:
         content.append(
             {
                 "type": "image_url",
                 "image_url": {"url": reference_images[0]},
-            }
+            },
         )
     return {"model": model_id, "content": content}
 
@@ -3335,14 +3566,24 @@ async def _mxapi_jimeng_submit_task(
 ) -> str:
     api_key = _mxapi_config_value(provider, "api_key", "MXAPI_KEY")
     if not api_key:
-        raise RuntimeError(f"Provider '{job.provider_id}' is missing an API key.")
+        raise RuntimeError(
+            f"Provider '{job.provider_id}' is missing an API key.",
+        )
 
     url = f"{_mxapi_base_url(provider)}/api/v2/video/generate"
     body = _mxapi_jimeng_submit_body(request, model, job)
     return await _mxapi_submit_request(
-        url, {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, body,
-        accepted_codes={None, 0, 200, "200"}, error_message="MXAPI Jimeng task submission failed.",
-        execution=execution, slot="video", adapter="mxapi_jimeng_video",
+        url,
+        {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        body,
+        accepted_codes={None, 0, 200, "200"},
+        error_message="MXAPI Jimeng task submission failed.",
+        execution=execution,
+        slot="video",
+        adapter="mxapi_jimeng_video",
     )
 
 
@@ -3358,7 +3599,7 @@ def _mxapi_grok_aspect_ratio(parameters: dict[str, Any]) -> str:
         parameters.get("aspect_ratio")
         or parameters.get("aspectRatio")
         or parameters.get("ratio")
-        or "16:9"
+        or "16:9",
     )
     return ratio if ratio in _MXAPI_GROK_VIDEO_ASPECT_RATIOS else "16:9"
 
@@ -3369,12 +3610,14 @@ def _mxapi_grok_resolution(model_id: str, parameters: dict[str, Any]) -> str:
         or parameters.get("videoResolution")
         or parameters.get("video_resolution")
         or parameters.get("resolution")
-        or "720p"
+        or "720p",
     ).lower()
     if resolution not in _MXAPI_GROK_VIDEO_RESOLUTIONS:
         resolution = "720p"
     if model_id.endswith("-fast") and resolution == "1080p":
-        raise RuntimeError("Grok Imagine Video 1.5 Fast does not support 1080p.")
+        raise RuntimeError(
+            "Grok Imagine Video 1.5 Fast does not support 1080p.",
+        )
     return resolution
 
 
@@ -3409,7 +3652,9 @@ def _mxapi_grok_reference_images(request: Request, job: AigcJob) -> list[str]:
         if not raw_url:
             continue
         if _seedance_reference_kind(item, raw_url) != "image":
-            raise RuntimeError("Grok video generation only supports image references.")
+            raise RuntimeError(
+                "Grok video generation only supports image references.",
+            )
         values.append(raw_url)
 
     images: list[str] = []
@@ -3440,7 +3685,9 @@ def _mxapi_grok_submit_body(
     reference_images = _mxapi_grok_reference_images(request, job)
     if model_id.endswith("-fast"):
         if len(reference_images) > 7:
-            raise RuntimeError("Grok Imagine Video 1.5 Fast supports at most 7 images.")
+            raise RuntimeError(
+                "Grok Imagine Video 1.5 Fast supports at most 7 images.",
+            )
     elif len(reference_images) != 1:
         raise RuntimeError("Grok Imagine Video 1.5 requires exactly 1 image.")
 
@@ -3466,15 +3713,26 @@ async def _mxapi_grok_submit_task(
 ) -> str:
     api_key = _mxapi_config_value(provider, "api_key", "MXAPI_KEY")
     if not api_key:
-        raise RuntimeError(f"Provider '{job.provider_id}' is missing an API key.")
+        raise RuntimeError(
+            f"Provider '{job.provider_id}' is missing an API key.",
+        )
 
     body = _mxapi_grok_submit_body(request, model, job)
     channel = _mxapi_channel(provider, job.parameters)
     url = f"{_mxapi_base_url(provider)}/api/v2/video/grok"
     return await _mxapi_submit_request(
-        url, {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "X-Channel": channel}, body,
-        accepted_codes={None, 0, 200, "200"}, error_message="MXAPI Grok task submission failed.",
-        execution=execution, slot="video", adapter="mxapi_grok_video",
+        url,
+        {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "X-Channel": channel,
+        },
+        body,
+        accepted_codes={None, 0, 200, "200"},
+        error_message="MXAPI Grok task submission failed.",
+        execution=execution,
+        slot="video",
+        adapter="mxapi_grok_video",
     )
 
 
@@ -3507,7 +3765,9 @@ def _mxapi_grok_download_url(payload: dict[str, Any]) -> str | None:
             continue
         raw = value.get("rawResponse")
         video = raw.get("video") if isinstance(raw, dict) else None
-        cdn_url = video.get("cdn_video_url") if isinstance(video, dict) else None
+        cdn_url = (
+            video.get("cdn_video_url") if isinstance(video, dict) else None
+        )
         if isinstance(cdn_url, str) and cdn_url.strip():
             return cdn_url.strip()
     return _mxapi_seedance_video_url_from_value(payload)
@@ -3533,14 +3793,18 @@ async def _mxapi_grok_query_task(
         except httpx.TimeoutException:
             return "running", None, {}
         except httpx.HTTPStatusError as exc:
-            raise RuntimeError(_mxapi_http_error_message(exc.response)) from exc
+            raise RuntimeError(
+                _mxapi_http_error_message(exc.response),
+            ) from exc
 
     payload = response.json()
     if payload.get("code") not in {None, 0, 200, "200"}:
         raise RuntimeError(_mxapi_grok_error_message(payload))
     status = _mxapi_seedance_status(payload)
     video_url = _mxapi_grok_download_url(payload)
-    if status in _MXAPI_SEEDANCE_SUCCESS_STATUSES or (not status and video_url):
+    if status in _MXAPI_SEEDANCE_SUCCESS_STATUSES or (
+        not status and video_url
+    ):
         if video_url:
             return "completed", video_url, payload
         raise RuntimeError("MXAPI Grok completed without a video URL.")
@@ -3557,13 +3821,13 @@ async def _mxapi_grok_poll_task(
         os.environ.get("AIGC_STUDIO_VIDEO_POLL_TIMEOUT_SECONDS")
         or os.environ.get("MXAPI_GROK_POLL_TIMEOUT_SECONDS")
         or os.environ.get("MXAPI_POLL_TIMEOUT_SECONDS")
-        or 1800
+        or 1800,
     )
     interval_seconds = float(
         os.environ.get("AIGC_STUDIO_VIDEO_POLL_INTERVAL_SECONDS")
         or os.environ.get("MXAPI_GROK_POLL_INTERVAL_SECONDS")
         or os.environ.get("MXAPI_POLL_INTERVAL_SECONDS")
-        or 3
+        or 3,
     )
     loop = asyncio.get_running_loop()
     started_at = loop.time()
@@ -3645,7 +3909,10 @@ def _seedream_size_from_image_parameters(parameters: dict[str, Any]) -> str:
         return tier.upper()
 
     ratio_key = f"{int(ratio_width)}:{int(ratio_height)}"
-    return _SEEDREAM_RECOMMENDED_SIZES.get(tier, {}).get(ratio_key, tier.upper())
+    return _SEEDREAM_RECOMMENDED_SIZES.get(tier, {}).get(
+        ratio_key,
+        tier.upper(),
+    )
 
 
 def _aigc_adapter_for(provider: Any, model: Any, job: AigcJob) -> str | None:
@@ -3690,9 +3957,11 @@ def _aigc_adapter_for(provider: Any, model: Any, job: AigcJob) -> str | None:
     if provider_configured:
         return str(provider_configured)
 
-    if job.capability in {"text_to_image", "image_to_image", "image_edit"} and (
-        "mxapi" in provider_id or "open.mxapi.org" in base_url
-    ):
+    if job.capability in {
+        "text_to_image",
+        "image_to_image",
+        "image_edit",
+    } and ("mxapi" in provider_id or "open.mxapi.org" in base_url):
         return "mxapi_gpt_image"
     if (
         job.capability == "text_to_image"
@@ -3736,7 +4005,10 @@ async def _download_remote_asset(url: str) -> tuple[bytes, str]:
             )
             return response.content, mime_type
         except httpx.HTTPStatusError as exc:
-            retryable = exc.response.status_code in _REMOTE_ASSET_RETRYABLE_STATUS_CODES
+            retryable = (
+                exc.response.status_code
+                in _REMOTE_ASSET_RETRYABLE_STATUS_CODES
+            )
             if not retryable or attempt + 1 >= attempts:
                 raise
         except httpx.TransportError:
@@ -3758,8 +4030,14 @@ def _seedream_reference_candidates(job: AigcJob) -> list[str]:
     _append_reference_candidate(values, job.parameters.get("referenceImages"))
     _append_reference_candidate(values, job.parameters.get("reference_images"))
     _append_reference_candidate(values, job.parameters.get("image"))
-    _append_reference_candidate(values, job.parameters.get("referencePreviewUrl"))
-    _append_reference_candidate(values, job.parameters.get("annotationPreviewUrl"))
+    _append_reference_candidate(
+        values,
+        job.parameters.get("referencePreviewUrl"),
+    )
+    _append_reference_candidate(
+        values,
+        job.parameters.get("annotationPreviewUrl"),
+    )
     _append_reference_candidate(values, job.inputs.get("image"))
     _append_reference_candidate(values, job.inputs.get("referenceImages"))
     _append_reference_candidate(values, job.inputs.get("reference_images"))
@@ -3788,7 +4066,9 @@ def _ensure_reference_image_mime(mime_type: str | None, source: str) -> str:
 
 
 async def _image_file_to_data_url(
-    path: Path, mime_type: str | None, source: str
+    path: Path,
+    mime_type: str | None,
+    source: str,
 ) -> str:
     if not path.is_file():
         raise RuntimeError(f"Reference image '{source}' was not found.")
@@ -3799,7 +4079,11 @@ async def _image_file_to_data_url(
     return f"data:{clean_mime};base64,{b64encode(path.read_bytes()).decode('ascii')}"
 
 
-def _image_bytes_to_data_url(content: bytes, mime_type: str | None, source: str) -> str:
+def _image_bytes_to_data_url(
+    content: bytes,
+    mime_type: str | None,
+    source: str,
+) -> str:
     clean_mime = _ensure_reference_image_mime(mime_type, source)
     return f"data:{clean_mime};base64,{b64encode(content).decode('ascii')}"
 
@@ -3808,11 +4092,13 @@ async def _asset_to_image_data_url(request: Request, asset_id: str) -> str:
     try:
         asset = _load_asset_for_request(request, asset_id)
     except HTTPException as exc:
-        raise RuntimeError(f"Reference asset '{asset_id}' was not found.") from exc
+        raise RuntimeError(
+            f"Reference asset '{asset_id}' was not found.",
+        ) from exc
     storage = _cloud_storage_meta(asset)
     if storage:
         content, mime_type = await _cloud_storage_client_or_error().download(
-            str(storage["object_key"])
+            str(storage["object_key"]),
         )
         return _image_bytes_to_data_url(
             content,
@@ -3838,11 +4124,16 @@ async def _relative_reference_to_data_url(request: Request, value: str) -> str:
     )
     allowed_roots = [artifact_root.resolve(), asset_files_root]
     if not any(_path_is_relative_to(target, root) for root in allowed_roots):
-        raise RuntimeError(f"Reference image '{value}' is outside allowed roots.")
+        raise RuntimeError(
+            f"Reference image '{value}' is outside allowed roots.",
+        )
     return await _image_file_to_data_url(target, None, value)
 
 
-async def _seedream_reference_images(request: Request, job: AigcJob) -> list[str]:
+async def _seedream_reference_images(
+    request: Request,
+    job: AigcJob,
+) -> list[str]:
     images: list[str] = []
     for value in _seedream_reference_candidates(job):
         if value.startswith("data:image/"):
@@ -3931,7 +4222,9 @@ async def _save_seedream_response_asset(
         content, mime_type = await _download_remote_asset(str(image_url))
         suffix = _suffix_for_mime_type(mime_type, fallback=fallback_suffix)
     else:
-        raise RuntimeError("Seedream response did not include b64_json or url.")
+        raise RuntimeError(
+            "Seedream response did not include b64_json or url.",
+        )
     return await _save_generated_asset(
         request,
         job,
@@ -4006,7 +4299,9 @@ async def _collect_seedream_stream_assets(
         if len(assets) >= expected_count:
             break
     if not assets:
-        raise RuntimeError("Seedream streaming generation returned no image data.")
+        raise RuntimeError(
+            "Seedream streaming generation returned no image data.",
+        )
     return assets
 
 
@@ -4036,7 +4331,9 @@ def _is_annotation_input(value: Any) -> bool:
     title = _clean_text(value.get("title"))
     if title not in {"标注", "图像标注", "Annotation"}:
         return False
-    return any(_clean_text(value.get(key)) for key in _REFERENCE_INPUT_URL_KEYS)
+    return any(
+        _clean_text(value.get(key)) for key in _REFERENCE_INPUT_URL_KEYS
+    )
 
 
 def _iter_annotation_inputs(job: AigcJob) -> list[dict[str, Any]]:
@@ -4065,10 +4362,14 @@ def _iter_annotation_inputs(job: AigcJob) -> list[dict[str, Any]]:
         annotations.append(
             {
                 "role": "image_annotation",
-                "source_preview_url": job.parameters.get("annotationSourcePreviewUrl"),
-                "annotated_preview_url": job.parameters.get("annotationPreviewUrl"),
+                "source_preview_url": job.parameters.get(
+                    "annotationSourcePreviewUrl",
+                ),
+                "annotated_preview_url": job.parameters.get(
+                    "annotationPreviewUrl",
+                ),
                 "instruction": job.parameters.get("annotationInstruction"),
-            }
+            },
         )
 
     deduped: list[dict[str, Any]] = []
@@ -4133,12 +4434,16 @@ def _annotation_prompt_sections(job: AigcJob) -> list[str]:
     return [
         ANNOTATION_IMAGE_EDITING_PROMPT,
         "标注说明：\n"
-        + "\n".join(f"{index}. {line}" for index, line in enumerate(lines, start=1)),
+        + "\n".join(
+            f"{index}. {line}" for index, line in enumerate(lines, start=1)
+        ),
     ]
 
 
 def _image_prompt_from_job(job: AigcJob) -> str:
-    prompt = str(job.inputs.get("prompt") or job.parameters.get("prompt") or "").strip()
+    prompt = str(
+        job.inputs.get("prompt") or job.parameters.get("prompt") or "",
+    ).strip()
     if not prompt:
         return prompt
     prompt_sections: list[str] = []
@@ -4167,20 +4472,25 @@ def _image_prompt_from_job(job: AigcJob) -> str:
                 ),
             )
         except (TypeError, ValueError) as exc:
-            logger.warning("Ignoring invalid Visual DNA job parameters: %s", exc)
+            logger.warning(
+                "Ignoring invalid Visual DNA job parameters: %s",
+                exc,
+            )
     runtime_mode = str(job.parameters.get("styleRuntimeMode") or "").strip()
     if runtime_mode in {"prompt_style", "native_effect"}:
         style_name = str(
             job.parameters.get("styleReferenceName")
             or profile_snapshot.get("title")
-            or ""
+            or "",
         ).strip()
-        style_description = str(job.parameters.get("styleDescription") or "").strip()
+        style_description = str(
+            job.parameters.get("styleDescription") or "",
+        ).strip()
         style_keywords = str(job.parameters.get("styleKeywords") or "").strip()
         supplemental_prompt = str(
             job.parameters.get("styleSupplementalPrompt")
             or profile_snapshot.get("supplemental_prompt")
-            or ""
+            or "",
         ).strip()
         style_lines: list[str] = []
         if style_name:
@@ -4225,11 +4535,15 @@ async def _execute_seedream_image(
         "image_edit",
         "mask_edit",
     }:
-        raise RuntimeError(f"Seedream image adapter does not support {job.capability}.")
+        raise RuntimeError(
+            f"Seedream image adapter does not support {job.capability}.",
+        )
 
     api_key = getattr(provider, "api_key", "") or ""
     if not api_key:
-        raise RuntimeError(f"Provider '{job.provider_id}' is missing an API key.")
+        raise RuntimeError(
+            f"Provider '{job.provider_id}' is missing an API key.",
+        )
 
     count = _image_count(job.parameters) or 1
     count = max(1, min(count, 15))
@@ -4245,7 +4559,9 @@ async def _execute_seedream_image(
     }
     if reference_images:
         extra_body["image"] = (
-            reference_images[0] if len(reference_images) == 1 else reference_images
+            reference_images[0]
+            if len(reference_images) == 1
+            else reference_images
         )
 
     request_kwargs: dict[str, Any] = {
@@ -4259,7 +4575,9 @@ async def _execute_seedream_image(
         request_kwargs["response_format"] = "b64_json"
         request_kwargs["stream"] = True
         extra_body["sequential_image_generation"] = "auto"
-        extra_body["sequential_image_generation_options"] = {"max_images": count}
+        extra_body["sequential_image_generation_options"] = {
+            "max_images": count,
+        }
     elif reference_images:
         extra_body["sequential_image_generation"] = "disabled"
 
@@ -4293,7 +4611,10 @@ async def _execute_seedream_image(
             async def generate_fill_asset(index: int) -> AigcAsset:
                 fill_extra_body = dict(extra_body)
                 fill_extra_body["sequential_image_generation"] = "disabled"
-                fill_extra_body.pop("sequential_image_generation_options", None)
+                fill_extra_body.pop(
+                    "sequential_image_generation_options",
+                    None,
+                )
                 if execution is not None:
                     execution.check_active()
                 fill_result = await client.images.generate(
@@ -4319,9 +4640,15 @@ async def _execute_seedream_image(
                 *(generate_fill_asset(index) for index in fill_indexes),
                 return_exceptions=True,
             )
-            for index, fill_result in zip(fill_indexes, fill_results, strict=True):
+            for index, fill_result in zip(
+                fill_indexes,
+                fill_results,
+                strict=True,
+            ):
                 if isinstance(fill_result, Exception):
-                    fill_failures.append((index, _exception_message(fill_result)))
+                    fill_failures.append(
+                        (index, _exception_message(fill_result)),
+                    )
                 elif isinstance(fill_result, BaseException):
                     raise fill_result
                 else:
@@ -4343,7 +4670,8 @@ async def _execute_seedream_image(
                 "Seedream image batch partially succeeded: "
                 f"{len(assets)}/{count} generated; {len(fill_failures)} failed. "
                 + "; ".join(
-                    f"Image {index}: {message}" for index, message in fill_failures
+                    f"Image {index}: {message}"
+                    for index, message in fill_failures
                 ),
             )
         return assets
@@ -4367,7 +4695,9 @@ async def _execute_mxapi_gpt_image(
     execution: ProviderExecution | None = None,
 ) -> list[AigcAsset]:
     if job.capability not in {"text_to_image", "image_to_image", "image_edit"}:
-        raise RuntimeError(f"MXAPI image adapter does not support {job.capability}.")
+        raise RuntimeError(
+            f"MXAPI image adapter does not support {job.capability}.",
+        )
 
     prompt = _image_prompt_from_job(job)
     if not prompt:
@@ -4378,7 +4708,9 @@ async def _execute_mxapi_gpt_image(
     async def finish_single(index: int, task_id: str) -> AigcAsset:
         image_url = await _mxapi_poll_task(provider, task_id, adapter)
         content, mime_type = await _download_remote_asset(image_url)
-        fallback_suffix, _fallback_mime_type = _image_output_format(job.parameters)
+        fallback_suffix, _fallback_mime_type = _image_output_format(
+            job.parameters,
+        )
         suffix = _suffix_for_mime_type(mime_type, fallback=fallback_suffix)
         filename_suffix = f"{index + 1}.{suffix}" if count > 1 else suffix
         asset = await _save_generated_asset(
@@ -4403,12 +4735,18 @@ async def _execute_mxapi_gpt_image(
         return asset
 
     async def submit_single(index: int) -> str:
-        accepted = execution.accepted(f"image-{index}", adapter) if execution else None
+        accepted = (
+            execution.accepted(f"image-{index}", adapter)
+            if execution
+            else None
+        )
         if accepted is not None:
             return accepted
         reference_images = _mxapi_reference_images(request, job)
         if job.capability != "text_to_image" and not reference_images:
-            raise RuntimeError("MXAPI image editing requires at least one reference image URL.")
+            raise RuntimeError(
+                "MXAPI image editing requires at least one reference image URL.",
+            )
         return await _mxapi_submit_task(
             provider,
             job,
@@ -4476,7 +4814,9 @@ async def _execute_mxapi_gpt_image(
         job.logs.append(
             "Image batch partially succeeded: "
             f"{succeeded_count}/{count} generated; {failed_count} failed. "
-            + "; ".join(f"Image {index + 1}: {message}" for index, message in failures),
+            + "; ".join(
+                f"Image {index + 1}: {message}" for index, message in failures
+            ),
         )
     return assets
 
@@ -4490,12 +4830,24 @@ async def _execute_mxapi_seedance_video(
     adapter: str,
     execution: ProviderExecution | None = None,
 ) -> list[AigcAsset]:
-    if job.capability not in {"text_to_video", "image_to_video", "reference_video"}:
-        raise RuntimeError(f"MXAPI Seedance adapter does not support {job.capability}.")
+    if job.capability not in {
+        "text_to_video",
+        "image_to_video",
+        "reference_video",
+    }:
+        raise RuntimeError(
+            f"MXAPI Seedance adapter does not support {job.capability}.",
+        )
 
     task_id = execution.accepted("video", adapter) if execution else None
     if task_id is None:
-        task_id = await _mxapi_seedance_submit_task(request, provider, model, job, execution=execution)
+        task_id = await _mxapi_seedance_submit_task(
+            request,
+            provider,
+            model,
+            job,
+            execution=execution,
+        )
     video_url, payload = await _mxapi_seedance_poll_task(provider, task_id)
     content, mime_type = await _download_remote_asset(video_url)
     suffix = _suffix_for_mime_type(mime_type, fallback="mp4")
@@ -4526,11 +4878,19 @@ async def _execute_mxapi_grok_video(
     execution: ProviderExecution | None = None,
 ) -> list[AigcAsset]:
     if job.capability not in {"text_to_video", "image_to_video"}:
-        raise RuntimeError(f"MXAPI Grok adapter does not support {job.capability}.")
+        raise RuntimeError(
+            f"MXAPI Grok adapter does not support {job.capability}.",
+        )
 
     task_id = execution.accepted("video", adapter) if execution else None
     if task_id is None:
-        task_id = await _mxapi_grok_submit_task(request, provider, model, job, execution=execution)
+        task_id = await _mxapi_grok_submit_task(
+            request,
+            provider,
+            model,
+            job,
+            execution=execution,
+        )
     video_url, payload = await _mxapi_grok_poll_task(provider, task_id)
     content, mime_type = await _download_remote_asset(video_url)
     suffix = _suffix_for_mime_type(mime_type, fallback="mp4")
@@ -4562,11 +4922,19 @@ async def _execute_mxapi_jimeng_video(
     execution: ProviderExecution | None = None,
 ) -> list[AigcAsset]:
     if job.capability not in {"text_to_video", "image_to_video"}:
-        raise RuntimeError(f"MXAPI Jimeng adapter does not support {job.capability}.")
+        raise RuntimeError(
+            f"MXAPI Jimeng adapter does not support {job.capability}.",
+        )
 
     task_id = execution.accepted("video", adapter) if execution else None
     if task_id is None:
-        task_id = await _mxapi_jimeng_submit_task(request, provider, model, job, execution=execution)
+        task_id = await _mxapi_jimeng_submit_task(
+            request,
+            provider,
+            model,
+            job,
+            execution=execution,
+        )
     video_url, payload = await _mxapi_seedance_poll_task(provider, task_id)
     content, mime_type = await _download_remote_asset(video_url)
     suffix = _suffix_for_mime_type(mime_type, fallback="mp4")
@@ -4601,7 +4969,9 @@ async def _execute_openai_image(
         "image_edit",
         "mask_edit",
     }:
-        raise RuntimeError(f"OpenAI image adapter does not support {job.capability}.")
+        raise RuntimeError(
+            f"OpenAI image adapter does not support {job.capability}.",
+        )
     if job.capability != "text_to_image":
         raise RuntimeError(
             "OpenAI image edit/reference execution is not configured yet. "
@@ -4610,9 +4980,13 @@ async def _execute_openai_image(
 
     api_key = getattr(provider, "api_key", "") or ""
     if not api_key:
-        raise RuntimeError(f"Provider '{job.provider_id}' is missing an API key.")
+        raise RuntimeError(
+            f"Provider '{job.provider_id}' is missing an API key.",
+        )
 
-    prompt = str(job.inputs.get("prompt") or job.parameters.get("prompt") or "").strip()
+    prompt = str(
+        job.inputs.get("prompt") or job.parameters.get("prompt") or "",
+    ).strip()
     if not prompt:
         raise RuntimeError("Prompt is required for text_to_image generation.")
 
@@ -4621,7 +4995,9 @@ async def _execute_openai_image(
         "prompt": prompt,
     }
     if adapter == "volcengine_seedream":
-        request_kwargs["size"] = _seedream_size_from_image_parameters(job.parameters)
+        request_kwargs["size"] = _seedream_size_from_image_parameters(
+            job.parameters,
+        )
         count = _image_count(job.parameters)
         if count is not None:
             request_kwargs["n"] = count
@@ -4690,14 +5066,18 @@ async def _execute_openai_image(
 
 
 def _job_prompt_text(job: AigcJob) -> str:
-    return str(job.inputs.get("prompt") or job.parameters.get("prompt") or "").strip()
+    return str(
+        job.inputs.get("prompt") or job.parameters.get("prompt") or "",
+    ).strip()
 
 
 def _text_reference_urls(job: AigcJob) -> list[str]:
     urls: list[str] = []
     for item in job.inputs.get("reference_nodes") or []:
         if isinstance(item, dict):
-            preview_url = str(item.get("preview_url") or item.get("url") or "").strip()
+            preview_url = str(
+                item.get("preview_url") or item.get("url") or "",
+            ).strip()
             if preview_url:
                 urls.append(preview_url)
     for item in job.parameters.get("referenceImages") or []:
@@ -4709,13 +5089,17 @@ def _text_reference_urls(job: AigcJob) -> list[str]:
 
 def _model_supports_text_images(model: Any) -> bool:
     if getattr(model, "supports_image", False) or getattr(
-        model, "supports_vision", False
+        model,
+        "supports_vision",
+        False,
     ):
         return True
     capabilities = set(
         str(item) for item in getattr(model, "aigc_capabilities", []) or []
     )
-    return "reference_image" in capabilities or "image_to_prompt" in capabilities
+    return (
+        "reference_image" in capabilities or "image_to_prompt" in capabilities
+    )
 
 
 def _external_text_reference_urls(request: Request, job: AigcJob) -> list[str]:
@@ -4727,7 +5111,7 @@ def _external_text_reference_urls(request: Request, job: AigcJob) -> list[str]:
             if not external_url:
                 raise RuntimeError(
                     "Visual text model reference images must be externally accessible. "
-                    f"Current reference is not accessible: {value}"
+                    f"Current reference is not accessible: {value}",
                 )
             value = external_url
         urls.append(value)
@@ -4752,7 +5136,8 @@ def _text_job_messages(
         reference_urls = _external_text_reference_urls(request, job)
 
     is_storyboard_script = job.capability == "storyboard" and (
-        text_mode == "storyboard_script" or output_format == "storyboard_shots_json"
+        text_mode == "storyboard_script"
+        or output_format == "storyboard_shots_json"
     )
     if is_storyboard_script:
         system_prompt = (
@@ -4788,7 +5173,8 @@ def _text_job_messages(
 
     content: list[dict[str, Any]] = [{"type": "text", "text": user_text}]
     content.extend(
-        {"type": "image_url", "image_url": {"url": url}} for url in reference_urls
+        {"type": "image_url", "image_url": {"url": url}}
+        for url in reference_urls
     )
     return [
         {"role": "system", "content": system_prompt},
@@ -4883,14 +5269,31 @@ async def _execute_text_generation(
     return [asset]
 
 
-async def _execute_job(request: Request, job: AigcJob, execution: ProviderExecution | None = None) -> list[AigcAsset]:
-    provider, model = await _find_provider_model(request, job.provider_id, job.model_id)
+async def _execute_job(
+    request: Request,
+    job: AigcJob,
+    execution: ProviderExecution | None = None,
+) -> list[AigcAsset]:
+    provider, model = await _find_provider_model(
+        request,
+        job.provider_id,
+        job.model_id,
+    )
     if execution is not None:
         execution.check_active()
     adapter = _aigc_adapter_for(provider, model, job)
-    if execution is not None and execution.read_only and adapter not in {
-        "mxapi_seedance2", "mxapi_grok_video", "mxapi_jimeng_video", "mxapi_gpt_image", "mxapi_nano2",
-    }:
+    if (
+        execution is not None
+        and execution.read_only
+        and adapter
+        not in {
+            "mxapi_seedance2",
+            "mxapi_grok_video",
+            "mxapi_jimeng_video",
+            "mxapi_gpt_image",
+            "mxapi_nano2",
+        }
+    ):
         raise RuntimeError("PROVIDER_RECOVERY_NOT_SUPPORTED")
     if adapter == "artifact_stub":
         return [await _create_stub_artifact(request, job)]
@@ -4903,9 +5306,21 @@ async def _execute_job(request: Request, job: AigcJob, execution: ProviderExecut
     ):
         adapter = "openai_image"
     if adapter == "volcengine_seedream":
-        return await _execute_seedream_image(request, job, provider, adapter=adapter, execution=execution)
+        return await _execute_seedream_image(
+            request,
+            job,
+            provider,
+            adapter=adapter,
+            execution=execution,
+        )
     if adapter in {"mxapi_gpt_image", "mxapi_nano2"}:
-        return await _execute_mxapi_gpt_image(request, job, provider, adapter=adapter, execution=execution)
+        return await _execute_mxapi_gpt_image(
+            request,
+            job,
+            provider,
+            adapter=adapter,
+            execution=execution,
+        )
     if adapter == "mxapi_seedance2":
         return await _execute_mxapi_seedance_video(
             request,
@@ -4934,7 +5349,12 @@ async def _execute_job(request: Request, job: AigcJob, execution: ProviderExecut
             execution=execution,
         )
     if adapter == "openai_image":
-        return await _execute_openai_image(request, job, provider, adapter=adapter)
+        return await _execute_openai_image(
+            request,
+            job,
+            provider,
+            adapter=adapter,
+        )
     raise RuntimeError(
         "No AIGC adapter is configured for "
         f"{job.provider_id}/{job.model_id}. Set aigc_adapter metadata or install a provider adapter.",
@@ -4950,7 +5370,10 @@ async def _mark_job_running(job: AigcJob) -> AigcJob:
     try:
         await _publish_job_event(job, "AIGC job running")
     except Exception:
-        logger.warning("AIGC running notification unavailable for job %s", job.id)
+        logger.warning(
+            "AIGC running notification unavailable for job %s",
+            job.id,
+        )
     return job
 
 
@@ -4968,13 +5391,20 @@ async def _run_job_to_completion(request: Request, job_id: str) -> AigcJob:
         return job
     canvas_owner = AigcCanvasService.owner(_load_canvas(job.canvas_id))
     owner = canvas_owner or current_user_id(request)
-    allow_ownerless = canvas_owner is None and (current_user_id(request) == "0" or is_admin_request(request))
-    lifecycle = AigcJobLifecycle(_resource_store(STUDIO_ROOT), AigcExecutionRepository(get_app_engine()))
+    allow_ownerless = canvas_owner is None and (
+        current_user_id(request) == "0" or is_admin_request(request)
+    )
+    lifecycle = AigcJobLifecycle(
+        _resource_store(STUDIO_ROOT),
+        AigcExecutionRepository(get_app_engine()),
+    )
     if job.status == "cancelled":
         settle_cancelled_aigc_job(
             job,
             owner,
-            supplier_references=lifecycle.repository.provider_task_references(job.id),
+            supplier_references=lifecycle.repository.provider_task_references(
+                job.id,
+            ),
         )
         return job
     recovered = lifecycle.recover_terminal(job, owner_user_id=owner)
@@ -4983,12 +5413,18 @@ async def _run_job_to_completion(request: Request, job_id: str) -> AigcJob:
             settle_cancelled_aigc_job(
                 recovered,
                 owner,
-                supplier_references=lifecycle.repository.provider_task_references(job.id),
+                supplier_references=lifecycle.repository.provider_task_references(
+                    job.id,
+                ),
             )
         return recovered
     try:
         command = execution_command(job)
-        attempt = lifecycle.repository.begin_job_attempt(job.id, owner, command=command)
+        attempt = lifecycle.repository.begin_job_attempt(
+            job.id,
+            owner,
+            command=command,
+        )
         read_only = lifecycle.repository.has_provider_tasks(job.id)
     except ValueError as exc:
         if str(exc) == "JOB_ALREADY_SUCCEEDED":
@@ -4998,11 +5434,23 @@ async def _run_job_to_completion(request: Request, job_id: str) -> AigcJob:
         if str(exc) != "JOB_RECONCILIATION_REQUIRED":
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         try:
-            attempt = lifecycle.repository.resume_job_attempt(job.id, owner, command=command)
+            attempt = lifecycle.repository.resume_job_attempt(
+                job.id,
+                owner,
+                command=command,
+            )
             read_only = True
         except ValueError as recovery_error:
-            raise HTTPException(status_code=409, detail=str(recovery_error)) from recovery_error
-    execution = ProviderExecution(lifecycle.repository, job.id, attempt, read_only=read_only)
+            raise HTTPException(
+                status_code=409,
+                detail=str(recovery_error),
+            ) from recovery_error
+    execution = ProviderExecution(
+        lifecycle.repository,
+        job.id,
+        attempt,
+        read_only=read_only,
+    )
     if job.status != "running":
         try:
             job = await _mark_job_running(job)
@@ -5018,9 +5466,11 @@ async def _run_job_to_completion(request: Request, job_id: str) -> AigcJob:
         from ..storage.repos.price_catalog_repo import PriceCatalogRepository
 
         if not execution.read_only and not ModelPublicationService(
-            PriceCatalogRepository(get_app_engine())
+            PriceCatalogRepository(get_app_engine()),
         ).is_published(job.provider_id, job.model_id):
-            raise RuntimeError("Model is not published in the active price catalog")
+            raise RuntimeError(
+                "Model is not published in the active price catalog",
+            )
         # AIGC adapters call media suppliers directly, outside the Agent model
         # wrapper. Reserve the published price explicitly before any supplier
         # activity; the immutable job id makes recovery idempotent.
@@ -5031,11 +5481,15 @@ async def _run_job_to_completion(request: Request, job_id: str) -> AigcJob:
         recovered = lifecycle.recover_terminal(job, owner_user_id=owner)
         if recovered is not None:
             if recovered.status == "cancelled":
-                references = lifecycle.repository.provider_task_references(job.id)
+                references = lifecycle.repository.provider_task_references(
+                    job.id,
+                )
                 if billing is not None and billing.item_status == "held":
                     billing.settle_failure(
                         error="CancelledError",
-                        supplier_reference=references[0] if references else job.id,
+                        supplier_reference=references[0]
+                        if references
+                        else job.id,
                         uncertain=bool(references),
                     )
                 else:
@@ -5051,7 +5505,10 @@ async def _run_job_to_completion(request: Request, job_id: str) -> AigcJob:
         # of whether this particular test/runtime has billing enabled.
         uncertain = bool(
             references
-            and not isinstance(exc, (ProviderSubmissionRejected, ProviderTaskFailed))
+            and not isinstance(
+                exc,
+                (ProviderSubmissionRejected, ProviderTaskFailed),
+            ),
         )
         if billing is not None:
             try:
@@ -5061,14 +5518,25 @@ async def _run_job_to_completion(request: Request, job_id: str) -> AigcJob:
                     uncertain=uncertain,
                 )
             except Exception as billing_error:
-                lifecycle.repository.finish_job_attempt(job.id, attempt, uncertain=True)
+                lifecycle.repository.finish_job_attempt(
+                    job.id,
+                    attempt,
+                    uncertain=True,
+                )
                 raise HTTPException(
                     status_code=503,
                     detail="JOB_BILLING_RECONCILIATION_REQUIRED",
                 ) from billing_error
         if uncertain:
-            lifecycle.repository.finish_job_attempt(job.id, attempt, uncertain=True)
-            raise HTTPException(status_code=503, detail="JOB_RESULT_RECONCILIATION_REQUIRED") from exc
+            lifecycle.repository.finish_job_attempt(
+                job.id,
+                attempt,
+                uncertain=True,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="JOB_RESULT_RECONCILIATION_REQUIRED",
+            ) from exc
         failure = _exception_message(exc)
     except asyncio.CancelledError:
         if billing is not None:
@@ -5101,7 +5569,11 @@ async def _run_job_to_completion(request: Request, job_id: str) -> AigcJob:
                     supplier_reference=references[0] if references else job.id,
                 )
             except Exception as exc:
-                lifecycle.repository.finish_job_attempt(job.id, attempt, uncertain=True)
+                lifecycle.repository.finish_job_attempt(
+                    job.id,
+                    attempt,
+                    uncertain=True,
+                )
                 raise HTTPException(
                     status_code=503,
                     detail="JOB_BILLING_RECONCILIATION_REQUIRED",
@@ -5110,19 +5582,42 @@ async def _run_job_to_completion(request: Request, job_id: str) -> AigcJob:
     try:
         # Provider failure and result/notification failure are different facts.
         # Never enter the provider-failure branch after generation succeeded.
-        job = (lifecycle.record_failure(job, failure, owner_user_id=owner, allow_ownerless=allow_ownerless,
-                                       attempt_token=attempt)
-               if failure is not None else lifecycle.record_success(
-                   job, outputs, owner_user_id=owner, allow_ownerless=allow_ownerless, attempt_token=attempt))
+        job = (
+            lifecycle.record_failure(
+                job,
+                failure,
+                owner_user_id=owner,
+                allow_ownerless=allow_ownerless,
+                attempt_token=attempt,
+            )
+            if failure is not None
+            else lifecycle.record_success(
+                job,
+                outputs,
+                owner_user_id=owner,
+                allow_ownerless=allow_ownerless,
+                attempt_token=attempt,
+            )
+        )
     except Exception as exc:
         recovered = lifecycle.recover_terminal(job, owner_user_id=owner)
         if recovered is not None:
             return recovered
         try:
-            lifecycle.repository.finish_job_attempt(job.id, attempt, uncertain=True)
+            lifecycle.repository.finish_job_attempt(
+                job.id,
+                attempt,
+                uncertain=True,
+            )
         except Exception:
-            logger.warning("AIGC attempt still pending reconciliation for job %s", job.id)
-        raise HTTPException(status_code=503, detail="JOB_RESULT_RECONCILIATION_REQUIRED") from exc
+            logger.warning(
+                "AIGC attempt still pending reconciliation for job %s",
+                job.id,
+            )
+        raise HTTPException(
+            status_code=503,
+            detail="JOB_RESULT_RECONCILIATION_REQUIRED",
+        ) from exc
     try:
         await _publish_job_event(job, f"AIGC job {job.status}")
     except Exception:
@@ -5146,13 +5641,12 @@ def _start_background_job_run(request: Request, job_id: str) -> None:
         except asyncio.CancelledError:
             pass
         except Exception:
-            logger.exception("Background AIGC job runner crashed for job %s", job_id)
+            logger.exception(
+                "Background AIGC job runner crashed for job %s",
+                job_id,
+            )
 
     task.add_done_callback(cleanup)
-
-
-
-
 
 
 @router.get("/capabilities", response_model=CapabilityList)
@@ -5164,7 +5658,9 @@ async def list_capabilities(request: Request) -> CapabilityList:
 
 
 @router.get("/workflow-capabilities", response_model=WorkflowCapabilityCatalog)
-async def list_workflow_capabilities(request: Request) -> WorkflowCapabilityCatalog:
+async def list_workflow_capabilities(
+    request: Request,
+) -> WorkflowCapabilityCatalog:
     return await build_workflow_capability_catalog(
         getattr(request.app.state, "provider_manager", None),
     )
@@ -5227,13 +5723,14 @@ async def list_style_templates(
         reverse=True,
     )
     return StyleTemplateList(
-        templates=_slice_items(templates, limit=limit, offset=offset)
+        templates=_slice_items(templates, limit=limit, offset=offset),
     )
 
 
 @router.get("/style-templates/recent", response_model=StyleTemplateList)
 async def list_recent_style_templates(
-    limit: int = 30, offset: int = 0
+    limit: int = 30,
+    offset: int = 0,
 ) -> StyleTemplateList:
     templates = [
         template
@@ -5242,13 +5739,14 @@ async def list_recent_style_templates(
     ]
     templates.sort(key=lambda item: item.last_used_at or "", reverse=True)
     return StyleTemplateList(
-        templates=_slice_items(templates, limit=limit, offset=offset)
+        templates=_slice_items(templates, limit=limit, offset=offset),
     )
 
 
 @router.get("/style-templates/favorites", response_model=StyleTemplateList)
 async def list_favorite_style_templates(
-    limit: int = 50, offset: int = 0
+    limit: int = 50,
+    offset: int = 0,
 ) -> StyleTemplateList:
     templates = [
         template
@@ -5257,11 +5755,15 @@ async def list_favorite_style_templates(
     ]
     templates.sort(key=lambda item: item.updated_at or "", reverse=True)
     return StyleTemplateList(
-        templates=_slice_items(templates, limit=limit, offset=offset)
+        templates=_slice_items(templates, limit=limit, offset=offset),
     )
 
 
-@router.post("/style-templates", response_model=AigcStyleTemplate, status_code=201)
+@router.post(
+    "/style-templates",
+    response_model=AigcStyleTemplate,
+    status_code=201,
+)
 async def upsert_style_template(
     body: AigcStyleTemplate = Body(...),
 ) -> AigcStyleTemplate:
@@ -5279,8 +5781,14 @@ async def update_style_template(
     _ensure_editable_style_template(template, request)
     updates = body.model_dump(exclude_unset=True)
     if "title" in updates and not str(updates["title"] or "").strip():
-        raise HTTPException(status_code=400, detail="Style template title is required.")
-    if "description" in updates and not str(updates["description"] or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Style template title is required.",
+        )
+    if (
+        "description" in updates
+        and not str(updates["description"] or "").strip()
+    ):
         raise HTTPException(
             status_code=400,
             detail="Style template description is required.",
@@ -5293,7 +5801,9 @@ async def update_style_template(
             "type": updates.get("type", template.type),
             "provider": updates.get("provider", template.provider),
             "category": updates.get("category", template.category),
-            "tags": updates.get("tags") if "tags" in updates else template.tags,
+            "tags": updates.get("tags")
+            if "tags" in updates
+            else template.tags,
             "runtime_mode": updates.get("runtime_mode", template.runtime_mode),
             "effect_template_uuid": template.effect_template_uuid,
             "effect_id": template.effect_id,
@@ -5317,17 +5827,25 @@ async def update_style_template(
 
 
 @router.delete("/style-templates/{template_id}", status_code=204)
-async def delete_style_template(request: Request, template_id: str) -> Response:
+async def delete_style_template(
+    request: Request,
+    template_id: str,
+) -> Response:
     template = _load_style_template(template_id)
     _ensure_editable_style_template(template, request)
     if template.id in DEFAULT_STYLE_TEMPLATE_IDS:
-        _save_style_template(template.model_copy(update={"status": "disabled"}))
+        _save_style_template(
+            template.model_copy(update={"status": "disabled"}),
+        )
         return Response(status_code=204)
     _delete_json(_style_template_path(template.id))
     return Response(status_code=204)
 
 
-@router.post("/style-templates/{template_id}/use", response_model=AigcStyleTemplate)
+@router.post(
+    "/style-templates/{template_id}/use",
+    response_model=AigcStyleTemplate,
+)
 async def mark_style_template_used(template_id: str) -> AigcStyleTemplate:
     template = _load_style_template(template_id)
     updated = template.model_copy(
@@ -5340,16 +5858,19 @@ async def mark_style_template_used(template_id: str) -> AigcStyleTemplate:
 
 
 @router.post(
-    "/style-templates/{template_id}/favorite", response_model=AigcStyleTemplate
+    "/style-templates/{template_id}/favorite",
+    response_model=AigcStyleTemplate,
 )
 async def update_style_template_favorite(
     template_id: str,
     body: StyleTemplateFavoriteUpdate = Body(
-        default_factory=StyleTemplateFavoriteUpdate
+        default_factory=StyleTemplateFavoriteUpdate,
     ),
 ) -> AigcStyleTemplate:
     template = _load_style_template(template_id)
-    return _save_style_template(template.model_copy(update={"favorite": body.favorite}))
+    return _save_style_template(
+        template.model_copy(update={"favorite": body.favorite}),
+    )
 
 
 @router.get("/canvases", response_model=CanvasList)
@@ -5359,17 +5880,28 @@ async def list_canvases(
     offset: int = 0,
 ) -> CanvasList:
     canvases = [
-        Canvas(**_read_json(path)) for path in sorted(_dir("canvases").glob("*.json"))
+        Canvas(**_read_json(path))
+        for path in sorted(_dir("canvases").glob("*.json"))
     ]
-    canvases = [canvas for canvas in canvases if _request_owns_canvas(request, canvas)]
+    canvases = [
+        canvas for canvas in canvases if _request_owns_canvas(request, canvas)
+    ]
     canvases.sort(key=lambda item: item.updated_at, reverse=True)
-    return CanvasList(canvases=_slice_items(canvases, limit=limit, offset=offset))
+    return CanvasList(
+        canvases=_slice_items(canvases, limit=limit, offset=offset),
+    )
 
 
 @router.post("/canvases", response_model=Canvas, status_code=201)
-async def create_canvas(request: Request, body: CanvasUpsert = Body(...)) -> Canvas:
+async def create_canvas(
+    request: Request,
+    body: CanvasUpsert = Body(...),
+) -> Canvas:
     try:
-        return AigcCanvasService(_resource_store(STUDIO_ROOT)).create(current_user_id(request), body)
+        return AigcCanvasService(_resource_store(STUDIO_ROOT)).create(
+            current_user_id(request),
+            body,
+        )
     except AigcResourceError as exc:
         raise _resource_http_error(exc) from exc
 
@@ -5387,8 +5919,11 @@ async def update_canvas(
 ) -> Canvas:
     try:
         return AigcCanvasService(_resource_store(STUDIO_ROOT)).update(
-            current_user_id(request), canvas_id, body,
-            allow_ownerless=current_user_id(request) == "0" or is_admin_request(request),
+            current_user_id(request),
+            canvas_id,
+            body,
+            allow_ownerless=current_user_id(request) == "0"
+            or is_admin_request(request),
         )
     except AigcResourceError as exc:
         raise _resource_http_error(exc) from exc
@@ -5398,8 +5933,10 @@ async def update_canvas(
 async def delete_canvas(request: Request, canvas_id: str) -> Response:
     try:
         AigcCanvasService(_resource_store(STUDIO_ROOT)).delete(
-            current_user_id(request), canvas_id,
-            allow_ownerless=current_user_id(request) == "0" or is_admin_request(request),
+            current_user_id(request),
+            canvas_id,
+            allow_ownerless=current_user_id(request) == "0"
+            or is_admin_request(request),
         )
     except AigcResourceError as exc:
         raise _resource_http_error(exc) from exc
@@ -5407,7 +5944,10 @@ async def delete_canvas(request: Request, canvas_id: str) -> Response:
 
 
 @router.post("/jobs", response_model=AigcJob, status_code=202)
-async def submit_job(request: Request, body: AigcJobCreate = Body(...)) -> AigcJob:
+async def submit_job(
+    request: Request,
+    body: AigcJobCreate = Body(...),
+) -> AigcJob:
     await _validate_job_submission(request, body)
     job = _create_queued_job(body)
     _write_json(_json_path("jobs", job.id), job)
@@ -5423,7 +5963,10 @@ async def list_jobs(
     limit: int = 100,
     offset: int = 0,
 ) -> JobList:
-    jobs = [AigcJob(**_read_json(path)) for path in sorted(_dir("jobs").glob("*.json"))]
+    jobs = [
+        AigcJob(**_read_json(path))
+        for path in sorted(_dir("jobs").glob("*.json"))
+    ]
     if canvas_id:
         _load_canvas_for_request(request, canvas_id)
         jobs = [job for job in jobs if job.canvas_id == canvas_id]
@@ -5448,7 +5991,9 @@ async def cancel_job(request: Request, job_id: str) -> AigcJob:
     job = _load_job_for_request(request, job_id)
     if job.status in {"succeeded", "failed"}:
         return job
-    canvas_owner = AigcCanvasService.owner(_load_canvas_for_request(request, job.canvas_id))
+    canvas_owner = AigcCanvasService.owner(
+        _load_canvas_for_request(request, job.canvas_id),
+    )
     owner = canvas_owner or current_user_id(request)
     if job.status != "cancelled":
         job = AigcJobLifecycle(
@@ -5506,12 +6051,21 @@ async def run_job(
         return job
 
     repository = AigcExecutionRepository(get_app_engine())
-    owner = AigcCanvasService.owner(_load_canvas_for_request(request, job.canvas_id)) or current_user_id(request)
-    recovered = AigcJobLifecycle(_resource_store(STUDIO_ROOT), repository).recover_terminal(job, owner_user_id=owner)
+    owner = AigcCanvasService.owner(
+        _load_canvas_for_request(request, job.canvas_id),
+    ) or current_user_id(request)
+    recovered = AigcJobLifecycle(
+        _resource_store(STUDIO_ROOT),
+        repository,
+    ).recover_terminal(job, owner_user_id=owner)
     if recovered is not None:
         return recovered
     try:
-        query_only = repository.can_query_provider_tasks(job.id, owner, execution_command(job))
+        query_only = repository.can_query_provider_tasks(
+            job.id,
+            owner,
+            execution_command(job),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     body = AigcJobCreate(**job.model_dump())
@@ -5546,12 +6100,19 @@ async def export_long_image(
     body: LongImageExportRequest,
 ) -> LongImageExportResult:
     canvas = _load_canvas_for_request(request, body.canvas_id)
-    target = next((node for node in canvas.nodes if node.id == body.node_id), None)
+    target = next(
+        (node for node in canvas.nodes if node.id == body.node_id),
+        None,
+    )
     if target is None:
-        raise HTTPException(status_code=400, detail="Long-image node not found.")
+        raise HTTPException(
+            status_code=400,
+            detail="Long-image node not found.",
+        )
     if target.type != "long_image_export":
         raise HTTPException(
-            status_code=400, detail="Node is not a long-image export node."
+            status_code=400,
+            detail="Node is not a long-image export node.",
         )
 
     sections = _long_image_sections(canvas, target.id)
@@ -5595,7 +6156,9 @@ async def export_long_image(
     )
     slice_assets: list[AigcAsset] = []
     for item in _long_image_slices(rendered.height, body.slice_height):
-        cropped = rendered.crop((0, item["y"], body.width, item["y"] + item["height"]))
+        cropped = rendered.crop(
+            (0, item["y"], body.width, item["y"] + item["height"]),
+        )
         slice_assets.append(
             await _save_long_image_png_asset(
                 request,
@@ -5603,7 +6166,7 @@ async def export_long_image(
                 cropped,
                 filename=f"{target.id}-slice-{item['index']:02d}-{job.id}.png",
                 role="slice",
-            )
+            ),
         )
 
     updated_canvas = _merge_long_image_export_output(
@@ -5634,7 +6197,8 @@ async def list_assets(
     offset: int = 0,
 ) -> AssetList:
     assets = [
-        AigcAsset(**_read_json(path)) for path in sorted(_dir("assets").glob("*.json"))
+        AigcAsset(**_read_json(path))
+        for path in sorted(_dir("assets").glob("*.json"))
     ]
     if canvas_id:
         _load_canvas_for_request(request, canvas_id)
@@ -5643,7 +6207,9 @@ async def list_assets(
             for asset in assets
             if str(asset.meta.get("canvas_id") or "") == canvas_id
         ]
-    assets = [asset for asset in assets if _request_can_access_asset(request, asset)]
+    assets = [
+        asset for asset in assets if _request_can_access_asset(request, asset)
+    ]
     if kind:
         assets = [asset for asset in assets if asset.kind == kind]
     assets.sort(key=lambda item: item.created_at, reverse=True)
@@ -5651,11 +6217,17 @@ async def list_assets(
 
 
 @router.get("/assets/{asset_id}/signed-url", response_model=AssetSignedUrl)
-async def get_asset_signed_url(request: Request, asset_id: str) -> AssetSignedUrl:
+async def get_asset_signed_url(
+    request: Request,
+    asset_id: str,
+) -> AssetSignedUrl:
     asset = _load_asset_for_request(request, asset_id)
     signed_url = _signed_cloud_asset_url(asset)
     if not signed_url:
-        raise HTTPException(status_code=409, detail="Asset is not cloud-backed.")
+        raise HTTPException(
+            status_code=409,
+            detail="Asset is not cloud-backed.",
+        )
     storage_client = _cloud_storage_client_or_error()
     return AssetSignedUrl(
         url=signed_url,
@@ -5681,20 +6253,31 @@ async def resolve_owned_asset_for_agent_review(
     asset = _load_asset_for_request(request, asset_id)
     service = AigcAssetService(_resource_store(STUDIO_ROOT))
     return await review_media_source(
-        request, service, asset, canvas_id=canvas_id, node_ids=node_ids,
-        asset_kinds=asset_kinds, artifact_root_resolver=_artifact_root_for_request,
+        request,
+        service,
+        asset,
+        canvas_id=canvas_id,
+        node_ids=node_ids,
+        asset_kinds=asset_kinds,
+        artifact_root_resolver=_artifact_root_for_request,
         storage_client_factory=_cloud_storage_client_or_error,
     )
 
 
-@public_router.get("/public-assets/{asset_id}/file", name="get_public_asset_file")
+@public_router.get(
+    "/public-assets/{asset_id}/file",
+    name="get_public_asset_file",
+)
 async def get_public_asset_file(
     request: Request,
     asset_id: str,
     token: str = "",
 ) -> Response:
     if not _verify_public_asset_token(asset_id, token):
-        raise HTTPException(status_code=403, detail="Invalid or expired asset token.")
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid or expired asset token.",
+        )
     return await _asset_file_response(request, asset_id, require_owner=False)
 
 
@@ -5730,7 +6313,10 @@ async def prepare_direct_asset_upload(
 ) -> AssetDirectUploadPrepare:
     storage_client = get_object_storage_client(require_enabled=True)
     if storage_client is None:
-        raise HTTPException(status_code=409, detail="Object storage is not enabled.")
+        raise HTTPException(
+            status_code=409,
+            detail="Object storage is not enabled.",
+        )
     asset_id = str(uuid.uuid4())
     filename = _safe_upload_filename(payload.filename)
     suffix = Path(filename).suffix
@@ -5748,7 +6334,7 @@ async def prepare_direct_asset_upload(
             "object_key": object_key,
             "owner_user_id": current_user_id(request),
             "size": payload.size,
-        }
+        },
     )
     return AssetDirectUploadPrepare(
         asset_id=asset_id,
@@ -5767,14 +6353,27 @@ async def complete_direct_asset_upload(
     request: Request,
     payload: AssetDirectUploadComplete,
 ) -> AigcAsset:
-    token_payload = _verify_direct_upload_token(payload.asset_id, payload.token)
+    token_payload = _verify_direct_upload_token(
+        payload.asset_id,
+        payload.token,
+    )
     if token_payload is None:
-        raise HTTPException(status_code=403, detail="Invalid or expired upload token.")
-    if str(token_payload.get("owner_user_id") or "0") != current_user_id(request):
-        raise HTTPException(status_code=403, detail="Invalid or expired upload token.")
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid or expired upload token.",
+        )
+    if str(token_payload.get("owner_user_id") or "0") != current_user_id(
+        request,
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid or expired upload token.",
+        )
     now = _now()
     mime_type = (
-        str(token_payload.get("mime_type") or "application/octet-stream").strip()
+        str(
+            token_payload.get("mime_type") or "application/octet-stream",
+        ).strip()
         or "application/octet-stream"
     )
     object_key = str(token_payload["object_key"])
@@ -5791,7 +6390,9 @@ async def complete_direct_asset_upload(
     asset = AigcAsset(
         id=payload.asset_id,
         kind=_asset_kind_for_mime(mime_type),
-        name=_safe_upload_filename(str(token_payload.get("filename") or "asset")),
+        name=_safe_upload_filename(
+            str(token_payload.get("filename") or "asset"),
+        ),
         path=f"oss://{bucket}/{object_key}",
         url=_asset_file_url(request, payload.asset_id),
         mime_type=mime_type,
@@ -5807,7 +6408,10 @@ async def complete_direct_asset_upload(
 
 
 @router.post("/assets/upload", response_model=AigcAsset, status_code=201)
-async def upload_asset(request: Request, file: UploadFile = File(...)) -> AigcAsset:
+async def upload_asset(
+    request: Request,
+    file: UploadFile = File(...),
+) -> AigcAsset:
     now = _now()
     asset_id = str(uuid.uuid4())
     suffix = Path(file.filename or "asset").suffix
@@ -5819,13 +6423,17 @@ async def upload_asset(request: Request, file: UploadFile = File(...)) -> AigcAs
     storage_client = get_object_storage_client(require_enabled=True)
     storage_meta: dict[str, Any] | None = None
     if storage_client is not None:
-        relative_path = (Path("aigc_studio") / "uploads" / safe_name).as_posix()
+        relative_path = (
+            Path("aigc_studio") / "uploads" / safe_name
+        ).as_posix()
         storage_meta = await storage_client.upload(
             relative_path=relative_path,
             content=content,
             mime_type=mime_type,
         )
-        asset_path = f"oss://{storage_meta['bucket']}/{storage_meta['object_key']}"
+        asset_path = (
+            f"oss://{storage_meta['bucket']}/{storage_meta['object_key']}"
+        )
     else:
         target = _dir("asset_files") / safe_name
         target.write_bytes(content)

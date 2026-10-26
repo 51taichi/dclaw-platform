@@ -23,6 +23,7 @@ from qwenpaw.app.integration_delivery.archive import (
 )
 from qwenpaw.app.super_experts.capabilities import (
     compute_capability_set_digest,
+    validate_super_expert_manifest,
 )
 
 
@@ -147,6 +148,29 @@ class _SealedService:
     def get_agent(self, agent_id: str):
         assert agent_id == "a_service"
         return self.record
+
+    def is_signer_authorized_for_package_type(
+        self,
+        package_type: str,
+        signer_id: str,
+    ) -> bool:
+        return (
+            package_type == "super_expert"
+            and self.super_expert_trust_store.is_official(signer_id)
+        )
+
+    def validate_extension_manifest(self, manifest) -> None:
+        if manifest.package_type == "super_expert":
+            validate_super_expert_manifest(
+                manifest,
+                self.super_expert_trust_store,
+            )
+
+    def package_type_requires_installation_grant(
+        self,
+        package_type: str,
+    ) -> bool:
+        return package_type == "super_expert"
 
     def release_root(self, agent_id: str, release_id: str) -> Path:
         return self.root / "releases" / agent_id / release_id

@@ -58,11 +58,7 @@ class DclawConfigurationContextService:
                 missing.append("agent_active_release")
             else:
                 source_version = active.version
-                profile_id = (
-                    "super-expert-2026.09"
-                    if active.package_type == "super_expert"
-                    else "sealed-2026.09"
-                )
+                profile_id = f"{active.package_type.replace('_', '-')}-2026.09"
         else:
             config = self._config_loader()
             ref = getattr(getattr(config, "agents", None), "profiles", {}).get(
@@ -140,5 +136,7 @@ class DclawConfigurationContextService:
         return matches[0] if len(matches) == 1 else None
 
 
-def get_dclaw_configuration_context_service() -> DclawConfigurationContextService:
+def get_dclaw_configuration_context_service() -> (
+    DclawConfigurationContextService
+):
     return DclawConfigurationContextService()

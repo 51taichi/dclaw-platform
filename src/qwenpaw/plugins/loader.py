@@ -174,14 +174,28 @@ class PluginLoader:
                         f"Failed to load module spec for {backend_entry_file}",
                     )
 
-                module = importlib.util.module_from_spec(spec)
-                sys.modules[module_name] = module
+                module = sys.modules.get(module_name)
+                if module is None:
+                    module = importlib.util.module_from_spec(spec)
+                    sys.modules[module_name] = module
 
-                # Set __package__ and __path__ to enable relative imports
-                module.__package__ = module_name
-                module.__path__ = [plugin_dir_str]
+                    # Set __package__ and __path__ to enable relative imports
+                    module.__package__ = module_name
+                    module.__path__ = [plugin_dir_str]
 
-                spec.loader.exec_module(module)
+                    spec.loader.exec_module(module)
+                else:
+                    loaded_path = Path(
+                        str(getattr(module, "__file__", "")),
+                    ).resolve()
+                    if loaded_path != backend_entry_file.resolve():
+                        raise ImportError(
+                            f"Plugin module name collision for '{plugin_id}'",
+                        )
+                    if not hasattr(module, "plugin"):
+                        # A legacy compatibility import may have created the
+                        # package namespace without executing plugin.py.
+                        spec.loader.exec_module(module)
 
                 # Get plugin definition
                 if not hasattr(module, "plugin"):
@@ -502,9 +516,11 @@ class PluginLoader:
     ) -> None:
         """Unload a plugin from memory and optionally remove its files.
 
-        Executes any registered shutdown hooks, removes the plugin
-        module from ``sys.modules``, cleans up the plugin registry, and
-        removes the plugin's tools from ``qwenpaw.agents.tools``.
+        Executes registered shutdown hooks, cleans up the plugin registry,
+        removes plugin tools, and removes unaliased plugin modules from
+        ``sys.modules``. Modules referenced by compatibility import aliases
+        remain inert in memory so callers never observe duplicate type or
+        context identities.
 
         Args:
             plugin_id: Plugin identifier to unload
@@ -539,15 +555,26 @@ class PluginLoader:
                     f"for plugin '{plugin_id}': {exc}",
                 )
 
-        # Remove Python module and all sub-modules so the next import
-        # gets a fresh copy (e.g. plugin_foo.utils must not be reused).
+        # Remove Python modules unless a compatibility import still aliases
+        # one of them. Python cannot invalidate objects already returned to
+        # callers; purging only the canonical names would create a second set
+        # of classes and context variables on the next legacy import.
         module_name = _plugin_module_name(plugin_id)
         prefix = module_name + "."
         stale = [
             k for k in sys.modules if k == module_name or k.startswith(prefix)
         ]
-        for k in stale:
-            sys.modules.pop(k, None)
+        stale_module_ids = {
+            id(sys.modules[k]) for k in stale if k in sys.modules
+        }
+        has_compatibility_alias = any(
+            name not in stale and id(module) in stale_module_ids
+            for name, module in sys.modules.items()
+            if module is not None
+        )
+        if not has_compatibility_alias:
+            for k in stale:
+                sys.modules.pop(k, None)
 
         # Clear all in-memory registry entries for this plugin
         self.registry.unregister_plugin(plugin_id)

@@ -5,7 +5,11 @@ from contextlib import suppress
 import logging
 import time
 
-from ..aigc.events import AigcDeliveryOutcome, AigcDomainEvent, AigcEventConsumer
+from ..aigc.events import (
+    AigcDeliveryOutcome,
+    AigcDomainEvent,
+    AigcEventConsumer,
+)
 from ..aigc.job_lifecycle import AigcJobLifecycle
 from ..storage.repos.aigc_execution_repo import AigcExecutionRepository
 from .event_bus import RuntimeEvent, RuntimeEventBus
@@ -13,48 +17,88 @@ from .event_bus import RuntimeEvent, RuntimeEventBus
 logger = logging.getLogger(__name__)
 
 
-def build_event_consumers(repository, bus, *, enable_super_experts: bool):
-    """Application wiring; disabling the outer component leaves core delivery on."""
-    consumers = [AigcRuntimeNotifications(repository, bus)]
-    if enable_super_experts:
-        from ..super_experts.aigc_event_adapter import AigcEventAdapter
-        from ..super_experts.composition import (
-            get_super_expert_platform_service, installation_is_active, resolve_event_scope,
-        )
-        consumers.append(AigcEventAdapter(
-            get_super_expert_platform_service(), repository,
-            scope_resolver=resolve_event_scope, installation_is_active=installation_is_active,
-        ))
-    return consumers
+def build_event_consumers(
+    repository,
+    bus,
+    *,
+    enable_super_experts: bool | None = None,
+):
+    """Build core consumers; plugins are resolved lazily by the worker."""
+    _ = enable_super_experts  # Legacy keyword; plugin registration owns policy.
+    return [AigcRuntimeNotifications(repository, bus)]
 
 
 class AigcRuntimeNotifications:
-    def __init__(self, repository: AigcExecutionRepository, bus: RuntimeEventBus, *, clock=time.time):
+    def __init__(
+        self,
+        repository: AigcExecutionRepository,
+        bus: RuntimeEventBus,
+        *,
+        clock=time.time,
+    ):
         self.repository = repository
         self.bus = bus
-        self.consumer = AigcEventConsumer(repository, "aigc-runtime-ui-v1", self._publish, clock=clock)
+        self.consumer = AigcEventConsumer(
+            repository,
+            "aigc-runtime-ui-v1",
+            self._publish,
+            clock=clock,
+        )
 
-    async def _publish(self, event: AigcDomainEvent) -> AigcDeliveryOutcome | None:
-        cancelled = event.event_type == "resource.changed" and event.payload.get("status") == "cancelled"
-        if event.event_type not in {"job.succeeded", "job.failed"} and not cancelled:
+    async def _publish(
+        self,
+        event: AigcDomainEvent,
+    ) -> AigcDeliveryOutcome | None:
+        cancelled = (
+            event.event_type == "resource.changed"
+            and event.payload.get("status") == "cancelled"
+        )
+        if (
+            event.event_type not in {"job.succeeded", "job.failed"}
+            and not cancelled
+        ):
             return None
         current = self.repository.get_job_result(event.resource_id)
-        if (current is None or current["owner_user_id"] != event.owner_user_id
-                or current["resource_version"] != event.resource_version):
-            return AigcDeliveryOutcome(status="blocked", error_code="OBSOLETE_JOB_RESULT")
-        payload = {key: event.payload[key] for key in (
-            "job_id", "canvas_id", "node_id", "capability", "provider_id", "model_id",
-            "status", "output_count", "updated_at",
-        )}
+        if (
+            current is None
+            or current["owner_user_id"] != event.owner_user_id
+            or current["resource_version"] != event.resource_version
+        ):
+            return AigcDeliveryOutcome(
+                status="blocked",
+                error_code="OBSOLETE_JOB_RESULT",
+            )
+        payload = {
+            key: event.payload[key]
+            for key in (
+                "job_id",
+                "canvas_id",
+                "node_id",
+                "capability",
+                "provider_id",
+                "model_id",
+                "status",
+                "output_count",
+                "updated_at",
+            )
+        }
         # Preserve the UI error field without rebroadcasting arbitrary provider
         # response text, signed asset URLs, local paths or credentials.
-        payload["error"] = "AIGC_GENERATION_FAILED" if payload["status"] == "failed" else None
+        payload["error"] = (
+            "AIGC_GENERATION_FAILED" if payload["status"] == "failed" else None
+        )
         payload["domain_event_id"] = event.event_id
         payload["resource_version"] = event.resource_version
-        await self.bus.publish(RuntimeEvent(
-            type="aigc.job.updated", scope="aigc", job_id=event.resource_id,
-            status=payload["status"], message=f"AIGC job {payload['status']}", payload=payload,
-        ))
+        await self.bus.publish(
+            RuntimeEvent(
+                type="aigc.job.updated",
+                scope="aigc",
+                job_id=event.resource_id,
+                status=payload["status"],
+                message=f"AIGC job {payload['status']}",
+                payload=payload,
+            ),
+        )
         return None
 
     async def deliver_pending(self, limit: int = 100) -> int:
@@ -67,7 +111,36 @@ class AigcRecoveryWorker:
     def __init__(self, lifecycle: AigcJobLifecycle, consumers: list):
         self.lifecycle = lifecycle
         self.consumers = consumers
+        self._plugin_consumers: dict[tuple[str, str], object] = {}
         self._task: asyncio.Task | None = None
+
+    def _active_consumers(self) -> list:
+        """Resolve plugin consumers at run time so late plugin load is safe."""
+        from qwenpaw.plugins.registry import PluginRegistry
+
+        registrations = PluginRegistry().get_aigc_event_consumer_factories()
+        active_keys = {(item.plugin_id, item.name) for item in registrations}
+        self._plugin_consumers = {
+            key: consumer
+            for key, consumer in self._plugin_consumers.items()
+            if key in active_keys
+        }
+        for item in registrations:
+            key = (item.plugin_id, item.name)
+            if key in self._plugin_consumers:
+                continue
+            try:
+                self._plugin_consumers[key] = item.factory(
+                    self.lifecycle.repository,
+                    getattr(self.consumers[0], "bus", None),
+                )
+            except Exception:
+                logger.exception(
+                    "AIGC plugin consumer initialization failed: %s:%s",
+                    item.plugin_id,
+                    item.name,
+                )
+        return [*self.consumers, *self._plugin_consumers.values()]
 
     @property
     def running(self) -> bool:
@@ -75,12 +148,15 @@ class AigcRecoveryWorker:
 
     async def run_once(self) -> None:
         try:
-            rows = await self._blocking(self.lifecycle.repository.pending_job_results, 100)
+            rows = await self._blocking(
+                self.lifecycle.repository.pending_job_results,
+                100,
+            )
             for row in rows:
                 await self._blocking(self.lifecycle.project_result, row)
         except Exception:
             logger.warning("AIGC projection recovery temporarily unavailable")
-        for consumer in self.consumers:
+        for consumer in self._active_consumers():
             try:
                 await consumer.deliver_pending(limit=100)
             except Exception:

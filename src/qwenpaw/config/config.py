@@ -1080,6 +1080,7 @@ class OrchestrationConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
+    capability_id: str = ""
     contract_version: Literal["1"] = "1"
     entrypoint: str = ""
     required_host_capabilities: tuple[str, ...] = ()
@@ -1096,15 +1097,24 @@ class OrchestrationConfig(BaseModel):
         if len(set(capabilities)) != len(capabilities):
             raise ValueError("duplicate orchestration host capability")
         if self.enabled:
+            if self.capability_id and not re.fullmatch(
+                r"[a-z][a-z0-9_.-]*/[1-9][0-9]*",
+                self.capability_id,
+            ):
+                raise ValueError("invalid orchestration capability id")
             if not re.fullmatch(
                 r"[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*\.py:[A-Za-z_][A-Za-z0-9_]*",
                 self.entrypoint,
             ):
                 raise ValueError("unsafe orchestration entrypoint")
-            if set(capabilities) != set(WORKSPACE_RUNTIME_HOST_CAPABILITIES_V1):
+            if set(capabilities) != set(
+                WORKSPACE_RUNTIME_HOST_CAPABILITIES_V1,
+            ):
                 raise ValueError("unsupported orchestration host capability")
         elif self.entrypoint or capabilities:
-            raise ValueError("disabled orchestration cannot declare an entrypoint")
+            raise ValueError(
+                "disabled orchestration cannot declare an entrypoint",
+            )
         return self
 
 

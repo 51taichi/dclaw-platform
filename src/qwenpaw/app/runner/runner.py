@@ -46,45 +46,12 @@ from ...agents.utils.file_handling import (
 )
 from ...config.config import load_agent_config
 from ...constant import WORKING_DIR
-from ..workspace.orchestration import (
-    WorkspaceOrchestrationError,
-    WorkspaceTurnResult,
-    is_workspace_business_turn,
-    resolve_active_workspace_authorization,
-    run_workspace_orchestration_turn,
-    workspace_result_to_message,
-)
 
 if TYPE_CHECKING:
     from ...agents.memory import BaseMemoryManager
     from ...agents.context import BaseContextManager
 
 logger = logging.getLogger(__name__)
-
-
-async def _list_aigc_capabilities_for_workspace(request: Any) -> dict[str, Any]:
-    """Project the existing user-scoped AIGC inventory into the Host boundary."""
-    from ...providers.provider_manager import ProviderManager
-    from ..routers.aigc_studio import build_capability_list
-
-    # ``request`` is an AgentScope AgentRequest here, not a Starlette Request.
-    # Resolve the application singleton directly so workspace runtimes can use
-    # the same catalog builder without depending on ``request.app.state``.
-    _ = request
-    result = await build_capability_list(ProviderManager.get_instance())
-    return result.model_dump(mode="json")
-
-
-async def _list_aigc_workflow_capabilities_for_workspace(
-    request: Any,
-) -> dict[str, Any]:
-    """Project the closed workflow registry and live priced models to Host."""
-    from ...providers.provider_manager import ProviderManager
-    from ..routers.aigc_studio import build_workflow_capability_catalog
-
-    _ = request
-    result = await build_workflow_capability_catalog(ProviderManager.get_instance())
-    return result.model_dump(mode="json")
 
 
 _PRINT_END_SIGNAL = "[END]"
@@ -102,7 +69,7 @@ def _is_isolated_agent_open_api_request(request: Any) -> bool:
         and is_isolated_agent_open_api(meta)
         and meta.get("target_type") == "agent"
         and meta.get("execution_mode") == "isolated_attempt"
-        and str(meta.get("open_invocation_id") or "").strip()
+        and str(meta.get("open_invocation_id") or "").strip(),
     )
 
 
@@ -173,205 +140,62 @@ async def _run_standard_or_orchestrated_turn(
     workspace_root: Path,
     orchestration: Any,
 ) -> AsyncGenerator[tuple[Msg, bool, bool], None]:
-    """Yield messages plus whether session state may be persisted."""
-    if not orchestration.enabled or not is_workspace_business_turn(
-        query,
-        mission_info=mission_info,
-    ):
+    """Dispatch an opted-in workspace turn through the owning plugin."""
+    if not orchestration.enabled:
         async for msg, last in _stream_printing_messages_interruptible(
             agents=[agent],
             coroutine_task=agent(messages),
         ):
             yield msg, last, True
         return
-    last_stream_id = None
-    try:
-        authorization = resolve_active_workspace_authorization(
-            agent_id=agent_id,
-            workspace_root=workspace_root,
-            tenant_id=str(getattr(request, "tenant_id", "local") or "local"),
-            config=orchestration,
-        )
-        tenant_id = str(getattr(request, "tenant_id", "local") or "local")
-        from ..super_experts.composition import (
-            get_super_expert_platform_service,
-        )
-        platform_service = get_super_expert_platform_service()
-        platform_events = platform_service.list_session_events(
-            installation_id=authorization.installation_id,
-            conversation_id=str(request.session_id),
-        )
-        from ..workspace.media_review_context import current_review_input
-        review_input = current_review_input(
-            user_id=str(request.user_id),
-            installation_id=authorization.installation_id,
-            conversation_id=str(request.session_id),
-        )
-        conversation_history: list[Any] = []
-        memory = getattr(agent, "memory", None)
-        get_memory = getattr(memory, "get_memory", None)
-        if callable(get_memory):
-            conversation_history = list(
-                await get_memory(prepend_summary=True),
-            )
+    from ...plugins.registry import PluginRegistry
 
-        async def business_call(
-            capability: str,
-            arguments: dict[str, Any],
-        ) -> dict[str, Any]:
-            payload = dict(arguments)
-            contract_version = authorization.granted_capabilities.get(capability)
-            if contract_version is None:
-                raise WorkspaceOrchestrationError("unauthorized_capability")
-            if capability == "aigc.capabilities.list/1":
-                if payload:
-                    raise WorkspaceOrchestrationError("orchestration_error")
-                return await _list_aigc_capabilities_for_workspace(request)
-            if capability == "aigc.workflow.capabilities.list/1":
-                if payload:
-                    raise WorkspaceOrchestrationError("orchestration_error")
-                return await _list_aigc_workflow_capabilities_for_workspace(request)
-            if capability == "interaction.capabilities.list/1":
-                from ..super_experts.interaction_contract import (
-                    build_interaction_catalog,
-                )
-                if set(payload) - {"component_types"}:
-                    raise WorkspaceOrchestrationError("orchestration_error")
-                return build_interaction_catalog(
-                    payload.get("component_types", []),
-                )
-            idempotency_key = str(payload.pop("idempotency_key", ""))
-            if not idempotency_key:
-                raise WorkspaceOrchestrationError("orchestration_error")
-            if capability in {
-                "interaction.card.create/1",
-                "interaction.card.cancel/1",
-            }:
-                return await platform_service.execute_interaction(
-                    tenant_id=tenant_id,
-                    installation_id=authorization.installation_id,
-                    conversation_id=str(request.session_id),
-                    capability=capability,
-                    contract_version=contract_version,
-                    arguments=payload,
-                    idempotency_key=idempotency_key,
-                )
-            target_installation_id = authorization.installation_id
-            if capability == "aigc.review.complete" and review_input is not None:
-                trusted_binding = review_input.get("binding")
-                if payload.get("binding") != trusted_binding:
-                    raise WorkspaceOrchestrationError("unauthorized_capability")
-                target_installation_id = str(
-                    (trusted_binding or {}).get("installation_id") or ""
-                )
-                if not target_installation_id:
-                    raise WorkspaceOrchestrationError("unauthorized_capability")
-            return await platform_service.execute(
-                tenant_id=tenant_id,
-                user_id=str(getattr(request, "user_id", "") or ""),
-                installation_id=target_installation_id,
-                capability=capability,
-                contract_version=contract_version,
-                arguments=payload,
-                idempotency_key=idempotency_key,
-            )
-
-        def read_aigc_task(material_task_id: str) -> dict[str, Any] | None:
-            task = platform_service.task_repository.get(material_task_id)
-            if task is None:
-                return None
-            task_binding = task.binding.model_dump(mode="json")
-            trusted_review_binding = (
-                review_input.get("binding") if review_input is not None else None
-            )
-            installation_matches = (
-                task.binding.installation_id == authorization.installation_id
-                or task_binding == trusted_review_binding
-            )
-            if (not installation_matches
-                    or task.binding.conversation_id != str(request.session_id)):
-                return None
-            return task.model_dump(mode="json")
-
-        def read_interaction_card(interaction_id: str) -> dict[str, Any] | None:
-            interactions = platform_service.interactions
-            if interactions is None:
-                return None
-            try:
-                if interaction_id:
-                    card = interactions.get_owned(
-                        interaction_id,
-                        installation_id=authorization.installation_id,
-                        conversation_id=str(request.session_id),
-                    )
-                else:
-                    cards = interactions.list_owned(
-                        installation_id=authorization.installation_id,
-                        conversation_ids={str(request.session_id)},
-                    )
-                    card = next(
-                        (
-                            item
-                            for item in reversed(cards)
-                            if item.status.value == "PENDING"
-                            and item.input_policy.value == "card_only"
-                        ),
-                        None,
-                    )
-                    if card is None:
-                        return None
-            except Exception:
-                return None
-            return card.model_dump(mode="json")
-        from ..workspace.public_stream import stream_workspace_turn
-        async for completed, value in stream_workspace_turn(
-            run_turn=run_workspace_orchestration_turn,
-            agent=agent,
-            original_messages=messages,
-            conversation_history=conversation_history,
-            request=request,
-            agent_id=agent_id,
-            workspace_root=workspace_root,
-            state_storage_root=Path(WORKING_DIR) / "workspace_runtime_state",
-            config=orchestration,
-            authorization=authorization,
-            business_call=business_call,
-            read_aigc_task=read_aigc_task,
-            read_interaction_card=read_interaction_card,
-            safe_metadata={
-                "platformEvents": [
-                    event.model_dump(mode="json") for event in platform_events
-                ],
-                **({"aigcReviewInput": review_input} if review_input is not None else {}),
-            },
-        ):
-            if completed:
-                result = value
-            else:
-                last_stream_id = value.id
-                yield value, False, True
-
-    except WorkspaceOrchestrationError:
-        logger.exception(
-            "Workspace orchestration failed closed for agent %s",
+    capability_id = str(getattr(orchestration, "capability_id", "") or "")
+    if not capability_id:
+        # Compatibility for signed releases created before capability_id was
+        # added to agent.json. The implementation still comes from a plugin.
+        capability_id = (
+            f"workspace.turn.orchestrate/{orchestration.contract_version}"
+        )
+    registration = PluginRegistry().get_workspace_turn_handler(capability_id)
+    if registration is None:
+        logger.error(
+            "Workspace turn handler is unavailable: %s (agent=%s)",
+            capability_id,
             agent_id,
         )
-        result = WorkspaceTurnResult(error_code="orchestration_error")
-    response_message = workspace_result_to_message(result, agent_name=agent_name)
-    if last_stream_id is not None:
-        response_message.id = last_stream_id
-    if result.error_code is None:
-        memory = getattr(agent, "memory", None)
-        add_to_memory = getattr(memory, "add", None)
-        if callable(add_to_memory):
-            for message in messages:
-                await add_to_memory(message)
-            await add_to_memory(response_message)
-    yield (
-        response_message,
-        True,
-        result.error_code is None,
-    )
+        yield Msg(
+            name=agent_name,
+            role="assistant",
+            content="本轮处理未能安全完成，请稍后重试。",
+        ), True, False
+        return
+
+    try:
+        stream = registration.callback(
+            agent=agent,
+            messages=messages,
+            request=request,
+            query=query,
+            mission_info=mission_info,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            workspace_root=workspace_root,
+            orchestration=orchestration,
+            standard_stream=_stream_printing_messages_interruptible,
+        )
+        async for item in stream:
+            yield item
+    except Exception:
+        logger.exception(
+            "Plugin workspace turn failed closed for agent %s",
+            agent_id,
+        )
+        yield Msg(
+            name=agent_name,
+            role="assistant",
+            content="本轮处理未能安全完成，请稍后重试。",
+        ), True, False
 
 
 class AgentRunner(Runner):
@@ -690,14 +514,18 @@ class AgentRunner(Runner):
                     normalize_untrusted_metadata,
                 )
 
-                base_request_context["metadata"] = normalize_untrusted_metadata(
+                base_request_context[
+                    "metadata"
+                ] = normalize_untrusted_metadata(
                     channel_meta.get("metadata"),
                 )
                 knowledge_base_id = str(
                     channel_meta.get("knowledge_base_id") or "",
                 ).strip()
                 if knowledge_base_id:
-                    base_request_context["knowledge_base_id"] = knowledge_base_id
+                    base_request_context[
+                        "knowledge_base_id"
+                    ] = knowledge_base_id
                     set_current_knowledge_base_id(knowledge_base_id)
             payload_context = getattr(request, "request_context", None)
             if isinstance(payload_context, dict):
@@ -905,9 +733,7 @@ class AgentRunner(Runner):
                 env_context=env_context,
                 mcp_clients=mcp_clients,
                 memory_manager=(
-                    None
-                    if isolated_agent_open_api
-                    else self.memory_manager
+                    None if isolated_agent_open_api else self.memory_manager
                 ),
                 context_manager=self.context_manager,
                 request_context=base_request_context,

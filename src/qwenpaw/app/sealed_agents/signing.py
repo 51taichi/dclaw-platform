@@ -5,22 +5,11 @@ from __future__ import annotations
 import base64
 import json
 import logging
-from dataclasses import dataclass
 from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class SuperExpertTrustStore:
-    """Signer identities allowed to publish platform-level super experts."""
-
-    official_signer_ids: frozenset[str]
-
-    def is_official(self, signer_id: str) -> bool:
-        return signer_id in self.official_signer_ids
 
 
 def load_trusted_signers(path: Path) -> dict[str, Ed25519PublicKey]:
@@ -38,5 +27,22 @@ def load_trusted_signers(path: Path) -> dict[str, Ed25519PublicKey]:
             raw = base64.b64decode(encoded, validate=True)
             signers[str(signer_id)] = Ed25519PublicKey.from_public_bytes(raw)
         except (TypeError, ValueError) as exc:
-            logger.error("Ignoring invalid sealed signer %s: %s", signer_id, exc)
+            logger.error(
+                "Ignoring invalid sealed signer %s: %s",
+                signer_id,
+                exc,
+            )
     return signers
+
+
+def __getattr__(name: str):
+    if name != "SuperExpertTrustStore":
+        raise AttributeError(name)
+    from qwenpaw.bundled_plugins import load_bundled_plugin_module
+
+    module = load_bundled_plugin_module(
+        "dclaw.super-agent-support",
+        "super-agent-support",
+        "super_agent.trust",
+    )
+    return module.SuperExpertTrustStore

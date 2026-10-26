@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.0 - 2026-10-26
+
+- Bundles development standard 2.4 with the explicit Super Agent plugin
+  ownership boundary and fail-closed release prerequisites.
+- Clarifies signer trust domains, business service installation identity, and
+  the split between the generic Runner core and Agent capability packages.
+- Keeps DevKit 1.3.0 schemas and all existing signed package formats compatible.
+
 ## 1.2.0 - 2026-10-26
 
 - Bundles DevKit 1.3.0 public contracts for opaque local file references,

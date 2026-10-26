@@ -38,11 +38,14 @@ from qwenpaw.app.workspace.orchestration import (
     WorkspaceTurnResult,
     workspace_result_to_message,
 )
-from qwenpaw.app.runner.runner import (
-    _list_aigc_capabilities_for_workspace,
-    _list_aigc_workflow_capabilities_for_workspace,
+from qwenpaw.app.workspace.orchestration import (
+    _list_aigc_capabilities as _list_aigc_capabilities_for_workspace,
+    _list_aigc_workflow_capabilities as _list_aigc_workflow_capabilities_for_workspace,
 )
-from qwenpaw.app.sealed_agents.models import SealedAgentRecord, SealedReleaseRecord
+from qwenpaw.app.sealed_agents.models import (
+    SealedAgentRecord,
+    SealedReleaseRecord,
+)
 from qwenpaw.app.sealed_agents.package import inspect_extracted_payload
 from qwenpaw.app.sealed_agents.package import (
     build_signed_package_bytes,
@@ -78,17 +81,21 @@ def test_agent_profile_defaults_to_disabled_orchestration():
 
 
 @pytest.mark.asyncio
-async def test_workspace_catalog_bridge_reuses_safe_aigc_inventory(monkeypatch):
+async def test_workspace_catalog_bridge_reuses_safe_aigc_inventory(
+    monkeypatch,
+):
     expected = {
-        "capabilities": [{
-            "provider_id": "provider-1",
-            "provider_name": "Provider",
-            "model_id": "image-1",
-            "model_name": "Image",
-            "capability": "text_to_image",
-            "source": "model_registry",
-            "parameter_schema": {"type": "object"},
-        }],
+        "capabilities": [
+            {
+                "provider_id": "provider-1",
+                "provider_name": "Provider",
+                "model_id": "image-1",
+                "model_name": "Image",
+                "capability": "text_to_image",
+                "source": "model_registry",
+                "parameter_schema": {"type": "object"},
+            },
+        ],
     }
 
     provider_manager = object()
@@ -113,7 +120,9 @@ async def test_workspace_catalog_bridge_reuses_safe_aigc_inventory(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_workspace_workflow_catalog_bridge_uses_server_projection(monkeypatch):
+async def test_workspace_workflow_catalog_bridge_uses_server_projection(
+    monkeypatch,
+):
     expected = {
         "schema_version": 1,
         "nodes": [{"kind": "video_generate"}],
@@ -140,17 +149,27 @@ async def test_workspace_workflow_catalog_bridge_uses_server_projection(monkeypa
     )
 
 
-def test_workspace_orchestration_timeout_allows_multi_step_agent_turns(monkeypatch):
-    monkeypatch.delenv("DCLAW_WORKSPACE_ORCHESTRATION_TIMEOUT_SECONDS", raising=False)
+def test_workspace_orchestration_timeout_allows_multi_step_agent_turns(
+    monkeypatch,
+):
+    monkeypatch.delenv(
+        "DCLAW_WORKSPACE_ORCHESTRATION_TIMEOUT_SECONDS",
+        raising=False,
+    )
     assert workspace_orchestration_timeout_seconds() == 180.0
 
 
-def test_workspace_orchestration_timeout_is_bounded_and_invalid_values_are_safe(monkeypatch):
+def test_workspace_orchestration_timeout_is_bounded_and_invalid_values_are_safe(
+    monkeypatch,
+):
     monkeypatch.setenv("DCLAW_WORKSPACE_ORCHESTRATION_TIMEOUT_SECONDS", "10")
     assert workspace_orchestration_timeout_seconds() == 30.0
     monkeypatch.setenv("DCLAW_WORKSPACE_ORCHESTRATION_TIMEOUT_SECONDS", "1200")
     assert workspace_orchestration_timeout_seconds() == 900.0
-    monkeypatch.setenv("DCLAW_WORKSPACE_ORCHESTRATION_TIMEOUT_SECONDS", "invalid")
+    monkeypatch.setenv(
+        "DCLAW_WORKSPACE_ORCHESTRATION_TIMEOUT_SECONDS",
+        "invalid",
+    )
     assert workspace_orchestration_timeout_seconds() == 180.0
 
 
@@ -162,10 +181,16 @@ def test_agent_profile_accepts_the_strict_v1_declaration():
     )
 
     assert profile.orchestration.entrypoint == "runtime.py:create_runtime"
-    assert profile.orchestration.required_host_capabilities == HOST_CAPABILITIES_V1
+    assert (
+        profile.orchestration.required_host_capabilities
+        == HOST_CAPABILITIES_V1
+    )
 
 
-def test_resolve_active_authorization_forwards_runtime_workspace(monkeypatch, tmp_path):
+def test_resolve_active_authorization_forwards_runtime_workspace(
+    monkeypatch,
+    tmp_path,
+):
     workspace = tmp_path / "runtime" / "agent"
     workspace.mkdir(parents=True)
     record = SimpleNamespace(active_release_id="release-1")
@@ -210,8 +235,12 @@ def test_candidate_execution_projects_runtime_system_instruction_as_last_user_tu
 
     assert [message.role for message in projected] == ["user", "user"]
     assert "ONLY JSON" in projected[-1].get_text_content()
-    assert projected[-1].get_text_content().endswith(
-        "不得输出面向客户的普通回答或任何前后解释。"
+    assert (
+        projected[-1]
+        .get_text_content()
+        .endswith(
+            "不得输出面向客户的普通回答或任何前后解释。",
+        )
     )
 
 
@@ -230,7 +259,7 @@ def test_candidate_execution_does_not_override_runtime_ini_format_with_json_rule
 
     assert "只输出 INI-lite" in candidate_instruction
     assert "JSON 类型" not in candidate_instruction
-    assert 'JSON null' not in candidate_instruction
+    assert "JSON null" not in candidate_instruction
 
 
 @pytest.mark.asyncio
@@ -274,10 +303,17 @@ async def test_internal_candidate_keeps_latest_nonempty_stream_chunk():
             self.extra_body = None
 
         async def __call__(
-            self, prompt, *, tools, tool_choice, max_tokens, extra_body
+            self,
+            prompt,
+            *,
+            tools,
+            tool_choice,
+            max_tokens,
+            extra_body,
         ):
             self.max_tokens = max_tokens
             self.extra_body = extra_body
+
             async def chunks():
                 yield SimpleNamespace(
                     id="chunk-1",
@@ -317,7 +353,10 @@ async def test_internal_candidate_forwards_validated_json_response_format():
         async def __call__(self, prompt, **kwargs):
             assert kwargs["response_format"] == {"type": "json_object"}
             assert kwargs["max_tokens"] == 8192
-            return SimpleNamespace(id="json-1", content=[{"type": "text", "text": "{}"}])
+            return SimpleNamespace(
+                id="json-1",
+                content=[{"type": "text", "text": "{}"}],
+            )
 
     result = await _execute_internal_candidate(
         SimpleNamespace(name="agent", formatter=Formatter(), model=Model()),
@@ -339,7 +378,8 @@ async def test_fallback_agent_rejects_json_format_instead_of_ignoring_it():
 
     with pytest.raises(WorkspaceOrchestrationError):
         await _execute_internal_candidate(
-            FallbackAgent(), [Msg(name="runtime", role="system", content="JSON")],
+            FallbackAgent(),
+            [Msg(name="runtime", role="system", content="JSON")],
             response_format="json_object",
         )
 
@@ -353,53 +393,95 @@ async def test_fallback_agent_rejects_json_format_instead_of_ignoring_it():
 
 def test_agent_execute_response_format_is_closed_and_does_not_coerce_values():
     assert _agent_execute_response_format({"messages": []}) is None
-    assert _agent_execute_response_format({
-        "messages": [], "response_format": "json_object",
-    }) == "json_object"
+    assert (
+        _agent_execute_response_format(
+            {
+                "messages": [],
+                "response_format": "json_object",
+            },
+        )
+        == "json_object"
+    )
     for invalid in (None, False, True, "json", {}, 0):
         with pytest.raises(WorkspaceOrchestrationError):
-            _agent_execute_response_format({
-                "messages": [], "response_format": invalid,
-            })
+            _agent_execute_response_format(
+                {
+                    "messages": [],
+                    "response_format": invalid,
+                },
+            )
 
 
 def test_agent_execute_mode_is_closed_and_defaults_to_internal_candidate():
     assert _agent_execute_mode({"messages": []}) == "candidate"
-    assert _agent_execute_mode({
-        "messages": [], "execution_mode": "agent_loop",
-    }) == "agent_loop"
+    assert (
+        _agent_execute_mode(
+            {
+                "messages": [],
+                "execution_mode": "agent_loop",
+            },
+        )
+        == "agent_loop"
+    )
     for invalid in (None, False, True, "full", {}, 0):
         with pytest.raises(WorkspaceOrchestrationError):
-            _agent_execute_mode({
-                "messages": [], "execution_mode": invalid,
-            })
+            _agent_execute_mode(
+                {
+                    "messages": [],
+                    "execution_mode": invalid,
+                },
+            )
 
 
 def test_agent_execute_instruction_is_optional_stripped_and_closed():
     assert _agent_execute_instruction({"messages": []}) is None
-    assert _agent_execute_instruction({
-        "messages": [], "instruction": "  keep the card  ",
-    }) == "keep the card"
+    assert (
+        _agent_execute_instruction(
+            {
+                "messages": [],
+                "instruction": "  keep the card  ",
+            },
+        )
+        == "keep the card"
+    )
     for invalid in (None, "", "   ", 1, True, []):
         with pytest.raises(WorkspaceOrchestrationError):
-            _agent_execute_instruction({
-                "messages": [], "instruction": invalid,
-            })
+            _agent_execute_instruction(
+                {
+                    "messages": [],
+                    "instruction": invalid,
+                },
+            )
 
 
 def test_agent_execute_require_interaction_is_optional_boolean_and_closed():
     assert _agent_execute_require_interaction({"messages": []}) is False
-    assert _agent_execute_require_interaction({
-        "messages": [], "require_interaction": True,
-    }) is True
-    assert _agent_execute_require_interaction({
-        "messages": [], "require_interaction": False,
-    }) is False
+    assert (
+        _agent_execute_require_interaction(
+            {
+                "messages": [],
+                "require_interaction": True,
+            },
+        )
+        is True
+    )
+    assert (
+        _agent_execute_require_interaction(
+            {
+                "messages": [],
+                "require_interaction": False,
+            },
+        )
+        is False
+    )
     for invalid in (None, 0, 1, "true", []):
         with pytest.raises(WorkspaceOrchestrationError):
-            _agent_execute_require_interaction({
-                "messages": [], "require_interaction": invalid,
-            })
+            _agent_execute_require_interaction(
+                {
+                    "messages": [],
+                    "require_interaction": invalid,
+                },
+            )
 
 
 @pytest.mark.parametrize(
@@ -409,7 +491,9 @@ def test_agent_execute_require_interaction_is_optional_boolean_and_closed():
         _orchestration(contract_version="2"),
         _orchestration(entrypoint="../runtime.py:create_runtime"),
         _orchestration(entrypoint="runtime.py"),
-        _orchestration(required_host_capabilities=[*HOST_CAPABILITIES_V1, "x"]),
+        _orchestration(
+            required_host_capabilities=[*HOST_CAPABILITIES_V1, "x"],
+        ),
         _orchestration(
             required_host_capabilities=[
                 *HOST_CAPABILITIES_V1,
@@ -517,9 +601,7 @@ def test_delivery_status_text_is_unchanged_without_verified_interaction():
         agent_name="陆羽",
     )
 
-    assert message.get_text_content() == (
-        "卡片已经发过去了。我从你的业务情况出发继续判断。"
-    )
+    assert message.get_text_content() == ("卡片已经发过去了。我从你的业务情况出发继续判断。")
 
 
 @pytest.mark.parametrize(
@@ -554,9 +636,7 @@ def test_runtime_reported_interaction_id_is_not_trusted_as_creation_evidence():
     message = workspace_result_to_message(result, agent_name="陆羽")
 
     assert not message.metadata
-    assert message.get_text_content() == (
-        "卡片已经发给你了。这句话没有真实创建回执。"
-    )
+    assert message.get_text_content() == ("卡片已经发给你了。这句话没有真实创建回执。")
 
 
 @pytest.mark.asyncio
@@ -790,17 +870,21 @@ def _request_for(transaction, **overrides):
 
 def test_runtime_deadline_is_host_private_not_request_input(tmp_path):
     transaction = WorkspaceStateTransaction.begin(
-        tmp_path / "state-store", installation_id="installation-1",
-        session_id="session-1", invocation_id="inv-private-deadline",
+        tmp_path / "state-store",
+        installation_id="installation-1",
+        session_id="session-1",
+        invocation_id="inv-private-deadline",
     )
     request = _request_for(transaction)
 
     assert "_runtime_deadline_monotonic" not in request.model_dump()
     with pytest.raises(ValidationError):
-        WorkspaceTurnRequest(**{
-            **request.model_dump(),
-            "_runtime_deadline_monotonic": 999999999.0,
-        })
+        WorkspaceTurnRequest(
+            **{
+                **request.model_dump(),
+                "_runtime_deadline_monotonic": 999999999.0,
+            },
+        )
 
 
 def test_state_transaction_commits_or_discards_as_one_unit(tmp_path):
@@ -862,7 +946,9 @@ def test_stale_state_transaction_cannot_overwrite_a_newer_commit(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_generic_runtime_candidate_is_internal_and_complete_is_visible(tmp_path):
+async def test_generic_runtime_candidate_is_internal_and_complete_is_visible(
+    tmp_path,
+):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     _write_runtime(
@@ -922,19 +1008,44 @@ async def test_configured_runtime_checkpoints_before_host_deadline(tmp_path):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"# {skill}\nUse only supplied evidence.\n")
     definition = {
-        "id": "deadline-flow", "version": "3.0.0", "entry_node": "collect", "nodes": [
-            {"id": "collect", "goal": "collect", "main_skill": "interview",
-             "collect_fields": ["business"],
-             "fact_policies": {"business": {"sources": ["customer"], "allow_unknown": False}},
-             "required_methods": [], "dimensions": [], "support_skills": [],
-             "next_node": "decide", "return_nodes": []},
-            {"id": "decide", "goal": "decide", "main_skill": "diagnose",
-             "collect_fields": [], "required_methods": [], "dimensions": [],
-             "support_skills": [], "next_node": None, "return_nodes": []},
+        "id": "deadline-flow",
+        "version": "3.0.0",
+        "entry_node": "collect",
+        "nodes": [
+            {
+                "id": "collect",
+                "goal": "collect",
+                "main_skill": "interview",
+                "collect_fields": ["business"],
+                "fact_policies": {
+                    "business": {
+                        "sources": ["customer"],
+                        "allow_unknown": False,
+                    },
+                },
+                "required_methods": [],
+                "dimensions": [],
+                "support_skills": [],
+                "next_node": "decide",
+                "return_nodes": [],
+            },
+            {
+                "id": "decide",
+                "goal": "decide",
+                "main_skill": "diagnose",
+                "collect_fields": [],
+                "required_methods": [],
+                "dimensions": [],
+                "support_skills": [],
+                "next_node": None,
+                "return_nodes": [],
+            },
         ],
     }
     (workspace / "config" / "flow.json").write_text(json.dumps(definition))
-    _write_runtime(workspace, """
+    _write_runtime(
+        workspace,
+        """
         from pathlib import Path
         import json
         from qwenpaw.app.workspace.flow_runtime import ConfiguredFlowRuntime
@@ -942,49 +1053,99 @@ async def test_configured_runtime_checkpoints_before_host_deadline(tmp_path):
             root = Path(__file__).resolve().parent
             definition = json.loads((root / "config" / "flow.json").read_text())
             return ConfiguredFlowRuntime(root, definition, contract_driven=True)
-    """)
+    """,
+    )
     transaction = WorkspaceStateTransaction.begin(
-        tmp_path / "state-store", installation_id="installation-1",
-        session_id="session-1", invocation_id="inv-budget",
+        tmp_path / "state-store",
+        installation_id="installation-1",
+        session_id="session-1",
+        invocation_id="inv-budget",
     )
 
     async def execute(arguments):
         payload = json.loads(arguments["messages"][-1]["content"])
-        if payload["operation"] == "generate" and payload["node"]["id"] == "decide":
+        if (
+            payload["operation"] == "generate"
+            and payload["node"]["id"] == "decide"
+        ):
             await asyncio.sleep(1)
         if payload["operation"] == "generate":
-            return {"text": json.dumps({"candidate": {
-                "reply": "business captured", "facts": {"business": {
-                    "value": "English lessons", "source": "customer",
-                    "status": "known", "quote": "English lessons"}},
-                "outcomes": {}, "node_completed": True,
-                "interaction": {"kind": "none"}, "actions": []},
-                "methods": {}, "support_requests": []})}
-        return {"text": json.dumps({
-            "candidate_digest": payload["candidate_digest"], "acceptable": True,
-            "context_revision": payload["context"]["revision"],
-            "context_node": payload["node"]["id"], "facts_valid": True,
-            "reply_valid": True, "dimensions": {}, "issues": []})}
+            return {
+                "text": json.dumps(
+                    {
+                        "candidate": {
+                            "reply": "business captured",
+                            "facts": {
+                                "business": {
+                                    "value": "English lessons",
+                                    "source": "customer",
+                                    "status": "known",
+                                    "quote": "English lessons",
+                                },
+                            },
+                            "outcomes": {},
+                            "node_completed": True,
+                            "interaction": {"kind": "none"},
+                            "actions": [],
+                        },
+                        "methods": {},
+                        "support_requests": [],
+                    },
+                ),
+            }
+        return {
+            "text": json.dumps(
+                {
+                    "candidate_digest": payload["candidate_digest"],
+                    "acceptable": True,
+                    "context_revision": payload["context"]["revision"],
+                    "context_node": payload["node"]["id"],
+                    "facts_valid": True,
+                    "reply_valid": True,
+                    "dimensions": {},
+                    "issues": [],
+                },
+            ),
+        }
 
     orchestrator = WorkspaceTurnOrchestrator(
         workspace_root=workspace,
         config=OrchestrationConfig.model_validate(_orchestration()),
-        signed_files=frozenset({"runtime.py"}), execute_agent=execute,
-        session_context=lambda: {}, timeout_seconds=0.15,
+        signed_files=frozenset({"runtime.py"}),
+        execute_agent=execute,
+        session_context=lambda: {},
+        timeout_seconds=0.15,
     )
-    request = _request_for(transaction, normalized_input={"messages": [{
-        "name": "user", "role": "user", "content": "English lessons"}]})
+    request = _request_for(
+        transaction,
+        normalized_input={
+            "messages": [
+                {
+                    "name": "user",
+                    "role": "user",
+                    "content": "English lessons",
+                },
+            ],
+        },
+    )
 
     result = await orchestrator.invoke(request, transaction)
 
     assert result.error_code is None
-    saved = json.loads((transaction.state_root / "configured-flow.json").read_text())
+    saved = json.loads(
+        (transaction.state_root / "configured-flow.json").read_text(),
+    )
     assert saved["revision"] == 1 and saved["current_node"] == "decide"
-    assert saved["recovery"] == {"node_id": "decide", "reason": "turn_budget_exhausted"}
+    assert saved["recovery"] == {
+        "node_id": "decide",
+        "reason": "turn_budget_exhausted",
+    }
 
 
 @pytest.mark.asyncio
-async def test_one_inbound_turn_automatically_resumes_checkpointed_next_owner(tmp_path):
+async def test_one_inbound_turn_automatically_resumes_checkpointed_next_owner(
+    tmp_path,
+):
     workspace = tmp_path / "workspace"
     (workspace / "config").mkdir(parents=True)
     for skill in ("interview", "diagnose"):
@@ -992,26 +1153,52 @@ async def test_one_inbound_turn_automatically_resumes_checkpointed_next_owner(tm
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"# {skill}\nUse only supplied evidence.\n")
     definition = {
-        "id": "continuation-flow", "version": "3.0.0", "entry_node": "collect", "nodes": [
-            {"id": "collect", "goal": "collect", "main_skill": "interview",
-             "collect_fields": ["business"],
-             "fact_policies": {"business": {"sources": ["customer"], "allow_unknown": False}},
-             "required_methods": [], "dimensions": [], "support_skills": [],
-             "next_node": "decide", "return_nodes": []},
-            {"id": "decide", "goal": "decide", "main_skill": "diagnose",
-             "collect_fields": [], "required_methods": [], "dimensions": [],
-             "support_skills": [], "next_node": None, "return_nodes": []},
+        "id": "continuation-flow",
+        "version": "3.0.0",
+        "entry_node": "collect",
+        "nodes": [
+            {
+                "id": "collect",
+                "goal": "collect",
+                "main_skill": "interview",
+                "collect_fields": ["business"],
+                "fact_policies": {
+                    "business": {
+                        "sources": ["customer"],
+                        "allow_unknown": False,
+                    },
+                },
+                "required_methods": [],
+                "dimensions": [],
+                "support_skills": [],
+                "next_node": "decide",
+                "return_nodes": [],
+            },
+            {
+                "id": "decide",
+                "goal": "decide",
+                "main_skill": "diagnose",
+                "collect_fields": [],
+                "required_methods": [],
+                "dimensions": [],
+                "support_skills": [],
+                "next_node": None,
+                "return_nodes": [],
+            },
         ],
     }
     (workspace / "config" / "flow.json").write_text(json.dumps(definition))
-    _write_runtime(workspace, """
+    _write_runtime(
+        workspace,
+        """
         from pathlib import Path
         import json
         from qwenpaw.app.workspace.flow_runtime import ConfiguredFlowRuntime
         def create_runtime():
             root = Path(__file__).resolve().parent
             return ConfiguredFlowRuntime(root, json.loads((root / "config" / "flow.json").read_text()), contract_driven=True)
-    """)
+    """,
+    )
 
     class Formatter:
         async def format(self, *, msgs):
@@ -1026,12 +1213,17 @@ async def test_one_inbound_turn_automatically_resumes_checkpointed_next_owner(tm
 
         async def __call__(self, prompt, **kwargs):
             message = await self.owner(prompt)
-            return SimpleNamespace(id="fixture", content=[{
-                "type": "text", "text": message.get_text_content(),
-            }])
+            return SimpleNamespace(
+                id="fixture",
+                content=[
+                    {
+                        "type": "text",
+                        "text": message.get_text_content(),
+                    },
+                ],
+            )
 
     class Agent:
-
         def __init__(self):
             self.slow_calls = 0
             self.decide_customer_texts = []
@@ -1039,8 +1231,11 @@ async def test_one_inbound_turn_automatically_resumes_checkpointed_next_owner(tm
             self.model = DirectModel(self)
 
         async def __call__(self, messages):
-            payload = next(json.loads(message.get_text_content()) for message in messages
-                           if message.name == "node_context")
+            payload = next(
+                json.loads(message.get_text_content())
+                for message in messages
+                if message.name == "node_context"
+            )
             operation = payload["operation"]
             if operation == "generate":
                 node_id = payload["node"]["id"]
@@ -1049,56 +1244,104 @@ async def test_one_inbound_turn_automatically_resumes_checkpointed_next_owner(tm
                     if self.slow_calls == 0:
                         self.slow_calls += 1
                         await asyncio.sleep(1)
-                facts = ({"business": {"value": "English lessons", "source": "customer",
-                          "status": "known", "quote": "English lessons"}}
-                         if node_id == "collect" else {})
-                value = {"candidate": {"reply": f"done:{node_id}", "facts": facts,
-                    "outcomes": {}, "node_completed": True,
-                    "interaction": {"kind": "none"}, "actions": []},
-                    "methods": {}, "support_requests": []}
+                facts = (
+                    {
+                        "business": {
+                            "value": "English lessons",
+                            "source": "customer",
+                            "status": "known",
+                            "quote": "English lessons",
+                        },
+                    }
+                    if node_id == "collect"
+                    else {}
+                )
+                value = {
+                    "candidate": {
+                        "reply": f"done:{node_id}",
+                        "facts": facts,
+                        "outcomes": {},
+                        "node_completed": True,
+                        "interaction": {"kind": "none"},
+                        "actions": [],
+                    },
+                    "methods": {},
+                    "support_requests": [],
+                }
             elif operation == "assess":
-                value = {"candidate_digest": payload["candidate_digest"], "acceptable": True,
+                value = {
+                    "candidate_digest": payload["candidate_digest"],
+                    "acceptable": True,
                     "context_revision": payload["context"]["revision"],
-                    "context_node": payload["node"]["id"], "facts_valid": True,
-                    "reply_valid": True, "dimensions": {}, "issues": []}
+                    "context_node": payload["node"]["id"],
+                    "facts_valid": True,
+                    "reply_valid": True,
+                    "dimensions": {},
+                    "issues": [],
+                }
             elif operation == "render":
                 value = {"reply": "final decision"}
             else:
                 value = {"valid": True, "issues": []}
-            return Msg(name="assistant", role="assistant", content=json.dumps(value))
+            return Msg(
+                name="assistant",
+                role="assistant",
+                content=json.dumps(value),
+            )
 
     agent = Agent()
     authorization = AuthorizedWorkspaceRelease(
-        installation_id="installation-1", release_id="release-1",
+        installation_id="installation-1",
+        release_id="release-1",
         release_digest=f"sha256:{'a' * 64}",
-        granted_capabilities={capability: "1" for capability in HOST_CAPABILITIES_V1},
+        granted_capabilities={
+            capability: "1" for capability in HOST_CAPABILITIES_V1
+        },
         signed_workspace_files=frozenset({"runtime.py"}),
     )
     inbound = [Msg(name="user", role="user", content="English lessons")]
 
     result = await run_workspace_orchestration_turn(
-        agent=agent, original_messages=inbound,
-        request=SimpleNamespace(session_id="session-1", user_id="user-1", channel="console"),
-        agent_id="generic-agent", workspace_root=workspace,
+        agent=agent,
+        original_messages=inbound,
+        request=SimpleNamespace(
+            session_id="session-1",
+            user_id="user-1",
+            channel="console",
+        ),
+        agent_id="generic-agent",
+        workspace_root=workspace,
         state_storage_root=tmp_path / "state-store",
         config=OrchestrationConfig.model_validate(_orchestration()),
-        authorization=authorization, timeout_seconds=0.15,
+        authorization=authorization,
+        timeout_seconds=0.15,
     )
 
-    assert result.error_code is None and result.message == {"reply": "final decision"}
-    state_files = list((tmp_path / "state-store" / "state").rglob("configured-flow.json"))
+    assert result.error_code is None and result.message == {
+        "reply": "final decision",
+    }
+    state_files = list(
+        (tmp_path / "state-store" / "state").rglob("configured-flow.json"),
+    )
     saved = json.loads(state_files[0].read_text())
     assert saved["revision"] == 2 and saved["status"] == "completed"
-    assert [item["node_id"] for item in saved["history"]] == ["collect", "decide"]
+    assert [item["node_id"] for item in saved["history"]] == [
+        "collect",
+        "decide",
+    ]
     assert agent.decide_customer_texts == ["", ""]
     assert inbound[0].get_text_content() == "English lessons"
 
 
 @pytest.mark.asyncio
-async def test_automatic_continuation_does_not_reapply_conversation_reset(tmp_path):
+async def test_automatic_continuation_does_not_reapply_conversation_reset(
+    tmp_path,
+):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    _write_runtime(workspace, """
+    _write_runtime(
+        workspace,
+        """
         import json
         from pathlib import Path
         class Runtime:
@@ -1116,25 +1359,41 @@ async def test_automatic_continuation_does_not_reapply_conversation_reset(tmp_pa
                     "diagnostics": ({} if continued else {"continuation_reason": "turn_budget_exhausted"}),
                 })
         def create_runtime(): return Runtime()
-    """)
+    """,
+    )
     authorization = AuthorizedWorkspaceRelease(
-        installation_id="installation-1", release_id="release-1",
+        installation_id="installation-1",
+        release_id="release-1",
         release_digest=f"sha256:{'a' * 64}",
-        granted_capabilities={capability: "1" for capability in HOST_CAPABILITIES_V1},
+        granted_capabilities={
+            capability: "1" for capability in HOST_CAPABILITIES_V1
+        },
         signed_workspace_files=frozenset({"runtime.py"}),
     )
     result = await run_workspace_orchestration_turn(
         agent=lambda _: None,
-        original_messages=[Msg(name="user", role="user", content="reset and analyze")],
-        request=SimpleNamespace(session_id="session-1", user_id="user-1", channel="console"),
-        agent_id="generic-agent", workspace_root=workspace,
+        original_messages=[
+            Msg(name="user", role="user", content="reset and analyze"),
+        ],
+        request=SimpleNamespace(
+            session_id="session-1",
+            user_id="user-1",
+            channel="console",
+        ),
+        agent_id="generic-agent",
+        workspace_root=workspace,
         state_storage_root=tmp_path / "state-store",
         config=OrchestrationConfig.model_validate(_orchestration()),
-        authorization=authorization, safe_metadata={
-            "conversationReset": True, "platformEvents": [{"event_id": "evidence-1"}],
-        }, timeout_seconds=0.15,
+        authorization=authorization,
+        safe_metadata={
+            "conversationReset": True,
+            "platformEvents": [{"event_id": "evidence-1"}],
+        },
+        timeout_seconds=0.15,
     )
-    state_file = next((tmp_path / "state-store" / "state").rglob("reset-count.json"))
+    state_file = next(
+        (tmp_path / "state-store" / "state").rglob("reset-count.json"),
+    )
     assert result.message == {"reply": "evidence-1"}
     assert json.loads(state_file.read_text()) == 1
 
@@ -1174,7 +1433,10 @@ async def test_runtime_failure_preserves_safe_diagnostic_ref(tmp_path):
     result = await orchestrator.invoke(_request_for(transaction), transaction)
 
     assert result.error_code == "runtime_failed"
-    assert result.diagnostic_ref == "WorkspaceRuntimeError:CALIBRATION_EVENT_INVALID"
+    assert (
+        result.diagnostic_ref
+        == "WorkspaceRuntimeError:CALIBRATION_EVENT_INVALID"
+    )
 
 
 @pytest.mark.asyncio
@@ -1272,7 +1534,9 @@ async def test_every_orchestration_failure_discards_state(
 
 
 @pytest.mark.asyncio
-async def test_cancellation_discards_staged_state_and_propagates_cancel(tmp_path):
+async def test_cancellation_discards_staged_state_and_propagates_cancel(
+    tmp_path,
+):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     _write_runtime(
@@ -1333,7 +1597,9 @@ async def test_runner_level_cancellation_records_a_terminal_trace(tmp_path):
         installation_id="installation-1",
         release_id="release-1",
         release_digest=f"sha256:{'a' * 64}",
-        granted_capabilities={capability: "1" for capability in HOST_CAPABILITIES_V1},
+        granted_capabilities={
+            capability: "1" for capability in HOST_CAPABILITIES_V1
+        },
         signed_workspace_files=frozenset({"runtime.py"}),
     )
     storage = tmp_path / "runtime-state"
@@ -1342,7 +1608,9 @@ async def test_runner_level_cancellation_records_a_terminal_trace(tmp_path):
             agent=lambda _messages: None,
             original_messages=[Msg(name="user", role="user", content="hello")],
             request=SimpleNamespace(
-                session_id="session-1", user_id="user-1", channel="console",
+                session_id="session-1",
+                user_id="user-1",
+                channel="console",
             ),
             agent_id="generic-agent",
             workspace_root=workspace,
@@ -1372,7 +1640,9 @@ async def test_runner_level_cancellation_records_a_terminal_trace(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_entrypoint_must_be_a_signed_regular_file_inside_workspace(tmp_path):
+async def test_entrypoint_must_be_a_signed_regular_file_inside_workspace(
+    tmp_path,
+):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     outside = tmp_path / "outside.py"
@@ -1439,8 +1709,12 @@ async def test_signed_runtime_can_import_its_own_signed_modules(tmp_path):
     assert result.message == {"reply": "package-local"}
 
 
-def test_authorization_binds_active_release_grant_digest_and_workspace(tmp_path):
-    release_root = tmp_path / "sealed" / "releases" / "generic-agent" / "release-1"
+def test_authorization_binds_active_release_grant_digest_and_workspace(
+    tmp_path,
+):
+    release_root = (
+        tmp_path / "sealed" / "releases" / "generic-agent" / "release-1"
+    )
     workspace = release_root / "agent"
     workspace.mkdir(parents=True)
     (workspace / "agent.json").write_text("{}")
@@ -1454,7 +1728,8 @@ def test_authorization_binds_active_release_grant_digest_and_workspace(tmp_path)
         package_type="super_expert",
         capability_digest=f"sha256:{'b' * 64}",
         declared_capabilities=tuple(
-            (capability, "1") for capability in (
+            (capability, "1")
+            for capability in (
                 "workspace.turn.orchestrate/1",
                 *HOST_CAPABILITIES_V1,
             )
@@ -1477,7 +1752,12 @@ def test_authorization_binds_active_release_grant_digest_and_workspace(tmp_path)
     )
 
     runtime_workspace = (
-        tmp_path / "sealed" / "runtime_workspaces" / "generic-agent" / "release-1" / "agent"
+        tmp_path
+        / "sealed"
+        / "runtime_workspaces"
+        / "generic-agent"
+        / "release-1"
+        / "agent"
     )
     runtime_workspace.mkdir(parents=True)
     authorization = authorize_workspace_release(
@@ -1498,7 +1778,9 @@ def test_authorization_binds_active_release_grant_digest_and_workspace(tmp_path)
 
 
 def test_self_declared_or_tampered_workspace_is_not_authorized(tmp_path):
-    release_root = tmp_path / "sealed" / "releases" / "generic-agent" / "release-1"
+    release_root = (
+        tmp_path / "sealed" / "releases" / "generic-agent" / "release-1"
+    )
     workspace = release_root / "agent"
     workspace.mkdir(parents=True)
     (workspace / "agent.json").write_text("{}")
@@ -1512,7 +1794,8 @@ def test_self_declared_or_tampered_workspace_is_not_authorized(tmp_path):
         package_type="super_expert",
         capability_digest=f"sha256:{'b' * 64}",
         declared_capabilities=tuple(
-            (capability, "1") for capability in (
+            (capability, "1")
+            for capability in (
                 "workspace.turn.orchestrate/1",
                 *HOST_CAPABILITIES_V1,
             )
@@ -1535,7 +1818,12 @@ def test_self_declared_or_tampered_workspace_is_not_authorized(tmp_path):
     )
     (workspace / "runtime.py").write_text("tampered = True")
     runtime_workspace = (
-        tmp_path / "sealed" / "runtime_workspaces" / "generic-agent" / "release-1" / "agent"
+        tmp_path
+        / "sealed"
+        / "runtime_workspaces"
+        / "generic-agent"
+        / "release-1"
+        / "agent"
     )
     runtime_workspace.mkdir(parents=True)
 
@@ -1553,11 +1841,16 @@ def test_self_declared_or_tampered_workspace_is_not_authorized(tmp_path):
 def test_business_turn_classification_excludes_platform_control_paths():
     assert is_workspace_business_turn("hello", mission_info=None)
     assert not is_workspace_business_turn("/new", mission_info=None)
-    assert not is_workspace_business_turn("continue", mission_info={"phase": 1})
+    assert not is_workspace_business_turn(
+        "continue",
+        mission_info={"phase": 1},
+    )
 
 
 @pytest.mark.asyncio
-async def test_runner_adapter_executes_internal_candidate_without_streaming(tmp_path):
+async def test_runner_adapter_executes_internal_candidate_without_streaming(
+    tmp_path,
+):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     _write_runtime(
@@ -1618,7 +1911,9 @@ async def test_runner_adapter_executes_internal_candidate_without_streaming(tmp_
             tmp_path / "state-store",
             installation_id="installation-1",
             session_id="session-1",
-        ).read_text(encoding="utf-8").splitlines()
+        )
+        .read_text(encoding="utf-8")
+        .splitlines()
     ]
     assert [event["event_type"] for event in trace_events] == [
         "orchestration.started",
@@ -1818,13 +2113,20 @@ async def test_agent_loop_can_require_a_real_interaction_before_text(tmp_path):
             nonlocal active_card
             self.reasoning_choices.append(tool_choice)
             if len(self.reasoning_choices) == 1:
-                active_card = {"interaction_id": "interaction-1", "status": "PENDING"}
+                active_card = {
+                    "interaction_id": "interaction-1",
+                    "status": "PENDING",
+                }
             return None
 
         async def __call__(self, _messages):
             await self._reasoning()
             await self._reasoning()
-            return Msg(name="assistant", role="assistant", content="card ready")
+            return Msg(
+                name="assistant",
+                role="assistant",
+                content="card ready",
+            )
 
     agent = Agent()
     authorization = AuthorizedWorkspaceRelease(
@@ -1861,7 +2163,8 @@ async def test_agent_loop_can_require_a_real_interaction_before_text(tmp_path):
 
 @pytest.mark.asyncio
 async def test_local_raw_model_trace_records_each_agent_execute_request_and_response(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     monkeypatch.setenv("DCLAW_WORKSPACE_MODEL_TRACE_RAW", "true")
     workspace = tmp_path / "workspace"
@@ -1910,11 +2213,15 @@ async def test_local_raw_model_trace_records_each_agent_execute_request_and_resp
 
     result = await run_workspace_orchestration_turn(
         agent=SimpleNamespace(
-            name="agent", formatter=Formatter(), model=Model(),
+            name="agent",
+            formatter=Formatter(),
+            model=Model(),
         ),
         original_messages=[Msg(name="user", role="user", content="开始")],
         request=SimpleNamespace(
-            session_id="session-1", user_id="user-1", channel="console",
+            session_id="session-1",
+            user_id="user-1",
+            channel="console",
         ),
         agent_id="luyu_traffic_operator",
         workspace_root=workspace,
@@ -1930,10 +2237,20 @@ async def test_local_raw_model_trace_records_each_agent_execute_request_and_resp
             storage,
             installation_id="installation-1",
             session_id="session-1",
-        ).read_text(encoding="utf-8").splitlines()
+        )
+        .read_text(encoding="utf-8")
+        .splitlines()
     ]
-    started = next(event for event in events if event["event_type"] == "agent.execute.started")
-    completed = next(event for event in events if event["event_type"] == "agent.execute.completed")
+    started = next(
+        event
+        for event in events
+        if event["event_type"] == "agent.execute.started"
+    )
+    completed = next(
+        event
+        for event in events
+        if event["event_type"] == "agent.execute.completed"
+    )
     assert started["payload"]["call_number"] == 1
     assert started["payload"]["response_format"] == "json_object"
     assert started["payload"]["model_key"] == "deepseek:test"
@@ -1946,7 +2263,9 @@ async def test_local_raw_model_trace_records_each_agent_execute_request_and_resp
 
 
 @pytest.mark.asyncio
-async def test_server_owned_platform_events_reach_the_workspace_runtime(tmp_path):
+async def test_server_owned_platform_events_reach_the_workspace_runtime(
+    tmp_path,
+):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     _write_runtime(
@@ -1966,14 +2285,20 @@ async def test_server_owned_platform_events_reach_the_workspace_runtime(tmp_path
         installation_id="installation-1",
         release_id="release-1",
         release_digest=f"sha256:{'a' * 64}",
-        granted_capabilities={capability: "1" for capability in HOST_CAPABILITIES_V1},
+        granted_capabilities={
+            capability: "1" for capability in HOST_CAPABILITIES_V1
+        },
         signed_workspace_files=frozenset({"runtime.py"}),
     )
 
     result = await run_workspace_orchestration_turn(
         agent=lambda _messages: None,
         original_messages=[Msg(name="user", role="user", content="continue")],
-        request=SimpleNamespace(session_id="session-1", user_id="user-1", channel="console"),
+        request=SimpleNamespace(
+            session_id="session-1",
+            user_id="user-1",
+            channel="console",
+        ),
         agent_id="generic-agent",
         workspace_root=workspace,
         state_storage_root=tmp_path / "state-store",
@@ -1986,7 +2311,9 @@ async def test_server_owned_platform_events_reach_the_workspace_runtime(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_official_signed_non_luyu_fixture_uses_the_generic_protocol(tmp_path):
+async def test_official_signed_non_luyu_fixture_uses_the_generic_protocol(
+    tmp_path,
+):
     fixture = (
         Path(__file__).parents[3]
         / "fixtures/super_expert/generic-orchestration-v1"
@@ -2013,15 +2340,31 @@ async def test_official_signed_non_luyu_fixture_uses_the_generic_protocol(tmp_pa
     )
 
     registry = SealedAgentRegistry(tmp_path / "registry")
+    from qwenpaw.bundled_plugins import load_bundled_plugin_module
+
+    package_handler_module = load_bundled_plugin_module(
+        "dclaw.super-agent-support",
+        "super-agent-support",
+        "super_agent.package_handler",
+    )
+    grant_repository = SuperExpertGrantRepository(tmp_path / "grants")
+    package_handler = package_handler_module.SuperAgentPackageHandler(
+        tmp_path / "sealed",
+        official_signer_ids=frozenset({"official-test"}),
+        trusted_signers={"official-test": private.public_key()},
+        grant_repository=grant_repository,
+    )
     service = SealedAgentService(
         root=tmp_path / "sealed",
         registry=registry,
         trusted_signers={"official-test": private.public_key()},
-        official_super_expert_signer_ids=frozenset({"official-test"}),
-        grant_repository=SuperExpertGrantRepository(tmp_path / "grants"),
+        package_type_handlers={"super_expert": package_handler},
     )
     release = service.install(package_bytes)
-    await service.validate_release_runtime("generic-orchestration", release.release_id)
+    await service.validate_release_runtime(
+        "generic-orchestration",
+        release.release_id,
+    )
     service.grant_installation(
         "generic-orchestration",
         release.release_id,
@@ -2033,20 +2376,25 @@ async def test_official_signed_non_luyu_fixture_uses_the_generic_protocol(tmp_pa
         release.release_id,
         tenant_id="tenant-a",
     )
-    signed_workspace = service.release_root(
+    signed_workspace = (
+        service.release_root(
+            "generic-orchestration",
+            release.release_id,
+        )
+        / "agent"
+    )
+    workspace = service.prepare_runtime_workspace(
         "generic-orchestration",
         release.release_id,
-    ) / "agent"
-    workspace = service.prepare_runtime_workspace(
-        "generic-orchestration", release.release_id
     )
     authorization = authorize_workspace_release(
         record=record,
         workspace_root=workspace,
         release_root=service.release_root(
-            "generic-orchestration", release.release_id
+            "generic-orchestration",
+            release.release_id,
         ),
-        grant_repository=service.grant_repository,
+        grant_repository=grant_repository,
         tenant_id="tenant-a",
         config=AgentProfileConfig.model_validate_json(
             (signed_workspace / "agent.json").read_text(),

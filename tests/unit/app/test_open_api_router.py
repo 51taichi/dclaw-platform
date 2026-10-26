@@ -26,6 +26,7 @@ from qwenpaw.app.open_api.runtime import (
 )
 from qwenpaw.app.routers import open_api
 from qwenpaw.app.task_limits import TaskConcurrencyLimiter
+from qwenpaw.plugins.registry import PluginRegistry
 
 
 def test_output_profile_is_larger_only_for_super_expert_release():
@@ -41,12 +42,26 @@ def test_output_profile_is_larger_only_for_super_expert_release():
         open_api._output_profile_for_release(SealedReleaseRecord(**base))
         == "default"
     )
-    assert (
-        open_api._output_profile_for_release(
-            SealedReleaseRecord(**base, package_type="super_expert"),
-        )
-        == "super_expert"
+    registry = PluginRegistry()
+    previous = registry._sealed_package_types.copy()
+    registry._sealed_package_types.clear()
+    handler = SimpleNamespace(
+        supports_runtime_feature=lambda feature: feature == "extended_output",
     )
+    registry.register_sealed_package_type(
+        "test.super-agent-support",
+        "super_expert",
+        handler,
+    )
+    try:
+        assert (
+            open_api._output_profile_for_release(
+                SealedReleaseRecord(**base, package_type="super_expert"),
+            )
+            == "extended"
+        )
+    finally:
+        registry._sealed_package_types = previous
 
 
 class FakeOpenApiRepository:
@@ -250,7 +265,8 @@ class TypedFailureConsoleChannel:
 
 class FakeChannelManager:
     def __init__(
-        self, console_channel: FakeConsoleChannel | None = None
+        self,
+        console_channel: FakeConsoleChannel | None = None,
     ) -> None:
         self.console_channel = console_channel or FakeConsoleChannel()
         self.requested: list[str] = []
@@ -555,7 +571,9 @@ def _stub_router_billing_runtime(monkeypatch):
     monkeypatch.setattr(
         open_api,
         "create_open_api_billing_runtime",
-        lambda **_kwargs: _FakeBillingRuntime(open_api.get_open_api_repository()),
+        lambda **_kwargs: _FakeBillingRuntime(
+            open_api.get_open_api_repository(),
+        ),
     )
 
 
@@ -597,7 +615,10 @@ def test_open_message_request_rejects_unknown_execution_mode():
         )
     assert (
         build_open_session_id(
-            "app-1", "public-agent", "ext user", "bad header\r\n"
+            "app-1",
+            "public-agent",
+            "ext user",
+            "bad header\r\n",
         )
         == "open:app-1:public-agent:ext_user:bad_header"
     )
@@ -703,13 +724,17 @@ async def test_prepare_isolated_agent_attempts_are_unique_without_durable_chats(
     for index, item in enumerate(prepared, start=1):
         assert item.chat_id == f"open-api:invocation-{index}"
         assert item.session_id.startswith(
-            "open:attempt:e5f47b6539291f6539e20dfe:"
+            "open:attempt:e5f47b6539291f6539e20dfe:",
         )
         assert len(item.session_id) == 62
         assert item.payload["content_parts"][0].text == "frozen business input"
-        assert item.payload["meta"]["external_session_id"] == "customer-request-1"
+        assert (
+            item.payload["meta"]["external_session_id"] == "customer-request-1"
+        )
         assert item.payload["meta"]["execution_mode"] == "isolated_attempt"
-        assert item.payload["meta"]["open_invocation_id"] == f"invocation-{index}"
+        assert (
+            item.payload["meta"]["open_invocation_id"] == f"invocation-{index}"
+        )
         assert item.payload["meta"]["metadata"] == {
             "execution_mode": "persistent",
             "open_invocation_id": "caller-forged",
@@ -717,7 +742,9 @@ async def test_prepare_isolated_agent_attempts_are_unique_without_durable_chats(
 
 
 @pytest.mark.asyncio
-async def test_prepare_isolated_agent_chat_is_valid_for_sealed_runtime(tmp_path):
+async def test_prepare_isolated_agent_chat_is_valid_for_sealed_runtime(
+    tmp_path,
+):
     workspace = _workspace(agent_id="luyu_agent")
     request = _request(
         workspace=workspace,
@@ -748,9 +775,12 @@ async def test_prepare_isolated_agent_chat_is_valid_for_sealed_runtime(tmp_path)
 
     assert len(prepared.session_id) <= 128
     assert ":attempt:" in prepared.session_id
-    assert boundary.session_root == (
-        tmp_path / "sealed_sessions" / "luyu_agent" / prepared.session_id
-    ).resolve()
+    assert (
+        boundary.session_root
+        == (
+            tmp_path / "sealed_sessions" / "luyu_agent" / prepared.session_id
+        ).resolve()
+    )
     assert workspace.chat_manager.calls == []
 
 
@@ -771,7 +801,9 @@ async def test_explicit_persistent_agent_preparation_keeps_existing_shape():
         invocation_id="persistent-invocation-1",
     )
 
-    assert prepared.session_id == "open:app-1:public-agent:ext-user:ext-session"
+    assert (
+        prepared.session_id == "open:app-1:public-agent:ext-user:ext-session"
+    )
     assert prepared.chat_id == "chat-open-1"
     assert "execution_mode" not in prepared.payload["meta"]
     assert (
@@ -840,7 +872,9 @@ async def test_post_open_message_returns_404_when_publication_is_missing(
         await open_api.post_open_message(
             "missing-public",
             OpenMessageRequest(
-                external_user_id="u", external_session_id="s", message="hi"
+                external_user_id="u",
+                external_session_id="s",
+                message="hi",
             ),
             _request(),
         )
@@ -853,7 +887,7 @@ async def test_post_open_message_rejects_api_key_publication_mismatch(
     monkeypatch,
 ):
     repo = FakeOpenApiRepository(
-        publication=_publication(publication_id="pub-other")
+        publication=_publication(publication_id="pub-other"),
     )
     monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
 
@@ -861,7 +895,9 @@ async def test_post_open_message_rejects_api_key_publication_mismatch(
         await open_api.post_open_message(
             "public-agent",
             OpenMessageRequest(
-                external_user_id="u", external_session_id="s", message="hi"
+                external_user_id="u",
+                external_session_id="s",
+                message="hi",
             ),
             _request(publication_id="pub-db-1"),
         )
@@ -874,7 +910,10 @@ async def test_post_open_message_rejects_isolated_expert_team_before_invocation(
     monkeypatch,
 ):
     repo = FakeOpenApiRepository(
-        publication=_publication(target_type="expert_team", target_id="team-1")
+        publication=_publication(
+            target_type="expert_team",
+            target_id="team-1",
+        ),
     )
     monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
 
@@ -944,7 +983,9 @@ async def test_post_open_message_agent_publication_creates_invocation_from_reque
 
 
 @pytest.mark.asyncio
-async def test_open_api_concurrency_is_independent_from_bound_wallet(monkeypatch):
+async def test_open_api_concurrency_is_independent_from_bound_wallet(
+    monkeypatch,
+):
     workspace = _workspace(agent_id="agent-published")
     repo = FakeOpenApiRepository(publication=_publication())
     monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
@@ -980,7 +1021,9 @@ async def test_open_api_concurrency_is_independent_from_bound_wallet(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_open_api_concurrency_respects_configured_api_key_limit(monkeypatch):
+async def test_open_api_concurrency_respects_configured_api_key_limit(
+    monkeypatch,
+):
     workspace = _workspace(agent_id="agent-published")
     repo = FakeOpenApiRepository(publication=_publication())
     monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
@@ -1061,7 +1104,9 @@ async def test_open_api_concurrency_respects_configured_publication_limit(
 
 
 @pytest.mark.asyncio
-async def test_open_api_wait_queue_drains_one_hundred_request_burst(monkeypatch):
+async def test_open_api_wait_queue_drains_one_hundred_request_burst(
+    monkeypatch,
+):
     monkeypatch.setenv("DCLAW_OPEN_API_MAX_RUNNING_TASKS_GLOBAL", "20")
     monkeypatch.setenv(
         "DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_PUBLICATION",
@@ -1319,7 +1364,9 @@ async def test_isolated_agent_route_uses_ephemeral_chat_and_preserves_audit_ids(
     assert repo.invocations[0]["request_payload"]["execution_mode"] == (
         "isolated_attempt"
     )
-    stream_meta = workspace.task_tracker.attach_calls[0]["stream_payload"]["meta"]
+    stream_meta = workspace.task_tracker.attach_calls[0]["stream_payload"][
+        "meta"
+    ]
     assert stream_meta["execution_mode"] == "isolated_attempt"
     assert stream_meta["external_session_id"] == "customer-request-1"
 
@@ -1524,7 +1571,8 @@ async def test_post_open_message_marks_existing_run_cancelled_when_request_disco
 ):
     workspace = _workspace(agent_id="agent-published")
     workspace.task_tracker = FakeTaskTracker(
-        is_new_run=False, existing_events=[]
+        is_new_run=False,
+        existing_events=[],
     )
     repo = FakeOpenApiRepository(publication=_publication())
     monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
@@ -1601,7 +1649,9 @@ async def test_post_open_message_marks_existing_run_failed_on_expert_team_status
     def fake_get_team(team_id: str):
         assert team_id == "team-1"
         return SimpleNamespace(
-            id="team-1", enabled=True, leader_agent_id="leader-agent"
+            id="team-1",
+            enabled=True,
+            leader_agent_id="leader-agent",
         )
 
     monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
@@ -1610,7 +1660,8 @@ async def test_post_open_message_marks_existing_run_failed_on_expert_team_status
         open_api,
         "get_latest_expert_team_run_by_chat",
         lambda chat_id: SimpleNamespace(
-            id="existing-run-1", root_chat_id=chat_id
+            id="existing-run-1",
+            root_chat_id=chat_id,
         ),
     )
 
@@ -1636,7 +1687,7 @@ async def test_post_open_message_updates_invocation_failed_when_stream_fails(
 ):
     workspace = _workspace(agent_id="agent-published")
     workspace.channel_manager = FakeChannelManager(
-        FakeConsoleChannel(fail=True)
+        FakeConsoleChannel(fail=True),
     )
     repo = FakeOpenApiRepository(publication=_publication())
     monkeypatch.setattr(open_api, "get_open_api_repository", lambda: repo)
@@ -1769,7 +1820,9 @@ async def test_post_open_message_expert_team_creates_team_run_payload_and_header
     def fake_get_team(team_id: str):
         assert team_id == "team-1"
         return SimpleNamespace(
-            id="team-1", enabled=True, leader_agent_id="leader-agent"
+            id="team-1",
+            enabled=True,
+            leader_agent_id="leader-agent",
         )
 
     def fake_create_run(**kwargs):
@@ -1791,10 +1844,14 @@ async def test_post_open_message_expert_team_creates_team_run_payload_and_header
     monkeypatch.setattr(open_api, "get_expert_team_template", fake_get_team)
     monkeypatch.setattr(open_api, "create_expert_team_run", fake_create_run)
     monkeypatch.setattr(
-        open_api, "attach_run_to_chat", fake_attach_run_to_chat
+        open_api,
+        "attach_run_to_chat",
+        fake_attach_run_to_chat,
     )
     monkeypatch.setattr(
-        open_api, "ExpertTeamOrchestrator", FakeExpertTeamOrchestrator
+        open_api,
+        "ExpertTeamOrchestrator",
+        FakeExpertTeamOrchestrator,
     )
 
     response = await open_api.post_open_message(
@@ -1856,7 +1913,9 @@ async def test_post_open_message_expert_team_status_failed_marks_invocation_fail
     def fake_get_team(team_id: str):
         assert team_id == "team-1"
         return SimpleNamespace(
-            id="team-1", enabled=True, leader_agent_id="leader-agent"
+            id="team-1",
+            enabled=True,
+            leader_agent_id="leader-agent",
         )
 
     def fake_create_run(**kwargs):
@@ -1880,10 +1939,14 @@ async def test_post_open_message_expert_team_status_failed_marks_invocation_fail
     monkeypatch.setattr(open_api, "get_expert_team_template", fake_get_team)
     monkeypatch.setattr(open_api, "create_expert_team_run", fake_create_run)
     monkeypatch.setattr(
-        open_api, "attach_run_to_chat", fake_attach_run_to_chat
+        open_api,
+        "attach_run_to_chat",
+        fake_attach_run_to_chat,
     )
     monkeypatch.setattr(
-        open_api, "ExpertTeamOrchestrator", FakeExpertTeamOrchestrator
+        open_api,
+        "ExpertTeamOrchestrator",
+        FakeExpertTeamOrchestrator,
     )
 
     response = await open_api.post_open_message(
@@ -1924,7 +1987,9 @@ async def test_post_open_message_expert_team_existing_run_does_not_create_new_te
     def fake_get_team(team_id: str):
         assert team_id == "team-1"
         return SimpleNamespace(
-            id="team-1", enabled=True, leader_agent_id="leader-agent"
+            id="team-1",
+            enabled=True,
+            leader_agent_id="leader-agent",
         )
 
     def fake_create_run(**kwargs):
@@ -1937,7 +2002,8 @@ async def test_post_open_message_expert_team_existing_run_does_not_create_new_te
         open_api,
         "get_latest_expert_team_run_by_chat",
         lambda chat_id: SimpleNamespace(
-            id="existing-run-1", root_chat_id=chat_id
+            id="existing-run-1",
+            root_chat_id=chat_id,
         ),
     )
 
@@ -1980,7 +2046,9 @@ async def test_post_open_message_expert_team_existing_run_prefers_active_payload
     def fake_get_team(team_id: str):
         assert team_id == "team-1"
         return SimpleNamespace(
-            id="team-1", enabled=True, leader_agent_id="leader-agent"
+            id="team-1",
+            enabled=True,
+            leader_agent_id="leader-agent",
         )
 
     def fake_create_run(**kwargs):
@@ -1993,7 +2061,8 @@ async def test_post_open_message_expert_team_existing_run_prefers_active_payload
         open_api,
         "get_latest_expert_team_run_by_chat",
         lambda chat_id: SimpleNamespace(
-            id="stale-db-run", root_chat_id=chat_id
+            id="stale-db-run",
+            root_chat_id=chat_id,
         ),
     )
 

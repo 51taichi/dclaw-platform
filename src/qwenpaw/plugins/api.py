@@ -269,6 +269,58 @@ class PluginApi:
                 priority,
             )
 
+    def register_workspace_turn_handler(
+        self,
+        capability_id: str,
+        callback: Callable,
+    ) -> None:
+        """Register the runtime handler for an orchestration capability."""
+        if self._registry:
+            self._registry.register_workspace_turn_handler(
+                self.plugin_id,
+                capability_id,
+                callback,
+            )
+
+    def register_aigc_event_consumer_factory(
+        self,
+        name: str,
+        factory: Callable,
+    ) -> None:
+        """Contribute a consumer to the shared AIGC recovery worker."""
+        if self._registry:
+            self._registry.register_aigc_event_consumer_factory(
+                self.plugin_id,
+                name,
+                factory,
+            )
+
+    def register_aigc_canvas_policy(
+        self,
+        name: str,
+        callback: Callable,
+    ) -> None:
+        """Register an extension policy for managed AIGC canvases."""
+        if self._registry:
+            self._registry.register_aigc_canvas_policy(
+                self.plugin_id,
+                name,
+                callback,
+            )
+
+    def register_sealed_package_type(
+        self,
+        package_type: str,
+        handler: Any,
+    ) -> None:
+        """Register validation, grants and activation for a package type."""
+        if self._registry:
+            self._registry.register_sealed_package_type(
+                self.plugin_id,
+                package_type,
+                handler,
+            )
+
     def register_control_command(
         self,
         handler: Any,

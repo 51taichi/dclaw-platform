@@ -1,4 +1,4 @@
-"""Compile semantic super-expert workflows into DClaw-owned canvas specs."""
+"""Compile semantic workflows into DClaw-owned canvas specs."""
 
 from __future__ import annotations
 
@@ -131,7 +131,9 @@ _RESOLUTION_ALIASES = {
 }
 
 
-def canonicalize_workflow_blueprint(blueprint: WorkflowBlueprint) -> WorkflowBlueprint:
+def canonicalize_workflow_blueprint(
+    blueprint: WorkflowBlueprint,
+) -> WorkflowBlueprint:
     """Normalize documented transport aliases without changing workflow intent."""
     nodes: list[WorkflowNode] = []
     for node in blueprint.nodes:
@@ -159,7 +161,10 @@ def _validate_scalar_parameters(node: WorkflowNode) -> None:
         value = parameters["shot_count"]
         if type(value) is not int or not 1 <= value <= 100:
             _raise("PARAMETER_INVALID")
-    if "generate_audio" in parameters and type(parameters["generate_audio"]) is not bool:
+    if (
+        "generate_audio" in parameters
+        and type(parameters["generate_audio"]) is not bool
+    ):
         _raise("PARAMETER_INVALID")
     if "aspect_ratio" in parameters and parameters["aspect_ratio"] not in {
         "1:1",
@@ -209,7 +214,10 @@ def _validate_model(
     registration: NodeRegistration,
     available_models: Collection[AvailableWorkflowModel],
 ) -> None:
-    if not registration.requires_model or node.customer_action != "CLICK_GENERATE":
+    if (
+        not registration.requires_model
+        or node.customer_action != "CLICK_GENERATE"
+    ):
         return
     if not node.provider_id or not node.model_id or not node.capability:
         _raise("MODEL_UNAVAILABLE")
@@ -227,13 +235,19 @@ def _topological_order(
     registrations: Mapping[str, NodeRegistration],
 ) -> tuple[list[str], dict[str, int]]:
     by_id = {node.node_id: node for node in blueprint.nodes}
-    original_order = {node.node_id: index for index, node in enumerate(blueprint.nodes)}
+    original_order = {
+        node.node_id: index for index, node in enumerate(blueprint.nodes)
+    }
     outgoing: dict[str, list[str]] = defaultdict(list)
     incoming_count = {node_id: 0 for node_id in by_id}
     seen_edges: set[tuple[str, str, str]] = set()
 
     for edge in blueprint.edges:
-        if edge.source not in by_id or edge.target not in by_id or edge.source == edge.target:
+        if (
+            edge.source not in by_id
+            or edge.target not in by_id
+            or edge.source == edge.target
+        ):
             _raise("EDGE_INCOMPATIBLE")
         identity = (edge.source, edge.target, edge.target_slot)
         if identity in seen_edges:
@@ -241,7 +255,9 @@ def _topological_order(
         seen_edges.add(identity)
         source_registration = registrations[by_id[edge.source].kind]
         target_registration = registrations[by_id[edge.target].kind]
-        accepted_outputs = target_registration.input_slots.get(edge.target_slot)
+        accepted_outputs = target_registration.input_slots.get(
+            edge.target_slot,
+        )
         if (
             accepted_outputs is None
             or source_registration.output_type not in accepted_outputs
@@ -259,7 +275,10 @@ def _topological_order(
     while ready:
         current = ready.pop(0)
         ordered.append(current)
-        for target in sorted(outgoing[current], key=original_order.__getitem__):
+        for target in sorted(
+            outgoing[current],
+            key=original_order.__getitem__,
+        ):
             depth[target] = max(depth.get(target, 0), depth[current] + 1)
             incoming_count[target] -= 1
             if incoming_count[target] == 0:
@@ -339,7 +358,11 @@ def _node_data(
             "sliceHeight": parameters.get("slice_height", 2400),
         }
     if node.kind == "reference_note":
-        return {**common, "text": str(inputs.get("text") or ""), "participatesInGeneration": False}
+        return {
+            **common,
+            "text": str(inputs.get("text") or ""),
+            "participatesInGeneration": False,
+        }
     if node.kind == "reference_asset":
         asset_id = str(inputs.get("asset_id") or "")
         asset = asset_resolver(asset_id) if asset_id else None
@@ -386,7 +409,10 @@ def plan_manual_workflow(
     workflow_id = id_factory("workflow")
     bindings = {
         logical_id: id_factory(
-            _PHYSICAL_PREFIX.get(by_id[logical_id].kind, by_id[logical_id].kind)
+            _PHYSICAL_PREFIX.get(
+                by_id[logical_id].kind,
+                by_id[logical_id].kind,
+            ),
         )
         for logical_id in ordered_ids
     }
@@ -406,8 +432,11 @@ def plan_manual_workflow(
                 completion_rule="PRESENT",
                 manual_action="ADD_NODE",
                 node_kind=node.kind,
-                manual_node_data=_node_data(node, asset_resolver=asset_resolver),
-            )
+                manual_node_data=_node_data(
+                    node,
+                    asset_resolver=asset_resolver,
+                ),
+            ),
         )
     for index, edge in enumerate(blueprint.edges, start=1):
         steps.append(
@@ -425,12 +454,14 @@ def plan_manual_workflow(
                 source_node_id=bindings[edge.source],
                 target_node_id=bindings[edge.target],
                 target_slot=edge.target_slot,
-            )
+            ),
         )
     for logical_id in ordered_ids:
         node = by_id[logical_id]
         if node.customer_action == "CLICK_GENERATE":
-            steps.append(_guide_step(node, registry[node.kind], bindings[logical_id]))
+            steps.append(
+                _guide_step(node, registry[node.kind], bindings[logical_id]),
+            )
     output_id = bindings[blueprint.output_node_id]
     steps.append(
         WorkflowGuideStepDefinition(
@@ -446,7 +477,7 @@ def plan_manual_workflow(
             expected_output_type=(
                 registry[by_id[blueprint.output_node_id].kind].output_type
             ),
-        )
+        ),
     )
     return CompiledWorkflow(
         workflow_id=workflow_id,
@@ -549,7 +580,10 @@ def compile_workflow(
                 logical_node_id=logical_id,
                 physical_node_id=physical_id,
                 kind=node.kind,
-                position={"x": 120.0 + layer * 520.0, "y": 120.0 + row * 360.0},
+                position={
+                    "x": 120.0 + layer * 520.0,
+                    "y": 120.0 + row * 360.0,
+                },
                 data=_node_data(node, asset_resolver=asset_resolver),
             ),
         )

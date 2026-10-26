@@ -1,4 +1,4 @@
-"""Strict semantic contracts for super-expert AIGC workflows.
+"""Strict semantic contracts for versioned AIGC workflows.
 
 The models in this module deliberately describe business-level node intent.
 They never expose persisted canvas ``node.data`` or physical identifiers.
@@ -116,8 +116,10 @@ def _registration(
         output_type=output_type,
         control_id=control_id,
         customer_actions=customer_actions,
-        input_schema=input_schema or _closed_schema_for(input_keys, inputs=True),
-        parameter_schema=parameter_schema or _closed_schema_for(parameter_keys),
+        input_schema=input_schema
+        or _closed_schema_for(input_keys, inputs=True),
+        parameter_schema=parameter_schema
+        or _closed_schema_for(parameter_keys),
         requires_model=requires_model,
         provisioning_reason=provisioning_reason,
     )
@@ -135,13 +137,27 @@ def _closed_schema_for(
                 "type": "array",
                 "items": {"type": "string", "minLength": 1},
             }
-        elif key in {"count", "shot_count", "duration_seconds", "width", "slice_height"}:
+        elif key in {
+            "count",
+            "shot_count",
+            "duration_seconds",
+            "width",
+            "slice_height",
+        }:
             properties[key] = {"type": "integer"}
         elif key == "generate_audio":
             properties[key] = {"type": "boolean"}
         else:
-            properties[key] = {"type": "string", "minLength": 1} if inputs else {"type": "string"}
-    return {"type": "object", "properties": properties, "additionalProperties": False}
+            properties[key] = (
+                {"type": "string", "minLength": 1}
+                if inputs
+                else {"type": "string"}
+            )
+    return {
+        "type": "object",
+        "properties": properties,
+        "additionalProperties": False,
+    }
 
 
 _RESOLUTION_SCHEMA = {
@@ -194,7 +210,12 @@ _NODE_REGISTRY: dict[str, NodeRegistration] = {
             "properties": {
                 "aspect_ratio": {**_ASPECT_RATIO_SCHEMA, "default": "1:1"},
                 "resolution": {**_RESOLUTION_SCHEMA, "default": "1K"},
-                "count": {"type": "integer", "minimum": 1, "maximum": 8, "default": 1},
+                "count": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 8,
+                    "default": 1,
+                },
                 "image_mode": {"type": "string", "default": "blank"},
             },
             "additionalProperties": False,
@@ -238,7 +259,12 @@ _NODE_REGISTRY: dict[str, NodeRegistration] = {
             "properties": {
                 "aspect_ratio": {**_ASPECT_RATIO_SCHEMA, "default": "16:9"},
                 "resolution": {**_RESOLUTION_SCHEMA, "default": "720P"},
-                "duration_seconds": {"type": "integer", "minimum": 1, "maximum": 60, "default": 5},
+                "duration_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 60,
+                    "default": 5,
+                },
                 "generate_audio": {"type": "boolean", "default": False},
                 "video_mode": {"type": "string", "default": "blank"},
             },
@@ -340,20 +366,37 @@ def validate_workflow_blueprint(
         registration = _NODE_REGISTRY.get(node.kind)
         if registration is None:
             raise WorkflowContractError("workflow node kind is unavailable")
-        if node.capability is not None and node.capability not in registration.capabilities:
-            raise WorkflowContractError("workflow node capability is unavailable")
-        if registration.requires_model and node.customer_action == "CLICK_GENERATE" and (
-            not node.provider_id or not node.model_id or not node.capability
+        if (
+            node.capability is not None
+            and node.capability not in registration.capabilities
         ):
-            raise WorkflowContractError("workflow node model identity is required")
+            raise WorkflowContractError(
+                "workflow node capability is unavailable",
+            )
+        if (
+            registration.requires_model
+            and node.customer_action == "CLICK_GENERATE"
+            and (
+                not node.provider_id
+                or not node.model_id
+                or not node.capability
+            )
+        ):
+            raise WorkflowContractError(
+                "workflow node model identity is required",
+            )
         if node.customer_action not in registration.customer_actions:
-            raise WorkflowContractError("workflow node customer action is unavailable")
+            raise WorkflowContractError(
+                "workflow node customer action is unavailable",
+            )
         unknown_inputs = set(node.inputs) - registration.input_keys
         if unknown_inputs:
             raise WorkflowContractError("workflow node input is unavailable")
         unknown_parameters = set(node.parameters) - registration.parameter_keys
         if unknown_parameters:
-            raise WorkflowContractError("workflow node parameter is unavailable")
+            raise WorkflowContractError(
+                "workflow node parameter is unavailable",
+            )
     if blueprint.output_node_id not in seen:
         raise WorkflowContractError("workflow output node is unavailable")
     if len(set(blueprint.review_node_ids)) != len(blueprint.review_node_ids):

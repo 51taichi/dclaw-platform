@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from httpx import ASGITransport, AsyncClient
 
 from qwenpaw.app.guards import require_user
@@ -14,6 +14,10 @@ from qwenpaw.app.routers.super_expert_platform import (
     PlatformCommandRequest,
     SuperExpertPlatformError,
     SuperExpertPlatformService,
+)
+from qwenpaw.app.routers.super_expert_platform import (
+    frontend_read_router,
+    router as super_expert_user_router,
 )
 from qwenpaw.app.sealed_agents.models import SealedReleaseRecord
 from qwenpaw.app.super_experts.aigc_tasks import AigcTaskRepository
@@ -40,6 +44,22 @@ CAPABILITIES = (
     ("card.create", "1"),
     ("card.update", "1"),
 )
+
+
+def _api_app() -> FastAPI:
+    app = FastAPI()
+    app.include_router(api_router, prefix="/api")
+    app.include_router(
+        frontend_read_router,
+        prefix="/api",
+        dependencies=[Depends(require_user)],
+    )
+    app.include_router(
+        super_expert_user_router,
+        prefix="/api/user",
+        dependencies=[Depends(require_user)],
+    )
+    return app
 
 
 def _review_provider(
@@ -205,7 +225,9 @@ def test_review_model_selection_rejects_unknown_or_partially_compatible_models()
     assert selected is None
 
 
-def test_review_dispatch_targets_the_active_installation_after_an_upgrade(monkeypatch):
+def test_review_dispatch_targets_the_active_installation_after_an_upgrade(
+    monkeypatch,
+):
     active_release = SimpleNamespace(release_id="release-2")
     monkeypatch.setattr(
         "qwenpaw.app.sealed_agents.registry.get_sealed_agent_registry",
@@ -232,53 +254,118 @@ def test_review_dispatch_targets_the_active_installation_after_an_upgrade(monkey
         tenant_id="tenant-a",
     )
 
-    assert router_module._review_runtime_installation_id(
-        SimpleNamespace(grant_repository=repository),
-        historical_grant,
-    ) == "installation-2"
+    assert (
+        router_module._review_runtime_installation_id(
+            SimpleNamespace(grant_repository=repository),
+            historical_grant,
+        )
+        == "installation-2"
+    )
 
 
 @pytest.mark.asyncio
-async def test_conversation_route_resolves_owned_chat_without_selected_agent(monkeypatch):
+async def test_conversation_route_resolves_owned_chat_without_selected_agent(
+    monkeypatch,
+):
     from qwenpaw.app import chat_access
+
     rows = {
-        'owned': [{'id': 'owned', 'session_id': 'internal', 'user_id': 'user-a', 'agent_id': 'luyu'}],
-        'internal': [{'id': 'owned', 'session_id': 'internal', 'user_id': 'user-a', 'agent_id': 'luyu'}],
-        'foreign': [{'id': 'foreign', 'user_id': 'user-b', 'agent_id': 'private-agent'}],
+        "owned": [
+            {
+                "id": "owned",
+                "session_id": "internal",
+                "user_id": "user-a",
+                "agent_id": "luyu",
+            },
+        ],
+        "internal": [
+            {
+                "id": "owned",
+                "session_id": "internal",
+                "user_id": "user-a",
+                "agent_id": "luyu",
+            },
+        ],
+        "foreign": [
+            {
+                "id": "foreign",
+                "user_id": "user-b",
+                "agent_id": "private-agent",
+            },
+        ],
     }
-    monkeypatch.setattr(chat_access, 'get_user_repository', lambda: SimpleNamespace(
-        find_chat_access_rows=lambda cid: rows.get(cid, [])))
-    app = FastAPI()
-    app.include_router(api_router, prefix='/api')
+    monkeypatch.setattr(
+        chat_access,
+        "get_user_repository",
+        lambda: SimpleNamespace(
+            find_chat_access_rows=lambda cid: rows.get(cid, []),
+        ),
+    )
+    app = _api_app()
+
     def authenticated(request: Request):
-        request.state.user_id = 'user-a'
+        request.state.user_id = "user-a"
+
     app.dependency_overrides[require_user] = authenticated
-    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
-        response = await client.get('/api/super-expert-platform/conversation-route', params={'conversation_id': 'owned'}, headers={'X-Agent-Id': 'default'})
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get(
+            "/api/super-expert-platform/conversation-route",
+            params={"conversation_id": "owned"},
+            headers={"X-Agent-Id": "default"},
+        )
         assert response.status_code == 200, response.text
-        assert response.json() == {'conversation_id': 'owned', 'agent_id': 'luyu', 'chat_id': 'owned'}
-        response = await client.get('/api/super-expert-platform/conversation-route', params={'conversation_id': 'internal'})
+        assert response.json() == {
+            "conversation_id": "owned",
+            "agent_id": "luyu",
+            "chat_id": "owned",
+        }
+        response = await client.get(
+            "/api/super-expert-platform/conversation-route",
+            params={"conversation_id": "internal"},
+        )
         assert response.status_code == 200
-        assert response.json() == {'conversation_id': 'internal', 'agent_id': 'luyu', 'chat_id': 'owned'}
-        for cid in ['foreign', 'missing']:
-            response = await client.get('/api/super-expert-platform/conversation-route', params={'conversation_id': cid})
+        assert response.json() == {
+            "conversation_id": "internal",
+            "agent_id": "luyu",
+            "chat_id": "owned",
+        }
+        for cid in ["foreign", "missing"]:
+            response = await client.get(
+                "/api/super-expert-platform/conversation-route",
+                params={"conversation_id": cid},
+            )
             assert response.status_code == 404
-            assert 'private-agent' not in response.text
+            assert "private-agent" not in response.text
 
 
 @pytest.mark.asyncio
 async def test_conversation_route_requires_authentication(monkeypatch):
     from qwenpaw.app import auth
-    monkeypatch.setattr(auth, 'is_auth_enabled', lambda: True)
-    app = FastAPI()
-    app.include_router(api_router, prefix='/api')
-    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
-        response = await client.get('/api/super-expert-platform/conversation-route', params={'conversation_id': 'owned'})
+
+    monkeypatch.setattr(auth, "is_auth_enabled", lambda: True)
+    app = _api_app()
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get(
+            "/api/super-expert-platform/conversation-route",
+            params={"conversation_id": "owned"},
+        )
         assert response.status_code == 401
 
 
-def _workflow_blueprint(*, kind: str = "video_generate", fallback: str = "FAIL_CLOSED"):
-    capability = "text_to_video" if kind == "video_generate" else "image_to_video"
+def _workflow_blueprint(
+    *,
+    kind: str = "video_generate",
+    fallback: str = "FAIL_CLOSED",
+):
+    capability = (
+        "text_to_video" if kind == "video_generate" else "image_to_video"
+    )
     return {
         "schema_version": 1,
         "title": "三节点招生短视频",
@@ -310,7 +397,7 @@ def _workflow_blueprint(*, kind: str = "video_generate", fallback: str = "FAIL_C
             },
         ],
         "edges": [
-            {"source": "copy", "target": "clip", "target_slot": "prompt"}
+            {"source": "copy", "target": "clip", "target_slot": "prompt"},
         ],
         "output_node_id": "clip",
         "fallback_policy": fallback,
@@ -366,16 +453,15 @@ def _workflow_catalog():
                     source="model_registry",
                     parameter_schema={"type": "object"},
                 ),
-            ]
-        )
+            ],
+        ),
     )
 
 
 @pytest.mark.asyncio
 async def test_super_expert_read_api_supports_frontend_compatibility_prefix():
     """The shipped frontend path must resolve to the authenticated platform API."""
-    app = FastAPI()
-    app.include_router(api_router, prefix="/api")
+    app = _api_app()
     app.dependency_overrides[require_user] = lambda: "user-1"
 
     async with AsyncClient(
@@ -393,8 +479,7 @@ async def test_super_expert_read_api_supports_frontend_compatibility_prefix():
 @pytest.mark.asyncio
 async def test_super_expert_frontend_compatibility_prefix_requires_user():
     """The compatibility mount must never make platform operations public."""
-    app = FastAPI()
-    app.include_router(api_router, prefix="/api")
+    app = _api_app()
 
     def deny_user():
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -413,10 +498,11 @@ async def test_super_expert_frontend_compatibility_prefix_requires_user():
 
 @pytest.mark.asyncio
 async def test_super_expert_frontend_command_requires_authentication():
-    app = FastAPI()
-    app.include_router(api_router, prefix="/api")
+    app = _api_app()
+
     def deny_user():
         raise HTTPException(status_code=401, detail="Not authenticated")
+
     app.dependency_overrides[require_user] = deny_user
 
     async with AsyncClient(
@@ -432,46 +518,91 @@ async def test_super_expert_frontend_command_requires_authentication():
 
 
 @pytest.mark.asyncio
-async def test_shipped_card_resume_uses_verified_workflow_binding(tmp_path, monkeypatch):
+async def test_shipped_card_resume_uses_verified_workflow_binding(
+    tmp_path,
+    monkeypatch,
+):
     from qwenpaw.app.routers import aigc_studio
 
-    monkeypatch.setattr(aigc_studio, 'STUDIO_ROOT', tmp_path / 'studio')
+    monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
     aigc_studio._resource_store.cache_clear()
     service, grant, bus = _service(tmp_path)
+
     async def catalog():
         return _workflow_catalog()
-    monkeypatch.setattr(router_module, '_load_workflow_capability_catalog', catalog)
-    created = await service.execute(
-        tenant_id='tenant-a', user_id='user-a', installation_id=grant.installation_id,
-        capability='aigc.workflow.create/1', contract_version='1',
-        arguments=_workflow_arguments(grant.installation_id), idempotency_key='workflow-create',
+
+    monkeypatch.setattr(
+        router_module,
+        "_load_workflow_capability_catalog",
+        catalog,
     )
-    binding = created['task']['binding']
-    legacy_keys = ('installation_id', 'conversation_id', 'agent_task_id',
-                   'content_revision', 'material_task_id', 'canvas_id', 'node_id')
-    payload = {'installation_id': grant.installation_id, 'contract_version': '1',
-               'idempotency_key': 'card-resume', 'arguments': {'event_id': 'card-resume',
-               'binding': {key: binding[key] for key in legacy_keys}}}
-    monkeypatch.setattr(router_module, 'get_super_expert_platform_service', lambda: service)
+    created = await service.execute(
+        tenant_id="tenant-a",
+        user_id="user-a",
+        installation_id=grant.installation_id,
+        capability="aigc.workflow.create/1",
+        contract_version="1",
+        arguments=_workflow_arguments(grant.installation_id),
+        idempotency_key="workflow-create",
+    )
+    binding = created["task"]["binding"]
+    legacy_keys = (
+        "installation_id",
+        "conversation_id",
+        "agent_task_id",
+        "content_revision",
+        "material_task_id",
+        "canvas_id",
+        "node_id",
+    )
+    payload = {
+        "installation_id": grant.installation_id,
+        "contract_version": "1",
+        "idempotency_key": "card-resume",
+        "arguments": {
+            "event_id": "card-resume",
+            "binding": {key: binding[key] for key in legacy_keys},
+        },
+    }
+    monkeypatch.setattr(
+        router_module,
+        "get_super_expert_platform_service",
+        lambda: service,
+    )
     accesses = []
-    monkeypatch.setattr(router_module, 'ensure_chat_access',
-                        lambda request, cid, **kwargs: accesses.append(cid))
-    app = FastAPI()
-    app.include_router(api_router, prefix='/api')
+    monkeypatch.setattr(
+        router_module,
+        "ensure_chat_access",
+        lambda request, cid, **kwargs: accesses.append(cid),
+    )
+    app = _api_app()
+
     def authenticated(request: Request):
-        request.state.user_id = 'user-a'
-        request.state.tenant_id = 'tenant-a'
+        request.state.user_id = "user-a"
+        request.state.tenant_id = "tenant-a"
+
     app.dependency_overrides[require_user] = authenticated
-    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
-        response = await client.post('/api/super-expert-platform/commands/aigc.task.resume', json=payload)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/api/super-expert-platform/commands/aigc.task.resume",
+            json=payload,
+        )
         assert response.status_code == 200, response.text
-        assert response.json()['task']['status'] == 'IN_PROGRESS'
-        assert response.json()['task']['binding'] == binding
-        payload['arguments']['binding']['node_id'] = 'wrong-node'
-        response = await client.post('/api/super-expert-platform/commands/aigc.task.resume', json=payload)
+        assert response.json()["task"]["status"] == "IN_PROGRESS"
+        assert response.json()["task"]["binding"] == binding
+        payload["arguments"]["binding"]["node_id"] = "wrong-node"
+        response = await client.post(
+            "/api/super-expert-platform/commands/aigc.task.resume",
+            json=payload,
+        )
         assert response.status_code == 400
-    assert accesses and all(cid == binding['conversation_id'] for cid in accesses)
-    assert service.get_task(binding['material_task_id']).asset_id is None
+    assert accesses and all(
+        cid == binding["conversation_id"] for cid in accesses
+    )
+    assert service.get_task(binding["material_task_id"]).asset_id is None
 
 
 def _release():
@@ -558,51 +689,106 @@ def _service(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_chat_cards_restore_from_tasks_without_runtime_events(tmp_path, monkeypatch):
+async def test_chat_cards_restore_from_tasks_without_runtime_events(
+    tmp_path,
+    monkeypatch,
+):
     service, grant, bus = _service(tmp_path)
     bindings = []
-    for cid, mid in [('public-chat', 'material-1'), ('internal-chat', 'material-2'), ('other-chat', 'private-material')]:
-        binding = {**_binding(), 'installation_id': grant.installation_id,
-                   'conversation_id': cid, 'material_task_id': mid}
+    for cid, mid in [
+        ("public-chat", "material-1"),
+        ("internal-chat", "material-2"),
+        ("other-chat", "private-material"),
+    ]:
+        binding = {
+            **_binding(),
+            "installation_id": grant.installation_id,
+            "conversation_id": cid,
+            "material_task_id": mid,
+        }
         bindings.append(binding)
         await service.execute(
-            tenant_id='tenant-a', installation_id=grant.installation_id,
-            capability='aigc.task.create', contract_version='1',
-            arguments={'binding': binding, 'event_id': 'create-' + mid},
-            idempotency_key='create-' + mid,
+            tenant_id="tenant-a",
+            installation_id=grant.installation_id,
+            capability="aigc.task.create",
+            contract_version="1",
+            arguments={"binding": binding, "event_id": "create-" + mid},
+            idempotency_key="create-" + mid,
         )
     await service.execute(
-        tenant_id='tenant-a', installation_id=grant.installation_id,
-        capability='aigc.task.resume', contract_version='1',
-        arguments={'binding': bindings[0], 'event_id': 'resume-one'},
-        idempotency_key='resume-one',
+        tenant_id="tenant-a",
+        installation_id=grant.installation_id,
+        capability="aigc.task.resume",
+        contract_version="1",
+        arguments={"binding": bindings[0], "event_id": "resume-one"},
+        idempotency_key="resume-one",
     )
     bus.events.clear()  # A fresh page cannot rely on the transient SSE buffer.
-    monkeypatch.setattr(router_module, 'get_super_expert_platform_service', lambda: service)
+    monkeypatch.setattr(
+        router_module,
+        "get_super_expert_platform_service",
+        lambda: service,
+    )
+
     def owned_chat(request, cid, **kwargs):
-        if cid != 'public-chat':
-            raise HTTPException(status_code=404, detail='Chat not found')
-        return {'id': 'public-chat', 'session_id': 'internal-chat', 'user_id': 'user-a'}
-    monkeypatch.setattr(router_module, 'ensure_chat_access', owned_chat)
-    app = FastAPI(); app.include_router(api_router, prefix='/api')
+        if cid != "public-chat":
+            raise HTTPException(status_code=404, detail="Chat not found")
+        return {
+            "id": "public-chat",
+            "session_id": "internal-chat",
+            "user_id": "user-a",
+        }
+
+    monkeypatch.setattr(router_module, "ensure_chat_access", owned_chat)
+    app = _api_app()
+
     def authenticated(request: Request):
-        request.state.tenant_id = 'tenant-a'
-        request.state.user_id = 'user-a'
+        request.state.tenant_id = "tenant-a"
+        request.state.user_id = "user-a"
+
     app.dependency_overrides[require_user] = authenticated
-    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
         for _ in range(2):
-            response = await client.get('/api/super-expert-platform/cards', params={'conversation_id': 'public-chat'})
+            response = await client.get(
+                "/api/super-expert-platform/cards",
+                params={"conversation_id": "public-chat"},
+            )
             assert response.status_code == 200, response.text
-            cards = response.json()['cards']
-            assert {card['material_task_id'] for card in cards} == {'material-1', 'material-2'}
-            assert next(card for card in cards if card['material_task_id']=='material-1')['status']=='IN_PROGRESS'
-            assert all(card['href'].startswith('/aigc-studio?task=') for card in cards)
-        deleted = await client.delete('/api/super-expert-platform/tasks/material-1')
+            cards = response.json()["cards"]
+            assert {card["material_task_id"] for card in cards} == {
+                "material-1",
+                "material-2",
+            }
+            assert (
+                next(
+                    card
+                    for card in cards
+                    if card["material_task_id"] == "material-1"
+                )["status"]
+                == "IN_PROGRESS"
+            )
+            assert all(
+                card["href"].startswith("/aigc-studio?task=") for card in cards
+            )
+        deleted = await client.delete(
+            "/api/super-expert-platform/tasks/material-1",
+        )
         assert deleted.status_code == 204, deleted.text
-        response = await client.get('/api/super-expert-platform/cards', params={'conversation_id': 'public-chat'})
-        assert {card['material_task_id'] for card in response.json()['cards']} == {'material-2'}
-        assert service.get_task('material-1') is not None
-        response = await client.get('/api/super-expert-platform/cards', params={'conversation_id': 'other-chat'})
+        response = await client.get(
+            "/api/super-expert-platform/cards",
+            params={"conversation_id": "public-chat"},
+        )
+        assert {
+            card["material_task_id"] for card in response.json()["cards"]
+        } == {"material-2"}
+        assert service.get_task("material-1") is not None
+        response = await client.get(
+            "/api/super-expert-platform/cards",
+            params={"conversation_id": "other-chat"},
+        )
         assert response.status_code == 404
     assert not bus.events
 
@@ -610,92 +796,150 @@ async def test_chat_cards_restore_from_tasks_without_runtime_events(tmp_path, mo
 @pytest.mark.asyncio
 async def test_material_card_requires_an_existing_task(tmp_path):
     service, grant, bus = _service(tmp_path)
-    with pytest.raises(SuperExpertPlatformError, match='task is unavailable'):
+    with pytest.raises(SuperExpertPlatformError, match="task is unavailable"):
         await service.execute(
-            tenant_id='tenant-a', installation_id=grant.installation_id,
-            capability='card.create', contract_version='1',
-            arguments={'binding': {**_binding(), 'installation_id': grant.installation_id},
-                       'event_id': 'orphan-card', 'card': {
-                           'card_type': 'aigc_material_task', 'task_status': 'ACCEPTED'}},
-            idempotency_key='orphan-card',
+            tenant_id="tenant-a",
+            installation_id=grant.installation_id,
+            capability="card.create",
+            contract_version="1",
+            arguments={
+                "binding": {
+                    **_binding(),
+                    "installation_id": grant.installation_id,
+                },
+                "event_id": "orphan-card",
+                "card": {
+                    "card_type": "aigc_material_task",
+                    "task_status": "ACCEPTED",
+                },
+            },
+            idempotency_key="orphan-card",
         )
     assert not bus.events
 
 
 @pytest.mark.asyncio
-async def test_card_delivery_resolves_public_chat_id_without_changing_binding(tmp_path):
+async def test_card_delivery_resolves_public_chat_id_without_changing_binding(
+    tmp_path,
+):
     service, grant, bus = _service(tmp_path)
-    service.event_session_resolver = lambda cid: 'internal-session-for-' + cid
-    binding = {**_binding(), 'installation_id': grant.installation_id}
+    service.event_session_resolver = lambda cid: "internal-session-for-" + cid
+    binding = {**_binding(), "installation_id": grant.installation_id}
     await service.execute(
-        tenant_id='tenant-a', installation_id=grant.installation_id,
-        capability='aigc.task.create', contract_version='1',
-        arguments={'binding': binding, 'event_id': 'create-for-mapping'},
-        idempotency_key='create-for-mapping',
+        tenant_id="tenant-a",
+        installation_id=grant.installation_id,
+        capability="aigc.task.create",
+        contract_version="1",
+        arguments={"binding": binding, "event_id": "create-for-mapping"},
+        idempotency_key="create-for-mapping",
     )
     await service.execute(
-        tenant_id='tenant-a', installation_id=grant.installation_id,
-        capability='card.create', contract_version='1',
-        arguments={'binding': binding, 'event_id': 'card-for-mapping',
-                   'card': {'card_type': 'aigc_material_task'}},
-        idempotency_key='card-for-mapping',
+        tenant_id="tenant-a",
+        installation_id=grant.installation_id,
+        capability="card.create",
+        contract_version="1",
+        arguments={
+            "binding": binding,
+            "event_id": "card-for-mapping",
+            "card": {"card_type": "aigc_material_task"},
+        },
+        idempotency_key="card-for-mapping",
     )
-    assert bus.events[-1].session_id == 'internal-session-for-' + binding['conversation_id']
-    assert bus.events[-1].payload['envelope']['conversation_id'] == binding['conversation_id']
-    assert service.get_task(binding['material_task_id']).binding.conversation_id == binding['conversation_id']
+    assert (
+        bus.events[-1].session_id
+        == "internal-session-for-" + binding["conversation_id"]
+    )
+    assert (
+        bus.events[-1].payload["envelope"]["conversation_id"]
+        == binding["conversation_id"]
+    )
+    assert (
+        service.get_task(binding["material_task_id"]).binding.conversation_id
+        == binding["conversation_id"]
+    )
 
 
 @pytest.mark.asyncio
-async def test_material_card_alone_carries_authoritative_status_without_starting_job(tmp_path):
+async def test_material_card_alone_carries_authoritative_status_without_starting_job(
+    tmp_path,
+):
     service, grant, bus = _service(tmp_path)
-    binding = {**_binding(), 'installation_id': grant.installation_id}
+    binding = {**_binding(), "installation_id": grant.installation_id}
     await service.execute(
-        tenant_id='tenant-a', installation_id=grant.installation_id,
-        capability='aigc.task.create', contract_version='1',
-        arguments={'binding': binding, 'event_id': 'task-created'},
-        idempotency_key='task-created',
+        tenant_id="tenant-a",
+        installation_id=grant.installation_id,
+        capability="aigc.task.create",
+        contract_version="1",
+        arguments={"binding": binding, "event_id": "task-created"},
+        idempotency_key="task-created",
     )
-    before = service.get_task('material-1')
+    before = service.get_task("material-1")
     for _ in range(2):
         await service.execute(
-            tenant_id='tenant-a', installation_id=grant.installation_id,
-            capability='card.create', contract_version='1',
-            arguments={'binding': binding, 'event_id': 'card-created',
-                       'card': {'title': '生成主题视频', 'task_status': 'ACCEPTED'}},
-            idempotency_key='card-created',
+            tenant_id="tenant-a",
+            installation_id=grant.installation_id,
+            capability="card.create",
+            contract_version="1",
+            arguments={
+                "binding": binding,
+                "event_id": "card-created",
+                "card": {"title": "生成主题视频", "task_status": "ACCEPTED"},
+            },
+            idempotency_key="card-created",
         )
-    cards = [event for event in bus.events if event.payload['envelope']['event_type'] == 'card.created']
+    cards = [
+        event
+        for event in bus.events
+        if event.payload["envelope"]["event_type"] == "card.created"
+    ]
     assert len(cards) == 1
-    assert cards[0].status == 'WAITING_TO_START'
-    assert cards[0].payload['envelope']['payload']['task_status'] == 'WAITING_TO_START'
-    assert service.get_task('material-1') == before
+    assert cards[0].status == "WAITING_TO_START"
+    assert (
+        cards[0].payload["envelope"]["payload"]["task_status"]
+        == "WAITING_TO_START"
+    )
+    assert service.get_task("material-1") == before
     await service.execute(
-        tenant_id='tenant-a', installation_id=grant.installation_id,
-        capability='aigc.task.resume', contract_version='1',
-        arguments={'binding': binding, 'event_id': 'task-started'},
-        idempotency_key='task-started',
+        tenant_id="tenant-a",
+        installation_id=grant.installation_id,
+        capability="aigc.task.resume",
+        contract_version="1",
+        arguments={"binding": binding, "event_id": "task-started"},
+        idempotency_key="task-started",
     )
     replay = await service.execute(
-        tenant_id='tenant-a', installation_id=grant.installation_id,
-        capability='card.create', contract_version='1',
-        arguments={'binding': binding, 'event_id': 'card-created',
-                   'card': {'title': '生成主题视频', 'task_status': 'ACCEPTED'}},
-        idempotency_key='card-created',
+        tenant_id="tenant-a",
+        installation_id=grant.installation_id,
+        capability="card.create",
+        contract_version="1",
+        arguments={
+            "binding": binding,
+            "event_id": "card-created",
+            "card": {"title": "生成主题视频", "task_status": "ACCEPTED"},
+        },
+        idempotency_key="card-created",
     )
-    assert replay['event'] == cards[0].payload['envelope']
-    assert replay['card']['task_status'] == 'WAITING_TO_START'
-    with pytest.raises(SuperExpertPlatformError, match='binding mismatch'):
+    assert replay["event"] == cards[0].payload["envelope"]
+    assert replay["card"]["task_status"] == "WAITING_TO_START"
+    with pytest.raises(SuperExpertPlatformError, match="binding mismatch"):
         await service.execute(
-            tenant_id='tenant-a', installation_id=grant.installation_id,
-            capability='card.create', contract_version='1',
-            arguments={'binding': {**binding, 'node_id': 'wrong-node'},
-                       'event_id': 'wrong-card', 'card': {'title': '不能错绑'}},
-            idempotency_key='wrong-card',
+            tenant_id="tenant-a",
+            installation_id=grant.installation_id,
+            capability="card.create",
+            contract_version="1",
+            arguments={
+                "binding": {**binding, "node_id": "wrong-node"},
+                "event_id": "wrong-card",
+                "card": {"title": "不能错绑"},
+            },
+            idempotency_key="wrong-card",
         )
 
 
 @pytest.mark.asyncio
-async def test_authorized_command_validates_full_binding_and_publishes_once(tmp_path):
+async def test_authorized_command_validates_full_binding_and_publishes_once(
+    tmp_path,
+):
     service, grant, bus = _service(tmp_path)
     binding = _binding()
     binding["installation_id"] = grant.installation_id
@@ -731,14 +975,19 @@ async def test_authorized_command_validates_full_binding_and_publishes_once(tmp_
         conversation_id="conversation-1",
     )
     assert [event.event_id for event in session_events] == ["event-1"]
-    assert service.list_session_events(
-        installation_id=grant.installation_id,
-        conversation_id="another-conversation",
-    ) == ()
+    assert (
+        service.list_session_events(
+            installation_id=grant.installation_id,
+            conversation_id="another-conversation",
+        )
+        == ()
+    )
 
 
 @pytest.mark.asyncio
-async def test_asset_validation_happens_before_submit_state_transition(tmp_path):
+async def test_asset_validation_happens_before_submit_state_transition(
+    tmp_path,
+):
     service, grant, _bus = _service(tmp_path)
     binding = _binding()
     binding["installation_id"] = grant.installation_id
@@ -762,7 +1011,10 @@ async def test_asset_validation_happens_before_submit_state_transition(tmp_path)
     async def reject_asset(_binding, _asset_id, _task):
         raise SuperExpertPlatformError("asset binding mismatch")
 
-    with pytest.raises(SuperExpertPlatformError, match="asset binding mismatch"):
+    with pytest.raises(
+        SuperExpertPlatformError,
+        match="asset binding mismatch",
+    ):
         await service.execute(
             tenant_id="tenant-a",
             installation_id=grant.installation_id,
@@ -883,10 +1135,10 @@ def test_workflow_catalog_exposes_all_canvas_nodes_and_real_models():
     assert {
         (model.provider_id, model.model_id, model.capability)
         for model in catalog.available_models
-        } == {
-            ("provider-1", "text-1", "storyboard"),
-            ("provider-1", "image-1", "text_to_image"),
-            ("provider-1", "video-1", "text_to_video"),
+    } == {
+        ("provider-1", "text-1", "storyboard"),
+        ("provider-1", "image-1", "text_to_image"),
+        ("provider-1", "video-1", "text_to_video"),
         ("provider-1", "video-1", "image_to_video"),
     }
 
@@ -905,7 +1157,11 @@ async def test_authorized_workflow_create_provisions_all_nodes_and_bindings(
     async def catalog():
         return _workflow_catalog()
 
-    monkeypatch.setattr(router_module, "_load_workflow_capability_catalog", catalog)
+    monkeypatch.setattr(
+        router_module,
+        "_load_workflow_capability_catalog",
+        catalog,
+    )
     arguments = _workflow_arguments(grant.installation_id)
 
     first = await service.execute(
@@ -969,15 +1225,22 @@ async def test_workflow_create_http_api_provisions_every_available_node_without_
     async def catalog():
         return _workflow_catalog()
 
-    monkeypatch.setattr(router_module, "_load_workflow_capability_catalog", catalog)
+    monkeypatch.setattr(
+        router_module,
+        "_load_workflow_capability_catalog",
+        catalog,
+    )
     monkeypatch.setattr(
         router_module,
         "get_super_expert_platform_service",
         lambda: service,
     )
-    monkeypatch.setattr(router_module, "ensure_chat_access", lambda *_args, **_kwargs: {})
-    app = FastAPI()
-    app.include_router(api_router, prefix="/api")
+    monkeypatch.setattr(
+        router_module,
+        "ensure_chat_access",
+        lambda *_args, **_kwargs: {},
+    )
+    app = _api_app()
 
     def authenticated(request: Request):
         request.state.user_id = "user-a"
@@ -1083,9 +1346,21 @@ async def test_workflow_create_http_api_provisions_every_available_node_without_
                 "execution_preference": "CUSTOMER_TRIGGERED",
                 "nodes": nodes,
                 "edges": [
-                    {"source": "copy", "target": "image", "target_slot": "prompt"},
-                    {"source": "image", "target": "video", "target_slot": "reference_image"},
-                    {"source": "video", "target": "result", "target_slot": "asset"},
+                    {
+                        "source": "copy",
+                        "target": "image",
+                        "target_slot": "prompt",
+                    },
+                    {
+                        "source": "image",
+                        "target": "video",
+                        "target_slot": "reference_image",
+                    },
+                    {
+                        "source": "video",
+                        "target": "result",
+                        "target_slot": "asset",
+                    },
                 ],
                 "output_node_id": "result",
                 "fallback_policy": "FAIL_CLOSED",
@@ -1142,15 +1417,22 @@ async def test_workflow_create_http_api_rejects_every_non_creatable_node_without
     async def catalog():
         return _workflow_catalog()
 
-    monkeypatch.setattr(router_module, "_load_workflow_capability_catalog", catalog)
+    monkeypatch.setattr(
+        router_module,
+        "_load_workflow_capability_catalog",
+        catalog,
+    )
     monkeypatch.setattr(
         router_module,
         "get_super_expert_platform_service",
         lambda: service,
     )
-    monkeypatch.setattr(router_module, "ensure_chat_access", lambda *_args, **_kwargs: {})
-    app = FastAPI()
-    app.include_router(api_router, prefix="/api")
+    monkeypatch.setattr(
+        router_module,
+        "ensure_chat_access",
+        lambda *_args, **_kwargs: {},
+    )
+    app = _api_app()
 
     def authenticated(request: Request):
         request.state.user_id = "user-a"
@@ -1177,7 +1459,7 @@ async def test_workflow_create_http_api_rejects_every_non_creatable_node_without
                         "parameters": {},
                         "customer_action": "NONE",
                         "optional": False,
-                    }
+                    },
                 ],
                 "edges": [],
                 "output_node_id": "candidate",
@@ -1201,7 +1483,10 @@ async def test_workflow_create_http_api_rejects_every_non_creatable_node_without
 
 
 @pytest.mark.asyncio
-async def test_output_wrapper_review_uses_nearest_producing_node(tmp_path, monkeypatch):
+async def test_output_wrapper_review_uses_nearest_producing_node(
+    tmp_path,
+    monkeypatch,
+):
     from qwenpaw.app.routers import aigc_studio
 
     monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
@@ -1211,7 +1496,11 @@ async def test_output_wrapper_review_uses_nearest_producing_node(tmp_path, monke
     async def catalog():
         return _workflow_catalog()
 
-    monkeypatch.setattr(router_module, "_load_workflow_capability_catalog", catalog)
+    monkeypatch.setattr(
+        router_module,
+        "_load_workflow_capability_catalog",
+        catalog,
+    )
     base = _workflow_blueprint()
     output_node = {
         "node_id": "final",
@@ -1244,7 +1533,7 @@ async def test_output_wrapper_review_uses_nearest_producing_node(tmp_path, monke
     assert task is not None
 
     assert router_module._workflow_review_node_ids(task) == {
-        result["task"]["binding"]["node_bindings"]["clip"]
+        result["task"]["binding"]["node_bindings"]["clip"],
     }
 
 
@@ -1262,7 +1551,11 @@ async def test_workflow_task_write_failure_removes_provisioned_canvas(
     async def catalog():
         return _workflow_catalog()
 
-    monkeypatch.setattr(router_module, "_load_workflow_capability_catalog", catalog)
+    monkeypatch.setattr(
+        router_module,
+        "_load_workflow_capability_catalog",
+        catalog,
+    )
 
     def fail(*_args, **_kwargs):
         raise OSError("disk full")
@@ -1284,11 +1577,19 @@ async def test_workflow_task_write_failure_removes_provisioned_canvas(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("catalog_unavailable_on_retry", [False, True])
-async def test_core_managed_workflow_recovers_platform_binding_failure(tmp_path, monkeypatch, catalog_unavailable_on_retry):
+async def test_core_managed_workflow_recovers_platform_binding_failure(
+    tmp_path,
+    monkeypatch,
+    catalog_unavailable_on_retry,
+):
     from sqlalchemy import create_engine
     from qwenpaw.app.aigc.resource_store import AigcResourceStore
-    from qwenpaw.app.aigc.workflow_execution import AigcWorkflowExecutionService
-    from qwenpaw.app.storage.repos.aigc_execution_repo import AigcExecutionRepository
+    from qwenpaw.app.aigc.workflow_execution import (
+        AigcWorkflowExecutionService,
+    )
+    from qwenpaw.app.storage.repos.aigc_execution_repo import (
+        AigcExecutionRepository,
+    )
     from qwenpaw.app.storage.schema import create_all
     from qwenpaw.app.routers import aigc_studio
 
@@ -1296,13 +1597,20 @@ async def test_core_managed_workflow_recovers_platform_binding_failure(tmp_path,
     create_all(engine)
     monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
     service, grant, bus = _service(tmp_path)
-    core = AigcWorkflowExecutionService(AigcResourceStore(tmp_path / "studio"), AigcExecutionRepository(engine))
+    core = AigcWorkflowExecutionService(
+        AigcResourceStore(tmp_path / "studio"),
+        AigcExecutionRepository(engine),
+    )
     service.workflow_execution_service = core
 
     async def catalog():
         return _workflow_catalog()
 
-    monkeypatch.setattr(router_module, "_load_workflow_capability_catalog", catalog)
+    monkeypatch.setattr(
+        router_module,
+        "_load_workflow_capability_catalog",
+        catalog,
+    )
     arguments = _workflow_arguments(grant.installation_id)
     original_apply = service.task_repository.apply
 
@@ -1311,28 +1619,51 @@ async def test_core_managed_workflow_recovers_platform_binding_failure(tmp_path,
 
     monkeypatch.setattr(service.task_repository, "apply", fail)
     with pytest.raises(OSError, match="task write interrupted"):
-        await service.execute(tenant_id="tenant-a", user_id="user-a",
-                              installation_id=grant.installation_id,
-                              capability="aigc.workflow.create/1", contract_version="1",
-                              arguments=arguments, idempotency_key="recover-core")
+        await service.execute(
+            tenant_id="tenant-a",
+            user_id="user-a",
+            installation_id=grant.installation_id,
+            capability="aigc.workflow.create/1",
+            contract_version="1",
+            arguments=arguments,
+            idempotency_key="recover-core",
+        )
     canvases = list((tmp_path / "studio/canvases").glob("*.json"))
     assert len(canvases) == 1
     assert not bus.events
     monkeypatch.setattr(service.task_repository, "apply", original_apply)
     if catalog_unavailable_on_retry:
+
         async def unavailable_catalog():
             raise OSError("catalog temporarily unavailable")
 
-        monkeypatch.setattr(router_module, "_load_workflow_capability_catalog", unavailable_catalog)
-    result = await service.execute(tenant_id="tenant-a", user_id="user-a",
-                                   installation_id=grant.installation_id,
-                                   capability="aigc.workflow.create/1", contract_version="1",
-                                   arguments=arguments, idempotency_key="recover-core")
+        monkeypatch.setattr(
+            router_module,
+            "_load_workflow_capability_catalog",
+            unavailable_catalog,
+        )
+    result = await service.execute(
+        tenant_id="tenant-a",
+        user_id="user-a",
+        installation_id=grant.installation_id,
+        capability="aigc.workflow.create/1",
+        contract_version="1",
+        arguments=arguments,
+        idempotency_key="recover-core",
+    )
     binding = result["task"]["binding"]
     assert binding["canvas_id"] == canvases[0].stem
     assert len(list((tmp_path / "studio/canvases").glob("*.json"))) == 1
-    contract = core.repository.get_binding("user-a", binding["canvas_id"], binding["node_bindings"]["clip"])
-    assert (contract.provider_id, contract.model_id, contract.capability) == ("provider-1", "video-1", "text_to_video")
+    contract = core.repository.get_binding(
+        "user-a",
+        binding["canvas_id"],
+        binding["node_bindings"]["clip"],
+    )
+    assert (contract.provider_id, contract.model_id, contract.capability) == (
+        "provider-1",
+        "video-1",
+        "text_to_video",
+    )
     assert len(bus.events) == 1
     engine.dispose()
 
@@ -1349,7 +1680,9 @@ async def test_workflow_rejects_unavailable_model_without_creating_canvas(
     service, grant, _bus = _service(tmp_path)
 
     async def empty_catalog():
-        return project_workflow_capability_catalog(CapabilityList(capabilities=[]))
+        return project_workflow_capability_catalog(
+            CapabilityList(capabilities=[]),
+        )
 
     monkeypatch.setattr(
         router_module,
@@ -1384,7 +1717,11 @@ async def test_unavailable_workflow_never_creates_a_misleading_manual_canvas(
     async def catalog():
         return _workflow_catalog()
 
-    monkeypatch.setattr(router_module, "_load_workflow_capability_catalog", catalog)
+    monkeypatch.setattr(
+        router_module,
+        "_load_workflow_capability_catalog",
+        catalog,
+    )
     manual_node = {
         "schema_version": 1,
         "title": "人工合成流程",
@@ -1398,20 +1735,26 @@ async def test_unavailable_workflow_never_creates_a_misleading_manual_canvas(
                 "parameters": {},
                 "customer_action": "NONE",
                 "optional": False,
-            }
+            },
         ],
         "edges": [],
         "output_node_id": "compose",
         "fallback_policy": "FAIL_CLOSED",
     }
-    with pytest.raises(SuperExpertPlatformError, match="NODE_KIND_UNAVAILABLE"):
+    with pytest.raises(
+        SuperExpertPlatformError,
+        match="NODE_KIND_UNAVAILABLE",
+    ):
         await service.execute(
             tenant_id="tenant-a",
             user_id="user-a",
             installation_id=grant.installation_id,
             capability="aigc.workflow.create/1",
             contract_version="1",
-            arguments=_workflow_arguments(grant.installation_id, **manual_node),
+            arguments=_workflow_arguments(
+                grant.installation_id,
+                **manual_node,
+            ),
             idempotency_key="manual-closed",
         )
 
@@ -1419,7 +1762,10 @@ async def test_unavailable_workflow_never_creates_a_misleading_manual_canvas(
     arguments = _workflow_arguments(grant.installation_id, **manual_node)
     arguments["scope"]["material_task_id"] = "manual-material"
     arguments["event_id"] = "manual-event"
-    with pytest.raises(SuperExpertPlatformError, match="NODE_KIND_UNAVAILABLE"):
+    with pytest.raises(
+        SuperExpertPlatformError,
+        match="NODE_KIND_UNAVAILABLE",
+    ):
         await service.execute(
             tenant_id="tenant-a",
             user_id="user-a",
@@ -1446,7 +1792,11 @@ async def test_workflow_guide_endpoint_projects_real_canvas_and_blocks_if_delete
     async def catalog():
         return _workflow_catalog()
 
-    monkeypatch.setattr(router_module, "_load_workflow_capability_catalog", catalog)
+    monkeypatch.setattr(
+        router_module,
+        "_load_workflow_capability_catalog",
+        catalog,
+    )
     created = await service.execute(
         tenant_id="tenant-a",
         user_id="user-a",
@@ -1466,7 +1816,7 @@ async def test_workflow_guide_endpoint_projects_real_canvas_and_blocks_if_delete
         router_module,
         "ensure_chat_access",
         lambda _request, conversation_id, allow_admin: access_checks.append(
-            (conversation_id, allow_admin)
+            (conversation_id, allow_admin),
         ),
     )
     request = SimpleNamespace(state=SimpleNamespace(user_id="user-a"))
@@ -1474,17 +1824,23 @@ async def test_workflow_guide_endpoint_projects_real_canvas_and_blocks_if_delete
     guide = router_module.get_super_expert_task_guide("material-v2-1", request)
 
     assert guide["current_step_id"] == "copy.generate"
-    assert guide["current_step"]["node_id"] == created["task"]["binding"][
-        "node_bindings"
-    ]["copy"]
+    assert (
+        guide["current_step"]["node_id"]
+        == created["task"]["binding"]["node_bindings"]["copy"]
+    )
     assert access_checks == [("conversation-1", True)]
 
     canvas_id = created["task"]["binding"]["canvas_id"]
     aigc_studio._json_path("canvases", canvas_id).unlink()
     aigc_studio._resource_store.cache_clear()
-    blocked = router_module.get_super_expert_task_guide("material-v2-1", request)
+    blocked = router_module.get_super_expert_task_guide(
+        "material-v2-1",
+        request,
+    )
     assert blocked["current_step"]["status"] == "BLOCKED"
-    assert blocked["current_step"]["recovery"]["code"] == "BOUND_CANVAS_MISSING"
+    assert (
+        blocked["current_step"]["recovery"]["code"] == "BOUND_CANVAS_MISSING"
+    )
 
 
 @pytest.mark.asyncio
@@ -1501,7 +1857,11 @@ async def test_workflow_guide_update_persists_only_optional_bound_skip(
     async def catalog():
         return _workflow_catalog()
 
-    monkeypatch.setattr(router_module, "_load_workflow_capability_catalog", catalog)
+    monkeypatch.setattr(
+        router_module,
+        "_load_workflow_capability_catalog",
+        catalog,
+    )
     blueprint = _workflow_blueprint()
     blueprint["nodes"][0]["optional"] = True
     created = await service.execute(
@@ -1560,7 +1920,9 @@ async def test_ordinary_cross_tenant_or_wrong_version_call_is_denied(
 ):
     service, grant, _bus = _service(tmp_path)
     resolved_installation = (
-        grant.installation_id if installation_id == "valid" else installation_id
+        grant.installation_id
+        if installation_id == "valid"
+        else installation_id
     )
     binding = _binding()
     binding["installation_id"] = resolved_installation
@@ -1833,13 +2195,21 @@ async def test_asset_submit_dispatches_bound_agent_review_in_the_same_page(
         "get_super_expert_platform_service",
         lambda: service,
     )
-    monkeypatch.setattr(router_module, "ensure_chat_access", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        router_module,
+        "ensure_chat_access",
+        lambda *_args, **_kwargs: None,
+    )
 
     async def dispatch(_request, **kwargs):
         captured.update(kwargs)
         return {"status": "completed", "reply": "需要调整第一个镜头。"}
 
-    monkeypatch.setattr(router_module, "_dispatch_agent_asset_review", dispatch)
+    monkeypatch.setattr(
+        router_module,
+        "_dispatch_agent_asset_review",
+        dispatch,
+    )
     request = SimpleNamespace(
         state=SimpleNamespace(tenant_id="tenant-a", user_id="user-1"),
     )
@@ -1869,16 +2239,32 @@ async def test_asset_submit_dispatches_bound_agent_review_in_the_same_page(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("lookup_by_session", [False, True])
-@pytest.mark.parametrize("active_model", [{"provider_id": "vision-provider", "model": "vision-model"}, None])
+@pytest.mark.parametrize(
+    "active_model",
+    [{"provider_id": "vision-provider", "model": "vision-model"}, None],
+)
 @pytest.mark.parametrize("runner_failure", [False, True, "cancelled"])
 @pytest.mark.parametrize("chat_owner", ["user-1", "another-user"])
-async def test_asset_review_dispatch_uses_bound_session_and_media(monkeypatch, lookup_by_session, active_model, runner_failure, chat_owner):
+async def test_asset_review_dispatch_uses_bound_session_and_media(
+    monkeypatch,
+    lookup_by_session,
+    active_model,
+    runner_failure,
+    chat_owner,
+):
     import asyncio
     import json
-    from qwenpaw.app.agent_context import get_current_chat_model, set_current_chat_model
+    from qwenpaw.app.agent_context import (
+        get_current_chat_model,
+        set_current_chat_model,
+    )
     from qwenpaw.app.workspace.media_review_context import current_review_input
+
     captured = {}
-    outer_model = {"provider_id": "unrelated-provider", "model": "unrelated-model"}
+    outer_model = {
+        "provider_id": "unrelated-provider",
+        "model": "unrelated-model",
+    }
     previous_model = get_current_chat_model()
 
     class Chats:
@@ -1892,8 +2278,17 @@ async def test_asset_review_dispatch_uses_bound_session_and_media(monkeypatch, l
                 meta={"active_model": active_model},
             )
 
-        async def get_chat_id_by_session(self, session_id, channel, user_id=None):
-            assert (session_id, channel, user_id) == ("conversation-1", "console", "user-1")
+        async def get_chat_id_by_session(
+            self,
+            session_id,
+            channel,
+            user_id=None,
+        ):
+            assert (session_id, channel, user_id) == (
+                "conversation-1",
+                "console",
+                "user-1",
+            )
             return "chat-id-1"
 
     class GrantRepository:
@@ -1905,8 +2300,19 @@ async def test_asset_review_dispatch_uses_bound_session_and_media(monkeypatch, l
             captured["messages"] = messages
             captured["request"] = request
             captured["model"] = get_current_chat_model()
-            captured["review_input"] = current_review_input(user_id='user-1', installation_id='installation-1', conversation_id='conversation-1')
-            assert current_review_input(user_id='another-user', installation_id='installation-1', conversation_id='conversation-1') is None
+            captured["review_input"] = current_review_input(
+                user_id="user-1",
+                installation_id="installation-1",
+                conversation_id="conversation-1",
+            )
+            assert (
+                current_review_input(
+                    user_id="another-user",
+                    installation_id="installation-1",
+                    conversation_id="conversation-1",
+                )
+                is None
+            )
             if runner_failure == "cancelled":
                 raise asyncio.CancelledError()
             if runner_failure:
@@ -1953,7 +2359,9 @@ async def test_asset_review_dispatch_uses_bound_session_and_media(monkeypatch, l
                 request,
                 service=service,
                 installation_id="installation-1",
-                binding=router_module.AigcTaskBinding.model_validate({**_binding(), 'installation_id': 'installation-1'}),
+                binding=router_module.AigcTaskBinding.model_validate(
+                    {**_binding(), "installation_id": "installation-1"},
+                ),
                 asset_id="asset-1",
                 request_key="submit-1:agent-review",
             )
@@ -1964,9 +2372,18 @@ async def test_asset_review_dispatch_uses_bound_session_and_media(monkeypatch, l
         else:
             assert not runner_failure
             assert result == {"status": "completed", "reply": "审核通过。"}
-        assert captured["model"] == (active_model if chat_owner == "user-1" else None)
+        assert captured["model"] == (
+            active_model if chat_owner == "user-1" else None
+        )
         assert get_current_chat_model() == outer_model
-        assert current_review_input(user_id='user-1', installation_id='installation-1', conversation_id='conversation-1') is None
+        assert (
+            current_review_input(
+                user_id="user-1",
+                installation_id="installation-1",
+                conversation_id="conversation-1",
+            )
+            is None
+        )
     finally:
         set_current_chat_model(previous_model)
     assert captured["request"].session_id == (
@@ -1974,12 +2391,12 @@ async def test_asset_review_dispatch_uses_bound_session_and_media(monkeypatch, l
     )
     assert captured["request"].channel == "console"
     assert captured["messages"][0].content[1]["type"] == "video"
-    trusted = captured['review_input']
-    assert trusted['asset_id'] == 'asset-1'
-    assert trusted['binding']['conversation_id'] == 'conversation-1'
-    assert trusted['media_kind'] == 'video'
-    assert trusted['block_digest'].startswith('sha256:')
-    assert 'file:///tmp/result.mp4' not in json.dumps(trusted)
+    trusted = captured["review_input"]
+    assert trusted["asset_id"] == "asset-1"
+    assert trusted["binding"]["conversation_id"] == "conversation-1"
+    assert trusted["media_kind"] == "video"
+    assert trusted["block_digest"].startswith("sha256:")
+    assert "file:///tmp/result.mp4" not in json.dumps(trusted)
 
 
 @pytest.mark.asyncio
@@ -2206,7 +2623,11 @@ async def test_duplicate_asset_submit_replays_the_durable_agent_review(
         "get_super_expert_platform_service",
         lambda: service,
     )
-    monkeypatch.setattr(router_module, "ensure_chat_access", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        router_module,
+        "ensure_chat_access",
+        lambda *_a, **_k: None,
+    )
     dispatches = 0
 
     async def dispatch(*_args, **_kwargs):
@@ -2214,7 +2635,12 @@ async def test_duplicate_asset_submit_replays_the_durable_agent_review(
         dispatches += 1
         return {"status": "completed", "reply": "同一份审核结论。"}
 
-    monkeypatch.setattr(router_module, "_dispatch_agent_asset_review", dispatch)
+    monkeypatch.setattr(
+        router_module,
+        "_dispatch_agent_asset_review",
+        dispatch,
+    )
+
     async def resolve(*_args, **_kwargs):
         return {
             "type": "video",
@@ -2238,10 +2664,14 @@ async def test_duplicate_asset_submit_replays_the_durable_agent_review(
     )
 
     first = await router_module.execute_super_expert_command(
-        "aigc.asset.submit", command, request,
+        "aigc.asset.submit",
+        command,
+        request,
     )
     replay = await router_module.execute_super_expert_command(
-        "aigc.asset.submit", command, request,
+        "aigc.asset.submit",
+        command,
+        request,
     )
 
     assert dispatches == 1
@@ -2249,7 +2679,9 @@ async def test_duplicate_asset_submit_replays_the_durable_agent_review(
 
 
 @pytest.mark.asyncio
-async def test_nonterminal_review_is_not_cached_and_can_be_retried(monkeypatch):
+async def test_nonterminal_review_is_not_cached_and_can_be_retried(
+    monkeypatch,
+):
     dispatches = 0
     saved = []
     request_keys = []
@@ -2269,7 +2701,9 @@ async def test_nonterminal_review_is_not_cached_and_can_be_retried(monkeypatch):
             return receipt
 
         def get_task(self, _material_task_id):
-            return SimpleNamespace(status=router_module.AigcTaskStatus.SUBMITTED)
+            return SimpleNamespace(
+                status=router_module.AigcTaskStatus.SUBMITTED,
+            )
 
     async def dispatch(*_args, **_kwargs):
         nonlocal dispatches
@@ -2286,8 +2720,16 @@ async def test_nonterminal_review_is_not_cached_and_can_be_retried(monkeypatch):
         "get_super_expert_platform_service",
         lambda: Service(),
     )
-    monkeypatch.setattr(router_module, "ensure_chat_access", lambda *_a, **_k: None)
-    monkeypatch.setattr(router_module, "_dispatch_agent_asset_review", dispatch)
+    monkeypatch.setattr(
+        router_module,
+        "ensure_chat_access",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(
+        router_module,
+        "_dispatch_agent_asset_review",
+        dispatch,
+    )
     binding = {**_binding(), "installation_id": "installation-1"}
     command = PlatformCommandRequest(
         installation_id="installation-1",
@@ -2354,7 +2796,11 @@ async def test_submit_retry_recovers_terminal_review_without_running_agent_again
         "get_super_expert_platform_service",
         lambda: service,
     )
-    monkeypatch.setattr(router_module, "ensure_chat_access", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        router_module,
+        "ensure_chat_access",
+        lambda *_a, **_k: None,
+    )
 
     async def must_not_dispatch(*_args, **_kwargs):
         pytest.fail("a terminal review retry must not invoke the Agent again")
@@ -2409,17 +2855,26 @@ async def test_asset_review_dispatch_runs_inside_user_billing(monkeypatch):
             return True
 
     def prepare(user_id, source, request_key, fingerprint):
-        lifecycle.append((user_id, source.id, request_key, fingerprint["asset_id"]))
+        lifecycle.append(
+            (user_id, source.id, request_key, fingerprint["asset_id"]),
+        )
         return Billing()
 
-    monkeypatch.setattr(router_module, "prepare_user_billing_execution", prepare)
+    monkeypatch.setattr(
+        router_module,
+        "prepare_user_billing_execution",
+        prepare,
+    )
     monkeypatch.setattr(
         "qwenpaw.app.routers.super_expert_platform.resolve_owned_asset_for_agent_review",
         lambda *_a, **_k: None,
     )
 
     async def resolve(*_args, **_kwargs):
-        return {"type": "image", "source": {"type": "url", "url": "file:///tmp/a"}}
+        return {
+            "type": "image",
+            "source": {"type": "url", "url": "file:///tmp/a"},
+        }
 
     monkeypatch.setattr(
         "qwenpaw.app.routers.super_expert_platform.resolve_owned_asset_for_agent_review",
@@ -2440,12 +2895,17 @@ async def test_asset_review_dispatch_runs_inside_user_billing(monkeypatch):
 
     service = SimpleNamespace(
         grant_repository=SimpleNamespace(
-            get=lambda _id: SimpleNamespace(agent_id="agent-1", tenant_id="tenant-a"),
+            get=lambda _id: SimpleNamespace(
+                agent_id="agent-1",
+                tenant_id="tenant-a",
+            ),
         ),
     )
     request = SimpleNamespace(
         state=SimpleNamespace(user_id="user-1"),
-        app=SimpleNamespace(state=SimpleNamespace(multi_agent_manager=Manager())),
+        app=SimpleNamespace(
+            state=SimpleNamespace(multi_agent_manager=Manager()),
+        ),
     )
 
     await router_module._dispatch_agent_asset_review(
@@ -2478,7 +2938,9 @@ async def test_asset_submit_returns_safe_payment_required_error(monkeypatch):
             return None
 
         def get_task(self, _material_task_id):
-            return SimpleNamespace(status=router_module.AigcTaskStatus.SUBMITTED)
+            return SimpleNamespace(
+                status=router_module.AigcTaskStatus.SUBMITTED,
+            )
 
     async def insufficient(*_args, **_kwargs):
         raise router_module.InsufficientUsageCreditsError(3, 0)
@@ -2488,15 +2950,27 @@ async def test_asset_submit_returns_safe_payment_required_error(monkeypatch):
         "get_super_expert_platform_service",
         lambda: Service(),
     )
-    monkeypatch.setattr(router_module, "ensure_chat_access", lambda *_a, **_k: None)
-    monkeypatch.setattr(router_module, "_dispatch_agent_asset_review", insufficient)
+    monkeypatch.setattr(
+        router_module,
+        "ensure_chat_access",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(
+        router_module,
+        "_dispatch_agent_asset_review",
+        insufficient,
+    )
     binding = _binding()
     binding["installation_id"] = "installation-1"
     command = PlatformCommandRequest(
         installation_id="installation-1",
         contract_version="1",
         idempotency_key="submit",
-        arguments={"binding": binding, "event_id": "submit", "asset_id": "asset"},
+        arguments={
+            "binding": binding,
+            "event_id": "submit",
+            "asset_id": "asset",
+        },
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -2510,14 +2984,14 @@ async def test_asset_submit_returns_safe_payment_required_error(monkeypatch):
     assert exc_info.value.detail == "insufficient usage credits"
 
 
-def test_platform_command_router_is_mounted_only_on_authenticated_user_api():
+def test_platform_command_router_is_not_mounted_by_core_router():
     from qwenpaw.app import routers
 
-    assert any(
-        getattr(route, "original_router", None) is router_module.router
-        for route in routers.user_api_router.routes
-    )
     assert not any(
         getattr(route, "original_router", None) is router_module.router
         for route in routers.router.routes
+    )
+    assert not any(
+        getattr(route, "original_router", None) is router_module.router
+        for route in routers.user_api_router.routes
     )

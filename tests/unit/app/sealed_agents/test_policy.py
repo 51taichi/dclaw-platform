@@ -54,6 +54,10 @@ def test_global_workspace_skill_inventory_ignores_selected_sealed_agent(
         def is_sealed(agent_id):
             return agent_id == "luyu"
 
+        @staticmethod
+        def package_supports(agent_id, feature):
+            return agent_id == "luyu" and feature == "mutable_skill_overlay"
+
     monkeypatch.setattr(
         "qwenpaw.app.sealed_agents.policy.get_sealed_agent_registry",
         lambda: Registry(),

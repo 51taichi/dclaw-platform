@@ -19,6 +19,7 @@ from qwenpaw.app.super_experts.grants import (
     SuperExpertGrant,
     SuperExpertGrantPreview,
 )
+from qwenpaw.plugins.registry import PluginRegistry
 
 
 def _request(role="admin"):
@@ -71,12 +72,18 @@ def _write_active_agent_config(tmp_path, payload):
     config_path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def test_admin_list_returns_operational_metadata_without_asset_paths(monkeypatch):
+def test_admin_list_returns_operational_metadata_without_asset_paths(
+    monkeypatch,
+):
     class Service:
         def list_agents(self):
             return [_record()]
 
-    monkeypatch.setattr(router_module, "get_sealed_agent_service", lambda: Service())
+    monkeypatch.setattr(
+        router_module,
+        "get_sealed_agent_service",
+        lambda: Service(),
+    )
 
     response = router_module.list_sealed_agents(_request())
 
@@ -94,7 +101,9 @@ def test_admin_list_returns_operational_metadata_without_asset_paths(monkeypatch
 
 def test_agent_loop_harness_declaration_is_nullable_and_explicit():
     assert OrchestrationConfig().agent_loop_enabled is None
-    assert OrchestrationConfig(agent_loop_enabled=True).agent_loop_enabled is True
+    assert (
+        OrchestrationConfig(agent_loop_enabled=True).agent_loop_enabled is True
+    )
 
 
 def test_admin_list_projects_active_super_expert_harness_config(
@@ -102,6 +111,13 @@ def test_admin_list_projects_active_super_expert_harness_config(
     tmp_path,
 ):
     monkeypatch.setattr(router_module, "WORKING_DIR", tmp_path)
+    monkeypatch.setattr(
+        PluginRegistry,
+        "sealed_package_type_supports",
+        lambda _self, package_type, feature: (
+            package_type == "super_expert" and feature == "harness_status"
+        ),
+    )
     _write_active_agent_config(
         tmp_path,
         {
@@ -137,6 +153,13 @@ def test_admin_list_marks_missing_super_expert_harness_config_undeclared(
     tmp_path,
 ):
     monkeypatch.setattr(router_module, "WORKING_DIR", tmp_path)
+    monkeypatch.setattr(
+        PluginRegistry,
+        "sealed_package_type_supports",
+        lambda _self, package_type, feature: (
+            package_type == "super_expert" and feature == "harness_status"
+        ),
+    )
     _write_active_agent_config(tmp_path, {"id": "luyu", "name": "陆羽"})
 
     response = router_module._operational_dto(_super_expert_record())
@@ -205,9 +228,7 @@ def test_official_super_expert_root_is_separate_from_other_trusted_signers(
     monkeypatch.setattr(router_module, "WORKING_DIR", tmp_path)
     monkeypatch.setattr(router_module, "_service", None)
 
-    def load(path):
-        if path.name == "official_super_expert_signers.json":
-            return {"official": object()}
+    def load(_path):
         return {"ordinary": object()}
 
     monkeypatch.setattr(router_module, "load_trusted_signers", load)
@@ -216,26 +237,53 @@ def test_official_super_expert_root_is_separate_from_other_trusted_signers(
         "get_sealed_agent_registry",
         lambda: object(),
     )
+    handler = SimpleNamespace(
+        trusted_signers={"official": object()},
+        trust_store=SimpleNamespace(
+            official_signer_ids={"official"},
+        ),
+    )
+    monkeypatch.setattr(
+        PluginRegistry,
+        "get_sealed_package_types",
+        lambda _self: {
+            "super_expert": SimpleNamespace(handler=handler),
+        },
+    )
 
     service = router_module.get_sealed_agent_service()
 
-    assert set(service.trusted_signers) == {"ordinary", "official"}
-    assert service.super_expert_trust_store.official_signer_ids == {"official"}
+    assert set(service._current_trusted_signers()) == {"ordinary", "official"}
+    assert handler.trust_store.official_signer_ids == {"official"}
     router_module._service = None
 
 
 def test_router_has_no_package_or_content_download_route():
-    routes = [(route.path, frozenset(route.methods or set())) for route in router_module.router.routes]
+    routes = [
+        (route.path, frozenset(route.methods or set()))
+        for route in router_module.router.routes
+    ]
 
-    assert any(path == "/sealed-agents/releases" and "POST" in methods for path, methods in routes)
+    assert any(
+        path == "/sealed-agents/releases" and "POST" in methods
+        for path, methods in routes
+    )
     assert all(
-        not ("GET" in methods and any(word in path for word in ("download", "content", "files", "package")))
+        not (
+            "GET" in methods
+            and any(
+                word in path
+                for word in ("download", "content", "files", "package")
+            )
+        )
         for path, methods in routes
     )
 
 
 @pytest.mark.asyncio
-async def test_upload_returns_identity_and_complete_package_declaration(monkeypatch):
+async def test_upload_returns_identity_and_complete_package_declaration(
+    monkeypatch,
+):
     release = _record().active_release.model_copy(
         update={
             "package_type": "super_expert",
@@ -252,11 +300,18 @@ async def test_upload_returns_identity_and_complete_package_declaration(monkeypa
         def list_agents(self):
             return [
                 _record().model_copy(
-                    update={"agent_id": "generic-super-expert", "releases": [release]},
+                    update={
+                        "agent_id": "generic-super-expert",
+                        "releases": [release],
+                    },
                 ),
             ]
 
-    monkeypatch.setattr(router_module, "get_sealed_agent_service", lambda: Service())
+    monkeypatch.setattr(
+        router_module,
+        "get_sealed_agent_service",
+        lambda: Service(),
+    )
     response = await router_module.upload_sealed_agent_release(
         _request(),
         UploadFile(filename="expert.zip", file=BytesIO(b"signed-package")),
@@ -271,7 +326,10 @@ async def test_upload_returns_identity_and_complete_package_declaration(monkeypa
 
 
 def test_grant_routes_expose_complete_preview_and_accept_all_only(monkeypatch):
-    capabilities = (("workspace.turn.orchestrate/1", "1"), ("agent.execute", "1"))
+    capabilities = (
+        ("workspace.turn.orchestrate/1", "1"),
+        ("agent.execute", "1"),
+    )
     preview = SuperExpertGrantPreview(
         preview_id="preview-1",
         tenant_id="local",
@@ -285,7 +343,11 @@ def test_grant_routes_expose_complete_preview_and_accept_all_only(monkeypatch):
 
     class Service:
         def preview_grant(self, agent_id, release_id, *, tenant_id):
-            assert (agent_id, release_id, tenant_id) == ("luyu", "rel-1", "local")
+            assert (agent_id, release_id, tenant_id) == (
+                "luyu",
+                "rel-1",
+                "local",
+            )
             return preview
 
         def grant_installation(
@@ -308,7 +370,11 @@ def test_grant_routes_expose_complete_preview_and_accept_all_only(monkeypatch):
                 administrator_id=administrator_id,
             )
 
-    monkeypatch.setattr(router_module, "get_sealed_agent_service", lambda: Service())
+    monkeypatch.setattr(
+        router_module,
+        "get_sealed_agent_service",
+        lambda: Service(),
+    )
 
     preview_response = router_module.preview_super_expert_grant(
         "luyu",
@@ -321,10 +387,16 @@ def test_grant_routes_expose_complete_preview_and_accept_all_only(monkeypatch):
         _request(),
     )
 
-    assert preview_response["capabilities"] == [list(item) for item in capabilities]
-    assert grant_response["capabilities"] == [list(item) for item in capabilities]
+    assert preview_response["capabilities"] == [
+        list(item) for item in capabilities
+    ]
+    assert grant_response["capabilities"] == [
+        list(item) for item in capabilities
+    ]
     route_paths = {route.path for route in router_module.router.routes}
-    assert "/sealed-agents/{agent_id}/releases/{release_id}/grant" in route_paths
+    assert (
+        "/sealed-agents/{agent_id}/releases/{release_id}/grant" in route_paths
+    )
     assert all("capability" not in path for path in route_paths)
 
 
@@ -371,9 +443,17 @@ async def test_activation_registers_private_runtime_only_after_preload_succeeds(
 
     config = Config()
     saved = []
-    monkeypatch.setattr(router_module, "get_sealed_agent_service", lambda: Service())
+    monkeypatch.setattr(
+        router_module,
+        "get_sealed_agent_service",
+        lambda: Service(),
+    )
     monkeypatch.setattr(router_module, "load_config", lambda: config)
-    monkeypatch.setattr(router_module, "save_config", lambda value: saved.append(value))
+    monkeypatch.setattr(
+        router_module,
+        "save_config",
+        lambda value: saved.append(value),
+    )
     request = _request()
     request.app = SimpleNamespace(
         state=SimpleNamespace(multi_agent_manager=Manager()),
@@ -386,7 +466,9 @@ async def test_activation_registers_private_runtime_only_after_preload_succeeds(
     )
 
     assert response["agent_id"] == "luyu"
-    assert config.agents.profiles["luyu"].workspace_dir == str(release_root / "agent")
+    assert config.agents.profiles["luyu"].workspace_dir == str(
+        release_root / "agent",
+    )
     assert saved
 
 
@@ -451,7 +533,11 @@ async def test_activation_failure_restores_previous_profile_and_runtime(
     config = Config()
     config.agents.profiles["luyu"] = previous
     manager = Manager()
-    monkeypatch.setattr(router_module, "get_sealed_agent_service", lambda: Service())
+    monkeypatch.setattr(
+        router_module,
+        "get_sealed_agent_service",
+        lambda: Service(),
+    )
     monkeypatch.setattr(router_module, "load_config", lambda: config)
     monkeypatch.setattr(router_module, "save_config", lambda _value: None)
     request = _request()
@@ -528,7 +614,11 @@ async def test_first_activation_failure_stops_partially_loaded_runtime(
 
     config = Config()
     manager = Manager()
-    monkeypatch.setattr(router_module, "get_sealed_agent_service", lambda: Service())
+    monkeypatch.setattr(
+        router_module,
+        "get_sealed_agent_service",
+        lambda: Service(),
+    )
     monkeypatch.setattr(router_module, "load_config", lambda: config)
     monkeypatch.setattr(router_module, "save_config", lambda _value: None)
     request = _request()
@@ -599,13 +689,21 @@ async def test_disable_stops_loaded_runtime_and_config(monkeypatch):
     from qwenpaw.config.config import AgentProfileRef
 
     config.agents.profiles["luyu"] = AgentProfileRef(
-        id="luyu", workspace_dir="/private/release", enabled=True
+        id="luyu",
+        workspace_dir="/private/release",
+        enabled=True,
     )
-    monkeypatch.setattr(router_module, "get_sealed_agent_service", lambda: Service())
+    monkeypatch.setattr(
+        router_module,
+        "get_sealed_agent_service",
+        lambda: Service(),
+    )
     monkeypatch.setattr(router_module, "load_config", lambda: config)
     monkeypatch.setattr(router_module, "save_config", lambda _value: None)
     request = _request()
-    request.app = SimpleNamespace(state=SimpleNamespace(multi_agent_manager=Manager()))
+    request.app = SimpleNamespace(
+        state=SimpleNamespace(multi_agent_manager=Manager()),
+    )
 
     response = await router_module.disable_sealed_agent("luyu", request)
 
@@ -621,40 +719,60 @@ async def test_avatar_upload_persists_normalized_image(monkeypatch, tmp_path):
 
     registry = SealedAgentRegistry(tmp_path)
     registry.upsert_agent(_record())
-    monkeypatch.setattr(router_module, "get_sealed_agent_registry", lambda: registry)
+    monkeypatch.setattr(
+        router_module,
+        "get_sealed_agent_registry",
+        lambda: registry,
+    )
     data = BytesIO()
     Image.new("RGB", (16, 16), "gold").save(data, format="PNG")
     data.seek(0)
     result = await router_module.upload_sealed_agent_avatar(
-        "luyu", _request(), UploadFile(data, filename="avatar.png")
+        "luyu",
+        _request(),
+        UploadFile(data, filename="avatar.png"),
     )
     assert result["avatar"].startswith("data:image/png;base64,")
     assert registry.get_agent("luyu").avatar == result["avatar"]
 
 
 @pytest.mark.asyncio
-async def test_avatar_upload_rejects_non_admin_and_invalid_image(monkeypatch, tmp_path):
+async def test_avatar_upload_rejects_non_admin_and_invalid_image(
+    monkeypatch,
+    tmp_path,
+):
     from qwenpaw.app.sealed_agents.registry import SealedAgentRegistry
 
     registry = SealedAgentRegistry(tmp_path)
     registry.upsert_agent(_record())
-    monkeypatch.setattr(router_module, "get_sealed_agent_registry", lambda: registry)
+    monkeypatch.setattr(
+        router_module,
+        "get_sealed_agent_registry",
+        lambda: registry,
+    )
     for role, status in [("user", 403), ("admin", 400)]:
         with pytest.raises(HTTPException) as error:
             await router_module.upload_sealed_agent_avatar(
-                "luyu", _request(role), UploadFile(BytesIO(b"not an image"))
+                "luyu",
+                _request(role),
+                UploadFile(BytesIO(b"not an image")),
             )
         assert error.value.status_code == status
 
 
 @pytest.mark.asyncio
 async def test_avatar_upload_rejects_missing_expert_and_oversized_upload(
-    monkeypatch, tmp_path
+    monkeypatch,
+    tmp_path,
 ):
     from qwenpaw.app.sealed_agents.registry import SealedAgentRegistry
 
     registry = SealedAgentRegistry(tmp_path)
-    monkeypatch.setattr(router_module, "get_sealed_agent_registry", lambda: registry)
+    monkeypatch.setattr(
+        router_module,
+        "get_sealed_agent_registry",
+        lambda: registry,
+    )
     with pytest.raises(HTTPException) as missing:
         await router_module.upload_sealed_agent_avatar(
             "unknown",
@@ -675,55 +793,84 @@ async def test_avatar_upload_rejects_missing_expert_and_oversized_upload(
 
 @pytest.mark.asyncio
 async def test_banner_upload_is_independent_and_keeps_image_proportions(
-    monkeypatch, tmp_path
+    monkeypatch,
+    tmp_path,
 ):
     import base64
     from PIL import Image
     from qwenpaw.app.sealed_agents.registry import SealedAgentRegistry
 
     registry = SealedAgentRegistry(tmp_path)
-    registry.upsert_agent(_record().model_copy(update={"avatar": "existing-avatar"}))
-    monkeypatch.setattr(router_module, "get_sealed_agent_registry", lambda: registry)
+    registry.upsert_agent(
+        _record().model_copy(update={"avatar": "existing-avatar"}),
+    )
+    monkeypatch.setattr(
+        router_module,
+        "get_sealed_agent_registry",
+        lambda: registry,
+    )
     data = BytesIO()
     Image.new("RGB", (1800, 150), "blue").save(data, format="PNG")
     data.seek(0)
     result = await router_module.upload_sealed_agent_banner(
-        "luyu", _request(), UploadFile(data)
+        "luyu",
+        _request(),
+        UploadFile(data),
     )
     assert result["avatar"] == "existing-avatar"
     with Image.open(
-        BytesIO(base64.b64decode(result["banner_image"].split(",", 1)[1]))
+        BytesIO(base64.b64decode(result["banner_image"].split(",", 1)[1])),
     ) as image:
         assert image.size == (1800, 150)
     assert registry.get_agent("luyu").banner_image == result["banner_image"]
 
 
 @pytest.mark.asyncio
-async def test_banner_upload_rejects_invalid_image_and_non_admin(monkeypatch, tmp_path):
+async def test_banner_upload_rejects_invalid_image_and_non_admin(
+    monkeypatch,
+    tmp_path,
+):
     from qwenpaw.app.sealed_agents.registry import SealedAgentRegistry
 
     registry = SealedAgentRegistry(tmp_path)
     registry.upsert_agent(_record())
-    monkeypatch.setattr(router_module, "get_sealed_agent_registry", lambda: registry)
+    monkeypatch.setattr(
+        router_module,
+        "get_sealed_agent_registry",
+        lambda: registry,
+    )
     for role, code in [("user", 403), ("admin", 400)]:
         with pytest.raises(HTTPException) as error:
             await router_module.upload_sealed_agent_banner(
-                "luyu", _request(role), UploadFile(BytesIO(b"bad"))
+                "luyu",
+                _request(role),
+                UploadFile(BytesIO(b"bad")),
             )
         assert error.value.status_code == code
 
 
 @pytest.mark.asyncio
-async def test_banner_size_limit_preserves_existing_media(monkeypatch, tmp_path):
+async def test_banner_size_limit_preserves_existing_media(
+    monkeypatch,
+    tmp_path,
+):
     from qwenpaw.app.sealed_agents.registry import SealedAgentRegistry
 
     registry = SealedAgentRegistry(tmp_path)
-    original = _record().model_copy(update={"avatar": "avatar", "banner_image": "banner"})
+    original = _record().model_copy(
+        update={"avatar": "avatar", "banner_image": "banner"},
+    )
     registry.upsert_agent(original)
-    monkeypatch.setattr(router_module, "get_sealed_agent_registry", lambda: registry)
+    monkeypatch.setattr(
+        router_module,
+        "get_sealed_agent_registry",
+        lambda: registry,
+    )
     with pytest.raises(HTTPException) as error:
         await router_module.upload_sealed_agent_banner(
-            "luyu", _request(), UploadFile(BytesIO(b"x" * (5 * 1024 * 1024 + 1))),
+            "luyu",
+            _request(),
+            UploadFile(BytesIO(b"x" * (5 * 1024 * 1024 + 1))),
         )
     assert error.value.status_code == 400
     assert registry.get_agent("luyu") == original
@@ -732,7 +879,7 @@ async def test_banner_size_limit_preserves_existing_media(monkeypatch, tmp_path)
 @pytest.mark.asyncio
 async def test_delete_requires_admin():
     with pytest.raises(HTTPException) as error:
-        await router_module.delete_sealed_agent('luyu', _request('user'))
+        await router_module.delete_sealed_agent("luyu", _request("user"))
     assert error.value.status_code == 403
 
 
@@ -742,18 +889,31 @@ async def test_delete_removes_profile_and_stops_runtime(monkeypatch):
     from qwenpaw.config.config import AgentProfileRef
 
     config = Config()
-    config.agents.profiles['luyu'] = AgentProfileRef(id='luyu', workspace_dir='/tmp/luyu', enabled=False)
+    config.agents.profiles["luyu"] = AgentProfileRef(
+        id="luyu",
+        workspace_dir="/tmp/luyu",
+        enabled=False,
+    )
     service = Mock()
-    monkeypatch.setattr(router_module, 'get_sealed_agent_service', lambda: service)
-    monkeypatch.setattr(router_module, 'load_config', lambda: config)
+    monkeypatch.setattr(
+        router_module,
+        "get_sealed_agent_service",
+        lambda: service,
+    )
+    monkeypatch.setattr(router_module, "load_config", lambda: config)
     save = Mock()
-    monkeypatch.setattr(router_module, 'save_config', save)
-    manager = SimpleNamespace(is_agent_loaded=lambda _: True, stop_agent=AsyncMock())
+    monkeypatch.setattr(router_module, "save_config", save)
+    manager = SimpleNamespace(
+        is_agent_loaded=lambda _: True,
+        stop_agent=AsyncMock(),
+    )
     request = _request()
-    request.app = SimpleNamespace(state=SimpleNamespace(multi_agent_manager=manager))
-    result = await router_module.delete_sealed_agent('luyu', request)
-    assert result['deleted']
-    assert 'luyu' not in config.agents.profiles
-    service.delete.assert_called_once_with('luyu', actor='1')
-    manager.stop_agent.assert_awaited_once_with('luyu')
+    request.app = SimpleNamespace(
+        state=SimpleNamespace(multi_agent_manager=manager),
+    )
+    result = await router_module.delete_sealed_agent("luyu", request)
+    assert result["deleted"]
+    assert "luyu" not in config.agents.profiles
+    service.delete.assert_called_once_with("luyu", actor="1")
+    manager.stop_agent.assert_awaited_once_with("luyu")
     save.assert_called_once_with(config)

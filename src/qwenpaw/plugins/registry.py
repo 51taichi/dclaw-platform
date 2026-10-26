@@ -122,6 +122,42 @@ class WorkspaceContextEnricherRegistration:
     priority: int = 100
 
 
+@dataclass(frozen=True)
+class WorkspaceTurnHandlerRegistration:
+    """Plugin-owned handler for one orchestration capability."""
+
+    plugin_id: str
+    capability_id: str
+    callback: Callable
+
+
+@dataclass(frozen=True)
+class AigcEventConsumerFactoryRegistration:
+    """Factory contributing an optional consumer to core AIGC recovery."""
+
+    plugin_id: str
+    name: str
+    factory: Callable
+
+
+@dataclass(frozen=True)
+class AigcCanvasPolicyRegistration:
+    """Plugin policy evaluated for a managed AIGC canvas."""
+
+    plugin_id: str
+    name: str
+    callback: Callable
+
+
+@dataclass(frozen=True)
+class SealedPackageTypeRegistration:
+    """Lifecycle handler for an extension-owned sealed package type."""
+
+    plugin_id: str
+    package_type: str
+    handler: Any
+
+
 class PluginRegistry:  # pylint:disable=too-many-public-methods
     """Central plugin registry (Singleton).
 
@@ -156,11 +192,24 @@ class PluginRegistry:  # pylint:disable=too-many-public-methods
         self._asgi_app_registrations: List[AsgiAppRegistration] = []
         self._http_prefix_to_plugin: Dict[str, str] = {}
         self._platform_capabilities: Dict[
-            str, PlatformCapabilityRegistration
+            str,
+            PlatformCapabilityRegistration,
         ] = {}
         self._workspace_context_enrichers: List[
             WorkspaceContextEnricherRegistration
         ] = []
+        self._workspace_turn_handlers: Dict[
+            str,
+            WorkspaceTurnHandlerRegistration,
+        ] = {}
+        self._aigc_event_consumer_factories: List[
+            AigcEventConsumerFactoryRegistration
+        ] = []
+        self._aigc_canvas_policies: List[AigcCanvasPolicyRegistration] = []
+        self._sealed_package_types: Dict[
+            str,
+            SealedPackageTypeRegistration,
+        ] = {}
 
         self._initialized = True
 
@@ -367,6 +416,112 @@ class PluginRegistry:  # pylint:disable=too-many-public-methods
         self,
     ) -> List[WorkspaceContextEnricherRegistration]:
         return list(self._workspace_context_enrichers)
+
+    def register_workspace_turn_handler(
+        self,
+        plugin_id: str,
+        capability_id: str,
+        callback: Callable,
+    ) -> None:
+        if capability_id in self._workspace_turn_handlers:
+            owner = self._workspace_turn_handlers[capability_id].plugin_id
+            raise ValueError(
+                f"Workspace turn handler '{capability_id}' is already "
+                f"registered by plugin '{owner}'",
+            )
+        self._workspace_turn_handlers[
+            capability_id
+        ] = WorkspaceTurnHandlerRegistration(
+            plugin_id=plugin_id,
+            capability_id=capability_id,
+            callback=callback,
+        )
+
+    def get_workspace_turn_handler(
+        self,
+        capability_id: str,
+    ) -> WorkspaceTurnHandlerRegistration | None:
+        return self._workspace_turn_handlers.get(capability_id)
+
+    def register_aigc_event_consumer_factory(
+        self,
+        plugin_id: str,
+        name: str,
+        factory: Callable,
+    ) -> None:
+        if any(
+            item.name == name for item in self._aigc_event_consumer_factories
+        ):
+            raise ValueError(
+                f"AIGC event consumer factory already exists: {name}",
+            )
+        self._aigc_event_consumer_factories.append(
+            AigcEventConsumerFactoryRegistration(plugin_id, name, factory),
+        )
+
+    def get_aigc_event_consumer_factories(
+        self,
+    ) -> List[AigcEventConsumerFactoryRegistration]:
+        return list(self._aigc_event_consumer_factories)
+
+    def register_aigc_canvas_policy(
+        self,
+        plugin_id: str,
+        name: str,
+        callback: Callable,
+    ) -> None:
+        if any(item.name == name for item in self._aigc_canvas_policies):
+            raise ValueError(f"AIGC canvas policy already exists: {name}")
+        self._aigc_canvas_policies.append(
+            AigcCanvasPolicyRegistration(plugin_id, name, callback),
+        )
+
+    def get_aigc_canvas_policies(self) -> List[AigcCanvasPolicyRegistration]:
+        return list(self._aigc_canvas_policies)
+
+    def register_sealed_package_type(
+        self,
+        plugin_id: str,
+        package_type: str,
+        handler: Any,
+    ) -> None:
+        if package_type in self._sealed_package_types:
+            owner = self._sealed_package_types[package_type].plugin_id
+            raise ValueError(
+                f"Sealed package type '{package_type}' is already registered "
+                f"by plugin '{owner}'",
+            )
+        self._sealed_package_types[
+            package_type
+        ] = SealedPackageTypeRegistration(
+            plugin_id=plugin_id,
+            package_type=package_type,
+            handler=handler,
+        )
+
+    def get_sealed_package_type(
+        self,
+        package_type: str,
+    ) -> SealedPackageTypeRegistration | None:
+        return self._sealed_package_types.get(package_type)
+
+    def get_sealed_package_types(
+        self,
+    ) -> Dict[str, SealedPackageTypeRegistration]:
+        return self._sealed_package_types.copy()
+
+    def sealed_package_type_supports(
+        self,
+        package_type: str,
+        feature: str,
+    ) -> bool:
+        registration = self.get_sealed_package_type(package_type)
+        supports = (
+            getattr(registration.handler, "supports_runtime_feature", None)
+            if registration is not None
+            else None
+        )
+        return bool(callable(supports) and supports(feature))
 
     async def enrich_workspace_context(
         self,
@@ -708,6 +863,26 @@ class PluginRegistry:  # pylint:disable=too-many-public-methods
             for item in self._workspace_context_enrichers
             if item.plugin_id != plugin_id
         ]
+        self._workspace_turn_handlers = {
+            capability_id: item
+            for capability_id, item in self._workspace_turn_handlers.items()
+            if item.plugin_id != plugin_id
+        }
+        self._aigc_event_consumer_factories = [
+            item
+            for item in self._aigc_event_consumer_factories
+            if item.plugin_id != plugin_id
+        ]
+        self._aigc_canvas_policies = [
+            item
+            for item in self._aigc_canvas_policies
+            if item.plugin_id != plugin_id
+        ]
+        self._sealed_package_types = {
+            package_type: item
+            for package_type, item in self._sealed_package_types.items()
+            if item.plugin_id != plugin_id
+        }
         logger.info(
             f"Unregistered all entries for plugin '{plugin_id}'",
         )

@@ -130,8 +130,10 @@ class PreparedBillingExecution:
                     .where(
                         billing_executions.c.id == self.session.execution_id,
                         billing_executions.c.state == "running",
-                        billing_executions.c.owner_token == self.fence.owner_token,
-                        billing_executions.c.fence_generation == self.fence.generation,
+                        billing_executions.c.owner_token
+                        == self.fence.owner_token,
+                        billing_executions.c.fence_generation
+                        == self.fence.generation,
                         billing_executions.c.lease_expires_at
                         > func.current_timestamp(),
                     )
@@ -152,7 +154,8 @@ class PreparedBillingExecution:
                     update(expert_team_member_runs)
                     .where(
                         expert_team_member_runs.c.run_id == run_id,
-                        expert_team_member_runs.c.member_key == next_member_key,
+                        expert_team_member_runs.c.member_key
+                        == next_member_key,
                         expert_team_member_runs.c.state == "running",
                     )
                     .values(
@@ -165,18 +168,32 @@ class PreparedBillingExecution:
             return False
 
 
-def _meter_for_source(usage_service: UsageService, source: BillingSource) -> BillingModelMeter:
+def _meter_for_source(
+    usage_service: UsageService,
+    source: BillingSource,
+) -> BillingModelMeter:
     """Use the same base/expert budgets for all authenticated entry points."""
     from ..sealed_agents.registry import get_sealed_agent_registry
 
     output_tokens = 2048
     if source.expert_id:
         record = get_sealed_agent_registry().get_agent(source.expert_id)
-        if (record is not None and record.enabled
-                and record.active_release is not None
-                and record.active_release.package_type == "super_expert"):
-            output_tokens = 4096
-    return BillingModelMeter(usage_service, default_max_output_tokens=output_tokens)
+        if (
+            record is not None
+            and record.enabled
+            and record.active_release is not None
+        ):
+            from ...plugins.registry import PluginRegistry
+
+            if PluginRegistry().sealed_package_type_supports(
+                record.active_release.package_type,
+                "extended_output",
+            ):
+                output_tokens = 4096
+    return BillingModelMeter(
+        usage_service,
+        default_max_output_tokens=output_tokens,
+    )
 
 
 def prepare_user_billing_execution(

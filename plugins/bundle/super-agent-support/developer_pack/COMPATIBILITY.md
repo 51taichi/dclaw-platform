@@ -2,8 +2,8 @@
 
 | Component | Supported version |
 |---|---|
-| Developer pack | 1.0.x, 1.1.x and 1.2.x |
-| Development standard | 2.1, 2.2 and 2.3 |
+| Developer pack | 1.0.x, 1.1.x, 1.2.x and 1.3.x |
+| Development standard | 2.1, 2.2, 2.3 and 2.4 |
 | Super Agent DevKit | 1.2.x and 1.3.x |
 | Super Expert manifest | 3 |
 | Runtime / runtime host | 1 |
@@ -14,6 +14,7 @@
 | Support plugin for developer pack 1.0.x download | >= 1.5.0 |
 | Support plugin for developer pack 1.1.x download | >= 1.6.0 |
 | Support plugin for developer pack 1.2.x download | >= 1.7.0 |
+| Support plugin for developer pack 1.3.x download | >= 1.8.0 |
 | DClaw Windows client for required preflight | >= 2.6.12 |
 | DClaw Windows client for local file workflows | >= 2.6.13 |
 | Runner | >= 1.0.0; >= 1.1.0 for device protocol 2 file workflows |

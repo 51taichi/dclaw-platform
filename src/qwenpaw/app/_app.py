@@ -95,8 +95,7 @@ mimetypes.add_type("application/wasm", ".wasm")
 load_envs_into_environ()
 
 
-def _reconcile_sealed_agent_profiles(
-) -> WorkspaceReconciliationResult | None:
+def _reconcile_sealed_agent_profiles() -> WorkspaceReconciliationResult | None:
     """Best-effort startup alignment isolated from ordinary Agent startup."""
 
     try:
@@ -618,12 +617,7 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
     aigc_repository = AigcExecutionRepository(get_app_engine())
     aigc_recovery = AigcRecoveryWorker(
         AigcJobLifecycle(AigcResourceStore(STUDIO_ROOT), aigc_repository),
-        build_event_consumers(
-            aigc_repository, get_runtime_event_bus(),
-            enable_super_experts=os.getenv(
-                "QWENPAW_SUPER_EXPERT_AIGC_EVENTS_ENABLED", "true",
-            ).strip().lower() in {"1", "true", "yes", "on"},
-        ),
+        build_event_consumers(aigc_repository, get_runtime_event_bus()),
     )
     app.state.aigc_recovery_worker = aigc_recovery
     aigc_recovery.start()

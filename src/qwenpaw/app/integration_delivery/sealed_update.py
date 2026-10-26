@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Transparent signed-release adapter for sealed and super-expert Agents."""
+"""Transparent signed-release adapter for sealed package types."""
 
 from __future__ import annotations
 
@@ -22,7 +22,6 @@ from ..sealed_agents.package import (
     build_signed_package_bytes,
 )
 from ..sealed_agents.service import SealedAgentService
-from ..super_experts.capabilities import validate_super_expert_manifest
 from .update import (
     AgentApplyReceipt,
     DeliveryBundleError,
@@ -45,7 +44,7 @@ def _load_signer(
     path: Path,
     service: SealedAgentService | Any,
     *,
-    super_expert: bool,
+    package_type: str,
 ) -> tuple[str, Ed25519PrivateKey]:
     try:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -79,8 +78,12 @@ def _load_signer(
         raise SealedDeliveryError(
             "sealed delivery trusted signer does not match",
         )
-    if super_expert and not service.super_expert_trust_store.is_official(
-        signer_id,
+    if (
+        package_type != "sealed_agent"
+        and not service.is_signer_authorized_for_package_type(
+            package_type,
+            signer_id,
+        )
     ):
         raise SealedDeliveryError(
             "sealed delivery trusted signer is not official",
@@ -188,7 +191,7 @@ def apply_sealed_agent_source(
             or Path(SECRET_DIR) / "integration_delivery_signer.json",
         ),
         sealed_service,
-        super_expert=package_type == "super_expert",
+        package_type=package_type,
     )
     next_manifest = dict(manifest)
     next_manifest.update(
@@ -197,18 +200,16 @@ def apply_sealed_agent_source(
             "signer_id": signer_id,
         },
     )
-    if package_type == "super_expert":
-        validate_super_expert_manifest(
-            SealedPackageManifest.model_validate(next_manifest),
-            sealed_service.super_expert_trust_store,
-        )
+    sealed_service.validate_extension_manifest(
+        SealedPackageManifest.model_validate(next_manifest),
+    )
     package = build_signed_package_bytes(
         next_manifest,
         bundle.agent_files,
         private_key,
     )
     release = sealed_service.install(package)
-    if package_type == "super_expert":
+    if sealed_service.package_type_requires_installation_grant(package_type):
         sealed_service.grant_installation(
             bundle.agent_id,
             release.release_id,
@@ -267,7 +268,7 @@ def validate_sealed_agent_source(
             or Path(SECRET_DIR) / "integration_delivery_signer.json",
         ),
         sealed_service,
-        super_expert=package_type == "super_expert",
+        package_type=package_type,
     )
     next_manifest = dict(manifest)
     next_manifest.update(
@@ -276,11 +277,9 @@ def validate_sealed_agent_source(
             "signer_id": signer_id,
         },
     )
-    if package_type == "super_expert":
-        validate_super_expert_manifest(
-            SealedPackageManifest.model_validate(next_manifest),
-            sealed_service.super_expert_trust_store,
-        )
+    sealed_service.validate_extension_manifest(
+        SealedPackageManifest.model_validate(next_manifest),
+    )
     build_signed_package_bytes(next_manifest, bundle.agent_files, private_key)
 
 

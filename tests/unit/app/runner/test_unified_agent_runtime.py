@@ -8,8 +8,26 @@ from agentscope.message import Msg
 from qwenpaw.app.runner import runner as runner_module
 from qwenpaw.app.runner.runner import AgentRunner
 from qwenpaw.config.config import OrchestrationConfig
+from qwenpaw.app.workspace import orchestration as orchestration_module
 from qwenpaw.app.workspace.orchestration import WorkspaceTurnResult
 from qwenpaw.app.sealed_agents import registry as registry_module
+from qwenpaw.plugins.registry import PluginRegistry
+
+
+@pytest.fixture(autouse=True)
+def _registered_workspace_turn_handler():
+    registry = PluginRegistry()
+    previous = registry._workspace_turn_handlers.copy()
+    registry._workspace_turn_handlers.clear()
+    registry.register_workspace_turn_handler(
+        "test.super-agent-support",
+        "workspace.turn.orchestrate/1",
+        orchestration_module.handle_workspace_turn,
+    )
+    try:
+        yield
+    finally:
+        registry._workspace_turn_handlers = previous
 
 
 def _request():
@@ -117,7 +135,9 @@ async def test_undeclared_business_turn_uses_exact_standard_agent_path(
         yield await coroutine_task, True
 
     def fail_authorization(**_kwargs):
-        pytest.fail("undeclared Agent must not resolve orchestration authorization")
+        pytest.fail(
+            "undeclared Agent must not resolve orchestration authorization",
+        )
 
     monkeypatch.setattr(
         runner_module,
@@ -125,7 +145,7 @@ async def test_undeclared_business_turn_uses_exact_standard_agent_path(
         fake_stream,
     )
     monkeypatch.setattr(
-        runner_module,
+        orchestration_module,
         "resolve_active_workspace_authorization",
         fail_authorization,
         raising=False,
@@ -160,14 +180,16 @@ async def test_declared_turn_never_falls_back_to_direct_model_on_failure(
 ):
     class Agent:
         async def __call__(self, _messages):
-            pytest.fail("Runner must not directly invoke the model as fallback")
+            pytest.fail(
+                "Runner must not directly invoke the model as fallback",
+            )
 
     authorization = SimpleNamespace(
         installation_id="installation-1",
         granted_capabilities={},
     )
     monkeypatch.setattr(
-        runner_module,
+        orchestration_module,
         "resolve_active_workspace_authorization",
         lambda **_kwargs: authorization,
         raising=False,
@@ -189,7 +211,7 @@ async def test_declared_turn_never_falls_back_to_direct_model_on_failure(
         return WorkspaceTurnResult(error_code="orchestration_timeout")
 
     monkeypatch.setattr(
-        runner_module,
+        orchestration_module,
         "run_workspace_orchestration_turn",
         fail_closed,
         raising=False,
@@ -261,7 +283,7 @@ async def test_declared_turn_passes_loaded_conversation_history_to_runtime(
         granted_capabilities={},
     )
     monkeypatch.setattr(
-        runner_module,
+        orchestration_module,
         "resolve_active_workspace_authorization",
         lambda **_kwargs: authorization,
         raising=False,
@@ -282,11 +304,15 @@ async def test_declared_turn_passes_loaded_conversation_history_to_runtime(
         assert kwargs["original_messages"] == current_messages
         assert kwargs["conversation_history"] == prior_history
         return WorkspaceTurnResult(
-            message={"name": "assistant", "role": "assistant", "content": "继续"},
+            message={
+                "name": "assistant",
+                "role": "assistant",
+                "content": "继续",
+            },
         )
 
     monkeypatch.setattr(
-        runner_module,
+        orchestration_module,
         "run_workspace_orchestration_turn",
         capture_history,
         raising=False,
@@ -332,7 +358,10 @@ async def test_active_release_can_review_a_task_bound_to_its_previous_installati
     tmp_path,
 ):
     from qwenpaw.app.super_experts.models import AigcTaskBinding
-    from qwenpaw.app.workspace.media_review_context import bind_review_input
+
+    bind_review_input = (
+        orchestration_module._media_review_context.bind_review_input
+    )
 
     old_binding = AigcTaskBinding(
         installation_id="old-installation",
@@ -359,7 +388,7 @@ async def test_active_release_can_review_a_task_bound_to_its_previous_installati
         granted_capabilities={"aigc.review.complete": "1"},
     )
     monkeypatch.setattr(
-        runner_module,
+        orchestration_module,
         "resolve_active_workspace_authorization",
         lambda **_kwargs: authorization,
         raising=False,
@@ -404,11 +433,15 @@ async def test_active_release_can_review_a_task_bound_to_its_previous_installati
             },
         )
         return WorkspaceTurnResult(
-            message={"name": "assistant", "role": "assistant", "content": "审核完成"},
+            message={
+                "name": "assistant",
+                "role": "assistant",
+                "content": "审核完成",
+            },
         )
 
     monkeypatch.setattr(
-        runner_module,
+        orchestration_module,
         "run_workspace_orchestration_turn",
         exercise_review_bridge,
         raising=False,
@@ -434,7 +467,10 @@ async def test_active_release_can_review_a_task_bound_to_its_previous_installati
         asset_id="asset-1",
         media_block={
             "type": "image",
-            "source": {"type": "url", "url": "https://example.test/review.png"},
+            "source": {
+                "type": "url",
+                "url": "https://example.test/review.png",
+            },
         },
         runtime_installation_id="active-installation",
     ):

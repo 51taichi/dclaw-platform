@@ -65,7 +65,7 @@ from ...security.skill_scanner import SkillScanError
 from ..chat_access import current_user_id, is_admin_request
 from ..runtime.event_bus import RuntimeEvent, get_runtime_event_bus
 from ..sealed_agents.registry import get_sealed_agent_registry
-from ..sealed_agents.skill_overlay import super_expert_skill_overlay_root
+from ..sealed_agents.skill_overlay import sealed_skill_overlay_root
 from ..utils import schedule_agent_reload
 from ..task_limits import get_task_limiter
 
@@ -214,9 +214,7 @@ def _workspace_skill_entry_for_access(
         entry.get("visibility") or pool_entry.get("visibility") or "",
     ).strip()
     owner_user_id = str(
-        entry.get("owner_user_id")
-        or pool_entry.get("owner_user_id")
-        or "",
+        entry.get("owner_user_id") or pool_entry.get("owner_user_id") or "",
     ).strip()
     if visibility:
         entry["visibility"] = visibility
@@ -373,10 +371,7 @@ def _sync_default_skill_to_all_workspaces(
                 workspace_dir=workspace_dir,
                 overwrite=True,
             )
-            if (
-                request is not None
-                and result.get("success", True)
-            ):
+            if request is not None and result.get("success", True):
                 schedule_agent_reload(request, workspace["agent_id"])
         except Exception:
             logger.warning(
@@ -579,11 +574,11 @@ def _skill_workspace_dir(
     """Resolve the only Skill storage exposed for this Agent type."""
     registry = get_sealed_agent_registry()
     if registry.is_sealed(agent_id):
-        if not registry.is_super_expert(agent_id):
+        if not registry.package_supports(agent_id, "mutable_skill_overlay"):
             raise ValueError(
-                f"Sealed Agent '{agent_id}' is not a super expert Skill target",
+                f"Sealed Agent '{agent_id}' does not support a Skill overlay",
             )
-        overlay_root = super_expert_skill_overlay_root(agent_id)
+        overlay_root = sealed_skill_overlay_root(agent_id)
         overlay_root.mkdir(parents=True, exist_ok=True)
         return overlay_root
     if configured_workspace_dir is None:
@@ -607,7 +602,10 @@ async def _workspace_dir_for_agent(agent_id: str, request: Request) -> Path:
 def _can_receive_platform_skill(agent_id: str) -> bool:
     """Allow ordinary Agents and active super experts as Skill targets."""
     registry = get_sealed_agent_registry()
-    return not registry.is_sealed(agent_id) or registry.is_super_expert(agent_id)
+    return not registry.is_sealed(agent_id) or registry.package_supports(
+        agent_id,
+        "mutable_skill_overlay",
+    )
 
 
 async def _workspace_dir_for_skill_download_target(
@@ -616,7 +614,7 @@ async def _workspace_dir_for_skill_download_target(
 ) -> Path:
     if not _can_receive_platform_skill(agent_id):
         raise ValueError(
-            f"Sealed Agent '{agent_id}' is not a super expert Skill target",
+            f"Sealed Agent '{agent_id}' does not support a Skill overlay",
         )
     return await _workspace_dir_for_agent(agent_id, request)
 
@@ -702,7 +700,11 @@ async def _hub_task_set_status(
 
 
 async def _publish_hub_install_event(task: HubInstallTask) -> None:
-    status = task.status.value if isinstance(task.status, HubInstallTaskStatus) else str(task.status)
+    status = (
+        task.status.value
+        if isinstance(task.status, HubInstallTaskStatus)
+        else str(task.status)
+    )
     try:
         await get_runtime_event_bus().publish(
             RuntimeEvent(
@@ -880,11 +882,11 @@ def _build_workspace_skill_specs(
                 skill_name,
             )
         try:
-            pool_entry = _normalize_manifest_entry(pool_entries.get(skill_name))
+            pool_entry = _normalize_manifest_entry(
+                pool_entries.get(skill_name),
+            )
             visibility = str(
-                entry.get("visibility")
-                or pool_entry.get("visibility")
-                or "",
+                entry.get("visibility") or pool_entry.get("visibility") or "",
             ).strip()
             owner_user_id = str(
                 entry.get("owner_user_id")
@@ -1044,12 +1046,15 @@ async def list_workspace_skill_sources(
     for workspace in workspaces:
         agent_id = workspace["agent_id"]
         is_sealed = sealed_registry.is_sealed(agent_id)
-        is_super_expert = sealed_registry.is_super_expert(agent_id)
-        if is_sealed and not is_super_expert:
+        has_skill_overlay = sealed_registry.package_supports(
+            agent_id,
+            "mutable_skill_overlay",
+        )
+        if is_sealed and not has_skill_overlay:
             continue
         workspace_dir = (
-            super_expert_skill_overlay_root(agent_id)
-            if is_super_expert
+            sealed_skill_overlay_root(agent_id)
+            if has_skill_overlay
             else Path(workspace["workspace_dir"])
         )
         summaries.append(
@@ -1300,9 +1305,7 @@ async def create_pool_skill(
         else PRIVATE_VISIBILITY
     )
     owner_user_id = (
-        current_user_id(request)
-        if visibility == PRIVATE_VISIBILITY
-        else ""
+        current_user_id(request) if visibility == PRIVATE_VISIBILITY else ""
     )
     try:
         created = SkillPoolService().create_skill(
@@ -1516,16 +1519,18 @@ async def _resolve_and_preflight(
             for workspace in list_workspaces()
             if _can_receive_platform_skill(workspace["agent_id"])
         ]
-        
+
         # Ensure the current request's agent is always included, even if not in global config
         from ..agent_context import get_agent_for_request
+
         current_agent = await get_agent_for_request(request)
-        if (
-            _can_receive_platform_skill(current_agent.agent_id)
-            and not any(t.workspace_id == current_agent.agent_id for t in targets)
+        if _can_receive_platform_skill(current_agent.agent_id) and not any(
+            t.workspace_id == current_agent.agent_id for t in targets
         ):
-            targets.append(PoolDownloadTarget(workspace_id=current_agent.agent_id))
-            
+            targets.append(
+                PoolDownloadTarget(workspace_id=current_agent.agent_id),
+            )
+
     if not targets:
         raise HTTPException(
             status_code=400,
@@ -1595,7 +1600,11 @@ async def download_pool_skill_to_workspaces(
     if body.preview_only:
         return {"downloaded": []}
 
-    execution_plan = await _build_download_plan(request, targets, body.skill_name)
+    execution_plan = await _build_download_plan(
+        request,
+        targets,
+        body.skill_name,
+    )
 
     downloaded: list[dict[str, str]] = []
     try:
@@ -1691,7 +1700,10 @@ async def update_pool_skill_governance(
         raise HTTPException(status_code=403, detail="Admin access required")
     _require_pool_skill_access(request, skill_name)
     if body.visibility is None and body.client_visible is None:
-        raise HTTPException(status_code=400, detail="No governance fields provided")
+        raise HTTPException(
+            status_code=400,
+            detail="No governance fields provided",
+        )
     _ensure_pool_skill_can_be_private(skill_name, body.visibility)
     updated = _apply_pool_skill_governance(
         skill_name,
@@ -1885,9 +1897,10 @@ async def batch_delete_pool_skills(
                         if not _can_receive_platform_skill(ws["agent_id"]):
                             continue
                         workspace_dir = (
-                            super_expert_skill_overlay_root(ws["agent_id"])
-                            if get_sealed_agent_registry().is_super_expert(
+                            sealed_skill_overlay_root(ws["agent_id"])
+                            if get_sealed_agent_registry().package_supports(
                                 ws["agent_id"],
+                                "mutable_skill_overlay",
                             )
                             else Path(ws["workspace_dir"])
                         )

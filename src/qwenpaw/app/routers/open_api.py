@@ -207,10 +207,16 @@ def _resolve_sealed_publication_release(
 def _output_profile_for_release(
     release: SealedReleaseRecord | None,
 ) -> OpenApiOutputProfile:
-    """Keep the larger output budget scoped to verified super experts."""
+    """Resolve optional output behavior from the package-type plugin."""
 
-    if release is not None and release.package_type == "super_expert":
-        return "super_expert"
+    if release is not None:
+        from ...plugins.registry import PluginRegistry
+
+        if PluginRegistry().sealed_package_type_supports(
+            release.package_type,
+            "extended_output",
+        ):
+            return "extended"
     return "default"
 
 

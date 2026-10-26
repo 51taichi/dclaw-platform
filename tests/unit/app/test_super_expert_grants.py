@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from qwenpaw.app.sealed_agents.models import (
@@ -95,7 +97,9 @@ def test_preview_rejects_missing_or_incompatible_platform_capability(tmp_path):
     with pytest.raises(SuperExpertGrantError, match="unavailable"):
         repository.preview(
             "agent-1",
-            _release(declared_capabilities=(*CAPABILITIES, ("card.create", "99"))),
+            _release(
+                declared_capabilities=(*CAPABILITIES, ("card.create", "99")),
+            ),
             tenant_id="tenant-a",
         )
 
@@ -189,7 +193,12 @@ def test_super_expert_activation_requires_the_exact_tenant_grant(tmp_path):
         root=tmp_path / "releases",
         registry=registry,
         trusted_signers={},
-        grant_repository=grant_repository,
+        package_type_handlers={
+            "super_expert": SimpleNamespace(
+                requires_installation_grant=True,
+                is_release_granted=grant_repository.is_release_granted,
+            ),
+        },
     )
 
     with pytest.raises(SealedAgentReleaseError, match="authorization"):
