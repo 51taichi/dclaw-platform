@@ -20,6 +20,19 @@ configuration. Add `capability-pack/windows-x64/capability-build.json` only when
 the artifact needs more files or a prebuilt ZIP, and add `tests` to
 `project.json` only when selecting pytest or custom test paths and arguments.
 
+When upgrading to pack 1.4.1 or later, every project with an optional or
+required local helper must add
+`capability-pack/windows-x64/resources.lock.json`. Set `release_ready=true` and
+`status=release-ready` only after all resource URLs are production HTTPS URLs on
+the declared allowlist and every resource has size, SHA-256, SBOM, license,
+cache-key, and rollback-version evidence. Earlier signed packages remain valid;
+the resource gate applies when producing a new release.
+
+Pack 1.5.0 adds DevKit 1.4.0 and the installation-bound business service
+identity contracts. Existing manifests remain valid. A rebuilt Agent may
+declare the new capability only after its service registration and exact
+installation/release grant exist on the target DClaw instance.
+
 ## Rollback
 
 Keep the previous developer pack ZIP, checksum, public key, last accepted Agent

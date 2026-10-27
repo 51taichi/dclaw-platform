@@ -9,12 +9,18 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
+from .business_identity import BusinessIdentityError, BusinessIdentityManager
 from .service import LocalExecutionService
 
 
 class LocalExecutionMcp:
-    def __init__(self, service: LocalExecutionService) -> None:
+    def __init__(
+        self,
+        service: LocalExecutionService,
+        business_identity: BusinessIdentityManager | None = None,
+    ) -> None:
         self.service = service
+        self.business_identity = business_identity
         self.server = FastMCP(
             "DClaw Local Execution",
             instructions=(
@@ -165,3 +171,56 @@ class LocalExecutionMcp:
             dclaw_session_token: str,
         ) -> dict[str, Any]:
             return await service.call("local_task_result", locals())
+
+        if self.business_identity is not None:
+            identity = self.business_identity
+
+            @self.server.tool(
+                description=(
+                    "Issue a one-time installation-bound reference for a registered "
+                    "business service. No bearer credential is returned."
+                ),
+            )
+            async def business_service_identity_issue(
+                service_id: str,
+                audience: str,
+                scopes: list[str],
+                idempotency_key: str,
+                dclaw_session_token: str,
+                ttl_seconds: int = 120,
+            ) -> dict[str, Any]:
+                try:
+                    return identity.issue(**locals())
+                except BusinessIdentityError as exc:
+                    return {
+                        "error": {
+                            "code": exc.code,
+                            "retryable": exc.reason == "RATE_LIMITED",
+                        },
+                    }
+
+            @self.server.tool(
+                description=(
+                    "Send one HTTPS request through the platform transport using a "
+                    "one-time business identity reference."
+                ),
+            )
+            async def business_service_outbound_request(
+                binding_ref: str,
+                method: str,
+                url: str,
+                dclaw_session_token: str,
+                headers: dict[str, str] | None = None,
+                json_body: Any | None = None,
+                text_body: str | None = None,
+                timeout_seconds: int = 30,
+            ) -> dict[str, Any]:
+                try:
+                    return await identity.outbound_request(**locals())
+                except BusinessIdentityError as exc:
+                    return {
+                        "error": {
+                            "code": exc.code,
+                            "retryable": exc.reason == "UPSTREAM_FAILED",
+                        },
+                    }

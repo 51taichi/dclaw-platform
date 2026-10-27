@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/schemas/business-identity-v1/verify-response.schema.json",
+  "title": "Business identity assertion verification response",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["active", "claims"],
+  "properties": {
+    "active": {"const": true},
+    "claims": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["iss", "aud", "sub", "jti", "iat", "nbf", "exp", "tenant_id", "user_id", "session_id", "agent_id", "release_id", "installation_id", "invocation_id", "service_id", "scopes"],
+      "properties": {
+        "iss": {"type": "string", "format": "uri"},
+        "aud": {"type": "string", "format": "uri"},
+        "sub": {"type": "string", "pattern": "^urn:dclaw:installation:[0-9a-f]{64}$"},
+        "jti": {"type": "string", "pattern": "^bij_[0-9a-f]{32}$"},
+        "iat": {"type": "integer"},
+        "nbf": {"type": "integer"},
+        "exp": {"type": "integer"},
+        "tenant_id": {"type": "string"},
+        "user_id": {"type": "string"},
+        "session_id": {"type": "string"},
+        "agent_id": {"type": "string"},
+        "release_id": {"type": "string"},
+        "installation_id": {"type": "string"},
+        "invocation_id": {"type": "string"},
+        "service_id": {"type": "string"},
+        "scopes": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      }
+    }
+  }
+}

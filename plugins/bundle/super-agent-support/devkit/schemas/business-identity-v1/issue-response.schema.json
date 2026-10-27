@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/schemas/business-identity-v1/issue-response.schema.json",
+  "title": "Business service installation identity issue response",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["binding_ref", "service_id", "audience", "scopes", "issued_at", "expires_at", "issuer", "key_id", "audit_id"],
+  "properties": {
+    "binding_ref": {"type": "string", "pattern": "^bir_[0-9a-f]{32}$"},
+    "service_id": {"type": "string", "maxLength": 128},
+    "audience": {"type": "string", "format": "uri", "pattern": "^https://"},
+    "scopes": {"type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": {"type": "string"}},
+    "issued_at": {"type": "integer", "minimum": 0},
+    "expires_at": {"type": "integer", "minimum": 1},
+    "issuer": {"type": "string", "format": "uri", "pattern": "^https://"},
+    "key_id": {"type": "string", "pattern": "^bik_[0-9a-f]{32}$"},
+    "audit_id": {"type": "string", "pattern": "^bia_[0-9a-f]{32}$"}
+  }
+}

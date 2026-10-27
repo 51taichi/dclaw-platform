@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "retention_rule": "persist each accepted (issuer,jti) until exp + clock_skew",
+  "cases": [
+    {"name": "first verification", "expected": "accepted"},
+    {"name": "sequential duplicate jti", "expected_error": "BUSINESS_IDENTITY.ASSERTION_REPLAYED"},
+    {"name": "concurrent duplicate jti", "expected": "exactly one accepted", "expected_error": "BUSINESS_IDENTITY.ASSERTION_REPLAYED"},
+    {"name": "different installation", "expected_error": "BUSINESS_IDENTITY.ASSERTION_INVALID"},
+    {"name": "different release", "expected_error": "BUSINESS_IDENTITY.ASSERTION_INVALID"},
+    {"name": "different agent", "expected_error": "BUSINESS_IDENTITY.ASSERTION_INVALID"},
+    {"name": "different service on the same audience", "expected_error": "BUSINESS_IDENTITY.ASSERTION_INVALID"},
+    {"name": "required scope missing", "expected_error": "BUSINESS_IDENTITY.ASSERTION_INVALID"}
+  ]
+}

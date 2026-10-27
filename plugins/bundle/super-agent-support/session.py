@@ -14,6 +14,7 @@ from typing import Any
 
 CAPABILITY_ID = "local.execution.session/1"
 PREFLIGHT_CAPABILITY_ID = "local.environment.preflight/1"
+BUSINESS_IDENTITY_CAPABILITY_ID = "business.service.installation-identity/1"
 CONTEXT_KEY = "local_execution_session_token"
 MAX_LIFETIME_SECONDS = 600
 
@@ -173,7 +174,13 @@ class SessionSigner:
         invocation_id: str,
     ) -> dict[str, Any]:
         result = dict(context)
-        if granted_capabilities.get(CAPABILITY_ID) != "1":
+        if not any(
+            granted_capabilities.get(capability_id) == "1"
+            for capability_id in (
+                CAPABILITY_ID,
+                BUSINESS_IDENTITY_CAPABILITY_ID,
+            )
+        ):
             return result
         result[CONTEXT_KEY] = self.issue(
             user_id=str(context.get("user_id") or ""),

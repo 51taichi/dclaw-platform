@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "status": "release-ready",
+  "release_ready": true,
+  "allowed_domains": [
+    "downloads.deepmega.cn"
+  ],
+  "resources": []
+}

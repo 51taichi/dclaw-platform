@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import importlib.util
 import io
 import json
 from pathlib import Path
 import re
+import sqlite3
 import subprocess
 import sys
+import time
 import zipfile
 
 import pytest
@@ -45,6 +48,51 @@ def _devkit():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _business_identity_verifier():
+    path = DEVKIT_ROOT / "business_identity_verifier.py"
+    spec = importlib.util.spec_from_file_location(
+        "standalone_business_identity_verifier",
+        path,
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _business_assertion(private_key, *, jti: str, now: int):
+    def encode(value):
+        raw = (
+            json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+            if isinstance(value, dict)
+            else value
+        )
+        return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+    header = {"alg": "EdDSA", "kid": "key-1", "typ": "JWT"}
+    payload = {
+        "iss": "https://dclaw.deepmega.cn/business-identity",
+        "aud": "https://service.deepmega.cn/v1",
+        "sub": "urn:dclaw:installation:" + "a" * 64,
+        "jti": jti,
+        "iat": now,
+        "nbf": now,
+        "exp": now + 120,
+        "tenant_id": "tenant-1",
+        "user_id": "user-1",
+        "session_id": "session-1",
+        "agent_id": "agent-1",
+        "release_id": "release-1",
+        "installation_id": "install-1",
+        "invocation_id": "invocation-1",
+        "service_id": "service-1",
+        "scopes": ["orders.read"],
+    }
+    signing_input = f"{encode(header)}.{encode(payload)}"
+    signature = private_key.sign(signing_input.encode("ascii"))
+    return f"{signing_input}.{encode(signature)}", payload
 
 
 def _key_files(tmp_path: Path) -> tuple[Ed25519PrivateKey, Path, Path]:
@@ -86,7 +134,7 @@ def test_devkit_has_no_server_source_import_and_runs_standalone():
     )
     result = json.loads(completed.stdout)
     assert result["status"] == "ok"
-    assert result["devkit_version"] == "1.3.0"
+    assert result["devkit_version"] == "1.4.0"
     assert result["dependency_mode"] == "bundled-wheelhouse"
     assert result["cryptography_version"] == "46.0.3"
     assert "schemas/super-expert-manifest.schema.json" in result["schemas"]
@@ -110,7 +158,7 @@ def test_devkit_bundles_and_verifies_locked_encryption_dependencies():
     )
     result = json.loads(completed.stdout)
     assert result["status"] == "ok"
-    assert result["devkit_version"] == "1.3.0"
+    assert result["devkit_version"] == "1.4.0"
     assert result["wheelhouse_verified"] is True
     assert result["wheelhouse_files"] == 26
 
@@ -157,7 +205,7 @@ def test_devkit_catalog_and_digest_match_platform_contract():
             tuple(item["dependencies"]),
         )
         for item in catalog["capabilities"]
-        if item["group"] != "local_execution"
+        if item["group"] not in {"local_execution", "business_identity"}
     }
     server_core = {
         capability_id: (
@@ -275,3 +323,110 @@ def test_devkit_schemas_are_valid_and_plugin_contracts_are_canonical():
         "device-message.schema.json",
     ):
         assert (bundled / name).read_bytes() == (canonical / name).read_bytes()
+
+
+def test_business_identity_offline_verifier_persists_jti_and_blocks_replay(
+    tmp_path,
+):
+    verifier = _business_identity_verifier()
+    private_key = Ed25519PrivateKey.generate()
+    public = private_key.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    jwks = {
+        "issuer": "https://dclaw.deepmega.cn/business-identity",
+        "keys": [
+            {
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "alg": "EdDSA",
+                "use": "sig",
+                "kid": "key-1",
+                "x": base64.urlsafe_b64encode(public)
+                .rstrip(b"=")
+                .decode("ascii"),
+                "status": "active",
+            },
+        ],
+    }
+    now = int(time.time())
+    assertion, expected = _business_assertion(
+        private_key,
+        jti="jti-offline-1",
+        now=now,
+    )
+    cache = verifier.SQLiteJtiReplayCache(tmp_path / "replay.sqlite3")
+    kwargs = {
+        "jwks": jwks,
+        "expected_issuer": expected["iss"],
+        "expected_audience": expected["aud"],
+        "expected_installation_id": expected["installation_id"],
+        "expected_release_id": expected["release_id"],
+        "expected_agent_id": expected["agent_id"],
+        "expected_service_id": expected["service_id"],
+        "required_scopes": ["orders.read"],
+        "replay_cache": cache,
+        "now": now,
+    }
+    for override in (
+        {"expected_agent_id": "agent-2"},
+        {"expected_service_id": "service-2"},
+        {"required_scopes": ["orders.write"]},
+    ):
+        with pytest.raises(
+            verifier.BusinessIdentityVerificationError,
+            match="BUSINESS_IDENTITY.ASSERTION_INVALID",
+        ):
+            verifier.verify_business_identity_assertion(
+                assertion,
+                **{**kwargs, **override},
+            )
+    assert verifier.verify_business_identity_assertion(
+        assertion,
+        **kwargs,
+    )["jti"] == "jti-offline-1"
+    with pytest.raises(
+        verifier.BusinessIdentityVerificationError,
+        match="BUSINESS_IDENTITY.ASSERTION_REPLAYED",
+    ):
+        verifier.verify_business_identity_assertion(assertion, **kwargs)
+    with sqlite3.connect(cache.path) as db:
+        retain_until = db.execute(
+            "SELECT retain_until FROM business_identity_consumed_jti",
+        ).fetchone()[0]
+    assert retain_until == expected["exp"] + 30
+
+    concurrent_assertion, expected = _business_assertion(
+        private_key,
+        jti="jti-offline-2",
+        now=now,
+    )
+
+    def verify_once():
+        try:
+            verifier.verify_business_identity_assertion(
+                concurrent_assertion,
+                **{**kwargs, "replay_cache": cache},
+            )
+            return "verified"
+        except verifier.BusinessIdentityVerificationError as exc:
+            return str(exc)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _index: verify_once(), range(2)))
+    assert sorted(results) == [
+        "BUSINESS_IDENTITY.ASSERTION_REPLAYED",
+        "verified",
+    ]
+    fixture = json.loads(
+        (
+            DEVKIT_ROOT
+            / "fixtures"
+            / "business-identity"
+            / "replay-cases.json"
+        ).read_text(encoding="utf-8"),
+    )
+    assert fixture["retention_rule"] == (
+        "persist each accepted (issuer,jti) until exp + clock_skew"
+    )

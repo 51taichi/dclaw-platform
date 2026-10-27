@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import hmac
 import importlib.util
@@ -12,6 +13,7 @@ import sys
 from pathlib import Path
 import zipfile
 
+import httpx
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -70,6 +72,10 @@ async def test_plugin_load_and_unload_are_isolated(tmp_path):
             "local.environment.preflight/1"
             in get_platform_capability_catalog()
         )
+        assert (
+            "business.service.installation-identity/1"
+            in get_platform_capability_catalog()
+        )
         assert any(
             getattr(route, "path", None) == "/api/super-agent-support"
             for route in app.routes
@@ -109,6 +115,22 @@ async def test_plugin_load_and_unload_are_isolated(tmp_path):
             invocation_id="invocation-1",
         )
         assert context["local_execution_session_token"]
+        business_context = await loader.registry.enrich_workspace_context(
+            {
+                "tenant_id": "tenant-1",
+                "user_id": "user-1",
+                "session_id": "session-1",
+                "agent_id": "agent-1",
+                "agent_name": "Agent One",
+                "installation_id": "install-1",
+                "release_id": "release-1",
+            },
+            granted_capabilities={
+                "business.service.installation-identity/1": "1",
+            },
+            invocation_id="invocation-2",
+        )
+        assert business_context["local_execution_session_token"]
 
         await loader.unload_plugin(record.manifest.id)
 
@@ -118,6 +140,10 @@ async def test_plugin_load_and_unload_are_isolated(tmp_path):
         )
         assert (
             "local.environment.preflight/1"
+            not in get_platform_capability_catalog()
+        )
+        assert (
+            "business.service.installation-identity/1"
             not in get_platform_capability_catalog()
         )
         assert not any(
@@ -464,7 +490,7 @@ def test_developer_kit_is_downloadable_without_server_source(
 
     assert metadata.status_code == 200
     assert metadata.json()["name"] == "dclaw-super-agent-devkit"
-    assert metadata.json()["version"] == "1.3.0"
+    assert metadata.json()["version"] == "1.4.0"
     assert metadata.json()["download_path"] == (
         "/api/super-agent-support/developer-kit/v1.zip"
     )
@@ -483,7 +509,7 @@ def test_developer_kit_is_downloadable_without_server_source(
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-devkit-1.3.0"
+    prefix = "dclaw-super-agent-devkit-1.4.0"
     assert f"{prefix}/dclaw_agent_devkit.py" in names
     assert f"{prefix}/bootstrap.ps1" in names
     assert f"{prefix}/bootstrap.sh" in names
@@ -523,20 +549,20 @@ def test_developer_pack_is_downloadable_and_self_describing(
 
     assert metadata.status_code == 200
     payload = metadata.json()
-    assert payload["version"] == "1.4.0"
-    assert payload["standard"]["version"] == "2.5"
-    assert payload["devkit_version"] == "1.3.0"
+    assert payload["version"] == "1.5.0"
+    assert payload["standard"]["version"] == "2.7"
+    assert payload["devkit_version"] == "1.4.0"
     assert payload["server_source_required"] is False
     assert payload["download_path"].endswith("/developer-pack/download")
     assert payload["sha256"] == hashlib.sha256(downloaded.content).hexdigest()
     assert payload["content_sha256"] == payload["sha256"]
     assert downloaded.status_code == 200
-    assert "dclaw-super-agent-developer-pack-1.4.0.zip" in (
+    assert "dclaw-super-agent-developer-pack-1.5.0.zip" in (
         downloaded.headers["content-disposition"]
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-developer-pack-1.4.0"
+    prefix = "dclaw-super-agent-developer-pack-1.5.0"
     assert f"{prefix}/PACKAGE-MANIFEST.json" in names
     assert f"{prefix}/SHA256SUMS" in names
     assert f"{prefix}/dclaw_developer.py" in names
@@ -1989,3 +2015,455 @@ def test_capability_descriptor_schema_and_signature(plugin_module, tmp_path):
             signer_id="developer-1",
             signature=signature,
         )
+
+
+BUSINESS_IDENTITY_CAPABILITY = "business.service.installation-identity/1"
+BUSINESS_ISSUER = "https://8.8.8.8/business-identity"
+BUSINESS_AUDIENCE = "https://8.8.8.8/business/v1"
+BUSINESS_VERIFY = {
+    "audience": BUSINESS_AUDIENCE,
+    "installation_id": "install-1",
+    "release_id": "release-1",
+    "agent_id": "agent-1",
+    "service_id": "service-1",
+    "required_scopes": ["orders.read"],
+}
+
+
+def _business_identity_runtime(plugin_module, tmp_path, *, transport=None):
+    store = plugin_module.StateStore(tmp_path / "business-identity.sqlite3")
+    signer = plugin_module.SessionSigner(b"i" * 32)
+    manager_cls = sys.modules[
+        "test_dclaw_super_agent_support.business_identity"
+    ].BusinessIdentityManager
+    manager = manager_cls(
+        store,
+        b"i" * 32,
+        signer,
+        issuer=BUSINESS_ISSUER,
+        transport=transport,
+    )
+    manager.register_service(
+        actor_id="admin-1",
+        developer_id="developer-1",
+        service_id="service-1",
+        audience=BUSINESS_AUDIENCE,
+        allowed_domains=["8.8.8.8"],
+        allowed_scopes=["orders.read", "orders.write"],
+    )
+    manager.grant_installation(
+        actor_id="admin-1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        agent_id="agent-1",
+        release_id="release-1",
+        installation_id="install-1",
+        service_id="service-1",
+        audience=BUSINESS_AUDIENCE,
+        scopes=["orders.read"],
+    )
+    token = signer.issue(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        session_id="session-1",
+        agent_id="agent-1",
+        agent_name="Agent One",
+        installation_id="install-1",
+        release_id="release-1",
+        invocation_id="invocation-1",
+        capability_ids=[BUSINESS_IDENTITY_CAPABILITY],
+    )
+    return store, signer, manager, token
+
+
+@pytest.mark.asyncio
+async def test_business_identity_issue_inject_verify_and_replay(
+    plugin_module,
+    tmp_path,
+):
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["authorization"] = request.headers["authorization"]
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            json={"accepted": True},
+        )
+
+    store, _signer, manager, token = _business_identity_runtime(
+        plugin_module,
+        tmp_path,
+        transport=httpx.MockTransport(handler),
+    )
+    issued = manager.issue(
+        dclaw_session_token=token,
+        service_id="service-1",
+        audience=BUSINESS_AUDIENCE,
+        scopes=["orders.read"],
+        idempotency_key="request-00000001",
+    )
+    assert set(issued) == {
+        "binding_ref",
+        "service_id",
+        "audience",
+        "scopes",
+        "issued_at",
+        "expires_at",
+        "issuer",
+        "key_id",
+        "audit_id",
+    }
+    assert "token" not in json.dumps(issued).lower()
+    response = await manager.outbound_request(
+        dclaw_session_token=token,
+        binding_ref=issued["binding_ref"],
+        method="POST",
+        url=f"{BUSINESS_AUDIENCE}/orders",
+        json_body={"order_id": "order-1"},
+    )
+    assert response == {
+        "status_code": 200,
+        "content_type": "application/json",
+        "body_text": '{"accepted":true}',
+    }
+    assertion = captured["authorization"].removeprefix("Bearer ")
+    with pytest.raises(
+        Exception,
+        match="BUSINESS_IDENTITY.ASSERTION_SCOPE_MISMATCH",
+    ):
+        manager.verify_assertion(
+            assertion,
+            **{**BUSINESS_VERIFY, "installation_id": "install-2"},
+        )
+    claims = manager.verify_assertion(assertion, **BUSINESS_VERIFY)
+    assert claims["installation_id"] == "install-1"
+    assert claims["release_id"] == "release-1"
+    assert claims["aud"] == BUSINESS_AUDIENCE
+    assert claims["scopes"] == ["orders.read"]
+    with pytest.raises(Exception, match="BUSINESS_IDENTITY.ASSERTION_REPLAYED"):
+        manager.verify_assertion(assertion, **BUSINESS_VERIFY)
+    with pytest.raises(Exception, match="BUSINESS_IDENTITY.BINDING_REPLAYED"):
+        await manager.outbound_request(
+            dclaw_session_token=token,
+            binding_ref=issued["binding_ref"],
+            method="GET",
+            url=f"{BUSINESS_AUDIENCE}/orders",
+        )
+    audit = manager.audit_records()
+    encoded_audit = json.dumps(audit)
+    assert {item["action"] for item in audit} >= {"issue", "inject"}
+    assert assertion not in encoded_audit
+    assert "Bearer " not in encoded_audit
+    with store._connect() as db:
+        columns = {
+            row[1]
+            for row in db.execute(
+                "PRAGMA table_info(business_identity_keys)",
+            ).fetchall()
+        }
+    assert "private_key" not in columns
+
+
+@pytest.mark.asyncio
+async def test_business_identity_rotation_and_live_assertion_revocation(
+    plugin_module,
+    tmp_path,
+):
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["assertion"] = request.headers["authorization"].removeprefix(
+            "Bearer ",
+        )
+        return httpx.Response(204)
+
+    _store, _signer, manager, token = _business_identity_runtime(
+        plugin_module,
+        tmp_path,
+        transport=httpx.MockTransport(handler),
+    )
+    issued = manager.issue(
+        dclaw_session_token=token,
+        service_id="service-1",
+        audience=BUSINESS_AUDIENCE,
+        scopes=["orders.read"],
+        idempotency_key="rotation-request-1",
+    )
+    await manager.outbound_request(
+        dclaw_session_token=token,
+        binding_ref=issued["binding_ref"],
+        method="GET",
+        url=f"{BUSINESS_AUDIENCE}/orders",
+    )
+    assertion = captured["assertion"]
+    manager.rotate_key(actor_id="admin-1", emergency=False)
+    assert manager.verify_assertion(assertion, **BUSINESS_VERIFY)["jti"]
+    next_issued = manager.issue(
+        dclaw_session_token=token,
+        service_id="service-1",
+        audience=BUSINESS_AUDIENCE,
+        scopes=["orders.read"],
+        idempotency_key="rotation-request-2",
+    )
+    await manager.outbound_request(
+        dclaw_session_token=token,
+        binding_ref=next_issued["binding_ref"],
+        method="GET",
+        url=f"{BUSINESS_AUDIENCE}/orders",
+    )
+    next_assertion = captured["assertion"]
+    manager.rotate_key(actor_id="admin-1", emergency=True)
+    with pytest.raises(Exception, match="BUSINESS_IDENTITY.ASSERTION_INVALID"):
+        manager.verify_assertion(next_assertion, **BUSINESS_VERIFY)
+    keys = manager.verification_keys()["keys"]
+    assert {item["status"] for item in keys} >= {"active", "revoked"}
+
+
+@pytest.mark.asyncio
+async def test_business_identity_online_verify_consumes_jti_atomically(
+    plugin_module,
+    tmp_path,
+):
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["assertion"] = request.headers["authorization"].removeprefix(
+            "Bearer ",
+        )
+        return httpx.Response(204)
+
+    _store, _signer, manager, token = _business_identity_runtime(
+        plugin_module,
+        tmp_path,
+        transport=httpx.MockTransport(handler),
+    )
+    issued = manager.issue(
+        dclaw_session_token=token,
+        service_id="service-1",
+        audience=BUSINESS_AUDIENCE,
+        scopes=["orders.read"],
+        idempotency_key="concurrent-verify-1",
+    )
+    await manager.outbound_request(
+        dclaw_session_token=token,
+        binding_ref=issued["binding_ref"],
+        method="GET",
+        url=f"{BUSINESS_AUDIENCE}/orders",
+    )
+    assertion = captured["assertion"]
+
+    def verify_once() -> str:
+        try:
+            manager.verify_assertion(assertion, **BUSINESS_VERIFY)
+            return "verified"
+        except Exception as exc:  # stable public code is the assertion here
+            return str(exc)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _index: verify_once(), range(2)))
+    assert sorted(results) == [
+        "BUSINESS_IDENTITY.ASSERTION_REPLAYED",
+        "verified",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_business_identity_rejects_scope_release_path_and_large_response(
+    plugin_module,
+    tmp_path,
+):
+    def large_handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-length": str(1_048_577)},
+            content=b"x",
+        )
+
+    _store, signer, manager, token = _business_identity_runtime(
+        plugin_module,
+        tmp_path,
+        transport=httpx.MockTransport(large_handler),
+    )
+    with pytest.raises(Exception, match="BUSINESS_IDENTITY.SCOPE_NOT_ALLOWED"):
+        manager.issue(
+            dclaw_session_token=token,
+            service_id="service-1",
+            audience=BUSINESS_AUDIENCE,
+            scopes=["orders.write"],
+            idempotency_key="scope-denied-0001",
+        )
+    wrong_release = signer.issue(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        session_id="session-1",
+        agent_id="agent-1",
+        agent_name="Agent One",
+        installation_id="install-1",
+        release_id="release-2",
+        invocation_id="invocation-2",
+        capability_ids=[BUSINESS_IDENTITY_CAPABILITY],
+    )
+    with pytest.raises(Exception, match="BUSINESS_IDENTITY.RELEASE_MISMATCH"):
+        manager.issue(
+            dclaw_session_token=wrong_release,
+            service_id="service-1",
+            audience=BUSINESS_AUDIENCE,
+            scopes=["orders.read"],
+            idempotency_key="release-denied-01",
+        )
+    issued = manager.issue(
+        dclaw_session_token=token,
+        service_id="service-1",
+        audience=BUSINESS_AUDIENCE,
+        scopes=["orders.read"],
+        idempotency_key="path-denied-00001",
+    )
+    with pytest.raises(Exception, match="BUSINESS_IDENTITY.AUDIENCE_NOT_ALLOWED"):
+        await manager.outbound_request(
+            dclaw_session_token=token,
+            binding_ref=issued["binding_ref"],
+            method="GET",
+            url="https://8.8.8.8/admin",
+        )
+    encoded = manager.issue(
+        dclaw_session_token=token,
+        service_id="service-1",
+        audience=BUSINESS_AUDIENCE,
+        scopes=["orders.read"],
+        idempotency_key="encoded-path-0001",
+    )
+    with pytest.raises(Exception, match="BUSINESS_IDENTITY.AUDIENCE_NOT_ALLOWED"):
+        await manager.outbound_request(
+            dclaw_session_token=token,
+            binding_ref=encoded["binding_ref"],
+            method="GET",
+            url=f"{BUSINESS_AUDIENCE}/%2e%2e/admin",
+        )
+    large = manager.issue(
+        dclaw_session_token=token,
+        service_id="service-1",
+        audience=BUSINESS_AUDIENCE,
+        scopes=["orders.read"],
+        idempotency_key="large-response-01",
+    )
+    with pytest.raises(Exception, match="BUSINESS_IDENTITY.RESPONSE_TOO_LARGE"):
+        await manager.outbound_request(
+            dclaw_session_token=token,
+            binding_ref=large["binding_ref"],
+            method="GET",
+            url=f"{BUSINESS_AUDIENCE}/orders",
+        )
+    denied = [
+        item for item in manager.audit_records() if item["result"] == "denied"
+    ]
+    assert {item["reason_code"] for item in denied} >= {
+        "BUSINESS_IDENTITY.SCOPE_NOT_ALLOWED",
+        "BUSINESS_IDENTITY.RELEASE_MISMATCH",
+        "BUSINESS_IDENTITY.AUDIENCE_NOT_ALLOWED",
+        "BUSINESS_IDENTITY.RESPONSE_TOO_LARGE",
+    }
+
+
+def test_business_identity_service_change_revocation_and_independent_capability(
+    plugin_module,
+    tmp_path,
+):
+    _store, signer, manager, token = _business_identity_runtime(
+        plugin_module,
+        tmp_path,
+    )
+    with pytest.raises(
+        Exception,
+        match="BUSINESS_IDENTITY.SERVICE_UPDATE_REQUIRES_NEW_ID",
+    ):
+        manager.register_service(
+            actor_id="admin-1",
+            developer_id="developer-1",
+            service_id="service-1",
+            audience=BUSINESS_AUDIENCE,
+            allowed_domains=["8.8.8.8"],
+            allowed_scopes=["orders.read", "orders.write", "admin"],
+        )
+    with pytest.raises(Exception, match="BUSINESS_IDENTITY.AUDIENCE_NOT_ALLOWED"):
+        manager.register_service(
+            actor_id="admin-1",
+            developer_id="developer-1",
+            service_id="reserved-service",
+            audience="https://api.example/business/v1",
+            allowed_domains=["api.example"],
+            allowed_scopes=["orders.read"],
+        )
+    unauthorized = signer.issue(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        session_id="session-1",
+        agent_id="agent-1",
+        agent_name="Agent One",
+        installation_id="install-1",
+        release_id="release-1",
+        invocation_id="invocation-1",
+        capability_ids=["local.execution.session/1"],
+    )
+    with pytest.raises(Exception, match="BUSINESS_IDENTITY.NOT_GRANTED"):
+        manager.issue(
+            dclaw_session_token=unauthorized,
+            service_id="service-1",
+            audience=BUSINESS_AUDIENCE,
+            scopes=["orders.read"],
+            idempotency_key="not-granted-00001",
+        )
+    manager.revoke(
+        actor_id="admin-1",
+        kind="installation",
+        tenant_id="tenant-1",
+        subject_id="install-1",
+        reason="administrative revocation",
+    )
+    with pytest.raises(
+        Exception,
+        match="BUSINESS_IDENTITY.INSTALLATION_REVOKED",
+    ):
+        manager.issue(
+            dclaw_session_token=token,
+            service_id="service-1",
+            audience=BUSINESS_AUDIENCE,
+            scopes=["orders.read"],
+            idempotency_key="revoked-install-1",
+        )
+
+
+def test_business_identity_schemas_are_closed_and_published_to_devkit():
+    names = {
+        "issue-request.schema.json",
+        "issue-response.schema.json",
+        "outbound-request.schema.json",
+        "outbound-response.schema.json",
+        "error.schema.json",
+        "service-registration.schema.json",
+        "grant-registration.schema.json",
+        "verify-request.schema.json",
+        "verify-response.schema.json",
+    }
+    source = PLUGIN_ROOT / "schemas" / "business-identity-v1"
+    published = PLUGIN_ROOT / "devkit" / "schemas" / "business-identity-v1"
+    for name in names:
+        source_schema = json.loads((source / name).read_text(encoding="utf-8"))
+        published_schema = json.loads(
+            (published / name).read_text(encoding="utf-8"),
+        )
+        Draft202012Validator.check_schema(source_schema)
+        assert source_schema == published_schema
+        assert source_schema["additionalProperties"] is False
+    issue_schema = json.loads(
+        (source / "issue-request.schema.json").read_text(encoding="utf-8"),
+    )
+    validator = Draft202012Validator(issue_schema)
+    valid = {
+        "service_id": "service-1",
+        "audience": BUSINESS_AUDIENCE,
+        "scopes": ["orders.read"],
+        "idempotency_key": "schema-request-01",
+    }
+    assert not list(validator.iter_errors(valid))
+    assert list(validator.iter_errors({**valid, "tenant_id": "forged"}))

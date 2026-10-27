@@ -5,6 +5,11 @@ Agents. It contains the human standard, standalone DevKit, schemas, templates,
 SDK helpers, fixtures, and a single cross-platform command line tool. DClaw
 server source is not required.
 
+Version 1.5.0 bundles DevKit 1.4.0 and the public contracts for
+`business.service.installation-identity/1`. Business service assertions are
+issued and injected by the platform; Agent projects only receive and pass the
+opaque one-time `binding_ref`.
+
 ## Supported environments
 
 - CPython 3.10 through 3.13
@@ -54,6 +59,14 @@ builder, set its build manifest source to `prebuilt`, or pass
 `--capability-artifact-file /path/to/artifact.zip`; the CLI validates ZIP paths
 and integrity before binding its digest into the signed descriptor.
 
+Every local capability project must also keep
+`capability-pack/windows-x64/resources.lock.json` release-ready. The lock fixes
+the production HTTPS allowlist and, for every external resource, its size,
+SHA-256, SBOM evidence, license evidence, cache key, and rollback version.
+`validate`, `test`, `capability-build`, and `build` reject blocked resources,
+placeholder hosts such as `.test` or localhost, unapproved domains, temporary
+paths, and incomplete evidence before writing an artifact or sealed ZIP.
+
 The project test adapter is declared in `project.json`:
 
 ```json
@@ -76,7 +89,7 @@ discovery with the interpreter running the developer CLI.
 `build` runs the mandatory release gate, project tests, standalone DevKit
 validation, sealing, signature verification, and evidence generation. It fails
 closed when behavior evidence, approvals, schemas, capability declarations,
-dependencies, or signing checks are incomplete.
+dependencies, resource locks, or signing checks are incomplete.
 
 Run the bundled end-to-end exercise without production credentials:
 

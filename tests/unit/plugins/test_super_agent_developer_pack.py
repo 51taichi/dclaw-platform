@@ -34,16 +34,16 @@ def test_developer_pack_archive_is_complete_and_reproducible():
     second, repeated = archive.build_archive(PLUGIN_ROOT)
     assert first == second
     assert metadata == repeated
-    assert metadata["version"] == "1.4.0"
+    assert metadata["version"] == "1.5.0"
     assert metadata["standard"] == {
         "id": "dclaw.super-agent-development",
-        "version": "2.5",
+        "version": "2.7",
     }
-    assert metadata["devkit_version"] == "1.3.0"
+    assert metadata["devkit_version"] == "1.4.0"
     assert metadata["server_source_required"] is False
     assert metadata["sha256"] == hashlib.sha256(first).hexdigest()
 
-    prefix = "dclaw-super-agent-developer-pack-1.4.0/"
+    prefix = "dclaw-super-agent-developer-pack-1.5.0/"
     with zipfile.ZipFile(io.BytesIO(first)) as package:
         names = set(package.namelist())
         manifest = json.loads(package.read(prefix + "PACKAGE-MANIFEST.json"))
@@ -58,6 +58,7 @@ def test_developer_pack_archive_is_complete_and_reproducible():
         "devkit/dclaw_agent_devkit.py",
         "schemas/business-mcp-v1/request.schema.json",
         "schemas/developer-pack-v1/capability-build.schema.json",
+        "schemas/developer-pack-v1/resources-lock.schema.json",
         "schemas/developer-pack-v1/project.schema.json",
         "sdk/python/dclaw_local_capability.py",
         "templates/project/agent/runtime.py",
@@ -67,7 +68,7 @@ def test_developer_pack_archive_is_complete_and_reproducible():
         "examples/minimal-local/example.json",
     }
     assert {prefix + name for name in expected} <= names
-    assert manifest["version"] == "1.4.0"
+    assert manifest["version"] == "1.5.0"
     assert "devkit/wheelhouse/cryptography-46.0.3" in checksums
     assert not any(
         "src/qwenpaw" in name or "tests/unit" in name for name in names
@@ -231,6 +232,252 @@ def _make_release_ready(cli, project: Path) -> None:
     )
 
 
+def _release_ready_resource_lock() -> dict:
+    return {
+        "schema_version": 1,
+        "status": "release-ready",
+        "release_ready": True,
+        "allowed_domains": ["downloads.deepmega.cn"],
+        "resources": [
+            {
+                "resource_id": "runtime",
+                "version": "1.0.0",
+                "url": "https://downloads.deepmega.cn/resources/runtime.zip",
+                "size_bytes": 1024,
+                "sha256": "a" * 64,
+                "unpacked_size_bytes": 2048,
+                "target_path": "resources/runtime/1.0.0",
+                "sbom_url": (
+                    "https://downloads.deepmega.cn/resources/runtime.spdx.json"
+                ),
+                "sbom_sha256": "b" * 64,
+                "license_spdx": "Apache-2.0",
+                "license_evidence_url": (
+                    "https://downloads.deepmega.cn/resources/runtime-license.txt"
+                ),
+                "license_evidence_sha256": "c" * 64,
+                "cache_key": "runtime:1.0.0:sha256:" + "a" * 64,
+                "rollback_version": "0.9.0",
+                "status": "ready",
+            },
+        ],
+    }
+
+
+def _write_resource_lock(project: Path, value: dict) -> None:
+    path = (
+        project
+        / "capability-pack"
+        / "windows-x64"
+        / "resources.lock.json"
+    )
+    path.write_text(json.dumps(value), encoding="utf-8")
+
+
+def test_release_gate_rejects_unready_or_unhosted_resources(tmp_path):
+    cli = _module("developer_pack_resource_failure_test", PACK_CLI)
+    project = tmp_path / "agent"
+    cli.initialize_project(project, "test-agent", "Test Agent", "required")
+    _make_release_ready(cli, project)
+    lock = _release_ready_resource_lock()
+    lock["status"] = "release-blocked"
+    lock["release_ready"] = False
+    lock["resources"][0]["url"] = None
+    lock["resources"][0]["license"] = {
+        "spdx_id": "pending",
+        "url": "https://developer.example.test/license.txt",
+        "sha256": "c" * 64,
+    }
+    _write_resource_lock(project, lock)
+
+    with pytest.raises(cli.DeveloperPackError, match="release-ready"):
+        cli.release_gate(project)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda item: item.__setitem__("url", None), "URL is missing"),
+        (
+            lambda item: item.__setitem__(
+                "url",
+                "https://developer.example.test/runtime.zip",
+            ),
+            "non-production host",
+        ),
+        (
+            lambda item: item.__setitem__(
+                "url",
+                "https://localhost/runtime.zip",
+            ),
+            "non-production host",
+        ),
+        (
+            lambda item: item.__setitem__(
+                "url",
+                "https://downloads.deepmega.cn/tmp/runtime.zip",
+            ),
+            "temporary path",
+        ),
+        (lambda item: item.__setitem__("size_bytes", 0), "size is invalid"),
+        (lambda item: item.pop("sbom_url"), "SBOM URL is missing"),
+        (
+            lambda item: item.__setitem__("license_spdx", "pending"),
+            "license identifier is not release-ready",
+        ),
+        (
+            lambda item: item.pop("target_path"),
+            "target path must be a safe POSIX relative path",
+        ),
+        (lambda item: item.pop("cache_key"), "cache key is missing"),
+        (
+            lambda item: item.pop("rollback_version"),
+            "rollback version is missing",
+        ),
+    ],
+)
+def test_release_gate_rejects_incomplete_resource_metadata(
+    tmp_path,
+    mutation,
+    message,
+):
+    cli = _module("developer_pack_resource_metadata_test", PACK_CLI)
+    project = tmp_path / "agent"
+    cli.initialize_project(project, "test-agent", "Test Agent", "required")
+    _make_release_ready(cli, project)
+    lock = _release_ready_resource_lock()
+    mutation(lock["resources"][0])
+    _write_resource_lock(project, lock)
+
+    with pytest.raises(cli.DeveloperPackError, match=message):
+        cli.release_gate(project)
+
+
+def test_release_gate_accepts_complete_resource_metadata(tmp_path):
+    cli = _module("developer_pack_resource_success_test", PACK_CLI)
+    project = tmp_path / "agent"
+    cli.initialize_project(project, "test-agent", "Test Agent", "required")
+    _make_release_ready(cli, project)
+    _write_resource_lock(project, _release_ready_resource_lock())
+
+    result = cli.release_gate(project)
+
+    assert result["status"] == "valid"
+    assert result["resources"] == 1
+
+
+def test_secret_scan_ignores_generated_roots_but_scans_sources(tmp_path):
+    cli = _module("developer_pack_secret_scan_scope_test", PACK_CLI)
+    project = tmp_path / "agent"
+    for name in (
+        ".release-evidence",
+        "release-evidence",
+        "release",
+        "releases",
+        "artifacts",
+        "build",
+    ):
+        generated = project / name / "target" / "capability-build"
+        generated.mkdir(parents=True)
+        generated.joinpath("vendored.py").write_text(
+            'api_key = "0123456789abcdef"\n',
+            encoding="utf-8",
+        )
+
+    assert cli._scan_secrets(project) == 0
+
+    source = project / "agent" / "runtime.py"
+    source.parent.mkdir()
+    source.write_text('api_key = "0123456789abcdef"\n', encoding="utf-8")
+
+    with pytest.raises(cli.DeveloperPackError, match="embedded secret"):
+        cli._scan_secrets(project)
+
+
+def test_secret_scan_allows_public_pem_but_rejects_private_pem(tmp_path):
+    cli = _module("developer_pack_pem_scan_test", PACK_CLI)
+    project = tmp_path / "agent"
+    capability = project / "capability-pack" / "windows-x64"
+    capability.mkdir(parents=True)
+    capability.joinpath("runtime-release-public.pem").write_text(
+        "-----BEGIN PUBLIC KEY-----\nZmFrZS1wdWJsaWMta2V5\n"
+        "-----END PUBLIC KEY-----\n",
+        encoding="ascii",
+    )
+
+    assert cli._scan_secrets(project) == 1
+
+    capability.joinpath("embedded-private.pem").write_text(
+        "-----BEGIN ENCRYPTED PRIVATE KEY-----\nZmFrZS1wcml2YXRlLWtleQ==\n"
+        "-----END ENCRYPTED PRIVATE KEY-----\n",
+        encoding="ascii",
+    )
+
+    with pytest.raises(cli.DeveloperPackError, match="embedded secret"):
+        cli._scan_secrets(project)
+
+
+def test_build_fails_before_writing_artifacts_when_resources_are_blocked(tmp_path):
+    cli = _module("developer_pack_resource_build_order_test", PACK_CLI)
+    project = tmp_path / "agent"
+    cli.initialize_project(project, "test-agent", "Test Agent", "required")
+    _make_release_ready(cli, project)
+    lock = _release_ready_resource_lock()
+    lock["release_ready"] = False
+    _write_resource_lock(project, lock)
+    private_key = tmp_path / "private.b64"
+    public_key = tmp_path / "public.b64"
+    cli._devkit_command(
+        "keygen",
+        "--private-key",
+        str(private_key),
+        "--public-key",
+        str(public_key),
+    )
+    output = tmp_path / "release" / "agent.zip"
+
+    with pytest.raises(cli.DeveloperPackError, match="release-ready"):
+        cli.build_project(
+            project,
+            private_key,
+            public_key,
+            output,
+            "https://downloads.deepmega.cn/capabilities/agent.zip",
+        )
+
+    assert not output.exists()
+    assert not (
+        project / "capability-pack" / "windows-x64" / "artifact.zip"
+    ).exists()
+
+
+def test_direct_capability_build_rejects_non_production_artifact_url(tmp_path):
+    cli = _module("developer_pack_direct_resource_gate_test", PACK_CLI)
+    project = tmp_path / "agent"
+    cli.initialize_project(project, "test-agent", "Test Agent", "required")
+    _make_release_ready(cli, project)
+    private_key = tmp_path / "private.b64"
+    public_key = tmp_path / "public.b64"
+    cli._devkit_command(
+        "keygen",
+        "--private-key",
+        str(private_key),
+        "--public-key",
+        str(public_key),
+    )
+
+    with pytest.raises(cli.DeveloperPackError, match="non-production host"):
+        cli.build_local_capability(
+            project,
+            "https://developer.example.test/capability.zip",
+            private_key,
+        )
+
+    assert not (
+        project / "capability-pack" / "windows-x64" / "artifact.zip"
+    ).exists()
+
+
 def test_capability_build_manifest_packages_arbitrary_resources_deterministically(
     tmp_path,
 ):
@@ -266,12 +513,12 @@ def test_capability_build_manifest_packages_arbitrary_resources_deterministicall
 
     first = cli.build_local_capability(
         project,
-        "https://developer.example.test/capability.zip",
+        "https://downloads.deepmega.cn/capability.zip",
         private_key,
     )
     second = cli.build_local_capability(
         project,
-        "https://developer.example.test/capability.zip",
+        "https://downloads.deepmega.cn/capability.zip",
         private_key,
     )
 
@@ -311,7 +558,7 @@ def test_capability_build_imports_prebuilt_zip_and_rejects_unsafe_paths(
 
     result = cli.build_local_capability(
         project,
-        "https://developer.example.test/prebuilt.zip",
+        "https://downloads.deepmega.cn/prebuilt.zip",
         private_key,
         prebuilt,
     )
@@ -329,7 +576,7 @@ def test_capability_build_imports_prebuilt_zip_and_rejects_unsafe_paths(
     ):
         cli.build_local_capability(
             project,
-            "https://developer.example.test/unsafe.zip",
+            "https://downloads.deepmega.cn/unsafe.zip",
             private_key,
             unsafe,
         )

@@ -10,6 +10,10 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 
+from .business_identity import (
+    CAPABILITY_ID as BUSINESS_IDENTITY_CAPABILITY_ID,
+    BusinessIdentityManager,
+)
 from .credentials import CredentialBroker
 from .mcp_server import LocalExecutionMcp
 from .packages import CapabilityPackageRegistry
@@ -84,6 +88,16 @@ class SuperAgentSupportPlugin:
         key = _load_or_create_key(root, api.config.get("master_key_base64"))
         store = StateStore(root / "state.sqlite3")
         signer = SessionSigner(key)
+        business_identity = BusinessIdentityManager(
+            store,
+            key,
+            signer,
+            issuer=str(
+                api.config.get("business_identity_issuer")
+                or os.environ.get("DCLAW_BUSINESS_IDENTITY_ISSUER")
+                or "https://dclaw.deepmega.cn/business-identity"
+            ),
+        )
         credentials = CredentialBroker(store, key)
         packages = CapabilityPackageRegistry(
             store,
@@ -102,13 +116,14 @@ class SuperAgentSupportPlugin:
             official_signer_ids=frozenset(official_signers),
             trusted_signers=official_signers,
         )
-        self.mcp = LocalExecutionMcp(service)
+        self.mcp = LocalExecutionMcp(service, business_identity)
         app = create_app(
             store=store,
             service=service,
             mcp=self.mcp,
             packages=packages,
             credentials=credentials,
+            business_identity=business_identity,
         )
         api.register_asgi_app(
             app,
@@ -142,6 +157,11 @@ class SuperAgentSupportPlugin:
                 "1",
                 "local_execution",
             )
+        api.register_platform_capability(
+            BUSINESS_IDENTITY_CAPABILITY_ID,
+            "1",
+            "business_identity",
+        )
         api.register_aigc_event_consumer_factory(
             "super-agent-aigc-projection",
             create_aigc_event_consumer,

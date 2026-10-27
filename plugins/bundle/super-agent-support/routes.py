@@ -23,6 +23,7 @@ from fastapi.responses import Response
 from jsonschema import Draft202012Validator
 from pydantic import BaseModel, ConfigDict, Field
 
+from .business_identity import BusinessIdentityError, BusinessIdentityManager
 from .credentials import CredentialBroker, CredentialError
 from .developer_pack.archive import (
     build_archive as build_developer_pack_archive,
@@ -53,6 +54,51 @@ class DeviceBootstrap(BaseModel):
     model_config = ConfigDict(extra="forbid")
     device_id: str | None = Field(default=None, min_length=1, max_length=128)
     force_pairing: bool = False
+
+
+class BusinessServiceRegistration(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    developer_id: str = Field(min_length=1, max_length=128)
+    service_id: str = Field(min_length=1, max_length=128)
+    audience: str = Field(min_length=1, max_length=2048)
+    allowed_domains: list[str] = Field(min_length=1, max_length=32)
+    allowed_scopes: list[str] = Field(min_length=1, max_length=64)
+
+
+class BusinessIdentityGrant(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tenant_id: str = Field(min_length=1, max_length=128)
+    user_id: str = Field(min_length=1, max_length=128)
+    agent_id: str = Field(min_length=1, max_length=128)
+    release_id: str = Field(min_length=1, max_length=128)
+    installation_id: str = Field(min_length=1, max_length=128)
+    service_id: str = Field(min_length=1, max_length=128)
+    audience: str = Field(min_length=1, max_length=2048)
+    scopes: list[str] = Field(min_length=1, max_length=64)
+
+
+class BusinessIdentityRotation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    emergency: bool = False
+
+
+class BusinessIdentityRevocation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: str
+    tenant_id: str = Field(min_length=1, max_length=128)
+    subject_id: str = Field(min_length=1, max_length=256)
+    reason: str = Field(min_length=1, max_length=512)
+
+
+class BusinessIdentityVerification(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    assertion: str = Field(min_length=1, max_length=8192)
+    audience: str = Field(min_length=1, max_length=2048)
+    installation_id: str = Field(min_length=1, max_length=128)
+    release_id: str = Field(min_length=1, max_length=128)
+    agent_id: str = Field(min_length=1, max_length=128)
+    service_id: str = Field(min_length=1, max_length=128)
+    required_scopes: list[str] = Field(min_length=1, max_length=64)
 
 
 def _user_id(request: Request) -> str:
@@ -172,6 +218,7 @@ def create_app(
     mcp: LocalExecutionMcp,
     packages: CapabilityPackageRegistry,
     credentials: CredentialBroker,
+    business_identity: BusinessIdentityManager | None = None,
 ) -> FastAPI:
     # pylint: disable=too-many-statements
     app = FastAPI(
@@ -195,11 +242,118 @@ def create_app(
         return {
             "status": "ok",
             "plugin": "dclaw.super-agent-support",
-            "version": "1.9.0",
-            "protocols": {"local_execution": "1.1", "device": "2"},
+            "version": "1.10.0",
+            "protocols": {
+                "local_execution": "1.1",
+                "device": "2",
+                "business_identity": "1",
+            },
         }
 
     _register_developer_kit_routes(app)
+
+    if business_identity is not None:
+
+        @app.get("/business-identities/verification-keys")
+        async def business_identity_verification_keys() -> dict[str, Any]:
+            return business_identity.verification_keys()
+
+        @app.post("/business-identities/assertions/verify")
+        async def verify_business_identity_assertion(
+            body: BusinessIdentityVerification,
+        ) -> dict[str, Any]:
+            try:
+                claims = business_identity.verify_assertion(
+                    body.assertion,
+                    audience=body.audience,
+                    installation_id=body.installation_id,
+                    release_id=body.release_id,
+                    agent_id=body.agent_id,
+                    service_id=body.service_id,
+                    required_scopes=body.required_scopes,
+                )
+            except BusinessIdentityError as exc:
+                raise HTTPException(
+                    status_code=401,
+                    detail={"code": exc.code},
+                ) from exc
+            return {"active": True, "claims": claims}
+
+        @app.post("/admin/business-identities/services")
+        async def register_business_identity_service(
+            body: BusinessServiceRegistration,
+            request: Request,
+        ) -> dict[str, Any]:
+            _require_admin(request)
+            try:
+                return business_identity.register_service(
+                    actor_id=_user_id(request),
+                    **body.model_dump(),
+                )
+            except BusinessIdentityError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"code": exc.code},
+                ) from exc
+
+        @app.post("/admin/business-identities/grants")
+        async def grant_business_identity(
+            body: BusinessIdentityGrant,
+            request: Request,
+        ) -> dict[str, Any]:
+            _require_admin(request)
+            try:
+                return business_identity.grant_installation(
+                    actor_id=_user_id(request),
+                    **body.model_dump(),
+                )
+            except BusinessIdentityError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"code": exc.code},
+                ) from exc
+
+        @app.post("/admin/business-identities/keys/rotate")
+        async def rotate_business_identity_key(
+            body: BusinessIdentityRotation,
+            request: Request,
+        ) -> dict[str, Any]:
+            _require_admin(request)
+            return business_identity.rotate_key(
+                actor_id=_user_id(request),
+                emergency=body.emergency,
+            )
+
+        @app.post("/admin/business-identities/revocations")
+        async def revoke_business_identity(
+            body: BusinessIdentityRevocation,
+            request: Request,
+        ) -> dict[str, Any]:
+            _require_admin(request)
+            try:
+                return business_identity.revoke(
+                    actor_id=_user_id(request),
+                    **body.model_dump(),
+                )
+            except BusinessIdentityError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"code": exc.code},
+                ) from exc
+
+        @app.get("/admin/business-identities/audit")
+        async def business_identity_audit(
+            request: Request,
+            limit: int = 100,
+        ) -> dict[str, Any]:
+            _require_admin(request)
+            try:
+                return {"records": business_identity.audit_records(limit=limit)}
+            except BusinessIdentityError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"code": exc.code},
+                ) from exc
 
     @app.get("/environment-status")
     async def environment_status(request: Request) -> dict[str, Any]:

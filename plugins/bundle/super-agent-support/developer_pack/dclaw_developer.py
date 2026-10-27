@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import ipaddress
 import importlib.util
 import json
 from pathlib import Path, PurePosixPath
@@ -15,21 +16,24 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from urllib.parse import urlsplit
 import zipfile
 import xml.etree.ElementTree as ET
 
 
-PACK_VERSION = "1.4.0"
+PACK_VERSION = "1.5.0"
 STANDARD_ID = "dclaw.super-agent-development"
-STANDARD_VERSION = "2.5"
-DEVKIT_VERSION = "1.3.0"
+STANDARD_VERSION = "2.7"
+DEVKIT_VERSION = "1.4.0"
 PROJECT_SCHEMA_VERSION = 1
 LOCAL_SESSION = "local.execution.session/1"
 LOCAL_PREFLIGHT = "local.environment.preflight/1"
 SECRET_FILE_NAMES = {".env", ".env.local", "id_rsa", "id_ed25519"}
-SECRET_SUFFIXES = {".key", ".pem", ".p12", ".pfx"}
+SECRET_SUFFIXES = {".key", ".p12", ".pfx"}
 SECRET_PATTERNS = (
-    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+    re.compile(
+        r"-----BEGIN (?:RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----",
+    ),
     re.compile(r"AKIA[0-9A-Z]{16}"),
     re.compile(
         r"(?i)(?:api[_-]?key|access[_-]?token|client[_-]?secret|password)"
@@ -44,6 +48,11 @@ DEFAULT_CAPABILITY_MEMBERS = (
     "checkpoint.schema.json",
 )
 CAPABILITY_BUILD_MANIFEST = "capability-build.json"
+RESOURCE_LOCK = "resources.lock.json"
+RESOURCE_READY_STATUS = "release-ready"
+TEMPORARY_URL_PATH_PARTS = frozenset(
+    {"tmp", "temp", "temporary", "staging", "preview", "draft"},
+)
 
 
 class DeveloperPackError(ValueError):
@@ -267,8 +276,21 @@ def _validate_evidence(project: Path) -> dict:
 
 def _scan_secrets(project: Path) -> int:
     scanned = 0
-    ignored = {".git", ".venv", "release", "release-evidence", "__pycache__"}
-    for path in sorted(project.rglob("*")):
+    ignored = {".git", ".venv", "__pycache__"}
+    release_inputs = (
+        project / "project.json",
+        project / "manifest.template.json",
+        project / "agent",
+        project / "capability-pack",
+        project / "docs",
+    )
+    candidates: list[Path] = []
+    for source in release_inputs:
+        if source.is_file():
+            candidates.append(source)
+        elif source.is_dir():
+            candidates.extend(source.rglob("*"))
+    for path in sorted(set(candidates)):
         if not path.is_file() or any(part in ignored for part in path.parts):
             continue
         if (
@@ -318,6 +340,156 @@ def _validate_dependencies(project: Path, mode: str) -> int:
                     f"required local capability file is missing: {relative}",
                 )
     return len(dependencies)
+
+
+def _required_text(value: object, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise DeveloperPackError(f"{label} is missing")
+    cleaned = value.strip()
+    if re.search(r"(?i)\b(?:pending|placeholder|replace|todo|tbd)\b", cleaned):
+        raise DeveloperPackError(f"{label} is not release-ready")
+    return cleaned
+
+
+def _required_sha256(value: object, label: str) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+        raise DeveloperPackError(f"{label} SHA-256 is invalid")
+    return value
+
+
+def _validated_https_url(
+    value: object,
+    label: str,
+    allowed_domains: set[str],
+) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise DeveloperPackError(f"{label} URL is missing")
+    parsed = urlsplit(value.strip())
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if (
+        parsed.scheme != "https"
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise DeveloperPackError(f"{label} URL must use formal HTTPS")
+    if (
+        hostname == "localhost"
+        or hostname.endswith((".localhost", ".local", ".test"))
+    ):
+        raise DeveloperPackError(f"{label} URL uses a non-production host")
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        address = None
+    if address is not None and not address.is_global:
+        raise DeveloperPackError(f"{label} URL uses a non-production host")
+    if not any(
+        hostname == domain or hostname.endswith(f".{domain}")
+        for domain in allowed_domains
+    ):
+        raise DeveloperPackError(f"{label} URL host is not allowed")
+    path_parts = {
+        part.lower() for part in PurePosixPath(parsed.path).parts if part != "/"
+    }
+    if path_parts & TEMPORARY_URL_PATH_PARTS:
+        raise DeveloperPackError(f"{label} URL uses a temporary path")
+    return value.strip()
+
+
+def _validate_resources(
+    project: Path,
+    mode: str,
+    *,
+    artifact_url: str | None = None,
+) -> int:
+    path = project / "capability-pack" / "windows-x64" / RESOURCE_LOCK
+    if mode == "none" and not path.is_file():
+        return 0
+    if not path.is_file():
+        raise DeveloperPackError("local resource lock is missing")
+    lock = _read_json(path)
+    if lock.get("schema_version") != 1:
+        raise DeveloperPackError("local resource lock schema_version is unsupported")
+    if lock.get("release_ready") is not True:
+        raise DeveloperPackError("local resources are not release-ready")
+    if lock.get("status") != RESOURCE_READY_STATUS:
+        raise DeveloperPackError("local resource lock status is not release-ready")
+    domains = lock.get("allowed_domains")
+    if not isinstance(domains, list) or not domains:
+        raise DeveloperPackError("local resource allowed domains are missing")
+    allowed_domains: set[str] = set()
+    for value in domains:
+        domain = _required_text(value, "local resource allowed domain").lower()
+        if (
+            not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", domain)
+            or domain == "localhost"
+            or domain.endswith((".localhost", ".local", ".test"))
+        ):
+            raise DeveloperPackError("local resource allowed domain is invalid")
+        allowed_domains.add(domain)
+    if artifact_url is not None:
+        _validated_https_url(
+            artifact_url,
+            "capability artifact",
+            allowed_domains,
+        )
+    resources = lock.get("resources")
+    if not isinstance(resources, list):
+        raise DeveloperPackError("local resource entries are invalid")
+    identifiers: set[str] = set()
+    for index, item in enumerate(resources):
+        label = f"local resource {index + 1}"
+        if not isinstance(item, dict):
+            raise DeveloperPackError(f"{label} is invalid")
+        resource_id = _required_text(item.get("resource_id"), f"{label} id")
+        if resource_id in identifiers:
+            raise DeveloperPackError("local resource id is duplicated")
+        identifiers.add(resource_id)
+        _required_text(item.get("version"), f"{label} version")
+        _validated_https_url(item.get("url"), label, allowed_domains)
+        if (
+            not isinstance(item.get("size_bytes"), int)
+            or isinstance(item["size_bytes"], bool)
+            or item["size_bytes"] <= 0
+        ):
+            raise DeveloperPackError(f"{label} size is invalid")
+        _required_sha256(item.get("sha256"), label)
+        _validated_https_url(
+            item.get("sbom_url"),
+            f"{label} SBOM",
+            allowed_domains,
+        )
+        _required_sha256(item.get("sbom_sha256"), f"{label} SBOM")
+        _required_text(
+            item.get("license_spdx"),
+            f"{label} license identifier",
+        )
+        _validated_https_url(
+            item.get("license_evidence_url"),
+            f"{label} license evidence",
+            allowed_domains,
+        )
+        _required_sha256(
+            item.get("license_evidence_sha256"),
+            f"{label} license evidence",
+        )
+        unpacked_size = item.get("unpacked_size_bytes")
+        target_path = item.get("target_path")
+        if unpacked_size is not None or target_path is not None:
+            if (
+                not isinstance(unpacked_size, int)
+                or isinstance(unpacked_size, bool)
+                or unpacked_size <= 0
+            ):
+                raise DeveloperPackError(f"{label} unpacked size is invalid")
+            _safe_relative_path(target_path, f"{label} target path")
+        _required_text(item.get("cache_key"), f"{label} cache key")
+        _required_text(item.get("rollback_version"), f"{label} rollback version")
+        for field in ("status", "distribution_status"):
+            if field in item and item[field] not in {"ready", "release-ready"}:
+                raise DeveloperPackError(f"{label} {field} is not release-ready")
+    return len(resources)
 
 
 def _capability_build_spec(
@@ -561,7 +733,12 @@ def _materialize_descriptor(project: Path) -> None:
     _write_json(descriptor_path, descriptor)
 
 
-def _validate_local_schemas(project: Path, mode: str) -> int:
+def _validate_local_schemas(
+    project: Path,
+    mode: str,
+    *,
+    require_artifact: bool = True,
+) -> int:
     root = project / "capability-pack" / "windows-x64"
     descriptor = _read_json(root / "descriptor.template.json")
     if mode == "none":
@@ -585,20 +762,21 @@ def _validate_local_schemas(project: Path, mode: str) -> int:
         raise DeveloperPackError(
             "local capability descriptor is not a release",
         )
-    artifact_path = root / "artifact.zip"
-    artifact = descriptor.get("artifact")
-    if not artifact_path.is_file() or not isinstance(artifact, dict):
-        raise DeveloperPackError("signed local capability artifact is missing")
-    if (
-        artifact.get("sha256") != _sha256(artifact_path)
-        or artifact.get("size_bytes") != artifact_path.stat().st_size
-        or not str(artifact.get("url", "")).startswith("https://")
-        or str(artifact.get("url", "")).endswith(".invalid/")
-        or ".invalid/" in str(artifact.get("url", ""))
-    ):
-        raise DeveloperPackError(
-            "local capability artifact metadata is incomplete",
-        )
+    if require_artifact:
+        artifact_path = root / "artifact.zip"
+        artifact = descriptor.get("artifact")
+        if not artifact_path.is_file() or not isinstance(artifact, dict):
+            raise DeveloperPackError("signed local capability artifact is missing")
+        if (
+            artifact.get("sha256") != _sha256(artifact_path)
+            or artifact.get("size_bytes") != artifact_path.stat().st_size
+            or not str(artifact.get("url", "")).startswith("https://")
+            or str(artifact.get("url", "")).endswith(".invalid/")
+            or ".invalid/" in str(artifact.get("url", ""))
+        ):
+            raise DeveloperPackError(
+                "local capability artifact metadata is incomplete",
+            )
     schemas = descriptor.get("schemas")
     if not isinstance(schemas, dict):
         raise DeveloperPackError("local capability schemas are missing")
@@ -625,14 +803,15 @@ def _validate_local_schemas(project: Path, mode: str) -> int:
                 f"local {name} schema must be a closed object",
             )
     registration_path = project / "capability-pack" / "registration.json"
-    registration = _read_json(registration_path)
-    if registration.get("descriptor") != descriptor:
-        raise DeveloperPackError("signed local capability descriptor is stale")
-    manifest = _read_json(project / "manifest.template.json")
-    if registration.get("signer_id") != manifest.get(
-        "signer_id",
-    ) or not registration.get("signature"):
-        raise DeveloperPackError("local capability signature is missing")
+    if require_artifact:
+        registration = _read_json(registration_path)
+        if registration.get("descriptor") != descriptor:
+            raise DeveloperPackError("signed local capability descriptor is stale")
+        manifest = _read_json(project / "manifest.template.json")
+        if registration.get("signer_id") != manifest.get(
+            "signer_id",
+        ) or not registration.get("signature"):
+            raise DeveloperPackError("local capability signature is missing")
     return 3
 
 
@@ -642,9 +821,12 @@ def build_local_capability(
     private_key_path: Path,
     artifact_file: Path | None = None,
 ) -> dict:
-    project, _metadata, _manifest_path, manifest = _project(project_path)
-    if not re.fullmatch(r"https://[^\s]+", artifact_url):
-        raise DeveloperPackError("capability artifact URL must use HTTPS")
+    project, metadata, _manifest_path, manifest = _project(project_path)
+    _validate_resources(
+        project,
+        metadata.get("local_helper"),
+        artifact_url=artifact_url,
+    )
     root = project / "capability-pack" / "windows-x64"
     _materialize_descriptor(project)
     artifact_path = root / "artifact.zip"
@@ -685,6 +867,7 @@ def build_local_capability(
     }
     registration_path = project / "capability-pack" / "registration.json"
     _write_json(registration_path, registration)
+    _validate_local_schemas(project, metadata.get("local_helper"))
     return {
         "status": "built",
         "artifact": str(artifact_path),
@@ -772,7 +955,12 @@ def release_gate(project_path: Path) -> dict:
     devkit.validate_workspace(project / "agent", manifest)
     evidence = _validate_evidence(project)
     dependencies = _validate_dependencies(project, mode)
-    schemas = _validate_local_schemas(project, mode)
+    resources = _validate_resources(project, mode)
+    schemas = _validate_local_schemas(
+        project,
+        mode,
+        require_artifact=False,
+    )
     scanned = _scan_secrets(project)
     return {
         "status": "valid",
@@ -782,6 +970,7 @@ def release_gate(project_path: Path) -> dict:
         "local_helper": mode,
         "capabilities": len(declared),
         "dependencies": dependencies,
+        "resources": resources,
         "local_schemas": schemas,
         "secret_scan_files": scanned,
         **evidence,
@@ -1030,6 +1219,7 @@ def build_project(
     capability_artifact_file: Path | None = None,
 ) -> dict:
     project_metadata = _read_json(project_path.resolve() / "project.json")
+    test_result = run_tests(project_path)
     capability_build = None
     if project_metadata.get("local_helper") != "none":
         if not capability_artifact_url:
@@ -1042,7 +1232,6 @@ def build_project(
             private_key,
             capability_artifact_file,
         )
-    test_result = run_tests(project_path)
     project, _metadata, manifest_path, manifest = _project(project_path)
     _devkit_command("digest", "--manifest", str(manifest_path), "--write")
     validation = _devkit_command(
@@ -1204,7 +1393,7 @@ def demo(workspace: Path) -> dict:
         private_key,
         public_key,
         output,
-        "https://developer.example.test/capabilities/example-local-agent-0.1.0.zip",
+        "https://downloads.deepmega.cn/capabilities/example-local-agent-0.1.0.zip",
     )
     result["local_capability"] = capability
     result["demo_workspace"] = str(workspace)

@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.5.0 - 2026-10-27
+
+- Publishes DevKit 1.4.0 and the strict installation-bound business service
+  identity schemas for issue, controlled outbound transport, verification,
+  administration, and stable errors.
+- Declares `business.service.installation-identity/1` as a server-side platform
+  capability with no Runner dependency.
+- Bundles the single human development standard 2.7; no parallel standard is
+  introduced.
+- Retains the release-ready resource lock and secret-scan fixes introduced in
+  1.4.1.
+
+## 1.4.1 - 2026-10-27
+
+- Validates `resources.lock.json` before writing a capability artifact or
+  sealed Super Expert ZIP.
+- Fails closed for blocked resources, non-production or unapproved URLs,
+  missing sizes or SHA-256 digests, incomplete SBOM or license evidence,
+  missing cache keys, and missing rollback versions.
+- Bundles development standard 2.6 while keeping DevKit 1.3.0 and all existing
+  signed descriptor and manifest contracts compatible.
+
 ## 1.4.0 - 2026-10-26
 
 - Bundles development standard 2.5 and its mandatory core-residue audit.

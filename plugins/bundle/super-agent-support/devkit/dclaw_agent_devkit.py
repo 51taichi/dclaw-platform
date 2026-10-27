@@ -20,7 +20,7 @@ import unicodedata
 import zipfile
 
 
-DEVKIT_VERSION = "1.3.0"
+DEVKIT_VERSION = "1.4.0"
 CRYPTOGRAPHY_VERSION = "46.0.3"
 SUPPORTED_PYTHON = ">=3.10,<3.14"
 SUPPORTED_PLATFORMS = {

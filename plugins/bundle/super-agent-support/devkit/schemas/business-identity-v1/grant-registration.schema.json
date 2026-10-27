@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/schemas/business-identity-v1/grant-registration.schema.json",
+  "title": "Business identity installation grant",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["tenant_id", "user_id", "agent_id", "release_id", "installation_id", "service_id", "audience", "scopes"],
+  "properties": {
+    "tenant_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "user_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "agent_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "release_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "installation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "service_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "audience": {"type": "string", "format": "uri", "pattern": "^https://", "maxLength": 2048},
+    "scopes": {"type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"}}
+  }
+}

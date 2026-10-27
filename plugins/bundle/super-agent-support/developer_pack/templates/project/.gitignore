@@ -3,7 +3,11 @@ __pycache__/
 .demo-task/
 .demo-keys/
 release/
+releases/
 release-evidence/
+.release-evidence/
+artifacts/
+build/
 *.key
 *.pem
 *.p12
