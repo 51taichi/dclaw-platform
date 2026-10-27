@@ -7,7 +7,10 @@ import io
 import hashlib
 import json
 import secrets
+import threading
+import time
 import uuid
+from collections import deque
 from pathlib import Path
 from typing import Any
 import zipfile
@@ -19,7 +22,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from jsonschema import Draft202012Validator
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -32,6 +35,44 @@ from .mcp_server import LocalExecutionMcp
 from .packages import CapabilityPackageRegistry, PackageError
 from .service import LocalExecutionService
 from .store import StateStore
+
+
+PUBLIC_KEYS_RATE_LIMIT_PER_MINUTE = 60
+PUBLIC_KEYS_RATE_LIMIT_MAX_CLIENTS = 4096
+
+
+class _PublicKeysRateLimiter:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._requests: dict[str, deque[float]] = {}
+
+    def _prune(self, cutoff: float) -> None:
+        expired = [
+            client
+            for client, requests in self._requests.items()
+            if not requests or requests[-1] <= cutoff
+        ]
+        for client in expired:
+            self._requests.pop(client, None)
+
+    def allow(self, client: str, *, now: float | None = None) -> bool:
+        current = time.monotonic() if now is None else now
+        cutoff = current - 60.0
+        with self._lock:
+            if (
+                client not in self._requests
+                and len(self._requests) >= PUBLIC_KEYS_RATE_LIMIT_MAX_CLIENTS
+            ):
+                self._prune(cutoff)
+                if len(self._requests) >= PUBLIC_KEYS_RATE_LIMIT_MAX_CLIENTS:
+                    return False
+            recent = self._requests.setdefault(client, deque())
+            while recent and recent[0] <= cutoff:
+                recent.popleft()
+            if len(recent) >= PUBLIC_KEYS_RATE_LIMIT_PER_MINUTE:
+                return False
+            recent.append(current)
+            return True
 
 
 class PackageRegistration(BaseModel):
@@ -236,13 +277,14 @@ def create_app(
             ).read_text(encoding="utf-8"),
         ),
     )
+    public_keys_rate_limiter = _PublicKeysRateLimiter()
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
         return {
             "status": "ok",
             "plugin": "dclaw.super-agent-support",
-            "version": "1.10.0",
+            "version": "1.10.1",
             "protocols": {
                 "local_execution": "1.1",
                 "device": "2",
@@ -255,8 +297,36 @@ def create_app(
     if business_identity is not None:
 
         @app.get("/business-identities/verification-keys")
-        async def business_identity_verification_keys() -> dict[str, Any]:
-            return business_identity.verification_keys()
+        async def business_identity_verification_keys(
+            request: Request,
+        ) -> Response:
+            client = request.client.host if request.client else "unknown"
+            if not public_keys_rate_limiter.allow(client):
+                return JSONResponse(
+                    {"detail": "rate limit exceeded"},
+                    status_code=429,
+                    headers={"Retry-After": "60", "Cache-Control": "no-store"},
+                )
+            payload = business_identity.verification_keys()
+            encoded = json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            etag = '"' + hashlib.sha256(encoded).hexdigest() + '"'
+            headers = {
+                "Cache-Control": "public, max-age=60, must-revalidate",
+                "ETag": etag,
+                "X-Content-Type-Options": "nosniff",
+            }
+            if request.headers.get("if-none-match") == etag:
+                return Response(status_code=304, headers=headers)
+            return Response(
+                encoded,
+                media_type="application/json",
+                headers=headers,
+            )
 
         @app.post("/business-identities/assertions/verify")
         async def verify_business_identity_assertion(

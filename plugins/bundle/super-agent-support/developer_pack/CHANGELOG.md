@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.5.1 - 2026-10-27
+
+- Publishes DevKit 1.4.1 and development standard 2.8 with the exact MCP
+  operation catalog and controlled outbound assertion transport contract.
+- Supports standard POSIX project virtual-environment Python symlinks after
+  validating the interpreter, project environment and `sys.prefix`.
+- Rejects directory symlink escapes, wrappers, arbitrary interpreters,
+  Agent-supplied authorization and case-insensitive duplicate headers.
+- Documents anonymous cached JWK discovery and keeps existing signed Agent,
+  manifest, local execution and business identity contract versions valid.
+
 ## 1.5.0 - 2026-10-27
 
 - Publishes DevKit 1.4.0 and the strict installation-bound business service

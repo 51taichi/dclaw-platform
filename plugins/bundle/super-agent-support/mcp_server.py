@@ -190,7 +190,14 @@ class LocalExecutionMcp:
                 ttl_seconds: int = 120,
             ) -> dict[str, Any]:
                 try:
-                    return identity.issue(**locals())
+                    return identity.issue(
+                        service_id=service_id,
+                        audience=audience,
+                        scopes=scopes,
+                        idempotency_key=idempotency_key,
+                        dclaw_session_token=dclaw_session_token,
+                        ttl_seconds=ttl_seconds,
+                    )
                 except BusinessIdentityError as exc:
                     return {
                         "error": {
@@ -216,7 +223,16 @@ class LocalExecutionMcp:
                 timeout_seconds: int = 30,
             ) -> dict[str, Any]:
                 try:
-                    return await identity.outbound_request(**locals())
+                    return await identity.outbound_request(
+                        binding_ref=binding_ref,
+                        method=method,
+                        url=url,
+                        dclaw_session_token=dclaw_session_token,
+                        headers=headers,
+                        json_body=json_body,
+                        text_body=text_body,
+                        timeout_seconds=timeout_seconds,
+                    )
                 except BusinessIdentityError as exc:
                     return {
                         "error": {

@@ -102,6 +102,15 @@ class AsgiAppRegistration:
 
 
 @dataclass(frozen=True)
+class PublicHttpRouteRegistration:
+    """Exact anonymous HTTP route declared by one backend plugin."""
+
+    plugin_id: str
+    method: str
+    path: str
+
+
+@dataclass(frozen=True)
 class PlatformCapabilityRegistration:
     """Versioned platform capability contributed by a plugin."""
 
@@ -190,6 +199,9 @@ class PluginRegistry:  # pylint:disable=too-many-public-methods
         self._plugin_http_app: Optional[Any] = None
         self._http_router_registrations: List[HttpRouterRegistration] = []
         self._asgi_app_registrations: List[AsgiAppRegistration] = []
+        self._public_http_routes: Dict[
+            tuple[str, str], PublicHttpRouteRegistration
+        ] = {}
         self._http_prefix_to_plugin: Dict[str, str] = {}
         self._platform_capabilities: Dict[
             str,
@@ -355,6 +367,62 @@ class PluginRegistry:  # pylint:disable=too-many-public-methods
             AsgiAppRegistration(plugin_id, normalized, route),
         )
         self._http_prefix_to_plugin[normalized] = plugin_id
+
+    def register_public_http_route(
+        self,
+        plugin_id: str,
+        *,
+        method: str,
+        path: str,
+    ) -> None:
+        """Declare one exact plugin-owned route as anonymously readable.
+
+        This registration only changes the outer authentication decision. The
+        plugin still owns the route implementation and its response contract.
+        Wildcards, prefixes, query strings, and unsafe methods are rejected.
+        """
+        normalized_method = str(method).strip().upper()
+        if normalized_method not in {"GET", "HEAD"}:
+            raise ValueError("Public plugin HTTP routes must use GET or HEAD")
+        normalized_path = str(path).strip()
+        if (
+            not normalized_path.startswith("/api/")
+            or normalized_path.endswith("/")
+            or "?" in normalized_path
+            or "#" in normalized_path
+            or "{" in normalized_path
+            or "}" in normalized_path
+            or "//" in normalized_path
+        ):
+            raise ValueError(
+                "Public plugin HTTP route must be one exact /api/... path",
+            )
+        key = (normalized_method, normalized_path)
+        existing = self._public_http_routes.get(key)
+        if existing is not None:
+            raise ValueError(
+                f"Public HTTP route {normalized_method} {normalized_path!r} "
+                f"is already registered by plugin '{existing.plugin_id}'",
+            )
+        self._public_http_routes[key] = PublicHttpRouteRegistration(
+            plugin_id=plugin_id,
+            method=normalized_method,
+            path=normalized_path,
+        )
+
+    def is_public_http_route(self, method: str, path: str) -> bool:
+        """Return whether a plugin declared this exact method/path public."""
+        normalized_method = str(method).strip().upper()
+        if normalized_method == "HEAD":
+            return ("HEAD", path) in self._public_http_routes or (
+                "GET",
+                path,
+            ) in self._public_http_routes
+        return (normalized_method, path) in self._public_http_routes
+
+    def get_public_http_routes(self) -> List[PublicHttpRouteRegistration]:
+        """Return public route declarations for diagnostics and tests."""
+        return list(self._public_http_routes.values())
 
     def register_platform_capability(
         self,
@@ -551,6 +619,11 @@ class PluginRegistry:  # pylint:disable=too-many-public-methods
         return current
 
     def _unregister_plugin_http_routes(self, plugin_id: str) -> None:
+        self._public_http_routes = {
+            key: registration
+            for key, registration in self._public_http_routes.items()
+            if registration.plugin_id != plugin_id
+        }
         http_app = self._plugin_http_app
         if http_app is None:
             return

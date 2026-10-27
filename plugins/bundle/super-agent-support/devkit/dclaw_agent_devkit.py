@@ -20,7 +20,7 @@ import unicodedata
 import zipfile
 
 
-DEVKIT_VERSION = "1.4.0"
+DEVKIT_VERSION = "1.4.1"
 CRYPTOGRAPHY_VERSION = "46.0.3"
 SUPPORTED_PYTHON = ">=3.10,<3.14"
 SUPPORTED_PLATFORMS = {
@@ -814,6 +814,13 @@ def _command_verify(args: argparse.Namespace) -> None:
 
 def _command_contracts(_args: argparse.Namespace) -> None:
     catalog = _read_json(_root() / "capability-catalog.json")
+    operation_catalog = _root() / "operation-catalog.json"
+    transport_fixture = (
+        _root()
+        / "fixtures"
+        / "business-identity"
+        / "transport-cases.json"
+    )
     _json_result(
         status="ok",
         devkit_version=DEVKIT_VERSION,
@@ -822,6 +829,14 @@ def _command_contracts(_args: argparse.Namespace) -> None:
         cryptography_version=CRYPTOGRAPHY_VERSION,
         supported_python=SUPPORTED_PYTHON,
         supported_platforms=sorted(set(SUPPORTED_PLATFORMS.values())),
+        operation_catalog=operation_catalog.relative_to(_root()).as_posix(),
+        operation_catalog_sha256=hashlib.sha256(
+            operation_catalog.read_bytes(),
+        ).hexdigest(),
+        transport_fixture=transport_fixture.relative_to(_root()).as_posix(),
+        transport_fixture_sha256=hashlib.sha256(
+            transport_fixture.read_bytes(),
+        ).hexdigest(),
         schemas=sorted(
             path.relative_to(_root()).as_posix()
             for path in (_root() / "schemas").rglob("*.json")

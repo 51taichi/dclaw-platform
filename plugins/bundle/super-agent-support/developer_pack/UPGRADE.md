@@ -33,6 +33,11 @@ identity contracts. Existing manifests remain valid. A rebuilt Agent may
 declare the new capability only after its service registration and exact
 installation/release grant exist on the target DClaw instance.
 
+Pack 1.5.1 adds DevKit 1.4.1 transport fixtures and safely accepts the normal
+`.venv/bin/python` symlink created on POSIX systems. Existing signed packages
+remain valid. Re-run `validate` and `test` before rebuilding; no manifest or
+capability contract migration is required.
+
 ## Rollback
 
 Keep the previous developer pack ZIP, checksum, public key, last accepted Agent

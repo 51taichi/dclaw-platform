@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import sqlite3
 import threading
 import time
@@ -15,10 +16,31 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 MAX_ASSERTION_LIFETIME_SECONDS = 300
 DEFAULT_CLOCK_SKEW_SECONDS = 30
+_BEARER_ASSERTION = re.compile(
+    r"Bearer ([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)",
+)
 
 
 class BusinessIdentityVerificationError(ValueError):
     """A stable verification or replay failure."""
+
+
+def extract_bearer_assertion(authorization_values: list[str]) -> str:
+    """Extract exactly one platform assertion from raw Authorization values."""
+    if (
+        not isinstance(authorization_values, list)
+        or len(authorization_values) != 1
+        or not isinstance(authorization_values[0], str)
+    ):
+        raise BusinessIdentityVerificationError(
+            "BUSINESS_IDENTITY.ASSERTION_INVALID",
+        )
+    match = _BEARER_ASSERTION.fullmatch(authorization_values[0])
+    if match is None:
+        raise BusinessIdentityVerificationError(
+            "BUSINESS_IDENTITY.ASSERTION_INVALID",
+        )
+    return match.group(1)
 
 
 def _decode(value: str) -> bytes:

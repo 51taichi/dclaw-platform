@@ -235,6 +235,20 @@ class PluginApi:
                 name=name,
             )
 
+    def register_public_http_route(
+        self,
+        *,
+        method: str,
+        path: str,
+    ) -> None:
+        """Declare one exact plugin-owned GET/HEAD route as anonymous."""
+        if self._registry:
+            self._registry.register_public_http_route(
+                self.plugin_id,
+                method=method,
+                path=path,
+            )
+
     def register_platform_capability(
         self,
         capability_id: str,

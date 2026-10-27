@@ -5,7 +5,7 @@ Agents. It contains the human standard, standalone DevKit, schemas, templates,
 SDK helpers, fixtures, and a single cross-platform command line tool. DClaw
 server source is not required.
 
-Version 1.5.0 bundles DevKit 1.4.0 and the public contracts for
+Version 1.5.1 bundles DevKit 1.4.1 and the public contracts for
 `business.service.installation-identity/1`. Business service assertions are
 issued and injected by the platform; Agent projects only receive and pass the
 opaque one-time `binding_ref`.
@@ -83,8 +83,12 @@ Supported adapters are `unittest` and `pytest`. The CLI invokes them without a
 shell and writes the normalized command plus the actual executed test count to
 release evidence. When project test dependencies live in a project virtual
 environment, set `tests.python` to its safe project-relative interpreter path,
-such as `.venv/Scripts/python.exe`. Projects without this field retain unittest
-discovery with the interpreter running the developer CLI.
+which must be exactly `.venv/Scripts/python.exe` or `.venv/bin/python`. The pack verifies the
+project virtual environment, CPython version, executable identity and
+`sys.prefix`; normal POSIX virtual-environment Python symlinks are supported,
+while directory symlink escapes, wrappers and arbitrary interpreters are
+rejected. Projects without this field retain unittest discovery with the
+interpreter running the developer CLI.
 
 `build` runs the mandatory release gate, project tests, standalone DevKit
 validation, sealing, signature verification, and evidence generation. It fails

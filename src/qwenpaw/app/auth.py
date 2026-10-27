@@ -952,7 +952,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 )
             return await call_next(request)
 
-        skip_auth = self._should_skip_auth(request)
+        plugin_public_route = self._is_plugin_public_route(request)
+        skip_auth = plugin_public_route or self._should_skip_auth(request)
         decision = backup_endpoint_policy.apply(request, skip_auth=skip_auth)
         if isinstance(decision, Response):
             return decision
@@ -988,12 +989,28 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 media_type="application/json",
             )
 
-        if skip_auth and not hasattr(request.state, "user"):
+        if (
+            skip_auth
+            and not plugin_public_route
+            and not hasattr(request.state, "user")
+        ):
             request.state.user = "admin"
             request.state.user_id = 1
             request.state.role = "admin"
 
         return await call_next(request)
+
+    @staticmethod
+    def _is_plugin_public_route(request: Request) -> bool:
+        """Check the generic plugin SPI for an exact anonymous route."""
+        if not is_auth_enabled() or request.method == "OPTIONS":
+            return False
+        from ..plugins.registry import PluginRegistry
+
+        return PluginRegistry().is_public_http_route(
+            request.method,
+            request.url.path,
+        )
 
     @staticmethod
     def _should_skip_auth(request: Request) -> bool:

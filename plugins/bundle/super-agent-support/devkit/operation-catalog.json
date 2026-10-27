@@ -1,0 +1,62 @@
+{
+  "catalog_version": "1",
+  "owner": "dclaw.super-agent-support",
+  "minimum_plugin_version": "1.10.1",
+  "capability_id": "business.service.installation-identity/1",
+  "local_capability_gateway": {
+    "owner": "dclaw-platform",
+    "endpoint_path": "/api/super-agent-support/mcp/",
+    "transport": "streamable-http",
+    "jsonrpc_version": "2.0",
+    "session_mode": "stateless",
+    "mcp_session_id_required": false,
+    "agent_raw_jsonrpc_allowed": false,
+    "host_sequence": [
+      "initialize",
+      "notifications/initialized",
+      "tools/list",
+      "tools/call"
+    ],
+    "request_headers": {
+      "Content-Type": "application/json",
+      "Accept": "application/json, text/event-stream"
+    }
+  },
+  "platform_injected_arguments": ["dclaw_session_token"],
+  "operations": [
+    {
+      "client_key": "business_identity.issue",
+      "tool_name": "business_service_identity_issue",
+      "input_schema": "schemas/business-identity-v1/issue-request.schema.json",
+      "output_schema": "schemas/business-identity-v1/issue-response.schema.json",
+      "must_precede": "business_identity.outbound"
+    },
+    {
+      "client_key": "business_identity.outbound",
+      "tool_name": "business_service_outbound_request",
+      "input_schema": "schemas/business-identity-v1/outbound-request.schema.json",
+      "output_schema": "schemas/business-identity-v1/outbound-response.schema.json",
+      "requires_binding_from": "business_identity.issue"
+    }
+  ],
+  "controlled_outbound": {
+    "authorization_owner": "dclaw-platform",
+    "authorization_header": "Authorization",
+    "authorization_format": "Bearer <assertion>",
+    "authorization_cardinality": 1,
+    "agent_authorization_allowed": false,
+    "proxy_forwarding": "verbatim-single-value",
+    "receiver_fail_closed_on": [
+      "missing",
+      "duplicate",
+      "combined-multi-value",
+      "non-bearer",
+      "empty-token"
+    ],
+    "ordinary_log_or_trace_allowed": false,
+    "url_boundary": "registered-audience-origin-and-path-subtree",
+    "redirects_allowed": false,
+    "request_body": "zero-or-one-of-json_body-or-text_body"
+  },
+  "stable_error_schema": "schemas/business-identity-v1/error.schema.json"
+}

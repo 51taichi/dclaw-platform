@@ -1,0 +1,32 @@
+{
+  "fixture_version": "1",
+  "positive": [
+    {
+      "name": "platform-single-bearer-and-json-body",
+      "agent_headers": {"Accept": "application/json", "X-Request-Id": "request-0001"},
+      "platform_headers": {"Authorization": "Bearer header.payload.signature"},
+      "json_body": {"request_id": "request-0001"}
+    },
+    {
+      "name": "platform-single-bearer-and-empty-text-body",
+      "agent_headers": {},
+      "platform_headers": {"Authorization": "Bearer header.payload.signature"},
+      "text_body": ""
+    },
+    {
+      "name": "platform-single-bearer-and-no-body",
+      "agent_headers": {},
+      "platform_headers": {"Authorization": "Bearer header.payload.signature"}
+    }
+  ],
+  "negative": [
+    {"name": "agent-authorization", "agent_headers": {"Authorization": "Bearer forged"}, "text_body": ""},
+    {"name": "missing-authorization", "received_authorization": [], "text_body": ""},
+    {"name": "duplicate-authorization", "received_authorization": ["Bearer one", "Bearer two"], "text_body": ""},
+    {"name": "combined-multi-value", "received_authorization": ["Bearer one, Bearer two"], "text_body": ""},
+    {"name": "non-bearer", "received_authorization": ["Basic abc"], "text_body": ""},
+    {"name": "empty-bearer", "received_authorization": ["Bearer "], "text_body": ""},
+    {"name": "both-bodies", "received_authorization": ["Bearer token"], "json_body": {}, "text_body": ""},
+    {"name": "audience-path-escape", "received_authorization": ["Bearer token"], "url": "https://service.example/admin", "text_body": ""}
+  ]
+}

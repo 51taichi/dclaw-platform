@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.7`
+当前版本：`2.8`
 
 发布日期：`2026-10-27`
 
@@ -504,16 +504,16 @@ stateDiagram-v2
 
 截至 2026-10-27 的上一生产基线为 Server `1.1.10`、提交 `db08ac40fb0033d6c944636da58b2ce82686a951`、`dclaw.super-agent-support` `1.9.0`、Developer Pack `1.4.0` 和 DevKit `1.3.0`。该基线已完成认证下载和健康核对，但 Developer Pack `1.4.0` 未读取 `resources.lock.json`，不得再用于生成新的正式本地能力或超级专家发布包。
 
-本标准 `2.7` 的正式组合为 Developer Pack `1.5.0`、支持插件 `1.10.0` 与 DevKit `1.4.0`。该组合保留 `2.6` 的资源清单失败关闭修复，并正式发布 `business.service.installation-identity/1` 的机器合同、服务端签发、受控出站注入、验证、撤销与审计实现。
+本标准 `2.8` 的正式组合为 Developer Pack `1.5.1`、支持插件 `1.10.1` 与 DevKit `1.4.1`。该组合保留 `2.7` 的安装级业务服务身份能力，并补齐准确 MCP 操作目录、断言运输、匿名公开验签键和 POSIX 项目虚拟环境执行合同。
 
-本标准 `2.7` 的正式开发与发布门禁如下。版本必须作为一个兼容组合核对，不能只满足其中一项：
+本标准 `2.8` 的正式开发与发布门禁如下。版本必须作为一个兼容组合核对，不能只满足其中一项：
 
 | 项目 | 本标准要求 | 2026-10-26 正式环境核对 | 结论 |
 |---|---|---|---|
 | DClaw 核心 | 至少 `1.1.10` | 公网 `/api/version` 返回 `1.1.10`，运行镜像标记 Server 提交 `db08ac40` | 满足 |
-| 支持插件 | 至少 `1.10.0` | 上一生产基线为 `1.9.0` | 必须升级后才能授权安装级业务服务身份 |
-| Super Agent DevKit | `1.4.0`，且由目标实例认证下载 | 上一生产基线为 `1.3.0` | 必须升级并重新认证下载 |
-| Super Agent 开发包 | `1.5.0`，标准 `2.7`、DevKit `1.4.0` | 上一生产基线为 `1.4.0` | 必须升级并重新认证下载 |
+| 支持插件 | 至少 `1.10.1` | `1.10.0` 缺少完整公开运输与匿名 JWK 合同 | 必须升级后才能按本标准发布业务身份能力 |
+| Super Agent DevKit | `1.4.1`，且由目标实例认证下载 | `1.4.0` 缺少正式操作目录和运输夹具 | 必须升级并重新认证下载 |
+| Super Agent 开发包 | `1.5.1`，标准 `2.8`、DevKit `1.4.1` | `1.5.0` 的 POSIX 虚拟环境执行门禁不兼容正常符号链接 | 必须升级并重新认证下载 |
 | Windows 客户端 | 普通预检至少 `2.6.12`；本地文件链路至少 `2.6.13` | `2.6.11` | 不满足，先发布并升级客户端 |
 | 通用 Runner | 普通链路至少 `1.0.0`；本地文件链路至少 `1.1.0` | 随兼容客户端核对 | 业务服务身份完全由服务端提供，不要求 Runner 升级 |
 
@@ -538,7 +538,7 @@ stateDiagram-v2
 
 上述接口属于认证后的目标 DClaw，不是匿名公共下载站。`401` 表示尚未携带有效身份，不能据此断言接口缺失；有效身份下 `404`、插件版本低于要求、返回的 DevKit 版本不匹配或 ZIP SHA-256 与元数据不一致，均表示当前目标环境未达到发布门禁。开发方只能继续源码和离线测试，状态标记为 `platform-tooling-missing`，不得使用平台仓库内源码副本、旧兼容构建器、历史签名包或其他环境下载的 DevKit 替代。
 
-生产升级必须部署插件 `1.10.0`、Developer Pack `1.5.0` 和 DevKit `1.4.0`；使用本地文件链路时仍须完成 Windows 客户端 `2.6.13`、Runner `1.1.0` 和协议 `2` 的实际连接核对。安装级业务服务身份不经过客户端或 Runner，因此不会单独触发客户端或 Runner 升级。开发方必须使用自己的应用身份认证会话实际下载 Developer Pack 或 DevKit、核对服务端 SHA-256，并在上传前核对插件 Secret 与相应信任库配置；服务器 root SSH 权限和镜像中存在文件都不能替代应用下载身份或发布证据。任何历史 Agent 专属 Relay、Runner、工具前缀和能力 ID 只作为冻结兼容路径，不得被新发布复制或回退使用。
+生产升级必须部署插件 `1.10.1`、Developer Pack `1.5.1` 和 DevKit `1.4.1`；使用本地文件链路时仍须完成 Windows 客户端 `2.6.13`、Runner `1.1.0` 和设备协议 `2` 的实际连接核对。manifest 中 `platform_contract_versions.local_execution="1"` 是平台合同主版本；本地执行与文件能力的合同修订版 `1.1` 以及 Runner 设备协议 `2` 是不同层级的版本，不得互相替代或写错字段。安装级业务服务身份不经过客户端或 Runner，因此不会单独触发客户端或 Runner 升级。开发方必须使用自己的应用身份认证会话实际下载 Developer Pack 或 DevKit、核对服务端 SHA-256，并在上传前核对插件 Secret 与相应信任库配置；服务器 root SSH 权限和镜像中存在文件都不能替代应用下载身份或发布证据。任何历史 Agent 专属 Relay、Runner、工具前缀和能力 ID 只作为冻结兼容路径，不得被新发布复制或回退使用。
 
 生产安装必须把插件 `state_dir` 放在持久卷，并通过平台 Secret 配置稳定的 `master_key_base64`；容器可使用 `DCLAW_SUPER_AGENT_SUPPORT_MASTER_KEY_BASE64`，该值解码后至少 32 字节，不得写入仓库、镜像或 Agent 包。`trusted_package_signers` 是 `signer_id` 到原始 Ed25519 公钥 Base64 的映射。未配置受信公钥时，插件仍可启动和提供环境状态，但所有能力包注册必须失败关闭。
 
@@ -727,7 +727,7 @@ DClaw 平台负责卡片持久化、渲染、提交和可信回传；开发方�
 
 管理员不能只配置一个 Secret 名称就视为该能力可用。生产密封前，目标实例必须已经公开安装级业务服务身份的能力 ID、请求/响应 Schema、绑定对象、scope、Token 注入或交换位置、过期/刷新/撤销语义、稳定错误码和最低插件版本；该能力必须出现在目标实例下载的能力目录中，并能进入 manifest 能力摘要和管理员授权预览。缺少其中任一项时，开发方不得自行命名能力 ID、猜测 Header 或直接注入 Secret。
 
-静态服务 Bearer、客户端密钥或长期 Token 禁止进入 manifest、Agent 配置、提示词、卡片和本地任务输入。标准 `2.7` 已通过插件 `1.10.0` 和 DevKit `1.4.0` 正式发布 `business.service.installation-identity/1`；满足第 25.2.1 节登记、授权和版本门禁的 Agent 可以声明并使用该能力。目标环境低于最低版本、缺少精确服务登记或安装/发布版授权时，生产密封与上传仍必须失败关闭；开发方不得以内嵌 Secret 绕过门禁。
+静态服务 Bearer、客户端密钥或长期 Token 禁止进入 manifest、Agent 配置、提示词、卡片和本地任务输入。标准 `2.8` 已通过插件 `1.10.1` 和 DevKit `1.4.1` 正式发布 `business.service.installation-identity/1` 的完整调用与运输合同；满足第 25.2.1 节登记、授权和版本门禁的 Agent 可以声明并使用该能力。目标环境低于最低版本、缺少精确服务登记或安装/发布版授权时，生产密封与上传仍必须失败关闭；开发方不得以内嵌 Secret 绕过门禁。
 
 ## 15. 本地助手协作标准
 
@@ -1261,7 +1261,7 @@ GET <DCLAW_BASE_URL>/api/super-agent-support/developer-pack/download
 
 开发包元数据必须返回准确的开发包版本、标准标识与版本、DevKit 版本、ZIP SHA-256、文件数、支持平台和稳定下载路径。下载后的顶层目录名带开发包版本，包内 `PACKAGE-MANIFEST.json` 和 `SHA256SUMS` 列出公开资产及摘要；开发者根据元数据判断版本，不得根据稳定下载路径、标准文件名或 ZIP 文件名猜测版本。
 
-开发包 `1.5.0` 包含标准 `2.7`、DevKit `1.4.0`、公开 Schema/SDK、完整项目模板、业务服务模板、本地能力模板、测试夹具、最小离线示例、SBOM、第三方许可证、兼容矩阵、升级和回滚说明。统一命令如下：
+开发包 `1.5.1` 包含标准 `2.8`、DevKit `1.4.1`、公开 Schema/SDK、完整项目模板、业务服务模板、本地能力模板、测试夹具、最小离线示例、SBOM、第三方许可证、兼容矩阵、升级和回滚说明。统一命令如下：
 
 ```text
 python dclaw_developer.py doctor
@@ -1525,7 +1525,7 @@ flowchart LR
 
 `401` 首先是认证缺失，`403` 首先是权限配置，不能直接判断能力不存在。有效身份下 `404` 且插件版本低于标准、DevKit 版本不匹配、客户端低于门禁或插件未启用，都属于版本/部署缺口。只有在满足目标版本并核对最新能力目录后，仍然没有所需通用合同，才可能是真正的平台能力缺失。
 
-标准 `2.7` 已接受并实现安装级业务服务身份；目标环境只有同时达到插件 `1.10.0`、DevKit `1.4.0` 和 Developer Pack `1.5.0`，并完成服务登记与安装/发布版授权，才可以宣称该能力可用。Windows 客户端 `2.6.13` / Runner `1.1.0` 的交付只影响本地文件链路，与服务端业务身份能力分别核对。
+标准 `2.8` 已接受并实现安装级业务服务身份；目标环境只有同时达到插件 `1.10.1`、DevKit `1.4.1` 和 Developer Pack `1.5.1`，并完成服务登记与安装/发布版授权，才可以宣称该能力可用。Windows 客户端 `2.6.13` / Runner `1.1.0` 的交付只影响本地文件链路，与服务端业务身份能力分别核对。
 
 ### 25.2 申请材料
 
@@ -1575,7 +1575,7 @@ flowchart LR
 
 #### 25.2.1 安装级业务服务身份（accepted / implemented）
 
-平台负责人已接受该通用能力，正式实现由 `dclaw.super-agent-support` `1.10.0` 提供，机器合同由 DevKit `1.4.0` 发布，并随 Developer Pack `1.5.0` 交付。Agent 只有在目标环境完成服务登记、精确发布版/安装授权且 manifest 声明该能力时才能使用；插件或合同版本不足时必须失败关闭。
+平台负责人已接受该通用能力，正式实现由 `dclaw.super-agent-support` `1.10.1` 提供，机器合同由 DevKit `1.4.1` 发布，并随 Developer Pack `1.5.1` 交付。Agent 只有在目标环境完成服务登记、精确发布版/安装授权且 manifest 声明该能力时才能使用；插件或合同版本不足时必须失败关闭。
 
 - 正式能力 ID：`business.service.installation-identity/1`
 - 合同版本：`1`
@@ -1594,6 +1594,12 @@ flowchart LR
 
 响应同样是关闭对象，只返回 `binding_ref`、`service_id`、`audience`、`scopes`、`issued_at`、`expires_at`、`issuer`、`key_id` 和 `audit_id`。`binding_ref` 只能交给平台管理的 HTTP/MCP 出站运输层；平台在发送请求时注入短时签名断言，Token 原文不得返回 Agent、写入卡片、对话、普通日志或本地能力输入。
 
+DevKit `operation-catalog.json` 是准确的调用入口目录。超级专家运行时使用客户端键 `business_identity.issue` 和 `business_identity.outbound`；宿主分别映射为 MCP 工具 `business_service_identity_issue` 和 `business_service_outbound_request`。正式入口是 `/api/super-agent-support/mcp/`，运输协议为无状态 MCP Streamable HTTP 与 JSON-RPC `2.0`。宿主完成 `initialize`、`notifications/initialized`、`tools/list` 后通过 `tools/call` 调用，并从受信运行上下文注入 `dclaw_session_token`；Agent 不得自行构造原始 JSON-RPC、提交或覆盖该参数。每次出站必须先成功调用 `issue` 取得一次性 `binding_ref`，再调用 `outbound`，禁止缓存或跨调用重用。
+
+`business_service_outbound_request` 必填 `binding_ref`、`method` 和 `url`，可选 `headers`、`json_body`、`text_body` 和 `timeout_seconds`；请求体可以省略，存在时只能在 `json_body` 与 `text_body` 中选择一个。Agent Header 仅允许 `Accept`、`Content-Type`、`Idempotency-Key`、`User-Agent` 和 `X-Request-Id`，Header 名按大小写不敏感处理，大小写重复项必须失败关闭。Agent 提供任何 `Authorization` 都必须失败；平台在实际出站请求中只注入一个 `Authorization: Bearer <assertion>` 并原样传递。业务服务收到缺失、重复、合并多值、非 Bearer 或空 Token 时必须失败关闭。断言值禁止进入普通日志、trace、错误响应和 Agent 可见输出。
+
+公开验签键固定从匿名 `GET /api/super-agent-support/business-identities/verification-keys` 获取。该匿名权限只匹配精确的 GET/HEAD 路径，插件卸载后立即撤销；其他插件路由继续执行 DClaw 身份认证。响应提供 `ETag` 和短时公共缓存，业务服务应使用条件请求并在密钥轮换后刷新；平台必须限制请求频率和客户端状态数量，响应只能包含公钥材料。
+
 出站 URL 必须使用正式 HTTPS、公网解析地址、登记域名和 audience 的同一 origin，并限制在 audience 路径本身或其子路径；重定向被拒绝。请求与响应正文上限均为 1 MiB，响应按流式读取在超过上限时立即中止，不能先完整缓冲后判断。
 
 平台从已认证运行上下文派生 `tenant_id`、`user_id`、`agent_id`、`release_id`、`installation_id`、`session_id` 和已授权能力，Agent 输入不得声明或覆盖这些字段。签名断言至少包含 `iss`、`aud`、`sub`、`jti`、`iat`、`nbf`、`exp`、上述安装上下文字段、`service_id` 和 `scopes`；`sub` 是不可变安装身份。该能力不依赖 `local.execution.session/1`，不授予本地执行、能力包安装、客户凭证读取或任意网络访问，这些权限继续使用独立能力和管理员授权。
@@ -1606,13 +1612,13 @@ flowchart LR
 
 审计记录签发、注入、拒绝、轮换和撤销，字段至少包含 `audit_id`、`trace_id`、操作者、租户、Agent 发布版、安装、服务、scope、audience、结果、稳定原因码、`key_id` 和时间；禁止记录 bearer 原文或私钥。稳定错误至少包括 `BUSINESS_IDENTITY.NOT_GRANTED`、`SERVICE_UNKNOWN`、`AUDIENCE_NOT_ALLOWED`、`SCOPE_NOT_ALLOWED`、`INSTALLATION_REVOKED`、`RELEASE_MISMATCH`、`SIGNER_UNAVAILABLE` 和 `RATE_LIMITED`，且不得泄露其他租户、用户、Agent 或安装是否存在。
 
-兼容要求：合同 `1` 只能做向后兼容修订；现有未声明该能力的 Agent 继续运行，现有静态业务凭证不得静默迁移。新增或改变请求/响应字段、权限语义或必填 claim 必须发布新合同版本。最低组件版本为支持插件 `1.10.0`、DevKit `1.4.0` 和 Developer Pack `1.5.0`；该能力由服务端签发、验证和注入，不要求客户端或 Runner 升级。
+兼容要求：合同 `1` 只能做向后兼容修订；现有未声明该能力的 Agent 继续运行，现有静态业务凭证不得静默迁移。新增或改变请求/响应字段、权限语义或必填 claim 必须发布新合同版本。最低组件版本为支持插件 `1.10.1`、DevKit `1.4.1` 和 Developer Pack `1.5.1`；该能力由服务端签发、验证和注入，不要求客户端或 Runner 升级。
 
 正式发布必须持续通过以下测试：关闭 Schema 正反例；运行上下文防伪造；租户、用户、Agent、发布版、安装、服务、audience 和 scope 隔离；签名、有效期、时钟偏差与重放；轮换重叠和紧急撤销；日志、trace、卡片、Agent 输出、数据库导出、崩溃转储和客户端流量无 Token/私钥；插件禁用与卸载隔离；升级/回滚不恢复已撤销签发权；真实业务服务端到端验签及跨安装重放失败。
 
 ### 25.3 平台评审结果
 
-`business.service.installation-identity/1` 的正式评审结论为 `accepted`，并已按第 25.2.1 节在插件 `1.10.0`、DevKit `1.4.0` 和 Developer Pack `1.5.0` 中实现。后续修改其字段、权限、状态、重放或资源限制仍须按本节重新评审。
+`business.service.installation-identity/1` 的正式评审结论为 `accepted`，并已按第 25.2.1 节在插件 `1.10.1`、DevKit `1.4.1` 和 Developer Pack `1.5.1` 中实现。后续修改其字段、权限、状态、重放或资源限制仍须按本节重新评审。
 
 平台方必须给出以下一种明确结论：
 
@@ -1965,10 +1971,10 @@ Agent 名称：<可选，中文显示名称>
 2. 开发方自己的业务目标、源 Agent 材料和测试凭证；
 3. 从目标 DClaw 认证调用元数据接口并按其 `download_path` 下载、核对 SHA-256 的官方开发包；兼容自动化可以继续单独下载同版本官方 DevKit。
 
-开发包 `1.5.0` 是推荐的单一离线移交物，必须提供：
+开发包 `1.5.1` 是推荐的单一离线移交物，必须提供：
 
 - 唯一标准文件与明确的标准版本，不复制第二套人工规则；
-- 官方 DevKit `1.4.0` 及其完整离线加密依赖；
+- 官方 DevKit `1.4.1` 及其完整离线加密依赖；
 - `dclaw_developer.py` 的 `doctor`、`info`、`init`、`validate`、`test`、`keygen`、`capability-build`、`build`、`upgrade` 和 `demo`；
 - 超级专家、业务服务和本地能力包模板，以及职责边界示例；
 - 公共业务服务、本地执行和能力包 Schema/SDK；
@@ -1980,7 +1986,7 @@ Agent 名称：<可选，中文显示名称>
 
 开发包本身不得包含平台管理员凭据、生产地址、签名私钥、供应商 Secret、客户数据或 DClaw 私有实现。包内公开工具不得导入 `qwenpaw` 或要求开发者克隆服务器仓库。
 
-DevKit `1.4.0` 必须提供：
+DevKit `1.4.1` 必须提供：
 
 - `dclaw_agent_devkit.py`：`doctor`、`contracts`、`digest`、`validate`、`keygen`、`build`、`verify`；
 - `capability-catalog.json`：当前可声明的能力、版本、组和依赖；
@@ -1988,7 +1994,8 @@ DevKit `1.4.0` 必须提供：
 - `schemas/local-execution-v1/`：本地请求、响应和错误合同；
 - `schemas/super-agent-support-v1/`：能力包、设备命令、设备消息和凭证绑定合同；
 - `schemas/business-identity-v1/`：安装级业务服务身份签发、出站、在线验证、管理和稳定错误合同；
-- `business_identity_verifier.py` 与 `fixtures/business-identity/replay-cases.json`：公开 JWK 离线验签、持久化 `jti` 防重放和正反夹具；
+- `operation-catalog.json`：正式 MCP 入口、客户端键、工具名、调用顺序和平台注入参数；
+- `business_identity_verifier.py` 与 `fixtures/business-identity/`：公开 JWK 离线验签、持久化 `jti` 防重放、断言 Header 运输和正反夹具；
 - `templates/minimal/`：最小 manifest、`agent.json` 和 `runtime.py`。
 - `bootstrap.ps1`、`bootstrap.sh`、`requirements.lock`、`CHECKSUMS.sha256` 和 `wheelhouse/`：在支持平台离线创建隔离环境，逐文件校验并安装固定加密依赖；
 - `THIRD_PARTY_LICENSES.md`：列出随 DevKit 分发的依赖、版本和许可证。
@@ -1998,6 +2005,15 @@ DevKit `1.4.0` 必须提供：
 平台内部实现文件、测试文件和维护文档可以继续存在，但它们只服务平台维护者，不属于开发方输入。开发方缺少字段或行为定义时应报告标准或 DevKit 缺陷；平台不得用“请克隆服务器源码”回答。
 
 ## 34. 版本记录
+
+### 2.8 - 2026-10-27
+
+- 支持插件升级为 `1.10.1`、DevKit 升级为 `1.4.1`、Developer Pack 升级为 `1.5.1`，保持 manifest、签名包、本地执行和业务身份能力合同版本不变。
+- 发布准确的业务身份 MCP 操作目录，固定客户端键、MCP 工具名、Streamable HTTP/JSON-RPC 调用顺序和受信运行上下文参数注入。
+- 固定受控出站请求体为可省略且最多一种，拒绝 Agent `Authorization` 与大小写重复 Header，平台只发送一个 Bearer 断言，并发布接收方失败关闭夹具。
+- 通过通用插件公开路由 SPI 匿名提供精确 JWK 路径，增加 ETag、缓存、限流、轮换和插件卸载隔离；核心不硬编码 Super Agent 业务路由。
+- 修复 Developer Pack 对正常 POSIX `.venv/bin/python` 符号链接的误拒绝，同时验证项目虚拟环境、真实 CPython、`sys.prefix` 和目录逃逸。
+- 明确 manifest `platform_contract_versions.local_execution="1"`、本地执行合同修订 `1.1` 与 Runner 设备协议 `2` 属于不同层级。
 
 ### 2.7 - 2026-10-27
 

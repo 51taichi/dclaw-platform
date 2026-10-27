@@ -24,6 +24,7 @@ from starlette.testclient import TestClient
 from qwenpaw.app.super_experts.capabilities import (
     get_platform_capability_catalog,
 )
+from qwenpaw.app import auth as app_auth
 from qwenpaw.plugins.loader import PluginLoader
 from qwenpaw.plugins.registry import PluginRegistry
 
@@ -75,6 +76,10 @@ async def test_plugin_load_and_unload_are_isolated(tmp_path):
         assert (
             "business.service.installation-identity/1"
             in get_platform_capability_catalog()
+        )
+        assert loader.registry.is_public_http_route(
+            "GET",
+            "/api/super-agent-support/business-identities/verification-keys",
         )
         assert any(
             getattr(route, "path", None) == "/api/super-agent-support"
@@ -146,6 +151,10 @@ async def test_plugin_load_and_unload_are_isolated(tmp_path):
             "business.service.installation-identity/1"
             not in get_platform_capability_catalog()
         )
+        assert not loader.registry.is_public_http_route(
+            "GET",
+            "/api/super-agent-support/business-identities/verification-keys",
+        )
         assert not any(
             getattr(route, "path", None) == "/api/super-agent-support"
             for route in app.routes
@@ -178,6 +187,37 @@ async def test_plugin_load_and_unload_are_isolated(tmp_path):
             invocation_id="invocation-2",
         )
         assert unchanged == {"user_id": "user-1"}
+    finally:
+        PluginRegistry._instance = previous
+
+
+def test_generic_plugin_public_route_auth_and_unload(monkeypatch):
+    previous = PluginRegistry._instance
+    PluginRegistry._instance = None
+    registry = PluginRegistry()
+    app = FastAPI()
+
+    @app.get("/api/example/public")
+    async def public_endpoint():
+        return {"status": "public"}
+
+    @app.get("/api/example/private")
+    async def private_endpoint():
+        return {"status": "private"}
+
+    registry.register_public_http_route(
+        "example.plugin",
+        method="GET",
+        path="/api/example/public",
+    )
+    monkeypatch.setattr(app_auth, "is_auth_enabled", lambda: True)
+    app.add_middleware(app_auth.AuthMiddleware)
+    try:
+        with TestClient(app) as client:
+            assert client.get("/api/example/public").status_code == 200
+            assert client.get("/api/example/private").status_code == 401
+            registry.unregister_plugin("example.plugin")
+            assert client.get("/api/example/public").status_code == 401
     finally:
         PluginRegistry._instance = previous
 
@@ -460,6 +500,129 @@ def test_mcp_endpoint_exposes_exact_standard_tool_set(plugin_module, tmp_path):
     }
 
 
+def test_mcp_endpoint_publishes_business_identity_tools(plugin_module, tmp_path):
+    store, _signer, broker, service = _runtime(plugin_module, tmp_path)
+    outbound_requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        outbound_requests.append(request)
+        return httpx.Response(200, json={"accepted": True})
+
+    _identity_store, _identity_signer, identity, token = (
+        _business_identity_runtime(
+            plugin_module,
+            tmp_path / "identity",
+            transport=httpx.MockTransport(handler),
+        )
+    )
+    mcp_cls = sys.modules[
+        "test_dclaw_super_agent_support.mcp_server"
+    ].LocalExecutionMcp
+    endpoint = mcp_cls(service, identity)
+    headers = {
+        "accept": "application/json, text/event-stream",
+        "content-type": "application/json",
+    }
+    with TestClient(endpoint.app) as client:
+        initialized = client.post(
+            "/",
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "contract-test", "version": "1"},
+                },
+            },
+        )
+        ready = client.post(
+            "/",
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+            },
+        )
+        listed = client.post(
+            "/",
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list",
+                "params": {},
+            },
+        )
+        issued = client.post(
+            "/",
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "business_service_identity_issue",
+                    "arguments": {
+                        "service_id": "service-1",
+                        "audience": BUSINESS_AUDIENCE,
+                        "scopes": ["orders.read"],
+                        "idempotency_key": "mcp-identity-issue-01",
+                        "dclaw_session_token": token,
+                    },
+                },
+            },
+        )
+        issue_result = issued.json()["result"]
+        issue_payload = json.loads(issue_result["content"][0]["text"])
+        outbound_response = client.post(
+            "/",
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {
+                    "name": "business_service_outbound_request",
+                    "arguments": {
+                        "binding_ref": issue_payload["binding_ref"],
+                        "method": "GET",
+                        "url": f"{BUSINESS_AUDIENCE}/orders",
+                        "dclaw_session_token": token,
+                    },
+                },
+            },
+        )
+    del store, broker
+    assert initialized.status_code == 200
+    assert ready.status_code in {200, 202}
+    assert listed.status_code == 200
+    tools = {item["name"]: item for item in listed.json()["result"]["tools"]}
+    assert {
+        "business_service_identity_issue",
+        "business_service_outbound_request",
+    } <= set(tools)
+    outbound_schema = tools["business_service_outbound_request"]["inputSchema"]
+    assert set(outbound_schema["required"]) == {
+        "binding_ref",
+        "method",
+        "url",
+        "dclaw_session_token",
+    }
+    assert issued.status_code == 200
+    assert issue_result["isError"] is False
+    assert outbound_response.status_code == 200
+    outbound_result = outbound_response.json()["result"]
+    assert outbound_result["isError"] is False
+    assert json.loads(outbound_result["content"][0]["text"])["status_code"] == 200
+    assert len(outbound_requests) == 1
+    assert outbound_requests[0].headers.get_list("authorization") == [
+        outbound_requests[0].headers["authorization"],
+    ]
+
+
 def test_developer_kit_is_downloadable_without_server_source(
     plugin_module,
     tmp_path,
@@ -490,7 +653,7 @@ def test_developer_kit_is_downloadable_without_server_source(
 
     assert metadata.status_code == 200
     assert metadata.json()["name"] == "dclaw-super-agent-devkit"
-    assert metadata.json()["version"] == "1.4.0"
+    assert metadata.json()["version"] == "1.4.1"
     assert metadata.json()["download_path"] == (
         "/api/super-agent-support/developer-kit/v1.zip"
     )
@@ -509,7 +672,7 @@ def test_developer_kit_is_downloadable_without_server_source(
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-devkit-1.4.0"
+    prefix = "dclaw-super-agent-devkit-1.4.1"
     assert f"{prefix}/dclaw_agent_devkit.py" in names
     assert f"{prefix}/bootstrap.ps1" in names
     assert f"{prefix}/bootstrap.sh" in names
@@ -549,20 +712,20 @@ def test_developer_pack_is_downloadable_and_self_describing(
 
     assert metadata.status_code == 200
     payload = metadata.json()
-    assert payload["version"] == "1.5.0"
-    assert payload["standard"]["version"] == "2.7"
-    assert payload["devkit_version"] == "1.4.0"
+    assert payload["version"] == "1.5.1"
+    assert payload["standard"]["version"] == "2.8"
+    assert payload["devkit_version"] == "1.4.1"
     assert payload["server_source_required"] is False
     assert payload["download_path"].endswith("/developer-pack/download")
     assert payload["sha256"] == hashlib.sha256(downloaded.content).hexdigest()
     assert payload["content_sha256"] == payload["sha256"]
     assert downloaded.status_code == 200
-    assert "dclaw-super-agent-developer-pack-1.5.0.zip" in (
+    assert "dclaw-super-agent-developer-pack-1.5.1.zip" in (
         downloaded.headers["content-disposition"]
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-developer-pack-1.5.0"
+    prefix = "dclaw-super-agent-developer-pack-1.5.1"
     assert f"{prefix}/PACKAGE-MANIFEST.json" in names
     assert f"{prefix}/SHA256SUMS" in names
     assert f"{prefix}/dclaw_developer.py" in names
@@ -2149,6 +2312,7 @@ async def test_business_identity_issue_inject_verify_and_replay(
             binding_ref=issued["binding_ref"],
             method="GET",
             url=f"{BUSINESS_AUDIENCE}/orders",
+            text_body="",
         )
     audit = manager.audit_records()
     encoded_audit = json.dumps(audit)
@@ -2163,6 +2327,142 @@ async def test_business_identity_issue_inject_verify_and_replay(
             ).fetchall()
         }
     assert "private_key" not in columns
+
+
+@pytest.mark.asyncio
+async def test_business_identity_outbound_body_and_header_transport(
+    plugin_module,
+    tmp_path,
+):
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(204)
+
+    _store, _signer, manager, token = _business_identity_runtime(
+        plugin_module,
+        tmp_path,
+        transport=httpx.MockTransport(handler),
+    )
+
+    def issue(key: str) -> dict:
+        return manager.issue(
+            dclaw_session_token=token,
+            service_id="service-1",
+            audience=BUSINESS_AUDIENCE,
+            scopes=["orders.read"],
+            idempotency_key=key,
+        )
+
+    no_body = issue("bodyless-request-01")
+    await manager.outbound_request(
+        dclaw_session_token=token,
+        binding_ref=no_body["binding_ref"],
+        method="GET",
+        url=f"{BUSINESS_AUDIENCE}/orders",
+    )
+    assert captured[-1].content == b""
+    assert captured[-1].headers.get_list("authorization") == [
+        captured[-1].headers["authorization"],
+    ]
+    assert captured[-1].headers["authorization"].startswith("Bearer ")
+
+    json_request = issue("json-request-00001")
+    await manager.outbound_request(
+        dclaw_session_token=token,
+        binding_ref=json_request["binding_ref"],
+        method="POST",
+        url=f"{BUSINESS_AUDIENCE}/orders",
+        headers={"Content-Type": "application/vnd.example+json"},
+        json_body={"order_id": "order-1"},
+    )
+    assert captured[-1].headers.get_list("content-type") == [
+        "application/vnd.example+json",
+    ]
+
+    duplicate = issue("duplicate-header-01")
+    with pytest.raises(Exception, match="BUSINESS_IDENTITY.INVALID_REQUEST"):
+        await manager.outbound_request(
+            dclaw_session_token=token,
+            binding_ref=duplicate["binding_ref"],
+            method="GET",
+            url=f"{BUSINESS_AUDIENCE}/orders",
+            headers={"Accept": "application/json", "accept": "text/plain"},
+            text_body="",
+        )
+    authorization = issue("authorization-req-1")
+    with pytest.raises(Exception, match="BUSINESS_IDENTITY.INVALID_REQUEST"):
+        await manager.outbound_request(
+            dclaw_session_token=token,
+            binding_ref=authorization["binding_ref"],
+            method="GET",
+            url=f"{BUSINESS_AUDIENCE}/orders",
+            headers={"Authorization": "Bearer forged"},
+            text_body="",
+        )
+    both = issue("both-bodies-req-1")
+    with pytest.raises(Exception, match="BUSINESS_IDENTITY.INVALID_REQUEST"):
+        await manager.outbound_request(
+            dclaw_session_token=token,
+            binding_ref=both["binding_ref"],
+            method="POST",
+            url=f"{BUSINESS_AUDIENCE}/orders",
+            json_body={},
+            text_body="",
+        )
+
+
+def test_business_identity_public_keys_cache_rotation_and_bounded_rate_limit(
+    plugin_module,
+    tmp_path,
+):
+    store, _signer, broker, service = _runtime(plugin_module, tmp_path)
+    _identity_store, _identity_signer, manager, _token = (
+        _business_identity_runtime(plugin_module, tmp_path / "identity")
+    )
+    mcp_cls = sys.modules[
+        "test_dclaw_super_agent_support.mcp_server"
+    ].LocalExecutionMcp
+    package_cls = sys.modules[
+        "test_dclaw_super_agent_support.packages"
+    ].CapabilityPackageRegistry
+    routes = sys.modules["test_dclaw_super_agent_support.routes"]
+    plugin_app = routes.create_app(
+        store=store,
+        service=service,
+        mcp=mcp_cls(service, manager),
+        packages=package_cls(
+            store,
+            PLUGIN_ROOT / "schemas" / "capability-descriptor.schema.json",
+            {},
+        ),
+        credentials=broker,
+        business_identity=manager,
+    )
+    with TestClient(plugin_app) as client:
+        first = client.get("/business-identities/verification-keys")
+        cached = client.get(
+            "/business-identities/verification-keys",
+            headers={"If-None-Match": first.headers["etag"]},
+        )
+        manager.rotate_key(actor_id="admin-1", emergency=False)
+        rotated = client.get(
+            "/business-identities/verification-keys",
+            headers={"If-None-Match": first.headers["etag"]},
+        )
+    assert first.status_code == 200
+    assert first.headers["cache-control"] == "public, max-age=60, must-revalidate"
+    assert cached.status_code == 304
+    assert rotated.status_code == 200
+    assert rotated.headers["etag"] != first.headers["etag"]
+
+    limiter = routes._PublicKeysRateLimiter()
+    for index in range(routes.PUBLIC_KEYS_RATE_LIMIT_MAX_CLIENTS):
+        assert limiter.allow(f"client-{index}", now=0.0)
+    assert not limiter.allow("overflow", now=0.0)
+    assert limiter.allow("after-expiry", now=61.0)
+    assert len(limiter._requests) == 1
 
 
 @pytest.mark.asyncio
@@ -2195,6 +2495,7 @@ async def test_business_identity_rotation_and_live_assertion_revocation(
         binding_ref=issued["binding_ref"],
         method="GET",
         url=f"{BUSINESS_AUDIENCE}/orders",
+        text_body="",
     )
     assertion = captured["assertion"]
     manager.rotate_key(actor_id="admin-1", emergency=False)
@@ -2211,6 +2512,7 @@ async def test_business_identity_rotation_and_live_assertion_revocation(
         binding_ref=next_issued["binding_ref"],
         method="GET",
         url=f"{BUSINESS_AUDIENCE}/orders",
+        text_body="",
     )
     next_assertion = captured["assertion"]
     manager.rotate_key(actor_id="admin-1", emergency=True)
@@ -2250,6 +2552,7 @@ async def test_business_identity_online_verify_consumes_jti_atomically(
         binding_ref=issued["binding_ref"],
         method="GET",
         url=f"{BUSINESS_AUDIENCE}/orders",
+        text_body="",
     )
     assertion = captured["assertion"]
 
@@ -2325,6 +2628,7 @@ async def test_business_identity_rejects_scope_release_path_and_large_response(
             binding_ref=issued["binding_ref"],
             method="GET",
             url="https://8.8.8.8/admin",
+            text_body="",
         )
     encoded = manager.issue(
         dclaw_session_token=token,
@@ -2339,6 +2643,7 @@ async def test_business_identity_rejects_scope_release_path_and_large_response(
             binding_ref=encoded["binding_ref"],
             method="GET",
             url=f"{BUSINESS_AUDIENCE}/%2e%2e/admin",
+            text_body="",
         )
     large = manager.issue(
         dclaw_session_token=token,
@@ -2353,6 +2658,7 @@ async def test_business_identity_rejects_scope_release_path_and_large_response(
             binding_ref=large["binding_ref"],
             method="GET",
             url=f"{BUSINESS_AUDIENCE}/orders",
+            text_body="",
         )
     denied = [
         item for item in manager.audit_records() if item["result"] == "denied"
@@ -2467,3 +2773,35 @@ def test_business_identity_schemas_are_closed_and_published_to_devkit():
     }
     assert not list(validator.iter_errors(valid))
     assert list(validator.iter_errors({**valid, "tenant_id": "forged"}))
+    outbound_schema = json.loads(
+        (source / "outbound-request.schema.json").read_text(encoding="utf-8"),
+    )
+    outbound_validator = Draft202012Validator(outbound_schema)
+    outbound = {
+        "binding_ref": "bir_" + "a" * 32,
+        "method": "GET",
+        "url": BUSINESS_AUDIENCE,
+    }
+    assert not list(outbound_validator.iter_errors(outbound))
+    assert not list(
+        outbound_validator.iter_errors({**outbound, "json_body": {}}),
+    )
+    assert not list(
+        outbound_validator.iter_errors({**outbound, "text_body": ""}),
+    )
+    assert list(
+        outbound_validator.iter_errors(
+            {**outbound, "json_body": {}, "text_body": ""},
+        ),
+    )
+    assert list(
+        outbound_validator.iter_errors(
+            {
+                **outbound,
+                "headers": {
+                    "Accept": "application/json",
+                    "accept": "text/plain",
+                },
+            },
+        ),
+    ) == []

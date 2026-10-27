@@ -51,7 +51,11 @@ def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def _public_hostname(hostname: str | None) -> bool:
+def _public_hostname(
+    hostname: str | None,
+    *,
+    resolve: bool = True,
+) -> bool:
     if not hostname:
         return False
     lowered = hostname.rstrip(".").lower()
@@ -66,6 +70,8 @@ def _public_hostname(hostname: str | None) -> bool:
     except ValueError:
         if "." not in lowered:
             return False
+        if not resolve:
+            return True
         try:
             addresses = {
                 item[4][0]
@@ -87,6 +93,7 @@ def _validated_https_url(
     value: str,
     *,
     allow_query: bool = True,
+    resolve_hostname: bool = True,
 ) -> tuple[str, str]:
     try:
         parsed = urlsplit(value)
@@ -95,7 +102,7 @@ def _validated_https_url(
         raise BusinessIdentityError("AUDIENCE_NOT_ALLOWED") from exc
     if (
         parsed.scheme != "https"
-        or not _public_hostname(parsed.hostname)
+        or not _public_hostname(parsed.hostname, resolve=resolve_hostname)
         or parsed.username is not None
         or parsed.password is not None
         or parsed.fragment
@@ -148,7 +155,11 @@ class BusinessIdentityManager:
     ) -> None:
         if len(master_key) < 32:
             raise ValueError("business identity master key must be at least 32 bytes")
-        _validated_https_url(issuer, allow_query=False)
+        _validated_https_url(
+            issuer,
+            allow_query=False,
+            resolve_hostname=False,
+        )
         _validated_path(issuer)
         self._path = store.path
         self._master_key = bytes(master_key)
@@ -973,9 +984,14 @@ class BusinessIdentityManager:
         request_headers: dict[str, str] = {}
         for name, value in (headers or {}).items():
             lowered = str(name).lower()
-            if lowered not in _SAFE_HEADERS or not isinstance(value, str) or len(value) > 2048:
+            if (
+                lowered not in _SAFE_HEADERS
+                or lowered in request_headers
+                or not isinstance(value, str)
+                or len(value) > 2048
+            ):
                 raise BusinessIdentityError("INVALID_REQUEST")
-            request_headers[name] = value
+            request_headers[lowered] = value
         current = int(time.time()) if now is None else int(now)
         row, service = self._consume_binding(binding_ref, identity, current)
         allowed_domains = json.loads(service["allowed_domains_json"])
@@ -993,9 +1009,9 @@ class BusinessIdentityManager:
         if host not in allowed_domains or origin != audience_origin or not path_allowed:
             raise BusinessIdentityError("AUDIENCE_NOT_ALLOWED")
         assertion = self._sign_assertion(row)
-        request_headers["Authorization"] = f"Bearer {assertion}"
+        request_headers["authorization"] = f"Bearer {assertion}"
         if json_body is not None:
-            request_headers.setdefault("Content-Type", "application/json")
+            request_headers.setdefault("content-type", "application/json")
         try:
             async with httpx.AsyncClient(
                 transport=self._transport,

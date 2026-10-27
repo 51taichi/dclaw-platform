@@ -18,7 +18,7 @@ import zipfile
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, ValidationError
 
 from qwenpaw.app.sealed_agents.package import (
     build_signed_package_bytes,
@@ -134,13 +134,109 @@ def test_devkit_has_no_server_source_import_and_runs_standalone():
     )
     result = json.loads(completed.stdout)
     assert result["status"] == "ok"
-    assert result["devkit_version"] == "1.4.0"
+    assert result["devkit_version"] == "1.4.1"
     assert result["dependency_mode"] == "bundled-wheelhouse"
     assert result["cryptography_version"] == "46.0.3"
     assert "schemas/super-expert-manifest.schema.json" in result["schemas"]
     assert (
         "schemas/local-execution-v1/tool-call.schema.json" in result["schemas"]
     )
+    assert result["operation_catalog"] == "operation-catalog.json"
+    assert len(result["operation_catalog_sha256"]) == 64
+    assert result["transport_fixture"] == (
+        "fixtures/business-identity/transport-cases.json"
+    )
+    assert len(result["transport_fixture_sha256"]) == 64
+
+
+def test_business_identity_operation_catalog_is_complete_and_consistent():
+    catalog = json.loads(
+        (DEVKIT_ROOT / "operation-catalog.json").read_text(encoding="utf-8"),
+    )
+    fixture = json.loads(
+        (
+            DEVKIT_ROOT
+            / "fixtures"
+            / "business-identity"
+            / "transport-cases.json"
+        ).read_text(encoding="utf-8"),
+    )
+
+    assert catalog["owner"] == "dclaw.super-agent-support"
+    assert catalog["minimum_plugin_version"] == "1.10.1"
+    gateway = catalog["local_capability_gateway"]
+    assert gateway == {
+        "owner": "dclaw-platform",
+        "endpoint_path": "/api/super-agent-support/mcp/",
+        "transport": "streamable-http",
+        "jsonrpc_version": "2.0",
+        "session_mode": "stateless",
+        "mcp_session_id_required": False,
+        "agent_raw_jsonrpc_allowed": False,
+        "host_sequence": [
+            "initialize",
+            "notifications/initialized",
+            "tools/list",
+            "tools/call",
+        ],
+        "request_headers": {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        },
+    }
+    assert catalog["platform_injected_arguments"] == ["dclaw_session_token"]
+
+    operations = {item["client_key"]: item for item in catalog["operations"]}
+    assert set(operations) == {
+        "business_identity.issue",
+        "business_identity.outbound",
+    }
+    assert operations["business_identity.issue"]["tool_name"] == (
+        "business_service_identity_issue"
+    )
+    assert operations["business_identity.issue"]["must_precede"] == (
+        "business_identity.outbound"
+    )
+    assert operations["business_identity.outbound"]["tool_name"] == (
+        "business_service_outbound_request"
+    )
+    assert operations["business_identity.outbound"]["requires_binding_from"] == (
+        "business_identity.issue"
+    )
+
+    for operation in operations.values():
+        for key in ("input_schema", "output_schema"):
+            assert (DEVKIT_ROOT / operation[key]).is_file()
+    assert (DEVKIT_ROOT / catalog["stable_error_schema"]).is_file()
+
+    outbound_schema = json.loads(
+        (DEVKIT_ROOT / operations["business_identity.outbound"]["input_schema"])
+        .read_text(encoding="utf-8"),
+    )
+    transport = outbound_schema["x-dclaw-transport"]
+    controlled = catalog["controlled_outbound"]
+    assert transport["agent_authorization_header"] == "forbidden"
+    assert controlled["agent_authorization_allowed"] is False
+    assert transport["platform_authorization_header"] == "Authorization"
+    assert transport["platform_authorization_cardinality"] == 1
+    assert controlled["authorization_cardinality"] == 1
+    assert transport["request_body"] == (
+        "zero-or-one-of-json_body-or-text_body"
+    )
+    assert controlled["request_body"] == transport["request_body"]
+    assert fixture["positive"] and fixture["negative"]
+
+    validator = Draft202012Validator(outbound_schema)
+    base = {
+        "binding_ref": "bir_" + "a" * 32,
+        "method": "POST",
+        "url": "https://service.example/v1/resource",
+    }
+    validator.validate(base)
+    validator.validate({**base, "json_body": {}})
+    validator.validate({**base, "text_body": ""})
+    with pytest.raises(ValidationError):
+        validator.validate({**base, "json_body": {}, "text_body": ""})
 
 
 def test_devkit_bundles_and_verifies_locked_encryption_dependencies():
@@ -158,7 +254,7 @@ def test_devkit_bundles_and_verifies_locked_encryption_dependencies():
     )
     result = json.loads(completed.stdout)
     assert result["status"] == "ok"
-    assert result["devkit_version"] == "1.4.0"
+    assert result["devkit_version"] == "1.4.1"
     assert result["wheelhouse_verified"] is True
     assert result["wheelhouse_files"] == 26
 
@@ -430,3 +526,42 @@ def test_business_identity_offline_verifier_persists_jti_and_blocks_replay(
     assert fixture["retention_rule"] == (
         "persist each accepted (issuer,jti) until exp + clock_skew"
     )
+
+
+def test_business_identity_transport_rejects_ambiguous_authorization():
+    verifier = _business_identity_verifier()
+    assertion = "header.payload.signature"
+    assert verifier.extract_bearer_assertion(
+        [f"Bearer {assertion}"],
+    ) == assertion
+    for values in (
+        [],
+        [f"Bearer {assertion}", f"Bearer {assertion}"],
+        [f"Bearer {assertion}, Bearer {assertion}"],
+        ["Basic abc"],
+        ["Bearer "],
+    ):
+        with pytest.raises(
+            verifier.BusinessIdentityVerificationError,
+            match="BUSINESS_IDENTITY.ASSERTION_INVALID",
+        ):
+            verifier.extract_bearer_assertion(values)
+
+    fixture = json.loads(
+        (
+            DEVKIT_ROOT
+            / "fixtures"
+            / "business-identity"
+            / "transport-cases.json"
+        ).read_text(encoding="utf-8"),
+    )
+    assert {case["name"] for case in fixture["positive"]} >= {
+        "platform-single-bearer-and-no-body",
+    }
+    assert {case["name"] for case in fixture["negative"]} >= {
+        "missing-authorization",
+        "duplicate-authorization",
+        "combined-multi-value",
+        "non-bearer",
+        "empty-bearer",
+    }

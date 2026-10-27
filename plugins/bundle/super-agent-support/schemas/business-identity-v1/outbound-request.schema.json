@@ -14,5 +14,16 @@
     "text_body": {"type": "string", "maxLength": 1048576},
     "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 60, "default": 30}
   },
-  "allOf": [{"not": {"required": ["json_body", "text_body"]}}]
+  "allOf": [{"not": {"required": ["json_body", "text_body"]}}],
+  "x-dclaw-transport": {
+    "agent_header_allowlist": ["Accept", "Content-Type", "Idempotency-Key", "User-Agent", "X-Request-Id"],
+    "agent_authorization_header": "forbidden",
+    "platform_authorization_header": "Authorization",
+    "platform_authorization_format": "Bearer <assertion>",
+    "platform_authorization_cardinality": 1,
+    "proxy_forwarding": "verbatim-single-value",
+    "receiver_fail_closed_on": ["missing", "duplicate", "combined-multi-value", "non-bearer", "empty-token"],
+    "logging": "authorization-value-forbidden",
+    "request_body": "zero-or-one-of-json_body-or-text_body"
+  }
 }

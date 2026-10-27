@@ -10,6 +10,7 @@ import hashlib
 import ipaddress
 import importlib.util
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
@@ -21,10 +22,10 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 
-PACK_VERSION = "1.5.0"
+PACK_VERSION = "1.5.1"
 STANDARD_ID = "dclaw.super-agent-development"
-STANDARD_VERSION = "2.7"
-DEVKIT_VERSION = "1.4.0"
+STANDARD_VERSION = "2.8"
+DEVKIT_VERSION = "1.4.1"
 PROJECT_SCHEMA_VERSION = 1
 LOCAL_SESSION = "local.execution.session/1"
 LOCAL_PREFLIGHT = "local.environment.preflight/1"
@@ -1013,16 +1014,9 @@ def _test_configuration(
             python_value,
             "project test Python",
         )
-        python_path = _project_file(
-            project,
-            python_relative,
-            "project test Python",
+        python_executable = str(
+            _validated_project_venv_python(project, python_relative),
         )
-        if not python_path.is_file():
-            raise DeveloperPackError(
-                f"project test Python is missing: {python_relative}",
-            )
-        python_executable = str(python_path)
     if adapter == "pytest" and any(
         value == "--junitxml"
         or value.startswith("--junitxml=")
@@ -1034,6 +1028,147 @@ def _test_configuration(
             "pytest JUnit output is managed by the developer pack",
         )
     return adapter, python_executable, safe_paths, arguments
+
+
+def _validated_project_venv_python(
+    project: Path,
+    relative: PurePosixPath,
+) -> Path:
+    label = "project test Python"
+    posix_entry = PurePosixPath(".venv/bin/python")
+    windows_entry = PurePosixPath(".venv/Scripts/python.exe")
+    if relative not in {posix_entry, windows_entry}:
+        raise DeveloperPackError(
+            f"{label} must be .venv/bin/python or .venv/Scripts/python.exe",
+        )
+    root = project.resolve(strict=True)
+    current = root
+    for part in relative.parts[:-1]:
+        current = current / part
+        if current.is_symlink():
+            raise DeveloperPackError(
+                f"{label} cannot use a symbolic-link directory: {relative}",
+            )
+        if not current.is_dir():
+            raise DeveloperPackError(
+                f"{label} parent is missing: {relative}",
+            )
+    executable = current / relative.parts[-1]
+    environment = root / ".venv"
+    configuration = environment / "pyvenv.cfg"
+    if configuration.is_symlink() or not configuration.is_file():
+        raise DeveloperPackError(
+            f"{label} requires a trusted .venv/pyvenv.cfg",
+        )
+    if relative == windows_entry and executable.is_symlink():
+        raise DeveloperPackError(
+            f"{label} Windows entry cannot be a symbolic link",
+        )
+    try:
+        target = executable.resolve(strict=True)
+    except (OSError, ValueError) as exc:
+        raise DeveloperPackError(
+            f"{label} escapes its project root or is missing: {relative}",
+        ) from exc
+    if not target.is_file() or (
+        os.name != "nt" and not os.access(executable, os.X_OK)
+    ):
+        raise DeveloperPackError(f"{label} is not executable: {relative}")
+    try:
+        header = target.read_bytes()[:4]
+    except OSError as exc:
+        raise DeveloperPackError(
+            f"{label} cannot be inspected: {relative}",
+        ) from exc
+    native_headers = {
+        b"\x7fELF",
+        b"\xfe\xed\xfa\xce",
+        b"\xce\xfa\xed\xfe",
+        b"\xfe\xed\xfa\xcf",
+        b"\xcf\xfa\xed\xfe",
+        b"\xca\xfe\xba\xbe",
+        b"\xbe\xba\xfe\xca",
+    }
+    if header not in native_headers and header[:2] != b"MZ":
+        raise DeveloperPackError(
+            f"{label} must resolve to a native Python executable, not a wrapper",
+        )
+    try:
+        target.relative_to(root)
+    except ValueError:
+        pass
+    else:
+        try:
+            target.relative_to(environment)
+        except ValueError as exc:
+            raise DeveloperPackError(
+                f"{label} cannot escape to a writable project target",
+            ) from exc
+    config_values: dict[str, str] = {}
+    for line in configuration.read_text(encoding="utf-8").splitlines():
+        if "=" in line:
+            name, value = line.split("=", 1)
+            config_values[name.strip().lower()] = value.strip()
+    home = config_values.get("home")
+    if relative == posix_entry and executable.is_symlink():
+        home_root = Path(home).expanduser() if home else None
+        home_candidates: list[Path] = []
+        if home_root is not None:
+            home_candidates.extend(home_root / name for name in ("python", "python3"))
+            if home_root.is_dir():
+                home_candidates.extend(home_root.glob("python3.*"))
+        home_targets = {
+            candidate.resolve()
+            for candidate in home_candidates
+            if candidate.is_file()
+        }
+        if target not in home_targets:
+            raise DeveloperPackError(
+                f"{label} target does not match .venv/pyvenv.cfg home",
+            )
+    probe = (
+        "import json,sys;print(json.dumps({"
+        "'implementation':sys.implementation.name,"
+        "'executable':sys.executable,"
+        "'prefix':sys.prefix,"
+        "'base_prefix':sys.base_prefix,"
+        "'version':[sys.version_info.major,sys.version_info.minor]}))"
+    )
+    try:
+        completed = subprocess.run(
+            [str(executable), "-I", "-c", probe],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        details = json.loads(completed.stdout.strip())
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+        raise DeveloperPackError(
+            f"{label} is not a usable Python interpreter: {relative}",
+        ) from exc
+    try:
+        reported_executable = Path(details["executable"]).resolve(strict=True)
+        reported_prefix = Path(details["prefix"]).resolve(strict=True)
+        reported_base_prefix = Path(details["base_prefix"]).resolve(strict=True)
+        version = tuple(details["version"])
+    except (KeyError, OSError, TypeError, ValueError) as exc:
+        raise DeveloperPackError(
+            f"{label} returned invalid interpreter metadata: {relative}",
+        ) from exc
+    if (
+        completed.returncode != 0
+        or details.get("implementation") != "cpython"
+        or reported_executable != target
+        or reported_prefix != environment
+        or reported_prefix == reported_base_prefix
+        or version not in {(3, 10), (3, 11), (3, 12), (3, 13)}
+    ):
+        raise DeveloperPackError(
+            f"{label} must be CPython 3.10-3.13 from its project virtual environment",
+        )
+    return executable
 
 
 def _run_project_test_command(

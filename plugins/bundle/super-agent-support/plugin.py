@@ -130,6 +130,13 @@ class SuperAgentSupportPlugin:
             prefix="/super-agent-support",
             name="dclaw-super-agent-support",
         )
+        api.register_public_http_route(
+            method="GET",
+            path=(
+                "/api/super-agent-support/business-identities/"
+                "verification-keys"
+            ),
+        )
         frontend_api = APIRouter(dependencies=[Depends(require_user)])
         frontend_api.include_router(frontend_read_routes)
         api.register_http_router(

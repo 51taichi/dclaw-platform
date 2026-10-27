@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import venv
 import zipfile
 
 import pytest
@@ -34,16 +35,16 @@ def test_developer_pack_archive_is_complete_and_reproducible():
     second, repeated = archive.build_archive(PLUGIN_ROOT)
     assert first == second
     assert metadata == repeated
-    assert metadata["version"] == "1.5.0"
+    assert metadata["version"] == "1.5.1"
     assert metadata["standard"] == {
         "id": "dclaw.super-agent-development",
-        "version": "2.7",
+        "version": "2.8",
     }
-    assert metadata["devkit_version"] == "1.4.0"
+    assert metadata["devkit_version"] == "1.4.1"
     assert metadata["server_source_required"] is False
     assert metadata["sha256"] == hashlib.sha256(first).hexdigest()
 
-    prefix = "dclaw-super-agent-developer-pack-1.5.0/"
+    prefix = "dclaw-super-agent-developer-pack-1.5.1/"
     with zipfile.ZipFile(io.BytesIO(first)) as package:
         names = set(package.namelist())
         manifest = json.loads(package.read(prefix + "PACKAGE-MANIFEST.json"))
@@ -56,6 +57,8 @@ def test_developer_pack_archive_is_complete_and_reproducible():
         "dclaw_developer.py",
         "standard/super-agent-development-standard-v1.zh-CN.md",
         "devkit/dclaw_agent_devkit.py",
+        "devkit/operation-catalog.json",
+        "devkit/fixtures/business-identity/transport-cases.json",
         "schemas/business-mcp-v1/request.schema.json",
         "schemas/developer-pack-v1/capability-build.schema.json",
         "schemas/developer-pack-v1/resources-lock.schema.json",
@@ -68,7 +71,7 @@ def test_developer_pack_archive_is_complete_and_reproducible():
         "examples/minimal-local/example.json",
     }
     assert {prefix + name for name in expected} <= names
-    assert manifest["version"] == "1.5.0"
+    assert manifest["version"] == "1.5.1"
     assert "devkit/wheelhouse/cryptography-46.0.3" in checksums
     assert not any(
         "src/qwenpaw" in name or "tests/unit" in name for name in names
@@ -607,3 +610,114 @@ def test_pytest_adapter_records_actual_test_count_and_command(tmp_path):
     assert result["tests"] == 3
     assert result["test_commands"][0][0] == "<python>"
     assert "--junitxml=<evidence.xml>" in result["test_commands"][0]
+
+
+def test_project_virtual_environment_python_is_validated(tmp_path):
+    cli = _module("developer_pack_venv_test", PACK_CLI)
+    project = tmp_path / "agent"
+    cli.initialize_project(project, "test-agent", "Test Agent", "none")
+    environment = project / ".venv"
+    venv.EnvBuilder(
+        with_pip=False,
+        symlinks=sys.platform != "win32",
+    ).create(environment)
+    relative = (
+        ".venv/Scripts/python.exe"
+        if sys.platform == "win32"
+        else ".venv/bin/python"
+    )
+    metadata = {"tests": {"adapter": "unittest", "paths": ["tests"], "python": relative}}
+
+    _adapter, executable, _paths, _arguments = cli._test_configuration(
+        project,
+        metadata,
+    )
+
+    assert Path(executable) == project / relative
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX venv contract")
+def test_project_test_python_rejects_symlink_directory_and_wrapper(tmp_path):
+    cli = _module("developer_pack_venv_rejection_test", PACK_CLI)
+    project = tmp_path / "agent"
+    cli.initialize_project(project, "test-agent", "Test Agent", "none")
+    outside = tmp_path / "outside"
+    venv.EnvBuilder(
+        with_pip=False,
+        symlinks=sys.platform != "win32",
+    ).create(outside)
+    (project / ".venv").symlink_to(outside, target_is_directory=True)
+    linked = ".venv/bin/python"
+    with pytest.raises(cli.DeveloperPackError, match="symbolic-link directory"):
+        cli._test_configuration(
+            project,
+            {"tests": {"adapter": "unittest", "paths": ["tests"], "python": linked}},
+        )
+
+    wrapper_project = tmp_path / "wrapper-agent"
+    cli.initialize_project(
+        wrapper_project,
+        "wrapper-agent",
+        "Wrapper Agent",
+        "none",
+    )
+    fake = wrapper_project / ".venv" / "bin"
+    fake.mkdir(parents=True)
+    (wrapper_project / ".venv" / "pyvenv.cfg").write_text(
+        f"home = {Path(sys.executable).resolve().parent}\n",
+        encoding="utf-8",
+    )
+    wrapper = tmp_path / "python-wrapper"
+    wrapper.write_text("#!/bin/sh\necho not-python\n", encoding="utf-8")
+    wrapper.chmod(0o755)
+    (fake / "python").symlink_to(wrapper)
+    with pytest.raises(cli.DeveloperPackError, match="native Python executable"):
+        cli._test_configuration(
+            wrapper_project,
+            {
+                "tests": {
+                    "adapter": "unittest",
+                    "paths": ["tests"],
+                    "python": ".venv/bin/python",
+                },
+            },
+        )
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX venv contract")
+def test_project_test_python_rejects_nonstandard_and_project_escape(tmp_path):
+    cli = _module("developer_pack_venv_escape_test", PACK_CLI)
+    project = tmp_path / "agent"
+    cli.initialize_project(project, "test-agent", "Test Agent", "none")
+    with pytest.raises(cli.DeveloperPackError, match="must be .venv/bin/python"):
+        cli._test_configuration(
+            project,
+            {
+                "tests": {
+                    "adapter": "unittest",
+                    "paths": ["tests"],
+                    "python": "venv/bin/python",
+                },
+            },
+        )
+
+    controlled = project / "controlled-python"
+    controlled.write_bytes(Path(sys.executable).resolve().read_bytes())
+    controlled.chmod(0o755)
+    (project / ".venv" / "bin").mkdir(parents=True)
+    (project / ".venv" / "bin" / "python").symlink_to(controlled)
+    (project / ".venv" / "pyvenv.cfg").write_text(
+        f"home = {controlled.parent}\nversion_info = 3.10\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(cli.DeveloperPackError, match="writable project target"):
+        cli._test_configuration(
+            project,
+            {
+                "tests": {
+                    "adapter": "unittest",
+                    "paths": ["tests"],
+                    "python": ".venv/bin/python",
+                },
+            },
+        )
