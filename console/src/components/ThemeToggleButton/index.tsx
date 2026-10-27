@@ -46,7 +46,7 @@ export default function ThemeToggleButton() {
       placement="bottomRight"
       overlayClassName={styles.themeDropdown}
     >
-      <Button className={styles.toggleBtn} type="text" icon={icon} />
+      <Button className={styles.toggleBtn} icon={icon} />
     </Dropdown>
   );
 }
