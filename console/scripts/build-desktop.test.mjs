@@ -82,6 +82,10 @@ test("desktop build rejects unsynchronized versions before invoking Tauri", () =
     path.join(tauriDirectory, "Cargo.toml"),
     '[package]\nname = "dclaw"\nversion = "1.1.10"\n',
   );
+  writeFileSync(
+    path.join(tauriDirectory, "Cargo.lock"),
+    'version = 4\n\n[[package]]\nname = "dclaw"\nversion = "1.1.10"\n',
+  );
 
   const result = spawnSync(
     process.execPath,

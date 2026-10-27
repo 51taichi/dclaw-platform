@@ -23,9 +23,18 @@ const output = path.join(
   "resources",
   "local-helper",
 );
+const expectedRunnerVersion = "1.1.0";
+const expectedProtocolVersion = "2";
 
 if (process.argv.includes("--describe")) {
-  process.stdout.write(`${JSON.stringify({ project, output })}\n`);
+  process.stdout.write(
+    `${JSON.stringify({
+      project,
+      output,
+      expectedRunnerVersion,
+      expectedProtocolVersion,
+    })}\n`,
+  );
   process.exit(0);
 }
 
@@ -38,6 +47,21 @@ if (process.platform !== "win32") {
 if (!fs.existsSync(project)) {
   console.error(
     `Missing DClaw local helper source: ${project}. Set DCLAW_SERVER_SOURCE_DIR to a compatible dclaw-server checkout.`,
+  );
+  process.exit(1);
+}
+const helperSource = fs.readFileSync(
+  path.join(path.dirname(project), "Program.cs"),
+  "utf8",
+);
+if (
+  !helperSource.includes(`string RunnerVersion = "${expectedRunnerVersion}"`) ||
+  !helperSource.includes(
+    `string ProtocolVersion = "${expectedProtocolVersion}"`,
+  )
+) {
+  console.error(
+    `Local helper source must provide Runner ${expectedRunnerVersion} and protocol ${expectedProtocolVersion}.`,
   );
   process.exit(1);
 }

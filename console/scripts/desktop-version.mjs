@@ -23,7 +23,39 @@ function projectPaths(repositoryRoot) {
     version: path.join(repositoryRoot, "VERSION"),
     tauri: path.join(tauriDirectory, "tauri.conf.json"),
     cargo: path.join(tauriDirectory, "Cargo.toml"),
+    cargoLock: path.join(tauriDirectory, "Cargo.lock"),
   };
+}
+
+function cargoLockPackageSection(cargoLockContents) {
+  const section = cargoLockContents.match(
+    /(^|\n)(\[\[package\]\]\s*\nname\s*=\s*"dclaw"\s*\n)([\s\S]*?)(?=\n\[\[package\]\]|$)/,
+  );
+  if (!section) {
+    throw new Error('Cargo.lock does not contain the "dclaw" package.');
+  }
+  return section;
+}
+
+function readCargoLockPackageVersion(cargoLockContents) {
+  const section = cargoLockPackageSection(cargoLockContents);
+  const version = section[3].match(/^version\s*=\s*"([^"]+)"\s*$/m)?.[1];
+  if (!version) {
+    throw new Error('Cargo.lock package "dclaw" does not contain a version.');
+  }
+  return version;
+}
+
+function replaceCargoLockPackageVersion(cargoLockContents, version) {
+  const section = cargoLockPackageSection(cargoLockContents);
+  const updatedBody = section[3].replace(
+    /^version\s*=\s*"[^"]+"\s*$/m,
+    `version = "${version}"`,
+  );
+  return cargoLockContents.replace(
+    section[0],
+    `${section[1]}${section[2]}${updatedBody}`,
+  );
 }
 
 function readCargoPackageVersion(cargoContents) {
@@ -89,13 +121,16 @@ export async function assertVersionsSynchronized(
   repositoryRoot = defaultRepositoryRoot,
 ) {
   const paths = projectPaths(repositoryRoot);
-  const [canonical, tauriContents, cargoContents] = await Promise.all([
-    readCanonicalVersion(repositoryRoot),
-    readFile(paths.tauri, "utf8"),
-    readFile(paths.cargo, "utf8"),
-  ]);
+  const [canonical, tauriContents, cargoContents, cargoLockContents] =
+    await Promise.all([
+      readCanonicalVersion(repositoryRoot),
+      readFile(paths.tauri, "utf8"),
+      readFile(paths.cargo, "utf8"),
+      readFile(paths.cargoLock, "utf8"),
+    ]);
   const tauriVersion = JSON.parse(tauriContents).version;
   const cargoVersion = readCargoPackageVersion(cargoContents);
+  const cargoLockVersion = readCargoLockPackageVersion(cargoLockContents);
   const mismatches = [];
 
   if (tauriVersion !== canonical) {
@@ -105,6 +140,9 @@ export async function assertVersionsSynchronized(
   }
   if (cargoVersion !== canonical) {
     mismatches.push(`Cargo.toml is ${cargoVersion}; expected ${canonical}`);
+  }
+  if (cargoLockVersion !== canonical) {
+    mismatches.push(`Cargo.lock is ${cargoLockVersion}; expected ${canonical}`);
   }
   if (mismatches.length > 0) {
     throw new Error(
@@ -122,9 +160,10 @@ export async function setDesktopVersion(
 ) {
   validateVersion(version);
   const paths = projectPaths(repositoryRoot);
-  const [tauriContents, cargoContents] = await Promise.all([
+  const [tauriContents, cargoContents, cargoLockContents] = await Promise.all([
     readFile(paths.tauri, "utf8"),
     readFile(paths.cargo, "utf8"),
+    readFile(paths.cargoLock, "utf8"),
   ]);
   const tauriConfig = JSON.parse(tauriContents);
   if (typeof tauriConfig.version !== "string") {
@@ -132,11 +171,16 @@ export async function setDesktopVersion(
   }
   tauriConfig.version = version;
   const updatedCargo = replaceCargoPackageVersion(cargoContents, version);
+  const updatedCargoLock = replaceCargoLockPackageVersion(
+    cargoLockContents,
+    version,
+  );
 
   await Promise.all([
     writeFile(paths.version, `${version}\n`),
     writeFile(paths.tauri, `${JSON.stringify(tauriConfig, null, 2)}\n`),
     writeFile(paths.cargo, updatedCargo),
+    writeFile(paths.cargoLock, updatedCargoLock),
   ]);
   return version;
 }

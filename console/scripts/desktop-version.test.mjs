@@ -15,6 +15,7 @@ async function createFixture({
   canonical = "1.1.10",
   tauri = canonical,
   cargo = canonical,
+  cargoLock = canonical,
 } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), "dclaw-version-"));
   const tauriDirectory = path.join(root, "console", "src-tauri");
@@ -27,6 +28,10 @@ async function createFixture({
   await writeFile(
     path.join(tauriDirectory, "Cargo.toml"),
     `[package]\nname = "dclaw"\nversion = "${cargo}"\n\n[dependencies]\nserde = "1"\n`,
+  );
+  await writeFile(
+    path.join(tauriDirectory, "Cargo.lock"),
+    `version = 4\n\n[[package]]\nname = "dclaw"\nversion = "${cargoLock}"\ndependencies = [\n "serde",\n]\n\n[[package]]\nname = "serde"\nversion = "1.0.0"\n`,
   );
   return root;
 }
@@ -57,10 +62,15 @@ test("reads and validates the canonical version", async () => {
 });
 
 test("reports every desktop version mismatch", async () => {
-  const root = await createFixture({ tauri: "1.1.9", cargo: "1.1.8" });
+  const root = await createFixture({
+    tauri: "1.1.9",
+    cargo: "1.1.8",
+    cargoLock: "1.1.7",
+  });
   await assert.rejects(assertVersionsSynchronized(root), (error) => {
     assert.match(error.message, /tauri\.conf\.json.*1\.1\.9/);
     assert.match(error.message, /Cargo\.toml.*1\.1\.8/);
+    assert.match(error.message, /Cargo\.lock.*1\.1\.7/);
     return true;
   });
 });
@@ -86,4 +96,11 @@ test("sets and synchronizes all desktop version files", async () => {
   );
   assert.match(cargo, /\[package\][\s\S]*version = "1\.3\.5"/);
   assert.match(cargo, /serde = "1"/);
+
+  const cargoLock = await readFile(
+    path.join(root, "console", "src-tauri", "Cargo.lock"),
+    "utf8",
+  );
+  assert.match(cargoLock, /name = "dclaw"\nversion = "1\.3\.5"/);
+  assert.match(cargoLock, /name = "serde"\nversion = "1\.0\.0"/);
 });

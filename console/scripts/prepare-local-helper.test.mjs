@@ -28,4 +28,6 @@ test("local helper build resolves the plugin-owned source and client resource", 
     paths.output,
     path.join(consoleDirectory, "src-tauri/resources/local-helper"),
   );
+  assert.equal(paths.expectedRunnerVersion, "1.1.0");
+  assert.equal(paths.expectedProtocolVersion, "2");
 });

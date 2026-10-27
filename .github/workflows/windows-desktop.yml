@@ -29,7 +29,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: 51taichi/dclaw-server
-          ref: 1d2117a565bce578253753ed5a7fdf31296e2f91
+          ref: db08ac40fb0033d6c944636da58b2ce82686a951
           path: dclaw-server
           token: ${{ secrets.DCLAW_SERVER_READ_TOKEN || github.token }}
 

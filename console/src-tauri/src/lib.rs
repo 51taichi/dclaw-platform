@@ -30,6 +30,8 @@ enum CloseAction {
 const CHAT_ATTACHMENT_MAX_BYTES: u64 = 25 * 1024 * 1024;
 const CLIPBOARD_ATTACHMENT_LIMIT: usize = 20;
 const LOCAL_HELPER_HEARTBEAT_MAX_AGE_SECONDS: u64 = 45;
+const LOCAL_HELPER_RUNNER_VERSION: &str = "1.1.0";
+const LOCAL_HELPER_PROTOCOL_VERSION: &str = "2";
 
 #[derive(Default)]
 struct LocalHelperProcessState {
@@ -144,7 +146,7 @@ fn local_helper_status_value(app: &AppHandle) -> Result<LocalHelperStatus, Strin
         connected,
         paired: device_id.is_some() && config_has_device_token(&config_path),
         device_id,
-        runner_version: "1.0.0",
+        runner_version: LOCAL_HELPER_RUNNER_VERSION,
     })
 }
 
@@ -255,8 +257,8 @@ fn start_local_helper(
         "pairingCode": pairing,
         "displayName": std::env::var("COMPUTERNAME")
             .unwrap_or_else(|_| "Windows device".to_owned()),
-        "runnerVersion": "1.0.0",
-        "protocolVersion": "1",
+        "runnerVersion": LOCAL_HELPER_RUNNER_VERSION,
+        "protocolVersion": LOCAL_HELPER_PROTOCOL_VERSION,
     });
     fs::write(
         &config_path,
@@ -531,7 +533,10 @@ fn get_app_status() -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{attachments_from_paths, close_action, config_has_device_token, CloseAction};
+    use super::{
+        attachments_from_paths, close_action, config_has_device_token, CloseAction,
+        LOCAL_HELPER_PROTOCOL_VERSION, LOCAL_HELPER_RUNNER_VERSION,
+    };
     use std::{fs, time::SystemTime};
     use tauri_plugin_dialog::MessageDialogResult;
 
@@ -583,5 +588,11 @@ mod tests {
         fs::write(&path, r#"{"deviceId":"device-1","deviceToken":"secret"}"#).unwrap();
         assert!(config_has_device_token(&path));
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn bundled_local_helper_matches_device_protocol_v2() {
+        assert_eq!(LOCAL_HELPER_RUNNER_VERSION, "1.1.0");
+        assert_eq!(LOCAL_HELPER_PROTOCOL_VERSION, "2");
     }
 }
