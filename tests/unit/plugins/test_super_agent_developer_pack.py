@@ -74,7 +74,12 @@ def test_developer_pack_archive_is_complete_and_reproducible():
     assert manifest["version"] == "1.5.1"
     assert "devkit/wheelhouse/cryptography-46.0.3" in checksums
     assert not any(
-        "src/qwenpaw" in name or "tests/unit" in name for name in names
+        "src/qwenpaw" in name
+        or "tests/unit" in name
+        or "/._" in name
+        or "/__MACOSX/" in name
+        or name.endswith("/.DS_Store")
+        for name in names
     )
     for path in list(PACK_ROOT.rglob("*.py")) + list(
         (PLUGIN_ROOT / "devkit").rglob("*.py"),
@@ -89,6 +94,25 @@ def test_developer_pack_archive_is_complete_and_reproducible():
         Draft202012Validator.check_schema(
             json.loads(schema_path.read_text(encoding="utf-8")),
         )
+
+
+def test_developer_pack_archive_rejects_platform_metadata(tmp_path):
+    archive = _module("developer_pack_archive_metadata", PACK_ROOT / "archive.py")
+    ordinary = tmp_path / "README.md"
+    ordinary.write_text("ok", encoding="utf-8")
+    apple_double = tmp_path / "._README.md"
+    apple_double.write_bytes(b"metadata")
+    finder = tmp_path / ".DS_Store"
+    finder.write_bytes(b"metadata")
+    bytecode = tmp_path / "module.pyc"
+    bytecode.write_bytes(b"metadata")
+    macos = tmp_path / "__MACOSX" / "file"
+    macos.parent.mkdir()
+    macos.write_bytes(b"metadata")
+
+    assert archive._is_publishable_file(ordinary)
+    for path in (apple_double, finder, bytecode, macos):
+        assert not archive._is_publishable_file(path)
 
 
 def test_doctor_and_offline_demo_build_a_verified_package(tmp_path):

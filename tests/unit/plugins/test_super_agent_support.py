@@ -680,6 +680,36 @@ def test_developer_kit_is_downloadable_without_server_source(
     assert f"{prefix}/CHECKSUMS.sha256" in names
     assert len([name for name in names if "/wheelhouse/" in name]) == 26
     assert all("qwenpaw" not in name for name in names)
+    assert not any(
+        "/._" in name
+        or "/__MACOSX/" in name
+        or name.endswith("/.DS_Store")
+        for name in names
+    )
+
+
+def test_developer_kit_archive_is_reproducible_and_filters_metadata(
+    plugin_module,
+    tmp_path,
+):
+    routes = sys.modules["test_dclaw_super_agent_support.routes"]
+    (tmp_path / "VERSION").write_text("9.9.9\n", encoding="utf-8")
+    (tmp_path / "contract.json").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "._contract.json").write_bytes(b"apple-double")
+    (tmp_path / ".DS_Store").write_bytes(b"finder")
+    macos = tmp_path / "__MACOSX"
+    macos.mkdir()
+    (macos / "contract.json").write_bytes(b"metadata")
+
+    first, version = routes._developer_kit_archive(tmp_path)
+    second, repeated_version = routes._developer_kit_archive(tmp_path)
+    assert first == second
+    assert version == repeated_version == "9.9.9"
+    with zipfile.ZipFile(io.BytesIO(first)) as archive:
+        assert archive.namelist() == [
+            "dclaw-super-agent-devkit-9.9.9/VERSION",
+            "dclaw-super-agent-devkit-9.9.9/contract.json",
+        ]
 
 
 def test_developer_pack_is_downloadable_and_self_describing(

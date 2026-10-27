@@ -8,6 +8,8 @@
   validating the interpreter, project environment and `sys.prefix`.
 - Rejects directory symlink escapes, wrappers, arbitrary interpreters,
   Agent-supplied authorization and case-insensitive duplicate headers.
+- Excludes AppleDouble, Finder, bytecode and macOS archive metadata from
+  deterministic Developer Pack and DevKit downloads.
 - Documents anonymous cached JWK discovery and keeps existing signed Agent,
   manifest, local execution and business identity contract versions valid.
 

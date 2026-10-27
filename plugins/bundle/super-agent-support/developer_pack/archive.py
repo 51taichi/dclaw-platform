@@ -10,23 +10,26 @@ import re
 import zipfile
 
 
+def _is_publishable_file(path: Path) -> bool:
+    return (
+        path.is_file()
+        and "__pycache__" not in path.parts
+        and "__MACOSX" not in path.parts
+        and path.suffix != ".pyc"
+        and path.name != ".DS_Store"
+        and not path.name.startswith("._")
+    )
+
+
 def _files(root: Path) -> dict[str, bytes]:
     result: dict[str, bytes] = {}
     developer_root = root / "developer_pack"
     for path in sorted(developer_root.rglob("*")):
-        if (
-            path.is_file()
-            and "__pycache__" not in path.parts
-            and path.suffix != ".pyc"
-        ):
+        if _is_publishable_file(path):
             result[path.relative_to(developer_root).as_posix()] = path.read_bytes()
     devkit_root = root / "devkit"
     for path in sorted(devkit_root.rglob("*")):
-        if (
-            path.is_file()
-            and "__pycache__" not in path.parts
-            and path.suffix != ".pyc"
-        ):
+        if _is_publishable_file(path):
             relative = path.relative_to(devkit_root).as_posix()
             result[f"devkit/{relative}"] = path.read_bytes()
     repository_root = root.parents[2]

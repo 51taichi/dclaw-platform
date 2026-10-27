@@ -2013,6 +2013,7 @@ DevKit `1.4.1` 必须提供：
 - 固定受控出站请求体为可省略且最多一种，拒绝 Agent `Authorization` 与大小写重复 Header，平台只发送一个 Bearer 断言，并发布接收方失败关闭夹具。
 - 通过通用插件公开路由 SPI 匿名提供精确 JWK 路径，增加 ETag、缓存、限流、轮换和插件卸载隔离；核心不硬编码 Super Agent 业务路由。
 - 修复 Developer Pack 对正常 POSIX `.venv/bin/python` 符号链接的误拒绝，同时验证项目虚拟环境、真实 CPython、`sys.prefix` 和目录逃逸。
+- Developer Pack 与 DevKit 下载过滤 AppleDouble、Finder、字节码及 macOS 归档元数据，并以固定 ZIP 元数据保证跨构建环境可复现。
 - 明确 manifest `platform_contract_versions.local_execution="1"`、本地执行合同修订 `1.1` 与 Runner 设备协议 `2` 属于不同层级。
 
 ### 2.7 - 2026-10-27

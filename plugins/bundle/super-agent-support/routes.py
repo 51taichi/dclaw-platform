@@ -156,8 +156,8 @@ def _require_admin(request: Request) -> None:
         raise HTTPException(status_code=403, detail="administrator required")
 
 
-def _developer_kit_archive() -> tuple[bytes, str]:
-    root = Path(__file__).parent / "devkit"
+def _developer_kit_archive(root: Path | None = None) -> tuple[bytes, str]:
+    root = root or Path(__file__).parent / "devkit"
     version = (root / "VERSION").read_text(encoding="utf-8").strip()
     prefix = f"dclaw-super-agent-devkit-{version}"
     output = io.BytesIO()
@@ -167,12 +167,28 @@ def _developer_kit_archive() -> tuple[bytes, str]:
         compression=zipfile.ZIP_DEFLATED,
     ) as archive:
         for path in sorted(root.rglob("*")):
-            if not path.is_file() or "__pycache__" in path.parts:
+            relative = path.relative_to(root)
+            if (
+                not path.is_file()
+                or "__pycache__" in relative.parts
+                or "__MACOSX" in relative.parts
+                or path.suffix == ".pyc"
+                or path.name == ".DS_Store"
+                or path.name.startswith("._")
+            ):
                 continue
-            archive.write(
-                path,
-                f"{prefix}/{path.relative_to(root).as_posix()}",
+            name = relative.as_posix()
+            info = zipfile.ZipInfo(
+                f"{prefix}/{name}",
+                (2026, 10, 26, 0, 0, 0),
             )
+            info.compress_type = zipfile.ZIP_DEFLATED
+            mode = 0o100755 if name in {
+                "bootstrap.sh",
+                "dclaw_agent_devkit.py",
+            } else 0o100644
+            info.external_attr = mode << 16
+            archive.writestr(info, path.read_bytes())
     return output.getvalue(), version
 
 
