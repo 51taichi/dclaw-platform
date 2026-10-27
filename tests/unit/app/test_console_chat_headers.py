@@ -32,8 +32,13 @@ class _FakeChannelManager:
 
 
 class _FakeChatManager:
-    def __init__(self, chat_id: str = "chat-real-id"):
+    def __init__(
+        self,
+        chat_id: str = "chat-real-id",
+        meta: dict | None = None,
+    ):
         self.chat_id = chat_id
+        self.meta = meta or {}
         self.calls: list[dict[str, str]] = []
 
     async def get_or_create_chat(
@@ -51,7 +56,11 @@ class _FakeChatManager:
                 "name": name,
             },
         )
-        return SimpleNamespace(id=self.chat_id, name="existing", meta={})
+        return SimpleNamespace(
+            id=self.chat_id,
+            name="existing",
+            meta=self.meta,
+        )
 
 
 class _FakeTaskTracker:
@@ -120,6 +129,41 @@ async def test_console_chat_stream_response_exposes_real_chat_id(monkeypatch):
 
     assert response.headers["x-qwenpaw-chat-id"] == "chat-real-id"
     assert response.headers["x-qwenpaw-session-id"] == "draft-session"
+
+
+@pytest.mark.asyncio
+async def test_console_chat_applies_persisted_local_access_mode(monkeypatch):
+    tracker = _FakeTaskTracker()
+    workspace = SimpleNamespace(
+        channel_manager=_FakeChannelManager(),
+        chat_manager=_FakeChatManager(
+            meta={"local_access_mode": "full_access"},
+        ),
+        task_tracker=tracker,
+    )
+
+    async def fake_get_agent_for_request(request):
+        _ = request
+        return workspace
+
+    monkeypatch.setattr(
+        console,
+        "get_agent_for_request",
+        fake_get_agent_for_request,
+    )
+
+    await console.post_console_chat(
+        {
+            "channel": "console",
+            "user_id": "default",
+            "session_id": "chat-real-id",
+            "input": [],
+        },
+        request=_FakeRequest(),
+    )
+
+    native_payload = tracker.calls[0]["native_payload"]
+    assert native_payload["meta"]["local_access_mode"] == "full_access"
 
 
 def test_console_chat_dict_input_text_stays_single_text_part():

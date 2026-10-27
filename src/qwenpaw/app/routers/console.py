@@ -38,6 +38,10 @@ from ..runner.title_generator import generate_and_update_title
 from ..guards import require_admin
 from ..chat_access import current_user_id, ensure_chat_access, is_admin_request
 from ..task_limits import get_task_limiter
+from ...security.local_access import (
+    LOCAL_ACCESS_MODE_META_KEY,
+    local_access_mode_from_meta,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -320,6 +324,9 @@ async def post_console_chat(
         native_payload["sender_id"],
         native_payload["channel_id"],
         name=name,
+    )
+    native_payload["meta"][LOCAL_ACCESS_MODE_META_KEY] = (
+        local_access_mode_from_meta(chat.meta).value
     )
 
     if chat and chat.meta and "active_model" in chat.meta:

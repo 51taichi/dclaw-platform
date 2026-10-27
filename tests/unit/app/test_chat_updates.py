@@ -99,6 +99,45 @@ async def test_put_chat_accepts_partial_rename_payload(
     assert saved.meta == {"source": "test"}
 
 
+async def test_put_chat_persists_valid_local_access_mode(
+    api_client: AsyncClient,
+    chat_manager: ChatManager,
+) -> None:
+    chat = await _seed_chat(chat_manager)
+
+    async with api_client:
+        response = await api_client.put(
+            f"/api/chats/{chat.id}",
+            json={"meta": {"local_access_mode": "full_access"}},
+        )
+
+    assert response.status_code == 200
+    saved = await chat_manager.get_chat(chat.id)
+    assert saved is not None
+    assert saved.meta == {
+        "source": "test",
+        "local_access_mode": "full_access",
+    }
+
+
+async def test_put_chat_rejects_invalid_local_access_mode(
+    api_client: AsyncClient,
+    chat_manager: ChatManager,
+) -> None:
+    chat = await _seed_chat(chat_manager)
+
+    async with api_client:
+        response = await api_client.put(
+            f"/api/chats/{chat.id}",
+            json={"meta": {"local_access_mode": "always_allow"}},
+        )
+
+    assert response.status_code == 422
+    saved = await chat_manager.get_chat(chat.id)
+    assert saved is not None
+    assert saved.meta == {"source": "test"}
+
+
 async def test_get_or_create_chat_reuses_existing_chat_id_as_session_id(
     chat_manager: ChatManager,
 ) -> None:

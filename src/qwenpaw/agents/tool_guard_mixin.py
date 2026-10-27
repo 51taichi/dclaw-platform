@@ -25,6 +25,7 @@ from ..security.tool_guard.models import (
     GuardFinding,
 )
 from ..security.tool_guard.execution_level import ToolExecutionLevel
+from ..security.local_access import LocalAccessMode, parse_local_access_mode
 from ..security.tool_guard.i18n import _TOOL_GUARD_I18N
 from ..constant import (
     TOOL_GUARD_APPROVAL_TIMEOUT_SECONDS,
@@ -111,7 +112,17 @@ class ToolGuardMixin:
         return bool(self._request_context.get("session_id"))
 
     def _get_tool_execution_level(self) -> ToolExecutionLevel:
-        """Get current agent's tool execution level from config."""
+        """Get the per-chat override or the agent's configured level."""
+        request_context = getattr(self, "_request_context", None) or {}
+        local_access_mode = parse_local_access_mode(
+            request_context.get("local_access_mode"),
+            default=None,
+        )
+        if local_access_mode == LocalAccessMode.ASK_FOR_APPROVAL:
+            return ToolExecutionLevel.STRICT
+        if local_access_mode == LocalAccessMode.FULL_ACCESS:
+            return ToolExecutionLevel.OFF
+
         agent_config = getattr(self, "_agent_config", None)
         if agent_config is None:
             return ToolExecutionLevel.AUTO
