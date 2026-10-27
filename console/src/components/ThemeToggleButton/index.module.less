@@ -1,11 +1,27 @@
 /* ---- Theme toggle button ---- */
 .toggleBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 32px;
   min-width: 32px;
   height: 32px;
   padding: 0;
+  vertical-align: middle;
+
+  :global(.ant-btn-icon),
+  :global(.spark-icon) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    line-height: 0;
+    vertical-align: 0;
+  }
 
   svg {
+    display: block;
     width: 16px;
     height: 16px;
   }
