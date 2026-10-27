@@ -38,6 +38,12 @@ Pack 1.5.1 adds DevKit 1.4.1 transport fixtures and safely accepts the normal
 remain valid. Re-run `validate` and `test` before rebuilding; no manifest or
 capability contract migration is required.
 
+Pack 1.5.2 fixes project metadata upgrades so `developer_pack_version`,
+`standard.version`, and `devkit_version` advance together. Run `validate`
+immediately after `upgrade`; a successful upgrade followed by a version
+mismatch is a tool defect and must not be worked around in a formal release.
+No manifest, signature, local execution, or business identity contract changes.
+
 ## Rollback
 
 Keep the previous developer pack ZIP, checksum, public key, last accepted Agent

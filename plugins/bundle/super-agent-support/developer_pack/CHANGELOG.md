@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.5.2 - 2026-10-27
+
+- Fixes `upgrade --project` to update `project.json.devkit_version` together
+  with the developer pack and standard versions.
+- Records the previous DevKit version and requires immediate validation of the
+  upgraded project metadata.
+- Bundles development standard 2.9 and its authenticated, immutable shared
+  toolchain release process.
+- Keeps DevKit 1.4.1 and every public manifest, signature, local execution and
+  business identity contract unchanged.
+
 ## 1.5.1 - 2026-10-27
 
 - Publishes DevKit 1.4.1 and development standard 2.8 with the exact MCP

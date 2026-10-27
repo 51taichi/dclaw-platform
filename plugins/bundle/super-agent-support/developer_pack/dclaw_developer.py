@@ -22,9 +22,9 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 
-PACK_VERSION = "1.5.1"
+PACK_VERSION = "1.5.2"
 STANDARD_ID = "dclaw.super-agent-development"
-STANDARD_VERSION = "2.8"
+STANDARD_VERSION = "2.9"
 DEVKIT_VERSION = "1.4.1"
 PROJECT_SCHEMA_VERSION = 1
 LOCAL_SESSION = "local.execution.session/1"
@@ -921,6 +921,8 @@ def release_gate(project_path: Path) -> dict:
         raise DeveloperPackError(
             "project developer pack version is not current",
         )
+    if metadata.get("devkit_version") != DEVKIT_VERSION:
+        raise DeveloperPackError("project DevKit version is not current")
     if _standard_version() != STANDARD_VERSION:
         raise DeveloperPackError(
             "developer pack and standard versions do not match",
@@ -1443,9 +1445,11 @@ def upgrade_project(project_path: Path, accept_standard: bool) -> dict:
     previous = {
         "developer_pack_version": metadata.get("developer_pack_version"),
         "standard_version": current_standard,
+        "devkit_version": metadata.get("devkit_version"),
     }
     metadata["developer_pack_version"] = PACK_VERSION
     metadata["standard"] = {"id": STANDARD_ID, "version": STANDARD_VERSION}
+    metadata["devkit_version"] = DEVKIT_VERSION
     _write_json(project / "project.json", metadata)
     record = {
         "previous": previous,
