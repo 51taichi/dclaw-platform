@@ -5,6 +5,7 @@ import { renderWithProviders } from "@/test/common_setup";
 import ConcurrencyMonitorButton, {
   type ConcurrencySnapshot,
 } from "./ConcurrencyMonitorButton";
+import styles from "./ConcurrencyMonitorButton.module.less";
 
 const firstSnapshot: ConcurrencySnapshot = {
   sampled_at: "2026-09-27T05:30:00+00:00",
@@ -54,14 +55,9 @@ describe("ConcurrencyMonitorButton", () => {
     expect(
       trigger.querySelector('[data-icon="SparkAdvancedMonitoringLine"]'),
     ).toBeInTheDocument();
-    expect(trigger).toHaveStyle({
-      display: "inline-flex",
-      alignItems: "center",
-      justifyContent: "center",
-      width: "32px",
-      height: "32px",
-      transform: "translateY(-3px)",
-    });
+    expect(trigger).toHaveClass(styles.triggerButton);
+    expect(trigger.className).not.toMatch(/-btn-text\b/u);
+    expect(trigger).not.toHaveStyle({ transform: "translateY(-3px)" });
 
     await user.click(trigger);
 

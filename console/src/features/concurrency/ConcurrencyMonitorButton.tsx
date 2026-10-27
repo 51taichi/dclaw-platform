@@ -14,6 +14,7 @@ import {
 } from "antd";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getConcurrencySnapshot } from "../../api/modules/concurrency";
+import styles from "./ConcurrencyMonitorButton.module.less";
 import type { ConcurrencySnapshot } from "./types";
 
 export type { ConcurrencySnapshot } from "./types";
@@ -168,20 +169,10 @@ export default function ConcurrencyMonitorButton({
     <>
       <Tooltip title="并发监控">
         <Button
-          type="text"
+          className={styles.triggerButton}
           icon={<SparkAdvancedMonitoringLine />}
           aria-label="并发监控"
           onClick={showDrawer}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            width: 32,
-            height: 32,
-            padding: 0,
-            verticalAlign: "middle",
-            transform: "translateY(-3px)",
-          }}
         />
       </Tooltip>
       <Drawer
