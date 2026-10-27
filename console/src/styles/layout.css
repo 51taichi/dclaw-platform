@@ -842,6 +842,16 @@ html.dark-mode [class*="chat-anywhere"] [class*="message"] a {
   width: 100%;
 }
 
+/* Request cards render a user Bubble inside the message Bubble. Keep the
+   inner layout at row width so its percentage cap does not collapse to the
+   minimum width of a single CJK character. */
+.qwenpaw-chat-anywhere-message-list
+  :is(.qwenpaw-bubble-end, .qwenpaw-bubble-user)
+  > .qwenpaw-bubble-content-wrapper
+  > :is(.qwenpaw-bubble-end, .qwenpaw-bubble-user) {
+  width: 100%;
+}
+
 .qwenpaw-chat-anywhere-message-list
   :is(.qwenpaw-bubble-end, .qwenpaw-bubble-user)
   .qwenpaw-bubble-content {
