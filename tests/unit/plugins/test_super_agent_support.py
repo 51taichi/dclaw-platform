@@ -191,6 +191,17 @@ async def test_plugin_load_and_unload_are_isolated(tmp_path):
         PluginRegistry._instance = previous
 
 
+@pytest.mark.asyncio
+async def test_mcp_lifecycle_can_stop_from_a_different_task(plugin_module):
+    mcp = plugin_module.LocalExecutionMcp(service=object())
+
+    await mcp.start()
+    await asyncio.create_task(mcp.stop())
+
+    assert mcp._runner_task is None
+    assert mcp._stop_event is None
+
+
 def test_generic_plugin_public_route_auth_and_unload(monkeypatch):
     previous = PluginRegistry._instance
     PluginRegistry._instance = None
@@ -742,7 +753,7 @@ def test_developer_pack_is_downloadable_and_self_describing(
         downloaded = client.get("/developer-pack/download")
 
     assert health.status_code == 200
-    assert health.json()["version"] == "1.11.0"
+    assert health.json()["version"] == "1.11.1"
     assert metadata.status_code == 200
     payload = metadata.json()
     assert payload["version"] == "1.5.2"

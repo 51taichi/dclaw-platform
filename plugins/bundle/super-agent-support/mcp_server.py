@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from contextlib import AbstractAsyncContextManager
+import asyncio
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -35,20 +35,51 @@ class LocalExecutionMcp:
             ),
         )
         self.app = self.server.streamable_http_app()
-        self._lifecycle: AbstractAsyncContextManager | None = None
+        self._runner_task: asyncio.Task[None] | None = None
+        self._stop_event: asyncio.Event | None = None
         self._register_tools()
 
     async def start(self) -> None:
-        if self._lifecycle is not None:
+        if self._runner_task is not None:
             return
-        lifecycle = self.server.session_manager.run()
-        await lifecycle.__aenter__()
-        self._lifecycle = lifecycle
+        stop_event = asyncio.Event()
+        ready = asyncio.get_running_loop().create_future()
+
+        async def run() -> None:
+            try:
+                async with self.server.session_manager.run():
+                    if not ready.done():
+                        ready.set_result(None)
+                    await stop_event.wait()
+            except BaseException as exc:
+                if not ready.done():
+                    ready.set_exception(exc)
+                raise
+
+        task = asyncio.create_task(
+            run(),
+            name="dclaw-super-agent-support-mcp",
+        )
+        self._runner_task = task
+        self._stop_event = stop_event
+        try:
+            await ready
+        except BaseException:
+            self._runner_task = None
+            self._stop_event = None
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            raise
 
     async def stop(self) -> None:
-        lifecycle, self._lifecycle = self._lifecycle, None
-        if lifecycle is not None:
-            await lifecycle.__aexit__(None, None, None)
+        task, self._runner_task = self._runner_task, None
+        stop_event, self._stop_event = self._stop_event, None
+        if task is None:
+            return
+        if stop_event is not None:
+            stop_event.set()
+        await task
 
     def _register_tools(self) -> None:
         service = self.service

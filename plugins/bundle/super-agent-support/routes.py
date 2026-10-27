@@ -327,7 +327,7 @@ def create_app(
         return {
             "status": "ok",
             "plugin": "dclaw.super-agent-support",
-            "version": "1.11.0",
+            "version": "1.11.1",
             "protocols": {
                 "local_execution": "1.1",
                 "device": "2",
