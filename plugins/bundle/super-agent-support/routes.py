@@ -13,6 +13,7 @@ import uuid
 from collections import deque
 from pathlib import Path
 from typing import Any
+from typing import Literal
 import zipfile
 
 from fastapi import (
@@ -80,6 +81,32 @@ class PackageRegistration(BaseModel):
     descriptor: dict[str, Any]
     signer_id: str = Field(min_length=1, max_length=128)
     signature: str = Field(min_length=1, max_length=1024)
+
+
+class PublicComponentRegistration(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    display_name: str = Field(min_length=1, max_length=128)
+    version: str = Field(
+        pattern=r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$",
+    )
+    status: Literal["available", "reserved", "disabled"]
+    provides: list[str] = Field(min_length=1, max_length=64)
+    notes: str = Field(default="", max_length=1024)
+
+
+COMPONENT_PLATFORMS = {
+    "windows-x64": {"helper": "windows-helper", "status": "available"},
+    "windows-arm64": {"helper": "windows-helper", "status": "reserved"},
+    "macos-arm64": {"helper": "mac-helper", "status": "reserved"},
+    "macos-x64": {"helper": "mac-helper", "status": "reserved"},
+}
+
+
+def _complete_component_registry(store: StateStore) -> dict[str, Any]:
+    return {
+        **store.get_public_component_registry(),
+        "helper_platforms": COMPONENT_PLATFORMS,
+    }
 
 
 class CredentialBinding(BaseModel):
@@ -300,7 +327,7 @@ def create_app(
         return {
             "status": "ok",
             "plugin": "dclaw.super-agent-support",
-            "version": "1.10.2",
+            "version": "1.11.0",
             "protocols": {
                 "local_execution": "1.1",
                 "device": "2",
@@ -569,6 +596,41 @@ def create_app(
     async def list_packages(request: Request) -> dict[str, Any]:
         _require_admin(request)
         return {"packages": store.list_packages()}
+
+    @app.get("/component-registry")
+    async def get_component_registry() -> dict[str, Any]:
+        return _complete_component_registry(store)
+
+    @app.put(
+        "/admin/component-registry/{component_id}/variants/{platform}",
+    )
+    async def set_component_registry_entry(
+        component_id: str,
+        platform: str,
+        body: PublicComponentRegistration,
+        request: Request,
+    ) -> dict[str, Any]:
+        _require_admin(request)
+        if not component_id or len(component_id) > 128 or any(
+            character not in "abcdefghijklmnopqrstuvwxyz0123456789._-"
+            for character in component_id
+        ):
+            raise HTTPException(status_code=422, detail="invalid component_id")
+        if component_id[0] not in "abcdefghijklmnopqrstuvwxyz":
+            raise HTTPException(status_code=422, detail="invalid component_id")
+        if platform not in COMPONENT_PLATFORMS:
+            raise HTTPException(status_code=422, detail="unsupported platform")
+        payload = body.model_dump()
+        payload["provides"] = sorted(set(payload["provides"]))
+        store.set_public_component_variant(
+            component_id=component_id,
+            platform=platform,
+            component_version=payload.pop("version"),
+            availability=payload.pop("status"),
+            updated_by=_user_id(request),
+            **payload,
+        )
+        return _complete_component_registry(store)
 
     @app.post("/credentials")
     async def bind_credential(

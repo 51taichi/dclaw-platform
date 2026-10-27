@@ -73,6 +73,31 @@ class StateStore:
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_packages_active_capability
                     ON packages(capability_id) WHERE status='active';
+                CREATE TABLE IF NOT EXISTS public_components (
+                    component_id TEXT PRIMARY KEY,
+                    display_name TEXT NOT NULL,
+                    notes TEXT NOT NULL DEFAULT '',
+                    updated_by TEXT NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS public_component_variants (
+                    component_id TEXT NOT NULL REFERENCES public_components(component_id),
+                    platform TEXT NOT NULL,
+                    component_version TEXT NOT NULL,
+                    availability TEXT NOT NULL,
+                    provides_json TEXT NOT NULL,
+                    updated_by TEXT NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    PRIMARY KEY(component_id, platform)
+                );
+                CREATE TABLE IF NOT EXISTS component_registry_meta (
+                    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                    registry_version INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
+                INSERT OR IGNORE INTO component_registry_meta(
+                    singleton,registry_version,updated_at
+                ) VALUES(1,0,0);
                 CREATE TABLE IF NOT EXISTS tasks (
                     task_id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL,
@@ -412,6 +437,123 @@ class StateStore:
             }
             for row in rows
         ]
+
+    def set_public_component_variant(
+        self,
+        *,
+        component_id: str,
+        display_name: str,
+        platform: str,
+        component_version: str,
+        availability: str,
+        provides: list[str],
+        notes: str,
+        updated_by: str,
+    ) -> dict[str, Any]:
+        now = int(time.time())
+        with self._lock, self._connect() as db:
+            db.execute(
+                """
+                INSERT INTO public_components(
+                    component_id,display_name,notes,updated_by,updated_at
+                ) VALUES(?,?,?,?,?)
+                ON CONFLICT(component_id) DO UPDATE SET
+                    display_name=excluded.display_name,
+                    notes=excluded.notes,
+                    updated_by=excluded.updated_by,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    component_id,
+                    display_name,
+                    notes,
+                    updated_by,
+                    now,
+                ),
+            )
+            db.execute(
+                """
+                INSERT INTO public_component_variants(
+                    component_id,platform,component_version,availability,
+                    provides_json,updated_by,updated_at
+                ) VALUES(?,?,?,?,?,?,?)
+                ON CONFLICT(component_id,platform) DO UPDATE SET
+                    component_version=excluded.component_version,
+                    availability=excluded.availability,
+                    provides_json=excluded.provides_json,
+                    updated_by=excluded.updated_by,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    component_id,
+                    platform,
+                    component_version,
+                    availability,
+                    _json(provides),
+                    updated_by,
+                    now,
+                ),
+            )
+            db.execute(
+                """
+                UPDATE component_registry_meta
+                SET registry_version=registry_version+1,updated_at=?
+                WHERE singleton=1
+                """,
+                (now,),
+            )
+        return self.get_public_component_registry()
+
+    def get_public_component_registry(self) -> dict[str, Any]:
+        with self._connect() as db:
+            meta = db.execute(
+                """
+                SELECT registry_version,updated_at
+                FROM component_registry_meta WHERE singleton=1
+                """,
+            ).fetchone()
+            components = db.execute(
+                """
+                SELECT component_id,display_name,notes,updated_at
+                FROM public_components ORDER BY component_id
+                """,
+            ).fetchall()
+            variants = db.execute(
+                """
+                SELECT component_id,platform,component_version,availability,
+                    provides_json,updated_at
+                FROM public_component_variants
+                ORDER BY component_id,platform
+                """,
+            ).fetchall()
+        variants_by_component: dict[str, list[dict[str, Any]]] = {}
+        for row in variants:
+            variants_by_component.setdefault(row["component_id"], []).append(
+                {
+                    "platform": row["platform"],
+                    "version": row["component_version"],
+                    "status": row["availability"],
+                    "provides": json.loads(row["provides_json"]),
+                    "updated_at": int(row["updated_at"]),
+                },
+            )
+        return {
+            "registry_version": int(meta["registry_version"]),
+            "updated_at": int(meta["updated_at"]),
+            "components": [
+                {
+                    "component_id": row["component_id"],
+                    "display_name": row["display_name"],
+                    "notes": row["notes"],
+                    "variants": variants_by_component.get(
+                        row["component_id"],
+                        [],
+                    ),
+                    "updated_at": int(row["updated_at"]),
+                }
+                for row in components
+            ],
+        }
 
     def create_task(
         self,

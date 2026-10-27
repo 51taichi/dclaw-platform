@@ -1,0 +1,8 @@
+{
+  "id": "dclaw.super-agent-support.mac-helper",
+  "status": "reserved",
+  "platforms": ["macos-arm64", "macos-x64"],
+  "device_protocol": "2",
+  "local_execution_contract": "1.1",
+  "implementation": null
+}

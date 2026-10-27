@@ -742,7 +742,7 @@ def test_developer_pack_is_downloadable_and_self_describing(
         downloaded = client.get("/developer-pack/download")
 
     assert health.status_code == 200
-    assert health.json()["version"] == "1.10.2"
+    assert health.json()["version"] == "1.11.0"
     assert metadata.status_code == 200
     payload = metadata.json()
     assert payload["version"] == "1.5.2"
@@ -767,6 +767,138 @@ def test_developer_pack_is_downloadable_and_self_describing(
         f"{prefix}/standard/super-agent-development-standard-v1.zh-CN.md"
         in names
     )
+
+
+def test_public_component_registry_get_and_admin_set(
+    plugin_module,
+    tmp_path,
+):
+    store, _signer, broker, service = _runtime(plugin_module, tmp_path)
+    mcp_cls = sys.modules[
+        "test_dclaw_super_agent_support.mcp_server"
+    ].LocalExecutionMcp
+    package_cls = sys.modules[
+        "test_dclaw_super_agent_support.packages"
+    ].CapabilityPackageRegistry
+    routes = sys.modules["test_dclaw_super_agent_support.routes"]
+    plugin_app = routes.create_app(
+        store=store,
+        service=service,
+        mcp=mcp_cls(service),
+        packages=package_cls(
+            store,
+            PLUGIN_ROOT / "schemas" / "capability-descriptor.schema.json",
+            {},
+        ),
+        credentials=broker,
+    )
+    root = FastAPI()
+
+    @root.middleware("http")
+    async def authenticated(request, call_next):
+        request.state.user_id = "user-1"
+        request.state.role = request.headers.get("x-test-role", "user")
+        return await call_next(request)
+
+    root.mount("/api/super-agent-support", plugin_app)
+    ffmpeg = {
+        "display_name": "FFmpeg",
+        "version": "7.1.0",
+        "status": "available",
+        "provides": ["ffprobe", "ffmpeg", "ffmpeg"],
+        "notes": "Shared media processing tools.",
+    }
+    ffmpeg_mac = {
+        **ffmpeg,
+        "status": "reserved",
+    }
+    python = {
+        "display_name": "Python Runtime",
+        "version": "3.11.9",
+        "status": "available",
+        "provides": ["python"],
+        "notes": "Shared Python runtime.",
+    }
+
+    with TestClient(root) as client:
+        empty = client.get("/api/super-agent-support/component-registry")
+        forbidden = client.put(
+            "/api/super-agent-support/admin/component-registry/ffmpeg/"
+            "variants/windows-x64",
+            json=ffmpeg,
+        )
+        first = client.put(
+            "/api/super-agent-support/admin/component-registry/ffmpeg/"
+            "variants/windows-x64",
+            headers={"x-test-role": "admin"},
+            json=ffmpeg,
+        )
+        second = client.put(
+            "/api/super-agent-support/admin/component-registry/ffmpeg/"
+            "variants/macos-arm64",
+            headers={"x-test-role": "admin"},
+            json=ffmpeg_mac,
+        )
+        third = client.put(
+            "/api/super-agent-support/admin/component-registry/python-runtime/"
+            "variants/windows-x64",
+            headers={"x-test-role": "admin"},
+            json=python,
+        )
+        complete = client.get(
+            "/api/super-agent-support/component-registry",
+        )
+
+    assert empty.status_code == 200
+    assert empty.json() == {
+        "registry_version": 0,
+        "updated_at": 0,
+        "components": [],
+        "helper_platforms": {
+            "windows-x64": {
+                "helper": "windows-helper",
+                "status": "available",
+            },
+            "windows-arm64": {
+                "helper": "windows-helper",
+                "status": "reserved",
+            },
+            "macos-arm64": {
+                "helper": "mac-helper",
+                "status": "reserved",
+            },
+            "macos-x64": {
+                "helper": "mac-helper",
+                "status": "reserved",
+            },
+        },
+    }
+    assert forbidden.status_code == 403
+    assert first.status_code == 200
+    assert first.json()["registry_version"] == 1
+    assert len(first.json()["components"]) == 1
+    first_variant = first.json()["components"][0]["variants"][0]
+    assert first_variant["platform"] == "windows-x64"
+    assert first_variant["status"] == "available"
+    assert first_variant["provides"] == [
+        "ffmpeg",
+        "ffprobe",
+    ]
+    assert second.status_code == 200
+    assert second.json()["registry_version"] == 2
+    assert [
+        item["platform"]
+        for item in second.json()["components"][0]["variants"]
+    ] == ["macos-arm64", "windows-x64"]
+    assert second.json()["components"][0]["variants"][0]["status"] == (
+        "reserved"
+    )
+    assert third.status_code == 200
+    assert third.json()["registry_version"] == 3
+    assert [
+        item["component_id"] for item in third.json()["components"]
+    ] == ["ffmpeg", "python-runtime"]
+    assert complete.json() == third.json()
 
 
 def test_device_bootstrap_reuses_only_current_users_device(
