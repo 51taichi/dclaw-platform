@@ -2159,5 +2159,82 @@
     "detailPayload": "Данные",
     "detailExecutionTrace": "Трассировка выполнения",
     "detailTraceEmpty": "Трассировка выполнения недоступна"
+  },
+  "workbench": {
+    "input": {
+      "completeInteractionFirst": "Завершите карточку взаимодействия выше, чтобы продолжить ввод",
+      "dropFiles": "Отпустите, чтобы загрузить вложения",
+      "addFileContext": "Добавить файл как контекст ответа",
+      "loadingWorkspaceFiles": "Загрузка файлов рабочей области...",
+      "noMatchingFiles": "Подходящие файлы не найдены",
+      "attachFile": "Прикрепить файл",
+      "skillInstallFailed": "Не удалось установить навык. Повторите попытку позже."
+    }
+  },
+  "chatToolbar": {
+    "summonExpert": "Вызвать эксперта",
+    "selectMode": "Выбрать режим",
+    "recentExperts": "Недавние эксперты",
+    "summonOtherExperts": "Открыть центр экспертов",
+    "auto": "Auto",
+    "modelLabel": "Модель",
+    "smartRouting": "Рекомендуемая умная маршрутизация",
+    "switchedToAuto": "Выбрано Auto",
+    "switchedToModel": "Выбрано: {{model}}",
+    "switchFailed": "Не удалось переключить",
+    "noModels": "Нет доступных моделей. Сначала настройте провайдера.",
+    "skills": "Навыки",
+    "searchSkills": "Поиск навыков...",
+    "loadingSkills": "Загрузка навыков...",
+    "noSkills": "Нет доступных навыков",
+    "privateSkill": "Личный",
+    "defaultSkillBadge": "По умолчанию",
+    "defaultSkills": "Навыки по умолчанию",
+    "mySkills": "Мои навыки",
+    "installedSkills": "Установленные",
+    "recommended": "Рекомендуется",
+    "summonedExpert": "Вызван эксперт «{{name}}»",
+    "connectorConnected": "«{{name}}» подключён",
+    "connectorNames": {
+      "github": "GitHub",
+      "feishu": "Feishu",
+      "dingtalk": "DingTalk",
+      "wecom": "WeCom",
+      "notion": "Notion",
+      "mysql": "MySQL",
+      "email": "Почтовый сервис"
+    },
+    "modeDetails": {
+      "craft": {
+        "description": "Самый функциональный автономный режим: отвечает на вопросы, работает с файлами, выполняет команды и завершает задачи разработки целиком.",
+        "fileAccess": "Чтение и запись файлов",
+        "terminal": "Выполнение команд терминала",
+        "webSearch": "Автоматический веб-поиск"
+      },
+      "plan": {
+        "description": "Глубокое рассуждение и проектирование архитектуры с чётким планом и декомпозицией задач до написания кода.",
+        "reasoning": "Глубокое логическое рассуждение",
+        "architecture": "Проектирование архитектуры",
+        "breakdown": "Декомпозиция задач разработки"
+      },
+      "ask": {
+        "description": "Быстро и безопасно отвечает на технические вопросы, не изменяя локальные файлы.",
+        "consulting": "Быстрая техническая консультация",
+        "codeAnalysis": "Анализ логики кода",
+        "frameworkKnowledge": "Знание фреймворков и библиотек"
+      }
+    },
+    "importSkill": "Добавить навык",
+    "connect": "Подключить",
+    "connected": "Подключено",
+    "manageConnectors": "Управление коннекторами",
+    "localAccess": {
+      "question": "Как DClaw должен получать разрешение на действия?",
+      "askApproval": "Спрашивать перед действиями",
+      "askApprovalDescription": "Всегда запрашивать разрешение перед запуском инструментов",
+      "fullAccess": "Разрешить полный доступ",
+      "fullAccessDescription": "Запускать инструменты без ограничений и запросов разрешения",
+      "saveFailed": "Не удалось сохранить настройки доступа"
+    }
   }
 }

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { useNavigate, useLocation } from "react-router-dom";
 import { message, Popover } from "antd";
 import {
@@ -41,6 +42,7 @@ import {
 import { buildAutoRoutingModelSlotRequest } from "./chatToolbarModelSelection";
 import { getRouteChatId } from "../routeSession";
 import styles from "./ChatToolbar.module.less";
+import LocalAccessSelector from "./LocalAccessSelector";
 
 function getSkillUIProps(name: string) {
   let hash = 0;
@@ -74,6 +76,7 @@ type SkillItem = ToolbarSkillItem;
 interface ConnectorItem {
   id: string;
   name: string;
+  nameKey: string;
   icon: React.ReactNode;
   color: string;
 }
@@ -106,35 +109,52 @@ const PRESET_CONNECTORS: ConnectorItem[] = [
   {
     id: "github",
     name: "GitHub",
+    nameKey: "chatToolbar.connectorNames.github",
     icon: <Github size={16} />,
     color: "#24292e",
   },
   {
     id: "feishu",
     name: "飞书",
+    nameKey: "chatToolbar.connectorNames.feishu",
     icon: <MessageSquare size={16} />,
     color: "#3370ff",
   },
   {
     id: "dingtalk",
     name: "钉钉",
+    nameKey: "chatToolbar.connectorNames.dingtalk",
     icon: <MessageSquare size={16} />,
     color: "#0089ff",
   },
   {
     id: "wechat-work",
     name: "企业微信",
+    nameKey: "chatToolbar.connectorNames.wecom",
     icon: <MessageSquare size={16} />,
     color: "#07c160",
   },
-  { id: "notion", name: "Notion", icon: <FileText size={16} />, color: "#000" },
+  {
+    id: "notion",
+    name: "Notion",
+    nameKey: "chatToolbar.connectorNames.notion",
+    icon: <FileText size={16} />,
+    color: "#000",
+  },
   {
     id: "mysql",
     name: "MySQL",
+    nameKey: "chatToolbar.connectorNames.mysql",
     icon: <Database size={16} />,
     color: "#00758f",
   },
-  { id: "smtp", name: "邮件服务", icon: <Mail size={16} />, color: "#ea4335" },
+  {
+    id: "smtp",
+    name: "邮件服务",
+    nameKey: "chatToolbar.connectorNames.email",
+    icon: <Mail size={16} />,
+    color: "#ea4335",
+  },
 ];
 
 // ── Hook: Click outside ──────────────────────────────────────────
@@ -156,7 +176,7 @@ function useClickOutside(
 
 // ── Component ────────────────────────────────────────────────────
 
-const renderModePopover = (modeId: string) => {
+const renderModePopover = (modeId: string, t: TFunction) => {
   let title = "";
   let desc = "";
   let features: string[] = [];
@@ -165,19 +185,28 @@ const renderModePopover = (modeId: string) => {
   if (modeId === "craft") {
     title = "Craft";
     isRecommended = true;
-    desc =
-      "最强大的全自动执行模式。不仅能解答问题，还能读写文件、执行命令，完成端到端开发。";
-    features = ["文件读写操作", "终端命令执行", "自动化网页搜索"];
+    desc = t("chatToolbar.modeDetails.craft.description");
+    features = [
+      t("chatToolbar.modeDetails.craft.fileAccess"),
+      t("chatToolbar.modeDetails.craft.terminal"),
+      t("chatToolbar.modeDetails.craft.webSearch"),
+    ];
   } else if (modeId === "plan") {
     title = "Plan";
-    desc =
-      "专注深度逻辑推理与全局架构设计。在编写代码前，为您提供清晰详尽的方案规划与任务拆解。";
-    features = ["深度逻辑推理", "架构方案设计", "开发任务拆解"];
+    desc = t("chatToolbar.modeDetails.plan.description");
+    features = [
+      t("chatToolbar.modeDetails.plan.reasoning"),
+      t("chatToolbar.modeDetails.plan.architecture"),
+      t("chatToolbar.modeDetails.plan.breakdown"),
+    ];
   } else if (modeId === "ask") {
     title = "Ask";
-    desc =
-      "专注纯粹的技术问答。响应迅速，绝对安全，不会对您的任何本地文件产生修改。";
-    features = ["快速技术咨询", "代码逻辑分析", "框架库知识检索"];
+    desc = t("chatToolbar.modeDetails.ask.description");
+    features = [
+      t("chatToolbar.modeDetails.ask.consulting"),
+      t("chatToolbar.modeDetails.ask.codeAnalysis"),
+      t("chatToolbar.modeDetails.ask.frameworkKnowledge"),
+    ];
   } else {
     return null;
   }
@@ -208,7 +237,7 @@ const renderModePopover = (modeId: string) => {
           }}
         >
           <Sparkles size={14} />
-          <span>推荐</span>
+          <span>{t("chatToolbar.recommended")}</span>
         </div>
       )}
       <div style={{ color: "#666", lineHeight: 1.5, marginBottom: 8 }}>
@@ -602,7 +631,7 @@ export default function ChatToolbar({
                   <div className={styles.dropdownItemLabel}>{mode.name}</div>
                 </div>
                 <Popover
-                  content={renderModePopover(mode.id)}
+                  content={renderModePopover(mode.id, t)}
                   placement="right"
                   overlayInnerStyle={{ borderRadius: 8 }}
                 >
@@ -670,7 +699,11 @@ export default function ChatToolbar({
                           setActiveMode("");
                           setShowExpertMenu(false);
                           setShowSummonSubMenu(false);
-                          message.info(`已召唤「${expert.name}」`);
+                          message.info(
+                            t("chatToolbar.summonedExpert", {
+                              name: expert.name,
+                            }),
+                          );
                         }}
                       >
                         <div
@@ -838,10 +871,10 @@ export default function ChatToolbar({
                     }),
                   );
                   setSelectedModel("");
-                  message.info("已切换到 Auto");
+                  message.info(t("chatToolbar.switchedToAuto"));
                   window.dispatchEvent(new CustomEvent("model-switched"));
-                } catch (err) {
-                  message.error("切换失败");
+                } catch {
+                  message.error(t("chatToolbar.switchFailed"));
                 } finally {
                   setLoadingModelSwitch(false);
                 }
@@ -871,7 +904,9 @@ export default function ChatToolbar({
                 }}
               >
                 <div className={styles.dropdownItemLabel}>Auto</div>
-                <div className={styles.dropdownItemDesc}>推荐智能路由</div>
+                <div className={styles.dropdownItemDesc}>
+                  {t("chatToolbar.smartRouting")}
+                </div>
               </div>
               {!visibleSelectedModel && (
                 <Check size={14} className={styles.dropdownItemCheck} />
@@ -900,10 +935,14 @@ export default function ChatToolbar({
                         chat_id: chatId,
                       });
                       setSelectedModel(model.id);
-                      message.info(`已切换到 ${model.name}`);
+                      message.info(
+                        t("chatToolbar.switchedToModel", {
+                          model: model.name,
+                        }),
+                      );
                       window.dispatchEvent(new CustomEvent("model-switched"));
-                    } catch (err) {
-                      message.error("切换失败");
+                    } catch {
+                      message.error(t("chatToolbar.switchFailed"));
                     } finally {
                       setLoadingModelSwitch(false);
                     }
@@ -943,6 +982,18 @@ export default function ChatToolbar({
           </div>
         )}
       </div>
+
+      <LocalAccessSelector
+        chatId={chatId}
+        agentId={selectedExpertTeam?.leader_agent_id || selectedAgent}
+        disabled={disabled}
+        onOpen={() => {
+          setShowExpertMenu(false);
+          setShowModelMenu(false);
+          setShowSkills(false);
+          setShowConnectors(false);
+        }}
+      />
 
       <span className={styles.toolbarDivider} />
 
@@ -986,7 +1037,7 @@ export default function ChatToolbar({
                 >
                   🔮
                 </div>
-                加载技能中...
+                {t("chatToolbar.loadingSkills")}
               </div>
             ) : filteredSkills.length === 0 ? (
               <div
@@ -997,7 +1048,7 @@ export default function ChatToolbar({
                   fontSize: "12px",
                 }}
               >
-                未找到可用技能
+                {t("chatToolbar.noSkills")}
               </div>
             ) : (
               (() => {
@@ -1050,7 +1101,7 @@ export default function ChatToolbar({
                               fontWeight: 600,
                             }}
                           >
-                            私有
+                            {t("chatToolbar.privateSkill")}
                           </span>
                         )}
                         {skill.isDefault && (
@@ -1068,7 +1119,7 @@ export default function ChatToolbar({
                               fontWeight: 600,
                             }}
                           >
-                            默认
+                            {t("chatToolbar.defaultSkillBadge")}
                           </span>
                         )}
                       </div>
@@ -1091,7 +1142,7 @@ export default function ChatToolbar({
                             textTransform: "uppercase",
                           }}
                         >
-                          🌟 默认技能
+                          {t("chatToolbar.defaultSkills")}
                         </div>
                         {defaultItems.map(renderSkillItem)}
                         {(privateItems.length > 0 ||
@@ -1118,7 +1169,7 @@ export default function ChatToolbar({
                             textTransform: "uppercase",
                           }}
                         >
-                          🔒 我的技能
+                          {t("chatToolbar.mySkills")}
                         </div>
                         {privateItems.map(renderSkillItem)}
                         {installedItems.length > 0 && (
@@ -1144,7 +1195,7 @@ export default function ChatToolbar({
                             textTransform: "uppercase",
                           }}
                         >
-                          📦 已安装
+                          {t("chatToolbar.installedSkills")}
                         </div>
                         {installedItems.map(renderSkillItem)}
                       </>
@@ -1187,29 +1238,36 @@ export default function ChatToolbar({
 
         {showConnectors && (
           <div className={styles.popoverPanel}>
-            {PRESET_CONNECTORS.map((conn) => (
-              <div key={conn.id} className={styles.popoverItem}>
-                <div
-                  className={styles.popoverItemIcon}
-                  style={{ background: `${conn.color}15`, color: conn.color }}
-                >
-                  {conn.icon}
+            {PRESET_CONNECTORS.map((conn) => {
+              const connectorName = t(conn.nameKey, conn.name);
+              return (
+                <div key={conn.id} className={styles.popoverItem}>
+                  <div
+                    className={styles.popoverItemIcon}
+                    style={{ background: `${conn.color}15`, color: conn.color }}
+                  >
+                    {conn.icon}
+                  </div>
+                  <div className={styles.popoverItemInfo}>
+                    <div className={styles.popoverItemName}>
+                      {connectorName}
+                    </div>
+                  </div>
+                  <span
+                    className={styles.popoverItemAction}
+                    onClick={() => {
+                      message.success(
+                        t("chatToolbar.connectorConnected", {
+                          name: connectorName,
+                        }),
+                      );
+                    }}
+                  >
+                    {t("chatToolbar.connect")}
+                  </span>
                 </div>
-                <div className={styles.popoverItemInfo}>
-                  <div className={styles.popoverItemName}>{conn.name}</div>
-                </div>
-                <span
-                  className={styles.popoverItemAction}
-                  onClick={() => {
-                    message.success(
-                      `「${conn.name}」${t("chatToolbar.connected")}`,
-                    );
-                  }}
-                >
-                  {t("chatToolbar.connect")}
-                </span>
-              </div>
-            ))}
+              );
+            })}
             <div className={styles.popoverFooter}>
               <button
                 className={styles.popoverFooterBtn}

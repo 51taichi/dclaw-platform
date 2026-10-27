@@ -23,6 +23,9 @@ const DEFAULT_USER_ID = "default";
 const DEFAULT_CHANNEL = "console";
 const DEFAULT_SESSION_NAME = "New Chat";
 export const DRAFT_SESSION_ID = "draft-session";
+export type LocalAccessMode = "ask_for_approval" | "full_access";
+export const DEFAULT_LOCAL_ACCESS_MODE: LocalAccessMode = "ask_for_approval";
+const LOCAL_ACCESS_MODE_META_KEY = "local_access_mode";
 const ROLE_TOOL = "tool";
 const ROLE_USER = "user";
 const ROLE_ASSISTANT = "assistant";
@@ -418,6 +421,7 @@ function clearPendingUserMessage(sessionId: string): void {
 
 class SessionApi implements IAgentScopeRuntimeWebUISessionAPI {
   private sessionList: IAgentScopeRuntimeWebUISession[] = [];
+  private draftLocalAccessMode: LocalAccessMode = DEFAULT_LOCAL_ACCESS_MODE;
 
   /**
    * Pending resolvers waiting for a specific session's realId.
@@ -461,6 +465,7 @@ class SessionApi implements IAgentScopeRuntimeWebUISessionAPI {
     this.sessionRequests.clear();
     this.lastSelectedSessionId = null;
     this.preferredChatId = null;
+    this.draftLocalAccessMode = DEFAULT_LOCAL_ACCESS_MODE;
     window.currentSessionId = undefined;
     clearAllLiveResponseText();
   }
@@ -629,6 +634,55 @@ class SessionApi implements IAgentScopeRuntimeWebUISessionAPI {
     return s?.realId ?? null;
   }
 
+  private normalizeLocalAccessMode(value: unknown): LocalAccessMode {
+    return value === "full_access" ? "full_access" : "ask_for_approval";
+  }
+
+  async getLocalAccessMode(chatId?: string | null): Promise<LocalAccessMode> {
+    if (!chatId || isDraftSessionId(chatId)) {
+      return this.draftLocalAccessMode;
+    }
+
+    let session = this.findSessionByChatId(chatId);
+    if (!session) {
+      await this.getSessionList();
+      session = this.findSessionByChatId(chatId);
+    }
+    return this.normalizeLocalAccessMode(
+      session?.meta?.[LOCAL_ACCESS_MODE_META_KEY],
+    );
+  }
+
+  async setLocalAccessMode(
+    chatId: string | null | undefined,
+    mode: LocalAccessMode,
+    agentId?: string,
+  ): Promise<LocalAccessMode> {
+    const normalized = this.normalizeLocalAccessMode(mode);
+    if (!chatId || isDraftSessionId(chatId)) {
+      this.draftLocalAccessMode = normalized;
+      return normalized;
+    }
+
+    const session = this.findSessionByChatId(chatId);
+    const backendId = session?.realId || chatId;
+    const updated = await api.updateChat(
+      backendId,
+      { meta: { [LOCAL_ACCESS_MODE_META_KEY]: normalized } },
+      agentId,
+    );
+    const updatedMeta = updated.meta || {
+      ...(session?.meta || {}),
+      [LOCAL_ACCESS_MODE_META_KEY]: normalized,
+    };
+    if (session) {
+      session.meta = updatedMeta;
+    }
+    return this.normalizeLocalAccessMode(
+      updatedMeta[LOCAL_ACCESS_MODE_META_KEY],
+    );
+  }
+
   private findSessionByChatId(chatId: string): ExtendedSession | undefined {
     return this.sessionList.find((s) => {
       const ext = s as ExtendedSession;
@@ -737,6 +791,7 @@ class SessionApi implements IAgentScopeRuntimeWebUISessionAPI {
   }
 
   startDraftSession(): IAgentScopeRuntimeWebUISession[] {
+    this.draftLocalAccessMode = DEFAULT_LOCAL_ACCESS_MODE;
     window.currentSessionId = undefined;
     window.currentUserId = DEFAULT_USER_ID;
     window.currentChannel = window.location.pathname.startsWith("/claw")

@@ -2179,5 +2179,82 @@
     "detailPayload": "Dados",
     "detailExecutionTrace": "Rastro de execução",
     "detailTraceEmpty": "Nenhum rastro de execução disponível"
+  },
+  "workbench": {
+    "input": {
+      "completeInteractionFirst": "Conclua o cartão de interação acima para continuar",
+      "dropFiles": "Solte para enviar os anexos",
+      "addFileContext": "Adicionar arquivo como contexto da resposta",
+      "loadingWorkspaceFiles": "Carregando arquivos do espaço de trabalho...",
+      "noMatchingFiles": "Nenhum arquivo correspondente encontrado",
+      "attachFile": "Anexar arquivo",
+      "skillInstallFailed": "Falha ao instalar a habilidade. Tente novamente mais tarde."
+    }
+  },
+  "chatToolbar": {
+    "summonExpert": "Chamar especialista",
+    "selectMode": "Selecionar modo",
+    "recentExperts": "Especialistas recentes",
+    "summonOtherExperts": "Abrir Central de Especialistas",
+    "auto": "Auto",
+    "modelLabel": "Modelo",
+    "smartRouting": "Roteamento inteligente recomendado",
+    "switchedToAuto": "Alterado para Auto",
+    "switchedToModel": "Alterado para {{model}}",
+    "switchFailed": "Falha ao alterar",
+    "noModels": "Nenhum modelo disponível. Configure um provedor primeiro.",
+    "skills": "Habilidades",
+    "searchSkills": "Pesquisar habilidades...",
+    "loadingSkills": "Carregando habilidades...",
+    "noSkills": "Nenhuma habilidade disponível",
+    "privateSkill": "Privada",
+    "defaultSkillBadge": "Padrão",
+    "defaultSkills": "Habilidades padrão",
+    "mySkills": "Minhas habilidades",
+    "installedSkills": "Instaladas",
+    "recommended": "Recomendado",
+    "summonedExpert": "Especialista “{{name}}” chamado",
+    "connectorConnected": "“{{name}}” conectado",
+    "connectorNames": {
+      "github": "GitHub",
+      "feishu": "Feishu",
+      "dingtalk": "DingTalk",
+      "wecom": "WeCom",
+      "notion": "Notion",
+      "mysql": "MySQL",
+      "email": "Serviço de e-mail"
+    },
+    "modeDetails": {
+      "craft": {
+        "description": "O modo autônomo mais completo. Responde perguntas, lê e grava arquivos, executa comandos e conclui tarefas de desenvolvimento de ponta a ponta.",
+        "fileAccess": "Ler e gravar arquivos",
+        "terminal": "Executar comandos no terminal",
+        "webSearch": "Pesquisa automatizada na web"
+      },
+      "plan": {
+        "description": "Foca em raciocínio profundo e arquitetura, criando um plano claro e dividindo as tarefas antes de escrever código.",
+        "reasoning": "Raciocínio lógico profundo",
+        "architecture": "Projeto de arquitetura",
+        "breakdown": "Divisão das tarefas de desenvolvimento"
+      },
+      "ask": {
+        "description": "Responde rapidamente a perguntas técnicas com segurança e não altera arquivos locais.",
+        "consulting": "Orientação técnica rápida",
+        "codeAnalysis": "Análise da lógica do código",
+        "frameworkKnowledge": "Conhecimento de frameworks e bibliotecas"
+      }
+    },
+    "importSkill": "Adicionar habilidade",
+    "connect": "Conectar",
+    "connected": "Conectado",
+    "manageConnectors": "Gerenciar conectores",
+    "localAccess": {
+      "question": "Como o DClaw deve obter aprovação antes de agir?",
+      "askApproval": "Perguntar antes das ações",
+      "askApprovalDescription": "Sempre pedir aprovação antes de executar ações de ferramentas",
+      "fullAccess": "Permitir acesso total",
+      "fullAccessDescription": "Executar ações de ferramentas sem restrições ou pedidos de aprovação",
+      "saveFailed": "Falha ao salvar as configurações de acesso"
+    }
   }
 }

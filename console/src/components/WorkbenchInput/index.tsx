@@ -553,7 +553,9 @@ export default function WorkbenchInput({
           "Failed to prepare selected skill for target agent",
           error,
         );
-        message.error("技能安装失败，请稍后重试");
+        message.error(
+          t("workbench.input.skillInstallFailed", "技能安装失败，请稍后重试"),
+        );
         setIsSubmitting(false);
         return;
       }
@@ -679,16 +681,19 @@ export default function WorkbenchInput({
 
   return (
     <div
-      className={`${styles.chatToolbarWrapper} ${
-        inFlow ? styles.inFlow : ""
-      } ${wide ? styles.wide : ""}`}
+      className={`${styles.chatToolbarWrapper} ${inFlow ? styles.inFlow : ""} ${
+        wide ? styles.wide : ""
+      }`}
     >
       {topAccessory && (
         <div className={styles.inputTopAccessory}>{topAccessory}</div>
       )}
       {disabled ? (
         <div className={styles.disabledNotice} role="status">
-          请先完成上方交互卡片，提交后即可继续输入
+          {t(
+            "workbench.input.completeInteractionFirst",
+            "请先完成上方交互卡片，提交后即可继续输入",
+          )}
         </div>
       ) : null}
       <div
@@ -771,14 +776,21 @@ export default function WorkbenchInput({
           <div className={styles.mentionPopupWrapper}>
             <div className={styles.mentionPopupList} ref={mentionPopupRef}>
               <div className={styles.mentionHeader}>
-                <FileText size={14} /> 添加文件作为回答背景
+                <FileText size={14} />
+                {t("workbench.input.addFileContext", "添加文件作为回答背景")}
               </div>
               {isFetchingFiles ? (
                 <div className={styles.mentionLoading}>
-                  <LoadingOutlined /> 正在加载工作区文件...
+                  <LoadingOutlined />{" "}
+                  {t(
+                    "workbench.input.loadingWorkspaceFiles",
+                    "正在加载工作区文件...",
+                  )}
                 </div>
               ) : filteredFiles.length === 0 ? (
-                <div className={styles.mentionEmpty}>未找到匹配文件</div>
+                <div className={styles.mentionEmpty}>
+                  {t("workbench.input.noMatchingFiles", "未找到匹配文件")}
+                </div>
               ) : (
                 filteredFiles.map((file, idx) => (
                   <div
@@ -846,7 +858,10 @@ export default function WorkbenchInput({
             <div className={styles.footerUtilityActions}>
               <button
                 className={styles.toolbarBtn}
-                title="添加文件作为回答背景"
+                title={t(
+                  "workbench.input.addFileContext",
+                  "添加文件作为回答背景",
+                )}
                 disabled={disabled}
                 onClick={(e) => {
                   if (disabled) return;

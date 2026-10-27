@@ -2144,5 +2144,82 @@
     "detailPayload": "追加情報",
     "detailExecutionTrace": "実行トレース",
     "detailTraceEmpty": "実行トレースはありません"
+  },
+  "workbench": {
+    "input": {
+      "completeInteractionFirst": "上の操作カードを完了すると入力を続けられます",
+      "dropFiles": "離すと添付ファイルをアップロードします",
+      "addFileContext": "回答の参考情報としてファイルを追加",
+      "loadingWorkspaceFiles": "ワークスペースのファイルを読み込み中...",
+      "noMatchingFiles": "一致するファイルがありません",
+      "attachFile": "ファイルを添付",
+      "skillInstallFailed": "スキルをインストールできませんでした。後でもう一度お試しください。"
+    }
+  },
+  "chatToolbar": {
+    "summonExpert": "専門家を呼び出す",
+    "selectMode": "モードを選択",
+    "recentExperts": "最近の専門家",
+    "summonOtherExperts": "専門家センターを開く",
+    "auto": "Auto",
+    "modelLabel": "モデル",
+    "smartRouting": "推奨スマートルーティング",
+    "switchedToAuto": "Auto に切り替えました",
+    "switchedToModel": "{{model}} に切り替えました",
+    "switchFailed": "切り替えに失敗しました",
+    "noModels": "利用可能なモデルがありません。先に設定でプロバイダーを構成してください。",
+    "skills": "スキル",
+    "searchSkills": "スキルを検索...",
+    "loadingSkills": "スキルを読み込み中...",
+    "noSkills": "利用可能なスキルがありません",
+    "privateSkill": "非公開",
+    "defaultSkillBadge": "デフォルト",
+    "defaultSkills": "デフォルトスキル",
+    "mySkills": "マイスキル",
+    "installedSkills": "インストール済み",
+    "recommended": "推奨",
+    "summonedExpert": "「{{name}}」を呼び出しました",
+    "connectorConnected": "「{{name}}」に接続しました",
+    "connectorNames": {
+      "github": "GitHub",
+      "feishu": "Feishu",
+      "dingtalk": "DingTalk",
+      "wecom": "WeCom",
+      "notion": "Notion",
+      "mysql": "MySQL",
+      "email": "メールサービス"
+    },
+    "modeDetails": {
+      "craft": {
+        "description": "最も高機能な自動実行モードです。質問への回答、ファイルの読み書き、コマンド実行、開発作業を一貫して行えます。",
+        "fileAccess": "ファイルの読み書き",
+        "terminal": "ターミナルコマンドの実行",
+        "webSearch": "自動ウェブ検索"
+      },
+      "plan": {
+        "description": "深い論理的思考と全体設計に集中し、コードを書く前に明確な計画と作業分解を提示します。",
+        "reasoning": "深い論理的思考",
+        "architecture": "アーキテクチャ設計",
+        "breakdown": "開発タスクの分解"
+      },
+      "ask": {
+        "description": "技術的な質問に素早く安全に回答し、ローカルファイルは変更しません。",
+        "consulting": "迅速な技術相談",
+        "codeAnalysis": "コードロジック分析",
+        "frameworkKnowledge": "フレームワークとライブラリの知識"
+      }
+    },
+    "importSkill": "スキルを追加",
+    "connect": "接続",
+    "connected": "接続済み",
+    "manageConnectors": "コネクターを管理",
+    "localAccess": {
+      "question": "DClaw が操作を実行する際、どのように承認しますか？",
+      "askApproval": "操作前に確認",
+      "askApprovalDescription": "ツール操作を実行する前に常に確認します",
+      "fullAccess": "フルアクセスを許可",
+      "fullAccessDescription": "制限や承認確認なしでツール操作を実行します",
+      "saveFailed": "アクセス設定を保存できませんでした"
+    }
   }
 }

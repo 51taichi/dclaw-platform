@@ -2728,7 +2728,16 @@
     "selectWorkspace": "选择工作空间",
     "noTasks": "暂无任务",
     "noTasksHint": "在上方输入框描述你的需求，开始新任务",
-    "taskLabel": "任务"
+    "taskLabel": "任务",
+    "input": {
+      "completeInteractionFirst": "请先完成上方交互卡片，提交后即可继续输入",
+      "dropFiles": "松开即可上传附件",
+      "addFileContext": "添加文件作为回答背景",
+      "loadingWorkspaceFiles": "正在加载工作区文件...",
+      "noMatchingFiles": "未找到匹配文件",
+      "attachFile": "添加附件",
+      "skillInstallFailed": "技能安装失败，请稍后重试"
+    }
   },
   "billing": {
     "insufficientTitle": "积分不足，本次调用未继续",
@@ -2756,6 +2765,61 @@
     "manageConnectors": "管理连接器",
     "connect": "连接",
     "connected": "已连接",
-    "workspace": "选择工作空间"
+    "workspace": "选择工作空间",
+    "selectMode": "选择模式",
+    "recentExperts": "最近使用的专家",
+    "summonOtherExperts": "打开专家中心",
+    "smartRouting": "推荐智能路由",
+    "switchedToAuto": "已切换到 Auto",
+    "switchedToModel": "已切换到 {{model}}",
+    "switchFailed": "切换失败",
+    "noModels": "暂无可用模型，请先在设置中配置 Provider",
+    "loadingSkills": "加载技能中...",
+    "noSkills": "未找到可用技能",
+    "privateSkill": "私有",
+    "defaultSkillBadge": "默认",
+    "defaultSkills": "默认技能",
+    "mySkills": "我的技能",
+    "installedSkills": "已安装",
+    "recommended": "推荐",
+    "summonedExpert": "已召唤「{{name}}」",
+    "connectorConnected": "「{{name}}」已连接",
+    "connectorNames": {
+      "github": "GitHub",
+      "feishu": "飞书",
+      "dingtalk": "钉钉",
+      "wecom": "企业微信",
+      "notion": "Notion",
+      "mysql": "MySQL",
+      "email": "邮件服务"
+    },
+    "modeDetails": {
+      "craft": {
+        "description": "最强大的全自动执行模式。不仅能解答问题，还能读写文件、执行命令，完成端到端开发。",
+        "fileAccess": "文件读写操作",
+        "terminal": "终端命令执行",
+        "webSearch": "自动化网页搜索"
+      },
+      "plan": {
+        "description": "专注深度逻辑推理与全局架构设计。在编写代码前，为您提供清晰详尽的方案规划与任务拆解。",
+        "reasoning": "深度逻辑推理",
+        "architecture": "架构方案设计",
+        "breakdown": "开发任务拆解"
+      },
+      "ask": {
+        "description": "专注纯粹的技术问答。响应迅速，绝对安全，不会对您的任何本地文件产生修改。",
+        "consulting": "快速技术咨询",
+        "codeAnalysis": "代码逻辑分析",
+        "frameworkKnowledge": "框架库知识检索"
+      }
+    },
+    "localAccess": {
+      "question": "DClaw 执行操作时应如何获得批准？",
+      "askApproval": "操作前询问",
+      "askApprovalDescription": "执行工具操作前始终请求你的批准",
+      "fullAccess": "允许完全访问",
+      "fullAccessDescription": "不受限制地执行工具操作，不再请求批准",
+      "saveFailed": "权限设置保存失败"
+    }
   }
 }

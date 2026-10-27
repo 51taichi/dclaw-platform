@@ -2719,7 +2719,16 @@
     "selectWorkspace": "Select Workspace",
     "noTasks": "No tasks yet",
     "noTasksHint": "Click the button above to start a new task",
-    "taskLabel": "Tasks"
+    "taskLabel": "Tasks",
+    "input": {
+      "completeInteractionFirst": "Complete the interaction card above before continuing",
+      "dropFiles": "Release to upload attachments",
+      "addFileContext": "Add a file as answer context",
+      "loadingWorkspaceFiles": "Loading workspace files...",
+      "noMatchingFiles": "No matching files found",
+      "attachFile": "Attach file",
+      "skillInstallFailed": "Failed to install the skill. Try again later."
+    }
   },
   "billing": {
     "insufficientTitle": "Insufficient credits; this call did not continue",
@@ -2747,6 +2756,61 @@
     "manageConnectors": "Manage Connectors",
     "connect": "Connect",
     "connected": "Connected",
-    "workspace": "Select Workspace"
+    "workspace": "Select Workspace",
+    "selectMode": "Select mode",
+    "recentExperts": "Recent experts",
+    "summonOtherExperts": "Open Expert Center",
+    "smartRouting": "Recommended smart routing",
+    "switchedToAuto": "Switched to Auto",
+    "switchedToModel": "Switched to {{model}}",
+    "switchFailed": "Switch failed",
+    "noModels": "No models available. Configure a provider in Settings first.",
+    "loadingSkills": "Loading skills...",
+    "noSkills": "No skills available",
+    "privateSkill": "Private",
+    "defaultSkillBadge": "Default",
+    "defaultSkills": "Default skills",
+    "mySkills": "My skills",
+    "installedSkills": "Installed",
+    "recommended": "Recommended",
+    "summonedExpert": "Summoned “{{name}}”",
+    "connectorConnected": "“{{name}}” connected",
+    "connectorNames": {
+      "github": "GitHub",
+      "feishu": "Feishu",
+      "dingtalk": "DingTalk",
+      "wecom": "WeCom",
+      "notion": "Notion",
+      "mysql": "MySQL",
+      "email": "Email service"
+    },
+    "modeDetails": {
+      "craft": {
+        "description": "The most capable autonomous mode. It can answer questions, read and write files, run commands, and complete development tasks end to end.",
+        "fileAccess": "Read and write files",
+        "terminal": "Run terminal commands",
+        "webSearch": "Automated web search"
+      },
+      "plan": {
+        "description": "Focuses on deep reasoning and overall architecture, producing a clear plan and task breakdown before code is written.",
+        "reasoning": "Deep logical reasoning",
+        "architecture": "Architecture design",
+        "breakdown": "Development task breakdown"
+      },
+      "ask": {
+        "description": "Focuses on technical questions with fast, safe responses and does not modify local files.",
+        "consulting": "Quick technical guidance",
+        "codeAnalysis": "Code logic analysis",
+        "frameworkKnowledge": "Framework and library knowledge"
+      }
+    },
+    "localAccess": {
+      "question": "How should DClaw get approval before taking actions?",
+      "askApproval": "Ask before actions",
+      "askApprovalDescription": "Always ask for approval before running tool actions",
+      "fullAccess": "Allow full access",
+      "fullAccessDescription": "Run tool actions without restrictions or approval prompts",
+      "saveFailed": "Failed to save access settings"
+    }
   }
 }

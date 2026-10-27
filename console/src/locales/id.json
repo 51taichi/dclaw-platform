@@ -650,5 +650,82 @@
       "refreshSuccess": "Log disegarkan",
       "copyBackend": "Salin log backend"
     }
+  },
+  "workbench": {
+    "input": {
+      "completeInteractionFirst": "Selesaikan kartu interaksi di atas untuk melanjutkan input",
+      "dropFiles": "Lepaskan untuk mengunggah lampiran",
+      "addFileContext": "Tambahkan file sebagai konteks jawaban",
+      "loadingWorkspaceFiles": "Memuat file ruang kerja...",
+      "noMatchingFiles": "Tidak ada file yang cocok",
+      "attachFile": "Lampirkan file",
+      "skillInstallFailed": "Gagal memasang skill. Coba lagi nanti."
+    }
+  },
+  "chatToolbar": {
+    "summonExpert": "Panggil pakar",
+    "selectMode": "Pilih mode",
+    "recentExperts": "Pakar terbaru",
+    "summonOtherExperts": "Buka Pusat Pakar",
+    "auto": "Auto",
+    "modelLabel": "Model",
+    "smartRouting": "Perutean cerdas yang disarankan",
+    "switchedToAuto": "Beralih ke Auto",
+    "switchedToModel": "Beralih ke {{model}}",
+    "switchFailed": "Gagal beralih",
+    "noModels": "Tidak ada model. Konfigurasikan penyedia terlebih dahulu.",
+    "skills": "Skill",
+    "searchSkills": "Cari skill...",
+    "loadingSkills": "Memuat skill...",
+    "noSkills": "Tidak ada skill tersedia",
+    "privateSkill": "Privat",
+    "defaultSkillBadge": "Bawaan",
+    "defaultSkills": "Skill bawaan",
+    "mySkills": "Skill saya",
+    "installedSkills": "Terpasang",
+    "recommended": "Disarankan",
+    "summonedExpert": "Pakar “{{name}}” dipanggil",
+    "connectorConnected": "“{{name}}” terhubung",
+    "connectorNames": {
+      "github": "GitHub",
+      "feishu": "Feishu",
+      "dingtalk": "DingTalk",
+      "wecom": "WeCom",
+      "notion": "Notion",
+      "mysql": "MySQL",
+      "email": "Layanan email"
+    },
+    "modeDetails": {
+      "craft": {
+        "description": "Mode otonom paling lengkap. Dapat menjawab pertanyaan, membaca dan menulis file, menjalankan perintah, dan menyelesaikan tugas pengembangan dari awal hingga akhir.",
+        "fileAccess": "Membaca dan menulis file",
+        "terminal": "Menjalankan perintah terminal",
+        "webSearch": "Pencarian web otomatis"
+      },
+      "plan": {
+        "description": "Berfokus pada penalaran mendalam dan arsitektur, dengan rencana serta pembagian tugas yang jelas sebelum menulis kode.",
+        "reasoning": "Penalaran logis mendalam",
+        "architecture": "Desain arsitektur",
+        "breakdown": "Pembagian tugas pengembangan"
+      },
+      "ask": {
+        "description": "Menjawab pertanyaan teknis dengan cepat dan aman tanpa mengubah file lokal.",
+        "consulting": "Panduan teknis cepat",
+        "codeAnalysis": "Analisis logika kode",
+        "frameworkKnowledge": "Pengetahuan framework dan pustaka"
+      }
+    },
+    "importSkill": "Tambahkan skill",
+    "connect": "Hubungkan",
+    "connected": "Terhubung",
+    "manageConnectors": "Kelola konektor",
+    "localAccess": {
+      "question": "Bagaimana DClaw harus meminta persetujuan sebelum bertindak?",
+      "askApproval": "Tanya sebelum bertindak",
+      "askApprovalDescription": "Selalu minta persetujuan sebelum menjalankan tindakan alat",
+      "fullAccess": "Izinkan akses penuh",
+      "fullAccessDescription": "Jalankan tindakan alat tanpa batasan atau permintaan persetujuan",
+      "saveFailed": "Gagal menyimpan pengaturan akses"
+    }
   }
 }
