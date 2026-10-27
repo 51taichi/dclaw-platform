@@ -606,6 +606,19 @@ def test_open_message_request_accepts_explicit_execution_modes():
     assert isolated.execution_mode == "isolated_attempt"
 
 
+def test_open_message_request_accepts_message_at_length_limit():
+    message = "x" * 80_000
+
+    request = OpenMessageRequest(external_user_id="user", message=message)
+
+    assert request.message == message
+
+
+def test_open_message_request_rejects_message_above_length_limit():
+    with pytest.raises(ValidationError, match="message is too long"):
+        OpenMessageRequest(external_user_id="user", message="x" * 80_001)
+
+
 def test_open_message_request_rejects_unknown_execution_mode():
     with pytest.raises(ValidationError):
         OpenMessageRequest(

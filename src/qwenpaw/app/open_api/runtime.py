@@ -61,7 +61,7 @@ from .execution_mode import bind_isolated_agent_open_api
 
 _SAFE_ID_PATTERN = re.compile(r"[^A-Za-z0-9_.:-]+")
 _MAX_EXTERNAL_ID_LENGTH = 128
-_MAX_MESSAGE_LENGTH = 20_000
+_MAX_MESSAGE_LENGTH = 80_000
 _BILLING_MODES = frozenset({"off", "shadow", "observe", "enforced"})
 
 
