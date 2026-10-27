@@ -51,12 +51,30 @@ sudo install -m 644 deploy/production/compose.production.yml \
   /opt/dclaw-deploy/compose.production.yml
 sudo install -m 755 \
   deploy/production/lib.sh \
+  deploy/production/build-release.sh \
+  deploy/production/deploy-release.sh \
+  deploy/production/deploy-result.sh \
   deploy/production/update.sh \
   deploy/production/status.sh \
   deploy/production/rollback.sh \
   deploy/production/adopt.sh \
   /opt/dclaw-deploy/
 ```
+
+When a server-only release must keep the current production client, build the
+exact pair instead of following either repository's moving `main` branch:
+
+```bash
+sudo /opt/dclaw-deploy/build-release.sh \
+  --server-sha 0123456789abcdef0123456789abcdef01234567 \
+  --client-sha 89abcdef0123456789abcdef0123456789abcdef
+```
+
+Both arguments are required together and must be complete 40-character
+commits. The script downloads those immutable snapshots, labels the image with
+the same full commits, and writes them to the pending release receipt. Calling
+the script without either argument retains the existing behavior of resolving
+both `main` branches once at build start.
 
 Do not copy `production.env.example` over the current environment. The first
 adoption captures the existing container environment directly into protected

@@ -15,6 +15,30 @@ fail() {
   exit 1
 }
 
+REQUESTED_SERVER_SHA=
+REQUESTED_CLIENT_SHA=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --server-sha)
+      test "$#" -ge 2 || fail "--server-sha requires a value"
+      REQUESTED_SERVER_SHA=$2
+      shift 2
+      ;;
+    --client-sha)
+      test "$#" -ge 2 || fail "--client-sha requires a value"
+      REQUESTED_CLIENT_SHA=$2
+      shift 2
+      ;;
+    *) fail "unknown argument: $1" ;;
+  esac
+done
+if [ -n "$REQUESTED_SERVER_SHA" ] || [ -n "$REQUESTED_CLIENT_SHA" ]; then
+  test -n "$REQUESTED_SERVER_SHA" && test -n "$REQUESTED_CLIENT_SHA" ||
+    fail "both --server-sha and --client-sha are required"
+  [[ $REQUESTED_SERVER_SHA =~ $SHA_PATTERN ]] || fail "invalid server SHA"
+  [[ $REQUESTED_CLIENT_SHA =~ $SHA_PATTERN ]] || fail "invalid client SHA"
+fi
+
 for command in gh docker flock tar; do
   command -v "$command" >/dev/null 2>&1 || fail "$command is not installed"
 done
@@ -77,9 +101,11 @@ retry_network_download() {
 download_repository() {
   local repository=$1
   local directory=$2
-  local revision
-  revision=$(retry_network_command gh api \
-    "repos/$repository/commits/main" --jq .sha)
+  local revision=$3
+  if [ -z "$revision" ]; then
+    revision=$(retry_network_command gh api \
+      "repos/$repository/commits/main" --jq .sha)
+  fi
   [[ $revision =~ $SHA_PATTERN ]] || return 1
   local archive="$context_dir/${directory##*/}.tar.gz"
   retry_network_download "$archive" gh api \
@@ -102,8 +128,10 @@ assemble_release_context() {
 }
 
 build_local_release() {
-  SERVER_SHA=$(download_repository "$SERVER_REPOSITORY" "$SERVER_DIR") || return 1
-  CLIENT_SHA=$(download_repository "$CLIENT_REPOSITORY" "$CLIENT_DIR") || return 1
+  SERVER_SHA=$(download_repository \
+    "$SERVER_REPOSITORY" "$SERVER_DIR" "$REQUESTED_SERVER_SHA") || return 1
+  CLIENT_SHA=$(download_repository \
+    "$CLIENT_REPOSITORY" "$CLIENT_DIR" "$REQUESTED_CLIENT_SHA") || return 1
   [[ $SERVER_SHA =~ $SHA_PATTERN ]] || return 1
   [[ $CLIENT_SHA =~ $SHA_PATTERN ]] || return 1
 

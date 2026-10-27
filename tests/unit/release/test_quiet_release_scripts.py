@@ -198,6 +198,70 @@ def test_build_release_waits_silently_and_pins_both_main_revisions(
     assert not git_log.exists() or "ls-remote" not in git_log.read_text()
 
 
+def test_build_release_accepts_an_exact_revision_pair(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_commands(fake_bin)
+    deploy_root = tmp_path / "deploy"
+    gh_log = tmp_path / "gh.log"
+    server_sha = "c" * 40
+    client_sha = "d" * 40
+    environment = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "DCLAW_DEPLOY_ROOT": str(deploy_root),
+        "FAKE_GH_LOG": str(gh_log),
+    }
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(PRODUCTION / "build-release.sh"),
+            "--server-sha",
+            server_sha,
+            "--client-sha",
+            client_sha,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert result.returncode == 0, result.stderr
+    pending = dict(
+        line.split("=", 1)
+        for line in (deploy_root / "pending-release.env").read_text().splitlines()
+    )
+    assert pending["SERVER_SHA"] == server_sha
+    assert pending["CLIENT_SHA"] == client_sha
+    calls = gh_log.read_text()
+    assert "/commits/main" not in calls
+    assert f"api repos/51taichi/dclaw-server/tarball/{server_sha}" in calls
+    assert f"api repos/51taichi/dclaw-client/tarball/{client_sha}" in calls
+
+
+def test_build_release_rejects_an_incomplete_revision_pair(tmp_path: Path) -> None:
+    result = subprocess.run(
+        [
+            "bash",
+            str(PRODUCTION / "build-release.sh"),
+            "--server-sha",
+            "c" * 40,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "DCLAW_DEPLOY_ROOT": str(tmp_path / "deploy")},
+    )
+
+    assert result.returncode != 0
+    assert result.stdout == (
+        "BUILD_FAILED\n"
+        "reason：both --server-sha and --client-sha are required\n"
+    )
+
+
 def test_build_failure_never_writes_a_deployable_release(
     tmp_path: Path,
 ) -> None:
