@@ -58,3 +58,16 @@ def test_runbook_preserves_current_production_resource_names() -> None:
         "https://dclaw.deepmega.cn",
     ):
         assert value in text
+
+
+def test_runbook_fails_closed_for_short_lived_validation_tokens() -> None:
+    text = " ".join(RUNBOOK.read_text().split())
+
+    assert "/api/admin/sealed-agents" in text
+    assert "`/api/sealed-agents`" in text
+    assert "register its cleanup handler before the token is created" in text
+    for failure_mode in ("HTTP 4xx/5xx", "command failure", "SSH interruption"):
+        assert failure_mode in text
+    assert "revoke the server-side token" in text
+    assert "mode `0600` files" in text
+    assert "separate assertion that the temporary files are absent" in text

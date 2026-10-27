@@ -218,6 +218,21 @@ Provisioning is idempotent and refuses to overwrite a conflicting signer ID.
 Restart DClaw after the first provision so the sealed-Agent service reloads
 both trust registries.
 
+Production Super Expert administration is mounted under the exact
+`/api/admin/sealed-agents` prefix. Release checks must resolve routes from the
+current source or OpenAPI contract and must not probe the legacy-looking
+`/api/sealed-agents` prefix.
+
+Any release check that creates a short-lived access token must register its
+cleanup handler before the token is created. Use `trap` or an equivalent
+`finally` block so success, HTTP 4xx/5xx, command failure, SSH interruption,
+and early process exit all attempt to revoke the server-side token and
+overwrite and remove every local and remote token file. Token values must only
+travel through standard input or mode `0600` files; they must never appear in
+arguments, logs, images, environment files, or reports. Finish with a separate
+assertion that the temporary files are absent, and report only the cleanup
+status.
+
 Before an update, retain the running image digest and confirm that the
 `dclaw-data` and `dclaw-secrets` volumes are attached. Delivery operation
 receipts live under `integration_delivery/operations/` in the data volume and
@@ -254,3 +269,5 @@ Verify all of the following before declaring the release complete:
 5. `docker inspect dclaw` still shows `dclaw-net` and the three named volumes.
 6. The preceding immutable image and the pre-update PostgreSQL dump remain
    readable.
+7. Every short-lived validation token has been revoked and all local and remote
+   token files have passed the final absence check.
