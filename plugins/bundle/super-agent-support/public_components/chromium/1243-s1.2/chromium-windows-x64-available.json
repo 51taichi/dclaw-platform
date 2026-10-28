@@ -1,0 +1,39 @@
+{
+  "artifact": {
+    "archive_format": "zip",
+    "sha256": "4baa80874ec459e665abf93119d8cbdaeba3dd02ae0e67d39b708dbf162b0263",
+    "size_bytes": 411187488,
+    "unpacked_size_bytes": 411170870,
+    "url": "https://dclaw.rouhigh.com/agent-artifacts/super-agent-components/v1/windows-x64/chromium/1243-s1.2/chromium-windows-x64-1243-s1.2.zip"
+  },
+  "cache_key": "chromium/windows-x64/1243-s1.2",
+  "component_id": "chromium",
+  "component_version": "1243-s1.2",
+  "dependencies": [],
+  "descriptor_version": "1",
+  "display_name": "Chromium Browser Runtime",
+  "environment_paths": {},
+  "exports": {
+    "chrome": "chromium-1243/chrome-win64/chrome.exe"
+  },
+  "license": {
+    "evidence_sha256": "4f365cde3f62028dc364f6e75b45cfd84e9ab6974ebbe1a591a264a2d0632b5e",
+    "evidence_url": "https://dclaw.rouhigh.com/agent-artifacts/super-agent-components/v1/evidence/chromium-license-evidence.json",
+    "spdx": "NOASSERTION"
+  },
+  "notes": "Migrated Playwright Chromium revision 1243 runtime; Chrome for Testing 153.0.8010.12 for browser automation.",
+  "path_entries": [
+    "chromium-1243/chrome-win64"
+  ],
+  "platform": "windows-x64",
+  "provides": [
+    "chromium",
+    "browser.automation"
+  ],
+  "rollback_version": "1243-s1.2",
+  "sbom": {
+    "sha256": "896fc4d9de6303bd4788a1d99236bf0d3b0286402c3676f61bfb3cbda8287c6c",
+    "url": "https://dclaw.rouhigh.com/agent-artifacts/super-agent-components/v1/evidence/chromium-sbom.json"
+  },
+  "status": "available"
+}

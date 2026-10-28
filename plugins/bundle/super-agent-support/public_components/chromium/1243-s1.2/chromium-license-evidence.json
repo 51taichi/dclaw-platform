@@ -1,0 +1,18 @@
+{
+  "component_id": "chromium",
+  "component_version": "1243-s1.2",
+  "embedded_notice": {
+    "copyright": "Copyright 2026 Google LLC. All rights reserved.",
+    "path": "chromium-1243/chrome-win64/ABOUT",
+    "sha256": "122b32f3ee3f1e8d65c774f5257fc6cc2127b666148ced0ce2efa3ea57e1d93c",
+    "size_bytes": 257
+  },
+  "provenance": {
+    "browser_version": "153.0.8010.12",
+    "distribution": "Chrome for Testing",
+    "project_url": "https://www.chromium.org/",
+    "playwright_revision": "1243"
+  },
+  "schema": "dclaw-public-component-license-evidence/1",
+  "spdx": "NOASSERTION"
+}

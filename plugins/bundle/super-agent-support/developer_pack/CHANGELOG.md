@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.1 - 2026-10-28
+
+- Bundles development standard 2.13 and DevKit 1.5.0.
+- Requires legacy Agent runtimes to be mapped into the public Component registry before any separate cleanup decision.
+
 ## 1.6.0 - 2026-10-28
 
 - Bundles development standard 2.12 and DevKit 1.5.0.

@@ -1,0 +1,23 @@
+{
+  "artifact": {
+    "name": "chromium-windows-x64-1243-s1.2.zip",
+    "sha256": "4baa80874ec459e665abf93119d8cbdaeba3dd02ae0e67d39b708dbf162b0263",
+    "size_bytes": 411187488,
+    "unpacked_size_bytes": 411170870
+  },
+  "component_id": "chromium",
+  "component_version": "1243-s1.2",
+  "contents": [
+    "Chrome for Testing 153.0.8010.12 Windows x64 browser distribution",
+    "Playwright Chromium browser revision 1243"
+  ],
+  "entrypoint": "chromium-1243/chrome-win64/chrome.exe",
+  "platform": "windows-x64",
+  "schema": "dclaw-public-component-sbom/1",
+  "source": {
+    "browser_version": "153.0.8010.12",
+    "distribution": "Chrome for Testing",
+    "playwright_browser_name": "chromium",
+    "playwright_revision": "1243"
+  }
+}

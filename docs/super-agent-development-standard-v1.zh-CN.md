@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.12`
+当前版本：`2.13`
 
 发布日期：`2026-10-28`
 
@@ -506,16 +506,16 @@ stateDiagram-v2
 
 截至 2026-10-27 的上一生产基线为 Server `1.1.10`、提交 `db08ac40fb0033d6c944636da58b2ce82686a951`、`dclaw.super-agent-support` `1.9.0`、Developer Pack `1.4.0` 和 DevKit `1.3.0`。该基线已完成认证下载和健康核对，但 Developer Pack `1.4.0` 未读取 `resources.lock.json`，不得再用于生成新的正式本地能力或超级专家发布包。
 
-本标准 `2.12` 的正式组合为 Developer Pack `1.6.0`、支持插件 `1.12.0`、DevKit `1.5.0` 与 Runner `1.2.0`。该组合发布公共 Component 签名描述符、精确依赖声明和本地安装机器合同；没有声明 `public_components` 的旧能力包继续按原合同运行。
+本标准 `2.13` 的正式组合为 Developer Pack `1.6.1`、支持插件 `1.12.0`、DevKit `1.5.0` 与 Runner `1.2.0`。该组合发布公共 Component 签名描述符、精确依赖声明和本地安装机器合同；没有声明 `public_components` 的旧能力包继续按原合同运行。
 
-本标准 `2.12` 的正式开发与发布门禁如下。版本必须作为一个兼容组合核对，不能只满足其中一项：
+本标准 `2.13` 的正式开发与发布门禁如下。版本必须作为一个兼容组合核对，不能只满足其中一项：
 
 | 项目 | 本标准要求 | 2026-10-26 正式环境核对 | 结论 |
 |---|---|---|---|
 | DClaw 核心 | 至少 `1.1.10` | 公网 `/api/version` 返回 `1.1.10`，运行镜像标记 Server 提交 `db08ac40` | 满足 |
 | 支持插件 | 至少 `1.12.0` | 生产仍须读取健康接口核对 | 公共 Component 注册表、签名验证、依赖解析和无界面 API 全部由插件提供 |
 | Super Agent DevKit | `1.5.0`，且由目标实例认证下载 | 生产仍须读取元数据核对 | 提供公共 Component Schema 与 `component-registry` CLI |
-| Super Agent 开发包 | `1.6.0`，标准 `2.12`、DevKit `1.5.0` | 生产仍须认证下载核对 | 新盘点使用 `1.6.0`；旧已签名 Agent 保持有效 |
+| Super Agent 开发包 | `1.6.1`，标准 `2.13`、DevKit `1.5.0` | 生产仍须认证下载核对 | 新盘点使用 `1.6.1`；旧已签名 Agent 保持有效 |
 | Windows 客户端 | 普通预检至少 `2.6.12`；本地文件链路至少 `2.6.13` | `2.6.11` | 不满足，先发布并升级客户端 |
 | 通用 Runner | 普通链路至少 `1.0.0`；本地文件链路至少 `1.1.0`；公共 Component 链路至少 `1.2.0` | 随兼容客户端核对 | 只有声明公共 Component 的新能力包要求 `1.2.0` |
 
@@ -542,7 +542,7 @@ stateDiagram-v2
 
 上述接口属于认证后的目标 DClaw，不是匿名公共下载站。`401` 表示尚未携带有效身份，不能据此断言接口缺失；有效身份下 `404`、插件版本低于要求、返回的 DevKit 版本不匹配或 ZIP SHA-256 与元数据不一致，均表示当前目标环境未达到发布门禁。开发方只能继续源码和离线测试，状态标记为 `platform-tooling-missing`，不得使用平台仓库内源码副本、旧兼容构建器、历史签名包或其他环境下载的 DevKit 替代。
 
-生产升级必须部署插件 `1.12.0`、Developer Pack `1.6.0` 和 DevKit `1.5.0`；使用公共 Component 的 Windows 能力包还须完成 Runner `1.2.0`、设备协议 `2` 和 `windows-x64` 平台报告的实际连接核对。只使用本地文件链路时仍以 Windows 客户端 `2.6.13`、Runner `1.1.0` 和设备协议 `2` 为最低要求。manifest 中 `platform_contract_versions.local_execution="1"` 是平台合同主版本；本地执行合同修订版 `1.2`、Runner 设备协议 `2` 和公共 Component 描述符 `1` 是不同层级的版本，不得互相替代或写错字段。安装级业务服务身份不经过客户端或 Runner，因此不会单独触发客户端或 Runner 升级。开发方必须使用自己的应用身份认证会话实际下载 Developer Pack 或 DevKit、核对服务端 SHA-256，并在上传前核对插件 Secret 与相应信任库配置；服务器 root SSH 权限和镜像中存在文件都不能替代应用下载身份或发布证据。任何历史 Agent 专属 Relay、Runner、工具前缀和能力 ID 只作为冻结兼容路径，不得被新发布复制或回退使用。
+生产升级必须部署插件 `1.12.0`、Developer Pack `1.6.1` 和 DevKit `1.5.0`；使用公共 Component 的 Windows 能力包还须完成 Runner `1.2.0`、设备协议 `2` 和 `windows-x64` 平台报告的实际连接核对。只使用本地文件链路时仍以 Windows 客户端 `2.6.13`、Runner `1.1.0` 和设备协议 `2` 为最低要求。manifest 中 `platform_contract_versions.local_execution="1"` 是平台合同主版本；本地执行合同修订版 `1.2`、Runner 设备协议 `2` 和公共 Component 描述符 `1` 是不同层级的版本，不得互相替代或写错字段。安装级业务服务身份不经过客户端或 Runner，因此不会单独触发客户端或 Runner 升级。开发方必须使用自己的应用身份认证会话实际下载 Developer Pack 或 DevKit、核对服务端 SHA-256，并在上传前核对插件 Secret 与相应信任库配置；服务器 root SSH 权限和镜像中存在文件都不能替代应用下载身份或发布证据。任何历史 Agent 专属 Relay、Runner、工具前缀和能力 ID 只作为冻结兼容路径，不得被新发布复制或回退使用。
 
 生产安装必须把插件 `state_dir` 放在持久卷，并通过平台 Secret 配置稳定的 `master_key_base64`；容器可使用 `DCLAW_SUPER_AGENT_SUPPORT_MASTER_KEY_BASE64`，该值解码后至少 32 字节，不得写入仓库、镜像或 Agent 包。`trusted_package_signers` 是 `signer_id` 到原始 Ed25519 公钥 Base64 的映射；`trusted_component_signers` 是 `signer_id` 到 DER SubjectPublicKeyInfo 编码的 P-256 公钥 Base64 映射。未配置对应受信公钥时，插件仍可启动和提供环境状态，但对应的能力包或公共 Component 注册必须失败关闭。
 
@@ -949,6 +949,8 @@ FFmpeg、FFprobe、Python Runtime、Node.js、Whisper 引擎、模型和其他�
 
 Agent 私有 component 和只服务该 Agent 的依赖仍随 Agent 能力包交付。私有 component 依赖已注册公共 Component 时，私有包只保留自身代码与资源，按注册版本进行适配，不重复打包公共运行环境。
 
+迁移已有 Agent 时，发现旧 Agent 专属运行库不得直接删除。先逐项与完整公共 Component 注册表对照：已有同类公共 Component 时，把旧运行库映射到注册版本并由 Agent 完成版本适配，不重复注册旧版本；缺少的可复用运行库按公共 Component 合同补齐制品、许可证、SBOM、签名、HTTPS 上传和注册。旧运行库制品在公共注册和 Agent 适配完成前保留为迁移输入；是否删除旧副本属于后续独立操作，必须另行确认。Agent 私有能力包继续作为私有交付物，不得因合并公共运行库而误并入公共注册表。
+
 公共 Component 使用 DevKit 的 `schemas/super-agent-support-v1/public-component-descriptor.schema.json`。每个平台变体必须固定 `component_id`、`platform`、准确版本、状态、直接公共依赖、正式 HTTPS artifact、压缩和解压大小、SHA-256、导出程序、PATH/环境路径、SBOM、许可证、缓存键和回滚版本。`available` 变体不得缺少 artifact、SBOM 或许可证；`reserved` 与 `disabled` 变体不得伪造可下载 artifact。
 
 公共 Component 描述符使用 ECDSA P-256 + SHA-256 签名，签名输入为键排序、无额外空白的 UTF-8 规范 JSON。插件使用 `trusted_component_signers` 独立信任库验签；公共 Component signer 不等于超级专家 signer 或 Agent 私有能力包 signer。GET 必须返回完整注册表，PUT 必须验证路径中的 Component/平台与签名描述符一致、递增 `registry_version` 并返回更新后的完整注册表。
@@ -1293,7 +1295,7 @@ GET <DCLAW_BASE_URL>/api/super-agent-support/developer-pack/download
 
 开发包元数据必须返回准确的开发包版本、标准标识与版本、DevKit 版本、ZIP SHA-256、文件数、支持平台和稳定下载路径。下载后的顶层目录名带开发包版本，包内 `PACKAGE-MANIFEST.json` 和 `SHA256SUMS` 列出公开资产及摘要；开发者根据元数据判断版本，不得根据稳定下载路径、标准文件名或 ZIP 文件名猜测版本。
 
-开发包 `1.6.0` 包含标准 `2.12`、DevKit `1.5.0`、公共 Component 无界面 CLI 与 Schema、公开 SDK、完整项目模板、业务服务模板、本地能力模板、测试夹具、最小离线示例、SBOM、第三方许可证、兼容矩阵、升级和回滚说明。统一命令如下：
+开发包 `1.6.1` 包含标准 `2.13`、DevKit `1.5.0`、公共 Component 无界面 CLI 与 Schema、公开 SDK、完整项目模板、业务服务模板、本地能力模板、测试夹具、最小离线示例、SBOM、第三方许可证、兼容矩阵、升级和回滚说明。统一命令如下：
 
 ```text
 python dclaw_developer.py doctor
@@ -2055,7 +2057,7 @@ Agent 名称：<可选，中文显示名称>
 2. 开发方自己的业务目标、源 Agent 材料和测试凭证；
 3. 从目标 DClaw 认证调用元数据接口并按其 `download_path` 下载、核对 SHA-256 的官方开发包；兼容自动化可以继续单独下载同版本官方 DevKit。
 
-开发包 `1.6.0` 是推荐的单一离线移交物，必须提供：
+开发包 `1.6.1` 是推荐的单一离线移交物，必须提供：
 
 - 唯一标准文件与明确的标准版本，不复制第二套人工规则；
 - 官方 DevKit `1.5.0` 及其完整离线加密依赖；
@@ -2089,6 +2091,12 @@ DevKit `1.5.0` 必须提供：
 平台内部实现文件、测试文件和维护文档可以继续存在，但它们只服务平台维护者，不属于开发方输入。开发方缺少字段或行为定义时应报告标准或 DevKit 缺陷；平台不得用“请克隆服务器源码”回答。
 
 ## 34. 版本记录
+
+### 2.13 - 2026-10-28
+
+- 增加旧 Agent 专属运行库迁移规则：先映射已有公共 Component，缺失项再补齐并注册；禁止在公共注册和 Agent 适配完成前直接删除旧运行库。
+- 明确同类公共 Component 已存在时由 Agent 适配注册版本，不重复登记旧版本；Agent 私有能力包不因公共运行库合并而进入公共注册表。
+- 本次规则为向后兼容的迁移门禁，公共 Component 描述符、插件、DevKit 和 Runner 合同版本保持不变。
 
 ### 2.12 - 2026-10-28
 

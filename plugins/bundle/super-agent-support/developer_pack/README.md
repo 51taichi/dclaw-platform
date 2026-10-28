@@ -5,7 +5,7 @@ Agents. It contains the human standard, standalone DevKit, schemas, templates,
 SDK helpers, fixtures, and a single cross-platform command line tool. DClaw
 server source is not required.
 
-Version 1.6.0 bundles development standard 2.12 and DevKit 1.5.0. It adds the
+Version 1.6.1 bundles development standard 2.13 and DevKit 1.5.0. It adds the
 signed public Component descriptor, exact capability dependency declarations,
 and the headless `component-registry` CLI. Project upgrades update the pack,
 standard and DevKit versions together before validation. Component inventory

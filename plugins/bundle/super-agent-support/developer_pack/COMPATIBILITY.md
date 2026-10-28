@@ -3,7 +3,7 @@
 | Component | Supported version |
 |---|---|
 | Developer pack | 1.0.x through 1.6.x |
-| Development standard | 2.1 through 2.12 |
+| Development standard | 2.1 through 2.13 |
 | Super Agent DevKit | 1.2.x through 1.5.x |
 | Super Expert manifest | 3 |
 | Runtime / runtime host | 1 |
