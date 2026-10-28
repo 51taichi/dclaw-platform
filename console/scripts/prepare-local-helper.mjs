@@ -23,7 +23,7 @@ const output = path.join(
   "resources",
   "local-helper",
 );
-const expectedRunnerVersion = "1.1.0";
+const expectedRunnerVersion = "1.3.0";
 const expectedProtocolVersion = "2";
 
 if (process.argv.includes("--describe")) {
