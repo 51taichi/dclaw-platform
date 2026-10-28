@@ -5,12 +5,13 @@ Agents. It contains the human standard, standalone DevKit, schemas, templates,
 SDK helpers, fixtures, and a single cross-platform command line tool. DClaw
 server source is not required.
 
-Version 1.6.1 bundles development standard 2.13 and DevKit 1.5.0. It adds the
-signed public Component descriptor, exact capability dependency declarations,
-and the headless `component-registry` CLI. Project upgrades update the pack,
-standard and DevKit versions together before validation. Component inventory
-and registration call the support plugin directly; the pack does not require a
-DClaw management page or server source.
+Version 1.7.0 bundles development standard 2.14 and DevKit 1.6.0. It adds
+explicit non-entry public Component export bindings for Runner 1.3.0 while
+retaining the signed Component registry and headless `component-registry`
+CLI. Project upgrades update the pack, standard and DevKit versions together
+before validation. Component inventory and registration call the support
+plugin directly; the pack does not require a DClaw management page or server
+source.
 
 ## Supported environments
 

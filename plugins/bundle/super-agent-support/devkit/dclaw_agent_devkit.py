@@ -23,7 +23,7 @@ from urllib.request import Request, urlopen
 import zipfile
 
 
-DEVKIT_VERSION = "1.5.0"
+DEVKIT_VERSION = "1.6.0"
 CRYPTOGRAPHY_VERSION = "46.0.3"
 SUPPORTED_PYTHON = ">=3.10,<3.14"
 SUPPORTED_PLATFORMS = {
@@ -843,6 +843,12 @@ def _command_contracts(_args: argparse.Namespace) -> None:
         / "business-identity"
         / "transport-cases.json"
     )
+    component_export_fixture = (
+        _root()
+        / "fixtures"
+        / "public-components"
+        / "component-export-cases.json"
+    )
     _json_result(
         status="ok",
         devkit_version=DEVKIT_VERSION,
@@ -858,6 +864,12 @@ def _command_contracts(_args: argparse.Namespace) -> None:
         transport_fixture=transport_fixture.relative_to(_root()).as_posix(),
         transport_fixture_sha256=hashlib.sha256(
             transport_fixture.read_bytes(),
+        ).hexdigest(),
+        component_export_fixture=(
+            component_export_fixture.relative_to(_root()).as_posix()
+        ),
+        component_export_fixture_sha256=hashlib.sha256(
+            component_export_fixture.read_bytes(),
         ).hexdigest(),
         schemas=sorted(
             path.relative_to(_root()).as_posix()

@@ -2,7 +2,7 @@
 
 ## Upgrade
 
-Pack 1.6.1 adopts development standard 2.13 and DevKit 1.5.0. Public Component
+Pack 1.7.0 adopts development standard 2.14 and DevKit 1.6.0. Public Component
 inventory and signed registration use only the versioned headless API/CLI owned
 by `dclaw.super-agent-support`; existing signed Agent releases remain valid.
 

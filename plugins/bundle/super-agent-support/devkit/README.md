@@ -1,10 +1,21 @@
 # DClaw Super Agent DevKit
 
-Version 1.5.0 adds the signed public Component descriptor, exact dependency
-declarations, and the headless `component-registry get/register` client. These
-commands call `dclaw.super-agent-support` directly and do not require a DClaw
-management page or server source. Version 1.4.1 business service identity
-contracts remain compatible.
+Version 1.6.0 adds explicit non-entry public Component export bindings for
+Runner 1.3.0. It retains the signed public Component descriptor, exact
+dependency declarations, and headless `component-registry get/register`
+client introduced in 1.5.0. These commands call
+`dclaw.super-agent-support` directly and do not require a DClaw management
+page or server source. Version 1.4.1 business service identity contracts
+remain compatible.
+
+Capability descriptors may bind a declared public Component export to a
+process environment variable with `component_exports`. Variables must use the
+`DCLAW_COMPONENT_*` namespace, the Component must also appear in
+`public_components`, and the capability must require Runner 1.3.0 or newer.
+Runner resolves the signed relative export inside the installed Component and
+fails closed for undeclared Components, missing exports, duplicate variables,
+pre-existing variables, or paths outside the Component root. See
+`fixtures/public-components/component-export-cases.json`.
 
 `operation-catalog.json` fixes the public client keys, MCP tool names,
 Streamable HTTP endpoint and JSON-RPC sequence. Controlled outbound requests

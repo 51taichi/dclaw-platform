@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.7.0 - 2026-10-28
+
+- Bundles development standard 2.14 and DevKit 1.6.0.
+- Adds explicit non-entry public Component export bindings for Runner 1.3.0.
+- Keeps capability descriptors without `component_exports` compatible with
+  existing Runner requirements.
+
 ## 1.6.1 - 2026-10-28
 
 - Bundles development standard 2.13 and DevKit 1.5.0.

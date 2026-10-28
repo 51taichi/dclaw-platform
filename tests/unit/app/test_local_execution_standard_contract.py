@@ -253,6 +253,25 @@ def test_runner_stages_continuation_bindings_as_relative_paths():
     )
 
 
+def test_runner_resolves_explicit_public_component_exports():
+    runner = (
+        Path(__file__).parents[3]
+        / "plugins"
+        / "bundle"
+        / "super-agent-support"
+        / "windows-helper"
+        / "Program.cs"
+    ).read_text(encoding="utf-8")
+
+    assert '"component_exports"' in runner
+    assert '"environment_variable"' in runner
+    assert "boundVariables.Add(variable)" in runner
+    assert "start.Environment.ContainsKey(variable)" in runner
+    assert "PathInside(\n                component.Root,\n                relativePath)" in runner
+    assert "undeclared component" in runner
+    assert "export binding is missing" in runner
+
+
 def test_local_execution_standard_requires_optional_plugin_isolation():
     text = STANDARD_DOC.read_text(encoding="utf-8")
 

@@ -74,6 +74,27 @@
         }
       }
     },
+    "component_exports": {
+      "type": "array",
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["environment_variable", "component_id", "export"],
+        "properties": {
+          "environment_variable": {
+            "type": "string",
+            "pattern": "^DCLAW_COMPONENT_[A-Z][A-Z0-9_]{0,47}$"
+          },
+          "component_id": {"$ref": "#/$defs/ComponentId"},
+          "export": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$"
+          }
+        }
+      }
+    },
     "schemas": {
       "type": "object",
       "additionalProperties": false,

@@ -16,7 +16,7 @@ internal sealed record HelperConfig(
     string? DeviceToken,
     string? PairingCode,
     string DisplayName,
-    string RunnerVersion = "1.2.0",
+    string RunnerVersion = "1.3.0",
     string ProtocolVersion = "2");
 
 internal sealed class Program
@@ -815,7 +815,7 @@ internal sealed class HelperRuntime
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
             };
-            ApplyComponentEnvironment(start, components);
+            ApplyComponentEnvironment(start, descriptor, components);
             foreach (var argument in entrypoint.GetProperty("arguments").EnumerateArray())
                 start.ArgumentList.Add(
                     ExpandArgument(argument.GetString()!, packageRoot, taskRoot));
@@ -1319,6 +1319,7 @@ internal sealed class HelperRuntime
 
     private static void ApplyComponentEnvironment(
         ProcessStartInfo start,
+        JsonElement capabilityDescriptor,
         List<(JsonObject Descriptor, string Root)> components)
     {
         var pathEntries = new List<string>();
@@ -1355,6 +1356,38 @@ internal sealed class HelperRuntime
             start.Environment["PYTHONPATH"] = string.Join(
                 Path.PathSeparator,
                 pythonPaths);
+        if (!capabilityDescriptor.TryGetProperty(
+                "component_exports",
+                out var exportBindings)) return;
+        var boundVariables = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var binding in exportBindings.EnumerateArray())
+        {
+            var variable = binding.GetProperty(
+                "environment_variable").GetString()!;
+            if (!boundVariables.Add(variable))
+                throw new InvalidDataException(
+                    "public Component export environment variable is duplicated");
+            if (start.Environment.ContainsKey(variable))
+                throw new InvalidDataException(
+                    "public Component export environment variable is already set");
+            var componentId = binding.GetProperty(
+                "component_id").GetString()!;
+            var exportName = binding.GetProperty("export").GetString()!;
+            var component = components.FirstOrDefault(item =>
+                item.Descriptor["component_id"]?.GetValue<string>() == componentId);
+            if (component.Descriptor is null)
+                throw new InvalidDataException(
+                    "public Component export binding references an undeclared component");
+            var exports = component.Descriptor["exports"] as JsonObject
+                ?? throw new InvalidDataException(
+                    "public Component exports are invalid");
+            var relativePath = exports[exportName]?.GetValue<string>()
+                ?? throw new InvalidDataException(
+                    "public Component export binding is missing");
+            start.Environment[variable] = PathInside(
+                component.Root,
+                relativePath);
+        }
     }
 
     private static string ExpandArgument(

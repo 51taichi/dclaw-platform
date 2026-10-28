@@ -22,10 +22,10 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 
-PACK_VERSION = "1.6.1"
+PACK_VERSION = "1.7.0"
 STANDARD_ID = "dclaw.super-agent-development"
-STANDARD_VERSION = "2.13"
-DEVKIT_VERSION = "1.5.0"
+STANDARD_VERSION = "2.14"
+DEVKIT_VERSION = "1.6.0"
 PROJECT_SCHEMA_VERSION = 1
 LOCAL_SESSION = "local.execution.session/1"
 LOCAL_PREFLIGHT = "local.environment.preflight/1"
@@ -58,6 +58,13 @@ TEMPORARY_URL_PATH_PARTS = frozenset(
 
 class DeveloperPackError(ValueError):
     """A deterministic developer-facing validation failure."""
+
+
+def _version_key(value: str) -> tuple[int, int, int]:
+    match = re.fullmatch(r"([0-9]+)\.([0-9]+)\.([0-9]+)", value)
+    if match is None:
+        return (0, 0, 0)
+    return tuple(int(part) for part in match.groups())
 
 
 def _root() -> Path:
@@ -783,13 +790,51 @@ def _validate_local_schemas(
         raise DeveloperPackError(
             "public Component requirements must use unique exact id/version pairs",
         )
+    declared_component_ids = {
+        item["component_id"] for item in public_components
+    }
+    component_exports = descriptor.get("component_exports", [])
+    if (
+        not isinstance(component_exports, list)
+        or len(component_exports) > 32
+        or any(
+            not isinstance(item, dict)
+            or set(item) != {
+                "environment_variable",
+                "component_id",
+                "export",
+            }
+            or not isinstance(item.get("environment_variable"), str)
+            or not re.fullmatch(
+                r"DCLAW_COMPONENT_[A-Z][A-Z0-9_]{0,47}",
+                item["environment_variable"],
+            )
+            or not isinstance(item.get("component_id"), str)
+            or item["component_id"] not in declared_component_ids
+            or not isinstance(item.get("export"), str)
+            or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", item["export"])
+            for item in component_exports
+        )
+        or len(
+            {item["environment_variable"] for item in component_exports}
+        ) != len(component_exports)
+    ):
+        raise DeveloperPackError(
+            "public Component export bindings must use unique declared Components",
+        )
+    if component_exports and _version_key(
+        str(descriptor.get("min_runner_version", "0.0.0")),
+    ) < _version_key("1.3.0"):
+        raise DeveloperPackError(
+            "public Component export bindings require Runner 1.3.0",
+        )
     entrypoint = descriptor.get("entrypoint")
     if not isinstance(entrypoint, dict):
         raise DeveloperPackError("local capability entrypoint is invalid")
     entrypoint_component = entrypoint.get("component_id")
-    if entrypoint_component is not None and entrypoint_component not in {
-        item["component_id"] for item in public_components
-    }:
+    if entrypoint_component is not None and entrypoint_component not in (
+        declared_component_ids
+    ):
         raise DeveloperPackError(
             "entrypoint public Component is not declared",
         )

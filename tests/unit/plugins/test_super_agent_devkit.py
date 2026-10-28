@@ -134,7 +134,7 @@ def test_devkit_has_no_server_source_import_and_runs_standalone():
     )
     result = json.loads(completed.stdout)
     assert result["status"] == "ok"
-    assert result["devkit_version"] == "1.5.0"
+    assert result["devkit_version"] == "1.6.0"
     assert result["dependency_mode"] == "bundled-wheelhouse"
     assert result["cryptography_version"] == "46.0.3"
     assert "schemas/super-expert-manifest.schema.json" in result["schemas"]
@@ -151,6 +151,38 @@ def test_devkit_has_no_server_source_import_and_runs_standalone():
         "fixtures/business-identity/transport-cases.json"
     )
     assert len(result["transport_fixture_sha256"]) == 64
+    assert result["component_export_fixture"] == (
+        "fixtures/public-components/component-export-cases.json"
+    )
+    assert len(result["component_export_fixture_sha256"]) == 64
+
+
+def test_component_export_contract_fixture_and_schema():
+    schema = json.loads(
+        (
+            DEVKIT_ROOT
+            / "schemas"
+            / "super-agent-support-v1"
+            / "capability-descriptor.schema.json"
+        ).read_text(encoding="utf-8"),
+    )
+    fixture = json.loads(
+        (
+            DEVKIT_ROOT
+            / "fixtures"
+            / "public-components"
+            / "component-export-cases.json"
+        ).read_text(encoding="utf-8"),
+    )
+    Draft202012Validator.check_schema(schema)
+    export_schema = dict(schema["properties"]["component_exports"])
+    export_schema["$defs"] = schema["$defs"]
+    validator = Draft202012Validator(export_schema)
+    validator.validate(fixture["positive"][0]["component_exports"])
+    with pytest.raises(ValidationError):
+        validator.validate(
+            fixture["negative"][1]["component_exports"],
+        )
 
 
 def test_business_identity_operation_catalog_is_complete_and_consistent():
@@ -258,7 +290,7 @@ def test_devkit_bundles_and_verifies_locked_encryption_dependencies():
     )
     result = json.loads(completed.stdout)
     assert result["status"] == "ok"
-    assert result["devkit_version"] == "1.5.0"
+    assert result["devkit_version"] == "1.6.0"
     assert result["wheelhouse_verified"] is True
     assert result["wheelhouse_files"] == 26
 
