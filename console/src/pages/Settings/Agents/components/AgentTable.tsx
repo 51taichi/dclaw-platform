@@ -128,11 +128,6 @@ export function AgentTable({
       ),
     },
     {
-      title: t("agent.id"),
-      dataIndex: "id",
-      key: "id",
-    },
-    {
       title: t("agent.description"),
       dataIndex: "description",
       key: "description",

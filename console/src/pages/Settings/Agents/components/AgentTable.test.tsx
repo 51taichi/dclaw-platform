@@ -121,6 +121,9 @@ describe("AgentTable", () => {
     );
 
     expect(screen.getByText("/workspaces/writer")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("columnheader", { name: "ID" }),
+    ).not.toBeInTheDocument();
     expect(container.querySelector(".anticon-edit")).toBeInTheDocument();
     expect(container.querySelector(".anticon-delete")).toBeInTheDocument();
     expect(container.querySelector(".lucide-eye")).toBeInTheDocument();
