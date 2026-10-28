@@ -16,6 +16,7 @@ from packaging.version import InvalidVersion, Version
 
 from .contracts import ERRORS, PublicError, failure, success, trace_id
 from .credentials import CredentialBroker, CredentialError
+from .public_components import PublicComponentError, PublicComponentRegistry
 from .session import SessionError, SessionSigner
 from .store import StateStore
 
@@ -58,10 +59,13 @@ class LocalExecutionService:
         store: StateStore,
         signer: SessionSigner,
         credential_broker: CredentialBroker,
+        *,
+        public_components: PublicComponentRegistry | None = None,
     ) -> None:
         self.store = store
         self.signer = signer
         self.credential_broker = credential_broker
+        self.public_components = public_components
         self._connections: dict[str, Any] = {}
         self._task_events: dict[str, asyncio.Event] = {}
         self._device_requests: dict[
@@ -408,6 +412,8 @@ class LocalExecutionService:
             device
             for device in online
             if _runner_supports(device, descriptor["min_runner_version"])
+            and device.get("platform", "windows-x64")
+            in descriptor.get("operating_systems", ["windows-x64"])
         ]
         if not compatible:
             device = online[0]
@@ -434,11 +440,24 @@ class LocalExecutionService:
                     "user_action": "none",
                 }
         device = compatible[0]
+        requirements = descriptor.get("public_components", [])
+        component_packages: list[dict[str, Any]] = []
+        if requirements:
+            if self.public_components is None:
+                raise ERRORS["PUBLIC_COMPONENT_UNAVAILABLE"]
+            try:
+                component_packages = self.public_components.resolve(
+                    requirements,
+                    platform=str(device.get("platform") or "windows-x64"),
+                )
+            except PublicComponentError as exc:
+                raise ERRORS["PUBLIC_COMPONENT_UNAVAILABLE"] from exc
         await self._send(
             device["device_id"],
             {
                 "type": "runtime.prepare",
                 "protocol_version": str(device.get("protocol_version") or "1"),
+                "public_components": component_packages,
                 "capability_package": package,
             },
         )

@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-STANDARD = {"id": "dclaw.local-execution", "version": "1.1"}
+STANDARD = {"id": "dclaw.local-execution", "version": "1.2"}
 TOOLS = (
     "local_environment_status",
     "local_capabilities_list",
@@ -76,6 +76,15 @@ ERRORS = {
         "correct_request",
         "当前能力目录中没有所选能力。",
         "capability_catalog",
+    ),
+    "PUBLIC_COMPONENT_UNAVAILABLE": PublicError(
+        "PUBLIC_COMPONENT.UNAVAILABLE",
+        "dependency",
+        True,
+        "contact_administrator",
+        "该能力需要的公共组件尚未在当前设备平台完成注册。",
+        "public_component_registry",
+        "public_component",
     ),
     "TASK_NOT_FOUND": PublicError(
         "LOCAL_GATEWAY.TASK_NOT_FOUND",

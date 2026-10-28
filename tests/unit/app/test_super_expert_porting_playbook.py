@@ -90,6 +90,31 @@ def test_porting_requires_explicitly_approved_behavior_equivalence():
     for phrase in required:
         assert phrase in text
 
-    assert "当前版本：`2.9`" in text
+    assert "当前版本：`2.12`" in text
     assert "平台统一工具链发布闭环" in text
     assert "Super Expert signer 预登记" in text
+
+
+def test_current_delivery_section_uses_current_toolchain_versions():
+    text = PLAYBOOK.read_text(encoding="utf-8")
+    section = text.split(
+        "## 33. 唯一外部输入与机器合同",
+        maxsplit=1,
+    )[1].split("## 34. 版本记录", maxsplit=1)[0]
+    plugin_root = (
+        Path(__file__).parents[3]
+        / "plugins"
+        / "bundle"
+        / "super-agent-support"
+    )
+    developer_pack_version = (
+        plugin_root / "developer_pack" / "VERSION"
+    ).read_text(encoding="utf-8").strip()
+    devkit_version = (
+        plugin_root / "devkit" / "VERSION"
+    ).read_text(encoding="utf-8").strip()
+
+    assert f"开发包 `{developer_pack_version}` 是推荐的单一离线移交物" in section
+    assert f"官方 DevKit `{devkit_version}` 及其完整离线加密依赖" in section
+    assert f"DevKit `{devkit_version}` 必须提供" in section
+    assert "DevKit `1.4.1`" not in section

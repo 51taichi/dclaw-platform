@@ -17,6 +17,7 @@ from .business_identity import (
 from .credentials import CredentialBroker
 from .mcp_server import LocalExecutionMcp
 from .packages import CapabilityPackageRegistry
+from .public_components import PublicComponentRegistry
 from .routes import create_app
 from .service import LocalExecutionService
 from .session import CAPABILITY_ID, PREFLIGHT_CAPABILITY_ID, SessionSigner
@@ -106,7 +107,24 @@ class SuperAgentSupportPlugin:
             / "capability-descriptor.schema.json",
             dict(api.config.get("trusted_package_signers") or {}),
         )
-        service = LocalExecutionService(store, signer, credentials)
+        component_signers = dict(
+            api.config.get("trusted_component_signers")
+            or api.config.get("trusted_package_signers")
+            or {},
+        )
+        public_components = PublicComponentRegistry(
+            store,
+            Path(__file__).parent
+            / "schemas"
+            / "public-component-descriptor.schema.json",
+            component_signers,
+        )
+        service = LocalExecutionService(
+            store,
+            signer,
+            credentials,
+            public_components=public_components,
+        )
         sealed_root = Path(WORKING_DIR) / "sealed_agents"
         official_signers = load_trusted_signers(
             sealed_root / "official_super_expert_signers.json",
@@ -124,6 +142,7 @@ class SuperAgentSupportPlugin:
             packages=packages,
             credentials=credentials,
             business_identity=business_identity,
+            public_components=public_components,
         )
         api.register_asgi_app(
             app,

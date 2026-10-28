@@ -2,9 +2,9 @@
 
 ## Upgrade
 
-Pack 1.5.4 adopts development standard 2.11. Public Component inventory and
-registration use only the versioned headless API/CLI owned by
-`dclaw.super-agent-support`; existing signed Agent releases remain valid.
+Pack 1.6.0 adopts development standard 2.12 and DevKit 1.5.0. Public Component
+inventory and signed registration use only the versioned headless API/CLI owned
+by `dclaw.super-agent-support`; existing signed Agent releases remain valid.
 
 1. Download the new versioned ZIP and verify the SHA-256 from authenticated
    metadata or the separately delivered checksum file.

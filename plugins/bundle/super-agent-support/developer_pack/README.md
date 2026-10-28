@@ -5,14 +5,12 @@ Agents. It contains the human standard, standalone DevKit, schemas, templates,
 SDK helpers, fixtures, and a single cross-platform command line tool. DClaw
 server source is not required.
 
-Version 1.5.4 bundles development standard 2.11, DevKit 1.4.1, and the public
-contracts for
-`business.service.installation-identity/1`. Business service assertions are
-issued and injected by the platform; Agent projects only receive and pass the
-opaque one-time `binding_ref`. Project upgrades update the pack, standard and
-DevKit versions together before validation. Public Component inventory and
-registration are exposed only through the support plugin's versioned API/CLI;
-the pack does not require a DClaw management page.
+Version 1.6.0 bundles development standard 2.12 and DevKit 1.5.0. It adds the
+signed public Component descriptor, exact capability dependency declarations,
+and the headless `component-registry` CLI. Project upgrades update the pack,
+standard and DevKit versions together before validation. Component inventory
+and registration call the support plugin directly; the pack does not require a
+DClaw management page or server source.
 
 ## Supported environments
 

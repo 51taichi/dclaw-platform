@@ -1,10 +1,10 @@
 # DClaw Super Agent DevKit
 
-Version 1.4.1 publishes the strict
-`business.service.installation-identity/1` request, response, verification,
-administration, and stable-error schemas. The platform returns only a one-time
-`binding_ref`; bearer assertions remain inside the controlled outbound
-transport.
+Version 1.5.0 adds the signed public Component descriptor, exact dependency
+declarations, and the headless `component-registry get/register` client. These
+commands call `dclaw.super-agent-support` directly and do not require a DClaw
+management page or server source. Version 1.4.1 business service identity
+contracts remain compatible.
 
 `operation-catalog.json` fixes the public client keys, MCP tool names,
 Streamable HTTP endpoint and JSON-RPC sequence. Controlled outbound requests

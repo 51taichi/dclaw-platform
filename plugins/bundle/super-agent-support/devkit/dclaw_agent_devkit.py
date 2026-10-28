@@ -17,10 +17,13 @@ import stat
 import struct
 import sys
 import unicodedata
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlsplit
+from urllib.request import Request, urlopen
 import zipfile
 
 
-DEVKIT_VERSION = "1.4.1"
+DEVKIT_VERSION = "1.5.0"
 CRYPTOGRAPHY_VERSION = "46.0.3"
 SUPPORTED_PYTHON = ">=3.10,<3.14"
 SUPPORTED_PLATFORMS = {
@@ -694,6 +697,25 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--package", type=Path, required=True)
     verify.add_argument("--public-key", type=Path, required=True)
     subparsers.add_parser("contracts")
+    components = subparsers.add_parser("component-registry")
+    components.add_argument("--base-url", required=True)
+    components.add_argument(
+        "--access-token",
+        default=os.environ.get("DCLAW_ACCESS_TOKEN", ""),
+    )
+    component_commands = components.add_subparsers(
+        dest="component_command",
+        required=True,
+    )
+    component_commands.add_parser("get")
+    register_component = component_commands.add_parser("register")
+    register_component.add_argument("--descriptor", type=Path, required=True)
+    register_component.add_argument("--signer-id", required=True)
+    component_signature = register_component.add_mutually_exclusive_group(
+        required=True,
+    )
+    component_signature.add_argument("--signature-file", type=Path)
+    component_signature.add_argument("--private-key", type=Path)
     return parser
 
 
@@ -844,6 +866,109 @@ def _command_contracts(_args: argparse.Namespace) -> None:
     )
 
 
+def _component_request(
+    method: str,
+    url: str,
+    *,
+    access_token: str,
+    body: dict[str, object] | None = None,
+) -> dict[str, object]:
+    if not access_token:
+        raise DevKitError("authenticated DClaw access token is required")
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {access_token}",
+    }
+    encoded = None
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+        encoded = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    request = Request(url, data=encoded, headers=headers, method=method)
+    try:
+        with urlopen(request, timeout=60) as response:  # nosec B310
+            result = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise DevKitError(
+            f"Component registry returned HTTP {exc.code}: {detail}",
+        ) from exc
+    except (URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise DevKitError(f"Component registry request failed: {exc}") from exc
+    if not isinstance(result, dict):
+        raise DevKitError("Component registry response must be a JSON object")
+    return result
+
+
+def _component_signature(
+    args: argparse.Namespace,
+    descriptor: dict[str, object],
+) -> str:
+    if args.signature_file:
+        signature = args.signature_file.read_text(encoding="utf-8").strip()
+        try:
+            base64.b64decode(signature, validate=True)
+        except ValueError as exc:
+            raise DevKitError("public Component signature file is invalid") from exc
+        return signature
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric.ec import ECDSA, SECP256R1
+
+    private_key = serialization.load_pem_private_key(
+        args.private_key.read_bytes(),
+        password=None,
+    )
+    if not isinstance(private_key.curve, SECP256R1):
+        raise DevKitError("public Component key must use P-256")
+    canonical = json.dumps(
+        descriptor,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.b64encode(
+        private_key.sign(canonical, ECDSA(hashes.SHA256())),
+    ).decode("ascii")
+
+
+def _command_component_registry(args: argparse.Namespace) -> None:
+    base_url = args.base_url.rstrip("/")
+    parsed = urlsplit(base_url)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise DevKitError("DClaw base URL must be an absolute HTTPS URL")
+    support_endpoint = base_url + "/api/super-agent-support"
+    endpoint = support_endpoint + "/component-registry"
+    if args.component_command == "get":
+        result = _component_request(
+            "GET",
+            endpoint,
+            access_token=args.access_token,
+        )
+    else:
+        descriptor = _read_json(args.descriptor)
+        component_id = descriptor.get("component_id")
+        component_platform = descriptor.get("platform")
+        if not isinstance(component_id, str) or not isinstance(
+            component_platform,
+            str,
+        ):
+            raise DevKitError("public Component descriptor identity is missing")
+        result = _component_request(
+            "PUT",
+            support_endpoint
+            + "/admin/component-registry/"
+            + quote(component_id, safe="")
+            + "/variants/"
+            + quote(component_platform, safe=""),
+            access_token=args.access_token,
+            body={
+                "descriptor": descriptor,
+                "signer_id": args.signer_id,
+                "signature": _component_signature(args, descriptor),
+            },
+        )
+    print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+
+
 COMMANDS = {
     "doctor": _command_doctor,
     "digest": _command_digest,
@@ -852,6 +977,7 @@ COMMANDS = {
     "build": _command_build,
     "verify": _command_verify,
     "contracts": _command_contracts,
+    "component-registry": _command_component_registry,
 }
 
 

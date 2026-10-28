@@ -16,7 +16,7 @@ internal sealed record HelperConfig(
     string? DeviceToken,
     string? PairingCode,
     string DisplayName,
-    string RunnerVersion = "1.1.0",
+    string RunnerVersion = "1.2.0",
     string ProtocolVersion = "2");
 
 internal sealed class Program
@@ -62,6 +62,7 @@ internal sealed class HelperRuntime
             "DClawLocalTool");
         Directory.CreateDirectory(_root);
         Directory.CreateDirectory(Path.Combine(_root, "Capabilities"));
+        Directory.CreateDirectory(Path.Combine(_root, "Components"));
         Directory.CreateDirectory(Path.Combine(_root, "Tasks"));
         Directory.CreateDirectory(Path.Combine(_root, "Outbox"));
         Directory.CreateDirectory(Path.Combine(_root, "LocalFileRefs"));
@@ -198,6 +199,7 @@ internal sealed class HelperRuntime
             ["display_name"] = _config.DisplayName,
             ["runner_version"] = _config.RunnerVersion,
             ["protocol_version"] = _config.ProtocolVersion,
+            ["platform"] = "windows-x64",
         };
         var encoded = string.Join("&", query.Where(item => !string.IsNullOrWhiteSpace(item.Value))
             .Select(item => $"{Uri.EscapeDataString(item.Key)}={Uri.EscapeDataString(item.Value!)}"));
@@ -214,7 +216,18 @@ internal sealed class HelperRuntime
                 await ReportCapabilitiesAsync(cancellationToken);
                 break;
             case "runtime.prepare":
-                await PrepareRuntimeAsync(message.GetProperty("capability_package"), cancellationToken);
+                var components = message.TryGetProperty("public_components", out var declaredComponents)
+                    ? declaredComponents
+                    : default;
+                if (components.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var component in components.EnumerateArray())
+                        await PreparePublicComponentAsync(component, cancellationToken);
+                }
+                await PrepareRuntimeAsync(
+                    message.GetProperty("capability_package"),
+                    components,
+                    cancellationToken);
                 await ReportCapabilitiesAsync(cancellationToken);
                 break;
             case "task.start":
@@ -260,7 +273,87 @@ internal sealed class HelperRuntime
         File.Move(temporary, _configPath, true);
     }
 
-    private async Task PrepareRuntimeAsync(JsonElement package, CancellationToken cancellationToken)
+    private async Task PreparePublicComponentAsync(
+        JsonElement envelope,
+        CancellationToken cancellationToken)
+    {
+        var descriptor = envelope.GetProperty("descriptor");
+        var componentId = descriptor.GetProperty("component_id").GetString()!;
+        var componentVersion = descriptor.GetProperty("component_version").GetString()!;
+        if (descriptor.GetProperty("platform").GetString() != "windows-x64"
+            || descriptor.GetProperty("status").GetString() != "available")
+            throw new InvalidDataException("public Component is unavailable for this platform");
+
+        var canonicalPayload = Convert.FromBase64String(
+            envelope.GetProperty("canonical_payload").GetString()!);
+        var canonicalNode = JsonNode.Parse(canonicalPayload);
+        var descriptorNode = JsonNode.Parse(descriptor.GetRawText());
+        if (canonicalNode is null || descriptorNode is null
+            || !JsonNode.DeepEquals(canonicalNode, descriptorNode))
+            throw new InvalidDataException("public Component canonical payload mismatch");
+        using (var verifier = ECDsa.Create())
+        {
+            verifier.ImportSubjectPublicKeyInfo(
+                Convert.FromBase64String(envelope.GetProperty("signer_public_key").GetString()!),
+                out _);
+            if (!verifier.VerifyData(
+                canonicalPayload,
+                Convert.FromBase64String(envelope.GetProperty("signature").GetString()!),
+                HashAlgorithmName.SHA256,
+                DSASignatureFormat.Rfc3279DerSequence))
+                throw new InvalidDataException("public Component signature is invalid");
+        }
+
+        var componentRoot = Path.Combine(
+            _root,
+            "Components",
+            SafeName(componentId),
+            SafeName(componentVersion));
+        if (File.Exists(Path.Combine(componentRoot, "descriptor.json"))) return;
+        var artifact = descriptor.GetProperty("artifact");
+        var expectedHash = artifact.GetProperty("sha256").GetString()!;
+        var expectedSize = artifact.GetProperty("size_bytes").GetInt64();
+        var maximumUnpackedSize = artifact.TryGetProperty("unpacked_size_bytes", out var unpacked)
+            ? unpacked.GetInt64()
+            : 8L * 1024 * 1024 * 1024;
+        var temporaryRoot = componentRoot + ".installing-" + Guid.NewGuid().ToString("N");
+        var archivePath = temporaryRoot + ".zip";
+        Directory.CreateDirectory(temporaryRoot);
+        try
+        {
+            await DownloadAndVerifyAsync(
+                artifact.GetProperty("url").GetString()!,
+                archivePath,
+                expectedSize,
+                expectedHash,
+                cancellationToken);
+            ExtractSafely(archivePath, temporaryRoot, maximumUnpackedSize);
+            await File.WriteAllTextAsync(
+                Path.Combine(temporaryRoot, "descriptor.json"),
+                descriptor.GetRawText(),
+                cancellationToken);
+            await File.WriteAllTextAsync(
+                Path.Combine(temporaryRoot, "signature.json"),
+                JsonSerializer.Serialize(new
+                {
+                    signerId = envelope.GetProperty("signer_id").GetString(),
+                    signature = envelope.GetProperty("signature").GetString(),
+                }, JsonOptions.Default),
+                cancellationToken);
+            Directory.CreateDirectory(Path.GetDirectoryName(componentRoot)!);
+            Directory.Move(temporaryRoot, componentRoot);
+        }
+        finally
+        {
+            if (File.Exists(archivePath)) File.Delete(archivePath);
+            if (Directory.Exists(temporaryRoot)) Directory.Delete(temporaryRoot, true);
+        }
+    }
+
+    private async Task PrepareRuntimeAsync(
+        JsonElement package,
+        JsonElement components,
+        CancellationToken cancellationToken)
     {
         var descriptor = package.GetProperty("descriptor");
         var artifact = descriptor.GetProperty("artifact");
@@ -275,25 +368,12 @@ internal sealed class HelperRuntime
         Directory.CreateDirectory(temporaryRoot);
         try
         {
-            using var response = await _http.GetAsync(
-                artifact.GetProperty("url").GetString(),
-                HttpCompletionOption.ResponseHeadersRead,
+            await DownloadAndVerifyAsync(
+                artifact.GetProperty("url").GetString()!,
+                archivePath,
+                expectedSize,
+                expectedHash,
                 cancellationToken);
-            response.EnsureSuccessStatusCode();
-            await using (var output = File.Create(archivePath))
-            await using (var input = await response.Content.ReadAsStreamAsync(cancellationToken))
-            {
-                await input.CopyToAsync(output, cancellationToken);
-            }
-            var info = new FileInfo(archivePath);
-            if (info.Length != expectedSize) throw new InvalidDataException("package size mismatch");
-            await using (var stream = File.OpenRead(archivePath))
-            {
-                var actual = Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken)).ToLowerInvariant();
-                if (!CryptographicOperations.FixedTimeEquals(
-                    Encoding.ASCII.GetBytes(actual), Encoding.ASCII.GetBytes(expectedHash)))
-                    throw new InvalidDataException("package digest mismatch");
-            }
             ExtractSafely(archivePath, temporaryRoot);
             await VerifySchemaFilesAsync(
                 temporaryRoot,
@@ -302,6 +382,11 @@ internal sealed class HelperRuntime
             await File.WriteAllTextAsync(
                 Path.Combine(temporaryRoot, "descriptor.json"),
                 descriptor.GetRawText(), cancellationToken);
+            if (components.ValueKind == JsonValueKind.Array)
+                await File.WriteAllTextAsync(
+                    Path.Combine(temporaryRoot, "public-components.json"),
+                    components.GetRawText(),
+                    cancellationToken);
             Directory.CreateDirectory(Path.GetDirectoryName(packageRoot)!);
             Directory.Move(temporaryRoot, packageRoot);
         }
@@ -312,12 +397,52 @@ internal sealed class HelperRuntime
         }
     }
 
-    private static void ExtractSafely(string archivePath, string targetRoot)
+    private async Task DownloadAndVerifyAsync(
+        string url,
+        string destination,
+        long expectedSize,
+        string expectedHash,
+        CancellationToken cancellationToken)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var artifactUri)
+            || artifactUri.Scheme != Uri.UriSchemeHttps)
+            throw new InvalidDataException("artifact URL must use HTTPS");
+        using var response = await _http.GetAsync(
+            artifactUri,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+        response.EnsureSuccessStatusCode();
+        if (response.Content.Headers.ContentLength is long contentLength
+            && contentLength != expectedSize)
+            throw new InvalidDataException("artifact size mismatch");
+        await using (var output = File.Create(destination))
+        await using (var input = await response.Content.ReadAsStreamAsync(cancellationToken))
+        {
+            await input.CopyToAsync(output, cancellationToken);
+        }
+        if (new FileInfo(destination).Length != expectedSize)
+            throw new InvalidDataException("artifact size mismatch");
+        await using var stream = File.OpenRead(destination);
+        var actual = Convert.ToHexString(
+            await SHA256.HashDataAsync(stream, cancellationToken)).ToLowerInvariant();
+        if (!CryptographicOperations.FixedTimeEquals(
+            Encoding.ASCII.GetBytes(actual), Encoding.ASCII.GetBytes(expectedHash)))
+            throw new InvalidDataException("artifact digest mismatch");
+    }
+
+    private static void ExtractSafely(
+        string archivePath,
+        string targetRoot,
+        long maximumUnpackedSize = 8L * 1024 * 1024 * 1024)
     {
         var fullRoot = Path.GetFullPath(targetRoot) + Path.DirectorySeparatorChar;
         using var archive = ZipFile.OpenRead(archivePath);
+        long unpackedSize = 0;
         foreach (var entry in archive.Entries)
         {
+            unpackedSize = checked(unpackedSize + entry.Length);
+            if (unpackedSize > maximumUnpackedSize)
+                throw new InvalidDataException("archive expands beyond declared limit");
             var destination = Path.GetFullPath(Path.Combine(targetRoot, entry.FullName));
             if (!destination.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("package path escapes install root");
@@ -681,9 +806,8 @@ internal sealed class HelperRuntime
             var maxDiskBytes = checked(
                 limits.GetProperty("max_disk_mib").GetInt64() * 1024 * 1024);
             var maxOutputBytes = limits.GetProperty("max_output_bytes").GetInt64();
-            var executable = Path.GetFullPath(Path.Combine(packageRoot, entrypoint.GetProperty("executable").GetString()!));
-            if (!executable.StartsWith(Path.GetFullPath(packageRoot) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("entrypoint escapes package root");
+            var components = await LoadPublicComponentsAsync(packageRoot, cancellationToken);
+            var executable = ResolveEntrypoint(packageRoot, entrypoint, components);
             var start = new ProcessStartInfo(executable)
             {
                 WorkingDirectory = taskRoot,
@@ -691,8 +815,10 @@ internal sealed class HelperRuntime
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
             };
+            ApplyComponentEnvironment(start, components);
             foreach (var argument in entrypoint.GetProperty("arguments").EnumerateArray())
-                start.ArgumentList.Add(argument.GetString()!);
+                start.ArgumentList.Add(
+                    ExpandArgument(argument.GetString()!, packageRoot, taskRoot));
             start.ArgumentList.Add("--task-root");
             start.ArgumentList.Add(taskRoot);
             if (continuation) start.ArgumentList.Add("--continue");
@@ -1132,6 +1258,120 @@ internal sealed class HelperRuntime
             ["type"] = "capabilities.report",
             ["capabilities"] = capabilities,
         }, cancellationToken);
+    }
+
+    private async Task<List<(JsonObject Descriptor, string Root)>> LoadPublicComponentsAsync(
+        string packageRoot,
+        CancellationToken cancellationToken)
+    {
+        var result = new List<(JsonObject Descriptor, string Root)>();
+        var declarationPath = Path.Combine(packageRoot, "public-components.json");
+        if (!File.Exists(declarationPath)) return result;
+        var envelopes = JsonNode.Parse(
+            await File.ReadAllTextAsync(declarationPath, cancellationToken)) as JsonArray
+            ?? throw new InvalidDataException("public Component declaration is invalid");
+        foreach (var item in envelopes)
+        {
+            var descriptor = item?["descriptor"] as JsonObject
+                ?? throw new InvalidDataException("public Component descriptor is missing");
+            var componentId = descriptor["component_id"]?.GetValue<string>()
+                ?? throw new InvalidDataException("public Component id is missing");
+            var componentVersion = descriptor["component_version"]?.GetValue<string>()
+                ?? throw new InvalidDataException("public Component version is missing");
+            var componentRoot = Path.Combine(
+                _root,
+                "Components",
+                SafeName(componentId),
+                SafeName(componentVersion));
+            var installedDescriptorPath = Path.Combine(componentRoot, "descriptor.json");
+            if (!File.Exists(installedDescriptorPath))
+                throw new FileNotFoundException(
+                    "public Component is not installed",
+                    componentId);
+            var installed = JsonNode.Parse(
+                await File.ReadAllTextAsync(installedDescriptorPath, cancellationToken));
+            if (!JsonNode.DeepEquals(installed, descriptor))
+                throw new InvalidDataException("installed public Component descriptor mismatch");
+            result.Add((descriptor, componentRoot));
+        }
+        return result;
+    }
+
+    private static string ResolveEntrypoint(
+        string packageRoot,
+        JsonElement entrypoint,
+        List<(JsonObject Descriptor, string Root)> components)
+    {
+        if (entrypoint.TryGetProperty("executable", out var privateExecutable))
+            return PathInside(packageRoot, privateExecutable.GetString()!);
+        var componentId = entrypoint.GetProperty("component_id").GetString()!;
+        var exportName = entrypoint.GetProperty("export").GetString()!;
+        var component = components.FirstOrDefault(item =>
+            item.Descriptor["component_id"]?.GetValue<string>() == componentId);
+        if (component.Descriptor is null)
+            throw new InvalidDataException("entrypoint public Component is not installed");
+        var exports = component.Descriptor["exports"] as JsonObject
+            ?? throw new InvalidDataException("public Component exports are invalid");
+        var relativePath = exports[exportName]?.GetValue<string>()
+            ?? throw new InvalidDataException("public Component export is missing");
+        return PathInside(component.Root, relativePath);
+    }
+
+    private static void ApplyComponentEnvironment(
+        ProcessStartInfo start,
+        List<(JsonObject Descriptor, string Root)> components)
+    {
+        var pathEntries = new List<string>();
+        var pythonPaths = new List<string>();
+        foreach (var component in components)
+        {
+            if (component.Descriptor["path_entries"] is JsonArray paths)
+            {
+                pathEntries.AddRange(paths.Select(item =>
+                    PathInside(component.Root, item!.GetValue<string>())));
+            }
+            if (component.Descriptor["environment_paths"] is not JsonObject environment)
+                continue;
+            if (environment["PYTHONHOME"] is JsonArray homes && homes.Count > 0)
+                start.Environment["PYTHONHOME"] = PathInside(
+                    component.Root,
+                    homes[0]!.GetValue<string>());
+            if (environment["PYTHONPATH"] is JsonArray declaredPythonPaths)
+            {
+                pythonPaths.AddRange(declaredPythonPaths.Select(item =>
+                    PathInside(component.Root, item!.GetValue<string>())));
+            }
+        }
+        if (pathEntries.Count > 0)
+        {
+            var existing = start.Environment.TryGetValue("PATH", out var value)
+                ? value
+                : Environment.GetEnvironmentVariable("PATH");
+            start.Environment["PATH"] = string.Join(
+                Path.PathSeparator,
+                pathEntries.Append(existing ?? string.Empty));
+        }
+        if (pythonPaths.Count > 0)
+            start.Environment["PYTHONPATH"] = string.Join(
+                Path.PathSeparator,
+                pythonPaths);
+    }
+
+    private static string ExpandArgument(
+        string value,
+        string packageRoot,
+        string taskRoot) => value
+        .Replace("{package_root}", packageRoot, StringComparison.Ordinal)
+        .Replace("{task_root}", taskRoot, StringComparison.Ordinal);
+
+    private static string PathInside(string root, string relativePath)
+    {
+        var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
+        var path = Path.GetFullPath(Path.Combine(root, relativePath));
+        if (!path.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("declared path escapes install root");
+        return path;
     }
 
     private async Task<bool> SendAsync(JsonObject message, CancellationToken cancellationToken)

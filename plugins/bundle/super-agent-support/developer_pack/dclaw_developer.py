@@ -22,10 +22,10 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 
-PACK_VERSION = "1.5.4"
+PACK_VERSION = "1.6.0"
 STANDARD_ID = "dclaw.super-agent-development"
-STANDARD_VERSION = "2.11"
-DEVKIT_VERSION = "1.4.1"
+STANDARD_VERSION = "2.12"
+DEVKIT_VERSION = "1.5.0"
 PROJECT_SCHEMA_VERSION = 1
 LOCAL_SESSION = "local.execution.session/1"
 LOCAL_PREFLIGHT = "local.environment.preflight/1"
@@ -762,6 +762,36 @@ def _validate_local_schemas(
     if descriptor.get("implementation_status") != "release":
         raise DeveloperPackError(
             "local capability descriptor is not a release",
+        )
+    public_components = descriptor.get("public_components", [])
+    if (
+        not isinstance(public_components, list)
+        or len(public_components) > 32
+        or any(
+            not isinstance(item, dict)
+            or set(item) != {"component_id", "version"}
+            or not isinstance(item.get("component_id"), str)
+            or not item["component_id"]
+            or not isinstance(item.get("version"), str)
+            or not item["version"]
+            for item in public_components
+        )
+        or len(
+            {item["component_id"] for item in public_components}
+        ) != len(public_components)
+    ):
+        raise DeveloperPackError(
+            "public Component requirements must use unique exact id/version pairs",
+        )
+    entrypoint = descriptor.get("entrypoint")
+    if not isinstance(entrypoint, dict):
+        raise DeveloperPackError("local capability entrypoint is invalid")
+    entrypoint_component = entrypoint.get("component_id")
+    if entrypoint_component is not None and entrypoint_component not in {
+        item["component_id"] for item in public_components
+    }:
+        raise DeveloperPackError(
+            "entrypoint public Component is not declared",
         )
     if require_artifact:
         artifact_path = root / "artifact.zip"

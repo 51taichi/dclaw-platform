@@ -35,16 +35,16 @@ def test_developer_pack_archive_is_complete_and_reproducible():
     second, repeated = archive.build_archive(PLUGIN_ROOT)
     assert first == second
     assert metadata == repeated
-    assert metadata["version"] == "1.5.4"
+    assert metadata["version"] == "1.6.0"
     assert metadata["standard"] == {
         "id": "dclaw.super-agent-development",
-        "version": "2.11",
+        "version": "2.12",
     }
-    assert metadata["devkit_version"] == "1.4.1"
+    assert metadata["devkit_version"] == "1.5.0"
     assert metadata["server_source_required"] is False
     assert metadata["sha256"] == hashlib.sha256(first).hexdigest()
 
-    prefix = "dclaw-super-agent-developer-pack-1.5.4/"
+    prefix = "dclaw-super-agent-developer-pack-1.6.0/"
     with zipfile.ZipFile(io.BytesIO(first)) as package:
         names = set(package.namelist())
         manifest = json.loads(package.read(prefix + "PACKAGE-MANIFEST.json"))
@@ -71,7 +71,7 @@ def test_developer_pack_archive_is_complete_and_reproducible():
         "examples/minimal-local/example.json",
     }
     assert {prefix + name for name in expected} <= names
-    assert manifest["version"] == "1.5.4"
+    assert manifest["version"] == "1.6.0"
     assert "devkit/wheelhouse/cryptography-46.0.3" in checksums
     assert not any(
         "src/qwenpaw" in name
@@ -130,11 +130,11 @@ def test_upgrade_updates_devkit_version_and_immediately_validates(tmp_path):
     result = cli.upgrade_project(project, accept_standard=False)
 
     upgraded = json.loads(metadata_path.read_text(encoding="utf-8"))
-    assert upgraded["developer_pack_version"] == "1.5.4"
-    assert upgraded["standard"]["version"] == "2.11"
-    assert upgraded["devkit_version"] == "1.4.1"
+    assert upgraded["developer_pack_version"] == "1.6.0"
+    assert upgraded["standard"]["version"] == "2.12"
+    assert upgraded["devkit_version"] == "1.5.0"
     assert result["previous"]["devkit_version"] == "1.4.0"
-    assert result["current"]["devkit_version"] == "1.4.1"
+    assert result["current"]["devkit_version"] == "1.5.0"
     assert cli.release_gate(project)["status"] == "valid"
 
 

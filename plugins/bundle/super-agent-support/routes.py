@@ -13,7 +13,6 @@ import uuid
 from collections import deque
 from pathlib import Path
 from typing import Any
-from typing import Literal
 import zipfile
 
 from fastapi import (
@@ -34,6 +33,7 @@ from .developer_pack.archive import (
 )
 from .mcp_server import LocalExecutionMcp
 from .packages import CapabilityPackageRegistry, PackageError
+from .public_components import PublicComponentError, PublicComponentRegistry
 from .service import LocalExecutionService
 from .store import StateStore
 
@@ -85,13 +85,9 @@ class PackageRegistration(BaseModel):
 
 class PublicComponentRegistration(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    display_name: str = Field(min_length=1, max_length=128)
-    version: str = Field(
-        pattern=r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$",
-    )
-    status: Literal["available", "reserved", "disabled"]
-    provides: list[str] = Field(min_length=1, max_length=64)
-    notes: str = Field(default="", max_length=1024)
+    descriptor: dict[str, Any]
+    signer_id: str = Field(min_length=1, max_length=128)
+    signature: str = Field(min_length=1, max_length=1024)
 
 
 COMPONENT_PLATFORMS = {
@@ -303,6 +299,7 @@ def create_app(
     packages: CapabilityPackageRegistry,
     credentials: CredentialBroker,
     business_identity: BusinessIdentityManager | None = None,
+    public_components: PublicComponentRegistry | None = None,
 ) -> FastAPI:
     # pylint: disable=too-many-statements
     app = FastAPI(
@@ -327,11 +324,12 @@ def create_app(
         return {
             "status": "ok",
             "plugin": "dclaw.super-agent-support",
-            "version": "1.11.3",
+            "version": "1.12.0",
             "protocols": {
-                "local_execution": "1.1",
+                "local_execution": "1.2",
                 "device": "2",
                 "business_identity": "1",
+                "public_components": "1",
             },
         }
 
@@ -535,6 +533,7 @@ def create_app(
             display_name=str(query.get("display_name") or "Windows device"),
             runner_version=str(query.get("runner_version") or "unknown"),
             protocol_version=protocol_version,
+            platform=str(query.get("platform") or "windows-x64"),
             device_token=issued_token,
         )
         await service.attach(device_id, websocket)
@@ -598,7 +597,8 @@ def create_app(
         return {"packages": store.list_packages()}
 
     @app.get("/component-registry")
-    async def get_component_registry() -> dict[str, Any]:
+    async def get_component_registry(request: Request) -> dict[str, Any]:
+        _user_id(request)
         return _complete_component_registry(store)
 
     @app.put(
@@ -607,10 +607,17 @@ def create_app(
     async def set_component_registry_entry(
         component_id: str,
         platform: str,
-        body: PublicComponentRegistration,
+        body: dict[str, Any],
         request: Request,
     ) -> dict[str, Any]:
         _require_admin(request)
+        try:
+            registration = PublicComponentRegistration.model_validate(body)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="invalid public Component registration envelope",
+            ) from exc
         if not component_id or len(component_id) > 128 or any(
             character not in "abcdefghijklmnopqrstuvwxyz0123456789._-"
             for character in component_id
@@ -620,17 +627,32 @@ def create_app(
             raise HTTPException(status_code=422, detail="invalid component_id")
         if platform not in COMPONENT_PLATFORMS:
             raise HTTPException(status_code=422, detail="unsupported platform")
-        payload = body.model_dump()
-        payload["provides"] = sorted(set(payload["provides"]))
-        store.set_public_component_variant(
-            component_id=component_id,
-            platform=platform,
-            component_version=payload.pop("version"),
-            availability=payload.pop("status"),
-            updated_by=_user_id(request),
-            **payload,
-        )
-        return _complete_component_registry(store)
+        if public_components is None:
+            raise HTTPException(
+                status_code=503,
+                detail="public Component registry is not configured",
+            )
+        descriptor = dict(registration.descriptor)
+        if (
+            descriptor.get("component_id") != component_id
+            or descriptor.get("platform") != platform
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="descriptor path identity mismatch",
+            )
+        try:
+            return {
+                **public_components.register(
+                    descriptor,
+                    signer_id=registration.signer_id,
+                    signature=registration.signature,
+                    updated_by=_user_id(request),
+                ),
+                "helper_platforms": COMPONENT_PLATFORMS,
+            }
+        except PublicComponentError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.post("/credentials")
     async def bind_credential(

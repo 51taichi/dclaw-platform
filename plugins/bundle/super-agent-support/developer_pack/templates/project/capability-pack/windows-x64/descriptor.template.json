@@ -5,13 +5,16 @@
   "package_id": "example.local.transform",
   "package_version": "0.1.0",
   "implementation_status": "release",
-  "min_runner_version": "1.0.0",
+  "min_runner_version": "1.2.0",
   "artifact": {
     "url": "https://developer.example.invalid/capabilities/example-local-transform-0.1.0.zip",
     "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
     "size_bytes": 1
   },
-  "entrypoint": {"executable": "python.exe", "arguments": ["runner.py"]},
+  "entrypoint": {"component_id": "python-runtime", "export": "python", "arguments": ["{package_root}/runner.py"]},
+  "public_components": [
+    {"component_id": "python-runtime", "version": "3.12.14"}
+  ],
   "schemas": {
     "input": {"path": "input.schema.json", "sha256": "{{INPUT_SCHEMA_SHA256}}", "document": {}},
     "result": {"path": "result.schema.json", "sha256": "{{RESULT_SCHEMA_SHA256}}", "document": {}},

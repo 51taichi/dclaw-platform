@@ -55,6 +55,7 @@ class StateStore:
                     display_name TEXT NOT NULL,
                     runner_version TEXT NOT NULL,
                     protocol_version TEXT NOT NULL,
+                    platform TEXT NOT NULL DEFAULT 'windows-x64',
                     status TEXT NOT NULL,
                     capabilities_json TEXT NOT NULL DEFAULT '[]',
                     last_seen INTEGER NOT NULL
@@ -86,6 +87,9 @@ class StateStore:
                     component_version TEXT NOT NULL,
                     availability TEXT NOT NULL,
                     provides_json TEXT NOT NULL,
+                    descriptor_json TEXT NOT NULL DEFAULT '{}',
+                    signer_id TEXT NOT NULL DEFAULT '',
+                    signature TEXT NOT NULL DEFAULT '',
                     updated_by TEXT NOT NULL,
                     updated_at INTEGER NOT NULL,
                     PRIMARY KEY(component_id, platform)
@@ -178,6 +182,41 @@ class StateStore:
             }
             if "token_hash" not in columns:
                 db.execute("ALTER TABLE devices ADD COLUMN token_hash TEXT")
+            if "platform" not in columns:
+                db.execute(
+                    "ALTER TABLE devices ADD COLUMN platform TEXT NOT NULL DEFAULT 'windows-x64'",
+                )
+            component_columns = {
+                row[1]
+                for row in db.execute(
+                    "PRAGMA table_info(public_component_variants)",
+                ).fetchall()
+            }
+            for name, definition in (
+                ("descriptor_json", "TEXT NOT NULL DEFAULT '{}'"),
+                ("signer_id", "TEXT NOT NULL DEFAULT ''"),
+                ("signature", "TEXT NOT NULL DEFAULT ''"),
+            ):
+                if name not in component_columns:
+                    db.execute(
+                        f"ALTER TABLE public_component_variants ADD COLUMN {name} {definition}",
+                    )
+            disabled_legacy_components = db.execute(
+                """
+                UPDATE public_component_variants
+                SET availability='disabled'
+                WHERE availability='available' AND descriptor_json='{}'
+                """,
+            ).rowcount
+            if disabled_legacy_components:
+                db.execute(
+                    """
+                    UPDATE component_registry_meta
+                    SET registry_version=registry_version+1,updated_at=?
+                    WHERE singleton=1
+                    """,
+                    (int(time.time()),),
+                )
             credential_columns = {
                 row[1]
                 for row in db.execute(
@@ -274,6 +313,7 @@ class StateStore:
         display_name: str,
         runner_version: str,
         protocol_version: str,
+        platform: str = "windows-x64",
         device_token: str | None = None,
         status: str = "online",
         capabilities: list[dict[str, Any]] | None = None,
@@ -283,14 +323,15 @@ class StateStore:
             db.execute(
                 """
                 INSERT INTO devices(device_id,user_id,token_hash,display_name,runner_version,
-                    protocol_version,status,capabilities_json,last_seen)
-                VALUES(?,?,?,?,?,?,?,?,?)
+                    protocol_version,platform,status,capabilities_json,last_seen)
+                VALUES(?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(device_id) DO UPDATE SET
                     user_id=excluded.user_id,
                     token_hash=COALESCE(excluded.token_hash,devices.token_hash),
                     display_name=excluded.display_name,
                     runner_version=excluded.runner_version,
                     protocol_version=excluded.protocol_version,
+                    platform=excluded.platform,
                     status=excluded.status,
                     capabilities_json=CASE WHEN excluded.capabilities_json='[]'
                         THEN devices.capabilities_json ELSE excluded.capabilities_json END,
@@ -305,6 +346,7 @@ class StateStore:
                     display_name,
                     runner_version,
                     protocol_version,
+                    platform,
                     status,
                     _json(capabilities or []),
                     now,
@@ -441,15 +483,18 @@ class StateStore:
     def set_public_component_variant(
         self,
         *,
-        component_id: str,
-        display_name: str,
-        platform: str,
-        component_version: str,
-        availability: str,
-        provides: list[str],
-        notes: str,
+        descriptor: dict[str, Any],
+        signer_id: str,
+        signature: str,
         updated_by: str,
     ) -> dict[str, Any]:
+        component_id = descriptor["component_id"]
+        display_name = descriptor["display_name"]
+        platform = descriptor["platform"]
+        component_version = descriptor["component_version"]
+        availability = descriptor["status"]
+        provides = descriptor["provides"]
+        notes = descriptor["notes"]
         now = int(time.time())
         with self._lock, self._connect() as db:
             db.execute(
@@ -475,12 +520,16 @@ class StateStore:
                 """
                 INSERT INTO public_component_variants(
                     component_id,platform,component_version,availability,
-                    provides_json,updated_by,updated_at
-                ) VALUES(?,?,?,?,?,?,?)
+                    provides_json,descriptor_json,signer_id,signature,
+                    updated_by,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(component_id,platform) DO UPDATE SET
                     component_version=excluded.component_version,
                     availability=excluded.availability,
                     provides_json=excluded.provides_json,
+                    descriptor_json=excluded.descriptor_json,
+                    signer_id=excluded.signer_id,
+                    signature=excluded.signature,
                     updated_by=excluded.updated_by,
                     updated_at=excluded.updated_at
                 """,
@@ -490,6 +539,9 @@ class StateStore:
                     component_version,
                     availability,
                     _json(provides),
+                    _json(descriptor),
+                    signer_id,
+                    signature,
                     updated_by,
                     now,
                 ),
@@ -521,19 +573,30 @@ class StateStore:
             variants = db.execute(
                 """
                 SELECT component_id,platform,component_version,availability,
-                    provides_json,updated_at
+                    provides_json,descriptor_json,signer_id,signature,updated_at
                 FROM public_component_variants
                 ORDER BY component_id,platform
                 """,
             ).fetchall()
         variants_by_component: dict[str, list[dict[str, Any]]] = {}
         for row in variants:
-            variants_by_component.setdefault(row["component_id"], []).append(
-                {
+            descriptor = json.loads(row["descriptor_json"])
+            variant = (
+                descriptor
+                if descriptor
+                else {
                     "platform": row["platform"],
-                    "version": row["component_version"],
+                    "component_version": row["component_version"],
                     "status": row["availability"],
                     "provides": json.loads(row["provides_json"]),
+                }
+            )
+            variants_by_component.setdefault(row["component_id"], []).append(
+                {
+                    **variant,
+                    "version": row["component_version"],
+                    "signer_id": row["signer_id"],
+                    "signature": row["signature"],
                     "updated_at": int(row["updated_at"]),
                 },
             )
@@ -553,6 +616,31 @@ class StateStore:
                 }
                 for row in components
             ],
+        }
+
+    def get_public_component_variant(
+        self,
+        component_id: str,
+        platform: str,
+    ) -> dict[str, Any] | None:
+        with self._connect() as db:
+            row = db.execute(
+                """
+                SELECT descriptor_json,signer_id,signature
+                FROM public_component_variants
+                WHERE component_id=? AND platform=?
+                """,
+                (component_id, platform),
+            ).fetchone()
+        if row is None or not row["descriptor_json"]:
+            return None
+        descriptor = json.loads(row["descriptor_json"])
+        if not descriptor:
+            return None
+        return {
+            "descriptor": descriptor,
+            "signer_id": row["signer_id"],
+            "signature": row["signature"],
         }
 
     def create_task(

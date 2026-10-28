@@ -16,6 +16,8 @@ import zipfile
 import httpx
 import pytest
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import FastAPI
 from jsonschema import Draft202012Validator
@@ -664,7 +666,7 @@ def test_developer_kit_is_downloadable_without_server_source(
 
     assert metadata.status_code == 200
     assert metadata.json()["name"] == "dclaw-super-agent-devkit"
-    assert metadata.json()["version"] == "1.4.1"
+    assert metadata.json()["version"] == "1.5.0"
     assert metadata.json()["download_path"] == (
         "/api/super-agent-support/developer-kit/v1.zip"
     )
@@ -683,7 +685,7 @@ def test_developer_kit_is_downloadable_without_server_source(
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-devkit-1.4.1"
+    prefix = "dclaw-super-agent-devkit-1.5.0"
     assert f"{prefix}/dclaw_agent_devkit.py" in names
     assert f"{prefix}/bootstrap.ps1" in names
     assert f"{prefix}/bootstrap.sh" in names
@@ -753,23 +755,23 @@ def test_developer_pack_is_downloadable_and_self_describing(
         downloaded = client.get("/developer-pack/download")
 
     assert health.status_code == 200
-    assert health.json()["version"] == "1.11.3"
+    assert health.json()["version"] == "1.12.0"
     assert metadata.status_code == 200
     payload = metadata.json()
-    assert payload["version"] == "1.5.4"
-    assert payload["standard"]["version"] == "2.11"
-    assert payload["devkit_version"] == "1.4.1"
+    assert payload["version"] == "1.6.0"
+    assert payload["standard"]["version"] == "2.12"
+    assert payload["devkit_version"] == "1.5.0"
     assert payload["server_source_required"] is False
     assert payload["download_path"].endswith("/developer-pack/download")
     assert payload["sha256"] == hashlib.sha256(downloaded.content).hexdigest()
     assert payload["content_sha256"] == payload["sha256"]
     assert downloaded.status_code == 200
-    assert "dclaw-super-agent-developer-pack-1.5.4.zip" in (
+    assert "dclaw-super-agent-developer-pack-1.6.0.zip" in (
         downloaded.headers["content-disposition"]
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-developer-pack-1.5.4"
+    prefix = "dclaw-super-agent-developer-pack-1.6.0"
     assert f"{prefix}/PACKAGE-MANIFEST.json" in names
     assert f"{prefix}/SHA256SUMS" in names
     assert f"{prefix}/dclaw_developer.py" in names
@@ -791,6 +793,21 @@ def test_public_component_registry_get_and_admin_set(
     package_cls = sys.modules[
         "test_dclaw_super_agent_support.packages"
     ].CapabilityPackageRegistry
+    component_cls = sys.modules[
+        "test_dclaw_super_agent_support.public_components"
+    ].PublicComponentRegistry
+    component_key = ec.generate_private_key(ec.SECP256R1())
+    component_public_key = base64.b64encode(
+        component_key.public_key().public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ),
+    ).decode("ascii")
+    component_registry = component_cls(
+        store,
+        PLUGIN_ROOT / "schemas" / "public-component-descriptor.schema.json",
+        {"official-components": component_public_key},
+    )
     routes = sys.modules["test_dclaw_super_agent_support.routes"]
     plugin_app = routes.create_app(
         store=store,
@@ -802,7 +819,12 @@ def test_public_component_registry_get_and_admin_set(
             {},
         ),
         credentials=broker,
+        public_components=component_registry,
     )
+    with TestClient(plugin_app) as unauthenticated_client:
+        unauthenticated = unauthenticated_client.get("/component-registry")
+    assert unauthenticated.status_code == 401
+
     root = FastAPI()
 
     @root.middleware("http")
@@ -812,49 +834,100 @@ def test_public_component_registry_get_and_admin_set(
         return await call_next(request)
 
     root.mount("/api/super-agent-support", plugin_app)
+    evidence = {
+        "url": "https://components.example.test/evidence.json",
+        "sha256": "b" * 64,
+    }
     ffmpeg = {
+        "descriptor_version": "1",
+        "component_id": "ffmpeg",
         "display_name": "FFmpeg",
-        "version": "7.1.0",
+        "platform": "windows-x64",
+        "component_version": "7.1.0",
         "status": "available",
-        "provides": ["ffprobe", "ffmpeg", "ffmpeg"],
+        "provides": ["ffmpeg", "ffprobe"],
+        "dependencies": [],
+        "artifact": {
+            "url": "https://components.example.test/ffmpeg.zip",
+            "sha256": "a" * 64,
+            "size_bytes": 1024,
+            "unpacked_size_bytes": 4096,
+            "archive_format": "zip",
+        },
+        "exports": {"ffmpeg": "bin/ffmpeg.exe", "ffprobe": "bin/ffprobe.exe"},
+        "path_entries": ["bin"],
+        "environment_paths": {},
+        "sbom": evidence,
+        "license": {
+            "spdx": "GPL-3.0-or-later",
+            "evidence_url": evidence["url"],
+            "evidence_sha256": evidence["sha256"],
+        },
+        "cache_key": "ffmpeg/windows-x64/7.1.0",
+        "rollback_version": "7.1.0",
         "notes": "Shared media processing tools.",
     }
     ffmpeg_mac = {
         **ffmpeg,
+        "platform": "macos-arm64",
         "status": "reserved",
+        "artifact": None,
+        "sbom": None,
+        "license": None,
     }
     python = {
+        **ffmpeg,
+        "component_id": "python-runtime",
         "display_name": "Python Runtime",
-        "version": "3.11.9",
-        "status": "available",
+        "component_version": "3.11.9",
         "provides": ["python"],
+        "artifact": {
+            **ffmpeg["artifact"],
+            "url": "https://components.example.test/python.zip",
+        },
+        "exports": {"python": "python.exe"},
+        "path_entries": ["."],
+        "environment_paths": {"PYTHONHOME": ["."], "PYTHONPATH": ["Lib"]},
+        "cache_key": "python-runtime/windows-x64/3.11.9",
+        "rollback_version": "3.11.9",
         "notes": "Shared Python runtime.",
     }
+
+    def envelope(descriptor):
+        signature = component_key.sign(
+            component_registry.canonical_payload(descriptor),
+            ec.ECDSA(hashes.SHA256()),
+        )
+        return {
+            "descriptor": descriptor,
+            "signer_id": "official-components",
+            "signature": base64.b64encode(signature).decode("ascii"),
+        }
 
     with TestClient(root) as client:
         empty = client.get("/api/super-agent-support/component-registry")
         forbidden = client.put(
             "/api/super-agent-support/admin/component-registry/ffmpeg/"
             "variants/windows-x64",
-            json=ffmpeg,
+            json=envelope(ffmpeg),
         )
         first = client.put(
             "/api/super-agent-support/admin/component-registry/ffmpeg/"
             "variants/windows-x64",
             headers={"x-test-role": "admin"},
-            json=ffmpeg,
+            json=envelope(ffmpeg),
         )
         second = client.put(
             "/api/super-agent-support/admin/component-registry/ffmpeg/"
             "variants/macos-arm64",
             headers={"x-test-role": "admin"},
-            json=ffmpeg_mac,
+            json=envelope(ffmpeg_mac),
         )
         third = client.put(
             "/api/super-agent-support/admin/component-registry/python-runtime/"
             "variants/windows-x64",
             headers={"x-test-role": "admin"},
-            json=python,
+            json=envelope(python),
         )
         complete = client.get(
             "/api/super-agent-support/component-registry",
@@ -910,6 +983,40 @@ def test_public_component_registry_get_and_admin_set(
         item["component_id"] for item in third.json()["components"]
     ] == ["ffmpeg", "python-runtime"]
     assert complete.json() == third.json()
+
+
+def test_store_disables_legacy_unsigned_available_component(
+    plugin_module,
+    tmp_path,
+):
+    path = tmp_path / "state.sqlite3"
+    store = plugin_module.StateStore(path)
+    with store._connect() as database:
+        database.execute(
+            """
+            INSERT INTO public_components(
+                component_id,display_name,notes,updated_by,updated_at
+            ) VALUES('legacy-ffmpeg','Legacy FFmpeg','','admin',1)
+            """,
+        )
+        database.execute(
+            """
+            INSERT INTO public_component_variants(
+                component_id,platform,component_version,availability,
+                provides_json,descriptor_json,signer_id,signature,
+                updated_by,updated_at
+            ) VALUES(
+                'legacy-ffmpeg','windows-x64','1.0.0','available',
+                '["ffmpeg"]','{}','','','admin',1
+            )
+            """,
+        )
+
+    migrated = plugin_module.StateStore(path).get_public_component_registry()
+    assert migrated["registry_version"] == 1
+    variant = migrated["components"][0]["variants"][0]
+    assert variant["status"] == "disabled"
+    assert variant["signer_id"] == ""
 
 
 def test_device_bootstrap_reuses_only_current_users_device(
@@ -1853,8 +1960,10 @@ def test_public_and_devkit_contract_schemas_are_byte_identical():
             / name,
         )
         for name in (
+            "capability-descriptor.schema.json",
             "device-command.schema.json",
             "device-message.schema.json",
+            "public-component-descriptor.schema.json",
         )
     ]
     for public, bundled in pairs:
@@ -1964,6 +2073,7 @@ async def test_environment_catalog_and_runtime_prepare_contract(
         "user_action": "wait",
     }
     assert websocket.messages[-1]["type"] == "runtime.prepare"
+    assert websocket.messages[-1]["public_components"] == []
 
     store.update_device_capabilities(
         "device-1",
@@ -1985,6 +2095,197 @@ async def test_environment_catalog_and_runtime_prepare_contract(
     )
     assert runtime_ready["data"]["state"] == "ready"
     assert runtime_ready["data"]["user_action"] == "none"
+
+
+@pytest.mark.asyncio
+async def test_runtime_prepare_resolves_signed_public_component_closure(
+    plugin_module,
+    tmp_path,
+):
+    store, signer, broker, _service = _runtime(plugin_module, tmp_path)
+    component_cls = sys.modules[
+        "test_dclaw_super_agent_support.public_components"
+    ].PublicComponentRegistry
+    service_cls = sys.modules[
+        "test_dclaw_super_agent_support.service"
+    ].LocalExecutionService
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    public_key = base64.b64encode(
+        private_key.public_key().public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ),
+    ).decode("ascii")
+    components = component_cls(
+        store,
+        PLUGIN_ROOT / "schemas" / "public-component-descriptor.schema.json",
+        {"official-components": public_key},
+    )
+    service = service_cls(
+        store,
+        signer,
+        broker,
+        public_components=components,
+    )
+
+    def descriptor(component_id, version, dependencies):
+        return {
+            "descriptor_version": "1",
+            "component_id": component_id,
+            "display_name": component_id,
+            "platform": "windows-x64",
+            "component_version": version,
+            "status": "available",
+            "provides": [component_id.replace("-", ".")],
+            "dependencies": dependencies,
+            "artifact": {
+                "url": f"https://components.example.test/{component_id}.zip",
+                "sha256": "a" * 64,
+                "size_bytes": 1024,
+                "unpacked_size_bytes": 4096,
+                "archive_format": "zip",
+            },
+            "exports": {},
+            "path_entries": ["."],
+            "environment_paths": {},
+            "sbom": {
+                "url": f"https://components.example.test/{component_id}.spdx.json",
+                "sha256": "b" * 64,
+            },
+            "license": {
+                "spdx": "MIT",
+                "evidence_url": f"https://components.example.test/{component_id}.license.txt",
+                "evidence_sha256": "c" * 64,
+            },
+            "cache_key": f"{component_id}/windows-x64/{version}",
+            "rollback_version": version,
+            "notes": "test component",
+        }
+
+    python = descriptor("python-runtime", "3.12.14", [])
+    whisper = descriptor(
+        "faster-whisper",
+        "1.2.1",
+        [{"component_id": "python-runtime", "version": "3.12.14"}],
+    )
+    for value in (python, whisper):
+        signature = private_key.sign(
+            components.canonical_payload(value),
+            ec.ECDSA(hashes.SHA256()),
+        )
+        components.register(
+            value,
+            signer_id="official-components",
+            signature=base64.b64encode(signature).decode("ascii"),
+            updated_by="admin-1",
+        )
+
+    store.upsert_device(
+        device_id="device-1",
+        user_id="user-1",
+        display_name="Windows",
+        runner_version="1.2.0",
+        protocol_version="2",
+        platform="windows-x64",
+        device_token="token",
+    )
+    websocket = _FakeWebSocket()
+    await service.attach("device-1", websocket)
+    package = {
+        "capability_id": "example.video.compose",
+        "package_id": "example.video.package",
+        "package_version": "1.0.0",
+        "min_runner_version": "1.2.0",
+        "operating_systems": ["windows-x64"],
+        "public_components": [
+            {"component_id": "faster-whisper", "version": "1.2.1"},
+        ],
+        "schemas": {
+            name: {"document": {"type": "object"}}
+            for name in ("input", "result", "checkpoint")
+        },
+        "limits": {"max_concurrency": 1},
+    }
+    store.register_package(package, signer_id="test", signature="test")
+    token = signer.issue(
+        user_id="user-1",
+        session_id="session-1",
+        agent_id="agent-1",
+        agent_name="Video Agent",
+        installation_id="install-1",
+        release_id="release-1",
+        invocation_id="invocation-1",
+    )
+
+    prepared = await service.call(
+        "local_runtime_prepare",
+        {
+            "capability": "example.video.compose",
+            "dclaw_session_token": token,
+        },
+    )
+    assert prepared["data"]["state"] == "preparing"
+    envelopes = websocket.messages[-1]["public_components"]
+    assert [
+        item["descriptor"]["component_id"] for item in envelopes
+    ] == ["python-runtime", "faster-whisper"]
+    assert all(item["canonical_payload"] for item in envelopes)
+    assert all(item["signer_public_key"] == public_key for item in envelopes)
+
+    package["public_components"][0]["version"] = "1.2.2"
+    store.register_package(package, signer_id="test", signature="test")
+    unavailable = await service.call(
+        "local_runtime_prepare",
+        {
+            "capability": "example.video.compose",
+            "dclaw_session_token": token,
+        },
+    )
+    assert unavailable["error"]["code"] == "PUBLIC_COMPONENT.UNAVAILABLE"
+
+
+def test_public_component_registry_rejects_untrusted_signer(
+    plugin_module,
+    tmp_path,
+):
+    store, _signer, _broker, _service = _runtime(plugin_module, tmp_path)
+    component_cls = sys.modules[
+        "test_dclaw_super_agent_support.public_components"
+    ].PublicComponentRegistry
+    error_cls = sys.modules[
+        "test_dclaw_super_agent_support.public_components"
+    ].PublicComponentError
+    components = component_cls(
+        store,
+        PLUGIN_ROOT / "schemas" / "public-component-descriptor.schema.json",
+        {},
+    )
+    descriptor = {
+        "descriptor_version": "1",
+        "component_id": "example-runtime",
+        "display_name": "Example Runtime",
+        "platform": "macos-arm64",
+        "component_version": "1.0.0",
+        "status": "reserved",
+        "provides": ["example.runtime"],
+        "dependencies": [],
+        "artifact": None,
+        "exports": {},
+        "path_entries": [],
+        "environment_paths": {},
+        "sbom": None,
+        "license": None,
+        "cache_key": "example-runtime/macos-arm64/1.0.0",
+        "rollback_version": "1.0.0",
+        "notes": "reserved",
+    }
+    with pytest.raises(error_cls, match="not trusted"):
+        components.register(
+            descriptor,
+            signer_id="unknown",
+            signature=base64.b64encode(b"invalid").decode("ascii"),
+            updated_by="admin-1",
+        )
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,7 @@
 {
   "id": "dclaw.super-agent-support",
   "name": "DClaw Super Agent Support",
-  "version": "1.11.3",
+  "version": "1.12.0",
   "type": "general",
   "description": "Generic local execution, installation-bound business service identity, credential broker, capability package, offline developer pack and DevKit, client adapter, and platform helper support for Super Agents.",
   "author": "DClaw",
@@ -16,6 +16,7 @@
       "local-execution",
       "credential-broker",
       "capability-packages",
+      "public-components",
       "developer-kit",
       "developer-pack",
       "client-adapter",

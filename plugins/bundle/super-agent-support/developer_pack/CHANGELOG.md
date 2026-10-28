@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.0 - 2026-10-28
+
+- Bundles development standard 2.12 and DevKit 1.5.0.
+- Adds the signed public Component descriptor and exact dependency declarations.
+- Adds the headless authenticated `component-registry get/register` workflow.
+- Keeps existing signed Agent packages and capability descriptors without
+  `public_components` compatible.
+
 ## 1.5.4 - 2026-10-28
 
 - Bundles development standard 2.11 and keeps DevKit 1.4.1.
