@@ -755,7 +755,7 @@ def test_developer_pack_is_downloadable_and_self_describing(
         downloaded = client.get("/developer-pack/download")
 
     assert health.status_code == 200
-    assert health.json()["version"] == "1.12.0"
+    assert health.json()["version"] == "1.12.1"
     assert metadata.status_code == 200
     payload = metadata.json()
     assert payload["version"] == "1.6.0"
@@ -2286,6 +2286,42 @@ def test_public_component_registry_rejects_untrusted_signer(
             signature=base64.b64encode(b"invalid").decode("ascii"),
             updated_by="admin-1",
         )
+
+
+def test_component_signer_trust_is_loaded_from_plugin_state(
+    plugin_module,
+    tmp_path,
+):
+    state_trust = {
+        "state-signer": base64.b64encode(b"state-key").decode("ascii"),
+    }
+    (tmp_path / "trusted_component_signers.json").write_text(
+        json.dumps(state_trust),
+        encoding="utf-8",
+    )
+
+    loaded = plugin_module._trusted_component_signers(
+        tmp_path,
+        {"configured-signer": "configured-key"},
+    )
+
+    assert loaded == {
+        **state_trust,
+        "configured-signer": "configured-key",
+    }
+
+
+def test_component_signer_trust_rejects_invalid_state(
+    plugin_module,
+    tmp_path,
+):
+    (tmp_path / "trusted_component_signers.json").write_text(
+        "[]",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="signer trust"):
+        plugin_module._trusted_component_signers(tmp_path, None)
 
 
 @pytest.mark.asyncio

@@ -11,6 +11,8 @@ import stat
 import zipfile
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 
@@ -210,7 +212,7 @@ def test_plugin_archive_embeds_current_standard_and_is_reproducible():
     assert first == second
     assert metadata == repeated
     assert metadata["plugin_id"] == "dclaw.super-agent-support"
-    assert metadata["version"] == "1.12.0"
+    assert metadata["version"] == "1.12.1"
     assert metadata["sha256"] == hashlib.sha256(first).hexdigest()
     with zipfile.ZipFile(io.BytesIO(first)) as archive:
         names = set(archive.namelist())
@@ -224,6 +226,45 @@ def test_plugin_archive_embeds_current_standard_and_is_reproducible():
         or name.endswith(".pyc")
         for name in names
     )
+
+
+def test_component_signer_trust_tool_is_atomic_and_idempotent(tmp_path):
+    tool = _module(
+        "manage_component_signers_test",
+        "manage_component_signers.py",
+    )
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    public_key_path = tmp_path / "component-public.pem"
+    public_key_path.write_bytes(
+        private_key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ),
+    )
+    state_dir = tmp_path / "state"
+
+    first = tool.set_signer(
+        state_dir,
+        "official-components",
+        public_key_path,
+    )
+    second = tool.set_signer(
+        state_dir,
+        "official-components",
+        public_key_path,
+    )
+    listed = tool.list_signers(state_dir)
+    removed = tool.remove_signer(state_dir, "official-components")
+
+    assert first["status"] == "updated"
+    assert second["status"] == "unchanged"
+    assert listed == {
+        "trusted_signer_ids": ["official-components"],
+        "count": 1,
+    }
+    assert removed["status"] == "removed"
+    assert tool.list_signers(state_dir)["count"] == 0
+    assert (state_dir / tool.TRUST_FILENAME).stat().st_mode & 0o777 == 0o600
 
 
 def test_register_super_expert_signer_is_atomic_and_idempotent(tmp_path):

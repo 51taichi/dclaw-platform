@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import secrets
 from pathlib import Path
@@ -80,6 +81,29 @@ def _load_or_create_key(root: Path, configured: str | None) -> bytes:
     return value
 
 
+def _trusted_component_signers(
+    root: Path,
+    configured: dict[str, str] | None,
+) -> dict[str, str]:
+    path = root / "trusted_component_signers.json"
+    stored: dict[str, str] = {}
+    if path.is_file():
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError("stored Component signer trust is invalid") from exc
+        if not isinstance(value, dict) or any(
+            not isinstance(signer_id, str)
+            or not signer_id
+            or not isinstance(public_key, str)
+            or not public_key
+            for signer_id, public_key in value.items()
+        ):
+            raise ValueError("stored Component signer trust is invalid")
+        stored = value
+    return {**stored, **dict(configured or {})}
+
+
 class SuperAgentSupportPlugin:
     def __init__(self) -> None:
         self.mcp: LocalExecutionMcp | None = None
@@ -107,10 +131,9 @@ class SuperAgentSupportPlugin:
             / "capability-descriptor.schema.json",
             dict(api.config.get("trusted_package_signers") or {}),
         )
-        component_signers = dict(
-            api.config.get("trusted_component_signers")
-            or api.config.get("trusted_package_signers")
-            or {},
+        component_signers = _trusted_component_signers(
+            root,
+            api.config.get("trusted_component_signers"),
         )
         public_components = PublicComponentRegistry(
             store,

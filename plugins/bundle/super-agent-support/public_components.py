@@ -29,7 +29,19 @@ class PublicComponentRegistry:
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
         Draft202012Validator.check_schema(schema)
         self._validator = Draft202012Validator(schema)
-        self._trusted_signers = dict(trusted_signers)
+        self._trusted_signers = {}
+        for signer_id, encoded_key in trusted_signers.items():
+            try:
+                public_key = serialization.load_der_public_key(
+                    base64.b64decode(encoded_key, validate=True),
+                )
+                if not isinstance(public_key.curve, SECP256R1):
+                    raise ValueError("unsupported public key curve")
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise PublicComponentError(
+                    f"trusted public Component signer is invalid: {signer_id}",
+                ) from exc
+            self._trusted_signers[signer_id] = encoded_key
         self._store = store
 
     @staticmethod
