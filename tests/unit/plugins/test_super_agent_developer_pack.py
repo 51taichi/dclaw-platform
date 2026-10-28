@@ -19,6 +19,7 @@ ROOT = Path(__file__).parents[3]
 PLUGIN_ROOT = ROOT / "plugins" / "bundle" / "super-agent-support"
 PACK_ROOT = PLUGIN_ROOT / "developer_pack"
 PACK_CLI = PACK_ROOT / "dclaw_developer.py"
+PLAYBOOK_NAME = "super-agent-development-standard-v1.zh-CN.md"
 
 
 def _module(name: str, path: Path):
@@ -113,6 +114,23 @@ def test_developer_pack_archive_rejects_platform_metadata(tmp_path):
     assert archive._is_publishable_file(ordinary)
     for path in (apple_double, finder, bytecode, macos):
         assert not archive._is_publishable_file(path)
+
+
+def test_developer_pack_prefers_plugin_embedded_standard(tmp_path):
+    archive = _module("developer_pack_embedded_standard", PACK_ROOT / "archive.py")
+    repository = tmp_path / "repository"
+    plugin_root = repository / "plugins" / "bundle" / "support"
+    embedded = plugin_root / "developer_pack" / "standard" / PLAYBOOK_NAME
+    image_standard = repository / "docs" / PLAYBOOK_NAME
+    embedded.parent.mkdir(parents=True)
+    image_standard.parent.mkdir(parents=True)
+    (plugin_root / "devkit").mkdir(parents=True)
+    embedded.write_text("当前版本：`2.12`\n", encoding="utf-8")
+    image_standard.write_text("当前版本：`2.11`\n", encoding="utf-8")
+
+    files = archive._files(plugin_root)
+
+    assert files[f"standard/{PLAYBOOK_NAME}"] == embedded.read_bytes()
 
 
 def test_upgrade_updates_devkit_version_and_immediately_validates(tmp_path):

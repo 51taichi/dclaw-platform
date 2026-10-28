@@ -32,14 +32,16 @@ def _files(root: Path) -> dict[str, bytes]:
         if _is_publishable_file(path):
             relative = path.relative_to(devkit_root).as_posix()
             result[f"devkit/{relative}"] = path.read_bytes()
-    repository_root = root.parents[2]
     standard_path = (
-        repository_root / "docs" / "super-agent-development-standard-v1.zh-CN.md"
+        developer_root
+        / "standard"
+        / "super-agent-development-standard-v1.zh-CN.md"
     )
     if not standard_path.is_file():
+        repository_root = root.parents[2]
         standard_path = (
-            developer_root
-            / "standard"
+            repository_root
+            / "docs"
             / "super-agent-development-standard-v1.zh-CN.md"
         )
     if not standard_path.is_file():

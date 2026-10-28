@@ -199,6 +199,33 @@ def test_toolchain_archive_rejects_platform_metadata(tmp_path):
             tool._safe_archive(archive, "test")
 
 
+def test_plugin_archive_embeds_current_standard_and_is_reproducible():
+    tool = _module("build_plugin_archive_test", "build_plugin_archive.py")
+    plugin_root = ROOT / "plugins" / "bundle" / "super-agent-support"
+    standard = ROOT / "docs" / "super-agent-development-standard-v1.zh-CN.md"
+
+    first, metadata = tool.build_archive(plugin_root, standard)
+    second, repeated = tool.build_archive(plugin_root, standard)
+
+    assert first == second
+    assert metadata == repeated
+    assert metadata["plugin_id"] == "dclaw.super-agent-support"
+    assert metadata["version"] == "1.12.0"
+    assert metadata["sha256"] == hashlib.sha256(first).hexdigest()
+    with zipfile.ZipFile(io.BytesIO(first)) as archive:
+        names = set(archive.namelist())
+        embedded = archive.read(metadata["standard_path"])
+    assert embedded == standard.read_bytes()
+    assert "plugin.json" in names
+    assert not any(
+        "__pycache__" in name
+        or "/bin/" in name
+        or "/obj/" in name
+        or name.endswith(".pyc")
+        for name in names
+    )
+
+
 def test_register_super_expert_signer_is_atomic_and_idempotent(tmp_path):
     tool = _module(
         "register_super_expert_signer_test",
