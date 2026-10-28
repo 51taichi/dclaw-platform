@@ -2,6 +2,10 @@
 
 ## Upgrade
 
+Pack 1.5.3 adopts development standard 2.10. New dependency inventories must
+classify reusable local runtimes and tools as public components managed by
+`dclaw.super-agent-support`; existing signed Agent releases remain valid.
+
 1. Download the new versioned ZIP and verify the SHA-256 from authenticated
    metadata or the separately delivered checksum file.
 2. Extract it beside the old pack. Never overwrite the old pack in place.

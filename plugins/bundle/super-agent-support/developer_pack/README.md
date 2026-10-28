@@ -5,7 +5,7 @@ Agents. It contains the human standard, standalone DevKit, schemas, templates,
 SDK helpers, fixtures, and a single cross-platform command line tool. DClaw
 server source is not required.
 
-Version 1.5.2 bundles DevKit 1.4.1 and the public contracts for
+Version 1.5.3 bundles DevKit 1.4.1 and the public contracts for
 `business.service.installation-identity/1`. Business service assertions are
 issued and injected by the platform; Agent projects only receive and pass the
 opaque one-time `binding_ref`. Project upgrades update the pack, standard and

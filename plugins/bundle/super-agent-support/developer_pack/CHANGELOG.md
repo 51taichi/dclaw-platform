@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.5.3 - 2026-10-28
+
+- Bundles development standard 2.10 and keeps DevKit 1.4.1.
+- Clarifies that reusable local components for Super Agents are owned and
+  released by `dclaw.super-agent-support`; Agent projects only declare and
+  adapt to registered versions.
+- Keeps sealed Agent, capability package, local execution, and business
+  identity machine contracts unchanged.
+
 ## 1.5.2 - 2026-10-27
 
 - Fixes `upgrade --project` to update `project.json.devkit_version` together
