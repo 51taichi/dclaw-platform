@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.4 - 2026-10-28
+
+- Bundles development standard 2.11 and keeps DevKit 1.4.1.
+- Defines public Component management as a headless, versioned support-plugin
+  API/CLI called by the migration Skill and platform maintenance automation.
+- Keeps DClaw core, client pages, administration pages, and existing signed
+  Agent machine contracts unchanged.
+
 ## 1.5.3 - 2026-10-28
 
 - Bundles development standard 2.10 and keeps DevKit 1.4.1.

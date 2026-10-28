@@ -2,8 +2,8 @@
 
 ## Upgrade
 
-Pack 1.5.3 adopts development standard 2.10. New dependency inventories must
-classify reusable local runtimes and tools as public components managed by
+Pack 1.5.4 adopts development standard 2.11. Public Component inventory and
+registration use only the versioned headless API/CLI owned by
 `dclaw.super-agent-support`; existing signed Agent releases remain valid.
 
 1. Download the new versioned ZIP and verify the SHA-256 from authenticated
@@ -47,6 +47,11 @@ Pack 1.5.2 fixes project metadata upgrades so `developer_pack_version`,
 immediately after `upgrade`; a successful upgrade followed by a version
 mismatch is a tool defect and must not be worked around in a formal release.
 No manifest, signature, local execution, or business identity contract changes.
+
+Pack 1.5.3 assigns reusable local runtimes and tools for Super Agents to
+`dclaw.super-agent-support`. Pack 1.5.4 fixes their management surface as a
+headless plugin API/CLI. Neither version requires a DClaw client or
+administration page, and neither changes existing signed Agent contracts.
 
 ## Rollback
 
