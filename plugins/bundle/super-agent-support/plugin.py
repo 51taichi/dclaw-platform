@@ -11,6 +11,10 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 
+from .agent_outbound import (
+    CAPABILITY_ID as AGENT_OUTBOUND_CAPABILITY_ID,
+    AgentOutboundManager,
+)
 from .business_identity import (
     CAPABILITY_ID as BUSINESS_IDENTITY_CAPABILITY_ID,
     BusinessIdentityManager,
@@ -124,6 +128,7 @@ class SuperAgentSupportPlugin:
             ),
         )
         credentials = CredentialBroker(store, key)
+        agent_outbound = AgentOutboundManager(credentials, signer)
         packages = CapabilityPackageRegistry(
             store,
             Path(__file__).parent
@@ -157,7 +162,11 @@ class SuperAgentSupportPlugin:
             official_signer_ids=frozenset(official_signers),
             trusted_signers=official_signers,
         )
-        self.mcp = LocalExecutionMcp(service, business_identity)
+        self.mcp = LocalExecutionMcp(
+            service,
+            business_identity,
+            agent_outbound,
+        )
         app = create_app(
             store=store,
             service=service,
@@ -165,6 +174,7 @@ class SuperAgentSupportPlugin:
             packages=packages,
             credentials=credentials,
             business_identity=business_identity,
+            agent_outbound=agent_outbound,
             public_components=public_components,
         )
         api.register_asgi_app(
@@ -210,6 +220,11 @@ class SuperAgentSupportPlugin:
             BUSINESS_IDENTITY_CAPABILITY_ID,
             "1",
             "business_identity",
+        )
+        api.register_platform_capability(
+            AGENT_OUTBOUND_CAPABILITY_ID,
+            "1",
+            "agent_outbound",
         )
         api.register_aigc_event_consumer_factory(
             "super-agent-aigc-projection",

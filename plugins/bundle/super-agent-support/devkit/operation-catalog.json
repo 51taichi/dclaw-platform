@@ -1,8 +1,12 @@
 {
   "catalog_version": "1",
   "owner": "dclaw.super-agent-support",
-  "minimum_plugin_version": "1.10.1",
+  "minimum_plugin_version": "1.14.0",
   "capability_id": "business.service.installation-identity/1",
+  "capability_ids": [
+    "business.service.installation-identity/1",
+    "agent.outbound/1"
+  ],
   "local_capability_gateway": {
     "owner": "dclaw-platform",
     "endpoint_path": "/api/super-agent-support/mcp/",
@@ -37,6 +41,14 @@
       "input_schema": "schemas/business-identity-v1/outbound-request.schema.json",
       "output_schema": "schemas/business-identity-v1/outbound-response.schema.json",
       "requires_binding_from": "business_identity.issue"
+    },
+    {
+      "client_key": "agent_outbound.request",
+      "capability_id": "agent.outbound/1",
+      "tool_name": "agent_outbound_request",
+      "input_schema": "schemas/agent-outbound-v1/request.schema.json",
+      "output_schema": "schemas/agent-outbound-v1/response.schema.json",
+      "credential_binding_schema": "schemas/agent-outbound-v1/credential-binding.schema.json"
     }
   ],
   "controlled_outbound": {
@@ -58,5 +70,19 @@
     "redirects_allowed": false,
     "request_body": "zero-or-one-of-json_body-or-text_body"
   },
-  "stable_error_schema": "schemas/business-identity-v1/error.schema.json"
+  "agent_controlled_outbound": {
+    "business_owner": "sealed-super-agent",
+    "credential_owner": "agent-installation",
+    "credential_injection": "transport-boundary-only",
+    "agent_authentication_header_allowed": false,
+    "local_helper_long_term_credential_allowed": false,
+    "url_boundary": "credential-domain-allowlist",
+    "method_boundary": "credential-method-allowlist",
+    "redirects_allowed": false,
+    "maximum_request_bytes": 1048576,
+    "maximum_response_bytes": 1048576,
+    "request_body": "zero-or-one-of-json_body-or-text_body"
+  },
+  "stable_error_schema": "schemas/business-identity-v1/error.schema.json",
+  "agent_outbound_error_schema": "schemas/agent-outbound-v1/error.schema.json"
 }

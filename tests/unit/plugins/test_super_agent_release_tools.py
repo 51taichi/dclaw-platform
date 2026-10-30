@@ -212,7 +212,7 @@ def test_plugin_archive_embeds_current_standard_and_is_reproducible():
     assert first == second
     assert metadata == repeated
     assert metadata["plugin_id"] == "dclaw.super-agent-support"
-    assert metadata["version"] == "1.13.0"
+    assert metadata["version"] == "1.14.0"
     assert metadata["sha256"] == hashlib.sha256(first).hexdigest()
     with zipfile.ZipFile(io.BytesIO(first)) as archive:
         names = set(archive.namelist())

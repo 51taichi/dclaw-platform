@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.18`
+当前版本：`2.19`
 
 发布日期：`2026-10-30`
 
@@ -537,6 +537,7 @@ stateDiagram-v2
 | `aigc` | DClaw 公共 AIGC 工作流 | 运行时 `aigc_workflow_catalog` 返回的实时 Schema |
 | `local_execution` | 本地助手会话与任务 | 本文第 3.2 节和第 15-18 节 |
 | `business_identity` | 安装绑定的业务服务短时身份与受控出站调用 | 本文第 25.2.1 节与 DevKit `business-identity-v1` Schema |
+| `agent_outbound` | 超级 Agent 自主编排的第三方业务 API 受控出站 | 本文第 25.2.2 节与 DevKit `agent-outbound-v1` Schema |
 
 代码不得根据能力名称猜参数；使用前读取对应版本协议或实时目录。
 
@@ -546,16 +547,16 @@ stateDiagram-v2
 
 截至 2026-10-27 的上一生产基线为 Server `1.1.10`、提交 `db08ac40fb0033d6c944636da58b2ce82686a951`、`dclaw.super-agent-support` `1.9.0`、Developer Pack `1.4.0` 和 DevKit `1.3.0`。该基线已完成认证下载和健康核对，但 Developer Pack `1.4.0` 未读取 `resources.lock.json`，不得再用于生成新的正式本地能力或超级专家发布包。
 
-本标准 `2.14` 的正式组合为 Developer Pack `1.7.0`、支持插件 `1.13.0`、DevKit `1.6.0` 与 Runner `1.3.0`。该组合在既有公共 Component 签名描述符、精确依赖声明和本地安装机器合同上，增加非入口 Component export 的显式绑定；没有声明 `component_exports` 的旧能力包继续按原合同运行。
+本标准 `2.19` 的正式组合为 Developer Pack `1.8.0`、支持插件 `1.14.0`、DevKit `1.7.0` 与 Runner `1.3.0`。该组合在既有公共 Component、非入口 export 绑定和业务服务身份合同之外，正式发布 `agent.outbound/1`：第三方业务请求完全由超级 Agent 决定，插件只执行凭证隔离、策略校验和最终网络运输；本地助手不接收第三方长期 Key。旧已签名 Agent 和既有合同继续按原版本运行。
 
-本标准 `2.14` 的正式开发与发布门禁如下。版本必须作为一个兼容组合核对，不能只满足其中一项：
+本标准 `2.19` 的正式开发与发布门禁如下。版本必须作为一个兼容组合核对，不能只满足其中一项：
 
 | 项目 | 本标准要求 | 2026-10-26 正式环境核对 | 结论 |
 |---|---|---|---|
 | DClaw 核心 | 至少 `1.1.10` | 公网 `/api/version` 返回 `1.1.10`，运行镜像标记 Server 提交 `db08ac40` | 满足 |
-| 支持插件 | 至少 `1.13.0` | 生产仍须读取健康接口核对 | 公共 Component 注册表、签名验证、依赖解析、export 绑定和无界面 API 全部由插件提供 |
-| Super Agent DevKit | `1.6.0`，且由目标实例认证下载 | 生产仍须读取元数据核对 | 提供公共 Component Schema、`component_exports` 合同与 `component-registry` CLI |
-| Super Agent 开发包 | `1.7.0`，标准 `2.14`、DevKit `1.6.0` | 生产仍须认证下载核对 | 新盘点使用 `1.7.0`；旧已签名 Agent 保持有效 |
+| 支持插件 | 至少 `1.14.0` | 生产仍须读取健康接口核对 | 提供 `agent.outbound/1`、凭证 Broker、公共 Component、export 绑定和无界面 API |
+| Super Agent DevKit | `1.7.0`，且由目标实例认证下载 | 生产仍须读取元数据核对 | 提供 `agent-outbound-v1`、公共 Component Schema、能力目录和操作目录 |
+| Super Agent 开发包 | `1.8.0`，标准 `2.19`、DevKit `1.7.0` | 生产仍须认证下载核对 | 新开发和迁移使用 `1.8.0`；旧已签名 Agent 保持有效 |
 | Windows 客户端 | 普通预检至少 `2.6.12`；本地文件链路至少 `2.6.13` | `2.6.11` | 不满足，先发布并升级客户端 |
 | 通用 Runner | 普通链路至少 `1.0.0`；本地文件链路至少 `1.1.0`；公共 Component 链路至少 `1.2.0`；非入口 export 绑定至少 `1.3.0` | 随兼容客户端核对 | 声明 `component_exports` 的能力包必须使用实际携带 Runner `1.3.0` 的兼容客户端 |
 
@@ -576,13 +577,14 @@ stateDiagram-v2
 | 公共 Component 完整注册表 | `GET /api/super-agent-support/component-registry` |
 | 公共 Component 签名注册 | `PUT /api/super-agent-support/admin/component-registry/{component_id}/variants/{platform}` |
 | 凭证绑定 / 撤销 | `POST /api/super-agent-support/credentials` / `DELETE /api/super-agent-support/credentials/{credential_ref}` |
+| Agent 出站凭证绑定 | `POST /api/super-agent-support/agent-outbound/credentials` |
 | 业务身份公开验签键 | `GET /api/super-agent-support/business-identities/verification-keys` |
 | 业务身份在线验证 | `POST /api/super-agent-support/business-identities/assertions/verify` |
 | 业务身份管理 | `/api/super-agent-support/admin/business-identities/` 下的服务、授权、轮换、撤销和审计接口 |
 
 上述接口属于认证后的目标 DClaw，不是匿名公共下载站。`401` 表示尚未携带有效身份，不能据此断言接口缺失；有效身份下 `404`、插件版本低于要求、返回的 DevKit 版本不匹配或 ZIP SHA-256 与元数据不一致，均表示当前目标环境未达到发布门禁。开发方只能继续源码和离线测试，状态标记为 `platform-tooling-missing`，不得使用平台仓库内源码副本、旧兼容构建器、历史签名包或其他环境下载的 DevKit 替代。
 
-生产升级必须部署插件 `1.13.0`、Developer Pack `1.7.0` 和 DevKit `1.6.0`；使用 `component_exports` 的 Windows 能力包还须完成 Runner `1.3.0`、设备协议 `2` 和 `windows-x64` 平台报告的实际连接核对。只使用普通公共 Component 入口的能力包仍可声明 Runner `1.2.0`，只使用本地文件链路时仍以 Windows 客户端 `2.6.13`、Runner `1.1.0` 和设备协议 `2` 为最低要求。manifest 中 `platform_contract_versions.local_execution="1"` 是平台合同主版本；本地执行合同修订版 `1.2`、Runner 设备协议 `2` 和公共 Component 描述符 `1` 是不同层级的版本，不得互相替代或写错字段。安装级业务服务身份不经过客户端或 Runner，因此不会单独触发客户端或 Runner 升级。开发方必须使用自己的应用身份认证会话实际下载 Developer Pack 或 DevKit、核对服务端 SHA-256，并在上传前核对插件 Secret 与相应信任库配置；服务器 root SSH 权限和镜像中存在文件都不能替代应用下载身份或发布证据。任何历史 Agent 专属 Relay、Runner、工具前缀和能力 ID 只作为冻结兼容路径，不得被新发布复制或回退使用。
+生产升级必须部署插件 `1.14.0`、Developer Pack `1.8.0` 和 DevKit `1.7.0`；使用 `component_exports` 的 Windows 能力包还须完成 Runner `1.3.0`、设备协议 `2` 和 `windows-x64` 平台报告的实际连接核对。`agent.outbound/1` 是插件服务端能力，不要求客户端或 Runner 升级，也不得把第三方调用转交 Runner。只使用普通公共 Component 入口的能力包仍可声明 Runner `1.2.0`，只使用本地文件链路时仍以 Windows 客户端 `2.6.13`、Runner `1.1.0` 和设备协议 `2` 为最低要求。manifest 中 `platform_contract_versions.local_execution="1"` 是平台合同主版本；本地执行合同修订版 `1.2`、Runner 设备协议 `2` 和公共 Component 描述符 `1` 是不同层级的版本，不得互相替代或写错字段。开发方必须使用自己的应用身份认证会话实际下载 Developer Pack 或 DevKit、核对服务端 SHA-256，并在上传前核对插件 Secret 与相应信任库配置；服务器 root SSH 权限和镜像中存在文件都不能替代应用下载身份或发布证据。任何历史 Agent 专属 Relay、Runner、工具前缀和能力 ID 只作为冻结兼容路径，不得被新发布复制或回退使用。
 
 生产安装必须把插件 `state_dir` 放在持久卷，并通过平台 Secret 配置稳定的 `master_key_base64`；容器可使用 `DCLAW_SUPER_AGENT_SUPPORT_MASTER_KEY_BASE64`，该值解码后至少 32 字节，不得写入仓库、镜像或 Agent 包。`trusted_package_signers` 是 `signer_id` 到原始 Ed25519 公钥 Base64 的映射；`trusted_component_signers` 是 `signer_id` 到 DER SubjectPublicKeyInfo 编码的 P-256 公钥 Base64 映射。未配置对应受信公钥时，插件仍可启动和提供环境状态，但对应的能力包或公共 Component 注册必须失败关闭。
 
@@ -1336,7 +1338,7 @@ GET <DCLAW_BASE_URL>/api/super-agent-support/developer-pack/download
 
 开发包元数据必须返回准确的开发包版本、标准标识与版本、DevKit 版本、ZIP SHA-256、文件数、支持平台和稳定下载路径。下载后的顶层目录名带开发包版本，包内 `PACKAGE-MANIFEST.json` 和 `SHA256SUMS` 列出公开资产及摘要；开发者根据元数据判断版本，不得根据稳定下载路径、标准文件名或 ZIP 文件名猜测版本。
 
-开发包 `1.7.0` 包含标准 `2.14`、DevKit `1.6.0`、公共 Component 无界面 CLI、`component_exports` Schema 与夹具、公开 SDK、完整项目模板、业务服务模板、本地能力模板、测试夹具、最小离线示例、SBOM、第三方许可证、兼容矩阵、升级和回滚说明。统一命令如下：
+开发包 `1.8.0` 包含标准 `2.19`、DevKit `1.7.0`、`agent.outbound/1` 机器合同、公共 Component 无界面 CLI、`component_exports` Schema 与夹具、公开 SDK、完整项目模板、业务服务模板、本地能力模板、测试夹具、最小离线示例、SBOM、第三方许可证、兼容矩阵、升级和回滚说明。统一命令如下：
 
 ```text
 python dclaw_developer.py doctor
@@ -1739,9 +1741,33 @@ DevKit `operation-catalog.json` 是准确的调用入口目录。超级专家运
 
 正式发布必须持续通过以下测试：关闭 Schema 正反例；运行上下文防伪造；租户、用户、Agent、发布版、安装、服务、audience 和 scope 隔离；签名、有效期、时钟偏差与重放；轮换重叠和紧急撤销；日志、trace、卡片、Agent 输出、数据库导出、崩溃转储和客户端流量无 Token/私钥；插件禁用与卸载隔离；升级/回滚不恢复已撤销签发权；真实业务服务端到端验签及跨安装重放失败。
 
+#### 25.2.2 Agent 自主第三方出站（accepted / implemented）
+
+平台负责人已接受该通用能力，正式实现由 `dclaw.super-agent-support` `1.14.0` 提供，机器合同由 DevKit `1.7.0` 发布，并随 Developer Pack `1.8.0` 交付。
+
+- 正式能力 ID：`agent.outbound/1`
+- 合同版本：`1`
+- 归属：`dclaw.super-agent-support`
+- 目的：让密封超级专家直接负责第三方业务 API 的选择、参数、幂等、创建、轮询、重试、费用和结果解释，同时使长期 Key 只在受控运输边界出现。
+
+该能力不是本地助手任务，也不是开发方业务服务。超级专家通过 DevKit `operation-catalog.json` 的客户端键 `agent_outbound.request` 调用 MCP 工具 `agent_outbound_request`；宿主从受信运行上下文注入 `dclaw_session_token`。Agent 必须声明 `agent.outbound/1`，但不需要同时声明 `local.execution.session/1`。需要下载或加工第三方结果时，Agent 取得公开或短时预签名 URL 后，再独立调用本地助手；本地助手不得接收 `credential_ref`、第三方长期 Key、认证 Header或供应商控制面任务。
+
+安装时通过认证接口 `POST /api/super-agent-support/agent-outbound/credentials` 绑定凭证。绑定请求必须固定供应商标识、认证类型、非空 scope、可用 Agent、可用安装、允许域名和允许方法。认证类型合同 `1` 只允许：
+
+- `bearer`：平台在最终网络边界注入单个 `Authorization: Bearer <value>`；
+- `header`：平台注入一个登记的认证 Header，例如 Sync.so 的 `x-api-key`。
+
+接口只返回不透明 `credential_ref` 和非 Secret 策略摘要，不返回认证值。凭证按用户、Agent、安装和 scope 加密隔离；跨用户、跨 Agent、跨安装、跨 scope、已撤销或旧通用凭证引用均失败关闭。Agent 源码、manifest、卡片、模型消息、工作区、trace、普通日志、本地任务和最终结果不得包含认证值。
+
+运行请求必填 `credential_ref`、`credential_scope`、`method` 和正式 HTTPS `url`，可选 `headers`、`json_body`、`text_body` 和 `timeout_seconds`。请求体最多选择一种；Agent Header 只允许 `Accept`、`Content-Type`、`Idempotency-Key`、`User-Agent` 和 `X-Request-Id`，禁止提交任何认证 Header。插件必须验证公网 HTTPS、私网/环回/保留地址、域名允许表、方法允许表、scope、1 MiB 请求和响应上限、`1..60` 秒超时，并拒绝全部重定向。响应只返回状态码、Content-Type 和受限 JSON 或文本正文；认证值即使被上游回显也必须脱敏。
+
+该合同只提供运输和凭证隔离，不识别 Sync.so、声音供应商或任何行业，不保存 Agent 不可见的业务任务，不决定供应商、请求路径、参数、轮询频率、重试、费用或完成条件。原业务确实已有开发方业务服务时，可以继续使用第 25.2.1 节；迁移不得仅为调用第三方 API 或保存 Key 新增业务服务、域名、audience 或 `business.service.installation-identity/1` 链路。
+
+兼容要求：旧已签名 Agent、`business.service.installation-identity/1` 和本地执行合同继续有效，不强制迁移。新建或主动重建的 Agent 只要第三方调用本来属于其业务逻辑，就使用 `agent.outbound/1`；本合同字段或权限语义发生不兼容变化时必须发布新合同版本。
+
 ### 25.3 平台评审结果
 
-`business.service.installation-identity/1` 的正式评审结论为 `accepted`，并已按第 25.2.1 节在插件 `1.10.1`、DevKit `1.4.1` 和 Developer Pack `1.5.1` 中实现。后续修改其字段、权限、状态、重放或资源限制仍须按本节重新评审。
+`business.service.installation-identity/1` 与 `agent.outbound/1` 的正式评审结论均为 `accepted`，并分别按第 25.2.1、25.2.2 节实现。后续修改其字段、权限、状态、隔离或资源限制仍须按本节重新评审。
 
 平台方必须给出以下一种明确结论：
 
@@ -2112,13 +2138,13 @@ Agent 名称：<可选，中文显示名称>
 2. 开发方自己的业务目标、源 Agent 材料和测试凭证；
 3. 从目标 DClaw 认证调用元数据接口并按其 `download_path` 下载、核对 SHA-256 的官方开发包；兼容自动化可以继续单独下载同版本官方 DevKit。
 
-开发包 `1.7.0` 是推荐的单一离线移交物，必须提供：
+开发包 `1.8.0` 是推荐的单一离线移交物，必须提供：
 
 - 唯一标准文件与明确的标准版本，不复制第二套人工规则；
-- 官方 DevKit `1.6.0` 及其完整离线加密依赖；
+- 官方 DevKit `1.7.0` 及其完整离线加密依赖；
 - `dclaw_developer.py` 的 `doctor`、`info`、`init`、`validate`、`test`、`keygen`、`capability-build`、`build`、`upgrade` 和 `demo`；
 - 超级专家、业务服务和本地能力包模板，以及职责边界示例；
-- 公共业务服务、本地执行和能力包 Schema/SDK；
+- Agent 自主出站、公共业务服务、本地执行和能力包 Schema/SDK；
 - 版本化能力构建清单、任意资源的确定性归档与安全预构建 ZIP 导入；
 - 受控 `unittest`/`pytest` 测试适配器以及真实命令和测试数量证据；
 - 行为基线、差异批准、能力越权、依赖完整性、`resources.lock.json`、Secret、测试、密封和验签失败关闭门禁；
@@ -2127,7 +2153,7 @@ Agent 名称：<可选，中文显示名称>
 
 开发包本身不得包含平台管理员凭据、生产地址、签名私钥、供应商 Secret、客户数据或 DClaw 私有实现。包内公开工具不得导入 `qwenpaw` 或要求开发者克隆服务器仓库。
 
-DevKit `1.6.0` 必须提供：
+DevKit `1.7.0` 必须提供：
 
 - `dclaw_agent_devkit.py`：`doctor`、`contracts`、`digest`、`validate`、`keygen`、`build`、`verify`；
 - `capability-catalog.json`：当前可声明的能力、版本、组和依赖；
@@ -2135,6 +2161,7 @@ DevKit `1.6.0` 必须提供：
 - `schemas/local-execution-v1/`：本地请求、响应和错误合同；
 - `schemas/super-agent-support-v1/`：能力包、设备命令、设备消息和凭证绑定合同；
 - `schemas/business-identity-v1/`：安装级业务服务身份签发、出站、在线验证、管理和稳定错误合同；
+- `schemas/agent-outbound-v1/`：Agent 自主第三方请求、响应、安装凭证绑定和稳定错误合同；
 - `operation-catalog.json`：正式 MCP 入口、客户端键、工具名、调用顺序和平台注入参数；
 - `business_identity_verifier.py` 与 `fixtures/business-identity/`：公开 JWK 离线验签、持久化 `jti` 防重放、断言 Header 运输和正反夹具；
 - `templates/minimal/`：最小 manifest、`agent.json` 和 `runtime.py`。
@@ -2146,6 +2173,13 @@ DevKit `1.6.0` 必须提供：
 平台内部实现文件、测试文件和维护文档可以继续存在，但它们只服务平台维护者，不属于开发方输入。开发方缺少字段或行为定义时应报告标准或 DevKit 缺陷；平台不得用“请克隆服务器源码”回答。
 
 ## 34. 版本记录
+
+### 2.19 - 2026-10-30
+
+- 支持插件升级为 `1.14.0`，正式发布 `agent.outbound/1`；第三方业务请求由密封超级 Agent 决定，插件只负责加密凭证解析、策略校验和受控 HTTPS 运输。
+- DevKit 升级为 `1.7.0`，发布 `agent-outbound-v1` 请求、响应、凭证绑定和错误 Schema，以及准确的 `agent_outbound.request` 操作目录。
+- Developer Pack 升级为 `1.8.0`，内嵌标准 `2.19` 与 DevKit `1.7.0`；旧签名 Agent、业务服务身份、本地执行和公共 Component 合同继续兼容。
+- 固定第三方长期 Key 不得进入模型、工作区、日志或本地助手；第三方返回的短期资源 URL 可以交给本地助手下载、加工，并把最终视频写入客户本地目录。
 
 ### 2.18 - 2026-10-30
 

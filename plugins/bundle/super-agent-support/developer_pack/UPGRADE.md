@@ -2,9 +2,16 @@
 
 ## Upgrade
 
-Pack 1.7.0 adopts development standard 2.14 and DevKit 1.6.0. Public Component
-inventory and signed registration use only the versioned headless API/CLI owned
-by `dclaw.super-agent-support`; existing signed Agent releases remain valid.
+Pack 1.8.0 adopts development standard 2.19 and DevKit 1.7.0. Agents that call
+third-party providers should declare `agent.outbound/1`, use the published
+operation catalog, and keep only opaque installation credential references.
+Existing signed Agents remain valid and may continue using their previous
+contracts until rebuilt. Do not replace an existing business service when it
+is part of the source product; only remove migration-added service/audience
+chains that existed solely to call a provider or store its key.
+
+Public Component inventory and signed registration continue to use only the
+versioned headless API/CLI owned by `dclaw.super-agent-support`.
 
 1. Download the new versioned ZIP and verify the SHA-256 from authenticated
    metadata or the separately delivered checksum file.

@@ -26,6 +26,7 @@ from fastapi.responses import JSONResponse, Response
 from jsonschema import Draft202012Validator
 from pydantic import BaseModel, ConfigDict, Field
 
+from .agent_outbound import AgentOutboundError, AgentOutboundManager
 from .business_identity import BusinessIdentityError, BusinessIdentityManager
 from .credentials import CredentialBroker, CredentialError
 from .developer_pack.archive import (
@@ -112,6 +113,24 @@ class CredentialBinding(BaseModel):
     scopes: list[str] = Field(min_length=1)
     agent_ids: list[str] = Field(default_factory=list)
     installation_ids: list[str] = Field(min_length=1)
+
+
+class AgentOutboundAuthorization(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: str
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    value: str = Field(min_length=1, max_length=8192)
+
+
+class AgentOutboundCredentialBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider: str = Field(min_length=1, max_length=128)
+    authorization: AgentOutboundAuthorization
+    scopes: list[str] = Field(min_length=1, max_length=64)
+    agent_ids: list[str] = Field(min_length=1, max_length=64)
+    installation_ids: list[str] = Field(min_length=1, max_length=64)
+    allowed_domains: list[str] = Field(min_length=1, max_length=32)
+    allowed_methods: list[str] = Field(min_length=1, max_length=5)
 
 
 class DeviceBootstrap(BaseModel):
@@ -299,6 +318,7 @@ def create_app(
     packages: CapabilityPackageRegistry,
     credentials: CredentialBroker,
     business_identity: BusinessIdentityManager | None = None,
+    agent_outbound: AgentOutboundManager | None = None,
     public_components: PublicComponentRegistry | None = None,
 ) -> FastAPI:
     # pylint: disable=too-many-statements
@@ -324,11 +344,12 @@ def create_app(
         return {
             "status": "ok",
             "plugin": "dclaw.super-agent-support",
-            "version": "1.13.0",
+            "version": "1.14.0",
             "protocols": {
                 "local_execution": "1.2",
                 "device": "2",
                 "business_identity": "1",
+                "agent_outbound": "1",
                 "public_components": "1",
             },
         }
@@ -690,5 +711,39 @@ def create_app(
         if not revoked:
             raise HTTPException(status_code=404, detail="credential not found")
         return {"revoked": True, "credential_ref": credential_ref}
+
+    if agent_outbound is not None:
+
+        @app.post("/agent-outbound/credentials")
+        async def bind_agent_outbound_credential(
+            body: AgentOutboundCredentialBinding,
+            request: Request,
+        ) -> dict[str, Any]:
+            try:
+                reference = agent_outbound.bind_credential(
+                    user_id=_user_id(request),
+                    provider=body.provider,
+                    authorization=body.authorization.model_dump(
+                        exclude_none=True,
+                    ),
+                    scopes=body.scopes,
+                    agent_ids=body.agent_ids,
+                    installation_ids=body.installation_ids,
+                    allowed_domains=body.allowed_domains,
+                    allowed_methods=body.allowed_methods,
+                )
+            except (AgentOutboundError, CredentialError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return {
+                "credential_ref": reference,
+                "provider": body.provider,
+                "scopes": body.scopes,
+                "agent_ids": body.agent_ids,
+                "installation_ids": body.installation_ids,
+                "allowed_domains": body.allowed_domains,
+                "allowed_methods": [
+                    item.upper() for item in body.allowed_methods
+                ],
+            }
 
     return app

@@ -79,6 +79,7 @@ async def test_plugin_load_and_unload_are_isolated(tmp_path):
             "business.service.installation-identity/1"
             in get_platform_capability_catalog()
         )
+        assert "agent.outbound/1" in get_platform_capability_catalog()
         assert loader.registry.is_public_http_route(
             "GET",
             "/api/super-agent-support/business-identities/verification-keys",
@@ -138,6 +139,20 @@ async def test_plugin_load_and_unload_are_isolated(tmp_path):
             invocation_id="invocation-2",
         )
         assert business_context["local_execution_session_token"]
+        outbound_context = await loader.registry.enrich_workspace_context(
+            {
+                "tenant_id": "tenant-1",
+                "user_id": "user-1",
+                "session_id": "session-1",
+                "agent_id": "agent-1",
+                "agent_name": "Agent One",
+                "installation_id": "install-1",
+                "release_id": "release-1",
+            },
+            granted_capabilities={"agent.outbound/1": "1"},
+            invocation_id="invocation-3",
+        )
+        assert outbound_context["local_execution_session_token"]
 
         await loader.unload_plugin(record.manifest.id)
 
@@ -153,6 +168,7 @@ async def test_plugin_load_and_unload_are_isolated(tmp_path):
             "business.service.installation-identity/1"
             not in get_platform_capability_catalog()
         )
+        assert "agent.outbound/1" not in get_platform_capability_catalog()
         assert not loader.registry.is_public_http_route(
             "GET",
             "/api/super-agent-support/business-identities/verification-keys",
@@ -513,8 +529,11 @@ def test_mcp_endpoint_exposes_exact_standard_tool_set(plugin_module, tmp_path):
     }
 
 
-def test_mcp_endpoint_publishes_business_identity_tools(plugin_module, tmp_path):
-    store, _signer, broker, service = _runtime(plugin_module, tmp_path)
+def test_mcp_endpoint_publishes_controlled_outbound_tools(
+    plugin_module,
+    tmp_path,
+):
+    store, signer, broker, service = _runtime(plugin_module, tmp_path)
     outbound_requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -531,7 +550,14 @@ def test_mcp_endpoint_publishes_business_identity_tools(plugin_module, tmp_path)
     mcp_cls = sys.modules[
         "test_dclaw_super_agent_support.mcp_server"
     ].LocalExecutionMcp
-    endpoint = mcp_cls(service, identity)
+    outbound_cls = sys.modules[
+        "test_dclaw_super_agent_support.agent_outbound"
+    ].AgentOutboundManager
+    endpoint = mcp_cls(
+        service,
+        identity,
+        outbound_cls(broker, signer, transport=httpx.MockTransport(handler)),
+    )
     headers = {
         "accept": "application/json, text/event-stream",
         "content-type": "application/json",
@@ -616,10 +642,19 @@ def test_mcp_endpoint_publishes_business_identity_tools(plugin_module, tmp_path)
     assert {
         "business_service_identity_issue",
         "business_service_outbound_request",
+        "agent_outbound_request",
     } <= set(tools)
     outbound_schema = tools["business_service_outbound_request"]["inputSchema"]
     assert set(outbound_schema["required"]) == {
         "binding_ref",
+        "method",
+        "url",
+        "dclaw_session_token",
+    }
+    agent_schema = tools["agent_outbound_request"]["inputSchema"]
+    assert set(agent_schema["required"]) == {
+        "credential_ref",
+        "credential_scope",
         "method",
         "url",
         "dclaw_session_token",
@@ -666,7 +701,7 @@ def test_developer_kit_is_downloadable_without_server_source(
 
     assert metadata.status_code == 200
     assert metadata.json()["name"] == "dclaw-super-agent-devkit"
-    assert metadata.json()["version"] == "1.6.0"
+    assert metadata.json()["version"] == "1.7.0"
     assert metadata.json()["download_path"] == (
         "/api/super-agent-support/developer-kit/v1.zip"
     )
@@ -685,7 +720,7 @@ def test_developer_kit_is_downloadable_without_server_source(
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-devkit-1.6.0"
+    prefix = "dclaw-super-agent-devkit-1.7.0"
     assert f"{prefix}/dclaw_agent_devkit.py" in names
     assert f"{prefix}/bootstrap.ps1" in names
     assert f"{prefix}/bootstrap.sh" in names
@@ -755,23 +790,23 @@ def test_developer_pack_is_downloadable_and_self_describing(
         downloaded = client.get("/developer-pack/download")
 
     assert health.status_code == 200
-    assert health.json()["version"] == "1.13.0"
+    assert health.json()["version"] == "1.14.0"
     assert metadata.status_code == 200
     payload = metadata.json()
-    assert payload["version"] == "1.7.0"
-    assert payload["standard"]["version"] == "2.14"
-    assert payload["devkit_version"] == "1.6.0"
+    assert payload["version"] == "1.8.0"
+    assert payload["standard"]["version"] == "2.19"
+    assert payload["devkit_version"] == "1.7.0"
     assert payload["server_source_required"] is False
     assert payload["download_path"].endswith("/developer-pack/download")
     assert payload["sha256"] == hashlib.sha256(downloaded.content).hexdigest()
     assert payload["content_sha256"] == payload["sha256"]
     assert downloaded.status_code == 200
-    assert "dclaw-super-agent-developer-pack-1.7.0.zip" in (
+    assert "dclaw-super-agent-developer-pack-1.8.0.zip" in (
         downloaded.headers["content-disposition"]
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-developer-pack-1.7.0"
+    prefix = "dclaw-super-agent-developer-pack-1.8.0"
     assert f"{prefix}/PACKAGE-MANIFEST.json" in names
     assert f"{prefix}/SHA256SUMS" in names
     assert f"{prefix}/dclaw_developer.py" in names
@@ -2607,6 +2642,212 @@ def test_credential_broker_never_stores_plaintext(plugin_module, tmp_path):
             installation_id="install-1",
             required_scope="media.resolve",
         )
+
+
+@pytest.mark.asyncio
+async def test_agent_outbound_injects_only_at_transport_and_redacts_echo(
+    plugin_module,
+    tmp_path,
+):
+    store, signer, broker, _service = _runtime(plugin_module, tmp_path)
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            json={"accepted": True, "echo": request.headers["x-api-key"]},
+        )
+
+    manager_cls = sys.modules[
+        "test_dclaw_super_agent_support.agent_outbound"
+    ].AgentOutboundManager
+    manager = manager_cls(
+        broker,
+        signer,
+        transport=httpx.MockTransport(handler),
+    )
+    reference = manager.bind_credential(
+        user_id="user-1",
+        provider="sync.so",
+        authorization={
+            "type": "header",
+            "name": "x-api-key",
+            "value": "sync-secret-value",
+        },
+        scopes=["sync.so.api"],
+        agent_ids=["agent-1"],
+        installation_ids=["install-1"],
+        allowed_domains=["8.8.8.8"],
+        allowed_methods=["GET", "POST"],
+    )
+    token = signer.issue(
+        user_id="user-1",
+        session_id="session-1",
+        agent_id="agent-1",
+        agent_name="Digital Human",
+        installation_id="install-1",
+        release_id="release-1",
+        invocation_id="invocation-1",
+        capability_ids=["agent.outbound/1"],
+    )
+
+    result = await manager.request(
+        dclaw_session_token=token,
+        credential_ref=reference,
+        credential_scope="sync.so.api",
+        method="POST",
+        url="https://8.8.8.8/v2/generate",
+        headers={"Accept": "application/json"},
+        json_body={"model": "sync-3"},
+    )
+
+    assert len(requests) == 1
+    assert requests[0].headers["x-api-key"] == "sync-secret-value"
+    assert requests[0].headers.get("authorization") is None
+    assert json.loads(requests[0].content) == {"model": "sync-3"}
+    assert result["body_json"] == {
+        "accepted": True,
+        "echo": "[REDACTED]",
+    }
+    row = store.get_credential(reference)
+    assert b"sync-secret-value" not in row["ciphertext"]
+    assert "sync-secret-value" not in repr(result)
+
+
+@pytest.mark.asyncio
+async def test_agent_outbound_enforces_installation_scope_domain_and_method(
+    plugin_module,
+    tmp_path,
+):
+    _store, signer, broker, _service = _runtime(plugin_module, tmp_path)
+    outbound_module = sys.modules[
+        "test_dclaw_super_agent_support.agent_outbound"
+    ]
+    manager = outbound_module.AgentOutboundManager(
+        broker,
+        signer,
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, json={"ok": True}),
+        ),
+    )
+    reference = manager.bind_credential(
+        user_id="user-1",
+        provider="sync.so",
+        authorization={"type": "bearer", "value": "provider-token"},
+        scopes=["sync.so.api"],
+        agent_ids=["agent-1"],
+        installation_ids=["install-1"],
+        allowed_domains=["8.8.8.8"],
+        allowed_methods=["POST"],
+    )
+
+    def token(*, agent_id="agent-1", installation_id="install-1"):
+        return signer.issue(
+            user_id="user-1",
+            session_id="session-1",
+            agent_id=agent_id,
+            agent_name="Digital Human",
+            installation_id=installation_id,
+            release_id="release-1",
+            invocation_id="invocation-1",
+            capability_ids=["agent.outbound/1"],
+        )
+
+    with pytest.raises(outbound_module.AgentOutboundError) as wrong_agent:
+        await manager.request(
+            dclaw_session_token=token(agent_id="agent-2"),
+            credential_ref=reference,
+            credential_scope="sync.so.api",
+            method="POST",
+            url="https://8.8.8.8/v2/generate",
+        )
+    assert wrong_agent.value.code == "AGENT_OUTBOUND.CREDENTIAL_DENIED"
+
+    with pytest.raises(outbound_module.AgentOutboundError) as wrong_method:
+        await manager.request(
+            dclaw_session_token=token(),
+            credential_ref=reference,
+            credential_scope="sync.so.api",
+            method="GET",
+            url="https://8.8.8.8/v2/generate",
+        )
+    assert wrong_method.value.code == "AGENT_OUTBOUND.POLICY_DENIED"
+
+    with pytest.raises(outbound_module.AgentOutboundError) as private_target:
+        await manager.request(
+            dclaw_session_token=token(),
+            credential_ref=reference,
+            credential_scope="sync.so.api",
+            method="POST",
+            url="https://127.0.0.1/v2/generate",
+        )
+    assert private_target.value.code == "AGENT_OUTBOUND.URL_NOT_ALLOWED"
+
+
+@pytest.mark.asyncio
+async def test_agent_outbound_rejects_redirects_and_missing_capability(
+    plugin_module,
+    tmp_path,
+):
+    _store, signer, broker, _service = _runtime(plugin_module, tmp_path)
+    outbound_module = sys.modules[
+        "test_dclaw_super_agent_support.agent_outbound"
+    ]
+    manager = outbound_module.AgentOutboundManager(
+        broker,
+        signer,
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                302,
+                headers={"location": "https://8.8.4.4/redirected"},
+            ),
+        ),
+    )
+    reference = manager.bind_credential(
+        user_id="user-1",
+        provider="sync.so",
+        authorization={"type": "header", "name": "x-api-key", "value": "secret"},
+        scopes=["sync.so.api"],
+        agent_ids=["agent-1"],
+        installation_ids=["install-1"],
+        allowed_domains=["8.8.8.8"],
+        allowed_methods=["POST"],
+    )
+    token_kwargs = {
+        "user_id": "user-1",
+        "session_id": "session-1",
+        "agent_id": "agent-1",
+        "agent_name": "Digital Human",
+        "installation_id": "install-1",
+        "release_id": "release-1",
+        "invocation_id": "invocation-1",
+    }
+    without_grant = signer.issue(**token_kwargs, capability_ids=[])
+    with pytest.raises(outbound_module.AgentOutboundError) as not_granted:
+        await manager.request(
+            dclaw_session_token=without_grant,
+            credential_ref=reference,
+            credential_scope="sync.so.api",
+            method="POST",
+            url="https://8.8.8.8/v2/generate",
+        )
+    assert not_granted.value.code == "AGENT_OUTBOUND.NOT_GRANTED"
+
+    granted = signer.issue(
+        **token_kwargs,
+        capability_ids=["agent.outbound/1"],
+    )
+    with pytest.raises(outbound_module.AgentOutboundError) as redirected:
+        await manager.request(
+            dclaw_session_token=granted,
+            credential_ref=reference,
+            credential_scope="sync.so.api",
+            method="POST",
+            url="https://8.8.8.8/v2/generate",
+        )
+    assert redirected.value.code == "AGENT_OUTBOUND.REDIRECT_REJECTED"
 
 
 def test_capability_descriptor_schema_and_signature(plugin_module, tmp_path):

@@ -2,8 +2,8 @@
   "spdxVersion": "SPDX-2.3",
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
-  "name": "dclaw-super-agent-developer-pack-1.7.0",
-  "documentNamespace": "https://dclaw.deepmega.cn/sbom/super-agent-developer-pack/1.7.0",
+  "name": "dclaw-super-agent-developer-pack-1.8.0",
+  "documentNamespace": "https://dclaw.deepmega.cn/sbom/super-agent-developer-pack/1.8.0",
   "creationInfo": {
     "created": "2026-10-26T00:00:00Z",
     "creators": ["Organization: DClaw"]
@@ -12,7 +12,7 @@
     {
       "name": "dclaw-super-agent-developer-pack",
       "SPDXID": "SPDXRef-Package-DeveloperPack",
-      "versionInfo": "1.7.0",
+      "versionInfo": "1.8.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "NOASSERTION",
@@ -22,7 +22,7 @@
     {
       "name": "dclaw-super-agent-devkit",
       "SPDXID": "SPDXRef-Package-DevKit",
-      "versionInfo": "1.6.0",
+      "versionInfo": "1.7.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "NOASSERTION",

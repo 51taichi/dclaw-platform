@@ -1,9 +1,9 @@
 {
   "id": "dclaw.super-agent-support",
   "name": "DClaw Super Agent Support",
-  "version": "1.13.0",
+  "version": "1.14.0",
   "type": "general",
-  "description": "Generic local execution, installation-bound business service identity, credential broker, capability package, offline developer pack and DevKit, client adapter, and platform helper support for Super Agents.",
+  "description": "Generic local execution, Agent-owned controlled outbound transport, credential broker, capability package, offline developer pack and DevKit, client adapter, and platform helper support for Super Agents.",
   "author": "DClaw",
   "entry": {
     "backend": "plugin.py"
@@ -15,6 +15,7 @@
     "modules": [
       "local-execution",
       "credential-broker",
+      "agent-outbound",
       "capability-packages",
       "public-components",
       "developer-kit",

@@ -1,12 +1,17 @@
 # DClaw Super Agent DevKit
 
-Version 1.6.0 adds explicit non-entry public Component export bindings for
-Runner 1.3.0. It retains the signed public Component descriptor, exact
-dependency declarations, and headless `component-registry get/register`
-client introduced in 1.5.0. These commands call
-`dclaw.super-agent-support` directly and do not require a DClaw management
-page or server source. Version 1.4.1 business service identity contracts
-remain compatible.
+Version 1.7.0 publishes `agent.outbound/1`, a provider-neutral controlled
+HTTPS transport for sealed Super Agents. The Agent owns provider selection,
+request parameters, idempotency, polling, retries, fees, and response
+interpretation. The transport resolves an installation-scoped
+`credential_ref`, enforces its domain, method, and scope policy, and injects
+the secret only at the final network boundary. Long-term provider credentials
+are never returned to the Agent, model, workspace, logs, or local helper.
+
+The 1.6.0 public Component export bindings for Runner 1.3.0 remain compatible,
+as do the 1.4.1 business service identity contracts. Component registry
+commands continue to call `dclaw.super-agent-support` directly and require no
+DClaw management page or server source.
 
 Capability descriptors may bind a declared public Component export to a
 process environment variable with `component_exports`. Variables must use the
@@ -23,6 +28,14 @@ may omit a body or provide exactly one of `json_body` and `text_body`. The
 platform injects exactly one `Authorization: Bearer <assertion>` header;
 Agent-supplied authorization and case-insensitive duplicate headers are
 rejected.
+
+`agent_outbound.request` does not use the business-service issue/audience
+flow. Its credential is installed through the authenticated
+`/api/super-agent-support/agent-outbound/credentials` endpoint with explicit
+scope, Agent, installation, domain, method, and authentication-header policy.
+Sync.so-style API keys use authorization type `header` with name `x-api-key`;
+Bearer providers use type `bearer`. The sealed Agent retains only the returned
+opaque `credential_ref`.
 
 Business services that verify with the public JWK set must use
 `business_identity_verifier.py` or an equivalent durable replay cache. Every

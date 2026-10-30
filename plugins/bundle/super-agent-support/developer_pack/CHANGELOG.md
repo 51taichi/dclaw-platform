@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.8.0 - 2026-10-30
+
+- Bundles development standard 2.19 and DevKit 1.7.0.
+- Publishes `agent.outbound/1` for Agent-owned third-party HTTP calls with
+  installation-scoped encrypted credential references.
+- Keeps provider choice, request parameters, polling, retries, fees, and
+  response interpretation in the sealed Agent; the local helper receives no
+  third-party long-term key.
+- Retains all existing signed package, local execution, public Component, and
+  business-service identity contracts for compatibility.
+
 ## 1.7.0 - 2026-10-28
 
 - Bundles development standard 2.14 and DevKit 1.6.0.

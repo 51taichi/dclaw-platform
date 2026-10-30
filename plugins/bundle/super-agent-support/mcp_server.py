@@ -9,6 +9,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
+from .agent_outbound import AgentOutboundError, AgentOutboundManager
 from .business_identity import BusinessIdentityError, BusinessIdentityManager
 from .service import LocalExecutionService
 
@@ -18,9 +19,11 @@ class LocalExecutionMcp:
         self,
         service: LocalExecutionService,
         business_identity: BusinessIdentityManager | None = None,
+        agent_outbound: AgentOutboundManager | None = None,
     ) -> None:
         self.service = service
         self.business_identity = business_identity
+        self.agent_outbound = agent_outbound
         self.server = FastMCP(
             "DClaw Local Execution",
             instructions=(
@@ -265,6 +268,47 @@ class LocalExecutionMcp:
                         timeout_seconds=timeout_seconds,
                     )
                 except BusinessIdentityError as exc:
+                    return {
+                        "error": {
+                            "code": exc.code,
+                            "retryable": exc.reason == "UPSTREAM_FAILED",
+                        },
+                    }
+
+        if self.agent_outbound is not None:
+            outbound = self.agent_outbound
+
+            @self.server.tool(
+                description=(
+                    "Send one provider-neutral HTTPS request selected by the "
+                    "Super Agent. Installation credentials are injected only at "
+                    "the transport boundary."
+                ),
+            )
+            async def agent_outbound_request(
+                credential_ref: str,
+                credential_scope: str,
+                method: str,
+                url: str,
+                dclaw_session_token: str,
+                headers: dict[str, str] | None = None,
+                json_body: Any | None = None,
+                text_body: str | None = None,
+                timeout_seconds: int = 30,
+            ) -> dict[str, Any]:
+                try:
+                    return await outbound.request(
+                        credential_ref=credential_ref,
+                        credential_scope=credential_scope,
+                        method=method,
+                        url=url,
+                        dclaw_session_token=dclaw_session_token,
+                        headers=headers,
+                        json_body=json_body,
+                        text_body=text_body,
+                        timeout_seconds=timeout_seconds,
+                    )
+                except AgentOutboundError as exc:
                     return {
                         "error": {
                             "code": exc.code,
