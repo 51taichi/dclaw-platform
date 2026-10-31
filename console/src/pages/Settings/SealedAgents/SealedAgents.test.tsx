@@ -257,10 +257,15 @@ it("uploads an independent avatar and shows it without replacing releases", asyn
     "expert-avatar",
   );
   expect(profileLayout.children[3]).toContainElement(avatarButton);
-  expect(profileLayout.querySelector(".ant-avatar")).toHaveStyle({
+  const profileAvatar = profileLayout.querySelector(".ant-avatar");
+  expect(profileAvatar).toHaveClass("ant-avatar-square");
+  expect(profileAvatar).toHaveStyle({
     width: "112px",
     height: "112px",
   });
+  const tableAvatar = container.querySelector(".ant-table-row .ant-avatar");
+  expect(tableAvatar).toHaveClass("ant-avatar-square");
+  expect(tableAvatar).toHaveStyle({ width: "44px", height: "44px" });
   expect(screen.queryByText(/内容摘要：|Invoke-only/)).not.toBeInTheDocument();
   const input = container.querySelector(
     'input[accept="image/png,image/jpeg,image/webp"]',

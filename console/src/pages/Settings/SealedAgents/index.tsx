@@ -290,7 +290,14 @@ export default function SealedAgentsPage() {
                 title: "Agent",
                 render: (_, a) => (
                   <Space>
-                    <Avatar src={a.avatar}>{a.name.charAt(0)}</Avatar>
+                    <Avatar
+                      className={styles.expertAvatarImage}
+                      shape="square"
+                      size={44}
+                      src={a.avatar}
+                    >
+                      {a.name.charAt(0)}
+                    </Avatar>
                     <SuperExpertBadge />
                     <span>{a.name}</span>
                     <Typography.Text type="secondary">
@@ -484,7 +491,12 @@ export default function SealedAgentsPage() {
                       className={styles.expertAvatar}
                       data-testid="expert-avatar"
                     >
-                      <Avatar size={112} src={agent.avatar}>
+                      <Avatar
+                        className={styles.expertAvatarImage}
+                        shape="square"
+                        size={112}
+                        src={agent.avatar}
+                      >
                         {agent.name.charAt(0)}
                       </Avatar>
                     </div>
