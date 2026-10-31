@@ -4,9 +4,9 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.19`
+当前版本：`2.20`
 
-发布日期：`2026-10-30`
+发布日期：`2026-10-31`
 
 ## 1. 文档目的
 
@@ -120,7 +120,9 @@ DClaw 平台 -> 密封超级专家
 
 - `local-execution` 模块：对外使用 `dclaw.local-execution` 公共合同，注册十二个通用工具，实现设备路由、任务、检查点、本地文件选择、直传、产物、错误和追踪；
 - `credential-broker` 模块：把 Agent 侧使用的客户或开发方第三方凭证加密保存为不透明引用，按用户、Agent 安装、凭证类型和权限范围隔离，支持撤销与轮换，并只在 Agent 已授权的受控第三方请求边界注入；本地助手只能接收公开或短时预签名资源 URL，不得接收第三方长期 Key；
-- `agent-outbound` 模块：向密封超级 Agent 提供与供应商无关的受控 HTTP/MCP 出站合同，校验目标域、方法、大小、超时、重定向和授权 scope，并在运输边界用 `credential_ref` 注入凭证；该模块不识别供应商、不决定业务参数、不创建 Agent 不可见的业务状态；
+- `agent-outbound` 模块：向密封超级 Agent 提供与供应商无关的受控 HTTP/MCP 出站合同，校验目标域、方法、大小、超时、重定向和授权 scope，并在运输边界通过安装级稳定 `credential_slot` 或兼容的 `credential_ref` 注入凭证；该模块不识别供应商、不决定业务参数、不创建 Agent 不可见的业务状态；
+- `agent-outbound-stream` 模块：为有明确大小上限的 HTTPS 二进制响应和 WSS 流提供受控运输，把结果写入临时资源存储并只向 Agent 返回不透明资源引用、摘要和媒体事实；媒体字节会经过该受控插件运输，但不得进入模型上下文或普通 DClaw API 响应；
+- `resource-exchange` 模块：提供按租户、用户、会话、Agent、发布版、安装和调用隔离的短时资源上传、读取和撤销合同；大文件通过预签名 HTTPS 在对象存储、第三方服务和本地助手之间传输，DClaw 服务进程不代理字节流；
 - `capability-packages` 模块：实现能力描述符、Schema、签名验证、注册、安装、版本、授权和回滚；
 - `public-components` 模块：独立拥有只供 Super Agent 本地重任务复用的 Python Runtime、Node.js、FFmpeg、Whisper 等公共 Component，包括公共性评审、分平台制品构建、许可证和 SBOM、签名、HTTPS 制品上传、完整注册表、版本兼容、本地助手按需下载、验签、缓存、原子安装和回滚；管理面只提供版本化无界面 API/CLI，供迁移 Skill 和平台维护自动化调用；
 - `interaction-components` 模块：拥有超级 Agent 使用的选择、问答、文件选择等卡片合同、状态机、工具和路由；
@@ -151,6 +153,7 @@ DClaw 核心只提供与业务无关的插件 SPI 和确实被其他 DClaw 功�
 12. 平台必须用自动测试证明插件未加载和卸载后的普通登录、普通对话、普通 Agent、公共文件、公共 AIGC Studio、通用 MCP、计费与备份链路不依赖插件内部模块。
 13. 核心配置示例只发布通用配置名；旧 Super Agent 专属环境变量只能由兼容读取逻辑临时接受，不得继续作为新部署模板的推荐配置。
 14. 公共 Component 管理禁止新增 DClaw 客户端页面、管理后台页面、菜单、按钮或普通用户入口；迁移 Skill 必须直接调用插件 API/CLI 完成查询和提交，平台维护自动化通过同一合同完成发布和注册。
+15. 在核心插件 SPI 版本不变时，插件安装、升级和回滚必须通过事务化热加载完成，不得要求重启 DClaw 主服务。热加载必须保留已生效配置和 signer，失败时恢复旧文件、旧配置和旧运行注册；只有核心 SPI 本身发生不兼容升级时，才允许作为独立的核心升级要求重启，不能把它当作普通插件更新步骤。
 
 ### 3.3 开发方问题的插件交付范围
 
@@ -1743,27 +1746,44 @@ DevKit `operation-catalog.json` 是准确的调用入口目录。超级专家运
 
 #### 25.2.2 Agent 自主第三方出站（accepted / implemented）
 
-平台负责人已接受该通用能力，正式实现由 `dclaw.super-agent-support` `1.14.0` 提供，机器合同由 DevKit `1.7.0` 发布，并随 Developer Pack `1.8.0` 交付。
+平台负责人已接受该通用能力，正式实现由 `dclaw.super-agent-support` `1.15.0` 提供，机器合同由 DevKit `1.8.0` 发布，并随 Developer Pack `1.9.0` 交付。
 
 - 正式能力 ID：`agent.outbound/1`
 - 合同版本：`1`
 - 归属：`dclaw.super-agent-support`
 - 目的：让密封超级专家直接负责第三方业务 API 的选择、参数、幂等、创建、轮询、重试、费用和结果解释，同时使长期 Key 只在受控运输边界出现。
 
-该能力不是本地助手任务，也不是开发方业务服务。超级专家通过 DevKit `operation-catalog.json` 的客户端键 `agent_outbound.request` 调用 MCP 工具 `agent_outbound_request`；宿主从受信运行上下文注入 `dclaw_session_token`。Agent 必须声明 `agent.outbound/1`，但不需要同时声明 `local.execution.session/1`。需要下载或加工第三方结果时，Agent 取得公开或短时预签名 URL 后，再独立调用本地助手；本地助手不得接收 `credential_ref`、第三方长期 Key、认证 Header或供应商控制面任务。
+该能力不是本地助手任务，也不是开发方业务服务。超级专家通过 DevKit `operation-catalog.json` 的客户端键 `agent_outbound.request` 调用 MCP 工具 `agent_outbound_request`；宿主从受信运行上下文注入 `dclaw_session_token`。Agent 必须声明 `agent.outbound/1`，但不需要同时声明 `local.execution.session/1`。需要下载或加工第三方结果时，Agent 取得公开或短时预签名 URL 后，再独立调用本地助手；本地助手不得接收 `credential_slot`、`credential_ref`、第三方长期 Key、认证 Header 或供应商控制面任务。
 
 安装时通过认证接口 `POST /api/super-agent-support/agent-outbound/credentials` 绑定凭证。绑定请求必须固定供应商标识、认证类型、非空 scope、可用 Agent、可用安装、允许域名和允许方法。认证类型合同 `1` 只允许：
 
 - `bearer`：平台在最终网络边界注入单个 `Authorization: Bearer <value>`；
 - `header`：平台注入一个登记的认证 Header，例如 Sync.so 的 `x-api-key`。
 
-接口只返回不透明 `credential_ref` 和非 Secret 策略摘要，不返回认证值。凭证按用户、Agent、安装和 scope 加密隔离；跨用户、跨 Agent、跨安装、跨 scope、已撤销或旧通用凭证引用均失败关闭。Agent 源码、manifest、卡片、模型消息、工作区、trace、普通日志、本地任务和最终结果不得包含认证值。
+新建或主动重建的 Agent 必须为每项安装凭证声明稳定 `credential_slot`，绑定时同时固定可用发布版；运行时只提交 slot，不保存每次安装产生的随机引用。插件在受信上下文中按租户、用户、Agent、发布版、安装和 scope 解析 slot。接口只返回 slot 和非 Secret 策略摘要，不返回认证值或底层 `credential_ref`。旧已签名 Agent 可以继续使用原有不透明 `credential_ref`，不得被强制重建或静默迁移。
 
-运行请求必填 `credential_ref`、`credential_scope`、`method` 和正式 HTTPS `url`，可选 `headers`、`json_body`、`text_body` 和 `timeout_seconds`。请求体最多选择一种；Agent Header 只允许 `Accept`、`Content-Type`、`Idempotency-Key`、`User-Agent` 和 `X-Request-Id`，禁止提交任何认证 Header。插件必须验证公网 HTTPS、私网/环回/保留地址、域名允许表、方法允许表、scope、1 MiB 请求和响应上限、`1..60` 秒超时，并拒绝全部重定向。响应只返回状态码、Content-Type 和受限 JSON 或文本正文；认证值即使被上游回显也必须脱敏。
+运行请求必须在 `credential_slot` 与兼容的 `credential_ref` 中二选一，并提交 `credential_scope`、`method` 和正式 HTTPS `url`；可选 `headers`、`json_body`、`text_body` 和 `timeout_seconds`。请求体最多选择一种；Agent Header 只允许 `Accept`、`Content-Type`、`Idempotency-Key`、`User-Agent` 和 `X-Request-Id`，禁止提交任何认证 Header。插件必须验证公网 HTTPS、私网/环回/保留地址、域名允许表、方法允许表、scope、1 MiB 请求和响应上限、`1..60` 秒超时，并拒绝全部重定向。响应只返回状态码、Content-Type 和受限 JSON 或文本正文；认证值即使被上游回显也必须脱敏。
 
 该合同只提供运输和凭证隔离，不识别 Sync.so、声音供应商或任何行业，不保存 Agent 不可见的业务任务，不决定供应商、请求路径、参数、轮询频率、重试、费用或完成条件。原业务确实已有开发方业务服务时，可以继续使用第 25.2.1 节；迁移不得仅为调用第三方 API 或保存 Key 新增业务服务、域名、audience 或 `business.service.installation-identity/1` 链路。
 
 兼容要求：旧已签名 Agent、`business.service.installation-identity/1` 和本地执行合同继续有效，不强制迁移。新建或主动重建的 Agent 只要第三方调用本来属于其业务逻辑，就使用 `agent.outbound/1`；本合同字段或权限语义发生不兼容变化时必须发布新合同版本。
+
+#### 25.2.3 Agent 流式出站与临时资源交换（accepted / implemented）
+
+平台负责人已接受这两项供应商无关的通用能力，正式实现由 `dclaw.super-agent-support` `1.15.0` 提供，机器合同由 DevKit `1.8.0` 发布，并随 Developer Pack `1.9.0` 交付。
+
+- 正式能力 ID：`agent.outbound.stream/1` 与 `resource.exchange/1`
+- 合同版本：均为 `1`
+- 归属：`dclaw.super-agent-support`
+- 目的：支持有明确大小上限的第三方 HTTPS 二进制响应、WSS 流和本地助手资源交换，不让模型、普通 DClaw API 响应或本地助手接触长期凭证与媒体正文。
+
+`agent.outbound.stream/1` 使用客户端键 `agent_outbound.stream` 和 MCP 工具 `agent_outbound_stream_request`。请求必须在 `credential_slot` 与兼容的 `credential_ref` 中二选一，固定 `https` 或 `wss`、正式公网 URL、scope、输出 MIME、用途、超时和最大输出大小；WSS 可以声明确定的发送帧、完成文本、二进制帧过滤和协议头剥离规则。插件禁止重定向、私网/环回/保留地址和未授权目标，对经过插件运输的输出实施 `32 MiB` 硬上限并写入临时对象存储；响应只返回 `resource_ref`、MIME、大小、SHA-256 和过期时间，不返回媒体字节。更大的素材不得使用本合同，应由第三方返回短时 HTTPS URL 后交给本地助手直连下载。
+
+`resource.exchange/1` 使用 `agent_resource_upload_create`、`agent_resource_upload_complete`、`agent_resource_read` 和 `agent_resource_revoke`。宿主从受信运行上下文绑定租户、用户、会话、Agent、发布版、安装和调用；上传前声明 MIME、大小上限、用途和 TTL，完成时核对实际大小与 SHA-256，读取只签发短时 HTTPS URL，撤销后立即失败关闭。对象存储不可用时返回稳定 `RESOURCE_EXCHANGE.STORAGE_UNAVAILABLE`，不得回退为 DClaw 服务端代理上传或下载。
+
+需要本地加工时，超级 Agent 把短时 `resource_ref` 或预签名读取 URL 交给本地助手；本地助手下载后校验 SHA-256 并在客户本地执行。最终视频、音频和大文件仍必须落到客户本地目录。`agent.outbound.stream/1` 依赖 `resource.exchange/1`，但二者都不要求把第三方业务判断下沉到本地助手。
+
+兼容要求：旧 `agent.outbound/1`、旧 `credential_ref`、旧签名 Agent、本地执行与业务服务身份合同继续有效；只有声明新能力的新发布版才使用流式和临时资源合同。不兼容字段或权限变化必须发布新的合同主版本。
 
 ### 25.3 平台评审结果
 
@@ -2138,10 +2158,10 @@ Agent 名称：<可选，中文显示名称>
 2. 开发方自己的业务目标、源 Agent 材料和测试凭证；
 3. 从目标 DClaw 认证调用元数据接口并按其 `download_path` 下载、核对 SHA-256 的官方开发包；兼容自动化可以继续单独下载同版本官方 DevKit。
 
-开发包 `1.8.0` 是推荐的单一离线移交物，必须提供：
+开发包 `1.9.0` 是推荐的单一离线移交物，必须提供：
 
 - 唯一标准文件与明确的标准版本，不复制第二套人工规则；
-- 官方 DevKit `1.7.0` 及其完整离线加密依赖；
+- 官方 DevKit `1.8.0` 及其完整离线加密依赖；
 - `dclaw_developer.py` 的 `doctor`、`info`、`init`、`validate`、`test`、`keygen`、`capability-build`、`build`、`upgrade` 和 `demo`；
 - 超级专家、业务服务和本地能力包模板，以及职责边界示例；
 - Agent 自主出站、公共业务服务、本地执行和能力包 Schema/SDK；
@@ -2153,7 +2173,7 @@ Agent 名称：<可选，中文显示名称>
 
 开发包本身不得包含平台管理员凭据、生产地址、签名私钥、供应商 Secret、客户数据或 DClaw 私有实现。包内公开工具不得导入 `qwenpaw` 或要求开发者克隆服务器仓库。
 
-DevKit `1.7.0` 必须提供：
+DevKit `1.8.0` 必须提供：
 
 - `dclaw_agent_devkit.py`：`doctor`、`contracts`、`digest`、`validate`、`keygen`、`build`、`verify`；
 - `capability-catalog.json`：当前可声明的能力、版本、组和依赖；
@@ -2162,6 +2182,8 @@ DevKit `1.7.0` 必须提供：
 - `schemas/super-agent-support-v1/`：能力包、设备命令、设备消息和凭证绑定合同；
 - `schemas/business-identity-v1/`：安装级业务服务身份签发、出站、在线验证、管理和稳定错误合同；
 - `schemas/agent-outbound-v1/`：Agent 自主第三方请求、响应、安装凭证绑定和稳定错误合同；
+- `schemas/agent-outbound-stream-v1/`：HTTPS/WSS 流式出站请求、资源引用响应和稳定错误合同；
+- `schemas/resource-exchange-v1/`：短时资源创建、完成、读取、撤销、响应和稳定错误合同；
 - `operation-catalog.json`：正式 MCP 入口、客户端键、工具名、调用顺序和平台注入参数；
 - `business_identity_verifier.py` 与 `fixtures/business-identity/`：公开 JWK 离线验签、持久化 `jti` 防重放、断言 Header 运输和正反夹具；
 - `templates/minimal/`：最小 manifest、`agent.json` 和 `runtime.py`。
@@ -2173,6 +2195,14 @@ DevKit `1.7.0` 必须提供：
 平台内部实现文件、测试文件和维护文档可以继续存在，但它们只服务平台维护者，不属于开发方输入。开发方缺少字段或行为定义时应报告标准或 DevKit 缺陷；平台不得用“请克隆服务器源码”回答。
 
 ## 34. 版本记录
+
+### 2.20 - 2026-10-31
+
+- 支持插件升级为 `1.15.0`，新增安装级稳定 `credential_slot`，同时保留旧 `credential_ref` 和旧签名 Agent 的兼容路径。
+- 正式发布 `agent.outbound.stream/1` 与 `resource.exchange/1`：受控 HTTPS/WSS 输出限制为 `32 MiB` 并写入临时对象存储；本地助手资源使用预签名 HTTPS 直传，不经 DClaw 服务端代理。
+- DevKit 升级为 `1.8.0`，发布流式出站、临时资源和稳定凭证槽 Schema 与操作目录；Developer Pack 升级为 `1.9.0` 并内嵌标准 `2.20`。
+- 修复通用插件事务化热加载：同一核心 SPI 下安装、升级和回滚无需重启 DClaw 主服务；失败恢复旧文件、旧配置和旧运行注册，配置与 signer 不丢失。
+- 旧 `agent.outbound/1`、业务服务身份、本地执行、公共 Component、密封格式和已签名 Agent 继续有效；本次不要求客户端或 Runner 因机器合同升级而强制更新。
 
 ### 2.19 - 2026-10-30
 

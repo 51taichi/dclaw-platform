@@ -93,5 +93,62 @@ class CredentialBroker:
             raise CredentialError("credential payload is invalid")
         return value
 
+    def bind_slot(
+        self,
+        *,
+        credential_ref: str,
+        tenant_id: str,
+        user_id: str,
+        agent_ids: list[str],
+        release_ids: list[str],
+        installation_ids: list[str],
+        scopes: list[str],
+        credential_slot: str,
+    ) -> None:
+        for agent_id in agent_ids:
+            for release_id in release_ids:
+                for installation_id in installation_ids:
+                    for scope in scopes:
+                        self._store.put_credential_slot(
+                            tenant_id=tenant_id,
+                            user_id=user_id,
+                            agent_id=agent_id,
+                            release_id=release_id,
+                            installation_id=installation_id,
+                            credential_scope=scope,
+                            credential_slot=credential_slot,
+                            credential_ref=credential_ref,
+                        )
+
+    def resolve_slot(
+        self,
+        credential_slot: str,
+        *,
+        tenant_id: str,
+        user_id: str,
+        agent_id: str,
+        release_id: str,
+        installation_id: str,
+        required_scope: str,
+    ) -> dict[str, Any]:
+        reference = self._store.get_credential_ref_for_slot(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            release_id=release_id,
+            installation_id=installation_id,
+            credential_scope=required_scope,
+            credential_slot=credential_slot,
+        )
+        if reference is None:
+            raise CredentialError("credential slot access denied")
+        return self.resolve(
+            reference,
+            user_id=user_id,
+            agent_id=agent_id,
+            installation_id=installation_id,
+            required_scope=required_scope,
+        )
+
     def revoke(self, reference: str, *, user_id: str) -> bool:
         return self._store.delete_credential(reference, user_id)

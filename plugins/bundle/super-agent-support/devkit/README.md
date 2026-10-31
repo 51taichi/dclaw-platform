@@ -1,6 +1,8 @@
 # DClaw Super Agent DevKit
 
-Version 1.7.0 publishes `agent.outbound/1`, a provider-neutral controlled
+Version 1.8.0 publishes stable installation credential slots,
+`agent.outbound.stream/1`, and `resource.exchange/1` in addition to the
+provider-neutral controlled
 HTTPS transport for sealed Super Agents. The Agent owns provider selection,
 request parameters, idempotency, polling, retries, fees, and response
 interpretation. The transport resolves an installation-scoped
@@ -35,7 +37,8 @@ flow. Its credential is installed through the authenticated
 scope, Agent, installation, domain, method, and authentication-header policy.
 Sync.so-style API keys use authorization type `header` with name `x-api-key`;
 Bearer providers use type `bearer`. The sealed Agent retains only the returned
-opaque `credential_ref`.
+stable `credential_slot` for new releases or the compatible opaque
+`credential_ref` for existing signed Agents.
 
 Business services that verify with the public JWK set must use
 `business_identity_verifier.py` or an equivalent durable replay cache. Every

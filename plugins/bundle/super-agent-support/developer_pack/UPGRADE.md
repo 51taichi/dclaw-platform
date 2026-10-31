@@ -2,9 +2,13 @@
 
 ## Upgrade
 
-Pack 1.8.0 adopts development standard 2.19 and DevKit 1.7.0. Agents that call
-third-party providers should declare `agent.outbound/1`, use the published
-operation catalog, and keep only opaque installation credential references.
+Pack 1.9.0 adopts development standard 2.20 and DevKit 1.8.0. New or rebuilt
+Agents that call third-party providers should declare `agent.outbound/1`, use
+the published operation catalog, and use stable installation credential slots.
+Agents that need HTTPS large responses or WSS streams declare
+`agent.outbound.stream/1` together with `resource.exchange/1`; only opaque
+resource references and digests enter the Agent response. Existing
+`credential_ref` callers remain compatible.
 Existing signed Agents remain valid and may continue using their previous
 contracts until rebuilt. Do not replace an existing business service when it
 is part of the source product; only remove migration-added service/audience

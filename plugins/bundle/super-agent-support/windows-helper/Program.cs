@@ -602,12 +602,17 @@ internal sealed class HelperRuntime
                 request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
             if (!response.IsSuccessStatusCode)
                 throw new LocalFileException("LOCAL_FILE_REF.RESOLVE_FAILED");
+            await using var digestInput = File.OpenRead(path);
+            var digest = Convert.ToHexString(
+                await SHA256.HashDataAsync(digestInput, cancellationToken))
+                .ToLowerInvariant();
             await SendDurableResponseAsync(new JsonObject
             {
                 ["type"] = "file.upload.result",
                 ["request_id"] = requestId,
                 ["status"] = "uploaded",
                 ["size_bytes"] = info.Length,
+                ["sha256"] = digest,
             }, requestId, cancellationToken);
         }
         catch (LocalFileException exception)

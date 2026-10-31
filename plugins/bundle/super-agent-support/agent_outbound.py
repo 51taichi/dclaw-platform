@@ -20,6 +20,7 @@ CAPABILITY_ID = "agent.outbound/1"
 MAX_REQUEST_BYTES = 1_048_576
 MAX_RESPONSE_BYTES = 1_048_576
 _CREDENTIAL_REF_PATTERN = re.compile(r"^cred_[0-9a-f]{32}$")
+_CREDENTIAL_SLOT_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
 _PROVIDER_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
 _SCOPE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 _HEADER_NAME_PATTERN = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$")
@@ -193,12 +194,15 @@ class AgentOutboundManager:
     def bind_credential(
         self,
         *,
+        tenant_id: str = "local",
         user_id: str,
         provider: str,
         authorization: dict[str, Any],
         scopes: list[str],
         agent_ids: list[str],
         installation_ids: list[str],
+        release_ids: list[str] | None = None,
+        credential_slot: str | None = None,
         allowed_domains: list[str],
         allowed_methods: list[str],
     ) -> str:
@@ -229,6 +233,21 @@ class AgentOutboundManager:
                 for item in installation_ids
             )
             or len(set(installation_ids)) != len(installation_ids)
+            or (
+                credential_slot is not None
+                and (
+                    not isinstance(credential_slot, str)
+                    or not _CREDENTIAL_SLOT_PATTERN.fullmatch(credential_slot)
+                    or not isinstance(release_ids, list)
+                    or not release_ids
+                    or len(release_ids) > 64
+                    or not all(
+                        isinstance(item, str) and 1 <= len(item) <= 128
+                        for item in release_ids
+                    )
+                    or len(set(release_ids)) != len(release_ids)
+                )
+            )
             or not isinstance(allowed_domains, list)
             or not allowed_domains
             or len(allowed_domains) > 32
@@ -251,7 +270,7 @@ class AgentOutboundManager:
         ):
             raise AgentOutboundError("INVALID_CREDENTIAL_POLICY")
         auth = self._validated_authorization(authorization)
-        return self._credentials.bind(
+        reference = self._credentials.bind(
             user_id=user_id,
             provider=provider,
             secret={
@@ -264,12 +283,26 @@ class AgentOutboundManager:
             agent_ids=agent_ids,
             installation_ids=installation_ids,
         )
+        if credential_slot is not None:
+            self._credentials.bind_slot(
+                credential_ref=reference,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                agent_ids=agent_ids,
+                release_ids=list(release_ids or []),
+                installation_ids=installation_ids,
+                scopes=scopes,
+                credential_slot=credential_slot,
+            )
+        return reference
 
     @staticmethod
     def _validated_authorization(value: dict[str, Any]) -> dict[str, str]:
         if not isinstance(value, dict):
             raise AgentOutboundError("INVALID_CREDENTIAL_POLICY")
         auth_type = value.get("type")
+        if auth_type == "none" and set(value) == {"type"}:
+            return {"type": "none"}
         secret_value = _safe_header_value(value.get("value"))
         if auth_type == "bearer" and set(value) == {"type", "value"}:
             return {"type": "bearer", "value": secret_value}
@@ -296,8 +329,9 @@ class AgentOutboundManager:
         self,
         *,
         dclaw_session_token: str,
-        credential_ref: str,
         credential_scope: str,
+        credential_ref: str | None = None,
+        credential_slot: str | None = None,
         method: str,
         url: str,
         headers: dict[str, str] | None = None,
@@ -307,10 +341,23 @@ class AgentOutboundManager:
     ) -> dict[str, Any]:
         identity = self._identity(dclaw_session_token)
         if (
-            not isinstance(credential_ref, str)
-            or not _CREDENTIAL_REF_PATTERN.fullmatch(credential_ref)
-            or not isinstance(credential_scope, str)
+            not isinstance(credential_scope, str)
             or not _SCOPE_PATTERN.fullmatch(credential_scope)
+            or (credential_ref is None) == (credential_slot is None)
+            or (
+                credential_ref is not None
+                and (
+                    not isinstance(credential_ref, str)
+                    or not _CREDENTIAL_REF_PATTERN.fullmatch(credential_ref)
+                )
+            )
+            or (
+                credential_slot is not None
+                and (
+                    not isinstance(credential_slot, str)
+                    or not _CREDENTIAL_SLOT_PATTERN.fullmatch(credential_slot)
+                )
+            )
         ):
             raise AgentOutboundError("INVALID_REQUEST")
         normalized_method = str(method).upper()
@@ -348,13 +395,24 @@ class AgentOutboundManager:
                 raise AgentOutboundError("INVALID_REQUEST")
             request_headers[lowered] = value
         try:
-            envelope = self._credentials.resolve(
-                credential_ref,
-                user_id=identity["u"],
-                agent_id=identity["a"],
-                installation_id=identity["g"],
-                required_scope=credential_scope,
-            )
+            if credential_slot is not None:
+                envelope = self._credentials.resolve_slot(
+                    credential_slot,
+                    tenant_id=identity["t"],
+                    user_id=identity["u"],
+                    agent_id=identity["a"],
+                    release_id=identity["r"],
+                    installation_id=identity["g"],
+                    required_scope=credential_scope,
+                )
+            else:
+                envelope = self._credentials.resolve(
+                    str(credential_ref),
+                    user_id=identity["u"],
+                    agent_id=identity["a"],
+                    installation_id=identity["g"],
+                    required_scope=credential_scope,
+                )
         except CredentialError as exc:
             raise AgentOutboundError("CREDENTIAL_DENIED") from exc
         if envelope.get("_dclaw_agent_outbound") != 1:
@@ -373,12 +431,16 @@ class AgentOutboundManager:
         if authorization["type"] == "bearer":
             injected_name = "authorization"
             injected_value = f"Bearer {authorization['value']}"
-        else:
+        elif authorization["type"] == "header":
             injected_name = authorization["name"]
             injected_value = authorization["value"]
-        if injected_name in request_headers:
-            raise AgentOutboundError("INVALID_REQUEST")
-        request_headers[injected_name] = injected_value
+        else:
+            injected_name = None
+            injected_value = None
+        if injected_name is not None:
+            if injected_name in request_headers:
+                raise AgentOutboundError("INVALID_REQUEST")
+            request_headers[injected_name] = str(injected_value)
         if json_body is not None:
             request_headers.setdefault("content-type", "application/json")
         try:
@@ -416,7 +478,7 @@ class AgentOutboundManager:
             raise
         except (httpx.HTTPError, OSError) as exc:
             raise AgentOutboundError("UPSTREAM_FAILED") from exc
-        secret_bytes = authorization["value"].encode("utf-8")
+        secret_bytes = authorization.get("value", "").encode("utf-8")
         if secret_bytes and secret_bytes in content:
             content = content.replace(secret_bytes, b"[REDACTED]")
         result: dict[str, Any] = {

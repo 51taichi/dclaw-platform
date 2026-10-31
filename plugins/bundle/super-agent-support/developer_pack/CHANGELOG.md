@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.9.0 - 2026-10-31
+
+- Bundles development standard 2.20 and DevKit 1.8.0.
+- Adds stable installation credential slots while retaining legacy opaque
+  credential references for existing signed Agents.
+- Publishes bounded HTTPS/WSS outbound and temporary resource exchange
+  contracts; local helper transfers use presigned object storage and media
+  bytes never enter the Agent or ordinary DClaw API response.
+- Keeps existing signed package, local execution, public Component, business
+  service identity, and `agent.outbound/1` contracts compatible.
+
 ## 1.8.0 - 2026-10-30
 
 - Bundles development standard 2.19 and DevKit 1.7.0.

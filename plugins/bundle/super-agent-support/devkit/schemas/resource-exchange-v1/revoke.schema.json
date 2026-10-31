@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/schemas/resource-exchange-v1/revoke.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["resource_ref"],
+  "properties": {
+    "resource_ref": {
+      "type": "string",
+      "pattern": "^res_[0-9a-f]{32}$"
+    }
+  }
+}

@@ -129,6 +129,11 @@ class AgentOutboundCredentialBinding(BaseModel):
     scopes: list[str] = Field(min_length=1, max_length=64)
     agent_ids: list[str] = Field(min_length=1, max_length=64)
     installation_ids: list[str] = Field(min_length=1, max_length=64)
+    release_ids: list[str] | None = Field(default=None, min_length=1, max_length=64)
+    credential_slot: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9_.-]{0,127}$",
+    )
     allowed_domains: list[str] = Field(min_length=1, max_length=32)
     allowed_methods: list[str] = Field(min_length=1, max_length=5)
 
@@ -189,6 +194,10 @@ def _user_id(request: Request) -> str:
     if user_id is None:
         raise HTTPException(status_code=401, detail="authentication required")
     return str(user_id)
+
+
+def _tenant_id(request: Request) -> str:
+    return str(getattr(request.state, "tenant_id", None) or "local")
 
 
 def _require_admin(request: Request) -> None:
@@ -344,12 +353,14 @@ def create_app(
         return {
             "status": "ok",
             "plugin": "dclaw.super-agent-support",
-            "version": "1.14.0",
+            "version": "1.15.0",
             "protocols": {
                 "local_execution": "1.2",
                 "device": "2",
                 "business_identity": "1",
                 "agent_outbound": "1",
+                "agent_outbound_stream": "1",
+                "resource_exchange": "1",
                 "public_components": "1",
             },
         }
@@ -721,6 +732,7 @@ def create_app(
         ) -> dict[str, Any]:
             try:
                 reference = agent_outbound.bind_credential(
+                    tenant_id=_tenant_id(request),
                     user_id=_user_id(request),
                     provider=body.provider,
                     authorization=body.authorization.model_dump(
@@ -729,13 +741,14 @@ def create_app(
                     scopes=body.scopes,
                     agent_ids=body.agent_ids,
                     installation_ids=body.installation_ids,
+                    release_ids=body.release_ids,
+                    credential_slot=body.credential_slot,
                     allowed_domains=body.allowed_domains,
                     allowed_methods=body.allowed_methods,
                 )
             except (AgentOutboundError, CredentialError) as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
-            return {
-                "credential_ref": reference,
+            result = {
                 "provider": body.provider,
                 "scopes": body.scopes,
                 "agent_ids": body.agent_ids,
@@ -745,5 +758,11 @@ def create_app(
                     item.upper() for item in body.allowed_methods
                 ],
             }
+            if body.credential_slot is None:
+                result["credential_ref"] = reference
+            else:
+                result["credential_slot"] = body.credential_slot
+                result["release_ids"] = body.release_ids
+            return result
 
     return app

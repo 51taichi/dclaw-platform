@@ -15,6 +15,10 @@ from .agent_outbound import (
     CAPABILITY_ID as AGENT_OUTBOUND_CAPABILITY_ID,
     AgentOutboundManager,
 )
+from .agent_outbound_stream import (
+    CAPABILITY_ID as AGENT_OUTBOUND_STREAM_CAPABILITY_ID,
+    AgentOutboundStreamManager,
+)
 from .business_identity import (
     CAPABILITY_ID as BUSINESS_IDENTITY_CAPABILITY_ID,
     BusinessIdentityManager,
@@ -27,6 +31,10 @@ from .routes import create_app
 from .service import LocalExecutionService
 from .session import CAPABILITY_ID, PREFLIGHT_CAPABILITY_ID, SessionSigner
 from .store import StateStore
+from .temporary_resources import (
+    CAPABILITY_ID as RESOURCE_EXCHANGE_CAPABILITY_ID,
+    TemporaryResourceBroker,
+)
 from .super_agent.capabilities import PLATFORM_CAPABILITY_CATALOG_V1
 from .super_agent.composition import (
     accepted_workflow_allows_unbound_node,
@@ -36,6 +44,7 @@ from .super_agent.package_handler import SuperAgentPackageHandler
 from .super_agent.orchestration import handle_workspace_turn
 from .super_agent.router import frontend_read_routes, user_routes
 from qwenpaw.app.guards import require_user
+from qwenpaw.app.object_storage import get_object_storage_client
 from qwenpaw.app.sealed_agents.signing import load_trusted_signers
 from qwenpaw.constant import WORKING_DIR
 
@@ -128,6 +137,20 @@ class SuperAgentSupportPlugin:
             ),
         )
         credentials = CredentialBroker(store, key)
+        try:
+            object_storage = get_object_storage_client(require_enabled=True)
+        except RuntimeError:
+            object_storage = None
+        temporary_resources = TemporaryResourceBroker(
+            store,
+            signer,
+            object_storage,
+        )
+        agent_outbound_stream = AgentOutboundStreamManager(
+            credentials,
+            signer,
+            temporary_resources,
+        )
         agent_outbound = AgentOutboundManager(credentials, signer)
         packages = CapabilityPackageRegistry(
             store,
@@ -166,6 +189,8 @@ class SuperAgentSupportPlugin:
             service,
             business_identity,
             agent_outbound,
+            temporary_resources,
+            agent_outbound_stream,
         )
         app = create_app(
             store=store,
@@ -225,6 +250,17 @@ class SuperAgentSupportPlugin:
             AGENT_OUTBOUND_CAPABILITY_ID,
             "1",
             "agent_outbound",
+        )
+        api.register_platform_capability(
+            RESOURCE_EXCHANGE_CAPABILITY_ID,
+            "1",
+            "resource_exchange",
+        )
+        api.register_platform_capability(
+            AGENT_OUTBOUND_STREAM_CAPABILITY_ID,
+            "1",
+            "agent_outbound",
+            dependencies=[RESOURCE_EXCHANGE_CAPABILITY_ID],
         )
         api.register_aigc_event_consumer_factory(
             "super-agent-aigc-projection",

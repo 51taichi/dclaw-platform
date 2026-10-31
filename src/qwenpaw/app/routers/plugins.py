@@ -3,6 +3,7 @@
 """Plugin API routes: list plugins with UI metadata and serve plugin
 static files.  Also provides runtime install / uninstall endpoints."""
 
+import copy
 import inspect
 import json
 import logging
@@ -485,6 +486,114 @@ class InstallPluginRequest(BaseModel):
     force: bool = False
 
 
+async def _load_plugin_transactionally(
+    *,
+    request: Request,
+    loader,
+    source_path: Path,
+    install_dir: Path,
+    force: bool,
+):
+    """Hot-load an update and restore the active plugin on failure."""
+    manifest_path = source_path / "plugin.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"plugin.json not found in {source_path}")
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    plugin_id = raw.get("id")
+    existing = loader.get_loaded_plugin(plugin_id) if plugin_id else None
+    if existing is None or not force:
+        record = await loader.load_plugin_from_path(
+            source_path=source_path,
+            install_dir=install_dir,
+        )
+        try:
+            await _post_load_setup(request, record.manifest.id)
+        except Exception:
+            provider_ids, commands = _collect_plugin_runtime_ids(
+                loader.registry,
+                record.manifest.id,
+            )
+            await loader.unload_plugin(record.manifest.id, delete_files=False)
+            _post_unload_cleanup(
+                request,
+                record.manifest.id,
+                provider_ids,
+                commands,
+            )
+            raise
+        return record
+
+    previous_config = copy.deepcopy(existing.config)
+    previous_source_path = existing.source_path.resolve()
+    rollback_root = Path(tempfile.mkdtemp(prefix="dclaw-plugin-rollback-"))
+    rollback_source = rollback_root / plugin_id
+    if not previous_source_path.is_dir():
+        shutil.rmtree(rollback_root, ignore_errors=True)
+        raise RuntimeError(
+            f"Cannot update plugin '{plugin_id}': active files are missing",
+        )
+    shutil.copytree(previous_source_path, rollback_source)
+    previous_plugin_ids, previous_commands = _collect_plugin_runtime_ids(
+        loader.registry,
+        plugin_id,
+    )
+
+    try:
+        await loader.unload_plugin(plugin_id, delete_files=False)
+        _post_unload_cleanup(
+            request,
+            plugin_id,
+            previous_plugin_ids,
+            previous_commands,
+        )
+        try:
+            record = await loader.load_plugin_from_path(
+                source_path=source_path,
+                config=previous_config,
+                install_dir=install_dir,
+            )
+            await _post_load_setup(request, plugin_id)
+            return record
+        except Exception as update_exc:
+            current = loader.get_loaded_plugin(plugin_id)
+            if current is not None:
+                current_plugin_ids, current_commands = (
+                    _collect_plugin_runtime_ids(loader.registry, plugin_id)
+                )
+                await loader.unload_plugin(plugin_id, delete_files=False)
+                _post_unload_cleanup(
+                    request,
+                    plugin_id,
+                    current_plugin_ids,
+                    current_commands,
+                )
+            target_path = (install_dir / plugin_id).resolve()
+            if target_path.exists():
+                shutil.rmtree(target_path)
+            shutil.copytree(rollback_source, target_path)
+            try:
+                restored = await loader.load_plugin_from_path(
+                    source_path=target_path,
+                    config=previous_config,
+                    install_dir=install_dir,
+                )
+                await _post_load_setup(request, plugin_id)
+            except Exception as rollback_exc:
+                raise RuntimeError(
+                    f"Plugin '{plugin_id}' update failed and rollback failed: "
+                    f"update={update_exc}; rollback={rollback_exc}",
+                ) from rollback_exc
+            logger.error(
+                "Plugin update for '%s' failed; restored version %s",
+                plugin_id,
+                restored.manifest.version,
+                exc_info=update_exc,
+            )
+            raise
+    finally:
+        shutil.rmtree(rollback_root, ignore_errors=True)
+
+
 @router.post(
     "/install",
     summary="Install plugin from path or URL",
@@ -537,41 +646,12 @@ async def install_plugin(
 
         from ...config.utils import get_plugins_dir
 
-        # Force-reinstall: unload the existing plugin first so that
-        # load_plugin_from_path can proceed without a conflict.
-        if body.force:
-            manifest_path = source_path / "plugin.json"
-            if manifest_path.exists():
-                raw = json.loads(
-                    manifest_path.read_text(encoding="utf-8"),
-                )
-                existing_id = raw.get("id")
-                if (
-                    existing_id
-                    and loader.get_loaded_plugin(existing_id) is not None
-                ):
-                    logger.info(
-                        f"Force-reinstall: unloading '{existing_id}'"
-                        " before re-installing",
-                    )
-                    _f_pids, _f_cmds = _collect_plugin_runtime_ids(
-                        loader.registry,
-                        existing_id,
-                    )
-                    await loader.unload_plugin(
-                        existing_id,
-                        delete_files=False,
-                    )
-                    _post_unload_cleanup(
-                        request,
-                        existing_id,
-                        _f_pids,
-                        _f_cmds,
-                    )
-
-        record = await loader.load_plugin_from_path(
+        record = await _load_plugin_transactionally(
+            request=request,
+            loader=loader,
             source_path=source_path,
             install_dir=get_plugins_dir(),
+            force=body.force,
         )
     except HTTPException:
         raise
@@ -588,8 +668,6 @@ async def install_plugin(
     finally:
         if temp_dir and temp_dir.exists():
             shutil.rmtree(temp_dir, ignore_errors=True)
-
-    await _post_load_setup(request, record.manifest.id)
 
     return {
         "id": record.manifest.id,
@@ -647,40 +725,12 @@ async def upload_plugin(
 
         from ...config.utils import get_plugins_dir
 
-        # Force-reinstall: unload existing plugin before re-installing
-        if force:
-            manifest_path = source_path / "plugin.json"
-            if manifest_path.exists():
-                raw = json.loads(
-                    manifest_path.read_text(encoding="utf-8"),
-                )
-                existing_id = raw.get("id")
-                if (
-                    existing_id
-                    and loader.get_loaded_plugin(existing_id) is not None
-                ):
-                    logger.info(
-                        f"Force-reinstall: unloading '{existing_id}'"
-                        " before re-installing",
-                    )
-                    _u_pids, _u_cmds = _collect_plugin_runtime_ids(
-                        loader.registry,
-                        existing_id,
-                    )
-                    await loader.unload_plugin(
-                        existing_id,
-                        delete_files=False,
-                    )
-                    _post_unload_cleanup(
-                        request,
-                        existing_id,
-                        _u_pids,
-                        _u_cmds,
-                    )
-
-        record = await loader.load_plugin_from_path(
+        record = await _load_plugin_transactionally(
+            request=request,
+            loader=loader,
             source_path=source_path,
             install_dir=get_plugins_dir(),
+            force=force,
         )
     except HTTPException:
         raise
@@ -697,8 +747,6 @@ async def upload_plugin(
     finally:
         if temp_dir.exists():
             shutil.rmtree(temp_dir, ignore_errors=True)
-
-    await _post_load_setup(request, record.manifest.id)
 
     return {
         "id": record.manifest.id,

@@ -5,13 +5,16 @@ Agents. It contains the human standard, standalone DevKit, schemas, templates,
 SDK helpers, fixtures, and a single cross-platform command line tool. DClaw
 server source is not required.
 
-Version 1.8.0 bundles development standard 2.19 and DevKit 1.7.0. It adds the
-provider-neutral `agent.outbound/1` contract so sealed Super Agents can own all
-third-party business calls while long-term credentials remain encrypted and
-invisible to the model, workspace, logs, and local helper. The 1.7.0 public
-Component export and registry contracts remain compatible. Project upgrades
-update the pack, standard and DevKit versions together before validation; no
-DClaw management page or server source is required.
+Version 1.9.0 bundles development standard 2.20 and DevKit 1.8.0. It adds
+stable installation credential slots, restricted HTTPS/WSS streaming outbound,
+and temporary resource exchange. Large results move through presigned object
+storage and are represented to the Agent by opaque references and digests;
+long-term credentials and media bytes remain invisible to the model,
+workspace, logs, local helper, and ordinary DClaw API responses. Existing
+`credential_ref`, signed Agent, public Component, and local execution contracts
+remain compatible. Project upgrades update the pack, standard and DevKit
+versions together before validation; no DClaw management page or server source
+is required.
 
 ## Supported environments
 

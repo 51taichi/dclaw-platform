@@ -141,6 +141,48 @@ class StateStore:
                     installation_ids_json TEXT NOT NULL DEFAULT '[]',
                     updated_at INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS credential_slots (
+                    tenant_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    release_id TEXT NOT NULL,
+                    installation_id TEXT NOT NULL,
+                    credential_scope TEXT NOT NULL,
+                    credential_slot TEXT NOT NULL,
+                    credential_ref TEXT NOT NULL REFERENCES credentials(credential_ref)
+                        ON DELETE CASCADE,
+                    updated_at INTEGER NOT NULL,
+                    PRIMARY KEY(
+                        tenant_id,user_id,agent_id,release_id,installation_id,
+                        credential_scope,credential_slot
+                    )
+                );
+                CREATE INDEX IF NOT EXISTS idx_credential_slots_ref
+                    ON credential_slots(credential_ref);
+                CREATE TABLE IF NOT EXISTS temporary_resources (
+                    resource_ref TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    release_id TEXT NOT NULL,
+                    installation_id TEXT NOT NULL,
+                    invocation_id TEXT NOT NULL,
+                    object_key TEXT NOT NULL,
+                    mime_type TEXT NOT NULL,
+                    purpose TEXT NOT NULL,
+                    max_size_bytes INTEGER NOT NULL,
+                    size_bytes INTEGER,
+                    sha256 TEXT,
+                    status TEXT NOT NULL,
+                    expires_at INTEGER NOT NULL,
+                    revoked_at INTEGER,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_temporary_resources_scope
+                    ON temporary_resources(
+                        tenant_id,user_id,agent_id,installation_id,expires_at
+                    );
                 CREATE TABLE IF NOT EXISTS local_file_refs (
                     local_file_ref TEXT PRIMARY KEY,
                     tenant_id TEXT NOT NULL DEFAULT 'local',
@@ -1024,10 +1066,155 @@ class StateStore:
 
     def delete_credential(self, credential_ref: str, user_id: str) -> bool:
         with self._lock, self._connect() as db:
+            db.execute(
+                "DELETE FROM credential_slots WHERE credential_ref=? AND user_id=?",
+                (credential_ref, user_id),
+            )
             return (
                 db.execute(
                     "DELETE FROM credentials WHERE credential_ref=? AND user_id=?",
                     (credential_ref, user_id),
+                ).rowcount
+                == 1
+            )
+
+    def put_credential_slot(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        agent_id: str,
+        release_id: str,
+        installation_id: str,
+        credential_scope: str,
+        credential_slot: str,
+        credential_ref: str,
+    ) -> None:
+        with self._lock, self._connect() as db:
+            db.execute(
+                """
+                INSERT INTO credential_slots(
+                    tenant_id,user_id,agent_id,release_id,installation_id,
+                    credential_scope,credential_slot,credential_ref,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(
+                    tenant_id,user_id,agent_id,release_id,installation_id,
+                    credential_scope,credential_slot
+                ) DO UPDATE SET
+                    credential_ref=excluded.credential_ref,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    tenant_id,
+                    user_id,
+                    agent_id,
+                    release_id,
+                    installation_id,
+                    credential_scope,
+                    credential_slot,
+                    credential_ref,
+                    int(time.time()),
+                ),
+            )
+
+    def get_credential_ref_for_slot(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        agent_id: str,
+        release_id: str,
+        installation_id: str,
+        credential_scope: str,
+        credential_slot: str,
+    ) -> str | None:
+        with self._connect() as db:
+            row = db.execute(
+                """
+                SELECT credential_ref FROM credential_slots
+                WHERE tenant_id=? AND user_id=? AND agent_id=? AND release_id=?
+                    AND installation_id=? AND credential_scope=?
+                    AND credential_slot=?
+                """,
+                (
+                    tenant_id,
+                    user_id,
+                    agent_id,
+                    release_id,
+                    installation_id,
+                    credential_scope,
+                    credential_slot,
+                ),
+            ).fetchone()
+        return str(row["credential_ref"]) if row is not None else None
+
+    def put_temporary_resource(self, value: dict[str, Any]) -> None:
+        with self._lock, self._connect() as db:
+            db.execute(
+                """
+                INSERT INTO temporary_resources(
+                    resource_ref,tenant_id,user_id,session_id,agent_id,release_id,
+                    installation_id,invocation_id,object_key,mime_type,purpose,
+                    max_size_bytes,size_bytes,sha256,status,expires_at,revoked_at,
+                    created_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL,'pending',?,NULL,?)
+                """,
+                (
+                    value["resource_ref"],
+                    value["tenant_id"],
+                    value["user_id"],
+                    value["session_id"],
+                    value["agent_id"],
+                    value["release_id"],
+                    value["installation_id"],
+                    value["invocation_id"],
+                    value["object_key"],
+                    value["mime_type"],
+                    value["purpose"],
+                    value["max_size_bytes"],
+                    value["expires_at"],
+                    value["created_at"],
+                ),
+            )
+
+    def get_temporary_resource(self, resource_ref: str) -> dict[str, Any] | None:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM temporary_resources WHERE resource_ref=?",
+                (resource_ref,),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def complete_temporary_resource(
+        self,
+        resource_ref: str,
+        *,
+        size_bytes: int,
+        sha256: str,
+    ) -> bool:
+        with self._lock, self._connect() as db:
+            return (
+                db.execute(
+                    """
+                    UPDATE temporary_resources
+                    SET size_bytes=?,sha256=?,status='ready'
+                    WHERE resource_ref=? AND status='pending' AND revoked_at IS NULL
+                    """,
+                    (size_bytes, sha256, resource_ref),
+                ).rowcount
+                == 1
+            )
+
+    def revoke_temporary_resource(self, resource_ref: str) -> bool:
+        with self._lock, self._connect() as db:
+            return (
+                db.execute(
+                    """
+                    UPDATE temporary_resources
+                    SET status='revoked',revoked_at=?
+                    WHERE resource_ref=? AND revoked_at IS NULL
+                    """,
+                    (int(time.time()), resource_ref),
                 ).rowcount
                 == 1
             )

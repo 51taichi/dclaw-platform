@@ -138,4 +138,5 @@ class PluginRecord:
     source_path: Path
     enabled: bool
     instance: Optional[Any] = None
+    config: Dict[str, Any] = field(default_factory=dict)
     diagnostics: List[str] = field(default_factory=list)

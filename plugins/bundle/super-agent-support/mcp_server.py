@@ -10,8 +10,16 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from .agent_outbound import AgentOutboundError, AgentOutboundManager
+from .agent_outbound_stream import (
+    AgentOutboundStreamError,
+    AgentOutboundStreamManager,
+)
 from .business_identity import BusinessIdentityError, BusinessIdentityManager
 from .service import LocalExecutionService
+from .temporary_resources import (
+    TemporaryResourceBroker,
+    TemporaryResourceError,
+)
 
 
 class LocalExecutionMcp:
@@ -20,10 +28,14 @@ class LocalExecutionMcp:
         service: LocalExecutionService,
         business_identity: BusinessIdentityManager | None = None,
         agent_outbound: AgentOutboundManager | None = None,
+        temporary_resources: TemporaryResourceBroker | None = None,
+        agent_outbound_stream: AgentOutboundStreamManager | None = None,
     ) -> None:
         self.service = service
         self.business_identity = business_identity
         self.agent_outbound = agent_outbound
+        self.temporary_resources = temporary_resources
+        self.agent_outbound_stream = agent_outbound_stream
         self.server = FastMCP(
             "DClaw Local Execution",
             instructions=(
@@ -239,7 +251,6 @@ class LocalExecutionMcp:
                             "retryable": exc.reason == "RATE_LIMITED",
                         },
                     }
-
             @self.server.tool(
                 description=(
                     "Send one HTTPS request through the platform transport using a "
@@ -286,11 +297,12 @@ class LocalExecutionMcp:
                 ),
             )
             async def agent_outbound_request(
-                credential_ref: str,
                 credential_scope: str,
                 method: str,
                 url: str,
                 dclaw_session_token: str,
+                credential_ref: str | None = None,
+                credential_slot: str | None = None,
                 headers: dict[str, str] | None = None,
                 json_body: Any | None = None,
                 text_body: str | None = None,
@@ -299,6 +311,7 @@ class LocalExecutionMcp:
                 try:
                     return await outbound.request(
                         credential_ref=credential_ref,
+                        credential_slot=credential_slot,
                         credential_scope=credential_scope,
                         method=method,
                         url=url,
@@ -313,5 +326,121 @@ class LocalExecutionMcp:
                         "error": {
                             "code": exc.code,
                             "retryable": exc.reason == "UPSTREAM_FAILED",
+                        },
+                    }
+
+        if self.temporary_resources is not None:
+            resources = self.temporary_resources
+
+            @self.server.tool(
+                description=(
+                    "Create an installation-scoped short-lived object-storage "
+                    "upload slot for a local file."
+                ),
+            )
+            async def agent_resource_upload_create(
+                mime_type: str,
+                max_size_bytes: int,
+                purpose: str,
+                dclaw_session_token: str,
+                ttl_seconds: int = 900,
+            ) -> dict[str, Any]:
+                try:
+                    return resources.create_upload(
+                        mime_type=mime_type,
+                        max_size_bytes=max_size_bytes,
+                        purpose=purpose,
+                        dclaw_session_token=dclaw_session_token,
+                        ttl_seconds=ttl_seconds,
+                    )
+                except TemporaryResourceError as exc:
+                    return {"error": {"code": exc.code, "retryable": False}}
+
+            @self.server.tool(
+                description="Finalize a direct upload using the trusted local digest.",
+            )
+            async def agent_resource_upload_complete(
+                resource_ref: str,
+                size_bytes: int,
+                sha256: str,
+                dclaw_session_token: str,
+            ) -> dict[str, Any]:
+                try:
+                    return resources.complete_upload(
+                        resource_ref=resource_ref,
+                        size_bytes=size_bytes,
+                        sha256=sha256,
+                        dclaw_session_token=dclaw_session_token,
+                    )
+                except TemporaryResourceError as exc:
+                    return {"error": {"code": exc.code, "retryable": False}}
+
+            @self.server.tool(
+                description="Resolve a ready resource to a short-lived HTTPS read URL.",
+            )
+            async def agent_resource_read(
+                resource_ref: str,
+                dclaw_session_token: str,
+                ttl_seconds: int = 300,
+            ) -> dict[str, Any]:
+                try:
+                    return resources.read(
+                        resource_ref=resource_ref,
+                        dclaw_session_token=dclaw_session_token,
+                        ttl_seconds=ttl_seconds,
+                    )
+                except TemporaryResourceError as exc:
+                    return {"error": {"code": exc.code, "retryable": False}}
+
+            @self.server.tool(description="Revoke a short-lived resource immediately.")
+            async def agent_resource_revoke(
+                resource_ref: str,
+                dclaw_session_token: str,
+            ) -> dict[str, Any]:
+                try:
+                    return resources.revoke(
+                        resource_ref=resource_ref,
+                        dclaw_session_token=dclaw_session_token,
+                    )
+                except TemporaryResourceError as exc:
+                    return {"error": {"code": exc.code, "retryable": False}}
+
+        if self.agent_outbound_stream is not None:
+            outbound_stream = self.agent_outbound_stream
+
+            @self.server.tool(
+                description=(
+                    "Run one restricted streaming HTTPS or WebSocket exchange and "
+                    "return an opaque short-lived resource reference."
+                ),
+            )
+            async def agent_outbound_stream_request(
+                protocol: str,
+                url: str,
+                credential_scope: str,
+                output_mime_type: str,
+                purpose: str,
+                dclaw_session_token: str,
+                credential_ref: str | None = None,
+                credential_slot: str | None = None,
+                method: str = "GET",
+                headers: dict[str, str] | None = None,
+                json_body: Any | None = None,
+                text_body: str | None = None,
+                send_frames: list[dict[str, Any]] | None = None,
+                completion_text: str | None = None,
+                binary_filter_contains: str | None = None,
+                binary_strip_through: str | None = None,
+                timeout_seconds: int = 60,
+                max_output_bytes: int = 33_554_432,
+            ) -> dict[str, Any]:
+                try:
+                    return await outbound_stream.request(**locals())
+                except AgentOutboundStreamError as exc:
+                    return {
+                        "error": {
+                            "code": exc.code,
+                            "retryable": exc.reason
+                            in {"UPSTREAM_FAILED", "UPSTREAM_TIMEOUT"},
                         },
                     }

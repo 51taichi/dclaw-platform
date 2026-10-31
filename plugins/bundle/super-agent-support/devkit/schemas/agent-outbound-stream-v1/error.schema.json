@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/schemas/agent-outbound-stream-v1/error.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["error"],
+  "properties": {"error": {"type": "object", "additionalProperties": false, "required": ["code", "retryable"], "properties": {"code": {"type": "string", "pattern": "^AGENT_OUTBOUND_STREAM\\.[A-Z_]+$"}, "retryable": {"type": "boolean"}}}}
+}

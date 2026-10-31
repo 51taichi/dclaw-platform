@@ -653,12 +653,14 @@ def test_mcp_endpoint_publishes_controlled_outbound_tools(
     }
     agent_schema = tools["agent_outbound_request"]["inputSchema"]
     assert set(agent_schema["required"]) == {
-        "credential_ref",
         "credential_scope",
         "method",
         "url",
         "dclaw_session_token",
     }
+    assert {"credential_ref", "credential_slot"} <= set(
+        agent_schema["properties"],
+    )
     assert issued.status_code == 200
     assert issue_result["isError"] is False
     assert outbound_response.status_code == 200
@@ -701,7 +703,7 @@ def test_developer_kit_is_downloadable_without_server_source(
 
     assert metadata.status_code == 200
     assert metadata.json()["name"] == "dclaw-super-agent-devkit"
-    assert metadata.json()["version"] == "1.7.0"
+    assert metadata.json()["version"] == "1.8.0"
     assert metadata.json()["download_path"] == (
         "/api/super-agent-support/developer-kit/v1.zip"
     )
@@ -720,7 +722,7 @@ def test_developer_kit_is_downloadable_without_server_source(
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-devkit-1.7.0"
+    prefix = "dclaw-super-agent-devkit-1.8.0"
     assert f"{prefix}/dclaw_agent_devkit.py" in names
     assert f"{prefix}/bootstrap.ps1" in names
     assert f"{prefix}/bootstrap.sh" in names
@@ -790,23 +792,23 @@ def test_developer_pack_is_downloadable_and_self_describing(
         downloaded = client.get("/developer-pack/download")
 
     assert health.status_code == 200
-    assert health.json()["version"] == "1.14.0"
+    assert health.json()["version"] == "1.15.0"
     assert metadata.status_code == 200
     payload = metadata.json()
-    assert payload["version"] == "1.8.0"
-    assert payload["standard"]["version"] == "2.19"
-    assert payload["devkit_version"] == "1.7.0"
+    assert payload["version"] == "1.9.0"
+    assert payload["standard"]["version"] == "2.20"
+    assert payload["devkit_version"] == "1.8.0"
     assert payload["server_source_required"] is False
     assert payload["download_path"].endswith("/developer-pack/download")
     assert payload["sha256"] == hashlib.sha256(downloaded.content).hexdigest()
     assert payload["content_sha256"] == payload["sha256"]
     assert downloaded.status_code == 200
-    assert "dclaw-super-agent-developer-pack-1.8.0.zip" in (
+    assert "dclaw-super-agent-developer-pack-1.9.0.zip" in (
         downloaded.headers["content-disposition"]
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-developer-pack-1.8.0"
+    prefix = "dclaw-super-agent-developer-pack-1.9.0"
     assert f"{prefix}/PACKAGE-MANIFEST.json" in names
     assert f"{prefix}/SHA256SUMS" in names
     assert f"{prefix}/dclaw_developer.py" in names
@@ -2848,6 +2850,299 @@ async def test_agent_outbound_rejects_redirects_and_missing_capability(
             url="https://8.8.8.8/v2/generate",
         )
     assert redirected.value.code == "AGENT_OUTBOUND.REDIRECT_REJECTED"
+
+
+@pytest.mark.asyncio
+async def test_agent_outbound_credential_slot_is_release_and_installation_scoped(
+    plugin_module,
+    tmp_path,
+):
+    _store, signer, broker, _service = _runtime(plugin_module, tmp_path)
+    outbound_module = sys.modules[
+        "test_dclaw_super_agent_support.agent_outbound"
+    ]
+    manager = outbound_module.AgentOutboundManager(
+        broker,
+        signer,
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, json={"ok": True}),
+        ),
+    )
+    manager.bind_credential(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        provider="sync.so",
+        authorization={"type": "header", "name": "x-api-key", "value": "secret"},
+        scopes=["sync.so.api"],
+        agent_ids=["agent-1"],
+        installation_ids=["install-1"],
+        release_ids=["release-1"],
+        credential_slot="sync.primary",
+        allowed_domains=["8.8.8.8"],
+        allowed_methods=["POST"],
+    )
+
+    def token(release_id):
+        return signer.issue(
+            tenant_id="tenant-1",
+            user_id="user-1",
+            session_id="session-1",
+            agent_id="agent-1",
+            agent_name="Agent",
+            installation_id="install-1",
+            release_id=release_id,
+            invocation_id="invocation-1",
+            capability_ids=["agent.outbound/1"],
+        )
+
+    result = await manager.request(
+        dclaw_session_token=token("release-1"),
+        credential_slot="sync.primary",
+        credential_scope="sync.so.api",
+        method="POST",
+        url="https://8.8.8.8/v2/generate",
+    )
+    assert result["body_json"] == {"ok": True}
+    with pytest.raises(outbound_module.AgentOutboundError) as denied:
+        await manager.request(
+            dclaw_session_token=token("release-2"),
+            credential_slot="sync.primary",
+            credential_scope="sync.so.api",
+            method="POST",
+            url="https://8.8.8.8/v2/generate",
+        )
+    assert denied.value.code == "AGENT_OUTBOUND.CREDENTIAL_DENIED"
+
+
+class _TemporaryStorage:
+    def __init__(self):
+        self.uploads = []
+
+    def build_object_key(self, relative_path):
+        return "root/" + relative_path
+
+    def signed_put_url(self, object_key, _mime_type):
+        return "https://8.8.8.8/" + object_key + "?put=1"
+
+    def signed_get_url(self, object_key, ttl_seconds=None):
+        return "https://8.8.8.8/" + object_key + f"?ttl={ttl_seconds}"
+
+    async def upload(self, *, relative_path, content, mime_type):
+        self.uploads.append((relative_path, content, mime_type))
+        return {"object_key": self.build_object_key(relative_path)}
+
+
+def test_temporary_resource_exchange_is_invocation_scoped(plugin_module, tmp_path):
+    store, signer, _broker, _service = _runtime(plugin_module, tmp_path)
+    resource_module = sys.modules[
+        "test_dclaw_super_agent_support.temporary_resources"
+    ]
+    resources = resource_module.TemporaryResourceBroker(
+        store,
+        signer,
+        _TemporaryStorage(),
+    )
+
+    def token(invocation_id):
+        return signer.issue(
+            tenant_id="tenant-1",
+            user_id="user-1",
+            session_id="session-1",
+            agent_id="agent-1",
+            agent_name="Agent",
+            installation_id="install-1",
+            release_id="release-1",
+            invocation_id=invocation_id,
+            capability_ids=["resource.exchange/1"],
+        )
+
+    created = resources.create_upload(
+        dclaw_session_token=token("invocation-1"),
+        mime_type="image/png",
+        max_size_bytes=1024,
+        purpose="ark.review.frame",
+    )
+    assert created["upload"]["allowed_domains"] == ["8.8.8.8"]
+    ready = resources.complete_upload(
+        dclaw_session_token=token("invocation-1"),
+        resource_ref=created["resource_ref"],
+        size_bytes=8,
+        sha256="a" * 64,
+    )
+    assert ready["status"] == "ready"
+    read = resources.read(
+        dclaw_session_token=token("invocation-1"),
+        resource_ref=created["resource_ref"],
+    )
+    assert read["status"] == "ready"
+    assert read["read_url"].startswith("https://8.8.8.8/")
+    with pytest.raises(resource_module.TemporaryResourceError) as denied:
+        resources.read(
+            dclaw_session_token=token("invocation-2"),
+            resource_ref=created["resource_ref"],
+        )
+    assert denied.value.code == "RESOURCE_EXCHANGE.NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_agent_outbound_websocket_stream_returns_resource_not_bytes(
+    plugin_module,
+    tmp_path,
+):
+    store, signer, broker, _service = _runtime(plugin_module, tmp_path)
+    resource_module = sys.modules[
+        "test_dclaw_super_agent_support.temporary_resources"
+    ]
+    stream_module = sys.modules[
+        "test_dclaw_super_agent_support.agent_outbound_stream"
+    ]
+    storage = _TemporaryStorage()
+    resources = resource_module.TemporaryResourceBroker(store, signer, storage)
+
+    class FakeSocket:
+        def __init__(self):
+            self.messages = iter(
+                [
+                    b"X-Test: 1\r\nPath:audio\r\n\r\nMP3-DATA",
+                    "Path:turn.end",
+                ],
+            )
+            self.sent = []
+
+        async def send(self, value):
+            self.sent.append(value)
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self.messages)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+    class FakeConnect:
+        def __init__(self, *_args, **_kwargs):
+            self.socket = FakeSocket()
+
+        async def __aenter__(self):
+            return self.socket
+
+        async def __aexit__(self, *_args):
+            return None
+
+    manager = stream_module.AgentOutboundStreamManager(
+        broker,
+        signer,
+        resources,
+        websocket_connect=FakeConnect,
+    )
+    manager_ref = sys.modules[
+        "test_dclaw_super_agent_support.agent_outbound"
+    ].AgentOutboundManager(broker, signer)
+    manager_ref.bind_credential(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        provider="edge-tts",
+        authorization={"type": "none"},
+        scopes=["edge.tts"],
+        agent_ids=["agent-1"],
+        installation_ids=["install-1"],
+        release_ids=["release-1"],
+        credential_slot="edge.primary",
+        allowed_domains=["8.8.8.8"],
+        allowed_methods=["GET"],
+    )
+    token = signer.issue(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        session_id="session-1",
+        agent_id="agent-1",
+        agent_name="Agent",
+        installation_id="install-1",
+        release_id="release-1",
+        invocation_id="invocation-1",
+        capability_ids=["agent.outbound.stream/1"],
+    )
+    result = await manager.request(
+        dclaw_session_token=token,
+        protocol="wss",
+        url="wss://8.8.8.8/tts",
+        credential_scope="edge.tts",
+        credential_slot="edge.primary",
+        output_mime_type="audio/mpeg",
+        purpose="tts.edge.audio",
+        send_frames=[{"kind": "text", "data": "synthesis request"}],
+        completion_text="Path:turn.end",
+        binary_filter_contains="Path:audio",
+        binary_strip_through="\r\n\r\n",
+    )
+    assert result["resource_ref"].startswith("res_")
+    assert "body" not in result
+    assert storage.uploads[0][1] == b"MP3-DATA"
+
+
+@pytest.mark.asyncio
+async def test_agent_outbound_https_stream_rejects_empty_output(
+    plugin_module,
+    tmp_path,
+):
+    store, signer, broker, _service = _runtime(plugin_module, tmp_path)
+    resource_module = sys.modules[
+        "test_dclaw_super_agent_support.temporary_resources"
+    ]
+    stream_module = sys.modules[
+        "test_dclaw_super_agent_support.agent_outbound_stream"
+    ]
+    storage = _TemporaryStorage()
+    resources = resource_module.TemporaryResourceBroker(store, signer, storage)
+    manager = stream_module.AgentOutboundStreamManager(
+        broker,
+        signer,
+        resources,
+        http_transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, content=b""),
+        ),
+    )
+    outbound_cls = sys.modules[
+        "test_dclaw_super_agent_support.agent_outbound"
+    ].AgentOutboundManager
+    credential_ref = outbound_cls(broker, signer).bind_credential(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        provider="fixture",
+        authorization={"type": "none"},
+        scopes=["media.read"],
+        agent_ids=["agent-1"],
+        installation_ids=["install-1"],
+        allowed_domains=["8.8.8.8"],
+        allowed_methods=["GET"],
+    )
+    token = signer.issue(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        session_id="session-1",
+        agent_id="agent-1",
+        agent_name="Agent",
+        installation_id="install-1",
+        release_id="release-1",
+        invocation_id="invocation-1",
+        capability_ids=["agent.outbound.stream/1"],
+    )
+
+    with pytest.raises(stream_module.AgentOutboundStreamError) as exc_info:
+        await manager.request(
+            dclaw_session_token=token,
+            protocol="https",
+            url="https://8.8.8.8/empty",
+            credential_scope="media.read",
+            output_mime_type="audio/mpeg",
+            purpose="empty.test",
+            credential_ref=credential_ref,
+        )
+
+    assert exc_info.value.code == "AGENT_OUTBOUND_STREAM.EMPTY_OUTPUT"
+    assert storage.uploads == []
 
 
 def test_capability_descriptor_schema_and_signature(plugin_module, tmp_path):

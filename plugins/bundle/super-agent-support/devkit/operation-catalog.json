@@ -1,11 +1,13 @@
 {
   "catalog_version": "1",
   "owner": "dclaw.super-agent-support",
-  "minimum_plugin_version": "1.14.0",
+  "minimum_plugin_version": "1.15.0",
   "capability_id": "business.service.installation-identity/1",
   "capability_ids": [
     "business.service.installation-identity/1",
-    "agent.outbound/1"
+    "agent.outbound/1",
+    "agent.outbound.stream/1",
+    "resource.exchange/1"
   ],
   "local_capability_gateway": {
     "owner": "dclaw-platform",
@@ -49,6 +51,42 @@
       "input_schema": "schemas/agent-outbound-v1/request.schema.json",
       "output_schema": "schemas/agent-outbound-v1/response.schema.json",
       "credential_binding_schema": "schemas/agent-outbound-v1/credential-binding.schema.json"
+    },
+    {
+      "client_key": "agent_outbound.stream",
+      "capability_id": "agent.outbound.stream/1",
+      "tool_name": "agent_outbound_stream_request",
+      "input_schema": "schemas/agent-outbound-stream-v1/request.schema.json",
+      "output_schema": "schemas/agent-outbound-stream-v1/response.schema.json",
+      "credential_binding_schema": "schemas/agent-outbound-v1/credential-binding.schema.json"
+    },
+    {
+      "client_key": "resource.upload.create",
+      "capability_id": "resource.exchange/1",
+      "tool_name": "agent_resource_upload_create",
+      "input_schema": "schemas/resource-exchange-v1/upload-create.schema.json",
+      "output_schema": "schemas/resource-exchange-v1/response.schema.json"
+    },
+    {
+      "client_key": "resource.upload.complete",
+      "capability_id": "resource.exchange/1",
+      "tool_name": "agent_resource_upload_complete",
+      "input_schema": "schemas/resource-exchange-v1/upload-complete.schema.json",
+      "output_schema": "schemas/resource-exchange-v1/response.schema.json"
+    },
+    {
+      "client_key": "resource.read",
+      "capability_id": "resource.exchange/1",
+      "tool_name": "agent_resource_read",
+      "input_schema": "schemas/resource-exchange-v1/read.schema.json",
+      "output_schema": "schemas/resource-exchange-v1/response.schema.json"
+    },
+    {
+      "client_key": "resource.revoke",
+      "capability_id": "resource.exchange/1",
+      "tool_name": "agent_resource_revoke",
+      "input_schema": "schemas/resource-exchange-v1/revoke.schema.json",
+      "output_schema": "schemas/resource-exchange-v1/response.schema.json"
     }
   ],
   "controlled_outbound": {
@@ -84,5 +122,7 @@
     "request_body": "zero-or-one-of-json_body-or-text_body"
   },
   "stable_error_schema": "schemas/business-identity-v1/error.schema.json",
-  "agent_outbound_error_schema": "schemas/agent-outbound-v1/error.schema.json"
+  "agent_outbound_error_schema": "schemas/agent-outbound-v1/error.schema.json",
+  "agent_outbound_stream_error_schema": "schemas/agent-outbound-stream-v1/error.schema.json",
+  "resource_exchange_error_schema": "schemas/resource-exchange-v1/error.schema.json"
 }

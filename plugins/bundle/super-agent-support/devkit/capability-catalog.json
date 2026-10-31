@@ -26,6 +26,8 @@
     {"capability_id":"local.execution.session/1","contract_version":"1","group":"local_execution","dependencies":[]},
     {"capability_id":"local.environment.preflight/1","contract_version":"1","group":"local_execution","dependencies":["local.execution.session/1"]},
     {"capability_id":"business.service.installation-identity/1","contract_version":"1","group":"business_identity","dependencies":[]},
-    {"capability_id":"agent.outbound/1","contract_version":"1","group":"agent_outbound","dependencies":[]}
+    {"capability_id":"agent.outbound/1","contract_version":"1","group":"agent_outbound","dependencies":[]},
+    {"capability_id":"resource.exchange/1","contract_version":"1","group":"resource_exchange","dependencies":[]},
+    {"capability_id":"agent.outbound.stream/1","contract_version":"1","group":"agent_outbound","dependencies":["resource.exchange/1"]}
   ]
 }

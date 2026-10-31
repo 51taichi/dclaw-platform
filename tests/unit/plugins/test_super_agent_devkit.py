@@ -134,7 +134,7 @@ def test_devkit_has_no_server_source_import_and_runs_standalone():
     )
     result = json.loads(completed.stdout)
     assert result["status"] == "ok"
-    assert result["devkit_version"] == "1.7.0"
+    assert result["devkit_version"] == "1.8.0"
     assert result["dependency_mode"] == "bundled-wheelhouse"
     assert result["cryptography_version"] == "46.0.3"
     assert "schemas/super-expert-manifest.schema.json" in result["schemas"]
@@ -199,7 +199,7 @@ def test_business_identity_operation_catalog_is_complete_and_consistent():
     )
 
     assert catalog["owner"] == "dclaw.super-agent-support"
-    assert catalog["minimum_plugin_version"] == "1.14.0"
+    assert catalog["minimum_plugin_version"] == "1.15.0"
     gateway = catalog["local_capability_gateway"]
     assert gateway == {
         "owner": "dclaw-platform",
@@ -227,6 +227,11 @@ def test_business_identity_operation_catalog_is_complete_and_consistent():
         "business_identity.issue",
         "business_identity.outbound",
         "agent_outbound.request",
+        "agent_outbound.stream",
+        "resource.upload.create",
+        "resource.upload.complete",
+        "resource.read",
+        "resource.revoke",
     }
     assert operations["business_identity.issue"]["tool_name"] == (
         "business_service_identity_issue"
@@ -245,6 +250,12 @@ def test_business_identity_operation_catalog_is_complete_and_consistent():
     )
     assert operations["agent_outbound.request"]["capability_id"] == (
         "agent.outbound/1"
+    )
+    assert operations["agent_outbound.stream"]["capability_id"] == (
+        "agent.outbound.stream/1"
+    )
+    assert operations["resource.revoke"]["tool_name"] == (
+        "agent_resource_revoke"
     )
 
     for operation in operations.values():
@@ -297,7 +308,7 @@ def test_devkit_bundles_and_verifies_locked_encryption_dependencies():
     )
     result = json.loads(completed.stdout)
     assert result["status"] == "ok"
-    assert result["devkit_version"] == "1.7.0"
+    assert result["devkit_version"] == "1.8.0"
     assert result["wheelhouse_verified"] is True
     assert result["wheelhouse_files"] == 26
 
@@ -348,6 +359,7 @@ def test_devkit_catalog_and_digest_match_platform_contract():
             "local_execution",
             "business_identity",
             "agent_outbound",
+            "resource_exchange",
         }
     }
     server_core = {

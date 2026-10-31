@@ -2,6 +2,7 @@
 """Plugin loader for discovering and loading plugins."""
 
 import asyncio
+import copy
 import importlib.util
 import inspect
 import json
@@ -255,6 +256,7 @@ class PluginLoader:
             source_path=source_path,
             enabled=True,
             instance=plugin_def,
+            config=copy.deepcopy(config or {}),
         )
 
         self._loaded_plugins[plugin_id] = record

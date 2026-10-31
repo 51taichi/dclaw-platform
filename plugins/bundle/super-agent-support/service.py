@@ -856,13 +856,16 @@ class LocalExecutionService:
         )
         if response.get("status") != "uploaded":
             self._raise_device_file_error(response.get("error_code"))
-        return {
+        result = {
             "status": "uploaded",
             "local_file_ref": reference,
             "size_bytes": int(
                 response.get("size_bytes") or record["size_bytes"],
             ),
         }
+        if response.get("sha256"):
+            result["sha256"] = str(response["sha256"])
+        return result
 
     async def _managed_artifacts_list(self, arguments, identity, _trace):
         self._require_file_capability(identity)
