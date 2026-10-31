@@ -19,6 +19,20 @@
     "completion_text": {"type": "string", "maxLength": 256},
     "binary_filter_contains": {"type": "string", "maxLength": 256},
     "binary_strip_through": {"type": "string", "maxLength": 256},
+    "response_transform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "json_pointer"],
+      "properties": {
+        "type": {"const": "json_base64"},
+        "json_pointer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^/(?:[^~/]|~[01])*(?:/(?:[^~/]|~[01])*)*$"
+        }
+      }
+    },
     "output_mime_type": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.+-]{0,63}/[a-z0-9][a-z0-9.+-]{0,127}$"},
     "purpose": {"type": "string", "pattern": "^[a-z][a-z0-9._-]{0,127}$"},
     "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 300, "default": 60},
@@ -27,6 +41,7 @@
   "allOf": [
     {"oneOf": [{"required": ["credential_ref"]}, {"required": ["credential_slot"]}]},
     {"not": {"required": ["json_body", "text_body"]}},
-    {"if": {"properties": {"protocol": {"const": "wss"}}, "required": ["protocol"]}, "then": {"required": ["send_frames"], "properties": {"method": {"const": "GET"}}}}
+    {"if": {"properties": {"protocol": {"const": "wss"}}, "required": ["protocol"]}, "then": {"required": ["send_frames"], "properties": {"method": {"const": "GET"}}}},
+    {"if": {"required": ["response_transform"]}, "then": {"properties": {"protocol": {"const": "https"}}}}
   ]
 }

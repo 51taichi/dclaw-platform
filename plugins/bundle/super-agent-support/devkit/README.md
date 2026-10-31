@@ -1,6 +1,6 @@
 # DClaw Super Agent DevKit
 
-Version 1.8.0 publishes stable installation credential slots,
+Version 1.8.1 publishes stable installation credential slots,
 `agent.outbound.stream/1`, and `resource.exchange/1` in addition to the
 provider-neutral controlled
 HTTPS transport for sealed Super Agents. The Agent owns provider selection,
@@ -9,6 +9,10 @@ interpretation. The transport resolves an installation-scoped
 `credential_ref`, enforces its domain, method, and scope policy, and injects
 the secret only at the final network boundary. Long-term provider credentials
 are never returned to the Agent, model, workspace, logs, or local helper.
+Presigned upload targets now have a dedicated closed response schema. HTTPS
+streaming requests can optionally extract one JSON Pointer string and strictly
+decode its Base64 payload directly into temporary object storage; the encoded
+or decoded media never enters the Agent response.
 
 The 1.6.0 public Component export bindings for Runner 1.3.0 remain compatible,
 as do the 1.4.1 business service identity contracts. Component registry

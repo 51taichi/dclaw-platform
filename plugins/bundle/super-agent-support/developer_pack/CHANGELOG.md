@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.9.1 - 2026-10-31
+
+- Bundles development standard 2.21 and DevKit 1.8.1.
+- Publishes the closed presigned-upload creation response contract.
+- Adds a bounded, provider-neutral JSON Pointer plus strict Base64 response
+  transform for HTTPS media responses without exposing media bytes to Agents.
+- Keeps pack 1.9.0, DevKit 1.8.0, existing signed Agents, and contract version 1
+  callers compatible.
+
 ## 1.9.0 - 2026-10-31
 
 - Bundles development standard 2.20 and DevKit 1.8.0.

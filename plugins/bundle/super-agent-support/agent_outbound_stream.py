@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import json
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -29,6 +30,71 @@ CAPABILITY_ID = "agent.outbound.stream/1"
 MAX_REQUEST_BYTES = 1_048_576
 MAX_OUTPUT_BYTES = 33_554_432
 _STREAM_HEADERS = _SAFE_AGENT_HEADERS | {"origin"}
+
+
+def _json_pointer(document: Any, pointer: str) -> Any:
+    if (
+        not isinstance(pointer, str)
+        or not 1 <= len(pointer) <= 512
+        or not pointer.startswith("/")
+    ):
+        raise AgentOutboundStreamError("TRANSFORM_FAILED")
+    current = document
+    for encoded in pointer[1:].split("/"):
+        index = 0
+        token: list[str] = []
+        while index < len(encoded):
+            if encoded[index] != "~":
+                token.append(encoded[index])
+                index += 1
+                continue
+            if (
+                index + 1 >= len(encoded)
+                or encoded[index + 1] not in {"0", "1"}
+            ):
+                raise AgentOutboundStreamError("TRANSFORM_FAILED")
+            token.append("~" if encoded[index + 1] == "0" else "/")
+            index += 2
+        key = "".join(token)
+        if isinstance(current, dict) and key in current:
+            current = current[key]
+        elif isinstance(current, list) and key.isdigit() and int(key) < len(current):
+            current = current[int(key)]
+        else:
+            raise AgentOutboundStreamError("TRANSFORM_FAILED")
+    return current
+
+
+def _transform_https_response(
+    content: bytes,
+    content_type: str,
+    response_transform: dict[str, Any] | None,
+    max_output_bytes: int,
+) -> bytes:
+    if response_transform is None:
+        return content
+    if (
+        not isinstance(response_transform, dict)
+        or set(response_transform) != {"type", "json_pointer"}
+        or response_transform.get("type") != "json_base64"
+    ):
+        raise AgentOutboundStreamError("INVALID_REQUEST")
+    media_type = content_type.partition(";")[0].strip().lower()
+    if media_type != "application/json" and not media_type.endswith("+json"):
+        raise AgentOutboundStreamError("TRANSFORM_FAILED")
+    try:
+        document = json.loads(content.decode("utf-8"))
+        encoded = _json_pointer(document, response_transform.get("json_pointer"))
+        if not isinstance(encoded, str):
+            raise AgentOutboundStreamError("TRANSFORM_FAILED")
+        transformed = base64.b64decode(encoded, validate=True)
+    except AgentOutboundStreamError:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError, binascii.Error) as exc:
+        raise AgentOutboundStreamError("TRANSFORM_FAILED") from exc
+    if len(transformed) > max_output_bytes:
+        raise AgentOutboundStreamError("OUTPUT_TOO_LARGE")
+    return transformed
 
 
 @dataclass(frozen=True)
@@ -204,6 +270,7 @@ class AgentOutboundStreamManager:
         completion_text: str | None = None,
         binary_filter_contains: str | None = None,
         binary_strip_through: str | None = None,
+        response_transform: dict[str, Any] | None = None,
         timeout_seconds: int = 60,
         max_output_bytes: int = MAX_OUTPUT_BYTES,
     ) -> dict[str, Any]:
@@ -228,6 +295,8 @@ class AgentOutboundStreamManager:
         normalized_method = str(method).upper()
         if protocol == "wss" and normalized_method != "GET":
             raise AgentOutboundStreamError("INVALID_REQUEST")
+        if protocol != "https" and response_transform is not None:
+            raise AgentOutboundStreamError("INVALID_REQUEST")
         if normalized_method not in {"GET", "POST", "PUT", "PATCH"}:
             raise AgentOutboundStreamError("INVALID_REQUEST")
         hostname, target = _validated_stream_url(url, protocol)
@@ -251,6 +320,7 @@ class AgentOutboundStreamManager:
                     headers=request_headers,
                     json_body=json_body,
                     text_body=text_body,
+                    response_transform=response_transform,
                     timeout_seconds=timeout_seconds,
                     max_output_bytes=max_output_bytes,
                 )
@@ -288,6 +358,7 @@ class AgentOutboundStreamManager:
         headers: dict[str, str],
         json_body: Any | None,
         text_body: str | None,
+        response_transform: dict[str, Any] | None,
         timeout_seconds: int,
         max_output_bytes: int,
     ) -> bytes:
@@ -302,6 +373,7 @@ class AgentOutboundStreamManager:
             raise AgentOutboundStreamError("REQUEST_TOO_LARGE")
         chunks: list[bytes] = []
         size = 0
+        response_content_type = ""
         async with httpx.AsyncClient(
             transport=self._http_transport,
             follow_redirects=False,
@@ -317,12 +389,18 @@ class AgentOutboundStreamManager:
                     raise AgentOutboundStreamError("REDIRECT_REJECTED")
                 if response.status_code >= 400:
                     raise AgentOutboundStreamError("UPSTREAM_REJECTED")
+                response_content_type = response.headers.get("content-type", "")
                 async for chunk in response.aiter_bytes():
                     size += len(chunk)
                     if size > max_output_bytes:
                         raise AgentOutboundStreamError("OUTPUT_TOO_LARGE")
                     chunks.append(chunk)
-        return b"".join(chunks)
+        return _transform_https_response(
+            b"".join(chunks),
+            response_content_type,
+            response_transform,
+            max_output_bytes,
+        )
 
     async def _wss(
         self,

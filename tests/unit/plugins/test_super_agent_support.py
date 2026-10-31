@@ -703,7 +703,7 @@ def test_developer_kit_is_downloadable_without_server_source(
 
     assert metadata.status_code == 200
     assert metadata.json()["name"] == "dclaw-super-agent-devkit"
-    assert metadata.json()["version"] == "1.8.0"
+    assert metadata.json()["version"] == "1.8.1"
     assert metadata.json()["download_path"] == (
         "/api/super-agent-support/developer-kit/v1.zip"
     )
@@ -722,7 +722,7 @@ def test_developer_kit_is_downloadable_without_server_source(
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-devkit-1.8.0"
+    prefix = "dclaw-super-agent-devkit-1.8.1"
     assert f"{prefix}/dclaw_agent_devkit.py" in names
     assert f"{prefix}/bootstrap.ps1" in names
     assert f"{prefix}/bootstrap.sh" in names
@@ -792,23 +792,23 @@ def test_developer_pack_is_downloadable_and_self_describing(
         downloaded = client.get("/developer-pack/download")
 
     assert health.status_code == 200
-    assert health.json()["version"] == "1.15.0"
+    assert health.json()["version"] == "1.15.1"
     assert metadata.status_code == 200
     payload = metadata.json()
-    assert payload["version"] == "1.9.0"
-    assert payload["standard"]["version"] == "2.20"
-    assert payload["devkit_version"] == "1.8.0"
+    assert payload["version"] == "1.9.1"
+    assert payload["standard"]["version"] == "2.21"
+    assert payload["devkit_version"] == "1.8.1"
     assert payload["server_source_required"] is False
     assert payload["download_path"].endswith("/developer-pack/download")
     assert payload["sha256"] == hashlib.sha256(downloaded.content).hexdigest()
     assert payload["content_sha256"] == payload["sha256"]
     assert downloaded.status_code == 200
-    assert "dclaw-super-agent-developer-pack-1.9.0.zip" in (
+    assert "dclaw-super-agent-developer-pack-1.9.1.zip" in (
         downloaded.headers["content-disposition"]
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-developer-pack-1.9.0"
+    prefix = "dclaw-super-agent-developer-pack-1.9.1"
     assert f"{prefix}/PACKAGE-MANIFEST.json" in names
     assert f"{prefix}/SHA256SUMS" in names
     assert f"{prefix}/dclaw_developer.py" in names
@@ -2976,6 +2976,17 @@ def test_temporary_resource_exchange_is_invocation_scoped(plugin_module, tmp_pat
     )
     assert read["status"] == "ready"
     assert read["read_url"].startswith("https://8.8.8.8/")
+    revoked = resources.revoke(
+        dclaw_session_token=token("invocation-1"),
+        resource_ref=created["resource_ref"],
+    )
+    assert revoked["status"] == "revoked"
+    with pytest.raises(resource_module.TemporaryResourceError) as revoked_read:
+        resources.read(
+            dclaw_session_token=token("invocation-1"),
+            resource_ref=created["resource_ref"],
+        )
+    assert revoked_read.value.code == "RESOURCE_EXCHANGE.REVOKED"
     with pytest.raises(resource_module.TemporaryResourceError) as denied:
         resources.read(
             dclaw_session_token=token("invocation-2"),
@@ -3143,6 +3154,151 @@ async def test_agent_outbound_https_stream_rejects_empty_output(
 
     assert exc_info.value.code == "AGENT_OUTBOUND_STREAM.EMPTY_OUTPUT"
     assert storage.uploads == []
+
+
+@pytest.mark.asyncio
+async def test_agent_outbound_https_stream_extracts_json_base64_to_resource(
+    plugin_module,
+    tmp_path,
+):
+    store, signer, broker, _service = _runtime(plugin_module, tmp_path)
+    resource_module = sys.modules[
+        "test_dclaw_super_agent_support.temporary_resources"
+    ]
+    stream_module = sys.modules[
+        "test_dclaw_super_agent_support.agent_outbound_stream"
+    ]
+    storage = _TemporaryStorage()
+    resources = resource_module.TemporaryResourceBroker(store, signer, storage)
+    payload = base64.b64encode(b"MP3-DATA").decode("ascii")
+    manager = stream_module.AgentOutboundStreamManager(
+        broker,
+        signer,
+        resources,
+        http_transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                200,
+                headers={"Content-Type": "application/json; charset=utf-8"},
+                json={"result": {"audio": payload}},
+            ),
+        ),
+    )
+    outbound_cls = sys.modules[
+        "test_dclaw_super_agent_support.agent_outbound"
+    ].AgentOutboundManager
+    outbound_cls(broker, signer).bind_credential(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        provider="fixture",
+        authorization={"type": "none"},
+        scopes=["tts.create"],
+        agent_ids=["agent-1"],
+        installation_ids=["install-1"],
+        release_ids=["release-1"],
+        credential_slot="tts.primary",
+        allowed_domains=["8.8.8.8"],
+        allowed_methods=["POST"],
+    )
+    token = signer.issue(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        session_id="session-1",
+        agent_id="agent-1",
+        agent_name="Agent",
+        installation_id="install-1",
+        release_id="release-1",
+        invocation_id="invocation-1",
+        capability_ids=["agent.outbound.stream/1"],
+    )
+
+    result = await manager.request(
+        dclaw_session_token=token,
+        protocol="https",
+        method="POST",
+        url="https://8.8.8.8/tts",
+        credential_scope="tts.create",
+        credential_slot="tts.primary",
+        output_mime_type="audio/mpeg",
+        purpose="tts.audio",
+        json_body={"text": "hello"},
+        response_transform={
+            "type": "json_base64",
+            "json_pointer": "/result/audio",
+        },
+    )
+
+    assert result["status"] == "ready"
+    assert "body" not in result
+    assert storage.uploads[0][1] == b"MP3-DATA"
+
+
+@pytest.mark.parametrize(
+    ("content_type", "payload", "transform", "reason"),
+    [
+        (
+            "text/plain",
+            b"{}",
+            {"type": "json_base64", "json_pointer": "/audio"},
+            "TRANSFORM_FAILED",
+        ),
+        (
+            "application/json",
+            b"{}",
+            {"type": "json_base64", "json_pointer": "/audio"},
+            "TRANSFORM_FAILED",
+        ),
+        (
+            "application/json",
+            b'{"audio":"***"}',
+            {"type": "json_base64", "json_pointer": "/audio"},
+            "TRANSFORM_FAILED",
+        ),
+        (
+            "application/json",
+            b'{"audio":"QQ=="}',
+            {"type": "json_base64", "json_pointer": "/bad~2pointer"},
+            "TRANSFORM_FAILED",
+        ),
+        (
+            "application/json",
+            b'{"audio":"QQ=="}',
+            {"type": "json_base64", "json_pointer": "/audio", "extra": True},
+            "INVALID_REQUEST",
+        ),
+    ],
+)
+def test_agent_outbound_https_transform_fails_closed(
+    plugin_module,
+    content_type,
+    payload,
+    transform,
+    reason,
+):
+    stream_module = sys.modules[
+        "test_dclaw_super_agent_support.agent_outbound_stream"
+    ]
+    with pytest.raises(stream_module.AgentOutboundStreamError) as exc_info:
+        stream_module._transform_https_response(
+            payload,
+            content_type,
+            transform,
+            1024,
+        )
+    assert exc_info.value.reason == reason
+
+
+def test_agent_outbound_https_transform_enforces_decoded_size(plugin_module):
+    stream_module = sys.modules[
+        "test_dclaw_super_agent_support.agent_outbound_stream"
+    ]
+    with pytest.raises(stream_module.AgentOutboundStreamError) as exc_info:
+        stream_module._transform_https_response(
+            b'{"audio":"QUI="}',
+            "application/json",
+            {"type": "json_base64", "json_pointer": "/audio"},
+            1,
+        )
+    assert exc_info.value.reason == "OUTPUT_TOO_LARGE"
 
 
 def test_capability_descriptor_schema_and_signature(plugin_module, tmp_path):

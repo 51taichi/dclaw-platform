@@ -1,7 +1,7 @@
 {
   "catalog_version": "1",
   "owner": "dclaw.super-agent-support",
-  "minimum_plugin_version": "1.15.0",
+  "minimum_plugin_version": "1.15.1",
   "capability_id": "business.service.installation-identity/1",
   "capability_ids": [
     "business.service.installation-identity/1",
@@ -65,7 +65,7 @@
       "capability_id": "resource.exchange/1",
       "tool_name": "agent_resource_upload_create",
       "input_schema": "schemas/resource-exchange-v1/upload-create.schema.json",
-      "output_schema": "schemas/resource-exchange-v1/response.schema.json"
+      "output_schema": "schemas/resource-exchange-v1/upload-create-response.schema.json"
     },
     {
       "client_key": "resource.upload.complete",

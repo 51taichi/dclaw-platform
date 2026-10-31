@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.20`
+当前版本：`2.21`
 
 发布日期：`2026-10-31`
 
@@ -552,14 +552,16 @@ stateDiagram-v2
 
 本标准 `2.19` 的正式组合为 Developer Pack `1.8.0`、支持插件 `1.14.0`、DevKit `1.7.0` 与 Runner `1.3.0`。该组合在既有公共 Component、非入口 export 绑定和业务服务身份合同之外，正式发布 `agent.outbound/1`：第三方业务请求完全由超级 Agent 决定，插件只执行凭证隔离、策略校验和最终网络运输；本地助手不接收第三方长期 Key。旧已签名 Agent 和既有合同继续按原版本运行。
 
-本标准 `2.19` 的正式开发与发布门禁如下。版本必须作为一个兼容组合核对，不能只满足其中一项：
+本标准 `2.21` 的正式组合为 Developer Pack `1.9.1`、支持插件 `1.15.1`、DevKit `1.8.1` 与 Runner `1.3.0`。该组合在 `2.20` 的稳定凭证槽、流式出站和临时资源交换基础上，补齐预签名上传创建响应的关闭 Schema，并为 HTTPS JSON 响应提供供应商无关的 JSON Pointer 加严格 Base64 媒体提取。旧已签名 Agent、旧 `credential_ref` 和合同版本 `1` 的既有调用继续兼容。
+
+本标准 `2.21` 的正式开发与发布门禁如下。版本必须作为一个兼容组合核对，不能只满足其中一项：
 
 | 项目 | 本标准要求 | 2026-10-26 正式环境核对 | 结论 |
 |---|---|---|---|
 | DClaw 核心 | 至少 `1.1.10` | 公网 `/api/version` 返回 `1.1.10`，运行镜像标记 Server 提交 `db08ac40` | 满足 |
-| 支持插件 | 至少 `1.14.0` | 生产仍须读取健康接口核对 | 提供 `agent.outbound/1`、凭证 Broker、公共 Component、export 绑定和无界面 API |
-| Super Agent DevKit | `1.7.0`，且由目标实例认证下载 | 生产仍须读取元数据核对 | 提供 `agent-outbound-v1`、公共 Component Schema、能力目录和操作目录 |
-| Super Agent 开发包 | `1.8.0`，标准 `2.19`、DevKit `1.7.0` | 生产仍须认证下载核对 | 新开发和迁移使用 `1.8.0`；旧已签名 Agent 保持有效 |
+| 支持插件 | 至少 `1.15.1` | 生产仍须读取健康接口核对 | 提供稳定凭证、流式出站、媒体提取、资源交换、公共 Component 和无界面 API |
+| Super Agent DevKit | `1.8.1`，且由目标实例认证下载 | 生产仍须读取元数据核对 | 提供出站、流式、资源交换关闭 Schema、能力目录和操作目录 |
+| Super Agent 开发包 | `1.9.1`，标准 `2.21`、DevKit `1.8.1` | 生产仍须认证下载核对 | 新开发和迁移使用 `1.9.1`；旧已签名 Agent 保持有效 |
 | Windows 客户端 | 普通预检至少 `2.6.12`；本地文件链路至少 `2.6.13` | `2.6.11` | 不满足，先发布并升级客户端 |
 | 通用 Runner | 普通链路至少 `1.0.0`；本地文件链路至少 `1.1.0`；公共 Component 链路至少 `1.2.0`；非入口 export 绑定至少 `1.3.0` | 随兼容客户端核对 | 声明 `component_exports` 的能力包必须使用实际携带 Runner `1.3.0` 的兼容客户端 |
 
@@ -587,7 +589,7 @@ stateDiagram-v2
 
 上述接口属于认证后的目标 DClaw，不是匿名公共下载站。`401` 表示尚未携带有效身份，不能据此断言接口缺失；有效身份下 `404`、插件版本低于要求、返回的 DevKit 版本不匹配或 ZIP SHA-256 与元数据不一致，均表示当前目标环境未达到发布门禁。开发方只能继续源码和离线测试，状态标记为 `platform-tooling-missing`，不得使用平台仓库内源码副本、旧兼容构建器、历史签名包或其他环境下载的 DevKit 替代。
 
-生产升级必须部署插件 `1.14.0`、Developer Pack `1.8.0` 和 DevKit `1.7.0`；使用 `component_exports` 的 Windows 能力包还须完成 Runner `1.3.0`、设备协议 `2` 和 `windows-x64` 平台报告的实际连接核对。`agent.outbound/1` 是插件服务端能力，不要求客户端或 Runner 升级，也不得把第三方调用转交 Runner。只使用普通公共 Component 入口的能力包仍可声明 Runner `1.2.0`，只使用本地文件链路时仍以 Windows 客户端 `2.6.13`、Runner `1.1.0` 和设备协议 `2` 为最低要求。manifest 中 `platform_contract_versions.local_execution="1"` 是平台合同主版本；本地执行合同修订版 `1.2`、Runner 设备协议 `2` 和公共 Component 描述符 `1` 是不同层级的版本，不得互相替代或写错字段。开发方必须使用自己的应用身份认证会话实际下载 Developer Pack 或 DevKit、核对服务端 SHA-256，并在上传前核对插件 Secret 与相应信任库配置；服务器 root SSH 权限和镜像中存在文件都不能替代应用下载身份或发布证据。任何历史 Agent 专属 Relay、Runner、工具前缀和能力 ID 只作为冻结兼容路径，不得被新发布复制或回退使用。
+生产升级必须部署插件 `1.15.1`、Developer Pack `1.9.1` 和 DevKit `1.8.1`；使用 `component_exports` 的 Windows 能力包还须完成 Runner `1.3.0`、设备协议 `2` 和 `windows-x64` 平台报告的实际连接核对。`agent.outbound/1`、`agent.outbound.stream/1` 和 `resource.exchange/1` 是插件服务端能力，不要求客户端或 Runner 因合同补丁强制升级，也不得把第三方业务调用转交 Runner。只使用普通公共 Component 入口的能力包仍可声明 Runner `1.2.0`，只使用本地文件链路时仍以 Windows 客户端 `2.6.13`、Runner `1.1.0` 和设备协议 `2` 为最低要求。manifest 中 `platform_contract_versions.local_execution="1"` 是平台合同主版本；本地执行合同修订版 `1.2`、Runner 设备协议 `2` 和公共 Component 描述符 `1` 是不同层级的版本，不得互相替代或写错字段。开发方必须使用自己的应用身份认证会话实际下载 Developer Pack 或 DevKit、核对服务端 SHA-256，并在上传前核对插件 Secret 与相应信任库配置；服务器 root SSH 权限和镜像中存在文件都不能替代应用下载身份或发布证据。任何历史 Agent 专属 Relay、Runner、工具前缀和能力 ID 只作为冻结兼容路径，不得被新发布复制或回退使用。
 
 生产安装必须把插件 `state_dir` 放在持久卷，并通过平台 Secret 配置稳定的 `master_key_base64`；容器可使用 `DCLAW_SUPER_AGENT_SUPPORT_MASTER_KEY_BASE64`，该值解码后至少 32 字节，不得写入仓库、镜像或 Agent 包。`trusted_package_signers` 是 `signer_id` 到原始 Ed25519 公钥 Base64 的映射；`trusted_component_signers` 是 `signer_id` 到 DER SubjectPublicKeyInfo 编码的 P-256 公钥 Base64 映射。未配置对应受信公钥时，插件仍可启动和提供环境状态，但对应的能力包或公共 Component 注册必须失败关闭。
 
@@ -1770,16 +1772,16 @@ DevKit `operation-catalog.json` 是准确的调用入口目录。超级专家运
 
 #### 25.2.3 Agent 流式出站与临时资源交换（accepted / implemented）
 
-平台负责人已接受这两项供应商无关的通用能力，正式实现由 `dclaw.super-agent-support` `1.15.0` 提供，机器合同由 DevKit `1.8.0` 发布，并随 Developer Pack `1.9.0` 交付。
+平台负责人已接受这两项供应商无关的通用能力，正式实现由 `dclaw.super-agent-support` `1.15.1` 提供，机器合同由 DevKit `1.8.1` 发布，并随 Developer Pack `1.9.1` 交付。
 
 - 正式能力 ID：`agent.outbound.stream/1` 与 `resource.exchange/1`
 - 合同版本：均为 `1`
 - 归属：`dclaw.super-agent-support`
 - 目的：支持有明确大小上限的第三方 HTTPS 二进制响应、WSS 流和本地助手资源交换，不让模型、普通 DClaw API 响应或本地助手接触长期凭证与媒体正文。
 
-`agent.outbound.stream/1` 使用客户端键 `agent_outbound.stream` 和 MCP 工具 `agent_outbound_stream_request`。请求必须在 `credential_slot` 与兼容的 `credential_ref` 中二选一，固定 `https` 或 `wss`、正式公网 URL、scope、输出 MIME、用途、超时和最大输出大小；WSS 可以声明确定的发送帧、完成文本、二进制帧过滤和协议头剥离规则。插件禁止重定向、私网/环回/保留地址和未授权目标，对经过插件运输的输出实施 `32 MiB` 硬上限并写入临时对象存储；响应只返回 `resource_ref`、MIME、大小、SHA-256 和过期时间，不返回媒体字节。更大的素材不得使用本合同，应由第三方返回短时 HTTPS URL 后交给本地助手直连下载。
+`agent.outbound.stream/1` 使用客户端键 `agent_outbound.stream` 和 MCP 工具 `agent_outbound_stream_request`。请求必须在 `credential_slot` 与兼容的 `credential_ref` 中二选一，固定 `https` 或 `wss`、正式公网 URL、scope、输出 MIME、用途、超时和最大输出大小；WSS 可以声明确定的发送帧、完成文本、二进制帧过滤和协议头剥离规则。HTTPS 可以选择关闭的 `response_transform={type:"json_base64",json_pointer:"/..."}`：插件只接受 JSON Content-Type，按 RFC 6901 精确取得一个字符串字段，执行严格 Base64 解码，并把解码结果直接写入临时对象存储；缺字段、错误 Pointer、非字符串、非 JSON、非法 Base64、额外转换字段或超限全部失败关闭。插件禁止重定向、私网/环回/保留地址和未授权目标，对经过插件运输的输出实施 `32 MiB` 硬上限并写入临时对象存储；响应只返回 `resource_ref`、MIME、大小、SHA-256 和过期时间，不返回原始 JSON、Base64 或媒体字节。更大的素材不得使用本合同，应由第三方返回短时 HTTPS URL 后交给本地助手直连下载。
 
-`resource.exchange/1` 使用 `agent_resource_upload_create`、`agent_resource_upload_complete`、`agent_resource_read` 和 `agent_resource_revoke`。宿主从受信运行上下文绑定租户、用户、会话、Agent、发布版、安装和调用；上传前声明 MIME、大小上限、用途和 TTL，完成时核对实际大小与 SHA-256，读取只签发短时 HTTPS URL，撤销后立即失败关闭。对象存储不可用时返回稳定 `RESOURCE_EXCHANGE.STORAGE_UNAVAILABLE`，不得回退为 DClaw 服务端代理上传或下载。
+`resource.exchange/1` 使用 `agent_resource_upload_create`、`agent_resource_upload_complete`、`agent_resource_read` 和 `agent_resource_revoke`。宿主从受信运行上下文绑定租户、用户、会话、Agent、发布版、安装和调用；上传前声明 MIME、大小上限、用途和 TTL，创建响应按专用关闭 Schema 返回 `resource_ref`、`status=pending`、MIME、大小上限、过期时间及只含 HTTPS URL、`PUT`、固定上传 Header、允许域和大小上限的 `upload` 对象，供本地助手直接上传。完成时核对实际大小与 SHA-256，读取只签发短时 HTTPS URL，撤销后立即失败关闭。对象存储不可用时返回稳定 `RESOURCE_EXCHANGE.STORAGE_UNAVAILABLE`，不得回退为 DClaw 服务端代理上传或下载。
 
 需要本地加工时，超级 Agent 把短时 `resource_ref` 或预签名读取 URL 交给本地助手；本地助手下载后校验 SHA-256 并在客户本地执行。最终视频、音频和大文件仍必须落到客户本地目录。`agent.outbound.stream/1` 依赖 `resource.exchange/1`，但二者都不要求把第三方业务判断下沉到本地助手。
 
@@ -2158,10 +2160,10 @@ Agent 名称：<可选，中文显示名称>
 2. 开发方自己的业务目标、源 Agent 材料和测试凭证；
 3. 从目标 DClaw 认证调用元数据接口并按其 `download_path` 下载、核对 SHA-256 的官方开发包；兼容自动化可以继续单独下载同版本官方 DevKit。
 
-开发包 `1.9.0` 是推荐的单一离线移交物，必须提供：
+开发包 `1.9.1` 是推荐的单一离线移交物，必须提供：
 
 - 唯一标准文件与明确的标准版本，不复制第二套人工规则；
-- 官方 DevKit `1.8.0` 及其完整离线加密依赖；
+- 官方 DevKit `1.8.1` 及其完整离线加密依赖；
 - `dclaw_developer.py` 的 `doctor`、`info`、`init`、`validate`、`test`、`keygen`、`capability-build`、`build`、`upgrade` 和 `demo`；
 - 超级专家、业务服务和本地能力包模板，以及职责边界示例；
 - Agent 自主出站、公共业务服务、本地执行和能力包 Schema/SDK；
@@ -2173,7 +2175,7 @@ Agent 名称：<可选，中文显示名称>
 
 开发包本身不得包含平台管理员凭据、生产地址、签名私钥、供应商 Secret、客户数据或 DClaw 私有实现。包内公开工具不得导入 `qwenpaw` 或要求开发者克隆服务器仓库。
 
-DevKit `1.8.0` 必须提供：
+DevKit `1.8.1` 必须提供：
 
 - `dclaw_agent_devkit.py`：`doctor`、`contracts`、`digest`、`validate`、`keygen`、`build`、`verify`；
 - `capability-catalog.json`：当前可声明的能力、版本、组和依赖；
@@ -2195,6 +2197,13 @@ DevKit `1.8.0` 必须提供：
 平台内部实现文件、测试文件和维护文档可以继续存在，但它们只服务平台维护者，不属于开发方输入。开发方缺少字段或行为定义时应报告标准或 DevKit 缺陷；平台不得用“请克隆服务器源码”回答。
 
 ## 34. 版本记录
+
+### 2.21 - 2026-10-31
+
+- 支持插件升级为 `1.15.1`，补齐预签名上传创建响应的专用关闭 Schema，公开合同与既有运行时返回保持一致。
+- `agent.outbound.stream/1` 增加可选的供应商无关 HTTPS JSON Pointer 加严格 Base64 媒体提取，原始 JSON、Base64 和媒体字节均不进入 Agent 响应。
+- DevKit 升级为 `1.8.1`，Developer Pack 升级为 `1.9.1`；合同主版本仍为 `1`，旧 Agent、旧包和不使用新可选字段的调用保持兼容。
+- 两项补丁全部属于 `dclaw.super-agent-support` 插件，不修改 DClaw 核心，也不要求客户端或 Runner 强制升级。
 
 ### 2.20 - 2026-10-31
 

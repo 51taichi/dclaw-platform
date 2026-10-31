@@ -431,6 +431,7 @@ class LocalExecutionMcp:
                 completion_text: str | None = None,
                 binary_filter_contains: str | None = None,
                 binary_strip_through: str | None = None,
+                response_transform: dict[str, Any] | None = None,
                 timeout_seconds: int = 60,
                 max_output_bytes: int = 33_554_432,
             ) -> dict[str, Any]:

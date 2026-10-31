@@ -5,7 +5,7 @@ Agents. It contains the human standard, standalone DevKit, schemas, templates,
 SDK helpers, fixtures, and a single cross-platform command line tool. DClaw
 server source is not required.
 
-Version 1.9.0 bundles development standard 2.20 and DevKit 1.8.0. It adds
+Version 1.9.1 bundles development standard 2.21 and DevKit 1.8.1. It adds
 stable installation credential slots, restricted HTTPS/WSS streaming outbound,
 and temporary resource exchange. Large results move through presigned object
 storage and are represented to the Agent by opaque references and digests;
@@ -15,6 +15,9 @@ workspace, logs, local helper, and ordinary DClaw API responses. Existing
 remain compatible. Project upgrades update the pack, standard and DevKit
 versions together before validation; no DClaw management page or server source
 is required.
+Presigned upload creation now has a closed machine response contract, and
+streaming HTTPS can safely extract a strict Base64 media field from JSON into
+temporary object storage without returning media bytes to the Agent.
 
 ## Supported environments
 

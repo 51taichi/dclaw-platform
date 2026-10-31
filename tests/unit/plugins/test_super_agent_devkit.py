@@ -134,7 +134,7 @@ def test_devkit_has_no_server_source_import_and_runs_standalone():
     )
     result = json.loads(completed.stdout)
     assert result["status"] == "ok"
-    assert result["devkit_version"] == "1.8.0"
+    assert result["devkit_version"] == "1.8.1"
     assert result["dependency_mode"] == "bundled-wheelhouse"
     assert result["cryptography_version"] == "46.0.3"
     assert "schemas/super-expert-manifest.schema.json" in result["schemas"]
@@ -199,7 +199,7 @@ def test_business_identity_operation_catalog_is_complete_and_consistent():
     )
 
     assert catalog["owner"] == "dclaw.super-agent-support"
-    assert catalog["minimum_plugin_version"] == "1.15.0"
+    assert catalog["minimum_plugin_version"] == "1.15.1"
     gateway = catalog["local_capability_gateway"]
     assert gateway == {
         "owner": "dclaw-platform",
@@ -254,6 +254,9 @@ def test_business_identity_operation_catalog_is_complete_and_consistent():
     assert operations["agent_outbound.stream"]["capability_id"] == (
         "agent.outbound.stream/1"
     )
+    assert operations["resource.upload.create"]["output_schema"].endswith(
+        "upload-create-response.schema.json"
+    )
     assert operations["resource.revoke"]["tool_name"] == (
         "agent_resource_revoke"
     )
@@ -261,6 +264,42 @@ def test_business_identity_operation_catalog_is_complete_and_consistent():
     for operation in operations.values():
         for key in ("input_schema", "output_schema"):
             assert (DEVKIT_ROOT / operation[key]).is_file()
+
+    upload_target_schema = json.loads(
+        (
+            DEVKIT_ROOT
+            / operations["resource.upload.create"]["output_schema"]
+        ).read_text(encoding="utf-8"),
+    )
+    upload_target = {
+        "resource_ref": "res_" + "a" * 32,
+        "status": "pending",
+        "mime_type": "image/jpeg",
+        "max_size_bytes": 1024,
+        "expires_at": 1,
+        "upload": {
+            "url": "https://objects.example/upload",
+            "method": "PUT",
+            "headers": {"Content-Type": "image/jpeg"},
+            "allowed_domains": ["objects.example"],
+            "max_size_bytes": 1024,
+        },
+    }
+    Draft202012Validator(upload_target_schema).validate(upload_target)
+    with pytest.raises(ValidationError):
+        Draft202012Validator(upload_target_schema).validate(
+            {
+                **upload_target,
+                "upload": {
+                    **upload_target["upload"],
+                    "url": "http://objects.example/upload",
+                },
+            },
+        )
+    with pytest.raises(ValidationError):
+        Draft202012Validator(upload_target_schema).validate(
+            {**upload_target, "upload": {**upload_target["upload"], "Authorization": "forbidden"}},
+        )
     assert (DEVKIT_ROOT / catalog["stable_error_schema"]).is_file()
 
     outbound_schema = json.loads(
@@ -308,7 +347,7 @@ def test_devkit_bundles_and_verifies_locked_encryption_dependencies():
     )
     result = json.loads(completed.stdout)
     assert result["status"] == "ok"
-    assert result["devkit_version"] == "1.8.0"
+    assert result["devkit_version"] == "1.8.1"
     assert result["wheelhouse_verified"] is True
     assert result["wheelhouse_files"] == 26
 
