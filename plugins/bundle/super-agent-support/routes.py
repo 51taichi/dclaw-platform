@@ -29,6 +29,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from .agent_outbound import AgentOutboundError, AgentOutboundManager
 from .business_identity import BusinessIdentityError, BusinessIdentityManager
 from .credentials import CredentialBroker, CredentialError
+from .component_artifacts import (
+    ComponentArtifactError,
+    ComponentArtifactManager,
+    ComponentArtifactUnavailable,
+)
 from .developer_pack.archive import (
     build_archive as build_developer_pack_archive,
 )
@@ -89,6 +94,16 @@ class PublicComponentRegistration(BaseModel):
     descriptor: dict[str, Any]
     signer_id: str = Field(min_length=1, max_length=128)
     signature: str = Field(min_length=1, max_length=1024)
+
+
+class PublicComponentUpload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    component_id: str
+    platform: str
+    component_version: str
+    size_bytes: int
+    sha256: str
+    md5: str
 
 
 COMPONENT_PLATFORMS = {
@@ -329,6 +344,7 @@ def create_app(
     business_identity: BusinessIdentityManager | None = None,
     agent_outbound: AgentOutboundManager | None = None,
     public_components: PublicComponentRegistry | None = None,
+    component_artifacts: ComponentArtifactManager | None = None,
 ) -> FastAPI:
     # pylint: disable=too-many-statements
     app = FastAPI(
@@ -353,7 +369,7 @@ def create_app(
         return {
             "status": "ok",
             "plugin": "dclaw.super-agent-support",
-            "version": "1.15.1",
+            "version": "1.15.2",
             "protocols": {
                 "local_execution": "1.2",
                 "device": "2",
@@ -633,6 +649,38 @@ def create_app(
         _user_id(request)
         return _complete_component_registry(store)
 
+    @app.post("/admin/component-artifacts/uploads")
+    async def create_component_artifact_upload(
+        body: PublicComponentUpload, request: Request,
+    ) -> dict[str, Any]:
+        _require_admin(request)
+        if component_artifacts is None:
+            raise HTTPException(status_code=503, detail="component uploads unavailable")
+        try:
+            return component_artifacts.create(
+                **body.model_dump(), created_by=_user_id(request),
+            )
+        except ComponentArtifactUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ComponentArtifactError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/admin/component-artifacts/uploads/{upload_id}/complete")
+    async def complete_component_artifact_upload(
+        upload_id: str, request: Request,
+    ) -> dict[str, Any]:
+        _require_admin(request)
+        if component_artifacts is None:
+            raise HTTPException(status_code=503, detail="component uploads unavailable")
+        try:
+            return await component_artifacts.complete(
+                upload_id, actor=_user_id(request),
+            )
+        except ComponentArtifactUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ComponentArtifactError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     @app.put(
         "/admin/component-registry/{component_id}/variants/{platform}",
     )
@@ -674,16 +722,20 @@ def create_app(
                 detail="descriptor path identity mismatch",
             )
         try:
-            return {
-                **public_components.register(
-                    descriptor,
-                    signer_id=registration.signer_id,
-                    signature=registration.signature,
-                    updated_by=_user_id(request),
-                ),
-                "helper_platforms": COMPONENT_PLATFORMS,
-            }
-        except PublicComponentError as exc:
+            upload_id = (
+                component_artifacts.require_verified_descriptor(descriptor)
+                if component_artifacts is not None else None
+            )
+            registry = public_components.register(
+                descriptor,
+                signer_id=registration.signer_id,
+                signature=registration.signature,
+                updated_by=_user_id(request),
+            )
+            if upload_id is not None:
+                store.mark_public_component_upload_registered(upload_id)
+            return {**registry, "helper_platforms": COMPONENT_PLATFORMS}
+        except (PublicComponentError, ComponentArtifactError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.post("/credentials")

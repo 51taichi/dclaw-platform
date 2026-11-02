@@ -1,6 +1,7 @@
 # DClaw Super Agent DevKit
 
-Version 1.8.1 publishes stable installation credential slots,
+Version 1.8.2 publishes public Component direct-upload commands and closed
+request/response schemas. It retains stable installation credential slots,
 `agent.outbound.stream/1`, and `resource.exchange/1` in addition to the
 provider-neutral controlled
 HTTPS transport for sealed Super Agents. The Agent owns provider selection,

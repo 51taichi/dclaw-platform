@@ -1,7 +1,7 @@
 {
   "catalog_version": "1",
   "owner": "dclaw.super-agent-support",
-  "minimum_plugin_version": "1.15.1",
+  "minimum_plugin_version": "1.15.2",
   "capability_id": "business.service.installation-identity/1",
   "capability_ids": [
     "business.service.installation-identity/1",

@@ -703,7 +703,7 @@ def test_developer_kit_is_downloadable_without_server_source(
 
     assert metadata.status_code == 200
     assert metadata.json()["name"] == "dclaw-super-agent-devkit"
-    assert metadata.json()["version"] == "1.8.1"
+    assert metadata.json()["version"] == "1.8.2"
     assert metadata.json()["download_path"] == (
         "/api/super-agent-support/developer-kit/v1.zip"
     )
@@ -722,7 +722,7 @@ def test_developer_kit_is_downloadable_without_server_source(
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-devkit-1.8.1"
+    prefix = "dclaw-super-agent-devkit-1.8.2"
     assert f"{prefix}/dclaw_agent_devkit.py" in names
     assert f"{prefix}/bootstrap.ps1" in names
     assert f"{prefix}/bootstrap.sh" in names
@@ -792,23 +792,23 @@ def test_developer_pack_is_downloadable_and_self_describing(
         downloaded = client.get("/developer-pack/download")
 
     assert health.status_code == 200
-    assert health.json()["version"] == "1.15.1"
+    assert health.json()["version"] == "1.15.2"
     assert metadata.status_code == 200
     payload = metadata.json()
-    assert payload["version"] == "1.9.1"
-    assert payload["standard"]["version"] == "2.21"
-    assert payload["devkit_version"] == "1.8.1"
+    assert payload["version"] == "1.9.2"
+    assert payload["standard"]["version"] == "2.22"
+    assert payload["devkit_version"] == "1.8.2"
     assert payload["server_source_required"] is False
     assert payload["download_path"].endswith("/developer-pack/download")
     assert payload["sha256"] == hashlib.sha256(downloaded.content).hexdigest()
     assert payload["content_sha256"] == payload["sha256"]
     assert downloaded.status_code == 200
-    assert "dclaw-super-agent-developer-pack-1.9.1.zip" in (
+    assert "dclaw-super-agent-developer-pack-1.9.2.zip" in (
         downloaded.headers["content-disposition"]
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-developer-pack-1.9.1"
+    prefix = "dclaw-super-agent-developer-pack-1.9.2"
     assert f"{prefix}/PACKAGE-MANIFEST.json" in names
     assert f"{prefix}/SHA256SUMS" in names
     assert f"{prefix}/dclaw_developer.py" in names
@@ -817,6 +817,150 @@ def test_developer_pack_is_downloadable_and_self_describing(
         f"{prefix}/standard/super-agent-development-standard-v1.zh-CN.md"
         in names
     )
+
+
+@pytest.mark.asyncio
+async def test_component_artifact_upload_verification_and_descriptor_binding(
+    plugin_module, tmp_path,
+):
+    store = plugin_module.StateStore(tmp_path / "state.sqlite3")
+    manager_cls = sys.modules[
+        "test_dclaw_super_agent_support.component_artifacts"
+    ].ComponentArtifactManager
+
+    class Storage:
+        class config:
+            signed_url_ttl_seconds = 900
+
+        def build_object_key(self, path):
+            return "prefix/" + path.strip("/")
+
+        def object_url(self, key):
+            return "https://objects.example.test/" + key
+
+        def signed_put_url(self, key, mime_type):
+            return self.object_url(key) + "?put=1"
+
+        def signed_get_url(self, key, ttl_seconds):
+            return self.object_url(key) + "?get=1"
+
+    headers = {"content-range": "bytes 0-0/4", "etag": '"' + "a" * 32 + '"'}
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(206, headers=headers, content=b"x"),
+    )
+    manager = manager_cls(
+        store, Storage(),
+        http_client_factory=lambda: httpx.AsyncClient(transport=transport),
+        public_base_url="https://cdn.example.test/assets",
+    )
+    upload = manager.create(
+        component_id="ffmpeg", platform="windows-x64",
+        component_version="7.1", size_bytes=4,
+        sha256="b" * 64, md5="a" * 32, created_by="admin-1",
+    )
+    assert upload["artifact_url"].startswith("https://cdn.example.test/assets/")
+    request_schema = json.loads((
+        PLUGIN_ROOT / "devkit" / "schemas" / "super-agent-support-v1"
+        / "component-artifact-upload-request.schema.json"
+    ).read_text(encoding="utf-8"))
+    response_schema = json.loads((
+        PLUGIN_ROOT / "devkit" / "schemas" / "super-agent-support-v1"
+        / "component-artifact-upload-response.schema.json"
+    ).read_text(encoding="utf-8"))
+    Draft202012Validator(response_schema).validate(upload)
+    Draft202012Validator(request_schema).validate({
+        "component_id": "ffmpeg", "platform": "windows-x64",
+        "component_version": "7.1", "size_bytes": 4,
+        "sha256": "b" * 64, "md5": "a" * 32,
+    })
+    descriptor = {
+        "component_id": "ffmpeg", "platform": "windows-x64",
+        "component_version": "7.1",
+        "artifact": {
+            "url": upload["artifact_url"], "sha256": "b" * 64,
+            "size_bytes": 4,
+        },
+    }
+    with pytest.raises(ValueError, match="not verified"):
+        manager.require_verified_descriptor(descriptor)
+    with pytest.raises(ValueError, match="not found"):
+        await manager.complete(upload["upload_id"], actor="other-admin")
+    receipt = await manager.complete(upload["upload_id"], actor="admin-1")
+    completion_schema = json.loads((
+        PLUGIN_ROOT / "devkit" / "schemas" / "super-agent-support-v1"
+        / "component-artifact-completion-response.schema.json"
+    ).read_text(encoding="utf-8"))
+    Draft202012Validator(completion_schema).validate(receipt)
+    assert receipt["status"] == "verified"
+    assert manager.require_verified_descriptor(descriptor) == upload["upload_id"]
+    with pytest.raises(ValueError, match="does not match"):
+        manager.require_verified_descriptor({
+            **descriptor, "artifact": {**descriptor["artifact"], "sha256": "c" * 64},
+        })
+    assert manager.create(
+        component_id="ffmpeg", platform="windows-x64",
+        component_version="7.1", size_bytes=4,
+        sha256="b" * 64, md5="a" * 32, created_by="admin-1",
+    )["upload"]["headers"]["Content-MD5"] == base64.b64encode(
+        bytes.fromhex("a" * 32),
+    ).decode("ascii")
+
+
+@pytest.mark.parametrize("failure", ["wrong_size", "private_url"])
+@pytest.mark.asyncio
+async def test_component_artifact_upload_rejects_wrong_storage_receipt(
+    plugin_module, tmp_path, failure,
+):
+    store = plugin_module.StateStore(tmp_path / "state.sqlite3")
+    manager_cls = sys.modules[
+        "test_dclaw_super_agent_support.component_artifacts"
+    ].ComponentArtifactManager
+
+    class Storage:
+        class config:
+            signed_url_ttl_seconds = 900
+
+        def build_object_key(self, path):
+            return path.strip("/")
+
+        def object_url(self, key):
+            return "https://objects.example.test/" + key
+
+        def signed_put_url(self, key, mime_type):
+            return self.object_url(key)
+
+        def signed_get_url(self, key, ttl_seconds):
+            return self.object_url(key) + "?signed=1"
+
+    def storage_response(request):
+        if failure == "private_url" and not request.url.query:
+            return httpx.Response(403)
+        return httpx.Response(
+            206,
+            headers={
+                "content-range": "bytes 0-0/5" if failure == "wrong_size" else "bytes 0-0/4",
+                "etag": '"' + "a" * 32 + '"',
+            },
+            content=b"x",
+        )
+
+    transport = httpx.MockTransport(storage_response)
+    manager = manager_cls(
+        store, Storage(),
+        http_client_factory=lambda: httpx.AsyncClient(transport=transport),
+    )
+    upload = manager.create(
+        component_id="ffmpeg", platform="windows-x64",
+        component_version="7.1", size_bytes=4,
+        sha256="b" * 64, md5="a" * 32, created_by="admin-1",
+    )
+    with pytest.raises(ValueError, match=(
+        "size or MD5" if failure == "wrong_size" else "not range-readable"
+    )):
+        await manager.complete(upload["upload_id"], actor="admin-1")
+    assert store.get_public_component_upload(upload["upload_id"])[
+        "completed_at"
+    ] is None
 
 
 def test_public_component_registry_get_and_admin_set(

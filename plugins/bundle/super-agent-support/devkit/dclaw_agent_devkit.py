@@ -23,7 +23,7 @@ from urllib.request import Request, urlopen
 import zipfile
 
 
-DEVKIT_VERSION = "1.8.1"
+DEVKIT_VERSION = "1.8.2"
 CRYPTOGRAPHY_VERSION = "46.0.3"
 SUPPORTED_PYTHON = ">=3.10,<3.14"
 SUPPORTED_PLATFORMS = {
@@ -716,6 +716,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     component_signature.add_argument("--signature-file", type=Path)
     component_signature.add_argument("--private-key", type=Path)
+    upload_component = component_commands.add_parser("upload")
+    upload_component.add_argument("--file", type=Path, required=True)
+    upload_component.add_argument("--component-id", required=True)
+    upload_component.add_argument("--platform", required=True)
+    upload_component.add_argument("--component-version", required=True)
     return parser
 
 
@@ -953,6 +958,57 @@ def _command_component_registry(args: argparse.Namespace) -> None:
         result = _component_request(
             "GET",
             endpoint,
+            access_token=args.access_token,
+        )
+    elif args.component_command == "upload":
+        import hashlib
+
+        sha256 = hashlib.sha256()
+        md5 = hashlib.md5(usedforsecurity=False)
+        size = 0
+        with args.file.open("rb") as source:
+            while chunk := source.read(1024 * 1024):
+                size += len(chunk)
+                sha256.update(chunk)
+                md5.update(chunk)
+        if not 1 <= size <= 2_147_483_648:
+            raise DevKitError("Component archive size is outside the supported range")
+        upload = _component_request(
+            "POST",
+            support_endpoint + "/admin/component-artifacts/uploads",
+            access_token=args.access_token,
+            body={
+                "component_id": args.component_id,
+                "platform": args.platform,
+                "component_version": args.component_version,
+                "size_bytes": size,
+                "sha256": sha256.hexdigest(),
+                "md5": md5.hexdigest(),
+            },
+        )
+        target = upload.get("upload")
+        if not isinstance(target, dict) or target.get("method") != "PUT":
+            raise DevKitError("Component upload response is invalid")
+        upload_url = target.get("url")
+        if not isinstance(upload_url, str) or urlsplit(upload_url).scheme != "https":
+            raise DevKitError("Component upload URL must use HTTPS")
+        headers = dict(target.get("headers") or {})
+        headers["Content-Length"] = str(size)
+        with args.file.open("rb") as source:
+            request = Request(upload_url, data=source, headers=headers, method="PUT")
+            try:
+                with urlopen(request, timeout=3600) as response:  # nosec B310
+                    if response.status not in (200, 201, 204):
+                        raise DevKitError("Component object upload failed")
+            except (HTTPError, URLError, TimeoutError) as exc:
+                raise DevKitError(f"Component object upload failed: {exc}") from exc
+        upload_id = upload.get("upload_id")
+        if not isinstance(upload_id, str):
+            raise DevKitError("Component upload ID is missing")
+        result = _component_request(
+            "POST",
+            support_endpoint + "/admin/component-artifacts/uploads/"
+            + quote(upload_id, safe="") + "/complete",
             access_token=args.access_token,
         )
     else:

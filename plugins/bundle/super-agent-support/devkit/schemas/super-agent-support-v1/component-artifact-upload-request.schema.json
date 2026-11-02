@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Public Component direct upload request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["component_id", "platform", "component_version", "size_bytes", "sha256", "md5"],
+  "properties": {
+    "component_id": {"type": "string", "pattern": "^[a-z][a-z0-9._-]{0,127}$"},
+    "platform": {"enum": ["windows-x64", "windows-arm64", "macos-arm64", "macos-x64"]},
+    "component_version": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$"},
+    "size_bytes": {"type": "integer", "minimum": 1, "maximum": 2147483648},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "md5": {"type": "string", "pattern": "^[0-9a-f]{32}$"}
+  }
+}

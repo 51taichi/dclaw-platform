@@ -81,6 +81,21 @@ class StateStore:
                     updated_by TEXT NOT NULL,
                     updated_at INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS public_component_uploads (
+                    upload_id TEXT PRIMARY KEY,
+                    component_id TEXT NOT NULL,
+                    platform TEXT NOT NULL,
+                    component_version TEXT NOT NULL,
+                    object_key TEXT NOT NULL UNIQUE,
+                    artifact_url TEXT NOT NULL UNIQUE,
+                    size_bytes INTEGER NOT NULL,
+                    sha256 TEXT NOT NULL,
+                    md5 TEXT NOT NULL,
+                    created_by TEXT NOT NULL,
+                    expires_at INTEGER NOT NULL,
+                    completed_at INTEGER,
+                    registered_at INTEGER
+                );
                 CREATE TABLE IF NOT EXISTS public_component_variants (
                     component_id TEXT NOT NULL REFERENCES public_components(component_id),
                     platform TEXT NOT NULL,
@@ -521,6 +536,52 @@ class StateStore:
             }
             for row in rows
         ]
+
+    def create_public_component_upload(self, record: dict[str, Any]) -> None:
+        with self._lock, self._connect() as db:
+            db.execute(
+                """INSERT INTO public_component_uploads(
+                    upload_id,component_id,platform,component_version,object_key,
+                    artifact_url,size_bytes,sha256,md5,created_by,expires_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                tuple(record[key] for key in (
+                    "upload_id", "component_id", "platform", "component_version",
+                    "object_key", "artifact_url", "size_bytes", "sha256",
+                    "md5", "created_by", "expires_at",
+                )),
+            )
+
+    def get_public_component_upload(self, upload_id: str) -> dict[str, Any] | None:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM public_component_uploads WHERE upload_id=?",
+                (upload_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def complete_public_component_upload(self, upload_id: str) -> bool:
+        with self._lock, self._connect() as db:
+            cursor = db.execute(
+                """UPDATE public_component_uploads SET completed_at=?
+                WHERE upload_id=? AND completed_at IS NULL AND expires_at>?""",
+                (int(time.time()), upload_id, int(time.time())),
+            )
+            return cursor.rowcount == 1
+
+    def get_public_component_upload_by_url(self, url: str) -> dict[str, Any] | None:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM public_component_uploads WHERE artifact_url=?",
+                (url,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def mark_public_component_upload_registered(self, upload_id: str) -> None:
+        with self._lock, self._connect() as db:
+            db.execute(
+                "UPDATE public_component_uploads SET registered_at=? WHERE upload_id=?",
+                (int(time.time()), upload_id),
+            )
 
     def set_public_component_variant(
         self,

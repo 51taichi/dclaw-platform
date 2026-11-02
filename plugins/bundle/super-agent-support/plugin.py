@@ -24,6 +24,7 @@ from .business_identity import (
     BusinessIdentityManager,
 )
 from .credentials import CredentialBroker
+from .component_artifacts import ComponentArtifactManager
 from .mcp_server import LocalExecutionMcp
 from .packages import CapabilityPackageRegistry
 from .public_components import PublicComponentRegistry
@@ -170,6 +171,14 @@ class SuperAgentSupportPlugin:
             / "public-component-descriptor.schema.json",
             component_signers,
         )
+        component_artifacts = ComponentArtifactManager(
+            store,
+            object_storage,
+            public_base_url=(
+                api.config.get("public_component_artifact_base_url")
+                or os.environ.get("DCLAW_PUBLIC_COMPONENT_ARTIFACT_BASE_URL")
+            ),
+        )
         service = LocalExecutionService(
             store,
             signer,
@@ -201,6 +210,7 @@ class SuperAgentSupportPlugin:
             business_identity=business_identity,
             agent_outbound=agent_outbound,
             public_components=public_components,
+            component_artifacts=component_artifacts,
         )
         api.register_asgi_app(
             app,

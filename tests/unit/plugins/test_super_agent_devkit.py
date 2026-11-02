@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import argparse
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import importlib.util
@@ -48,6 +49,56 @@ def _devkit():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_component_registry_upload_streams_to_object_storage(
+    tmp_path, monkeypatch, capsys,
+):
+    module = _devkit()
+    archive = tmp_path / "component.zip"
+    archive.write_bytes(b"component archive")
+    calls = []
+
+    def component_request(method, url, *, access_token, body=None):
+        calls.append((method, url, body))
+        if url.endswith("/uploads"):
+            assert body["size_bytes"] == archive.stat().st_size
+            assert body["sha256"] == hashlib.sha256(archive.read_bytes()).hexdigest()
+            return {
+                "upload_id": "a" * 32,
+                "upload": {
+                    "method": "PUT",
+                    "url": "https://objects.example.test/component.zip?signature=secret",
+                    "headers": {"Content-Type": "application/zip", "Content-MD5": "x"},
+                },
+            }
+        return {"status": "verified", "artifact_url": "https://objects.example.test/component.zip"}
+
+    class UploadResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    def upload(request, timeout):
+        assert request.get_method() == "PUT"
+        assert request.headers["Content-length"] == str(archive.stat().st_size)
+        assert request.data.read() == archive.read_bytes()
+        return UploadResponse()
+
+    monkeypatch.setattr(module, "_component_request", component_request)
+    monkeypatch.setattr(module, "urlopen", upload)
+    module._command_component_registry(argparse.Namespace(
+        base_url="https://dclaw.example.test", access_token="test-token",
+        component_command="upload", file=archive, component_id="ffmpeg",
+        platform="windows-x64", component_version="7.1",
+    ))
+    assert [call[0] for call in calls] == ["POST", "POST"]
+    assert calls[1][1].endswith("/" + "a" * 32 + "/complete")
+    assert json.loads(capsys.readouterr().out)["status"] == "verified"
 
 
 def _business_identity_verifier():
@@ -134,7 +185,7 @@ def test_devkit_has_no_server_source_import_and_runs_standalone():
     )
     result = json.loads(completed.stdout)
     assert result["status"] == "ok"
-    assert result["devkit_version"] == "1.8.1"
+    assert result["devkit_version"] == "1.8.2"
     assert result["dependency_mode"] == "bundled-wheelhouse"
     assert result["cryptography_version"] == "46.0.3"
     assert "schemas/super-expert-manifest.schema.json" in result["schemas"]
@@ -199,7 +250,7 @@ def test_business_identity_operation_catalog_is_complete_and_consistent():
     )
 
     assert catalog["owner"] == "dclaw.super-agent-support"
-    assert catalog["minimum_plugin_version"] == "1.15.1"
+    assert catalog["minimum_plugin_version"] == "1.15.2"
     gateway = catalog["local_capability_gateway"]
     assert gateway == {
         "owner": "dclaw-platform",
@@ -347,7 +398,7 @@ def test_devkit_bundles_and_verifies_locked_encryption_dependencies():
     )
     result = json.loads(completed.stdout)
     assert result["status"] == "ok"
-    assert result["devkit_version"] == "1.8.1"
+    assert result["devkit_version"] == "1.8.2"
     assert result["wheelhouse_verified"] is True
     assert result["wheelhouse_files"] == 26
 

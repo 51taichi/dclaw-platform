@@ -5,7 +5,7 @@ Agents. It contains the human standard, standalone DevKit, schemas, templates,
 SDK helpers, fixtures, and a single cross-platform command line tool. DClaw
 server source is not required.
 
-Version 1.9.1 bundles development standard 2.21 and DevKit 1.8.1. It adds
+Version 1.9.2 bundles development standard 2.22 and DevKit 1.8.2. It adds
 stable installation credential slots, restricted HTTPS/WSS streaming outbound,
 and temporary resource exchange. Large results move through presigned object
 storage and are represented to the Agent by opaque references and digests;
@@ -18,6 +18,9 @@ is required.
 Presigned upload creation now has a closed machine response contract, and
 streaming HTTPS can safely extract a strict Base64 media field from JSON into
 temporary object storage without returning media bytes to the Agent.
+Plugin administrators can now upload public Component ZIPs directly to object
+storage with `devkit/dclaw_agent_devkit.py component-registry upload`; the
+completion receipt must match the signed descriptor used for registration.
 
 ## Supported environments
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.9.2 - 2026-11-02
+
+- Bundles development standard 2.22 and DevKit 1.8.2.
+- Adds administrator-only direct object-storage upload for public Components,
+  completion verification, and a receipt binding before signed registration.
+- Keeps existing external HTTPS Components and signed Agents compatible.
+
 ## 1.9.1 - 2026-10-31
 
 - Bundles development standard 2.21 and DevKit 1.8.1.

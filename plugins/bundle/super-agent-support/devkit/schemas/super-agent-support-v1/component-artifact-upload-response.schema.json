@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Public Component direct upload initialization response",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["upload_id", "artifact_url", "sha256", "size_bytes", "expires_at", "upload"],
+  "properties": {
+    "upload_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "artifact_url": {"type": "string", "pattern": "^https://"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "size_bytes": {"type": "integer", "minimum": 1, "maximum": 2147483648},
+    "expires_at": {"type": "integer"},
+    "upload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "url", "headers"],
+      "properties": {
+        "method": {"const": "PUT"},
+        "url": {"type": "string", "pattern": "^https://"},
+        "headers": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Content-Type", "Content-MD5"],
+          "properties": {
+            "Content-Type": {"const": "application/zip"},
+            "Content-MD5": {"type": "string", "minLength": 24, "maxLength": 24}
+          }
+        }
+      }
+    }
+  }
+}
