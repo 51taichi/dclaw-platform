@@ -22,7 +22,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from jsonschema import Draft202012Validator
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -39,6 +39,11 @@ from .developer_pack.archive import (
 )
 from .mcp_server import LocalExecutionMcp
 from .packages import CapabilityPackageRegistry, PackageError
+from .platform_helpers import (
+    PlatformHelperError,
+    PlatformHelperRegistry,
+    PlatformHelperUnavailable,
+)
 from .public_components import PublicComponentError, PublicComponentRegistry
 from .service import LocalExecutionService
 from .store import StateStore
@@ -345,6 +350,7 @@ def create_app(
     agent_outbound: AgentOutboundManager | None = None,
     public_components: PublicComponentRegistry | None = None,
     component_artifacts: ComponentArtifactManager | None = None,
+    platform_helpers: PlatformHelperRegistry | None = None,
 ) -> FastAPI:
     # pylint: disable=too-many-statements
     app = FastAPI(
@@ -369,7 +375,7 @@ def create_app(
         return {
             "status": "ok",
             "plugin": "dclaw.super-agent-support",
-            "version": "1.15.2",
+            "version": "1.16.0",
             "protocols": {
                 "local_execution": "1.2",
                 "device": "2",
@@ -382,6 +388,53 @@ def create_app(
         }
 
     _register_developer_kit_routes(app)
+
+    @app.get("/local-helper/manifest")
+    async def local_helper_manifest(
+        platform: str,
+        request: Request,
+    ) -> dict[str, Any]:
+        _user_id(request)
+        if platform_helpers is None:
+            raise HTTPException(
+                status_code=503,
+                detail="local-helper distribution is unavailable",
+            )
+        try:
+            manifest, _artifact = platform_helpers.resolve(platform)
+            return manifest
+        except PlatformHelperUnavailable as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except PlatformHelperError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get("/local-helper/download")
+    async def download_local_helper(
+        platform: str,
+        request: Request,
+    ) -> FileResponse:
+        _user_id(request)
+        if platform_helpers is None:
+            raise HTTPException(
+                status_code=503,
+                detail="local-helper distribution is unavailable",
+            )
+        try:
+            manifest, artifact = platform_helpers.resolve(platform)
+        except PlatformHelperUnavailable as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except PlatformHelperError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return FileResponse(
+            artifact,
+            media_type="application/vnd.microsoft.portable-executable",
+            filename=f"DClaw.LocalHelper-{manifest['version']}.exe",
+            headers={
+                "Cache-Control": "private, max-age=300",
+                "X-Content-Type-Options": "nosniff",
+                "X-DClaw-Content-SHA256": manifest["sha256"],
+            },
+        )
 
     if business_identity is not None:
 

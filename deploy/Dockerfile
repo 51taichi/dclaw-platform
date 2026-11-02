@@ -9,7 +9,23 @@ COPY console /app/console
 RUN cd /app/console && npm ci --include=dev && NODE_OPTIONS=--max-old-space-size=4096 npm run build
 
 # -----------------------------------------------------------------------------
-# Stage 2: runtime image with Python, Chromium, and app.
+# Stage 2: compile the plugin-owned Windows local helper.
+# -----------------------------------------------------------------------------
+FROM mcr.microsoft.com/dotnet/sdk:8.0-bookworm-slim AS local-helper-builder
+WORKDIR /source
+COPY plugins/bundle/super-agent-support/windows-helper ./windows-helper
+RUN dotnet publish ./windows-helper/DClaw.LocalHelper.csproj \
+      --configuration Release \
+      --runtime win-x64 \
+      --self-contained true \
+      --output /out/local-helper \
+      /p:PublishSingleFile=true \
+      /p:IncludeNativeLibrariesForSelfExtract=true \
+      /p:DebugType=None \
+  && test -s /out/local-helper/DClaw.LocalHelper.exe
+
+# -----------------------------------------------------------------------------
+# Stage 3: runtime image with Python, Chromium, and app.
 # -----------------------------------------------------------------------------
 FROM agentscope-registry.ap-southeast-1.cr.aliyuncs.com/agentscope/node:slim
 
@@ -169,6 +185,8 @@ COPY deploy/pricing ./deploy/pricing
 COPY scripts/perf ./scripts/perf
 COPY src ./src
 COPY plugins/bundle/super-agent-support ./plugins/auto-load/super-agent-support
+COPY --from=local-helper-builder /out/local-helper/DClaw.LocalHelper.exe \
+  ./plugins/auto-load/super-agent-support/platform_helpers/windows-x64/DClaw.LocalHelper.exe
 COPY docs/super-agent-development-standard-v1.zh-CN.md ./plugins/auto-load/super-agent-support/developer_pack/standard/super-agent-development-standard-v1.zh-CN.md
 COPY website/public/docs/ ./src/qwenpaw/docs/
 # Inject console dist from build stage (repo does not commit dist). Remove any

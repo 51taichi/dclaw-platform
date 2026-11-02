@@ -138,7 +138,7 @@ ERRORS = {
         "FILE_SELECTOR.UNSUPPORTED",
         "unsupported",
         False,
-        "update_dclaw",
+        "update_local_helper",
         "当前本地助手不支持安全文件选择。",
         "file_selector",
     ),

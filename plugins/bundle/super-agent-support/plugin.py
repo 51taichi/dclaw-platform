@@ -27,6 +27,7 @@ from .credentials import CredentialBroker
 from .component_artifacts import ComponentArtifactManager
 from .mcp_server import LocalExecutionMcp
 from .packages import CapabilityPackageRegistry
+from .platform_helpers import PlatformHelperRegistry
 from .public_components import PublicComponentRegistry
 from .routes import create_app
 from .service import LocalExecutionService
@@ -211,6 +212,7 @@ class SuperAgentSupportPlugin:
             agent_outbound=agent_outbound,
             public_components=public_components,
             component_artifacts=component_artifacts,
+            platform_helpers=PlatformHelperRegistry(Path(__file__).parent),
         )
         api.register_asgi_app(
             app,

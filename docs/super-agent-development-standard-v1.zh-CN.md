@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.22`
+当前版本：`2.23`
 
 发布日期：`2026-11-02`
 
@@ -552,17 +552,17 @@ stateDiagram-v2
 
 本标准 `2.19` 的正式组合为 Developer Pack `1.8.0`、支持插件 `1.14.0`、DevKit `1.7.0` 与 Runner `1.3.0`。该组合在既有公共 Component、非入口 export 绑定和业务服务身份合同之外，正式发布 `agent.outbound/1`：第三方业务请求完全由超级 Agent 决定，插件只执行凭证隔离、策略校验和最终网络运输；本地助手不接收第三方长期 Key。旧已签名 Agent 和既有合同继续按原版本运行。
 
-本标准 `2.22` 的正式组合为 Developer Pack `1.9.2`、支持插件 `1.15.2`、DevKit `1.8.2` 与 Runner `1.3.0`。该组合在 `2.21` 的运行合同基础上增加插件管理的公共 Component 制品直传与注册门禁。旧已签名 Agent、旧 `credential_ref` 和合同版本 `1` 的既有调用继续兼容。
+本标准 `2.23` 的正式组合为 Developer Pack `1.9.3`、支持插件 `1.16.0`、DevKit `1.8.3` 与 Runner `1.3.0`。该组合将通用本地助手的二进制发布和版本清单归入支持插件，DClaw 客户端只负责按需下载、摘要校验、原子切换、启动与回退。
 
-本标准 `2.22` 的正式开发与发布门禁如下。版本必须作为一个兼容组合核对，不能只满足其中一项：
+本标准 `2.23` 的正式开发与发布门禁如下。版本必须作为一个兼容组合核对，不能只满足其中一项：
 
 | 项目 | 本标准要求 | 2026-10-26 正式环境核对 | 结论 |
 |---|---|---|---|
 | DClaw 核心 | 至少 `1.1.10` | 公网 `/api/version` 返回 `1.1.10`，运行镜像标记 Server 提交 `db08ac40` | 满足 |
-| 支持插件 | 至少 `1.15.2` | 生产仍须读取健康接口核对 | 提供稳定凭证、流式出站、媒体提取、资源交换、公共 Component 和无界面 API |
-| Super Agent DevKit | `1.8.2`，且由目标实例认证下载 | 生产仍须读取元数据核对 | 提供公共 Component 直传 CLI 与关闭 Schema；旧合同继续可用 |
-| Super Agent 开发包 | `1.9.2`，标准 `2.22`、DevKit `1.8.2` | 生产仍须认证下载核对 | 新开发和迁移使用 `1.9.2`；旧已签名 Agent 保持有效 |
-| Windows 客户端 | 普通预检至少 `2.6.12`；本地文件链路至少 `2.6.13` | `2.6.11` | 不满足，先发布并升级客户端 |
+| 支持插件 | 至少 `1.16.0` | 生产仍须读取健康接口核对 | 提供本地助手热分发、稳定凭证、流式出站、资源交换、公共 Component 和无界面 API |
+| Super Agent DevKit | `1.8.3`，且由目标实例认证下载 | 生产仍须读取元数据核对 | 发布 `update_local_helper` 动作与关闭 Schema |
+| Super Agent 开发包 | `1.9.3`，标准 `2.23`、DevKit `1.8.3` | 生产仍须认证下载核对 | 新开发和迁移使用 `1.9.3` |
+| Windows 客户端 | 本地助手按需分发至少 `2.6.19` | 生产仍须核对 | 客户端不携带助手二进制，只提供稳定下载、校验、切换和启动器 |
 | 通用 Runner | 普通链路至少 `1.0.0`；本地文件链路至少 `1.1.0`；公共 Component 链路至少 `1.2.0`；非入口 export 绑定至少 `1.3.0` | 随兼容客户端核对 | 声明 `component_exports` 的能力包必须使用实际携带 Runner `1.3.0` 的兼容客户端 |
 
 正式公开入口：
@@ -577,7 +577,9 @@ stateDiagram-v2
 | 本地执行 MCP | `/api/super-agent-support/mcp/`，Streamable HTTP |
 | 客户端环境检测 | `GET /api/super-agent-support/environment-status` |
 | 客户端配对 | `POST /api/super-agent-support/device-bootstrap` |
-| 本地助手通道 | `/api/super-agent-support/devices/connect`，WebSocket 协议 `1` |
+| 本地助手版本清单 | `GET /api/super-agent-support/local-helper/manifest?platform=windows-x64` |
+| 本地助手下载 | `GET /api/super-agent-support/local-helper/download?platform=windows-x64` |
+| 本地助手通道 | `/api/super-agent-support/devices/connect`，WebSocket 协议 `2` |
 | 能力包注册 | `POST /api/super-agent-support/capability-packages/register` |
 | 公共 Component 完整注册表 | `GET /api/super-agent-support/component-registry` |
 | 公共 Component 制品直传 | `POST /api/super-agent-support/admin/component-artifacts/uploads`，然后 `POST /api/super-agent-support/admin/component-artifacts/uploads/{upload_id}/complete` |
@@ -590,7 +592,7 @@ stateDiagram-v2
 
 上述接口属于认证后的目标 DClaw，不是匿名公共下载站。`401` 表示尚未携带有效身份，不能据此断言接口缺失；有效身份下 `404`、插件版本低于要求、返回的 DevKit 版本不匹配或 ZIP SHA-256 与元数据不一致，均表示当前目标环境未达到发布门禁。开发方只能继续源码和离线测试，状态标记为 `platform-tooling-missing`，不得使用平台仓库内源码副本、旧兼容构建器、历史签名包或其他环境下载的 DevKit 替代。
 
-生产升级必须部署插件 `1.15.2`、Developer Pack `1.9.2` 和 DevKit `1.8.2`；使用 `component_exports` 的 Windows 能力包还须完成 Runner `1.3.0`、设备协议 `2` 和 `windows-x64` 平台报告的实际连接核对。`agent.outbound/1`、`agent.outbound.stream/1` 和 `resource.exchange/1` 是插件服务端能力，不要求客户端或 Runner 因合同补丁强制升级，也不得把第三方业务调用转交 Runner。只使用普通公共 Component 入口的能力包仍可声明 Runner `1.2.0`，只使用本地文件链路时仍以 Windows 客户端 `2.6.13`、Runner `1.1.0` 和设备协议 `2` 为最低要求。manifest 中 `platform_contract_versions.local_execution="1"` 是平台合同主版本；本地执行合同修订版 `1.2`、Runner 设备协议 `2` 和公共 Component 描述符 `1` 是不同层级的版本，不得互相替代或写错字段。开发方必须使用自己的应用身份认证会话实际下载 Developer Pack 或 DevKit、核对服务端 SHA-256，并在上传前核对插件 Secret 与相应信任库配置；服务器 root SSH 权限和镜像中存在文件都不能替代应用下载身份或发布证据。任何历史 Agent 专属 Relay、Runner、工具前缀和能力 ID 只作为冻结兼容路径，不得被新发布复制或回退使用。
+生产升级必须部署插件 `1.16.0`、Developer Pack `1.9.3`、DevKit `1.8.3` 和具备插件助手下载器的 Windows 客户端 `2.6.19`；使用本地执行的能力包须完成 Runner `1.3.0`、设备协议 `2` 和 `windows-x64` 平台报告的实际连接核对。助手版本更新只发布支持插件，不再要求发布 DClaw 客户端。manifest 中 `platform_contract_versions.local_execution="1"` 是平台合同主版本；本地执行合同修订版 `1.2`、Runner 设备协议 `2` 和公共 Component 描述符 `1` 是不同层级的版本，不得互相替代或写错字段。开发方必须使用自己的应用身份认证会话实际下载 Developer Pack 或 DevKit、核对服务端 SHA-256，并在上传前核对插件 Secret 与相应信任库配置；服务器 root SSH 权限和镜像中存在文件都不能替代应用下载身份或发布证据。
 
 生产安装必须把插件 `state_dir` 放在持久卷，并通过平台 Secret 配置稳定的 `master_key_base64`；容器可使用 `DCLAW_SUPER_AGENT_SUPPORT_MASTER_KEY_BASE64`，该值解码后至少 32 字节，不得写入仓库、镜像或 Agent 包。`trusted_package_signers` 是 `signer_id` 到原始 Ed25519 公钥 Base64 的映射；`trusted_component_signers` 是 `signer_id` 到 DER SubjectPublicKeyInfo 编码的 P-256 公钥 Base64 映射。未配置对应受信公钥时，插件仍可启动和提供环境状态，但对应的能力包或公共 Component 注册必须失败关闭。
 
@@ -920,14 +922,14 @@ V1.1 另增加四个按需工具：`local_file_select`、`local_file_upload`、`
 
 ### 15.5 V1.1 环境与准备合同
 
-DClaw 客户端负责安装、携带、启动、绑定、重连和升级通用本地助手。超级专家不得下载安装器、展示绑定码、拼接 Runner 连接地址或建立第二套安装流程。`local_environment_status` 只返回状态和客户下一步动作：
+DClaw 客户端负责按需下载、校验、启动、绑定、重连和原子升级通用本地助手；助手二进制及版本清单由 `dclaw.super-agent-support` 插件发布，不随 DClaw 客户端安装包分发。超级专家不得下载安装器、展示绑定码、拼接 Runner 连接地址或建立第二套安装流程。`local_environment_status` 只返回状态和客户下一步动作：
 
 | `state` | `reason` | `user_action` | 含义 |
 |---|---|---|---|
 | `ready` | `none` | `none` | 至少一个已登录客户的兼容 Runner 在线 |
 | `device_not_ready` | `no_paired_device` | `open_dclaw` | 客户端尚未完成自动设备配对 |
 | `device_not_ready` | `device_offline` | `open_dclaw` | 已有设备记录但当前没有在线连接 |
-| `runner_update_required` | `runner_version_too_old` | `update_dclaw` | 在线 Runner 低于平台最低版本；通过更新 DClaw 客户端处理 |
+| `runner_update_required` | `runner_version_too_old` | `update_local_helper` | 在线 Runner 低于平台最低版本；客户端从当前支持插件重新下载并原子切换助手 |
 | `protocol_incompatible` | `protocol_version_mismatch` | `contact_administrator` | Agent 请求的本地执行协议与平台不兼容 |
 
 环境响应固定包含 `state`、`reason`、`protocol_version`、`compatible`、`minimum_runner_version`、`bootstrap_session_id`、`user_action` 和 `devices`。每个设备摘要固定包含 `device_id`、`display_name`、`runner_version`、`online` 和 `last_seen`。
@@ -950,7 +952,7 @@ DClaw 客户端负责安装、携带、启动、绑定、重连和升级通用�
 | `ready` | `none` | 目标签名能力包的准确版本已安装 |
 | `preparing` | `wait` | Runner 正在自动下载、验证并原子安装目标版本 |
 | `device_not_ready` | `open_dclaw` | 当前没有在线设备 |
-| `runner_update_required` | `update_dclaw` | Runner 低于能力包声明的 `min_runner_version` |
+| `runner_update_required` | `update_local_helper` | Runner 低于能力包声明的 `min_runner_version` |
 
 准备响应固定包含 `state`、`capability_id`、`package_id`、`package_version`、`min_runner_version`、`device_id`、`runner_version` 和 `user_action`。平台不使用旧 Relay 的 `runtime_update_required`：能力包准备无需客户另行确认，版本不一致时返回 `preparing` 并由 Runner 自动更新。
 
@@ -2170,10 +2172,10 @@ Agent 名称：<可选，中文显示名称>
 2. 开发方自己的业务目标、源 Agent 材料和测试凭证；
 3. 从目标 DClaw 认证调用元数据接口并按其 `download_path` 下载、核对 SHA-256 的官方开发包；兼容自动化可以继续单独下载同版本官方 DevKit。
 
-开发包 `1.9.1` 是推荐的单一离线移交物，必须提供：
+开发包 `1.9.3` 是推荐的单一离线移交物，必须提供：
 
 - 唯一标准文件与明确的标准版本，不复制第二套人工规则；
-- 官方 DevKit `1.8.1` 及其完整离线加密依赖；
+- 官方 DevKit `1.8.3` 及其完整离线加密依赖；
 - `dclaw_developer.py` 的 `doctor`、`info`、`init`、`validate`、`test`、`keygen`、`capability-build`、`build`、`upgrade` 和 `demo`；
 - 超级专家、业务服务和本地能力包模板，以及职责边界示例；
 - Agent 自主出站、公共业务服务、本地执行和能力包 Schema/SDK；
@@ -2185,7 +2187,7 @@ Agent 名称：<可选，中文显示名称>
 
 开发包本身不得包含平台管理员凭据、生产地址、签名私钥、供应商 Secret、客户数据或 DClaw 私有实现。包内公开工具不得导入 `qwenpaw` 或要求开发者克隆服务器仓库。
 
-DevKit `1.8.2` 必须提供：
+DevKit `1.8.3` 必须提供：
 
 - `dclaw_agent_devkit.py`：`doctor`、`contracts`、`digest`、`validate`、`keygen`、`build`、`verify`；
 - `capability-catalog.json`：当前可声明的能力、版本、组和依赖；
@@ -2207,6 +2209,12 @@ DevKit `1.8.2` 必须提供：
 平台内部实现文件、测试文件和维护文档可以继续存在，但它们只服务平台维护者，不属于开发方输入。开发方缺少字段或行为定义时应报告标准或 DevKit 缺陷；平台不得用“请克隆服务器源码”回答。
 
 ## 34. 版本记录
+
+### 2.23 - 2026-11-02
+
+- 支持插件 `1.16.0` 在热安装包内发布 Windows 本地助手及不可变版本清单，并提供登录用户可访问的版本检测和下载接口。
+- Windows 客户端 `2.6.19` 删除内置助手，首次使用时按需下载，校验大小与 SHA-256 后原子切换；新版本启动失败时保留上一版回退。
+- Runner 过旧动作由 `update_dclaw` 改为 `update_local_helper`；DevKit `1.8.3` 与 Developer Pack `1.9.3` 同步发布关闭合同。
 
 ### 2.22 - 2026-11-02
 

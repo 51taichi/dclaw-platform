@@ -75,7 +75,7 @@
         "compatible": {"type": "boolean"},
         "minimum_runner_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
         "bootstrap_session_id": {"type": ["string", "null"], "maxLength": 128},
-        "user_action": {"enum": ["none", "open_dclaw", "update_dclaw", "contact_administrator"]},
+        "user_action": {"enum": ["none", "open_dclaw", "update_local_helper", "contact_administrator"]},
         "devices": {"type": "array", "items": {"$ref": "#/$defs/Device"}}
       }
     },
@@ -116,7 +116,7 @@
         "min_runner_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
         "device_id": {"type": ["string", "null"], "maxLength": 128},
         "runner_version": {"type": ["string", "null"], "maxLength": 64},
-        "user_action": {"enum": ["none", "wait", "open_dclaw", "update_dclaw"]}
+        "user_action": {"enum": ["none", "wait", "open_dclaw", "update_local_helper"]}
       }
     },
     "TaskData": {

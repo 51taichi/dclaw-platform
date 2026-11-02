@@ -5,7 +5,7 @@ Agents. It contains the human standard, standalone DevKit, schemas, templates,
 SDK helpers, fixtures, and a single cross-platform command line tool. DClaw
 server source is not required.
 
-Version 1.9.2 bundles development standard 2.22 and DevKit 1.8.2. It adds
+Version 1.9.3 bundles development standard 2.23 and DevKit 1.8.3. It adds
 stable installation credential slots, restricted HTTPS/WSS streaming outbound,
 and temporary resource exchange. Large results move through presigned object
 storage and are represented to the Agent by opaque references and digests;

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.9.3 - 2026-11-02
+
+- Bundles development standard 2.23 and DevKit 1.8.3.
+- Moves the Windows local-helper binary and version manifest into the support
+  plugin release, with authenticated on-demand download and atomic updates.
+- Replaces Runner upgrade guidance that required a DClaw client release with
+  the plugin-managed `update_local_helper` action.
+
 ## 1.9.2 - 2026-11-02
 
 - Bundles development standard 2.22 and DevKit 1.8.2.

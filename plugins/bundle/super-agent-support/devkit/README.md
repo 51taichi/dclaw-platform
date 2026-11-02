@@ -1,6 +1,6 @@
 # DClaw Super Agent DevKit
 
-Version 1.8.2 publishes public Component direct-upload commands and closed
+Version 1.8.3 publishes plugin-managed local-helper update actions and closed
 request/response schemas. It retains stable installation credential slots,
 `agent.outbound.stream/1`, and `resource.exchange/1` in addition to the
 provider-neutral controlled

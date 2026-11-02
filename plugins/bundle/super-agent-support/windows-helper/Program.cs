@@ -15,9 +15,13 @@ internal sealed record HelperConfig(
     string DeviceId,
     string? DeviceToken,
     string? PairingCode,
-    string DisplayName,
-    string RunnerVersion = "1.3.0",
-    string ProtocolVersion = "2");
+    string DisplayName);
+
+internal static class HelperMetadata
+{
+    internal const string Version = "1.3.0";
+    internal const string ProtocolVersion = "2";
+}
 
 internal sealed class Program
 {
@@ -197,8 +201,8 @@ internal sealed class HelperRuntime
             ["device_token"] = _config.DeviceToken,
             ["pairing_code"] = _config.DeviceToken is null ? _config.PairingCode : null,
             ["display_name"] = _config.DisplayName,
-            ["runner_version"] = _config.RunnerVersion,
-            ["protocol_version"] = _config.ProtocolVersion,
+            ["runner_version"] = HelperMetadata.Version,
+            ["protocol_version"] = HelperMetadata.ProtocolVersion,
             ["platform"] = "windows-x64",
         };
         var encoded = string.Join("&", query.Where(item => !string.IsNullOrWhiteSpace(item.Value))

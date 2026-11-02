@@ -703,7 +703,7 @@ def test_developer_kit_is_downloadable_without_server_source(
 
     assert metadata.status_code == 200
     assert metadata.json()["name"] == "dclaw-super-agent-devkit"
-    assert metadata.json()["version"] == "1.8.2"
+    assert metadata.json()["version"] == "1.8.3"
     assert metadata.json()["download_path"] == (
         "/api/super-agent-support/developer-kit/v1.zip"
     )
@@ -722,7 +722,7 @@ def test_developer_kit_is_downloadable_without_server_source(
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-devkit-1.8.2"
+    prefix = "dclaw-super-agent-devkit-1.8.3"
     assert f"{prefix}/dclaw_agent_devkit.py" in names
     assert f"{prefix}/bootstrap.ps1" in names
     assert f"{prefix}/bootstrap.sh" in names
@@ -736,6 +736,89 @@ def test_developer_kit_is_downloadable_without_server_source(
         or name.endswith("/.DS_Store")
         for name in names
     )
+
+
+def test_plugin_distributes_authenticated_versioned_local_helper(
+    plugin_module,
+    tmp_path,
+):
+    store, _signer, broker, service = _runtime(plugin_module, tmp_path)
+    mcp_cls = sys.modules[
+        "test_dclaw_super_agent_support.mcp_server"
+    ].LocalExecutionMcp
+    package_cls = sys.modules[
+        "test_dclaw_super_agent_support.packages"
+    ].CapabilityPackageRegistry
+    platform_helper_cls = sys.modules[
+        "test_dclaw_super_agent_support.platform_helpers"
+    ].PlatformHelperRegistry
+    helper = b"MZ\x00plugin-owned-local-helper"
+    plugin_root = tmp_path / "plugin"
+    helper_root = plugin_root / "platform_helpers" / "windows-x64"
+    helper_root.mkdir(parents=True)
+    (helper_root / "DClaw.LocalHelper.exe").write_bytes(helper)
+    helper_metadata = {
+        "platform": "windows-x64",
+        "version": "1.3.0",
+        "protocol_version": "2",
+        "executable": "DClaw.LocalHelper.exe",
+    }
+    metadata_root = plugin_root / "windows-helper"
+    metadata_root.mkdir()
+    (metadata_root / "helper.json").write_text(
+        json.dumps(helper_metadata),
+        encoding="utf-8",
+    )
+    manifest = {
+        **helper_metadata,
+        "size_bytes": len(helper),
+        "sha256": hashlib.sha256(helper).hexdigest(),
+    }
+    routes = sys.modules["test_dclaw_super_agent_support.routes"]
+    plugin_app = routes.create_app(
+        store=store,
+        service=service,
+        mcp=mcp_cls(service),
+        packages=package_cls(
+            store,
+            PLUGIN_ROOT / "schemas" / "capability-descriptor.schema.json",
+            {},
+        ),
+        credentials=broker,
+        platform_helpers=platform_helper_cls(plugin_root),
+    )
+    with TestClient(plugin_app) as client:
+        assert client.get(
+            "/local-helper/manifest?platform=windows-x64",
+        ).status_code == 401
+
+    root = FastAPI()
+
+    @root.middleware("http")
+    async def authenticated(request, call_next):
+        request.state.user_id = "user-1"
+        return await call_next(request)
+
+    root.mount("/api/super-agent-support", plugin_app)
+    with TestClient(root) as client:
+        metadata = client.get(
+            "/api/super-agent-support/local-helper/manifest",
+            params={"platform": "windows-x64"},
+        )
+        downloaded = client.get(metadata.json()["download_path"])
+
+    assert metadata.status_code == 200
+    assert metadata.json() == {
+        **manifest,
+        "download_path": (
+            "/api/super-agent-support/local-helper/download"
+            "?platform=windows-x64"
+        ),
+    }
+    assert downloaded.status_code == 200
+    assert downloaded.content == helper
+    assert downloaded.headers["x-dclaw-content-sha256"] == manifest["sha256"]
+    assert downloaded.headers["x-content-type-options"] == "nosniff"
 
 
 def test_developer_kit_archive_is_reproducible_and_filters_metadata(
@@ -792,23 +875,23 @@ def test_developer_pack_is_downloadable_and_self_describing(
         downloaded = client.get("/developer-pack/download")
 
     assert health.status_code == 200
-    assert health.json()["version"] == "1.15.2"
+    assert health.json()["version"] == "1.16.0"
     assert metadata.status_code == 200
     payload = metadata.json()
-    assert payload["version"] == "1.9.2"
-    assert payload["standard"]["version"] == "2.22"
-    assert payload["devkit_version"] == "1.8.2"
+    assert payload["version"] == "1.9.3"
+    assert payload["standard"]["version"] == "2.23"
+    assert payload["devkit_version"] == "1.8.3"
     assert payload["server_source_required"] is False
     assert payload["download_path"].endswith("/developer-pack/download")
     assert payload["sha256"] == hashlib.sha256(downloaded.content).hexdigest()
     assert payload["content_sha256"] == payload["sha256"]
     assert downloaded.status_code == 200
-    assert "dclaw-super-agent-developer-pack-1.9.2.zip" in (
+    assert "dclaw-super-agent-developer-pack-1.9.3.zip" in (
         downloaded.headers["content-disposition"]
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-developer-pack-1.9.2"
+    prefix = "dclaw-super-agent-developer-pack-1.9.3"
     assert f"{prefix}/PACKAGE-MANIFEST.json" in names
     assert f"{prefix}/SHA256SUMS" in names
     assert f"{prefix}/dclaw_developer.py" in names
@@ -2198,7 +2281,7 @@ async def test_environment_catalog_and_runtime_prepare_contract(
     outdated = await service.call("local_environment_status", environment)
     assert outdated["data"]["state"] == "runner_update_required"
     assert outdated["data"]["reason"] == "runner_version_too_old"
-    assert outdated["data"]["user_action"] == "update_dclaw"
+    assert outdated["data"]["user_action"] == "update_local_helper"
 
     store.upsert_device(
         device_id="device-1",

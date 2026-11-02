@@ -28,15 +28,57 @@ def _module(name: str, filename: str):
     return module
 
 
-def test_standalone_plugin_release_contains_canonical_standard(tmp_path):
+def test_standalone_plugin_release_contains_canonical_standard(
+    tmp_path,
+    monkeypatch,
+):
     release = _module("support_plugin_release", "build_plugin_release.py")
+    plugin_root = ROOT / "plugins" / "bundle" / "super-agent-support"
+    standard_path = ROOT / "docs" / "super-agent-development-standard-v1.zh-CN.md"
+
+    def working_tree_git_bytes(*args):
+        if args[0] == "show":
+            return standard_path.read_bytes()
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+            for path in sorted(plugin_root.rglob("*")):
+                if path.is_file() and not {
+                    "__pycache__", "bin", "obj"
+                }.intersection(path.relative_to(plugin_root).parts):
+                    archive.write(
+                        path,
+                        (
+                            "super-agent-support/"
+                            + path.relative_to(plugin_root).as_posix()
+                        ),
+                    )
+        return output.getvalue()
+
+    monkeypatch.setattr(release, "_git_bytes", working_tree_git_bytes)
     output = tmp_path / "support-plugin.zip"
-    metadata = release.build(output)
-    assert metadata["plugin_version"] == "1.15.2"
-    assert metadata["standard_version"] == "2.22"
+    helper = tmp_path / "DClaw.LocalHelper.exe"
+    helper.write_bytes(b"MZ\x00signed-helper-fixture")
+    metadata = release.build(output, windows_helper_binary=helper)
+    assert metadata["plugin_version"] == "1.16.0"
+    assert metadata["standard_version"] == "2.23"
+    assert metadata["windows_helper_version"] == "1.3.0"
     with zipfile.ZipFile(output) as archive:
         standard = archive.read(release.STANDARD_IN_PLUGIN)
-        assert b"2.22" in standard
+        assert b"2.23" in standard
+        assert archive.read(release.HELPER_EXECUTABLE_IN_PLUGIN) == (
+            helper.read_bytes()
+        )
+        helper_manifest = json.loads(
+            archive.read(release.HELPER_MANIFEST_IN_PLUGIN),
+        )
+        assert helper_manifest == {
+            "executable": "DClaw.LocalHelper.exe",
+            "platform": "windows-x64",
+            "protocol_version": "2",
+            "sha256": hashlib.sha256(helper.read_bytes()).hexdigest(),
+            "size_bytes": len(helper.read_bytes()),
+            "version": "1.3.0",
+        }
         archive.extractall(tmp_path / "extracted")
     root = tmp_path / "extracted" / "super-agent-support"
     spec = importlib.util.spec_from_file_location(
@@ -47,7 +89,7 @@ def test_standalone_plugin_release_contains_canonical_standard(tmp_path):
     spec.loader.exec_module(module)
     payload, pack_metadata = module.build_archive(root)
     assert payload
-    assert pack_metadata["standard"]["version"] == "2.22"
+    assert pack_metadata["standard"]["version"] == "2.23"
 
 
 def _zip(files: dict[str, bytes]) -> bytes:
@@ -223,24 +265,45 @@ def test_toolchain_archive_rejects_platform_metadata(tmp_path):
             tool._safe_archive(archive, "test")
 
 
-def test_plugin_archive_embeds_current_standard_and_is_reproducible():
+def test_plugin_archive_embeds_current_standard_and_is_reproducible(tmp_path):
     tool = _module("build_plugin_archive_test", "build_plugin_archive.py")
     plugin_root = ROOT / "plugins" / "bundle" / "super-agent-support"
     standard = ROOT / "docs" / "super-agent-development-standard-v1.zh-CN.md"
+    helper = tmp_path / "DClaw.LocalHelper.exe"
+    helper.write_bytes(b"MZ\x00hot-install-helper-fixture")
 
-    first, metadata = tool.build_archive(plugin_root, standard)
-    second, repeated = tool.build_archive(plugin_root, standard)
+    first, metadata = tool.build_archive(
+        plugin_root,
+        standard,
+        windows_helper_binary=helper,
+    )
+    second, repeated = tool.build_archive(
+        plugin_root,
+        standard,
+        windows_helper_binary=helper,
+    )
 
     assert first == second
     assert metadata == repeated
     assert metadata["plugin_id"] == "dclaw.super-agent-support"
-    assert metadata["version"] == "1.15.2"
+    assert metadata["version"] == "1.16.0"
+    assert metadata["windows_helper_version"] == "1.3.0"
     assert metadata["sha256"] == hashlib.sha256(first).hexdigest()
     with zipfile.ZipFile(io.BytesIO(first)) as archive:
         names = set(archive.namelist())
         embedded = archive.read(metadata["standard_path"])
+        packaged_helper = archive.read(
+            tool.HELPER_EXECUTABLE_PATH.as_posix(),
+        )
+        helper_manifest = json.loads(
+            archive.read(tool.HELPER_MANIFEST_PATH.as_posix()),
+        )
     assert embedded == standard.read_bytes()
     assert "plugin.json" in names
+    assert packaged_helper == helper.read_bytes()
+    assert helper_manifest["sha256"] == hashlib.sha256(
+        helper.read_bytes(),
+    ).hexdigest()
     assert not any(
         "__pycache__" in name
         or "/bin/" in name

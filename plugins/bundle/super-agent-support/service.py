@@ -318,7 +318,7 @@ class LocalExecutionService:
         elif devices:
             state = "runner_update_required"
             reason = "runner_version_too_old"
-            user_action = "update_dclaw"
+            user_action = "update_local_helper"
         else:
             state = "device_not_ready"
             reason = "device_offline" if known_devices else "no_paired_device"
@@ -421,7 +421,7 @@ class LocalExecutionService:
                 "state": "runner_update_required",
                 "device_id": device["device_id"],
                 "runner_version": device["runner_version"],
-                "user_action": "update_dclaw",
+                "user_action": "update_local_helper",
             }
         for device in compatible:
             installed = any(

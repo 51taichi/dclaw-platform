@@ -52,3 +52,17 @@ def test_runtime_image_autoloads_only_super_agent_support() -> None:
     ) in dockerfile
     assert "COPY plugins/bundle ./plugins/bundle" not in dockerfile
     assert "COPY plugins/bundle/cloudpaw" not in dockerfile
+
+
+def test_runtime_image_builds_local_helper_into_support_plugin() -> None:
+    dockerfile = (ROOT / "deploy" / "Dockerfile").read_text(
+        encoding="utf-8",
+    )
+
+    assert "AS local-helper-builder" in dockerfile
+    assert "DClaw.LocalHelper.csproj" in dockerfile
+    assert "--runtime win-x64" in dockerfile
+    assert (
+        "./plugins/auto-load/super-agent-support/platform_helpers/"
+        "windows-x64/DClaw.LocalHelper.exe"
+    ) in dockerfile

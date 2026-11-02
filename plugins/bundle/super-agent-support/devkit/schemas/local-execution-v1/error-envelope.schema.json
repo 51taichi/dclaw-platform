@@ -82,7 +82,7 @@
         "complete_local_action",
         "reconnect_runner",
         "update_runner",
-        "update_dclaw",
+        "update_local_helper",
         "select_file_again",
         "select_different_file",
         "select_smaller_file",

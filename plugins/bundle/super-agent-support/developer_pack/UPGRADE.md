@@ -2,7 +2,7 @@
 
 ## Upgrade
 
-Pack 1.9.2 adopts development standard 2.22 and DevKit 1.8.2. New or rebuilt
+Pack 1.9.3 adopts development standard 2.23 and DevKit 1.8.3. New or rebuilt
 Agents that call third-party providers should declare `agent.outbound/1`, use
 the published operation catalog, and use stable installation credential slots.
 Agents that need HTTPS large responses or WSS streams declare
