@@ -95,6 +95,7 @@ export default function SidebarAccountMenu({
       <div className={styles.profileHeader}>
         <Avatar
           className={styles.avatar}
+          shape="square"
           size={42}
           src={defaultAvatarUrl}
           alt={avatarAlt}
@@ -214,6 +215,7 @@ export default function SidebarAccountMenu({
       >
         <Avatar
           className={styles.avatar}
+          shape="square"
           size={collapsed ? 34 : 36}
           src={defaultAvatarUrl}
           alt={avatarAlt}
