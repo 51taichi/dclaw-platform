@@ -2,7 +2,11 @@
 
 ## Upgrade
 
-Pack 1.9.3 adopts development standard 2.23 and DevKit 1.8.3. New or rebuilt
+Pack 1.10.0 adopts development standard 2.24 and DevKit 1.9.0. New projects
+default to the owner-scoped self-service `super_expert_public` type. Existing
+official `super_expert` releases keep their current type and administrator
+workflow; do not change their package type during an ordinary version update.
+New or rebuilt
 Agents that call third-party providers should declare `agent.outbound/1`, use
 the published operation catalog, and use stable installation credential slots.
 Agents that need HTTPS large responses or WSS streams declare

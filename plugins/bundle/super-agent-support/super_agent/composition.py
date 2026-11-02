@@ -62,7 +62,7 @@ def installation_is_active(grant, *, registry=None) -> bool:
     release = record.active_release
     return bool(
         release
-        and release.package_type == "super_expert"
+        and release.package_type in {"super_expert", "super_expert_public"}
         and release.release_id == grant.release_id
         and release.content_digest == grant.package_digest
         and release.capability_digest == grant.capability_digest,

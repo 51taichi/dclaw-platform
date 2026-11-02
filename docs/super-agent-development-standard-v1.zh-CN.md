@@ -4,9 +4,9 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.23`
+当前版本：`2.24`
 
-发布日期：`2026-11-02`
+发布日期：`2026-11-03`
 
 ## 1. 文档目的
 
@@ -64,7 +64,7 @@ super-agent-development-standard-v1.zh-CN.md
 | 本地能力网关 | DClaw 提供的通用 MCP 和任务网关，历史代码中可能称 Relay |
 | 本地能力包 | 开发方交付、由本地助手按协议安装和执行的 Agent 专属代码 |
 | 客户端 | 客户直接使用的 DClaw 桌面版；它是唯一登录和业务交互入口 |
-| 安装授权 | 管理员对某个签名发布版的完整能力清单进行一次性整体授权 |
+| 安装授权 | 对某个签名发布版的完整能力清单进行一次性整体授权；自助发布由开发者本人授权，历史官方包仍由管理员授权 |
 | `trace_id` | 跨平台、超级专家、网关、本地助手、能力包和外部服务关联日志的追踪标识 |
 
 “超级 Agent”是产品概念，“超级专家”是 DClaw 密封包类型。开发一个超级 Agent 时至少交付超级专家包；只有业务确实需要时才增加业务服务和本地能力包。
@@ -167,7 +167,7 @@ DClaw 核心只提供与业务无关的插件 SPI 和确实被其他 DClaw 功�
 
 “正式 DClaw 对接仍缺配套协议、Schema 和目标版本”属于本插件包的平台交付问题。插件必须提供协议、Schema、版本和真实接入点后，开发方才能完成正式集成。
 
-“尚未签名、上传或上线”是插件实现后的发布门禁：插件提供能力包签名验证、注册、安装和授权机制；开发方仍要签名并上传自己的超级专家包和能力包，管理员仍要授权、激活和完成真实验收。插件代码完成不会自动使 Agent 上线。
+“尚未签名、上传或上线”是插件实现后的发布门禁：插件提供签名验证、注册、安装和授权机制；开发方仍要签名并上传自己的超级专家包。`super_expert_public` 由开发者普通登录身份自助上传、授权并激活，激活后立即公开；历史 `super_expert` 继续走管理员发布链路。公共 Component 和能力包的平台注册仍由插件管理并按各自合同授权。插件代码完成不会自动使 Agent 上线。
 
 ### 3.4 所有超级 Agent 的公共业务骨架
 
@@ -554,14 +554,16 @@ stateDiagram-v2
 
 本标准 `2.23` 的正式组合为 Developer Pack `1.9.3`、支持插件 `1.16.0`、DevKit `1.8.3` 与 Runner `1.3.0`。该组合将通用本地助手的二进制发布和版本清单归入支持插件，DClaw 客户端只负责按需下载、摘要校验、原子切换、启动与回退。
 
-本标准 `2.23` 的正式开发与发布门禁如下。版本必须作为一个兼容组合核对，不能只满足其中一项：
+本标准 `2.24` 的组合为 Developer Pack `1.10.0`、支持插件 `1.17.0`、DevKit `1.9.0` 与 Runner `1.3.0`。新增普通登录用户自助签名登记、上传和全局发布的 `super_expert_public` 包类型；已有 `super_expert` 包和管理员发布链路保持兼容。新包类型的业务 Python 只在隔离进程执行，Agent 本体仅有密封运行时的受限工具集；所需业务 API、本地助手和 AIGC 仍通过签名能力清单与插件公开合同调用。
+
+本标准 `2.24` 的正式开发与发布门禁如下。版本必须作为一个兼容组合核对，不能只满足其中一项：
 
 | 项目 | 本标准要求 | 2026-10-26 正式环境核对 | 结论 |
 |---|---|---|---|
 | DClaw 核心 | 至少 `1.1.10` | 公网 `/api/version` 返回 `1.1.10`，运行镜像标记 Server 提交 `db08ac40` | 满足 |
-| 支持插件 | 至少 `1.16.0` | 生产仍须读取健康接口核对 | 提供本地助手热分发、稳定凭证、流式出站、资源交换、公共 Component 和无界面 API |
-| Super Agent DevKit | `1.8.3`，且由目标实例认证下载 | 生产仍须读取元数据核对 | 发布 `update_local_helper` 动作与关闭 Schema |
-| Super Agent 开发包 | `1.9.3`，标准 `2.23`、DevKit `1.8.3` | 生产仍须认证下载核对 | 新开发和迁移使用 `1.9.3` |
+| 支持插件 | 至少 `1.17.0` | 生产仍须读取健康接口核对 | 新增自助发布与隔离执行；旧插件能力继续可用 |
+| Super Agent DevKit | `1.9.0`，且由目标实例认证下载 | 生产仍须读取元数据核对 | 同时识别旧包与自助公开包，提供 `publish` CLI 与关闭 Schema |
+| Super Agent 开发包 | `1.10.0`，标准 `2.24`、DevKit `1.9.0` | 生产仍须认证下载核对 | 新开发和迁移默认使用自助公开包 |
 | Windows 客户端 | 本地助手按需分发至少 `2.6.19` | 生产仍须核对 | 客户端不携带助手二进制，只提供稳定下载、校验、切换和启动器 |
 | 通用 Runner | 普通链路至少 `1.0.0`；本地文件链路至少 `1.1.0`；公共 Component 链路至少 `1.2.0`；非入口 export 绑定至少 `1.3.0` | 随兼容客户端核对 | 声明 `component_exports` 的能力包必须使用实际携带 Runner `1.3.0` 的兼容客户端 |
 
@@ -574,6 +576,9 @@ stateDiagram-v2
 | DevKit ZIP | `GET /api/super-agent-support/developer-kit/v1.zip` |
 | 开发包元数据 | `GET /api/super-agent-support/developer-pack` |
 | 开发包稳定下载 | `GET /api/super-agent-support/developer-pack/download` |
+| 开发者公钥登记 | `POST /api/user/super-expert-publishing/signers` |
+| 开发者上传并公开 | `POST /api/user/super-expert-publishing/releases`，签名 ZIP 使用 multipart 字段 `file` |
+| 开发者已发布专家 | `GET /api/user/super-expert-publishing/agents` |
 | 本地执行 MCP | `/api/super-agent-support/mcp/`，Streamable HTTP |
 | 客户端环境检测 | `GET /api/super-agent-support/environment-status` |
 | 客户端配对 | `POST /api/super-agent-support/device-bootstrap` |
@@ -592,7 +597,7 @@ stateDiagram-v2
 
 上述接口属于认证后的目标 DClaw，不是匿名公共下载站。`401` 表示尚未携带有效身份，不能据此断言接口缺失；有效身份下 `404`、插件版本低于要求、返回的 DevKit 版本不匹配或 ZIP SHA-256 与元数据不一致，均表示当前目标环境未达到发布门禁。开发方只能继续源码和离线测试，状态标记为 `platform-tooling-missing`，不得使用平台仓库内源码副本、旧兼容构建器、历史签名包或其他环境下载的 DevKit 替代。
 
-生产升级必须部署插件 `1.16.0`、Developer Pack `1.9.3`、DevKit `1.8.3` 和具备插件助手下载器的 Windows 客户端 `2.6.19`；使用本地执行的能力包须完成 Runner `1.3.0`、设备协议 `2` 和 `windows-x64` 平台报告的实际连接核对。助手版本更新只发布支持插件，不再要求发布 DClaw 客户端。manifest 中 `platform_contract_versions.local_execution="1"` 是平台合同主版本；本地执行合同修订版 `1.2`、Runner 设备协议 `2` 和公共 Component 描述符 `1` 是不同层级的版本，不得互相替代或写错字段。开发方必须使用自己的应用身份认证会话实际下载 Developer Pack 或 DevKit、核对服务端 SHA-256，并在上传前核对插件 Secret 与相应信任库配置；服务器 root SSH 权限和镜像中存在文件都不能替代应用下载身份或发布证据。
+生产升级必须部署插件 `1.17.0`、Developer Pack `1.10.0`、DevKit `1.9.0` 和具备插件助手下载器的 Windows 客户端 `2.6.19`；使用本地执行的能力包须完成 Runner `1.3.0`、设备协议 `2` 和 `windows-x64` 平台报告的实际连接核对。助手版本更新只发布支持插件，不再要求发布 DClaw 客户端。manifest 中 `platform_contract_versions.local_execution="1"` 是平台合同主版本；本地执行合同修订版 `1.2`、Runner 设备协议 `2` 和公共 Component 描述符 `1` 是不同层级的版本，不得互相替代或写错字段。开发方必须使用自己的应用身份认证会话实际下载 Developer Pack 或 DevKit、核对服务端 SHA-256；自助公开包的公钥由开发者本人登记，私钥始终只保存在开发者设备上。服务器 root SSH 权限和镜像中存在文件都不能替代应用下载身份或发布证据。
 
 生产安装必须把插件 `state_dir` 放在持久卷，并通过平台 Secret 配置稳定的 `master_key_base64`；容器可使用 `DCLAW_SUPER_AGENT_SUPPORT_MASTER_KEY_BASE64`，该值解码后至少 32 字节，不得写入仓库、镜像或 Agent 包。`trusted_package_signers` 是 `signer_id` 到原始 Ed25519 公钥 Base64 的映射；`trusted_component_signers` 是 `signer_id` 到 DER SubjectPublicKeyInfo 编码的 P-256 公钥 Base64 映射。未配置对应受信公钥时，插件仍可启动和提供环境状态，但对应的能力包或公共 Component 注册必须失败关闭。
 
@@ -1537,7 +1542,7 @@ python dclaw_agent_devkit.py verify \
 - 执行运行时合同测试；
 - 列出发布包文件并确认无 Secret。
 
-`verify` 必须使用已入驻 signer 对应的公钥，在不含 Agent 源目录和 DClaw 服务端源码的干净目录执行。成功证据至少包含 DevKit 版本、ZIP SHA-256、验出的 `agent_id`、版本、`package_type=super_expert`、`signer_id`、`content_digest`、`capability_digest` 和零错误结果。四步回执必须形成同一条 `digest → validate → build → verify` 证据链；任何一步使用不同 DevKit、不同输入或不同摘要都不能合并为正式证据。
+`verify` 必须使用已登记 signer 对应的公钥，在不含 Agent 源目录和 DClaw 服务端源码的干净目录执行。成功证据至少包含 DevKit 版本、ZIP SHA-256、验出的 `agent_id`、版本、实际 `package_type`、`signer_id`、`content_digest`、`capability_digest` 和零错误结果。四步回执必须形成同一条 `digest → validate → build → verify` 证据链；任何一步使用不同 DevKit、不同输入或不同摘要都不能合并为正式证据。
 
 ### 21.6 历史 canonical 链路与独立 DevKit 证据
 
@@ -1547,7 +1552,30 @@ DClaw 历史正式发布曾由 Agent 项目的 `build_release.py` 调用 DClaw �
 
 历史 canonical 证据只证明对应历史包经过当时的服务端内部链路并成功发布。它依赖平台源码和内部验证器，不能证明后来发布的独立官方 DevKit 已从目标实例认证下载，也不能替代本标准要求的独立 `digest → validate → build → verify` 回执。新开发方交付必须走独立 DevKit；历史包继续按第 24 节兼容运行，无需仅为改变证据来源而重新发布。
 
-## 22. 管理员上传、授权与激活
+## 22. 自助上传、授权与激活
+
+### 22.1 普通开发者自助公开发布
+
+从本标准 `2.24` 起，新开发者默认使用 `package_type=super_expert_public`。开发者只需要普通 DClaw 登录身份和目标实例认证下载的 Developer Pack `1.10.0` / DevKit `1.9.0`，不需要管理员账号、预先人工登记 signer、服务器源码或 SSH。DevKit `keygen` 在开发者设备生成 Ed25519 密钥，私钥不能上传；使用 `publish register-signer` 只提交公钥，插件返回只属于该登录账号的 `signer_id`，然后写入 manifest 并完成 `digest → validate → build → verify`。
+
+```text
+python dclaw_agent_devkit.py keygen --private-key <本机私钥路径> --public-key <本机公钥路径>
+python dclaw_agent_devkit.py publish --base-url <目标DClaw HTTPS地址> register-signer --public-key <本机公钥路径>
+# 将返回的 signer_id 写入 manifest，完成 digest、validate、build、verify
+python dclaw_agent_devkit.py publish --base-url <目标DClaw HTTPS地址> upload --package <已验签ZIP路径>
+```
+
+上述 `publish` 命令从开发者本机环境变量 `DCLAW_ACCESS_TOKEN` 读取当前登录用户的短时访问令牌；不得把令牌、私钥或 Secret 发到聊天、写入包或提交到仓库。Skill 应通过用户已有的 DClaw 登录会话取得授权；没有有效用户身份时只做离线开发，接口返回 `401` 后提示重新登录，不能要求管理员令牌。插件通过 `POST /api/user/super-expert-publishing/signers` 登记公钥，通过 `POST /api/user/super-expert-publishing/releases` 接收签名 ZIP；这两个接口均仅对已登录用户开放。
+
+上传接口必须验签、校验完整性和能力清单、核对 signer 与 `agent_id` 都归当前账号、校验运行工作区、对准确发布版整体授权并原子激活。成功回执包含 `agent_id`、`release_id`、版本、两个摘要、signer、`state=active` 和 `visibility=public`。激活成功后专家立即向所有客户开放，没有私有测试阶段。开发者可以从正式客户端测试并按新的语义版本继续更新自己名下的专家；不能覆盖其他开发者或管理员发布的同名专家。管理员继续拥有停用和删除不合格专家的权力。
+
+如果 ZIP 已被接受但运行服务暂时无法激活，开发者可通过 `publish retry-activation --agent-id <ID> --release-id <回执ID>` 对同一发布版重试；不允许绕过失败的验签或能力校验。失败时准确报告 `uploaded/granted/active` 的真实状态，不能把已上传称为已上线。
+
+`super_expert_public` 的运行代码必须使用插件隔离进程，并且不获得 `unrestricted_tools` 或任意 MCP 客户端特性；隔离器不可用时上传返回 `503`，运行时失败关闭。第三方 API 通过 Agent 声明并获授权的 `agent.outbound/1` 等插件能力调用，客户本机重任务通过本地助手执行。签名不等于代码安全，管理员事后删除不能替代隔离。旧 `super_expert` 的签名包、权限、运行和管理员更新链路均保持不变。
+
+平台发布 `super_expert_public` 前，必须在实际运行容器内验证 `/usr/bin/bwrap` 存在，且该容器能够成功创建用户、进程和网络命名空间；仅检查二进制文件存在或插件热加载成功不算通过。未通过时，开发方可以继续离线构建和验签，但自助上传不可用，平台维护方负责补齐运行容器的隔离器和容器权限。此项属于运行环境门禁，不能通过把未受信开发者代码改回服务进程内执行来绕过。上传后的激活若失败，错误回执应包含已安装的 `release_id` 及准确的 `uploaded/granted/active` 状态，以便开发者修复环境后重试。
+
+### 22.2 历史管理员发布链路
 
 开发方取得 DClaw 后台管理员账号后，可以自行完成发布，但只能在签名者已入驻且目标平台支持所声明能力后进行。服务器 SSH 或 root 权限不构成 DClaw 后台应用身份，也不授予 Developer Pack/DevKit 下载、签名、上传、授权或激活权限。
 
@@ -1558,7 +1586,7 @@ DClaw 历史正式发布曾由 Agent 项目的 `build_release.py` 调用 DClaw �
 | `source-complete` | 源码、合同、测试和未签名构建输入完成 | 源码修订摘要、测试回执、已知阻塞；不得把资源构建输入称为正式包 |
 | `sealed` | 使用当前目标环境认证下载的官方 DevKit 完成四步证据链并独立验签 | DevKit/Schema/目录版本、ZIP SHA-256、signer、content/capability digest、`verify` 回执 |
 | `uploaded` | 服务器接受该准确 ZIP 并完成验签/运行时校验 | release ID、服务器识别的摘要、signer、`package_type` 和验证状态 |
-| `granted` | 管理员核对并整体接受准确能力清单 | installation/grant ID、管理员、能力摘要和授权时间 |
+| `granted` | 自助包由开发者本人、历史官方包由管理员整体接受准确能力清单 | installation/grant ID、授权来源与操作者、能力摘要和授权时间 |
 | `active` | 该 release 原子切换为当前运行版本且运行时验证有效 | active release ID、激活时间、runtime validation 和回滚目标 |
 | `e2e-verified` | 项目方从正式 DClaw 客户端完成并确认真实用户任务验收 | 项目方确认的任务记录、必要的 trace ID、真实第三方回执、产物摘要或人工检查结果 |
 
@@ -2172,10 +2200,10 @@ Agent 名称：<可选，中文显示名称>
 2. 开发方自己的业务目标、源 Agent 材料和测试凭证；
 3. 从目标 DClaw 认证调用元数据接口并按其 `download_path` 下载、核对 SHA-256 的官方开发包；兼容自动化可以继续单独下载同版本官方 DevKit。
 
-开发包 `1.9.3` 是推荐的单一离线移交物，必须提供：
+开发包 `1.10.0` 是推荐的单一离线移交物，必须提供：
 
 - 唯一标准文件与明确的标准版本，不复制第二套人工规则；
-- 官方 DevKit `1.8.3` 及其完整离线加密依赖；
+- 官方 DevKit `1.9.0` 及其完整离线加密依赖；
 - `dclaw_developer.py` 的 `doctor`、`info`、`init`、`validate`、`test`、`keygen`、`capability-build`、`build`、`upgrade` 和 `demo`；
 - 超级专家、业务服务和本地能力包模板，以及职责边界示例；
 - Agent 自主出站、公共业务服务、本地执行和能力包 Schema/SDK；
@@ -2187,11 +2215,12 @@ Agent 名称：<可选，中文显示名称>
 
 开发包本身不得包含平台管理员凭据、生产地址、签名私钥、供应商 Secret、客户数据或 DClaw 私有实现。包内公开工具不得导入 `qwenpaw` 或要求开发者克隆服务器仓库。
 
-DevKit `1.8.3` 必须提供：
+DevKit `1.9.0` 必须提供：
 
 - `dclaw_agent_devkit.py`：`doctor`、`contracts`、`digest`、`validate`、`keygen`、`build`、`verify`；
 - `capability-catalog.json`：当前可声明的能力、版本、组和依赖；
 - `schemas/super-expert-manifest.schema.json` 与 `schemas/agent-profile.schema.json`；
+- `schemas/publishing-v1/`：普通开发者公钥登记、自助发布与公开激活回执的关闭合同；
 - `schemas/local-execution-v1/`：本地请求、响应和错误合同；
 - `schemas/super-agent-support-v1/`：能力包、设备命令、设备消息和凭证绑定合同；
 - `schemas/business-identity-v1/`：安装级业务服务身份签发、出站、在线验证、管理和稳定错误合同；
@@ -2201,6 +2230,7 @@ DevKit `1.8.3` 必须提供：
 - `operation-catalog.json`：正式 MCP 入口、客户端键、工具名、调用顺序和平台注入参数；
 - `business_identity_verifier.py` 与 `fixtures/business-identity/`：公开 JWK 离线验签、持久化 `jti` 防重放、断言 Header 运输和正反夹具；
 - `templates/minimal/`：最小 manifest、`agent.json` 和 `runtime.py`。
+- `publish register-signer/upload/list/retry-activation`：使用普通用户登录令牌的正式自助发布命令；
 - `bootstrap.ps1`、`bootstrap.sh`、`requirements.lock`、`CHECKSUMS.sha256` 和 `wheelhouse/`：在支持平台离线创建隔离环境，逐文件校验并安装固定加密依赖；
 - `THIRD_PARTY_LICENSES.md`：列出随 DevKit 分发的依赖、版本和许可证。
 
@@ -2209,6 +2239,12 @@ DevKit `1.8.3` 必须提供：
 平台内部实现文件、测试文件和维护文档可以继续存在，但它们只服务平台维护者，不属于开发方输入。开发方缺少字段或行为定义时应报告标准或 DevKit 缺陷；平台不得用“请克隆服务器源码”回答。
 
 ## 34. 版本记录
+
+### 2.24 - 2026-11-03
+
+- 插件 `1.17.0` 新增 `super_expert_public` 受限包类型、开发者公钥与专家归属登记、普通用户自助上传、整体授权和公开激活；管理员保留停用与删除。
+- 新包类型的业务代码使用插件管理的隔离进程，平台 Agent 不授予无限制工具或任意 MCP；隔离器不可用时失败关闭。既有 `super_expert` 包及管理员发布路径保持兼容，DClaw 核心没有修改。
+- DevKit `1.9.0` 与 Developer Pack `1.10.0` 默认生成自助公开包，提供 `publish` CLI、Schema 和目标实例认证下载材料。
 
 ### 2.23 - 2026-11-02
 

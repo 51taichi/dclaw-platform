@@ -199,6 +199,8 @@ def compute_capability_set_digest(
 def validate_super_expert_manifest(
     package: SealedPackageManifest,
     trust_store: SuperExpertTrustStore,
+    *,
+    expected_package_type: str = "super_expert",
 ) -> SuperExpertManifest:
     """Validate official provenance and the package-specific capability closure."""
     catalog = get_platform_capability_catalog()
@@ -206,7 +208,7 @@ def validate_super_expert_manifest(
         package.validate_supported_contract()
     except ValueError as exc:
         raise CapabilityManifestError(str(exc)) from exc
-    if package.package_type != "super_expert":
+    if package.package_type != expected_package_type:
         raise CapabilityManifestError("package is not a super expert")
     if package.schema_version != 3:
         raise CapabilityManifestError(
@@ -216,8 +218,10 @@ def validate_super_expert_manifest(
         raise CapabilityManifestError(
             "super expert package declaration is incomplete",
         )
-    if not trust_store.is_official(package.signer_id):
-        raise CapabilityManifestError("super expert signer is not official")
+    if not trust_store.is_authorized(package.signer_id):
+        raise CapabilityManifestError(
+            "super expert signer is not official or registered developer",
+        )
     if package.capability_digest != compute_capability_set_digest(package):
         raise CapabilityManifestError("capability digest mismatch")
 

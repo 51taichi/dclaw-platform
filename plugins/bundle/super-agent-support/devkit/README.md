@@ -1,5 +1,13 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.0 adds owner-scoped self-service publishing for signed-in DClaw
+developers. `keygen` keeps the private key local; `publish register-signer`
+registers only the public key, and `publish upload` validates and globally
+activates a `super_expert_public` package. The CLI reads the signed-in user's
+short-lived token from `DCLAW_ACCESS_TOKEN`; never send it in chat or place it
+inside an Agent package. The package's business Python runs in a plugin
+sandbox and has only the sealed runtime's restricted tools.
+
 Version 1.8.3 publishes plugin-managed local-helper update actions and closed
 request/response schemas. It retains stable installation credential slots,
 `agent.outbound.stream/1`, and `resource.exchange/1` in addition to the

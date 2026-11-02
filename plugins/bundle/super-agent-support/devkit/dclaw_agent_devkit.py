@@ -17,13 +17,14 @@ import stat
 import struct
 import sys
 import unicodedata
+import uuid
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
 import zipfile
 
 
-DEVKIT_VERSION = "1.8.3"
+DEVKIT_VERSION = "1.9.0"
 CRYPTOGRAPHY_VERSION = "46.0.3"
 SUPPORTED_PYTHON = ">=3.10,<3.14"
 SUPPORTED_PLATFORMS = {
@@ -386,11 +387,14 @@ def validate_manifest(manifest: dict, *, require_content_digest: bool) -> None:
         "schema_version": 3,
         "agent_type": "sealed",
         "scope": "global",
-        "package_type": "super_expert",
     }
     for key, value in expected.items():
         if manifest.get(key) != value:
             raise DevKitError(f"manifest field is invalid: {key}")
+    if manifest.get("package_type") not in {
+        "super_expert", "super_expert_public",
+    }:
+        raise DevKitError("manifest field is invalid: package_type")
     _require_string(
         manifest.get("agent_id"),
         "agent_id",
@@ -721,6 +725,22 @@ def _parser() -> argparse.ArgumentParser:
     upload_component.add_argument("--component-id", required=True)
     upload_component.add_argument("--platform", required=True)
     upload_component.add_argument("--component-version", required=True)
+    publish = subparsers.add_parser("publish")
+    publish.add_argument("--base-url", required=True)
+    publish.add_argument(
+        "--access-token", default=os.environ.get("DCLAW_ACCESS_TOKEN", ""),
+    )
+    publish_commands = publish.add_subparsers(
+        dest="publish_command", required=True,
+    )
+    register_signer = publish_commands.add_parser("register-signer")
+    register_signer.add_argument("--public-key", type=Path, required=True)
+    upload_release = publish_commands.add_parser("upload")
+    upload_release.add_argument("--package", type=Path, required=True)
+    retry_release = publish_commands.add_parser("retry-activation")
+    retry_release.add_argument("--agent-id", required=True)
+    retry_release.add_argument("--release-id", required=True)
+    publish_commands.add_parser("list")
     return parser
 
 
@@ -889,6 +909,7 @@ def _component_request(
     *,
     access_token: str,
     body: dict[str, object] | None = None,
+    operation_name: str = "Component registry",
 ) -> dict[str, object]:
     if not access_token:
         raise DevKitError("authenticated DClaw access token is required")
@@ -907,12 +928,12 @@ def _component_request(
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise DevKitError(
-            f"Component registry returned HTTP {exc.code}: {detail}",
+            f"{operation_name} returned HTTP {exc.code}: {detail}",
         ) from exc
     except (URLError, TimeoutError, json.JSONDecodeError) as exc:
-        raise DevKitError(f"Component registry request failed: {exc}") from exc
+        raise DevKitError(f"{operation_name} request failed: {exc}") from exc
     if not isinstance(result, dict):
-        raise DevKitError("Component registry response must be a JSON object")
+        raise DevKitError(f"{operation_name} response must be a JSON object")
     return result
 
 
@@ -1037,6 +1058,70 @@ def _command_component_registry(args: argparse.Namespace) -> None:
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
 
 
+def _command_publish(args: argparse.Namespace) -> None:
+    base_url = args.base_url.rstrip("/")
+    parsed = urlsplit(base_url)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise DevKitError("DClaw base URL must be an absolute HTTPS URL")
+    if not args.access_token:
+        raise DevKitError("DCLAW_ACCESS_TOKEN is required")
+    endpoint = base_url + "/api/user/super-expert-publishing"
+    if args.publish_command == "register-signer":
+        result = _component_request(
+            "POST", endpoint + "/signers",
+            access_token=args.access_token,
+            body={"public_key": args.public_key.read_text(encoding="ascii").strip()},
+            operation_name="Super Expert publishing",
+        )
+    elif args.publish_command == "list":
+        result = _component_request(
+            "GET", endpoint + "/agents", access_token=args.access_token,
+            operation_name="Super Expert publishing",
+        )
+    elif args.publish_command == "retry-activation":
+        result = _component_request(
+            "POST",
+            endpoint + "/agents/" + quote(args.agent_id, safe="")
+            + "/releases/" + quote(args.release_id, safe="") + "/activate",
+            access_token=args.access_token,
+            operation_name="Super Expert publishing",
+        )
+    else:
+        package = args.package.read_bytes()
+        if not 1 <= len(package) <= MAX_PACKAGE_BYTES:
+            raise DevKitError("sealed package size is outside the supported range")
+        boundary = "dclaw-" + uuid.uuid4().hex
+        prefix = (
+            f"--{boundary}\r\n"
+            "Content-Disposition: form-data; name=\"file\"; "
+            "filename=\"agent.zip\"\r\n"
+            "Content-Type: application/zip\r\n\r\n"
+        ).encode("ascii")
+        suffix = f"\r\n--{boundary}--\r\n".encode("ascii")
+        request = Request(
+            endpoint + "/releases",
+            data=prefix + package + suffix,
+            headers={
+                "Authorization": f"Bearer {args.access_token}",
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=3600) as response:  # nosec B310
+                result = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise DevKitError(
+                f"Super Expert upload returned HTTP {exc.code}: {detail}",
+            ) from exc
+        except (URLError, TimeoutError, json.JSONDecodeError) as exc:
+            raise DevKitError("Super Expert upload request failed") from exc
+        if not isinstance(result, dict):
+            raise DevKitError("Super Expert upload response is invalid")
+    print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+
+
 COMMANDS = {
     "doctor": _command_doctor,
     "digest": _command_digest,
@@ -1046,6 +1131,7 @@ COMMANDS = {
     "verify": _command_verify,
     "contracts": _command_contracts,
     "component-registry": _command_component_registry,
+    "publish": _command_publish,
 }
 
 

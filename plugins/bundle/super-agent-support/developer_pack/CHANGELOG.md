@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.10.0 - 2026-11-03
+
+- Bundles development standard 2.24 and DevKit 1.9.0.
+- Adds ordinary-user public signer registration and owner-scoped upload,
+  grant, activation, and globally visible testing for `super_expert_public`.
+- Keeps official `super_expert` packages and administrator publication intact.
+
 ## 1.9.3 - 2026-11-02
 
 - Bundles development standard 2.23 and DevKit 1.8.3.

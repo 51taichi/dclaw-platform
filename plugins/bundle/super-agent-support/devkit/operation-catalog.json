@@ -1,7 +1,34 @@
 {
   "catalog_version": "1",
   "owner": "dclaw.super-agent-support",
-  "minimum_plugin_version": "1.16.0",
+  "minimum_plugin_version": "1.17.0",
+  "self_service_publication": {
+    "package_type": "super_expert_public",
+    "authentication": "DClaw signed-in user bearer token",
+    "signer_registration": {
+      "method": "POST",
+      "path": "/api/user/super-expert-publishing/signers",
+      "request_schema": "schemas/publishing-v1/signer-request.schema.json",
+      "response_schema": "schemas/publishing-v1/signer-response.schema.json"
+    },
+    "release_upload": {
+      "method": "POST",
+      "path": "/api/user/super-expert-publishing/releases",
+      "content_type": "multipart/form-data",
+      "file_field": "file",
+      "response_schema": "schemas/publishing-v1/release-response.schema.json",
+      "effect": "verify, install, grant, activate, publish globally"
+    },
+    "owned_agents": {
+      "method": "GET",
+      "path": "/api/user/super-expert-publishing/agents"
+    },
+    "retry_activation": {
+      "method": "POST",
+      "path_template": "/api/user/super-expert-publishing/agents/{agent_id}/releases/{release_id}/activate",
+      "response_schema": "schemas/publishing-v1/release-response.schema.json"
+    }
+  },
   "capability_id": "business.service.installation-identity/1",
   "capability_ids": [
     "business.service.installation-identity/1",

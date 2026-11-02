@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/contracts/super-agent-publishing/release-response-v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["agent_id", "release_id", "version", "content_digest", "capability_digest", "signer_id", "state", "visibility"],
+  "properties": {
+    "agent_id": {"type": "string"},
+    "release_id": {"type": "string"},
+    "version": {"type": "string"},
+    "content_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "capability_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "signer_id": {"type": "string"},
+    "state": {"const": "active"},
+    "visibility": {"const": "public"}
+  }
+}

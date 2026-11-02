@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/contracts/super-agent-publishing/signer-request-v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["public_key"],
+  "properties": {
+    "public_key": {"type": "string", "minLength": 40, "maxLength": 100}
+  }
+}

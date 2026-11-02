@@ -5,7 +5,12 @@ Agents. It contains the human standard, standalone DevKit, schemas, templates,
 SDK helpers, fixtures, and a single cross-platform command line tool. DClaw
 server source is not required.
 
-Version 1.9.3 bundles development standard 2.23 and DevKit 1.8.3. It adds
+Version 1.10.0 bundles development standard 2.24 and DevKit 1.9.0. New
+projects default to `super_expert_public`: any signed-in DClaw developer can
+register a public signing key, upload a verified package, and activate it for
+all users without administrator credentials. The private key stays local.
+Previously published `super_expert` packages keep their administrator route.
+The earlier pack added
 stable installation credential slots, restricted HTTPS/WSS streaming outbound,
 and temporary resource exchange. Large results move through presigned object
 storage and are represented to the Agent by opaque references and digests;
@@ -162,10 +167,13 @@ dclaw-super-agent-developer-pack-<version>/
 4. Implement the Agent, optional business service, and optional local
    capability. Keep long-lived credentials outside the project and inject them
    into the business service or the approved credential broker.
-5. Replace the placeholder signer ID, complete `SOURCE_BEHAVIOR_SPEC.json`, and
+5. Use DevKit `keygen` and `publish register-signer` with your own signed-in
+   DClaw identity, then put the returned signer ID in the manifest. Complete
+   `SOURCE_BEHAVIOR_SPEC.json` and
    record every approved behavior difference in `PORTING_RECORD.json`.
 6. Run `validate` and `test` until both pass.
 7. Keep the Ed25519 private key outside the project and run `build`. Archive the
    generated ZIP, checksum, and `release-evidence/<version>.json`.
-8. Upload, grant, activate, and run three real customer tasks only after the
-   platform owner authorizes those separate production actions.
+8. Use DevKit `publish upload` to verify, grant, activate, and make the new
+   public package visible. Run real client tasks and update the version if needed.
+   The administrator can disable or delete a nonconforming expert.

@@ -13,7 +13,7 @@
     "agent_type": {"const":"sealed"},
     "scope": {"const":"global"},
     "entrypoint": {"type":"string","pattern":"^agent/(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9_./-]+$"},
-    "package_type": {"const":"super_expert"},
+    "package_type": {"enum":["super_expert","super_expert_public"]},
     "orchestration": {
       "type":"object","additionalProperties":false,
       "required":["capability_id","contract_version","entrypoint","required_host_capabilities"],

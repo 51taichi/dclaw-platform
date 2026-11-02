@@ -48,6 +48,7 @@ from . import interaction_tools as _interaction_tools
 from . import media_delivery as _media_delivery
 from . import media_review_context as _media_review_context
 from . import public_stream as _public_stream
+from .public_runtime import PublicRuntimeError, invoke_public_runtime
 
 logger = logging.getLogger(__name__)
 _CANDIDATE_AGENT_LOCKS: dict[int, asyncio.Lock] = {}
@@ -165,6 +166,7 @@ class AuthorizedWorkspaceRelease:
     granted_capabilities: dict[str, str]
     signed_workspace_files: frozenset[str]
     signed_workspace_root: Path | None = None
+    package_type: str = "super_expert"
 
 
 def authorize_workspace_release(
@@ -180,7 +182,7 @@ def authorize_workspace_release(
     if (
         release is None
         or release.state != "active"
-        or release.package_type != "super_expert"
+        or release.package_type not in {"super_expert", "super_expert_public"}
         or release.orchestration_capability_id
         != "workspace.turn.orchestrate/1"
         or release.orchestration_contract_version != config.contract_version
@@ -237,6 +239,7 @@ def authorize_workspace_release(
         signed_workspace_root=(Path(release_root) / "agent").resolve(
             strict=True,
         ),
+        package_type=release.package_type,
     )
 
 
@@ -1120,6 +1123,8 @@ async def run_workspace_orchestration_turn(
                 payload=trace,
             ),
             timeout_seconds=actual_timeout,
+            public_runtime=authorization.package_type == "super_expert_public",
+            signed_workspace_root=authorization.signed_workspace_root,
         )
 
     orchestrator = build_orchestrator(
@@ -1588,6 +1593,8 @@ class WorkspaceTurnOrchestrator:
         business_call: Callable[[str, dict[str, Any]], Any] | None = None,
         trace_sink: Callable[[dict[str, Any]], Any] | None = None,
         timeout_seconds: float | None = None,
+        public_runtime: bool = False,
+        signed_workspace_root: Path | None = None,
     ) -> None:
         self.workspace_root = Path(workspace_root)
         self.config = config
@@ -1601,6 +1608,8 @@ class WorkspaceTurnOrchestrator:
             if timeout_seconds is None
             else timeout_seconds
         )
+        self.public_runtime = public_runtime
+        self.signed_workspace_root = signed_workspace_root
         self._runtime_module_prefix: str | None = None
 
     async def invoke(
@@ -1624,11 +1633,22 @@ class WorkspaceTurnOrchestrator:
             trace_sink=self.trace_sink,
         )
         try:
-            runtime = self._load_runtime()
-            result = runtime.handle(request, host)
-            if not inspect.isawaitable(result):
-                raise WorkspaceOrchestrationError("orchestration_error")
-            await asyncio.wait_for(result, timeout=self.timeout_seconds)
+            if self.public_runtime:
+                if self.signed_workspace_root is None:
+                    raise WorkspaceOrchestrationError("runtime_isolation_unavailable")
+                await invoke_public_runtime(
+                    source_root=self.signed_workspace_root,
+                    entrypoint=self.config.entrypoint,
+                    request=request,
+                    host=host,
+                    timeout_seconds=self.timeout_seconds,
+                )
+            else:
+                runtime = self._load_runtime()
+                result = runtime.handle(request, host)
+                if not inspect.isawaitable(result):
+                    raise WorkspaceOrchestrationError("orchestration_error")
+                await asyncio.wait_for(result, timeout=self.timeout_seconds)
             if host.failure is not None:
                 logger.error(
                     "Workspace runtime reported failure (%s)",
@@ -1655,6 +1675,12 @@ class WorkspaceTurnOrchestrator:
             return WorkspaceTurnResult(
                 error_code="orchestration_timeout",
                 diagnostic_ref="asyncio.TimeoutError",
+            )
+        except PublicRuntimeError as exc:
+            transaction.discard()
+            return WorkspaceTurnResult(
+                error_code="orchestration_error",
+                diagnostic_ref=str(exc),
             )
         except WorkspaceOrchestrationError as exc:
             transaction.discard()

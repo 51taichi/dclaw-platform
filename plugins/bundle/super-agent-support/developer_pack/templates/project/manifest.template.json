@@ -6,7 +6,7 @@
   "agent_type": "sealed",
   "scope": "global",
   "entrypoint": "agent/agent.json",
-  "package_type": "super_expert",
+  "package_type": "super_expert_public",
   "orchestration": {
     "capability_id": "workspace.turn.orchestrate/1",
     "contract_version": "1",
@@ -29,6 +29,6 @@
     {"capability_id": "runtime.fail", "contract_version": "1"}
   ],
   "capability_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-  "signer_id": "replace-with-approved-signer-id",
+  "signer_id": "replace-with-registered-signer-id",
   "public_metadata": {"description": "{{AGENT_NAME}}", "tags": []}
 }

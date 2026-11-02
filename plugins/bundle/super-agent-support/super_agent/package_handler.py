@@ -37,13 +37,17 @@ class SuperAgentPackageHandler:
         self.trust_store = SuperExpertTrustStore(
             official_signer_ids=official_signer_ids,
         )
-        self.trusted_signers = dict(trusted_signers or {})
+        self._trusted_signers = dict(trusted_signers or {})
         self.grant_repository = grant_repository or SuperExpertGrantRepository(
             root,
         )
 
     def validate_manifest(self, manifest) -> None:
         validate_super_expert_manifest(manifest, self.trust_store)
+
+    @property
+    def trusted_signers(self) -> Mapping[str, Any]:
+        return self._trusted_signers
 
     def is_signer_authorized(self, signer_id: str) -> bool:
         return self.trust_store.is_official(signer_id)
@@ -85,4 +89,42 @@ class SuperAgentPackageHandler:
         )
 
 
-__all__ = ["SuperAgentPackageHandler"]
+class PublicSuperAgentPackageHandler(SuperAgentPackageHandler):
+    """Self-service type with bounded platform tools and developer signers."""
+
+    package_type = "super_expert_public"
+    runtime_features = frozenset({"extended_output", "harness_status"})
+
+    def __init__(
+        self,
+        root: Path,
+        *,
+        publisher_repository: Any,
+        grant_repository: SuperExpertGrantRepository | None = None,
+    ) -> None:
+        super().__init__(
+            root,
+            official_signer_ids=frozenset(),
+            grant_repository=grant_repository,
+        )
+        self.publisher_repository = publisher_repository
+
+    @property
+    def trusted_signers(self) -> Mapping[str, Any]:
+        return self.publisher_repository.trusted_signers()
+
+    def validate_manifest(self, manifest) -> None:
+        validate_super_expert_manifest(
+            manifest,
+            SuperExpertTrustStore(
+                official_signer_ids=frozenset(),
+                developer_signer_ids=frozenset(self.trusted_signers),
+            ),
+            expected_package_type=self.package_type,
+        )
+
+    def is_signer_authorized(self, signer_id: str) -> bool:
+        return self.publisher_repository.signer_owner(signer_id) is not None
+
+
+__all__ = ["SuperAgentPackageHandler", "PublicSuperAgentPackageHandler"]

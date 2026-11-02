@@ -51,6 +51,51 @@ def _devkit():
     return module
 
 
+def test_publish_upload_uses_authenticated_https_multipart(
+    tmp_path, monkeypatch, capsys,
+):
+    module = _devkit()
+    archive = tmp_path / "agent.zip"
+    archive.write_bytes(b"signed package")
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return b'{"release_id":"release-1","state":"active"}'
+
+    def upload(request, timeout):
+        assert timeout == 3600
+        assert request.full_url == (
+            "https://dclaw.example.test/api/user/"
+            "super-expert-publishing/releases"
+        )
+        assert request.get_method() == "POST"
+        assert request.get_header("Authorization") == "Bearer test-token"
+        assert request.get_header("Content-type").startswith(
+            "multipart/form-data; boundary=dclaw-"
+        )
+        assert b"signed package" in request.data
+        assert b'name="file"' in request.data
+        return Response()
+
+    monkeypatch.setattr(module, "urlopen", upload)
+    args = argparse.Namespace(
+        base_url="https://dclaw.example.test", access_token="test-token",
+        publish_command="upload", package=archive,
+    )
+    module._command_publish(args)
+    assert json.loads(capsys.readouterr().out)["release_id"] == "release-1"
+
+    args.base_url = "http://dclaw.example.test"
+    with pytest.raises(module.DevKitError, match="HTTPS"):
+        module._command_publish(args)
+
+
 def test_component_registry_upload_streams_to_object_storage(
     tmp_path, monkeypatch, capsys,
 ):
@@ -185,7 +230,7 @@ def test_devkit_has_no_server_source_import_and_runs_standalone():
     )
     result = json.loads(completed.stdout)
     assert result["status"] == "ok"
-    assert result["devkit_version"] == "1.8.3"
+    assert result["devkit_version"] == "1.9.0"
     assert result["dependency_mode"] == "bundled-wheelhouse"
     assert result["cryptography_version"] == "46.0.3"
     assert "schemas/super-expert-manifest.schema.json" in result["schemas"]
@@ -250,7 +295,7 @@ def test_business_identity_operation_catalog_is_complete_and_consistent():
     )
 
     assert catalog["owner"] == "dclaw.super-agent-support"
-    assert catalog["minimum_plugin_version"] == "1.16.0"
+    assert catalog["minimum_plugin_version"] == "1.17.0"
     gateway = catalog["local_capability_gateway"]
     assert gateway == {
         "owner": "dclaw-platform",
@@ -398,7 +443,7 @@ def test_devkit_bundles_and_verifies_locked_encryption_dependencies():
     )
     result = json.loads(completed.stdout)
     assert result["status"] == "ok"
-    assert result["devkit_version"] == "1.8.3"
+    assert result["devkit_version"] == "1.9.0"
     assert result["wheelhouse_verified"] is True
     assert result["wheelhouse_files"] == 26
 

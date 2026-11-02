@@ -8,6 +8,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -44,6 +45,7 @@ class SuperExpertGrant(BaseModel):
     capability_digest: str
     capabilities: tuple[tuple[str, str], ...]
     administrator_id: str
+    authorization_source: Literal["administrator", "publisher"] = "administrator"
     granted_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
     )
@@ -81,7 +83,7 @@ class SuperExpertGrantRepository:
         *,
         tenant_id: str,
     ) -> SuperExpertGrantPreview:
-        if release.package_type != "super_expert":
+        if release.package_type not in {"super_expert", "super_expert_public"}:
             raise SuperExpertGrantError(
                 "release is not a super expert package",
             )
@@ -118,6 +120,7 @@ class SuperExpertGrantRepository:
         preview: SuperExpertGrantPreview,
         *,
         administrator_id: str,
+        authorization_source: Literal["administrator", "publisher"] = "administrator",
     ) -> SuperExpertGrant:
         grant = SuperExpertGrant(
             installation_id=uuid.uuid4().hex,
@@ -129,6 +132,7 @@ class SuperExpertGrantRepository:
             capability_digest=preview.capability_digest,
             capabilities=preview.capabilities,
             administrator_id=administrator_id,
+            authorization_source=authorization_source,
         )
         with self._lock:
             document = self._read()

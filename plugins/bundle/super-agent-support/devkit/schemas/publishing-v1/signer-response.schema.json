@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/contracts/super-agent-publishing/signer-response-v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["signer_id", "status"],
+  "properties": {
+    "signer_id": {"type": "string", "pattern": "^developer\\.[0-9a-f]{32}$"},
+    "status": {"const": "registered"}
+  }
+}

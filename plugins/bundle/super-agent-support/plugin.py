@@ -43,6 +43,10 @@ from .super_agent.composition import (
     create_aigc_event_consumer,
 )
 from .super_agent.package_handler import SuperAgentPackageHandler
+from .super_agent.package_handler import PublicSuperAgentPackageHandler
+from .super_agent.grants import SuperExpertGrantRepository
+from .super_agent.publication import PublisherPublication
+from .super_agent.publishers import PublisherRepository
 from .super_agent.orchestration import handle_workspace_turn
 from .super_agent.router import frontend_read_routes, user_routes
 from qwenpaw.app.guards import require_user
@@ -190,10 +194,21 @@ class SuperAgentSupportPlugin:
         official_signers = load_trusted_signers(
             sealed_root / "official_super_expert_signers.json",
         )
+        grant_repository = SuperExpertGrantRepository(sealed_root)
         package_handler = SuperAgentPackageHandler(
             sealed_root,
             official_signer_ids=frozenset(official_signers),
             trusted_signers=official_signers,
+            grant_repository=grant_repository,
+        )
+        publisher_repository = PublisherRepository(root / "publishers.sqlite3")
+        public_package_handler = PublicSuperAgentPackageHandler(
+            sealed_root,
+            publisher_repository=publisher_repository,
+            grant_repository=grant_repository,
+        )
+        publication = PublisherPublication(
+            publisher_repository, public_package_handler, root,
         )
         self.mcp = LocalExecutionMcp(
             service,
@@ -240,6 +255,13 @@ class SuperAgentSupportPlugin:
             prefix="/user/super-expert-platform",
             tags=["super-expert-platform"],
         )
+        publisher_api = APIRouter(dependencies=[Depends(require_user)])
+        publisher_api.include_router(publication.router)
+        api.register_http_router(
+            publisher_api,
+            prefix="/user/super-expert-publishing",
+            tags=["super-expert-publishing"],
+        )
         for definition in PLATFORM_CAPABILITY_CATALOG_V1.values():
             api.register_platform_capability(
                 definition.capability_id,
@@ -283,6 +305,9 @@ class SuperAgentSupportPlugin:
             accepted_workflow_allows_unbound_node,
         )
         api.register_sealed_package_type("super_expert", package_handler)
+        api.register_sealed_package_type(
+            "super_expert_public", public_package_handler,
+        )
         api.register_workspace_turn_handler(
             "workspace.turn.orchestrate/1",
             handle_workspace_turn,
