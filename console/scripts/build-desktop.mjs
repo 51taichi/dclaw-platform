@@ -8,6 +8,7 @@ import {
   assertVersionsSynchronized,
   defaultRepositoryRoot,
 } from "./desktop-version.mjs";
+import { npmInvocation } from "./npm-command.mjs";
 
 const consoleDirectory = fileURLToPath(new URL("..", import.meta.url));
 
@@ -111,7 +112,6 @@ const tauriBuildConfig = JSON.stringify({
   },
 });
 
-const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 const cargoTargetDirectory = path.resolve(
   consoleDirectory,
   profile.cargoTargetDirectory,
@@ -131,34 +131,31 @@ console.log(`Building DClaw Desktop (${profile.artifactLabel})`);
 console.log(`API: ${profile.apiBaseUrl}`);
 console.log(`Artifacts: ${cargoTargetDirectory}`);
 
-const result = spawnSync(
-  npmCommand,
-  [
-    "exec",
-    "--",
-    "tauri",
-    "build",
-    "--config",
-    tauriBuildConfig,
-    ...bundleArguments,
-    ...passthroughArguments,
-  ],
-  {
-    cwd: consoleDirectory,
-    stdio: "inherit",
-    env: {
-      ...process.env,
-      CARGO_TARGET_DIR: cargoTargetDirectory,
-      DCLAW_DESKTOP_EDITION: profile.edition,
-      DCLAW_DESKTOP_BRAND_ID:
-        profile.edition === "cn" ? "dclaw" : profile.edition,
-      DCLAW_DESKTOP_ARTIFACT_LABEL: profile.artifactLabel,
-      VITE_API_BASE_URL: profile.apiBaseUrl,
-      TAURI_SIGNING_PRIVATE_KEY: updaterPrivateKey,
-      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: updaterPrivateKeyPassword,
-    },
+const tauriBuild = npmInvocation([
+  "exec",
+  "--",
+  "tauri",
+  "build",
+  "--config",
+  tauriBuildConfig,
+  ...bundleArguments,
+  ...passthroughArguments,
+]);
+const result = spawnSync(tauriBuild.command, tauriBuild.args, {
+  cwd: consoleDirectory,
+  stdio: "inherit",
+  env: {
+    ...process.env,
+    CARGO_TARGET_DIR: cargoTargetDirectory,
+    DCLAW_DESKTOP_EDITION: profile.edition,
+    DCLAW_DESKTOP_BRAND_ID:
+      profile.edition === "cn" ? "dclaw" : profile.edition,
+    DCLAW_DESKTOP_ARTIFACT_LABEL: profile.artifactLabel,
+    VITE_API_BASE_URL: profile.apiBaseUrl,
+    TAURI_SIGNING_PRIVATE_KEY: updaterPrivateKey,
+    TAURI_SIGNING_PRIVATE_KEY_PASSWORD: updaterPrivateKeyPassword,
   },
-);
+});
 
 if (result.error) {
   console.error(result.error.message);

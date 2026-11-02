@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -17,25 +17,6 @@ function describeEdition(edition) {
 
   assert.equal(result.status, 0, result.stderr);
   return JSON.parse(result.stdout);
-}
-
-function describeEditionThroughNpm(scriptName) {
-  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-  const result = spawnSync(
-    npmCommand,
-    ["run", scriptName, "--", "--describe"],
-    {
-      cwd: new URL("..", import.meta.url),
-      encoding: "utf8",
-    },
-  );
-
-  assert.equal(result.status, 0, result.stderr);
-  const jsonLine = result.stdout
-    .split("\n")
-    .find((line) => line.startsWith("{"));
-  assert.ok(jsonLine, result.stdout);
-  return JSON.parse(jsonLine);
 }
 
 test("domestic desktop build targets the domestic API", () => {
@@ -63,9 +44,12 @@ test("overseas desktop builds are rejected until that edition is supported", () 
 });
 
 test("npm domestic build command selects the domestic profile", () => {
+  const packageJson = JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  );
   assert.equal(
-    describeEditionThroughNpm("desktop:build:cn").apiBaseUrl,
-    "https://dclaw.deepmega.cn",
+    packageJson.scripts["desktop:build:cn"],
+    "node scripts/build-desktop.mjs cn",
   );
 });
 

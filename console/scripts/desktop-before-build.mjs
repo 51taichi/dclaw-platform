@@ -1,16 +1,18 @@
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+import { npmInvocation } from "./npm-command.mjs";
+
 const consoleDirectory = fileURLToPath(new URL("..", import.meta.url));
-const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+const frontendBuild = npmInvocation(["run", "build"]);
 const steps = [
   {
     command: process.execPath,
     args: ["scripts/prepare-local-helper.mjs"],
   },
   {
-    command: npmCommand,
-    args: ["run", "build"],
+    command: frontendBuild.command,
+    args: frontendBuild.args,
   },
 ];
 
