@@ -33,8 +33,6 @@ import {
   SparkDataLine,
   SparkMicLine,
   SparkAgentLine,
-  SparkExitFullscreenLine,
-  SparkSearchUserLine,
   SparkMenuExpandLine,
   SparkMenuFoldLine,
   SparkOtherLine,
@@ -68,7 +66,6 @@ import styles from "./index.module.less";
 import { useTheme } from "../contexts/ThemeContext";
 import { KEY_TO_PATH, DEFAULT_OPEN_KEYS } from "./constants";
 import { useAgentStore } from "../stores/agentStore";
-import { isDesktopApp } from "../utils/env";
 import { useAuth } from "../contexts/AuthContext";
 import {
   buildTaskArchiveMeta,
@@ -82,6 +79,7 @@ import { sortTasksForSidebar } from "./taskListOrdering";
 import { isTaskGenerating } from "./taskListState";
 import { canInspectAgent } from "../utils/agentCapabilities";
 import { getAgentManagementMenuItems } from "./settingsAgentMenu";
+import SidebarAccountMenu from "../features/account/SidebarAccountMenu";
 
 // ── Layout ────────────────────────────────────────────────────────────────
 
@@ -142,8 +140,7 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
   const canInspectSelectedAgent = canInspectAgent(
     agents.find((agent) => agent.id === selectedAgent),
   );
-  const [isDesktop, setIsDesktop] = useState(isDesktopApp());
-  const { role } = useAuth();
+  const { username, role, logout } = useAuth();
   const isAdminRole = role === "admin";
 
   // Task filter states
@@ -155,14 +152,6 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
     useState<TaskArchiveView>("active");
 
   // ── Effects ──────────────────────────────────────────────────────────────
-
-  useEffect(() => {
-    if (!isDesktop) {
-      const onReady = () => setIsDesktop(true);
-      window.addEventListener("pywebviewready", onReady);
-      return () => window.removeEventListener("pywebviewready", onReady);
-    }
-  }, [isDesktop]);
 
   useEffect(() => {
     authApi
@@ -1201,38 +1190,23 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
         )}
 
         <div className={styles.siderFooter}>
-          {authEnabled && !collapsed && (
-            <div className={styles.authActions}>
-              <Button
-                type="text"
-                icon={<SparkSearchUserLine size={16} />}
-                onClick={() => {
-                  accountForm.resetFields();
-                  setAccountModalOpen(true);
-                }}
-                block
-                className={`${styles.authBtn} ${
-                  collapsed ? styles.authBtnCollapsed : ""
-                }`}
-              >
-                {!collapsed && t("account.title")}
-              </Button>
-              <Button
-                type="text"
-                icon={<SparkExitFullscreenLine size={16} />}
-                onClick={() => {
-                  clearAuthToken();
-                  window.location.href = "/login";
-                }}
-                block
-                className={`${styles.authBtn} ${
-                  collapsed ? styles.authBtnCollapsed : ""
-                }`}
-              >
-                {!collapsed && t("login.logout")}
-              </Button>
-            </div>
-          )}
+          {authEnabled && username ? (
+            <SidebarAccountMenu
+              username={username}
+              role={role}
+              collapsed={collapsed}
+              onOpenAccount={() => {
+                accountForm.resetFields();
+                setAccountModalOpen(true);
+              }}
+              onOpenWallet={() => navigate("/wallet")}
+              onOpenAdmin={() => navigate("/admin/agents")}
+              onLogout={() => {
+                logout();
+                window.location.href = "/login";
+              }}
+            />
+          ) : null}
 
           <div className={styles.collapseToggleContainer}>
             <Button

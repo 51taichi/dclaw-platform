@@ -6,16 +6,19 @@ import { useAgentStore } from "@/stores/agentStore";
 
 const {
   ensureLocalHelper,
+  getLocalHelperStatus,
   getLocalEnvironmentStatus,
   waitForLocalHelperConnection,
 } = vi.hoisted(() => ({
   ensureLocalHelper: vi.fn(),
+  getLocalHelperStatus: vi.fn(),
   getLocalEnvironmentStatus: vi.fn(),
   waitForLocalHelperConnection: vi.fn(),
 }));
 
 vi.mock("@/desktop/localHelper", () => ({
   ensureLocalHelper,
+  getLocalHelperStatus,
   getLocalEnvironmentStatus,
   waitForLocalHelperConnection,
 }));
@@ -36,6 +39,7 @@ vi.mock("react-i18next", () => ({
 }));
 
 import LocalHelperStatusButton from "./LocalHelperStatusButton";
+import { LocalHelperStatusProvider } from "./LocalHelperStatusContext";
 import { localAssistantMode } from "./mode";
 
 const connected = {
@@ -51,7 +55,9 @@ const connected = {
 function renderButton() {
   return render(
     <App>
-      <LocalHelperStatusButton />
+      <LocalHelperStatusProvider>
+        <LocalHelperStatusButton />
+      </LocalHelperStatusProvider>
     </App>,
   );
 }
@@ -60,6 +66,7 @@ describe("LocalHelperStatusButton", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useAgentStore.setState({ selectedAgent: "default", agents: [] });
+    getLocalHelperStatus.mockResolvedValue(connected);
     ensureLocalHelper.mockResolvedValue({ available: true, status: connected });
     waitForLocalHelperConnection.mockResolvedValue(connected);
     getLocalEnvironmentStatus.mockResolvedValue({
@@ -163,8 +170,26 @@ describe("LocalHelperStatusButton", () => {
 
     expect(
       await screen.findByRole("button", {
-        name: "本地助手异常，点击重试",
+        name: "本地助手需要升级",
       }),
     ).toBeEnabled();
+  });
+
+  it("reports an uninstalled helper without starting it", async () => {
+    const user = userEvent.setup();
+    getLocalHelperStatus.mockResolvedValue({
+      ...connected,
+      installed: false,
+      running: false,
+      connected: false,
+    });
+    renderButton();
+
+    await user.click(screen.getByRole("button", { name: "检测本地助手" }));
+
+    expect(
+      await screen.findByRole("button", { name: "本地助手未安装" }),
+    ).toBeEnabled();
+    expect(ensureLocalHelper).not.toHaveBeenCalled();
   });
 });

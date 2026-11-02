@@ -36,6 +36,7 @@ import { languageApi } from "./api/modules/language";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { useLocalHelperLifecycle } from "./desktop/useLocalHelperLifecycle";
 import { LOCAL_HELPER_ERROR_EVENT } from "./desktop/localHelper";
+import { LocalHelperStatusProvider } from "./features/localHelper/LocalHelperStatusContext";
 
 import "./styles/layout.css";
 import "./styles/form-override.css";
@@ -213,39 +214,41 @@ function AppInner() {
         }}
       >
         <AntdApp>
-          <LocalHelperNotice />
-          <RuntimeEventProvider>
-            <ApprovalProvider>
-              <Routes>
-                <Route
-                  path="/login"
-                  element={
-                    <Suspense fallback={null}>
-                      <LoginPage />
-                    </Suspense>
-                  }
-                />
-                <Route
-                  path="/admin/*"
-                  element={
-                    <AuthGuard>
-                      <RoleGuard requireAdmin>
-                        <AdminLayout />
-                      </RoleGuard>
-                    </AuthGuard>
-                  }
-                />
-                <Route
-                  path="/*"
-                  element={
-                    <AuthGuard>
-                      <ClientLayout />
-                    </AuthGuard>
-                  }
-                />
-              </Routes>
-            </ApprovalProvider>
-          </RuntimeEventProvider>
+          <LocalHelperStatusProvider>
+            <LocalHelperNotice />
+            <RuntimeEventProvider>
+              <ApprovalProvider>
+                <Routes>
+                  <Route
+                    path="/login"
+                    element={
+                      <Suspense fallback={null}>
+                        <LoginPage />
+                      </Suspense>
+                    }
+                  />
+                  <Route
+                    path="/admin/*"
+                    element={
+                      <AuthGuard>
+                        <RoleGuard requireAdmin>
+                          <AdminLayout />
+                        </RoleGuard>
+                      </AuthGuard>
+                    }
+                  />
+                  <Route
+                    path="/*"
+                    element={
+                      <AuthGuard>
+                        <ClientLayout />
+                      </AuthGuard>
+                    }
+                  />
+                </Routes>
+              </ApprovalProvider>
+            </RuntimeEventProvider>
+          </LocalHelperStatusProvider>
         </AntdApp>
       </ConfigProvider>
     </BrowserRouter>
