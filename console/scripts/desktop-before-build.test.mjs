@@ -18,4 +18,5 @@ test("every desktop build prepares the local helper before the frontend", () => 
     "scripts/prepare-local-helper.mjs",
   ]);
   assert.deepEqual(description.steps[1].args.slice(-2), ["run", "build"]);
+  assert.equal(description.steps[1].maxOldSpaceSizeMb, 4096);
 });

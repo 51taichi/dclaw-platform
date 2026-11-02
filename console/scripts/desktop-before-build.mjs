@@ -13,6 +13,7 @@ const steps = [
   {
     command: frontendBuild.command,
     args: frontendBuild.args,
+    maxOldSpaceSizeMb: 4096,
   },
 ];
 
@@ -22,10 +23,18 @@ if (process.argv.includes("--describe")) {
 }
 
 for (const step of steps) {
+  const env = step.maxOldSpaceSizeMb
+    ? {
+        ...process.env,
+        NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --max-old-space-size=${
+          step.maxOldSpaceSizeMb
+        }`.trim(),
+      }
+    : process.env;
   const result = spawnSync(step.command, step.args, {
     cwd: consoleDirectory,
     stdio: "inherit",
-    env: process.env,
+    env,
   });
   if (result.error) {
     console.error(result.error.message);
