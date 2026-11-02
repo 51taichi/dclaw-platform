@@ -74,16 +74,6 @@ export function LocalHelperStatusProvider({
             ),
           );
         }
-        if (!detected.installed) {
-          failureState = "not-installed";
-          throw new Error(
-            t(
-              "header.localHelperNotInstalledDetail",
-              "当前设备未安装本地助手，请安装或升级 DClaw 客户端后重试。",
-            ),
-          );
-        }
-
         const started = await ensureLocalHelper();
         if (!started.available) {
           failureState = "unavailable";
@@ -116,7 +106,7 @@ export function LocalHelperStatusProvider({
           throw new Error(
             t("header.localHelperUpdateRequired", {
               defaultValue:
-                "本地助手版本过低，请将 DClaw 客户端升级到支持 Runner v{{version}} 的版本。",
+                "本地助手版本过低，请重新检测并下载 Runner v{{version}}。",
               version: environment.minimum_runner_version,
             }),
           );

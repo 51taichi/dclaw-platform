@@ -1,23 +1,24 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use clipboard_rs::{common::RustImage, Clipboard, ClipboardContext, ContentFormat};
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use std::fs;
+use serde::Serialize;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Arc,
 };
-use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    AppHandle, Manager, State,
+    Manager,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogResult};
 
+mod local_helper;
 mod scene_webview;
+use local_helper::{
+    get_local_helper_status, install_local_helper, start_local_helper, stop_local_helper,
+    LocalHelperProcessState,
+};
 use scene_webview::{hide_scene_webviews, resize_scene_webview, show_scene_webview};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -29,266 +30,6 @@ enum CloseAction {
 
 const CHAT_ATTACHMENT_MAX_BYTES: u64 = 25 * 1024 * 1024;
 const CLIPBOARD_ATTACHMENT_LIMIT: usize = 20;
-const LOCAL_HELPER_HEARTBEAT_MAX_AGE_SECONDS: u64 = 45;
-const LOCAL_HELPER_RUNNER_VERSION: &str = "1.3.0";
-const LOCAL_HELPER_PROTOCOL_VERSION: &str = "2";
-
-#[derive(Default)]
-struct LocalHelperProcessState {
-    child: Mutex<Option<Child>>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LocalHelperStartRequest {
-    server_websocket_uri: String,
-    pairing_code: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct LocalHelperStatus {
-    supported: bool,
-    installed: bool,
-    running: bool,
-    connected: bool,
-    paired: bool,
-    device_id: Option<String>,
-    runner_version: &'static str,
-}
-
-fn local_helper_directory(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_local_data_dir()
-        .map(|path| path.join("local-helper"))
-        .map_err(|error| format!("无法确定本地助手配置目录: {error}"))
-}
-
-fn local_helper_executable(app: &AppHandle) -> Result<PathBuf, String> {
-    if let Some(configured) = std::env::var_os("DCLAW_LOCAL_HELPER_EXECUTABLE") {
-        return Ok(PathBuf::from(configured));
-    }
-    app.path()
-        .resource_dir()
-        .map(|path| {
-            path.join("resources")
-                .join("local-helper")
-                .join("DClaw.LocalHelper.exe")
-        })
-        .map_err(|error| format!("无法确定本地助手程序目录: {error}"))
-}
-
-fn local_helper_runtime_status_path(app: &AppHandle) -> Result<PathBuf, String> {
-    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
-        return Ok(PathBuf::from(local_app_data)
-            .join("DClawLocalTool")
-            .join("helper-status.json"));
-    }
-    Ok(local_helper_directory(app)?
-        .join("runtime")
-        .join("helper-status.json"))
-}
-
-fn read_json(path: &Path) -> Option<Value> {
-    fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-}
-
-fn fresh_runtime_status(path: &Path) -> Option<Value> {
-    let value = read_json(path)?;
-    let heartbeat = value.get("heartbeatUnixSeconds")?.as_u64()?;
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
-    (now.saturating_sub(heartbeat) <= LOCAL_HELPER_HEARTBEAT_MAX_AGE_SECONDS).then_some(value)
-}
-
-fn configured_device_id(config_path: &Path) -> Option<String> {
-    read_json(config_path)?
-        .get("deviceId")?
-        .as_str()
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-}
-
-fn config_has_device_token(config_path: &Path) -> bool {
-    read_json(config_path)
-        .and_then(|value| {
-            value
-                .get("deviceToken")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
-        .is_some_and(|value| !value.is_empty())
-}
-
-fn local_helper_status_value(app: &AppHandle) -> Result<LocalHelperStatus, String> {
-    let supported = cfg!(target_os = "windows");
-    let executable = local_helper_executable(app)?;
-    let config_path = local_helper_directory(app)?.join("config.json");
-    let runtime = fresh_runtime_status(&local_helper_runtime_status_path(app)?);
-    let running = runtime.is_some();
-    let connected = runtime
-        .as_ref()
-        .and_then(|value| value.get("connected"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let device_id = runtime
-        .as_ref()
-        .and_then(|value| value.get("deviceId"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .or_else(|| configured_device_id(&config_path));
-    Ok(LocalHelperStatus {
-        supported,
-        installed: executable.is_file(),
-        running,
-        connected,
-        paired: device_id.is_some() && config_has_device_token(&config_path),
-        device_id,
-        runner_version: LOCAL_HELPER_RUNNER_VERSION,
-    })
-}
-
-#[tauri::command]
-fn get_local_helper_status(
-    app: AppHandle,
-    state: State<'_, LocalHelperProcessState>,
-) -> Result<LocalHelperStatus, String> {
-    let mut status = local_helper_status_value(&app)?;
-    let mut process = state
-        .child
-        .lock()
-        .map_err(|_| "本地助手进程状态不可用".to_owned())?;
-    if let Some(child) = process.as_mut() {
-        match child.try_wait() {
-            Ok(None) => status.running = true,
-            Ok(Some(_)) => *process = None,
-            Err(_) => *process = None,
-        }
-    }
-    Ok(status)
-}
-
-fn stop_local_helper_process(
-    app: &AppHandle,
-    state: &LocalHelperProcessState,
-) -> Result<(), String> {
-    if let Some(mut child) = state
-        .child
-        .lock()
-        .map_err(|_| "本地助手进程状态不可用".to_owned())?
-        .take()
-    {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-
-    let status_path = local_helper_runtime_status_path(app)?;
-    if let Some(pid) = fresh_runtime_status(&status_path)
-        .and_then(|value| value.get("pid").and_then(Value::as_u64))
-    {
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            let _ = Command::new("taskkill")
-                .args(["/PID", &pid.to_string(), "/T", "/F"])
-                .creation_flags(0x08000000)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-        }
-        #[cfg(not(target_os = "windows"))]
-        let _ = pid;
-    }
-    let _ = fs::remove_file(status_path);
-    Ok(())
-}
-
-#[tauri::command]
-fn stop_local_helper(
-    app: AppHandle,
-    state: State<'_, LocalHelperProcessState>,
-) -> Result<(), String> {
-    stop_local_helper_process(&app, &state)
-}
-
-#[tauri::command]
-fn start_local_helper(
-    app: AppHandle,
-    state: State<'_, LocalHelperProcessState>,
-    request: LocalHelperStartRequest,
-) -> Result<LocalHelperStatus, String> {
-    if !cfg!(target_os = "windows") {
-        return local_helper_status_value(&app);
-    }
-    let executable = local_helper_executable(&app)?;
-    if !executable.is_file() {
-        return Err("当前设备未安装通用本地助手，请安装或升级 DClaw 客户端后重试。".to_owned());
-    }
-
-    let helper_directory = local_helper_directory(&app)?;
-    fs::create_dir_all(&helper_directory)
-        .map_err(|error| format!("无法创建本地助手配置目录: {error}"))?;
-    let config_path = helper_directory.join("config.json");
-    let existing = read_json(&config_path).unwrap_or_else(|| json!({}));
-    let pairing = request
-        .pairing_code
-        .as_deref()
-        .filter(|value| !value.is_empty());
-    if pairing.is_some() {
-        stop_local_helper_process(&app, &state)?;
-    } else if local_helper_status_value(&app)?.running {
-        return local_helper_status_value(&app);
-    }
-
-    let config = json!({
-        "serverWebSocketUri": request.server_websocket_uri,
-        "deviceId": if pairing.is_some() {
-            ""
-        } else {
-            existing.get("deviceId").and_then(Value::as_str).unwrap_or("")
-        },
-        "deviceToken": if pairing.is_some() {
-            Value::Null
-        } else {
-            existing.get("deviceToken").cloned().unwrap_or(Value::Null)
-        },
-        "pairingCode": pairing,
-        "displayName": std::env::var("COMPUTERNAME")
-            .unwrap_or_else(|_| "Windows device".to_owned()),
-        "runnerVersion": LOCAL_HELPER_RUNNER_VERSION,
-        "protocolVersion": LOCAL_HELPER_PROTOCOL_VERSION,
-    });
-    fs::write(
-        &config_path,
-        serde_json::to_vec_pretty(&config)
-            .map_err(|error| format!("无法生成本地助手配置: {error}"))?,
-    )
-    .map_err(|error| format!("无法写入本地助手配置: {error}"))?;
-
-    let mut command = Command::new(executable);
-    command
-        .arg(&config_path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000);
-    }
-    let child = command
-        .spawn()
-        .map_err(|error| format!("无法启动本地助手: {error}"))?;
-    *state
-        .child
-        .lock()
-        .map_err(|_| "本地助手进程状态不可用".to_owned())? = Some(child);
-    let mut status = local_helper_status_value(&app)?;
-    status.running = true;
-    Ok(status)
-}
 
 #[derive(Debug, Serialize)]
 struct ClipboardAttachment {
@@ -510,6 +251,7 @@ pub fn run() {
             get_app_status,
             read_clipboard_attachments,
             get_local_helper_status,
+            install_local_helper,
             start_local_helper,
             stop_local_helper,
             show_scene_webview,
@@ -533,10 +275,7 @@ fn get_app_status() -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        attachments_from_paths, close_action, config_has_device_token, CloseAction,
-        LOCAL_HELPER_PROTOCOL_VERSION, LOCAL_HELPER_RUNNER_VERSION,
-    };
+    use super::{attachments_from_paths, close_action, CloseAction};
     use std::{fs, time::SystemTime};
     use tauri_plugin_dialog::MessageDialogResult;
 
@@ -574,25 +313,5 @@ mod tests {
         assert_eq!(attachments[0].mime_type, "application/pdf");
         assert_eq!(attachments[0].base64_data, "cGRm");
         fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn local_helper_pairing_requires_a_persisted_device_token() {
-        let unique = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("dclaw-helper-config-{unique}.json"));
-        fs::write(&path, r#"{"deviceId":"device-1","deviceToken":null}"#).unwrap();
-        assert!(!config_has_device_token(&path));
-        fs::write(&path, r#"{"deviceId":"device-1","deviceToken":"secret"}"#).unwrap();
-        assert!(config_has_device_token(&path));
-        fs::remove_file(path).unwrap();
-    }
-
-    #[test]
-    fn bundled_local_helper_matches_device_protocol_v2() {
-        assert_eq!(LOCAL_HELPER_RUNNER_VERSION, "1.3.0");
-        assert_eq!(LOCAL_HELPER_PROTOCOL_VERSION, "2");
     }
 }

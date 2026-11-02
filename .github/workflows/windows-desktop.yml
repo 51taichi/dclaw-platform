@@ -25,14 +25,6 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
-      - name: Check out compatible local helper source
-        uses: actions/checkout@v4
-        with:
-          repository: 51taichi/dclaw-server
-          ref: 8f68a6aa6a10af972e57be7c92ca3b3b529d2f57
-          path: dclaw-server
-          token: ${{ secrets.DCLAW_SERVER_READ_TOKEN || secrets.DCLAW_SERVER_DISPATCH_TOKEN || github.token }}
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -44,11 +36,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
-
-      - name: Set up .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
 
       - name: Cache Rust build
         uses: swatinem/rust-cache@v2
@@ -64,21 +51,8 @@ jobs:
       - name: Build NSIS and MSI installers
         run: npm run desktop:build:cn
         env:
-          DCLAW_SERVER_SOURCE_DIR: ${{ github.workspace }}\dclaw-server
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_CN }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD_CN }}
-
-      - name: Verify local helper is bundled
-        shell: pwsh
-        run: |
-          $installer = Get-ChildItem "src-tauri/target/desktop-cn/release/bundle/nsis/*.exe" | Select-Object -First 1
-          if (-not $installer) {
-            throw "Windows NSIS installer was not created"
-          }
-          $listing = & 7z l $installer.FullName
-          if ($LASTEXITCODE -ne 0 -or -not ($listing -match "DClaw.LocalHelper.exe")) {
-            throw "Windows installer does not contain DClaw.LocalHelper.exe"
-          }
 
       - name: Upload Windows installers
         uses: actions/upload-artifact@v4

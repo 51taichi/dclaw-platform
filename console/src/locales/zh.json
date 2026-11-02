@@ -2117,13 +2117,13 @@
     "localHelperRetry": "本地助手异常，点击重试",
     "localHelperUnavailable": "本地助手不可用",
     "localHelperNotInstalled": "本地助手未安装",
-    "localHelperNotInstalledDetail": "当前设备未安装本地助手，请安装或升级 DClaw 客户端后重试。",
+    "localHelperNotInstalledDetail": "当前设备未安装本地助手，点击检测即可从超级专家插件下载。",
     "localHelperNeedsUpdate": "本地助手需要升级",
     "localHelperIncompatible": "本地助手不兼容",
     "localHelperPluginUnavailable": "平台尚未启用本地助手支持，请联系管理员。",
     "localHelperWindowsOnly": "请在 Windows DClaw 客户端中检测本地助手。",
     "localHelperConnectFailed": "本地助手已启动，但尚未连接到 DClaw，请稍后重试。",
-    "localHelperUpdateRequired": "本地助手版本过低，请将 DClaw 客户端升级到支持 Runner v{{version}} 的版本。",
+    "localHelperUpdateRequired": "本地助手版本过低，请重新检测并下载 Runner v{{version}}。",
     "localHelperProtocolIncompatible": "本地助手协议不兼容，请联系管理员。"
   },
   "scenes": {

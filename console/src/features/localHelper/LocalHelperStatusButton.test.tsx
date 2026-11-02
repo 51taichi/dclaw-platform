@@ -175,7 +175,7 @@ describe("LocalHelperStatusButton", () => {
     ).toBeEnabled();
   });
 
-  it("reports an uninstalled helper without starting it", async () => {
+  it("downloads an uninstalled helper when explicitly checked", async () => {
     const user = userEvent.setup();
     getLocalHelperStatus.mockResolvedValue({
       ...connected,
@@ -188,8 +188,10 @@ describe("LocalHelperStatusButton", () => {
     await user.click(screen.getByRole("button", { name: "检测本地助手" }));
 
     expect(
-      await screen.findByRole("button", { name: "本地助手未安装" }),
+      await screen.findByRole("button", {
+        name: "本地助手已连接 · v1.0.0",
+      }),
     ).toBeEnabled();
-    expect(ensureLocalHelper).not.toHaveBeenCalled();
+    expect(ensureLocalHelper).toHaveBeenCalledOnce();
   });
 });

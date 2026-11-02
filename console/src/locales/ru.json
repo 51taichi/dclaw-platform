@@ -1520,13 +1520,13 @@
     "localHelperRetry": "Локальный помощник недоступен, нажмите для повтора",
     "localHelperUnavailable": "Локальный помощник недоступен",
     "localHelperNotInstalled": "Локальный помощник не установлен",
-    "localHelperNotInstalledDetail": "Локальный помощник не установлен на этом устройстве. Установите или обновите DClaw и повторите попытку.",
+    "localHelperNotInstalledDetail": "Локальный помощник не установлен. Запустите проверку, чтобы загрузить его из плагина Super Agent.",
     "localHelperNeedsUpdate": "Требуется обновление локального помощника",
     "localHelperIncompatible": "Локальный помощник несовместим",
     "localHelperPluginUnavailable": "Поддержка локального помощника не включена на сервере. Обратитесь к администратору.",
     "localHelperWindowsOnly": "Проверьте локальный помощник в клиенте DClaw для Windows.",
     "localHelperConnectFailed": "Локальный помощник запущен, но ещё не подключён к DClaw. Повторите попытку позже.",
-    "localHelperUpdateRequired": "Локальный помощник устарел. Обновите DClaw до версии с поддержкой Runner v{{version}}.",
+    "localHelperUpdateRequired": "Локальный помощник устарел. Повторите проверку, чтобы загрузить Runner v{{version}}.",
     "localHelperProtocolIncompatible": "Протокол локального помощника несовместим. Обратитесь к администратору."
   },
   "theme": {

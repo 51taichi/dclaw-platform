@@ -152,7 +152,7 @@ describe("SuperExpertInteractionCard", () => {
     Reflect.deleteProperty(window, "pywebview");
   });
 
-  it("starts the bundled helper for the production desktop runtime", async () => {
+  it("starts the plugin-managed helper for the desktop runtime", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", {
       configurable: true,
       value: {},
@@ -206,15 +206,13 @@ describe("SuperExpertInteractionCard", () => {
     Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
   });
 
-  it("reports a missing helper only when a local expert action runs", async () => {
+  it("reports a helper download failure only when a local action runs", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", {
       configurable: true,
       value: {},
     });
     ensureLocalHelper.mockRejectedValue(
-      new Error(
-        "当前设备未安装通用本地助手，请安装或升级 DClaw 客户端后重试。",
-      ),
+      new Error("超级专家插件未发布可用的 Windows 本地助手。"),
     );
     const onSubmit = vi.fn().mockResolvedValue(undefined);
 
@@ -240,7 +238,7 @@ describe("SuperExpertInteractionCard", () => {
     );
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "当前设备未安装通用本地助手，请安装或升级 DClaw 客户端后重试。",
+      "超级专家插件未发布可用的 Windows 本地助手。",
     );
     expect(onSubmit).not.toHaveBeenCalled();
     expect(open).not.toHaveBeenCalled();

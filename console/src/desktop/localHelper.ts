@@ -23,6 +23,16 @@ interface DeviceBootstrapResponse {
   websocket_path: string;
 }
 
+interface LocalHelperManifest {
+  platform: string;
+  version: string;
+  protocol_version: string;
+  executable: string;
+  size_bytes: number;
+  sha256: string;
+  download_path: string;
+}
+
 export interface LocalHelperEnsureResult {
   available: boolean;
   status: LocalHelperStatus | null;
@@ -84,11 +94,59 @@ export async function getLocalHelperStatus(): Promise<LocalHelperStatus | null> 
 export async function ensureLocalHelper(): Promise<LocalHelperEnsureResult> {
   const status = await getLocalHelperStatus();
   if (!status) return { available: false, status: null };
-  if (!status.installed) {
+  const runtime = await getDesktopRuntime();
+  if (!runtime || runtime.platform !== "windows") {
+    return { available: false, status: null };
+  }
+  const platform = runtime.arch === "x86_64" ? "windows-x64" : "";
+  if (!platform) return { available: false, status };
+  const authHeaders = buildAuthHeaders();
+  const manifestResponse = await fetch(
+    getApiUrl(
+      `/super-agent-support/local-helper/manifest?platform=${platform}`,
+    ),
+    { headers: authHeaders },
+  );
+  if (manifestResponse.status === 404) {
+    return { available: false, status };
+  }
+  if (!manifestResponse.ok) {
+    const body = (await manifestResponse.json().catch(() => ({}))) as {
+      detail?: string;
+    };
     throw new Error(
-      "当前设备未安装通用本地助手，请安装或升级 DClaw 客户端后重试。",
+      body.detail || `本地助手版本检测失败 (${manifestResponse.status})`,
     );
   }
+  const manifest = (await manifestResponse.json()) as LocalHelperManifest;
+  if (
+    manifest.platform !== platform ||
+    manifest.executable !== "DClaw.LocalHelper.exe" ||
+    !manifest.version ||
+    !manifest.protocol_version ||
+    !Number.isSafeInteger(manifest.size_bytes) ||
+    manifest.size_bytes <= 0 ||
+    !/^[0-9a-f]{64}$/.test(manifest.sha256) ||
+    !manifest.download_path
+  ) {
+    throw new Error("本地助手版本清单无效");
+  }
+  const serverOrigin = getApiBaseUrl() || window.location.origin;
+  const downloadUrl = new URL(
+    manifest.download_path,
+    `${serverOrigin.replace(/\/$/, "")}/`,
+  ).toString();
+  const installed = await invoke<LocalHelperStatus>("install_local_helper", {
+    request: {
+      downloadUrl,
+      serverOrigin,
+      authorization: authHeaders.Authorization || null,
+      version: manifest.version,
+      protocolVersion: manifest.protocol_version,
+      sha256: manifest.sha256,
+      sizeBytes: manifest.size_bytes,
+    },
+  });
 
   const response = await fetch(
     getApiUrl("/super-agent-support/device-bootstrap"),
@@ -99,12 +157,12 @@ export async function ensureLocalHelper(): Promise<LocalHelperEnsureResult> {
         ...buildAuthHeaders(),
       },
       body: JSON.stringify({
-        device_id: status.paired ? status.deviceId : null,
+        device_id: installed.paired ? installed.deviceId : null,
       }),
     },
   );
   if (response.status === 404) {
-    return { available: false, status };
+    return { available: false, status: installed };
   }
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as {

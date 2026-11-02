@@ -46,9 +46,6 @@
     "macOS": {
       "minimumSystemVersion": "10.15"
     },
-    "resources": [
-      "resources/local-helper/*"
-    ],
     "shortDescription": "AI 智能工作台",
     "longDescription": "DClaw 是一个本地优先的 AI 桌面智能工作台，支持桌面自动化、智能文档处理和多模型协作。"
   },

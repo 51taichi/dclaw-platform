@@ -22,6 +22,24 @@ import {
 } from "./localHelper";
 
 describe("local helper desktop bridge", () => {
+  const manifest = {
+    platform: "windows-x64",
+    version: "1.3.0",
+    protocol_version: "2",
+    executable: "DClaw.LocalHelper.exe",
+    size_bytes: 1234,
+    sha256: "a".repeat(64),
+    download_path:
+      "/api/super-agent-support/local-helper/download?platform=windows-x64",
+  };
+  const bootstrap = {
+    paired: true,
+    device_id: "device-1",
+    pairing_code: null,
+    expires_in: 0,
+    websocket_path: "/api/super-agent-support/devices/connect",
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
     runtimeMock.mockResolvedValue({
@@ -38,7 +56,7 @@ describe("local helper desktop bridge", () => {
     );
   });
 
-  it("reuses a paired device and starts the bundled helper", async () => {
+  it("installs the plugin-owned helper before starting it", async () => {
     invokeMock.mockResolvedValueOnce({
       supported: true,
       installed: true,
@@ -51,31 +69,54 @@ describe("local helper desktop bridge", () => {
     invokeMock.mockResolvedValueOnce({
       supported: true,
       installed: true,
+      running: false,
+      connected: false,
+      paired: true,
+      deviceId: "device-1",
+      runnerVersion: "1.3.0",
+    });
+    invokeMock.mockResolvedValueOnce({
+      supported: true,
+      installed: true,
       running: true,
       connected: false,
       paired: true,
       deviceId: "device-1",
-      runnerVersion: "1.0.0",
+      runnerVersion: "1.3.0",
     });
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(
-          JSON.stringify({
-            paired: true,
-            device_id: "device-1",
-            pairing_code: null,
-            expires_in: 0,
-            websocket_path: "/api/super-agent-support/devices/connect",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify(manifest), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
           }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify(bootstrap), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
         ),
-      ),
     );
 
     const result = await ensureLocalHelper();
 
     expect(result.available).toBe(true);
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "install_local_helper", {
+      request: {
+        downloadUrl:
+          "https://dclaw.example/api/super-agent-support/local-helper/download?platform=windows-x64",
+        serverOrigin: "https://dclaw.example",
+        authorization: "Bearer token",
+        version: "1.3.0",
+        protocolVersion: "2",
+        sha256: "a".repeat(64),
+        sizeBytes: 1234,
+      },
+    });
     expect(fetch).toHaveBeenCalledWith(
       "https://dclaw.example/api/super-agent-support/device-bootstrap",
       expect.objectContaining({
@@ -113,7 +154,7 @@ describe("local helper desktop bridge", () => {
     expect(invokeMock).toHaveBeenCalledTimes(1);
   });
 
-  it("prompts for installation only when an on-demand check finds no helper", async () => {
+  it("downloads the helper on demand when it is not installed", async () => {
     invokeMock.mockResolvedValueOnce({
       supported: true,
       installed: false,
@@ -121,13 +162,52 @@ describe("local helper desktop bridge", () => {
       connected: false,
       paired: false,
       deviceId: null,
-      runnerVersion: "1.0.0",
+      runnerVersion: "",
     });
-
-    await expect(ensureLocalHelper()).rejects.toThrow(
-      "当前设备未安装通用本地助手，请安装或升级 DClaw 客户端后重试。",
+    invokeMock.mockResolvedValueOnce({
+      supported: true,
+      installed: true,
+      running: false,
+      connected: false,
+      paired: true,
+      deviceId: "device-1",
+      runnerVersion: "1.3.0",
+    });
+    invokeMock.mockResolvedValueOnce({
+      supported: true,
+      installed: true,
+      running: true,
+      connected: false,
+      paired: true,
+      deviceId: "device-1",
+      runnerVersion: "1.3.0",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify(manifest), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify(bootstrap), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
     );
-    expect(fetch).not.toHaveBeenCalled();
+
+    await expect(ensureLocalHelper()).resolves.toMatchObject({
+      available: true,
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(
+      2,
+      "install_local_helper",
+      expect.any(Object),
+    );
   });
 
   it("waits until the helper reports a real server connection", async () => {

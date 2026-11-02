@@ -1708,13 +1708,13 @@
     "localHelperRetry": "Assistente local indisponível, clique para tentar novamente",
     "localHelperUnavailable": "Assistente local indisponível",
     "localHelperNotInstalled": "Assistente local não instalado",
-    "localHelperNotInstalledDetail": "O assistente local não está instalado neste dispositivo. Instale ou atualize o DClaw e tente novamente.",
+    "localHelperNotInstalledDetail": "O assistente local não está instalado. Execute a verificação para baixá-lo do plugin Super Agent.",
     "localHelperNeedsUpdate": "O assistente local precisa ser atualizado",
     "localHelperIncompatible": "Assistente local incompatível",
     "localHelperPluginUnavailable": "O suporte ao assistente local não está ativado neste servidor. Contate o administrador.",
     "localHelperWindowsOnly": "Verifique o assistente local no cliente DClaw para Windows.",
     "localHelperConnectFailed": "O assistente local foi iniciado, mas ainda não se conectou ao DClaw. Tente novamente em instantes.",
-    "localHelperUpdateRequired": "O assistente local está desatualizado. Atualize o DClaw para uma versão compatível com o Runner v{{version}}.",
+    "localHelperUpdateRequired": "O assistente local está desatualizado. Verifique novamente para baixar o Runner v{{version}}.",
     "localHelperProtocolIncompatible": "O protocolo do assistente local é incompatível. Contate o administrador."
   },
   "theme": {

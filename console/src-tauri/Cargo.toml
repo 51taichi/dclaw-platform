@@ -32,3 +32,5 @@ tauri-plugin-single-instance = "2"
 clipboard-rs = "0.3.5"
 base64 = "0.22"
 mime_guess = "2"
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+sha2 = "0.10"

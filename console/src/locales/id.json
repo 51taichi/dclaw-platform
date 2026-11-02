@@ -79,13 +79,13 @@
     "localHelperRetry": "Bantuan lokal bermasalah, klik untuk mencoba lagi",
     "localHelperUnavailable": "Bantuan lokal tidak tersedia",
     "localHelperNotInstalled": "Bantuan lokal belum terpasang",
-    "localHelperNotInstalledDetail": "Bantuan lokal belum terpasang di perangkat ini. Pasang atau tingkatkan DClaw lalu coba lagi.",
+    "localHelperNotInstalledDetail": "Bantuan lokal belum terpasang. Jalankan pemeriksaan untuk mengunduhnya dari plugin Super Agent.",
     "localHelperNeedsUpdate": "Bantuan lokal perlu ditingkatkan",
     "localHelperIncompatible": "Bantuan lokal tidak kompatibel",
     "localHelperPluginUnavailable": "Dukungan bantuan lokal belum diaktifkan di server ini. Hubungi administrator.",
     "localHelperWindowsOnly": "Periksa bantuan lokal di klien DClaw Windows.",
     "localHelperConnectFailed": "Bantuan lokal telah dimulai tetapi belum terhubung ke DClaw. Coba lagi sebentar lagi.",
-    "localHelperUpdateRequired": "Versi bantuan lokal terlalu lama. Tingkatkan DClaw ke versi yang mendukung Runner v{{version}}.",
+    "localHelperUpdateRequired": "Versi bantuan lokal terlalu lama. Periksa kembali untuk mengunduh Runner v{{version}}.",
     "localHelperProtocolIncompatible": "Protokol bantuan lokal tidak kompatibel. Hubungi administrator."
   },
   "theme": {

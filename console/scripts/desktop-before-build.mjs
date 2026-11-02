@@ -7,10 +7,6 @@ const consoleDirectory = fileURLToPath(new URL("..", import.meta.url));
 const frontendBuild = npmInvocation(["run", "build"]);
 const steps = [
   {
-    command: process.execPath,
-    args: ["scripts/prepare-local-helper.mjs"],
-  },
-  {
     command: frontendBuild.command,
     args: frontendBuild.args,
     maxOldSpaceSizeMb: 4096,
