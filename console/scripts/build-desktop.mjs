@@ -50,19 +50,6 @@ if (checkVersionOnly) {
   process.exit(0);
 }
 
-if (process.platform === "win32") {
-  const helperResult = spawnSync(
-    process.execPath,
-    ["scripts/prepare-local-helper.mjs"],
-    { cwd: consoleDirectory, stdio: "inherit", env: process.env },
-  );
-  if (helperResult.error) {
-    console.error(helperResult.error.message);
-    process.exit(1);
-  }
-  if (helperResult.status !== 0) process.exit(helperResult.status ?? 1);
-}
-
 const updaterPublicKeyPath =
   process.env.DCLAW_UPDATER_PUBLIC_KEY_PATH ??
   path.join(consoleDirectory, "brands", profile.edition, "updater.pub");

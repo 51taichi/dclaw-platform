@@ -30,7 +30,7 @@ enum CloseAction {
 const CHAT_ATTACHMENT_MAX_BYTES: u64 = 25 * 1024 * 1024;
 const CLIPBOARD_ATTACHMENT_LIMIT: usize = 20;
 const LOCAL_HELPER_HEARTBEAT_MAX_AGE_SECONDS: u64 = 45;
-const LOCAL_HELPER_RUNNER_VERSION: &str = "1.1.0";
+const LOCAL_HELPER_RUNNER_VERSION: &str = "1.3.0";
 const LOCAL_HELPER_PROTOCOL_VERSION: &str = "2";
 
 #[derive(Default)]
@@ -592,7 +592,7 @@ mod tests {
 
     #[test]
     fn bundled_local_helper_matches_device_protocol_v2() {
-        assert_eq!(LOCAL_HELPER_RUNNER_VERSION, "1.1.0");
+        assert_eq!(LOCAL_HELPER_RUNNER_VERSION, "1.3.0");
         assert_eq!(LOCAL_HELPER_PROTOCOL_VERSION, "2");
     }
 }
