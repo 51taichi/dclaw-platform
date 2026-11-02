@@ -31,7 +31,7 @@ jobs:
           repository: 51taichi/dclaw-server
           ref: 8f68a6aa6a10af972e57be7c92ca3b3b529d2f57
           path: dclaw-server
-          token: ${{ secrets.DCLAW_SERVER_READ_TOKEN || github.token }}
+          token: ${{ secrets.DCLAW_SERVER_READ_TOKEN || secrets.DCLAW_SERVER_DISPATCH_TOKEN || github.token }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
