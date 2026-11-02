@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Avatar, Popover } from "antd";
 import {
   ChevronRight,
@@ -11,6 +11,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { billingApi } from "@/api/modules/billing";
 import type { BillingWallet } from "@/api/types/billing";
+import defaultAvatarUrl from "@/assets/account/default-avatar.webp";
 import { useLocalHelperStatus } from "@/features/localHelper/LocalHelperStatusContext";
 import styles from "./SidebarAccountMenu.module.less";
 
@@ -22,10 +23,6 @@ interface SidebarAccountMenuProps {
   onOpenWallet: () => void;
   onOpenAdmin: () => void;
   onLogout: () => void;
-}
-
-function accountInitial(username: string) {
-  return Array.from(username.trim())[0]?.toUpperCase() || "D";
 }
 
 export default function SidebarAccountMenu({
@@ -51,7 +48,7 @@ export default function SidebarAccountMenu({
   const roleLabel = isAdmin
     ? t("account.adminRole", "管理员")
     : t("account.userRole", "普通用户");
-  const initial = useMemo(() => accountInitial(username), [username]);
+  const avatarAlt = t("account.defaultAvatarAlt", "DClaw 默认头像");
 
   useEffect(() => {
     if (!open || wallet) return;
@@ -96,9 +93,12 @@ export default function SidebarAccountMenu({
   const content = (
     <div className={styles.menu} aria-label={t("account.menu", "账户菜单")}>
       <div className={styles.profileHeader}>
-        <Avatar className={styles.avatar} size={42}>
-          {initial}
-        </Avatar>
+        <Avatar
+          className={styles.avatar}
+          size={42}
+          src={defaultAvatarUrl}
+          alt={avatarAlt}
+        />
         <div className={styles.profileText}>
           <strong title={username}>{username}</strong>
           <span>{roleLabel}</span>
@@ -212,9 +212,12 @@ export default function SidebarAccountMenu({
         })}
         aria-expanded={open}
       >
-        <Avatar className={styles.avatar} size={collapsed ? 34 : 36}>
-          {initial}
-        </Avatar>
+        <Avatar
+          className={styles.avatar}
+          size={collapsed ? 34 : 36}
+          src={defaultAvatarUrl}
+          alt={avatarAlt}
+        />
         {!collapsed ? (
           <span className={styles.triggerText}>
             <strong title={username}>{username}</strong>

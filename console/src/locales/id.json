@@ -131,6 +131,7 @@
     "currentAccount": "Akun saat ini: {{username}}",
     "adminRole": "Administrator",
     "userRole": "Pengguna",
+    "defaultAvatarAlt": "Avatar bawaan DClaw",
     "pointsBalance": "Saldo poin",
     "pointsUnavailable": "Sementara tidak tersedia",
     "pointsValue": "{{value}} poin",

@@ -84,10 +84,16 @@ describe("SidebarAccountMenu", () => {
     const trigger = screen.getByRole("button", { name: "当前账户：alice" });
     expect(trigger).toHaveTextContent("alice");
     expect(trigger).toHaveTextContent("管理员");
+    expect(
+      screen.getByRole("img", { name: "DClaw 默认头像" }),
+    ).toBeInTheDocument();
 
     await user.click(trigger);
 
     expect(await screen.findByLabelText("账户菜单")).toBeInTheDocument();
+    expect(screen.getAllByRole("img", { name: "DClaw 默认头像" })).toHaveLength(
+      2,
+    );
     expect(
       screen.getByRole("button", { name: /账户管理/ }),
     ).toBeInTheDocument();

@@ -2047,6 +2047,7 @@
     "currentAccount": "Conta atual: {{username}}",
     "adminRole": "Administrador",
     "userRole": "Usuário",
+    "defaultAvatarAlt": "Avatar padrão do DClaw",
     "pointsBalance": "Saldo de pontos",
     "pointsUnavailable": "Temporariamente indisponível",
     "pointsValue": "{{value}} pontos",

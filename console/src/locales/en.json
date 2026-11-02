@@ -2615,6 +2615,7 @@
     "currentAccount": "Current account: {{username}}",
     "adminRole": "Administrator",
     "userRole": "User",
+    "defaultAvatarAlt": "Default DClaw avatar",
     "pointsBalance": "Points balance",
     "pointsUnavailable": "Temporarily unavailable",
     "pointsValue": "{{value}} points",

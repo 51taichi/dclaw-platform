@@ -2464,6 +2464,7 @@
     "currentAccount": "当前账户：{{username}}",
     "adminRole": "管理员",
     "userRole": "普通用户",
+    "defaultAvatarAlt": "DClaw 默认头像",
     "pointsBalance": "积分余额",
     "pointsUnavailable": "暂时不可用",
     "pointsValue": "{{value}} 积分",

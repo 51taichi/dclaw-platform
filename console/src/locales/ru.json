@@ -1829,6 +1829,7 @@
     "currentAccount": "Текущий аккаунт: {{username}}",
     "adminRole": "Администратор",
     "userRole": "Пользователь",
+    "defaultAvatarAlt": "Аватар DClaw по умолчанию",
     "pointsBalance": "Баланс баллов",
     "pointsUnavailable": "Временно недоступно",
     "pointsValue": "{{value}} баллов",
