@@ -342,11 +342,15 @@ def test_plugin_archive_embeds_current_standard_and_is_reproducible(tmp_path):
         helper_project = archive.read(
             "windows-helper/DClaw.LocalHelper.csproj",
         )
+        helper_program = archive.read(
+            "windows-helper/Program.cs",
+        )
     assert embedded == standard.read_bytes()
     assert "plugin.json" in names
     assert "windows-helper/LocalAssistantUi.cs" in names
     assert "windows-helper/TaskHistory.cs" in names
     assert b"<OutputType>WinExe</OutputType>" in helper_project
+    assert b"LocalAssistantUi.Run" in helper_program
     assert packaged_helper == helper.read_bytes()
     assert helper_manifest["sha256"] == hashlib.sha256(
         helper.read_bytes(),
