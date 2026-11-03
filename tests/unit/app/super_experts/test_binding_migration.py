@@ -219,7 +219,7 @@ async def test_migrated_submission_uses_core_with_deleted_markers(
     def unavailable():
         raise AssertionError("system must not call expert platform")
 
-    async def available(*_):
+    async def available(*_, **__):
         return object()
 
     monkeypatch.setattr(
@@ -269,7 +269,7 @@ async def test_managed_node_without_migration_is_not_trusted(
         lambda *_: canvas,
     )
 
-    async def available(*_):
+    async def available(*_, **__):
         return object()
 
     monkeypatch.setattr(aigc_studio, "_find_capability", available)
@@ -398,7 +398,7 @@ async def test_schema_missing_is_reported_without_ddl(legacy, tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("background", [False, True])
-async def test_previously_queued_job_is_checked_again_before_execution(
+async def test_previously_queued_workflow_job_is_checked_again_before_execution(
     legacy,
     monkeypatch,
     background,
@@ -440,16 +440,14 @@ async def test_previously_queued_job_is_checked_again_before_execution(
         lambda *_: calls.append("background"),
     )
 
-    async def reject_unconfigured_model(*_):
-        raise HTTPException(
-            status_code=422,
-            detail={"code": "aigc_model_not_allowed"},
-        )
+    async def reject_unavailable_model(*_, **kwargs):
+        assert kwargs == {"include_unselected": True}
+        return None
 
     monkeypatch.setattr(
         aigc_studio,
-        "_assert_job_model_policy_allowed",
-        reject_unconfigured_model,
+        "_find_capability",
+        reject_unavailable_model,
     )
     with pytest.raises(HTTPException) as failure:
         await aigc_studio.run_job(
@@ -457,7 +455,7 @@ async def test_previously_queued_job_is_checked_again_before_execution(
             job.id,
             background=background,
         )
-    assert failure.value.status_code == 422
+    assert failure.value.status_code == 400
     assert calls == []
 
 
@@ -487,7 +485,7 @@ async def test_managed_canvas_cannot_bypass_contract_with_new_node_id(
         lambda *_: aigc_studio.Canvas(**canvas),
     )
 
-    async def available(*_):
+    async def available(*_, **__):
         return object()
 
     monkeypatch.setattr(aigc_studio, "_find_capability", available)
@@ -554,7 +552,7 @@ async def test_accepted_workflow_canvas_allows_new_unbound_node(
         lambda *_: aigc_studio.Canvas(**canvas),
     )
 
-    async def available(*_):
+    async def available(*_, **__):
         return object()
 
     monkeypatch.setattr(aigc_studio, "_find_capability", available)

@@ -372,7 +372,11 @@ def _provider_configured_for_aigc(provider: Any) -> bool:
     return bool(str(getattr(provider, "api_key", "") or "").strip())
 
 
-async def build_capability_list(manager: Any | None) -> CapabilityList:
+async def build_capability_list(
+    manager: Any | None,
+    *,
+    include_unselected: bool = False,
+) -> CapabilityList:
     """Build the AIGC inventory from an already resolved provider manager.
 
     This keeps the inventory reusable by non-HTTP callers such as sealed
@@ -473,7 +477,11 @@ async def build_capability_list(manager: Any | None) -> CapabilityList:
     )
     try:
         effective = {
-            category: await policy_service.effective(category, manager)
+            category: await policy_service.effective(
+                category,
+                manager,
+                include_unselected=include_unselected,
+            )
             for category in AIGC_MODEL_CATEGORIES
         }
     except Exception as exc:
@@ -593,4 +601,6 @@ async def build_workflow_capability_catalog(
     manager: Any | None,
 ) -> WorkflowCapabilityCatalog:
     """Return workflow nodes plus only currently published/priced models."""
-    return project_workflow_capability_catalog(await build_capability_list(manager))
+    return project_workflow_capability_catalog(
+        await build_capability_list(manager, include_unselected=True)
+    )

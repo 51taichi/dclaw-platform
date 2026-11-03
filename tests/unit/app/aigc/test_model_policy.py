@@ -228,7 +228,7 @@ async def test_configured_default_recovers_when_selectable_again():
 
 
 @pytest.mark.asyncio
-async def test_configured_category_keeps_all_selectable_models_after_preferred_models():
+async def test_configured_category_only_exposes_selected_models():
     models = [
         model("preferred", model_type="llm", capabilities=("storyboard",)),
         model("also-available", model_type="llm", capabilities=("storyboard",)),
@@ -255,9 +255,19 @@ async def test_configured_category_keeps_all_selectable_models_after_preferred_m
 
     assert [item.model_id for item in effective.models] == [
         "preferred",
-        "also-available",
     ]
     assert effective.effective_default.model_id == "preferred"
+
+    workflow_effective = await service.effective(
+        "text",
+        manager,
+        include_unselected=True,
+    )
+
+    assert [item.model_id for item in workflow_effective.models] == [
+        "preferred",
+        "also-available",
+    ]
 
 
 def test_filter_capabilities_removes_disallowed_models_but_keeps_plugins():

@@ -136,7 +136,7 @@ async def test_validate_job_submission_allows_authorized_workflow_model_override
     )
     monkeypatch.setattr(aigc_studio, "_load_canvas_for_request", lambda *_a: canvas)
 
-    async def available(*_args):
+    async def available(*_args, **_kwargs):
         return object()
 
     monkeypatch.setattr(aigc_studio, "_find_capability", available)
@@ -185,7 +185,7 @@ async def test_validate_job_submission_keeps_workflow_capability_binding_after_c
         ),
     )
 
-    async def available(*_args):
+    async def available(*_args, **_kwargs):
         return object()
 
     monkeypatch.setattr(aigc_studio, "_find_capability", available)
@@ -257,7 +257,13 @@ async def test_validate_job_submission_restores_workflow_image_edit_mode(
     )
     observed = []
 
-    async def available(_request, _provider_id, _model_id, capability):
+    async def available(
+        _request,
+        _provider_id,
+        _model_id,
+        capability,
+        **_kwargs,
+    ):
         observed.append(capability)
         return object()
 
@@ -935,7 +941,7 @@ async def test_capabilities_fail_closed_without_effective_catalog(
     assert response.json() == {"capabilities": [], "defaults": {}}
 
 
-async def test_configured_image_policy_keeps_available_models_and_returns_default(
+async def test_configured_image_policy_filters_capabilities_and_returns_default(
     tmp_path,
     monkeypatch,
 ):
@@ -955,6 +961,9 @@ async def test_configured_image_policy_keeps_available_models_and_returns_defaul
 
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/api/aigc-studio/capabilities")
+        workflow_response = await client.get(
+            "/api/aigc-studio/workflow-capabilities"
+        )
 
     assert response.status_code == 200
     payload = response.json()
@@ -964,18 +973,25 @@ async def test_configured_image_policy_keeps_available_models_and_returns_defaul
         if item["capability"] in {"text_to_image", "image_edit"}
         and item["source"] == "model_registry"
     }
-    assert image_pairs == {
-        ("stub-aigc", "stub-image"),
-        ("openai", "gpt-image-2"),
-        ("volcengine", "custom-image-model"),
-        ("volcengine", "doubao-seedream-3-0-t2i"),
-    }
+    assert image_pairs == {("stub-aigc", "stub-image")}
     assert payload["defaults"]["image"] == {
         "configured": True,
         "configured_default": selected,
         "effective_default": selected,
         "fallback_active": False,
         "fallback_reason": [],
+    }
+    workflow_image_pairs = {
+        (item["provider_id"], item["model_id"])
+        for item in workflow_response.json()["available_models"]
+        if item["capability"] in {"text_to_image", "image_edit"}
+        and item["source"] == "model_registry"
+    }
+    assert workflow_image_pairs == {
+        ("stub-aigc", "stub-image"),
+        ("openai", "gpt-image-2"),
+        ("volcengine", "custom-image-model"),
+        ("volcengine", "doubao-seedream-3-0-t2i"),
     }
     engine.dispose()
 
@@ -1034,9 +1050,7 @@ async def test_text_policy_inventory_preserves_availability_and_selection_gates(
         item.model_id for item in inventory.capabilities
         if item.provider_id == "text-provider" and item.capability == "storyboard"
     ]
-    assert projected == (
-        ["configured-llm", "not-selected"] if expected else []
-    )
+    assert projected == (["configured-llm"] if expected else [])
     # Submission uses the same capability lookup, not just the visible menu.
     found = await aigc_studio._find_capability(
         request, "text-provider", "configured-llm", "storyboard",
@@ -1045,10 +1059,10 @@ async def test_text_policy_inventory_preserves_availability_and_selection_gates(
     alternative = await aigc_studio._find_capability(
         request, "text-provider", "not-selected", "storyboard",
     )
-    assert (alternative is not None) == expected
+    assert alternative is None
 
 
-async def test_job_submission_accepts_other_published_available_model(
+async def test_job_submission_rejects_model_removed_from_allowlist(
     tmp_path,
     monkeypatch,
 ):
@@ -1090,7 +1104,8 @@ async def test_job_submission_accepts_other_published_available_model(
                 },
             )
 
-    assert response.status_code == 202
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "aigc_model_not_allowed"
     engine.dispose()
 
 

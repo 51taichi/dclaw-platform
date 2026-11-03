@@ -971,8 +971,13 @@ async def _find_capability(
     provider_id: str,
     model_id: str,
     capability: str,
+    *,
+    include_unselected: bool = False,
 ) -> AigcCapabilityInfo | None:
-    available = await list_capabilities(request)
+    available = await build_capability_list(
+        getattr(request.app.state, "provider_manager", None),
+        include_unselected=include_unselected,
+    )
     for item in available.capabilities:
         if (
             item.provider_id == provider_id
@@ -1070,7 +1075,7 @@ def _accepted_workflow_allows_unbound_node(canvas: Canvas) -> bool:
 def _validate_job_resource_binding(
     request: Request,
     body: AigcJobCreate,
-) -> None:
+) -> bool:
     canvas = _load_canvas_for_request(request, body.canvas_id)
     target_node = next(
         (node for node in canvas.nodes if node.id == body.node_id),
@@ -1120,20 +1125,23 @@ def _validate_job_resource_binding(
                 status_code=409,
                 detail="Workflow-bound node execution mismatch.",
             ) from exc
+    return authoritative is not None or allow_unbound_node
 
 
 async def _validate_job_submission(
     request: Request,
     body: AigcJobCreate,
 ) -> None:
-    _validate_job_resource_binding(request, body)
+    workflow_bound = _validate_job_resource_binding(request, body)
     _resolve_job_prompt_binding(request, body)
-    await _assert_job_model_policy_allowed(request, body)
+    if not workflow_bound:
+        await _assert_job_model_policy_allowed(request, body)
     capability = await _find_capability(
         request,
         body.provider_id,
         body.model_id,
         body.capability,
+        include_unselected=workflow_bound,
     )
     if capability is None:
         raise HTTPException(

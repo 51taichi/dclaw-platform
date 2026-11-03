@@ -124,8 +124,8 @@ async def test_both_capability_entrances_call_core_catalog(monkeypatch):
     manager = object()
     calls = []
 
-    async def inventory(actual_manager):
-        calls.append(actual_manager)
+    async def inventory(actual_manager, **kwargs):
+        calls.append((actual_manager, kwargs))
         return CapabilityList(capabilities=[])
 
     monkeypatch.setattr(core, "build_capability_list", inventory)
@@ -133,7 +133,10 @@ async def test_both_capability_entrances_call_core_catalog(monkeypatch):
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(provider_manager=manager)))
     system_catalog = await system.list_workflow_capabilities(request)
     platform_catalog = await platform._load_workflow_capability_catalog()
-    assert calls == [manager, manager]
+    assert calls == [
+        (manager, {"include_unselected": True}),
+        (manager, {"include_unselected": True}),
+    ]
     assert system_catalog == platform_catalog
 
 
