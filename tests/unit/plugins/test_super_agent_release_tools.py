@@ -11,6 +11,7 @@ import stat
 import zipfile
 
 import pytest
+import yaml
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -26,6 +27,46 @@ def _module(name: str, filename: str):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_public_sandbox_compose_keeps_existing_server_settings(tmp_path):
+    module = _module(
+        "support_public_sandbox_compose", "configure_public_sandbox.py",
+    )
+    working = tmp_path / "working"
+    for name in (
+        "plugins/dclaw.super-agent-support", "sealed_agents",
+        "workspace_runtime_state", "super-agent-sandbox",
+    ):
+        (working / name).mkdir(parents=True)
+    compose = tmp_path / "compose.yaml"
+    original = {
+        "services": {"dclaw-server": {
+            "image": "dclaw-server:base", "network_mode": "bridge",
+            "environment": {"AUTH_PASSWORD": "keep-existing-value"},
+            "volumes": ["/host/data:/app/working"],
+        }},
+    }
+    compose.write_text(yaml.safe_dump(original), encoding="utf-8")
+    backup = tmp_path / "compose.backup.yaml"
+    module.configure(
+        compose, backup_path=backup,
+        sandbox_image="dclaw-server:sandbox", working_host_path=working,
+    )
+    assert yaml.safe_load(backup.read_text()) == original
+    updated = yaml.safe_load(compose.read_text())
+    server = updated["services"]["dclaw-server"]
+    assert server["environment"] == {
+        "AUTH_PASSWORD": "keep-existing-value",
+        "DCLAW_SUPER_AGENT_SANDBOX_SOCKET": module.SOCKET,
+    }
+    assert server["image"] == "dclaw-server:base"
+    assert server["volumes"] == ["/host/data:/app/working"]
+    sandbox = updated["services"][module.SERVICE]
+    assert sandbox["network_mode"] == "none"
+    assert sandbox["read_only"] is True
+    assert sandbox["cap_add"] == ["SYS_ADMIN"]
+    assert all(volume.endswith(":ro") for volume in sandbox["volumes"][:2])
 
 
 def test_standalone_plugin_release_contains_canonical_standard(
