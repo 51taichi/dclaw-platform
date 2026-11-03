@@ -738,6 +738,43 @@ describe("TaskPage", () => {
     expect(body.user_id).toBe("42");
   });
 
+  it("waits for the chat request to start before navigating to a new task", async () => {
+    let resolveFetch: (response: Response) => void = () => {};
+    global.fetch = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+
+    renderWithProviders(
+      <>
+        <LocationProbe />
+        <TaskPage />
+      </>,
+      { initialEntries: ["/task"] },
+    );
+    await screen.findByTestId("task-chat-ui");
+
+    let requestPromise: Promise<Response>;
+    act(() => {
+      requestPromise = capturedOptions.api.fetch({
+        input: [{ role: "user", content: "hello" }],
+        signal: new AbortController().signal,
+      });
+    });
+
+    await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    expect(currentPathname).toBe("/task");
+
+    await act(async () => {
+      resolveFetch(buildChatResponse("created-chat-id"));
+      await requestPromise!;
+    });
+
+    await waitFor(() => expect(currentPathname).toBe("/task/created-chat-id"));
+  });
+
   it("registers the opened task as the active runtime event session", async () => {
     const view = renderWithProviders(
       <>

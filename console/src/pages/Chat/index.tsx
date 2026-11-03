@@ -1727,10 +1727,6 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
         requestBody.channel = createdChat.channel || requestBody.channel;
         sessionApi.recordCreatedChat(createdChat);
         lastSessionIdRef.current = createdChat.id;
-        navigateRef.current(
-          `/${isClawMode ? "claw" : "task"}/${createdChat.id}`,
-          { replace: true },
-        );
       }
 
       const backendChatId =
@@ -1751,6 +1747,9 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
       setShowMagicImport(false);
       setImportStatus("idle");
 
+      // Keep the draft route active until the backend has accepted the run.
+      // Switching sessions before fetch resolves aborts the chat library's
+      // request signal and leaves its response placeholder generating forever.
       const response = await fetch(getApiUrl("/console/chat"), {
         method: "POST",
         headers,
@@ -1760,6 +1759,13 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
 
       const resolvedChatId =
         response.headers.get("X-QwenPaw-Chat-Id") || precreatedChatId;
+      if (precreatedChatId) {
+        lastSessionIdRef.current = precreatedChatId;
+        navigateRef.current(
+          `/${isClawMode ? "claw" : "task"}/${precreatedChatId}`,
+          { replace: true },
+        );
+      }
       if (resolvedChatId && selectedExpertTeam) {
         saveExpertTeamSelectionForChat(resolvedChatId, selectedExpertTeam.id);
       }
@@ -1801,6 +1807,7 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
           !chatIdRef.current || chatIdRef.current === submittedSessionId;
 
         if (
+          !precreatedChatId &&
           resolvedChatId !== chatIdRef.current &&
           wasStillSubmittedSession &&
           urlMatchesSubmittedSession
