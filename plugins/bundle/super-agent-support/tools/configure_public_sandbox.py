@@ -87,7 +87,9 @@ def configure(
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             yaml.safe_dump(document, stream, sort_keys=False, allow_unicode=True)
-        os.chmod(temporary, stat.S_IMODE(compose_path.stat().st_mode))
+        original_stat = compose_path.stat()
+        os.chmod(temporary, stat.S_IMODE(original_stat.st_mode))
+        os.chown(temporary, original_stat.st_uid, original_stat.st_gid)
         os.replace(temporary, compose_path)
     finally:
         Path(temporary).unlink(missing_ok=True)
