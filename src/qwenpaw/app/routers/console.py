@@ -301,7 +301,13 @@ async def post_console_chat(
     Stop via POST /console/chat/stop. Reconnect with body.reconnect=true.
     """
     workspace = await get_agent_for_request(request)
-    console_channel = await workspace.channel_manager.get_channel("console")
+    channel_manager = workspace.channel_manager
+    if channel_manager is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Console channel manager is unavailable",
+        )
+    console_channel = await channel_manager.get_channel("console")
     if console_channel is None:
         raise HTTPException(
             status_code=503,

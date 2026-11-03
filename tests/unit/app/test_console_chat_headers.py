@@ -100,6 +100,35 @@ class _FakeRequest:
 
 
 @pytest.mark.asyncio
+async def test_console_chat_returns_503_when_channel_manager_is_unavailable(
+    monkeypatch,
+):
+    async def fake_get_agent_for_request(request):
+        _ = request
+        return SimpleNamespace(channel_manager=None)
+
+    monkeypatch.setattr(
+        console,
+        "get_agent_for_request",
+        fake_get_agent_for_request,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await console.post_console_chat(
+            {
+                "channel": "console",
+                "user_id": "default",
+                "session_id": "draft-session",
+                "input": [],
+            },
+            request=_FakeRequest(),
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "Console channel manager is unavailable"
+
+
+@pytest.mark.asyncio
 async def test_console_chat_stream_response_exposes_real_chat_id(monkeypatch):
     workspace = SimpleNamespace(
         channel_manager=_FakeChannelManager(),

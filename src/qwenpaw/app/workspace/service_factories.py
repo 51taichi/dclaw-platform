@@ -84,14 +84,16 @@ async def create_channel_service(ws: "Workspace", _):
         ChannelManager instance or None if not configured
     """
     # pylint: disable=protected-access
-    if not ws._config.channels:
-        return None
-
     from ...config import Config, update_last_dispatch
+    from ...config.config import ChannelConfig
     from ..channels.manager import ChannelManager
     from ..channels.utils import make_process_from_runner
 
-    temp_config = Config(channels=ws._config.channels)
+    # The web/desktop console is a core transport, not an optional external
+    # channel. Sealed Agent packages may intentionally omit ``channels``;
+    # ChannelConfig supplies the enabled-by-default console in that case.
+    channels_config = ws._config.channels or ChannelConfig()
+    temp_config = Config(channels=channels_config)
     runner = ws._service_manager.services["runner"]
 
     def on_last_dispatch(channel, user_id, session_id):
