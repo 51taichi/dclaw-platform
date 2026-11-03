@@ -342,6 +342,25 @@ describe("ChatPage", () => {
     );
   });
 
+  it("does not resolve a new chat when the backend rejects the request", async () => {
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ detail: "Console unavailable" }), {
+        status: 503,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    renderWithProviders(<ChatPage />, { initialEntries: ["/chat"] });
+    await screen.findByTestId("chat-ui");
+
+    const response = await capturedOptions.api.fetch({
+      input: [{ role: "user", content: "hello" }],
+      signal: undefined,
+    });
+
+    expect(response.status).toBe(503);
+    expect(mockResolveSubmittedSession).not.toHaveBeenCalled();
+  });
+
   // ── handleFileUpload ──────────────────────────────────────────────────────
 
   it("calls onError and skips upload when file exceeds 10MB", async () => {

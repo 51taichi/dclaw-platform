@@ -2305,6 +2305,7 @@
     "unpinDrawer": "Unpin",
     "statusIdle": "Idle",
     "statusInProgress": "In progress",
+    "requestFailed": "Failed to start the task. Please try again later.",
     "disclaimer": "Works for your business, grows with your team",
     "greeting": "Hello, what should we move forward today?",
     "description": "I can help create tasks, search knowledge, call Skills or expert teams, and track execution progress.",

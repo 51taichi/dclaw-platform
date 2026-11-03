@@ -1805,18 +1805,22 @@ export default function ChatPage() {
         signal: data.signal,
       });
 
+      if (!response.ok) {
+        setIsGenerating(false);
+        message.error(t("chat.requestFailed"));
+        return response;
+      }
+
       const resolvedChatId =
         response.headers.get("X-QwenPaw-Chat-Id") || precreatedChatId;
       if (precreatedChatId) {
         lastSessionIdRef.current = precreatedChatId;
         navigateRef.current(`/task/${precreatedChatId}`, { replace: true });
       }
-      if (response.ok) {
-        const startedChatId =
-          resolvedChatId || precreatedChatId || backendChatId || routeChatId;
-        if (startedChatId) {
-          clearPendingTaskIntent(startedChatId);
-        }
+      const startedChatId =
+        resolvedChatId || precreatedChatId || backendChatId || routeChatId;
+      if (startedChatId) {
+        clearPendingTaskIntent(startedChatId);
       }
       if (resolvedChatId && activeExpertTeam) {
         saveExpertTeamSelectionForChat(resolvedChatId, activeExpertTeam.id);

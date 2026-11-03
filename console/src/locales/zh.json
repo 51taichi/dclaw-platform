@@ -2154,6 +2154,7 @@
     "unpinDrawer": "取消固定",
     "statusIdle": "空闲",
     "statusInProgress": "进行中",
+    "requestFailed": "任务启动失败，请稍后重试",
     "disclaimer": "为业务而生，随团队进化",
     "greeting": "你好，今天要推进什么任务？",
     "description": "我可以帮助你发起任务、检索知识、调用技能或专家团队，并跟踪执行进度。",

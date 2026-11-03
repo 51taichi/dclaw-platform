@@ -775,6 +775,36 @@ describe("TaskPage", () => {
     await waitFor(() => expect(currentPathname).toBe("/task/created-chat-id"));
   });
 
+  it("stays on the draft route when the backend rejects a new task", async () => {
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ detail: "Console unavailable" }), {
+        status: 503,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    renderWithProviders(
+      <>
+        <LocationProbe />
+        <TaskPage />
+      </>,
+      { initialEntries: ["/task"] },
+    );
+    await screen.findByTestId("task-chat-ui");
+
+    let response: Response;
+    await act(async () => {
+      response = await capturedOptions.api.fetch({
+        input: [{ role: "user", content: "hello" }],
+        signal: undefined,
+      });
+    });
+
+    expect(response!.status).toBe(503);
+    expect(currentPathname).toBe("/task");
+    expect(mockResolveSubmittedSession).not.toHaveBeenCalled();
+  });
+
   it("registers the opened task as the active runtime event session", async () => {
     const view = renderWithProviders(
       <>

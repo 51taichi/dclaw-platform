@@ -1538,6 +1538,7 @@
     "unpinDrawer": "固定解除",
     "statusIdle": "待機",
     "statusInProgress": "処理中",
+    "requestFailed": "タスクを開始できませんでした。しばらくしてからもう一度お試しください。",
     "disclaimer": "あなたのために働き、あなたと共に成長します",
     "greeting": "こんにちは、今日はどんなお手伝いができますか？",
     "description": "私はあなたの質問をサポートするAIアシスタントです。",

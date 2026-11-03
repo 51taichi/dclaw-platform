@@ -1757,6 +1757,12 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
         signal: data.signal,
       });
 
+      if (!response.ok) {
+        setIsGenerating(false);
+        message.error(t("chat.requestFailed"));
+        return response;
+      }
+
       const resolvedChatId =
         response.headers.get("X-QwenPaw-Chat-Id") || precreatedChatId;
       if (precreatedChatId) {

@@ -164,6 +164,7 @@
     "unpinDrawer": "Lepas sematan",
     "statusIdle": "Idle",
     "statusInProgress": "Sedang berjalan",
+    "requestFailed": "Gagal memulai tugas. Silakan coba lagi nanti.",
     "disclaimer": "Bekerja untuk Anda, berkembang bersama Anda",
     "greeting": "Halo, apa yang bisa saya bantu hari ini?",
     "description": "Saya asisten yang dapat membantu menjawab pertanyaan Anda.",
