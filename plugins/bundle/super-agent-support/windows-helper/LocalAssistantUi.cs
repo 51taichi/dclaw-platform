@@ -6,18 +6,16 @@ internal static class LocalAssistantUi
 {
     private const string BallClass = "DClawLocalAssistantBall";
     private const string DashboardClass = "DClawLocalAssistantDashboard";
-    private const int BallSize = 58;
-    private const int DashboardWidth = 820;
-    private const int DashboardHeight = 620;
-    private const int RowHeight = 34;
+    private const int BallSize = 68;
+    private const int DashboardWidth = 320;
+    private const int DashboardHeight = 390;
+    private const int TaskCardHeight = 120;
     private const int ListTop = 104;
-    private const int MaxVisibleRows = 12;
+    private const int MaxVisibleRows = 2;
 
     private const uint WsPopup = 0x80000000;
-    private const uint WsOverlappedWindow = 0x00CF0000;
     private const uint WsExTopmost = 0x00000008;
     private const uint WsExToolWindow = 0x00000080;
-    private const uint WsExAppWindow = 0x00040000;
     private const int SwHide = 0;
     private const int SwShow = 5;
     private const int SwShowNoActivate = 4;
@@ -27,13 +25,13 @@ internal static class LocalAssistantUi
     private const uint WmClose = 0x0010;
     private const uint WmPaint = 0x000F;
     private const uint WmTimer = 0x0113;
-    private const uint WmCommand = 0x0111;
     private const uint WmLButtonDown = 0x0201;
     private const uint WmLButtonUp = 0x0202;
     private const uint WmLButtonDblClk = 0x0203;
     private const uint WmMouseMove = 0x0200;
     private const uint WmRButtonUp = 0x0205;
     private const uint WmMouseWheel = 0x020A;
+    private const uint WmActivate = 0x0006;
     private const int ColorWindow = 5;
     private const int IdcArrow = 32512;
     private const int Transparent = 1;
@@ -58,6 +56,8 @@ internal static class LocalAssistantUi
     private static IntPtr _dashboard;
     private static bool _dragging;
     private static bool _dragged;
+    private static bool _taskPage;
+    private static bool _outputPage;
     private static Point _dragCursor;
     private static Point _dragWindow;
     private static IReadOnlyList<LocalTaskItem> _tasks = Array.Empty<LocalTaskItem>();
@@ -65,6 +65,8 @@ internal static class LocalAssistantUi
     private static int _selectedOutput;
     private static int _taskScroll;
     private static int _outputScroll;
+    private static IntPtr _logo;
+    private static IntPtr _gdiplusToken;
 
     internal static void Run(string root, Func<bool> connected)
     {
@@ -72,8 +74,9 @@ internal static class LocalAssistantUi
         _root = root;
         _connected = connected;
         Directory.CreateDirectory(Path.Combine(root, "Tasks"));
+        LoadLogo(root);
         var instance = GetModuleHandle(null);
-        RegisterWindowClass(BallClass, instance, ColorRef(244, 104, 48));
+        RegisterWindowClass(BallClass, instance, (uint)(ColorWindow + 1));
         RegisterWindowClass(DashboardClass, instance, (uint)(ColorWindow + 1));
 
         SystemParametersInfo(SpiGetWorkArea, 0, out var workArea, 0);
@@ -83,7 +86,7 @@ internal static class LocalAssistantUi
             "DClaw 本地助手",
             WsPopup,
             workArea.Right - BallSize - 24,
-            workArea.Bottom - BallSize - 88,
+            workArea.Bottom - BallSize - 16,
             BallSize,
             BallSize,
             IntPtr.Zero,
@@ -91,10 +94,10 @@ internal static class LocalAssistantUi
             instance,
             IntPtr.Zero);
         _dashboard = CreateWindowEx(
-            WsExAppWindow,
+            WsExTopmost | WsExToolWindow,
             DashboardClass,
             "DClaw 本地助手",
-            WsOverlappedWindow,
+            WsPopup,
             workArea.Left + Math.Max(0, (workArea.Width - DashboardWidth) / 2),
             workArea.Top + Math.Max(0, (workArea.Height - DashboardHeight) / 2),
             DashboardWidth,
@@ -106,6 +109,7 @@ internal static class LocalAssistantUi
         if (_ball == IntPtr.Zero || _dashboard == IntPtr.Zero)
             throw new InvalidOperationException("无法创建本地助手窗口");
         SetWindowRgn(_ball, CreateEllipticRgn(0, 0, BallSize, BallSize), true);
+        SetWindowRgn(_dashboard, CreateRoundRectRgn(0, 0, DashboardWidth, DashboardHeight, 48, 48), true);
         SetTimer(_ball, 1, 2000, IntPtr.Zero);
         SetTimer(_dashboard, 2, 3000, IntPtr.Zero);
         ReloadTasks();
@@ -116,6 +120,8 @@ internal static class LocalAssistantUi
             TranslateMessage(ref message);
             DispatchMessage(ref message);
         }
+        if (_logo != IntPtr.Zero) GdipDisposeImage(_logo);
+        if (_gdiplusToken != IntPtr.Zero) GdiplusShutdown(_gdiplusToken);
     }
 
     private static void RegisterWindowClass(string name, IntPtr instance, uint background)
@@ -236,7 +242,8 @@ internal static class LocalAssistantUi
                 ScrollDashboard(delta > 0 ? -1 : 1);
                 InvalidateRect(window, IntPtr.Zero, true);
                 return IntPtr.Zero;
-            case WmCommand:
+            case WmActivate when (wParam.ToUInt64() & 0xffff) == 0:
+                ShowWindow(window, SwHide);
                 return IntPtr.Zero;
             default:
                 return DefWindowProc(window, message, wParam, lParam);
@@ -248,24 +255,21 @@ internal static class LocalAssistantUi
         var dc = BeginPaint(window, out var paint);
         try
         {
-            GetClientRect(window, out var bounds);
-            using var orange = new GdiObject(CreateSolidBrush(ColorRef(242, 91, 43)));
+            var attention = AttentionState();
+            using var ring = new GdiObject(CreateSolidBrush(attention.Color));
             using var white = new GdiObject(CreateSolidBrush(ColorRef(255, 255, 255)));
-            using var status = new GdiObject(CreateSolidBrush(
-                _connected() ? ColorRef(38, 181, 94) : ColorRef(245, 177, 66)));
-            FillRect(dc, ref bounds, orange.Handle);
-            SetBkMode(dc, Transparent);
-            SetTextColor(dc, ColorRef(255, 255, 255));
-            using var logoFont = new GdiObject(CreateUiFont(28, 700));
-            var old = SelectObject(dc, logoFont.Handle);
-            var logoBounds = new Rect(0, 1, BallSize, BallSize - 2);
-            DrawText(dc, "D", -1, ref logoBounds, DtCenter | DtVCenter | DtSingleLine);
-            SelectObject(dc, old);
-            var oldBrush = SelectObject(dc, white.Handle);
-            Ellipse(dc, 39, 39, 56, 56);
+            using var status = new GdiObject(CreateSolidBrush(attention.Color));
+            var oldPen = SelectObject(dc, GetStockObject(8));
+            var oldBrush = SelectObject(dc, ring.Handle);
+            Ellipse(dc, 1, 1, 67, 67);
+            SelectObject(dc, white.Handle);
+            Ellipse(dc, 5, 5, 63, 63);
+            DrawLogo(dc, 6, 6, 56);
+            Ellipse(dc, 50, 50, 66, 66);
             SelectObject(dc, status.Handle);
-            Ellipse(dc, 41, 41, 54, 54);
+            Ellipse(dc, 52, 52, 64, 64);
             SelectObject(dc, oldBrush);
+            SelectObject(dc, oldPen);
         }
         finally
         {
@@ -278,81 +282,13 @@ internal static class LocalAssistantUi
         var dc = BeginPaint(window, out var paint);
         try
         {
-            GetClientRect(window, out var client);
             using var white = new GdiObject(CreateSolidBrush(ColorRef(255, 255, 255)));
-            using var light = new GdiObject(CreateSolidBrush(ColorRef(247, 248, 250)));
-            using var selected = new GdiObject(CreateSolidBrush(ColorRef(232, 240, 255)));
-            using var border = new GdiObject(CreateSolidBrush(ColorRef(226, 229, 235)));
+            var client = new Rect(0, 0, DashboardWidth, DashboardHeight);
             FillRect(dc, ref client, white.Handle);
             SetBkMode(dc, Transparent);
-
-            DrawLabel(dc, "DClaw 本地助手", 20, 14, client.Right - 40, 30, 22, 700, ColorRef(25, 29, 36));
-            var connection = _connected()
-                ? $"● 已连接 · v{HelperMetadata.Version}"
-                : $"● 正在连接 · v{HelperMetadata.Version}";
-            DrawLabel(
-                dc,
-                connection,
-                22,
-                50,
-                260,
-                24,
-                13,
-                400,
-                _connected() ? ColorRef(25, 142, 72) : ColorRef(196, 124, 20));
-            DrawLabel(dc, "本地任务", 20, 78, 460, 24, 14, 700, ColorRef(55, 61, 72));
-            DrawLabel(dc, "输出文件", 502, 78, client.Right - 520, 24, 14, 700, ColorRef(55, 61, 72));
-
-            var taskBottom = Math.Min(client.Bottom - 70, ListTop + MaxVisibleRows * RowHeight);
-            var taskPanel = new Rect(18, ListTop, Math.Min(482, client.Right - 320), taskBottom);
-            FillRect(dc, ref taskPanel, light.Handle);
-            var outputPanel = new Rect(498, ListTop, client.Right - 18, taskBottom);
-            FillRect(dc, ref outputPanel, light.Handle);
-            if (_tasks.Count == 0)
-            {
-                DrawLabel(dc, "暂无本地任务", 38, 128, 400, 30, 14, 400, ColorRef(130, 137, 148));
-            }
-            for (var visible = 0; visible < MaxVisibleRows; visible++)
-            {
-                var index = _taskScroll + visible;
-                if (index >= _tasks.Count) break;
-                var task = _tasks[index];
-                var top = ListTop + visible * RowHeight;
-                if (index == _selectedTask)
-                {
-                    var row = new Rect(18, top, taskPanel.Right, top + RowHeight);
-                    FillRect(dc, ref row, selected.Handle);
-                }
-                DrawLabel(dc, task.AgentName, 28, top + 2, 245, 28, 13, 500, ColorRef(35, 40, 48));
-                DrawLabel(dc, StatusText(task.Status), 276, top + 2, 72, 28, 12, 400, StatusColor(task.Status));
-                DrawLabel(dc, task.UpdatedAt.ToLocalTime().ToString("MM-dd HH:mm"), 350, top + 2, 100, 28, 11, 400, ColorRef(112, 119, 130));
-                DrawLabel(dc, task.Outputs.Count.ToString(), 452, top + 2, 24, 28, 12, 400, ColorRef(80, 87, 99), center: true);
-            }
-
-            var outputs = SelectedTask()?.Outputs ?? Array.Empty<LocalTaskOutput>();
-            if (_tasks.Count > 0 && outputs.Count == 0)
-                DrawLabel(dc, "暂无输出文件", 516, 128, client.Right - 540, 30, 14, 400, ColorRef(130, 137, 148));
-            for (var visible = 0; visible < MaxVisibleRows; visible++)
-            {
-                var index = _outputScroll + visible;
-                if (index >= outputs.Count) break;
-                var output = outputs[index];
-                var top = ListTop + visible * RowHeight;
-                if (index == _selectedOutput)
-                {
-                    var row = new Rect(498, top, client.Right - 18, top + RowHeight);
-                    FillRect(dc, ref row, selected.Handle);
-                }
-                DrawLabel(dc, output.Name, 510, top + 2, client.Right - 620, 28, 12, 500, ColorRef(35, 40, 48));
-                DrawLabel(dc, FormatSize(output.SizeBytes), client.Right - 108, top + 2, 82, 28, 11, 400, ColorRef(112, 119, 130));
-            }
-
-            var divider = new Rect(0, client.Bottom - 62, client.Right, client.Bottom - 61);
-            FillRect(dc, ref divider, border.Handle);
-            DrawButton(dc, ButtonRect(client, 0), "打开文件", true);
-            DrawButton(dc, ButtonRect(client, 1), "打开所在目录", true);
-            DrawButton(dc, ButtonRect(client, 2), "刷新", false);
-            DrawButton(dc, ButtonRect(client, 3), "隐藏", false);
+            if (_outputPage) PaintOutputPage(dc);
+            else if (_taskPage) PaintTaskPage(dc);
+            else PaintMainPage(dc);
         }
         finally
         {
@@ -360,54 +296,271 @@ internal static class LocalAssistantUi
         }
     }
 
+    private static void PaintMainPage(IntPtr dc)
+    {
+        DrawLogo(dc, 18, 18, 42);
+        DrawLabel(dc, "DClaw本地助手", 66, 18, 190, 26, 19, 600, ColorRef(25, 29, 36));
+        DrawLabel(dc, $"版本 {HelperMetadata.Version}", 66, 44, 185, 18, 12, 400, ColorRef(107, 114, 128));
+        DrawRounded(dc, new Rect(264, 20, 302, 58), 38, ColorRef(239, 244, 255));
+        DrawGlyph(dc, "\uE896", 264, 20, 38, 38, 18, ColorRef(37, 99, 235));
+        DrawRounded(dc, new Rect(18, 76, 302, 124), 12, ColorRef(243, 247, 255));
+        var attention = AttentionState();
+        using var status = new GdiObject(CreateSolidBrush(attention.Color));
+        var oldPen = SelectObject(dc, GetStockObject(8));
+        var oldBrush = SelectObject(dc, status.Handle);
+        Ellipse(dc, 31, 95, 41, 105);
+        SelectObject(dc, oldBrush);
+        SelectObject(dc, oldPen);
+        DrawLabel(dc, attention.Label, 51, 86, 229, 28,
+            14, 400, ColorRef(55, 65, 81));
+        DrawRounded(dc, new Rect(39, 205, 97, 263), 58, ColorRef(47, 52, 64));
+        DrawRounded(dc, new Rect(131, 205, 189, 263), 58, ColorRef(47, 52, 64));
+        DrawRounded(dc, new Rect(223, 205, 281, 263), 58, ColorRef(159, 18, 57));
+        DrawLabel(dc, "☷", 39, 205, 58, 58, 24, 400, ColorRef(255, 255, 255), center: true);
+        DrawLabel(dc, "⌂", 131, 205, 58, 58, 24, 400, ColorRef(255, 255, 255), center: true);
+        DrawLabel(dc, "×", 223, 205, 58, 58, 24, 400, ColorRef(255, 255, 255), center: true);
+        DrawLabel(dc, "任务", 39, 271, 58, 22, 13, 400, ColorRef(25, 29, 36), center: true);
+        DrawLabel(dc, "目录", 131, 271, 58, 22, 13, 400, ColorRef(25, 29, 36), center: true);
+        DrawLabel(dc, "退出", 223, 271, 58, 22, 13, 400, ColorRef(25, 29, 36), center: true);
+        DrawRounded(dc, new Rect(78, 199, 99, 219), 20, ColorRef(37, 99, 235));
+        DrawLabel(dc, _tasks.Count.ToString(), 78, 199, 21, 20, 11, 400,
+            ColorRef(255, 255, 255), center: true);
+    }
+
+    private static void PaintTaskPage(IntPtr dc)
+    {
+        DrawRounded(dc, new Rect(18, 18, 56, 56), 38, ColorRef(239, 244, 255));
+        DrawGlyph(dc, "\uE72B", 18, 18, 38, 38, 18, ColorRef(37, 99, 235));
+        DrawLabel(dc, "任务中心", 70, 18, 180, 38, 20, 600, ColorRef(25, 29, 36), center: true);
+        DrawLabel(dc, $"共 {_tasks.Count} 个本地任务", 18, 70, 200, 28, 12, 400,
+            ColorRef(107, 114, 128));
+        DrawRounded(dc, new Rect(239, 70, 302, 98), 8, ColorRef(37, 99, 235));
+        DrawLabel(dc, "刷新", 239, 70, 63, 28, 12, 400, ColorRef(255, 255, 255), center: true);
+        if (_tasks.Count == 0)
+            DrawLabel(dc, "暂无任务", 18, 172, 284, 30, 14, 400,
+                ColorRef(107, 114, 128), center: true);
+        for (var visible = 0; visible < MaxVisibleRows; visible++)
+        {
+            var index = _taskScroll + visible;
+            if (index >= _tasks.Count) break;
+            var task = _tasks[index];
+            var top = ListTop + visible * (TaskCardHeight + 10);
+            DrawRounded(dc, new Rect(18, top, 302, top + TaskCardHeight), 14,
+                ColorRef(249, 250, 251), ColorRef(229, 231, 235));
+            DrawLabel(dc, task.AgentName, 31, top + 10, 225, 24, 14, 600,
+                ColorRef(25, 29, 36));
+            using var status = new GdiObject(CreateSolidBrush(StatusColor(task.Status)));
+            var oldPen = SelectObject(dc, GetStockObject(8));
+            var oldBrush = SelectObject(dc, status.Handle);
+            Ellipse(dc, 274, top + 15, 286, top + 27);
+            SelectObject(dc, oldBrush);
+            SelectObject(dc, oldPen);
+            var shortId = task.TaskId[..Math.Min(8, task.TaskId.Length)];
+            DrawLabel(dc, $"任务 {shortId} · {task.UpdatedAt.ToLocalTime():MM-dd HH:mm}",
+                31, top + 37, 252, 18, 11, 400, ColorRef(107, 114, 128));
+            DrawLabel(dc, StatusText(task.Status), 31, top + 58, 220, 17, 11, 400,
+                StatusColor(task.Status));
+            if (task.Outputs.Count > 0)
+            {
+                DrawTaskAction(dc, new Rect(31, top + 83, 111, top + 111), "打开成品");
+                DrawTaskAction(dc, new Rect(117, top + 83, 197, top + 111), "成品目录");
+            }
+            DrawTaskAction(dc, new Rect(task.Outputs.Count > 0 ? 203 : 31, top + 83,
+                task.Outputs.Count > 0 ? 289 : 133, top + 111), "任务目录");
+        }
+    }
+
+    private static void DrawTaskAction(IntPtr dc, Rect bounds, string label)
+    {
+        DrawRounded(dc, bounds, 8, ColorRef(243, 244, 246), ColorRef(229, 231, 235));
+        DrawLabel(dc, label, bounds.Left, bounds.Top, bounds.Width, bounds.Height,
+            11, 400, ColorRef(55, 65, 81), center: true);
+    }
+
+    private static void PaintOutputPage(IntPtr dc)
+    {
+        DrawRounded(dc, new Rect(18, 18, 56, 56), 38, ColorRef(239, 244, 255));
+        DrawGlyph(dc, "\uE72B", 18, 18, 38, 38, 18, ColorRef(37, 99, 235));
+        DrawLabel(dc, "任务输出", 70, 18, 180, 38, 20, 600,
+            ColorRef(25, 29, 36), center: true);
+        var task = SelectedTask();
+        if (task is null) return;
+        DrawLabel(dc, task.AgentName, 18, 68, 284, 24, 14, 600, ColorRef(55, 65, 81));
+        DrawLabel(dc, $"{task.Outputs.Count} 个文件", 18, 91, 284, 18,
+            11, 400, ColorRef(107, 114, 128));
+        if (task.Outputs.Count == 0)
+            DrawLabel(dc, "暂无输出文件", 18, 190, 284, 30,
+                14, 400, ColorRef(107, 114, 128), center: true);
+        for (var visible = 0; visible < 4; visible++)
+        {
+            var index = _outputScroll + visible;
+            if (index >= task.Outputs.Count) break;
+            var output = task.Outputs[index];
+            var top = 118 + visible * 54;
+            DrawRounded(dc, new Rect(18, top, 302, top + 48), 8,
+                index == _selectedOutput ? ColorRef(239, 244, 255) : ColorRef(249, 250, 251),
+                ColorRef(229, 231, 235));
+            DrawLabel(dc, output.Name, 29, top + 3, 260, 23, 12, 500, ColorRef(55, 65, 81));
+            DrawLabel(dc, FormatSize(output.SizeBytes), 29, top + 25, 260, 17,
+                11, 400, ColorRef(107, 114, 128));
+        }
+        DrawTaskAction(dc, new Rect(18, 344, 151, 372), "打开文件");
+        DrawTaskAction(dc, new Rect(159, 344, 302, 372), "打开所在目录");
+    }
+
+    private static void DrawRounded(IntPtr dc, Rect bounds, int radius, uint fill, uint? border = null)
+    {
+        using var brush = new GdiObject(CreateSolidBrush(fill));
+        using var pen = new GdiObject(CreatePen(0, 1, border ?? fill));
+        var oldBrush = SelectObject(dc, brush.Handle);
+        var oldPen = SelectObject(dc, pen.Handle);
+        RoundRect(dc, bounds.Left, bounds.Top, bounds.Right, bounds.Bottom, radius * 2, radius * 2);
+        SelectObject(dc, oldPen);
+        SelectObject(dc, oldBrush);
+    }
+
+    private static void DrawGlyph(IntPtr dc, string glyph, int x, int y,
+        int width, int height, int size, uint color)
+    {
+        using var font = new GdiObject(CreateFont(-size, 0, 0, 0, 400,
+            0, 0, 0, 1, 0, 0, 5, 0, "Segoe MDL2 Assets"));
+        var oldFont = SelectObject(dc, font.Handle);
+        SetTextColor(dc, color);
+        var bounds = new Rect(x, y, x + width, y + height);
+        DrawText(dc, glyph, -1, ref bounds, DtCenter | DtVCenter | DtSingleLine);
+        SelectObject(dc, oldFont);
+    }
+
+    private static void LoadLogo(string root)
+    {
+        try
+        {
+            using var resource = typeof(LocalAssistantUi).Assembly.GetManifestResourceStream(
+                "DClaw.LocalHelper.Assets.DClaw-Bot-icon-round.png");
+            if (resource is null) return;
+            var logoPath = Path.Combine(root, "assistant-logo.png");
+            using (var output = File.Create(logoPath)) resource.CopyTo(output);
+            var startup = new GdiplusStartupInput { Version = 1 };
+            if (GdiplusStartup(out _gdiplusToken, ref startup, IntPtr.Zero) != 0) return;
+            if (GdipLoadImageFromFile(logoPath, out _logo) != 0) _logo = IntPtr.Zero;
+        }
+        catch (IOException)
+        {
+            _logo = IntPtr.Zero;
+        }
+    }
+
+    private static void DrawLogo(IntPtr dc, int x, int y, int size)
+    {
+        if (_logo == IntPtr.Zero)
+        {
+            DrawRounded(dc, new Rect(x, y, x + size, y + size), size / 2, ColorRef(242, 91, 43));
+            DrawLabel(dc, "D", x, y, size, size, size / 2, 700,
+                ColorRef(255, 255, 255), center: true);
+            return;
+        }
+        if (GdipCreateFromHDC(dc, out var graphics) != 0) return;
+        try
+        {
+            if (GdipCreatePath(0, out var path) != 0) return;
+            try
+            {
+                GdipAddPathEllipseI(path, x, y, size, size);
+                GdipSetClipPath(graphics, path, 0);
+                GdipDrawImageRectI(graphics, _logo, x, y, size, size);
+            }
+            finally
+            {
+                GdipDeletePath(path);
+            }
+        }
+        finally
+        {
+            GdipDeleteGraphics(graphics);
+        }
+    }
+
     private static void HandleDashboardClick(IntPtr window, int x, int y, bool doubleClick)
     {
-        GetClientRect(window, out var client);
-        if (y >= ListTop && y < ListTop + MaxVisibleRows * RowHeight)
+        if (_outputPage)
         {
-            var row = (y - ListTop) / RowHeight;
-            if (x < 490)
+            if (Contains(new Rect(18, 18, 56, 56), x, y)) _outputPage = false;
+            else if (y >= 118 && y < 334)
             {
-                var index = _taskScroll + row;
-                if (index < _tasks.Count)
+                var row = (y - 118) / 54;
+                var index = _outputScroll + row;
+                var task = SelectedTask();
+                if (task is not null && index < task.Outputs.Count && y < 118 + row * 54 + 48)
+                {
+                    _selectedOutput = index;
+                    if (doubleClick) TaskHistory.OpenFile(task.Outputs[index].FullPath);
+                }
+            }
+            else if (Contains(new Rect(18, 344, 151, 372), x, y)) OpenSelectedOutput(false);
+            else if (Contains(new Rect(159, 344, 302, 372), x, y)) OpenSelectedOutput(true);
+            InvalidateRect(window, IntPtr.Zero, true);
+            return;
+        }
+        if (!_taskPage)
+        {
+            if (Contains(new Rect(264, 20, 302, 58), x, y))
+                MessageBox(window, "本地助手由 DClaw 客户端自动更新。", "DClaw本地助手", 0);
+            else if (Contains(new Rect(39, 205, 97, 263), x, y))
+            {
+                _taskPage = true;
+                ReloadTasks();
+            }
+            else if (Contains(new Rect(131, 205, 189, 263), x, y))
+                TaskHistory.OpenDirectory(Path.Combine(_root, "Tasks"));
+            else if (Contains(new Rect(223, 205, 281, 263), x, y))
+                DestroyWindow(_ball);
+            InvalidateRect(window, IntPtr.Zero, true);
+            return;
+        }
+        if (Contains(new Rect(18, 18, 56, 56), x, y))
+            _taskPage = false;
+        else if (Contains(new Rect(239, 70, 302, 98), x, y))
+            ReloadTasks();
+        else if (y >= ListTop && y < ListTop + MaxVisibleRows * (TaskCardHeight + 10))
+        {
+            var row = (y - ListTop) / (TaskCardHeight + 10);
+            var top = ListTop + row * (TaskCardHeight + 10);
+            var index = _taskScroll + row;
+            if (index < _tasks.Count && y < top + TaskCardHeight)
+            {
+                var task = _tasks[index];
+                if (y >= top + 83 && y < top + 111)
+                {
+                    if (task.Outputs.Count > 0 && x >= 31 && x < 111)
+                        TaskHistory.OpenFile(task.Outputs[0].FullPath);
+                    else if (task.Outputs.Count > 0 && x >= 117 && x < 197)
+                        TaskHistory.OpenDirectory(task.Outputs[0].FullPath, selectFile: true);
+                    else if (x >= (task.Outputs.Count > 0 ? 203 : 31) && x < (task.Outputs.Count > 0 ? 289 : 133))
+                        TaskHistory.OpenDirectory(task.TaskRoot);
+                }
+                else
                 {
                     _selectedTask = index;
                     _selectedOutput = 0;
                     _outputScroll = 0;
-                    if (doubleClick) OpenSelectedTask();
+                    _outputPage = true;
                 }
             }
-            else
-            {
-                var outputs = SelectedTask()?.Outputs ?? Array.Empty<LocalTaskOutput>();
-                var index = _outputScroll + row;
-                if (index < outputs.Count)
-                {
-                    _selectedOutput = index;
-                    if (doubleClick) TaskHistory.OpenFile(outputs[index].FullPath);
-                }
-            }
-            InvalidateRect(window, IntPtr.Zero, true);
-            return;
         }
-        if (Contains(ButtonRect(client, 0), x, y)) OpenSelectedOutput();
-        else if (Contains(ButtonRect(client, 1), x, y)) OpenSelectedDirectory();
-        else if (Contains(ButtonRect(client, 2), x, y)) ReloadTasks();
-        else if (Contains(ButtonRect(client, 3), x, y)) ShowWindow(window, SwHide);
         InvalidateRect(window, IntPtr.Zero, true);
     }
 
     private static void ScrollDashboard(int direction)
     {
-        _taskScroll = Math.Clamp(
-            _taskScroll + direction,
-            0,
-            Math.Max(0, _tasks.Count - MaxVisibleRows));
-        var outputCount = SelectedTask()?.Outputs.Count ?? 0;
-        _outputScroll = Math.Clamp(
-            _outputScroll + direction,
-            0,
-            Math.Max(0, outputCount - MaxVisibleRows));
+        if (_outputPage)
+        {
+            var count = SelectedTask()?.Outputs.Count ?? 0;
+            _outputScroll = Math.Clamp(_outputScroll + direction, 0,
+                Math.Max(0, count - 4));
+        }
+        else if (_taskPage)
+            _taskScroll = Math.Clamp(_taskScroll + direction, 0,
+                Math.Max(0, _tasks.Count - MaxVisibleRows));
     }
 
     private static void ToggleDashboard()
@@ -417,7 +570,18 @@ internal static class LocalAssistantUi
             ShowWindow(_dashboard, SwHide);
             return;
         }
+        _taskPage = false;
+        _outputPage = false;
         ReloadTasks();
+        GetWindowRect(_ball, out var ball);
+        SystemParametersInfo(SpiGetWorkArea, 0, out var workArea, 0);
+        var x = ball.Left - DashboardWidth - 14;
+        if (x < workArea.Left) x = ball.Right + 14;
+        var y = ball.Top + BallSize / 2 - DashboardHeight / 2;
+        SetWindowPos(_dashboard, new IntPtr(-1),
+            Math.Clamp(x, workArea.Left + 8, Math.Max(workArea.Left + 8, workArea.Right - DashboardWidth - 8)),
+            Math.Clamp(y, workArea.Top + 8, Math.Max(workArea.Top + 8, workArea.Bottom - DashboardHeight - 8)),
+            0, 0, SwpNoSize);
         ShowWindow(_dashboard, SwShow);
         SetForegroundWindow(_dashboard);
         InvalidateRect(_dashboard, IntPtr.Zero, true);
@@ -458,77 +622,30 @@ internal static class LocalAssistantUi
     {
         var selectedId = SelectedTask()?.TaskId;
         _tasks = TaskHistory.Load(_root);
-        _selectedTask = selectedId is null
-            ? Math.Clamp(_selectedTask, 0, Math.Max(0, _tasks.Count - 1))
-            : Math.Max(0, _tasks.ToList().FindIndex(task => task.TaskId == selectedId));
-        _selectedOutput = Math.Clamp(
-            _selectedOutput,
-            0,
+        if (selectedId is not null)
+        {
+            var index = _tasks.ToList().FindIndex(task => task.TaskId == selectedId);
+            if (index >= 0) _selectedTask = index;
+            else _outputPage = false;
+        }
+        _selectedTask = Math.Clamp(_selectedTask, 0, Math.Max(0, _tasks.Count - 1));
+        _selectedOutput = Math.Clamp(_selectedOutput, 0,
             Math.Max(0, (SelectedTask()?.Outputs.Count ?? 0) - 1));
         _taskScroll = Math.Clamp(_taskScroll, 0, Math.Max(0, _tasks.Count - MaxVisibleRows));
-        _outputScroll = Math.Clamp(
-            _outputScroll,
-            0,
-            Math.Max(0, (SelectedTask()?.Outputs.Count ?? 0) - MaxVisibleRows));
+        _outputScroll = Math.Clamp(_outputScroll, 0,
+            Math.Max(0, (SelectedTask()?.Outputs.Count ?? 0) - 4));
     }
 
     private static LocalTaskItem? SelectedTask() =>
-        _selectedTask >= 0 && _selectedTask < _tasks.Count
-            ? _tasks[_selectedTask]
-            : null;
+        _selectedTask < _tasks.Count ? _tasks[_selectedTask] : null;
 
-    private static void OpenSelectedTask()
-    {
-        var task = SelectedTask();
-        if (task is null) return;
-        if (task.Outputs.Count > 0) TaskHistory.OpenFile(task.Outputs[0].FullPath);
-        else TaskHistory.OpenDirectory(task.TaskRoot);
-    }
-
-    private static void OpenSelectedOutput()
+    private static void OpenSelectedOutput(bool directory)
     {
         var outputs = SelectedTask()?.Outputs ?? Array.Empty<LocalTaskOutput>();
-        if (_selectedOutput >= 0 && _selectedOutput < outputs.Count)
-            TaskHistory.OpenFile(outputs[_selectedOutput].FullPath);
-    }
-
-    private static void OpenSelectedDirectory()
-    {
-        var task = SelectedTask();
-        if (task is null) return;
-        var outputs = task.Outputs;
-        if (_selectedOutput >= 0 && _selectedOutput < outputs.Count)
-            TaskHistory.OpenDirectory(outputs[_selectedOutput].FullPath, selectFile: true);
-        else
-            TaskHistory.OpenDirectory(task.TaskRoot);
-    }
-
-    private static void DrawButton(IntPtr dc, Rect bounds, string text, bool primary)
-    {
-        using var brush = new GdiObject(CreateSolidBrush(primary
-            ? ColorRef(47, 100, 232)
-            : ColorRef(241, 243, 247)));
-        FillRect(dc, ref bounds, brush.Handle);
-        DrawLabel(
-            dc,
-            text,
-            bounds.Left,
-            bounds.Top,
-            bounds.Width,
-            bounds.Height,
-            12,
-            500,
-            primary ? ColorRef(255, 255, 255) : ColorRef(55, 61, 72),
-            center: true);
-    }
-
-    private static Rect ButtonRect(Rect client, int index)
-    {
-        var widths = new[] { 92, 120, 76, 76 };
-        var right = client.Right - 18;
-        for (var i = 3; i > index; i--) right -= widths[i] + 10;
-        var left = right - widths[index];
-        return new Rect(left, client.Bottom - 49, right, client.Bottom - 16);
+        if (_selectedOutput >= outputs.Count) return;
+        var path = outputs[_selectedOutput].FullPath;
+        if (directory) TaskHistory.OpenDirectory(path, selectFile: true);
+        else TaskHistory.OpenFile(path);
     }
 
     private static void DrawLabel(
@@ -583,6 +700,19 @@ internal static class LocalAssistantUi
         _ => "未知",
     };
 
+    private static (string Label, uint Color) AttentionState()
+    {
+        if (_tasks.FirstOrDefault()?.Status == "waiting")
+            return ("需要你完成操作", ColorRef(245, 158, 11));
+        if (_tasks.FirstOrDefault()?.Status == "failed")
+            return ("最近操作失败", ColorRef(220, 38, 38));
+        if (_tasks.Any(task => task.Status == "running"))
+            return ("任务正在执行", ColorRef(22, 163, 74));
+        if (!_connected())
+            return ("正在重新连接", ColorRef(107, 114, 128));
+        return ("已连接，可以开始创作", ColorRef(37, 99, 235));
+    }
+
     private static uint StatusColor(string status) => status switch
     {
         "running" => ColorRef(47, 100, 232),
@@ -599,7 +729,7 @@ internal static class LocalAssistantUi
         while (value >= 1024 && unit < units.Length - 1)
         {
             value /= 1024;
-            unit += 1;
+            unit++;
         }
         return $"{value:0.#} {units[unit]}";
     }
@@ -670,6 +800,15 @@ internal static class LocalAssistantUi
         [MarshalAs(UnmanagedType.Bool)] internal bool Restore;
         [MarshalAs(UnmanagedType.Bool)] internal bool Update;
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)] internal byte[] Reserved;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct GdiplusStartupInput
+    {
+        internal uint Version;
+        internal IntPtr DebugEventCallback;
+        [MarshalAs(UnmanagedType.Bool)] internal bool SuppressBackgroundThread;
+        [MarshalAs(UnmanagedType.Bool)] internal bool SuppressExternalCodecs;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -841,6 +980,55 @@ internal static class LocalAssistantUi
 
     [DllImport("gdi32.dll")]
     private static extern IntPtr CreateEllipticRgn(int left, int top, int right, int bottom);
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateRoundRectRgn(int left, int top, int right, int bottom, int width, int height);
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreatePen(int style, int width, uint color);
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr GetStockObject(int index);
+
+    [DllImport("gdi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool RoundRect(IntPtr dc, int left, int top, int right, int bottom, int ellipseWidth, int ellipseHeight);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int MessageBox(IntPtr owner, string text, string caption, uint type);
+
+    [DllImport("gdiplus.dll", ExactSpelling = true)]
+    private static extern int GdiplusStartup(out IntPtr token, ref GdiplusStartupInput input, IntPtr output);
+
+    [DllImport("gdiplus.dll", ExactSpelling = true)]
+    private static extern void GdiplusShutdown(IntPtr token);
+
+    [DllImport("gdiplus.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern int GdipLoadImageFromFile(string filename, out IntPtr image);
+
+    [DllImport("gdiplus.dll", ExactSpelling = true)]
+    private static extern int GdipDisposeImage(IntPtr image);
+
+    [DllImport("gdiplus.dll", ExactSpelling = true)]
+    private static extern int GdipCreateFromHDC(IntPtr dc, out IntPtr graphics);
+
+    [DllImport("gdiplus.dll", ExactSpelling = true)]
+    private static extern int GdipDeleteGraphics(IntPtr graphics);
+
+    [DllImport("gdiplus.dll", ExactSpelling = true)]
+    private static extern int GdipCreatePath(int fillMode, out IntPtr path);
+
+    [DllImport("gdiplus.dll", ExactSpelling = true)]
+    private static extern int GdipDeletePath(IntPtr path);
+
+    [DllImport("gdiplus.dll", ExactSpelling = true)]
+    private static extern int GdipAddPathEllipseI(IntPtr path, int x, int y, int width, int height);
+
+    [DllImport("gdiplus.dll", ExactSpelling = true)]
+    private static extern int GdipSetClipPath(IntPtr graphics, IntPtr path, int combineMode);
+
+    [DllImport("gdiplus.dll", ExactSpelling = true)]
+    private static extern int GdipDrawImageRectI(IntPtr graphics, IntPtr image, int x, int y, int width, int height);
 
     [DllImport("gdi32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
