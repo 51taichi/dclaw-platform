@@ -1,0 +1,7 @@
+ARG DCLAW_BASE_IMAGE
+FROM ${DCLAW_BASE_IMAGE}
+
+# Required only by the plugin's isolated self-service runtime.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends bubblewrap \
+    && rm -rf /var/lib/apt/lists/*

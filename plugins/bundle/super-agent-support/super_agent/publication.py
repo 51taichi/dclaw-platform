@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import shutil
-import subprocess
 from pathlib import Path
 from typing import Any, Callable
 
@@ -26,33 +25,13 @@ from qwenpaw.config.config import AgentProfileRef
 from qwenpaw.config.utils import load_config, save_config
 
 from .package_handler import PublicSuperAgentPackageHandler
+from .public_runtime import isolation_available as runtime_isolation_available
 from .publishers import PublisherError, PublisherRepository
 
 
 class SignerRegistration(BaseModel):
     model_config = ConfigDict(extra="forbid")
     public_key: str = Field(min_length=40, max_length=100)
-
-
-def _isolation_available() -> bool:
-    bwrap = Path("/usr/bin/bwrap")
-    if not bwrap.is_file():
-        return False
-    command = [
-        str(bwrap), "--unshare-all", "--unshare-net",
-        "--ro-bind", "/usr", "/usr",
-    ]
-    for path in ("/lib", "/lib64"):
-        if Path(path).exists():
-            command.extend(("--ro-bind", path, path))
-    command.append("/usr/bin/true")
-    try:
-        return subprocess.run(
-            command, check=False, timeout=5,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        ).returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        return False
 
 
 def _actor(request: Request) -> tuple[str, str]:
@@ -73,7 +52,7 @@ class PublisherPublication:
         self.repository = repository
         self.handler = handler
         self.state_root = Path(state_root)
-        self.isolation_available = isolation_available or _isolation_available
+        self.isolation_available = isolation_available or runtime_isolation_available
         self._locks: dict[str, asyncio.Lock] = {}
         self.router = APIRouter()
         self._register_routes()

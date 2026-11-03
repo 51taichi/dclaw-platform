@@ -4,6 +4,7 @@ import base64
 import json
 from pathlib import Path
 from types import SimpleNamespace
+import uuid
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -126,6 +127,62 @@ def test_public_runtime_fails_closed_without_isolator(tmp_path):
     with pytest.raises(public_runtime.PublicRuntimeError, match="isolation"):
         import asyncio
         asyncio.run(run())
+
+
+def test_public_runtime_relays_host_calls_over_unix_socket(tmp_path, monkeypatch):
+    import asyncio
+
+    socket_path = Path("/tmp") / f"dclaw-{uuid.uuid4().hex[:8]}.sock"
+    monkeypatch.setenv(
+        "DCLAW_SUPER_AGENT_SANDBOX_SOCKET", str(socket_path),
+    )
+
+    class Request:
+        state_root = tmp_path / "state"
+        transaction_root = tmp_path / "transaction"
+
+        def model_dump(self, *, mode):
+            assert mode == "json"
+            return {
+                "state_root": str(self.state_root),
+                "transaction_root": str(self.transaction_root),
+            }
+
+    class Host:
+        async def call(self, capability, arguments):
+            assert capability == "session.context"
+            assert arguments == {}
+            return {"session_id": "session-1"}
+
+    async def handle(reader, writer):
+        start = json.loads(await reader.readline())
+        assert start["type"] == "start"
+        assert start["source_root"] == str(tmp_path)
+        writer.write(
+            b'{"type":"call","capability":"session.context",'
+            b'"arguments":{}}\n'
+        )
+        await writer.drain()
+        result = json.loads(await reader.readline())
+        assert result["value"] == {"session_id": "session-1"}
+        writer.write(b'{"type":"done"}\n')
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    async def run():
+        server = await asyncio.start_unix_server(handle, path=str(socket_path))
+        async with server:
+            await public_runtime.invoke_public_runtime(
+                source_root=tmp_path,
+                entrypoint="runtime.py:create_runtime",
+                request=Request(), host=Host(), timeout_seconds=2,
+            )
+
+    try:
+        asyncio.run(run())
+    finally:
+        socket_path.unlink(missing_ok=True)
 
 
 def test_normal_user_registers_publishes_and_cannot_take_another_agent(
