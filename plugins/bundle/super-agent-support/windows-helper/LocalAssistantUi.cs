@@ -16,6 +16,7 @@ internal static class LocalAssistantUi
     private const uint WsPopup = 0x80000000;
     private const uint WsExTopmost = 0x00000008;
     private const uint WsExToolWindow = 0x00000080;
+    private const uint WsExLayered = 0x00080000;
     private const int SwHide = 0;
     private const int SwShow = 5;
     private const int SwShowNoActivate = 4;
@@ -48,6 +49,7 @@ internal static class LocalAssistantUi
     private const int MenuTasks = 1001;
     private const int MenuDirectory = 1002;
     private const int MenuExit = 1003;
+    private const int PixelFormat32bppPArgb = 0x000E200B;
 
     private static readonly WndProc WindowProcedure = HandleWindowMessage;
     private static string _root = string.Empty;
@@ -56,6 +58,7 @@ internal static class LocalAssistantUi
     private static IntPtr _dashboard;
     private static bool _dragging;
     private static bool _dragged;
+    private static bool _layeredBallFailed;
     private static bool _taskPage;
     private static bool _outputPage;
     private static Point _dragCursor;
@@ -81,7 +84,7 @@ internal static class LocalAssistantUi
 
         SystemParametersInfo(SpiGetWorkArea, 0, out var workArea, 0);
         _ball = CreateWindowEx(
-            WsExTopmost | WsExToolWindow,
+            WsExTopmost | WsExToolWindow | WsExLayered,
             BallClass,
             "DClaw 本地助手",
             WsPopup,
@@ -108,7 +111,6 @@ internal static class LocalAssistantUi
             IntPtr.Zero);
         if (_ball == IntPtr.Zero || _dashboard == IntPtr.Zero)
             throw new InvalidOperationException("无法创建本地助手窗口");
-        SetWindowRgn(_ball, CreateEllipticRgn(0, 0, BallSize, BallSize), true);
         SetWindowRgn(_dashboard, CreateRoundRectRgn(0, 0, DashboardWidth, DashboardHeight, 48, 48), true);
         SetTimer(_ball, 1, 2000, IntPtr.Zero);
         SetTimer(_dashboard, 2, 3000, IntPtr.Zero);
@@ -170,10 +172,20 @@ internal static class LocalAssistantUi
         switch (message)
         {
             case WmPaint:
-                PaintBall(window);
+                if (_layeredBallFailed)
+                    PaintBallFallback(window);
+                else
+                {
+                    var dc = BeginPaint(window, out var paint);
+                    EndPaint(window, ref paint);
+                    if (!PaintBall(window)) EnableBallFallback(window);
+                }
                 return IntPtr.Zero;
             case WmTimer:
-                InvalidateRect(window, IntPtr.Zero, false);
+                if (_layeredBallFailed)
+                    InvalidateRect(window, IntPtr.Zero, false);
+                else if (!PaintBall(window))
+                    EnableBallFallback(window);
                 return IntPtr.Zero;
             case WmLButtonDown:
                 GetCursorPos(out _dragCursor);
@@ -250,26 +262,163 @@ internal static class LocalAssistantUi
         }
     }
 
-    private static void PaintBall(IntPtr window)
+    private static bool PaintBall(IntPtr window)
+    {
+        var screen = GetDC(IntPtr.Zero);
+        if (screen == IntPtr.Zero) return false;
+        var memory = CreateCompatibleDC(screen);
+        if (memory == IntPtr.Zero)
+        {
+            ReleaseDC(IntPtr.Zero, screen);
+            return false;
+        }
+        var bitmapInfo = new BitmapInfo
+        {
+            Header = new BitmapInfoHeader
+            {
+                Size = (uint)Marshal.SizeOf<BitmapInfoHeader>(),
+                Width = BallSize,
+                Height = -BallSize,
+                Planes = 1,
+                BitCount = 32,
+                SizeImage = BallSize * BallSize * 4,
+            },
+        };
+        var dib = CreateDIBSection(screen, ref bitmapInfo, 0, out var pixels, IntPtr.Zero, 0);
+        if (dib == IntPtr.Zero || pixels == IntPtr.Zero)
+        {
+            if (dib != IntPtr.Zero) DeleteObject(dib);
+            DeleteDC(memory);
+            ReleaseDC(IntPtr.Zero, screen);
+            return false;
+        }
+        var previous = SelectObject(memory, dib);
+        try
+        {
+            if (GdipCreateBitmapFromScan0(BallSize, BallSize, 0,
+                    PixelFormat32bppPArgb, IntPtr.Zero, out var surface) != 0)
+                return false;
+            try
+            {
+                if (GdipGetImageGraphicsContext(surface, out var graphics) != 0)
+                    return false;
+                try
+                {
+                    DrawBallSurface(graphics);
+                }
+                finally
+                {
+                    GdipDeleteGraphics(graphics);
+                }
+
+                var area = new GdipRect { Width = BallSize, Height = BallSize };
+                if (GdipBitmapLockBits(surface, ref area, 1,
+                        PixelFormat32bppPArgb, out var data) != 0)
+                    return false;
+                try
+                {
+                    var row = new byte[BallSize * 4];
+                    for (var y = 0; y < BallSize; y++)
+                    {
+                        Marshal.Copy(IntPtr.Add(data.Scan0, y * data.Stride), row, 0, row.Length);
+                        Marshal.Copy(row, 0, IntPtr.Add(pixels, y * row.Length), row.Length);
+                    }
+                }
+                finally
+                {
+                    GdipBitmapUnlockBits(surface, ref data);
+                }
+            }
+            finally
+            {
+                GdipDisposeImage(surface);
+            }
+
+            GetWindowRect(window, out var bounds);
+            var destination = new Point(bounds.Left, bounds.Top);
+            var size = new WindowSize(BallSize, BallSize);
+            var source = new Point(0, 0);
+            var blend = new BlendFunction { SourceConstantAlpha = 255, AlphaFormat = 1 };
+            return UpdateLayeredWindow(window, screen, ref destination, ref size,
+                memory, ref source, 0, ref blend, 2);
+        }
+        finally
+        {
+            SelectObject(memory, previous);
+            DeleteObject(dib);
+            DeleteDC(memory);
+            ReleaseDC(IntPtr.Zero, screen);
+        }
+    }
+
+    private static void DrawBallSurface(IntPtr graphics)
+    {
+        GdipGraphicsClear(graphics, 0);
+        GdipSetInterpolationMode(graphics, 7);
+        GdipSetSmoothingMode(graphics, 4);
+        GdipSetPixelOffsetMode(graphics, 4);
+        var color = AttentionState().Color;
+        FillBallEllipse(graphics, ToArgb(color), 1, 1, BallSize - 2);
+        FillBallEllipse(graphics, unchecked((int)0xFFFFFFFF), 5, 5, BallSize - 10);
+        if (_logo != IntPtr.Zero && GdipCreatePath(0, out var path) == 0)
+        {
+            try
+            {
+                GdipAddPathEllipseI(path, 6, 6, BallSize - 12, BallSize - 12);
+                GdipSetClipPath(graphics, path, 0);
+                GdipDrawImageRectI(graphics, _logo, 6, 6, BallSize - 12, BallSize - 12);
+                GdipResetClip(graphics);
+            }
+            finally
+            {
+                GdipDeletePath(path);
+            }
+        }
+        FillBallEllipse(graphics, unchecked((int)0xFFFFFFFF),
+            BallSize - 18, BallSize - 18, 16);
+        FillBallEllipse(graphics, ToArgb(color), BallSize - 16, BallSize - 16, 12);
+    }
+
+    private static void FillBallEllipse(IntPtr graphics, int color, int x, int y, int size)
+    {
+        if (GdipCreateSolidFill(color, out var brush) != 0) return;
+        try { GdipFillEllipseI(graphics, brush, x, y, size, size); }
+        finally { GdipDeleteBrush(brush); }
+    }
+
+    private static int ToArgb(uint colorRef) => unchecked((int)(
+        0xFF000000u
+        | ((colorRef & 0xFFu) << 16)
+        | (colorRef & 0xFF00u)
+        | ((colorRef >> 16) & 0xFFu)));
+
+    private static void EnableBallFallback(IntPtr window)
+    {
+        _layeredBallFailed = true;
+        SetLayeredWindowAttributes(window, 0, 255, 2);
+        SetWindowRgn(window, CreateEllipticRgn(0, 0, BallSize, BallSize), true);
+        InvalidateRect(window, IntPtr.Zero, true);
+    }
+
+    private static void PaintBallFallback(IntPtr window)
     {
         var dc = BeginPaint(window, out var paint);
         try
         {
-            var attention = AttentionState();
-            using var ring = new GdiObject(CreateSolidBrush(attention.Color));
+            var color = AttentionState().Color;
+            using var ring = new GdiObject(CreateSolidBrush(color));
             using var white = new GdiObject(CreateSolidBrush(ColorRef(255, 255, 255)));
-            using var status = new GdiObject(CreateSolidBrush(attention.Color));
-            var oldPen = SelectObject(dc, GetStockObject(8));
-            var oldBrush = SelectObject(dc, ring.Handle);
+            var previousPen = SelectObject(dc, GetStockObject(8));
+            var previousBrush = SelectObject(dc, ring.Handle);
             Ellipse(dc, 1, 1, BallSize - 1, BallSize - 1);
             SelectObject(dc, white.Handle);
             Ellipse(dc, 5, 5, BallSize - 5, BallSize - 5);
             DrawLogo(dc, 6, 6, BallSize - 12);
             Ellipse(dc, BallSize - 18, BallSize - 18, BallSize - 2, BallSize - 2);
-            SelectObject(dc, status.Handle);
+            SelectObject(dc, ring.Handle);
             Ellipse(dc, BallSize - 16, BallSize - 16, BallSize - 4, BallSize - 4);
-            SelectObject(dc, oldBrush);
-            SelectObject(dc, oldPen);
+            SelectObject(dc, previousBrush);
+            SelectObject(dc, previousPen);
         }
         finally
         {
@@ -846,6 +995,70 @@ internal static class LocalAssistantUi
         }
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WindowSize
+    {
+        internal int Width;
+        internal int Height;
+
+        internal WindowSize(int width, int height)
+        {
+            Width = width;
+            Height = height;
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BlendFunction
+    {
+        internal byte BlendOp;
+        internal byte BlendFlags;
+        internal byte SourceConstantAlpha;
+        internal byte AlphaFormat;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BitmapInfoHeader
+    {
+        internal uint Size;
+        internal int Width;
+        internal int Height;
+        internal ushort Planes;
+        internal ushort BitCount;
+        internal uint Compression;
+        internal uint SizeImage;
+        internal int XPelsPerMeter;
+        internal int YPelsPerMeter;
+        internal uint ClrUsed;
+        internal uint ClrImportant;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BitmapInfo
+    {
+        internal BitmapInfoHeader Header;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct GdipRect
+    {
+        internal int X;
+        internal int Y;
+        internal int Width;
+        internal int Height;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct GdipBitmapData
+    {
+        internal uint Width;
+        internal uint Height;
+        internal int Stride;
+        internal int PixelFormat;
+        internal IntPtr Scan0;
+        internal IntPtr Reserved;
+    }
+
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr GetModuleHandle(string? moduleName);
 
@@ -955,6 +1168,22 @@ internal static class LocalAssistantUi
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetLayeredWindowAttributes(IntPtr window, uint colorKey, byte alpha, uint flags);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool UpdateLayeredWindow(IntPtr window, IntPtr targetDc,
+        ref Point destination, ref WindowSize size, IntPtr sourceDc, ref Point source,
+        uint colorKey, ref BlendFunction blend, uint flags);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetDC(IntPtr window);
+
+    [DllImport("user32.dll")]
+    private static extern int ReleaseDC(IntPtr window, IntPtr dc);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SystemParametersInfo(int action, int parameter, out Rect bounds, int flags);
 
     [DllImport("user32.dll")]
@@ -980,6 +1209,17 @@ internal static class LocalAssistantUi
 
     [DllImport("gdi32.dll")]
     private static extern IntPtr CreateSolidBrush(uint color);
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateCompatibleDC(IntPtr dc);
+
+    [DllImport("gdi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DeleteDC(IntPtr dc);
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateDIBSection(IntPtr dc, ref BitmapInfo info, uint usage,
+        out IntPtr pixels, IntPtr section, uint offset);
 
     [DllImport("gdi32.dll")]
     private static extern IntPtr CreateEllipticRgn(int left, int top, int right, int bottom);
@@ -1014,6 +1254,36 @@ internal static class LocalAssistantUi
 
     [DllImport("gdiplus.dll", ExactSpelling = true)]
     private static extern int GdipCreateFromHDC(IntPtr dc, out IntPtr graphics);
+
+    [DllImport("gdiplus.dll", ExactSpelling = true)]
+    private static extern int GdipCreateBitmapFromScan0(int width, int height, int stride,
+        int pixelFormat, IntPtr scan0, out IntPtr bitmap);
+
+    [DllImport("gdiplus.dll", ExactSpelling = true)]
+    private static extern int GdipGetImageGraphicsContext(IntPtr image, out IntPtr graphics);
+
+    [DllImport("gdiplus.dll", ExactSpelling = true)]
+    private static extern int GdipGraphicsClear(IntPtr graphics, int color);
+
+    [DllImport("gdiplus.dll", ExactSpelling = true)]
+    private static extern int GdipBitmapLockBits(IntPtr bitmap, ref GdipRect area,
+        uint flags, int pixelFormat, out GdipBitmapData data);
+
+    [DllImport("gdiplus.dll", ExactSpelling = true)]
+    private static extern int GdipBitmapUnlockBits(IntPtr bitmap, ref GdipBitmapData data);
+
+    [DllImport("gdiplus.dll", ExactSpelling = true)]
+    private static extern int GdipCreateSolidFill(int color, out IntPtr brush);
+
+    [DllImport("gdiplus.dll", ExactSpelling = true)]
+    private static extern int GdipDeleteBrush(IntPtr brush);
+
+    [DllImport("gdiplus.dll", ExactSpelling = true)]
+    private static extern int GdipFillEllipseI(IntPtr graphics, IntPtr brush,
+        int x, int y, int width, int height);
+
+    [DllImport("gdiplus.dll", ExactSpelling = true)]
+    private static extern int GdipResetClip(IntPtr graphics);
 
     [DllImport("gdiplus.dll", ExactSpelling = true)]
     private static extern int GdipDeleteGraphics(IntPtr graphics);
