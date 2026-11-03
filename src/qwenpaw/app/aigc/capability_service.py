@@ -600,7 +600,7 @@ def project_workflow_capability_catalog(
 async def build_workflow_capability_catalog(
     manager: Any | None,
 ) -> WorkflowCapabilityCatalog:
-    """Return workflow nodes plus only currently published/priced models."""
+    """Return workflow nodes plus models enabled by the admin policy."""
     return project_workflow_capability_catalog(
-        await build_capability_list(manager, include_unselected=True)
+        await build_capability_list(manager)
     )

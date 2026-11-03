@@ -134,8 +134,8 @@ async def test_both_capability_entrances_call_core_catalog(monkeypatch):
     system_catalog = await system.list_workflow_capabilities(request)
     platform_catalog = await platform._load_workflow_capability_catalog()
     assert calls == [
-        (manager, {"include_unselected": True}),
-        (manager, {"include_unselected": True}),
+        (manager, {}),
+        (manager, {}),
     ]
     assert system_catalog == platform_catalog
 

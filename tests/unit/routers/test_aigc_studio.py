@@ -994,9 +994,6 @@ async def test_configured_image_policy_filters_capabilities_and_returns_default(
     }
     assert workflow_image_pairs == {
         ("stub-aigc", "stub-image"),
-        ("openai", "gpt-image-2"),
-        ("volcengine", "custom-image-model"),
-        ("volcengine", "doubao-seedream-3-0-t2i"),
     }
     engine.dispose()
 
