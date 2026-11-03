@@ -81,10 +81,55 @@ def _mxapi_base_url(provider: Any) -> str:
     ).rstrip("/")
 
 
+def _provider_custom_headers(provider: Any) -> dict[str, str]:
+    raw_headers = getattr(provider, "custom_headers", None) or {}
+    if not isinstance(raw_headers, dict):
+        return {}
+    return {
+        _clean_text(key): _clean_text(value)
+        for key, value in raw_headers.items()
+        if _clean_text(key) and _clean_text(value)
+    }
+
+
+def _header_value(headers: dict[str, str], name: str) -> str:
+    expected = name.casefold()
+    for key, value in headers.items():
+        if key.casefold() == expected:
+            return _clean_text(value)
+    return ""
+
+
+def _mxapi_headers(
+    provider: Any,
+    api_key: str,
+    *,
+    channel: str | None = None,
+    json_content: bool = False,
+) -> dict[str, str]:
+    protected = {"authorization"}
+    if json_content:
+        protected.add("content-type")
+    if channel is not None:
+        protected.add("x-channel")
+    headers = {
+        key: value
+        for key, value in _provider_custom_headers(provider).items()
+        if key.casefold() not in protected
+    }
+    headers["Authorization"] = f"Bearer {api_key}"
+    if json_content:
+        headers["Content-Type"] = "application/json"
+    if channel is not None:
+        headers["X-Channel"] = channel
+    return headers
+
+
 def _mxapi_channel(provider: Any, channel: str | None = None) -> str:
     meta = getattr(provider, "meta", {}) or {}
     return (
         _clean_text(channel)
+        or _header_value(_provider_custom_headers(provider), "X-Channel")
         or _clean_text(meta.get("channel"))
         or _clean_text(os.environ.get("MXAPI_CHANNEL"))
         or "default"
@@ -417,11 +462,12 @@ async def _submit_task(
     ) as client:
         response = await client.post(
             f"{_mxapi_base_url(provider)}/api/v2/gpt-image-2",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                "X-Channel": _mxapi_channel(provider, channel),
-            },
+            headers=_mxapi_headers(
+                provider,
+                api_key,
+                channel=_mxapi_channel(provider, channel),
+                json_content=True,
+            ),
             json=body,
         )
         try:
@@ -477,7 +523,7 @@ async def _query_task(provider: Any, task_id: str) -> tuple[str, str]:
             try:
                 response = await client.get(
                     url,
-                    headers={"Authorization": f"Bearer {api_key}"},
+                    headers=_mxapi_headers(provider, api_key),
                 )
                 response.raise_for_status()
             except httpx.TimeoutException:

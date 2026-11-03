@@ -42,6 +42,8 @@ async def test_imagegen_generates_image_with_mxapi(monkeypatch, tmp_path):
 
     calls: list[tuple[str, str]] = []
     submitted: dict[str, object] = {}
+    submitted_headers: dict[str, str] = {}
+    query_headers: dict[str, str] = {}
     workspace_dir = tmp_path / "workspace"
 
     class FakeAsyncClient:
@@ -57,14 +59,16 @@ async def test_imagegen_generates_image_with_mxapi(monkeypatch, tmp_path):
         async def post(self, url, **kwargs):
             calls.append(("post", url))
             submitted.update(kwargs["json"])
+            submitted_headers.update(kwargs["headers"])
             assert url == "https://open.mxapi.org/api/v2/gpt-image-2"
             assert kwargs["json"]["aspect_ratio"] == "16:9"
             assert kwargs["json"]["quality"] == "high"
             return _FakeResponse({"code": 200, "data": {"task_id": "task-1"}})
 
-        async def get(self, url, **_kwargs):
+        async def get(self, url, **kwargs):
             calls.append(("get", url))
             if "gpt-image/task" in url:
+                query_headers.update(kwargs["headers"])
                 return _FakeResponse(
                     {
                         "data": {
@@ -93,6 +97,11 @@ async def test_imagegen_generates_image_with_mxapi(monkeypatch, tmp_path):
             id="mxapi",
             base_url="https://open.mxapi.org",
             api_key="test-key",
+            custom_headers={
+                "X-Channel": "official",
+                "X-Provider-Trace": "enabled",
+                "Authorization": "must-not-override-api-key",
+            },
             meta={"channel": "default"},
         ),
     )
@@ -109,6 +118,17 @@ async def test_imagegen_generates_image_with_mxapi(monkeypatch, tmp_path):
 
     saved = list((workspace_dir / "media" / "imagegen").glob("imagegen_*.png"))
     assert len(saved) == 1
+    assert submitted_headers == {
+        "X-Provider-Trace": "enabled",
+        "Authorization": "Bearer test-key",
+        "Content-Type": "application/json",
+        "X-Channel": "official",
+    }
+    assert query_headers == {
+        "X-Channel": "official",
+        "X-Provider-Trace": "enabled",
+        "Authorization": "Bearer test-key",
+    }
     assert saved[0].read_bytes() == b"fake-png-bytes"
     image_blocks = [
         block

@@ -2392,12 +2392,61 @@ def _mxapi_base_url(provider: Any) -> str:
     ).rstrip("/")
 
 
+def _provider_custom_headers(provider: Any) -> dict[str, str]:
+    raw_headers = getattr(provider, "custom_headers", None) or {}
+    if not isinstance(raw_headers, dict):
+        return {}
+    return {
+        _clean_text(key): _clean_text(value)
+        for key, value in raw_headers.items()
+        if _clean_text(key) and _clean_text(value)
+    }
+
+
+def _header_value(headers: dict[str, str], name: str) -> str:
+    expected = name.casefold()
+    for key, value in headers.items():
+        if key.casefold() == expected:
+            return _clean_text(value)
+    return ""
+
+
+def _mxapi_headers(
+    provider: Any,
+    api_key: str,
+    *,
+    channel: str | None = None,
+    json_content: bool = False,
+) -> dict[str, str]:
+    protected = {"authorization"}
+    if json_content:
+        protected.add("content-type")
+    if channel is not None:
+        protected.add("x-channel")
+    headers = {
+        key: value
+        for key, value in _provider_custom_headers(provider).items()
+        if key.casefold() not in protected
+    }
+    headers["Authorization"] = f"Bearer {api_key}"
+    if json_content:
+        headers["Content-Type"] = "application/json"
+    if channel is not None:
+        headers["X-Channel"] = channel
+    return headers
+
+
 def _mxapi_channel(provider: Any, parameters: dict[str, Any]) -> str:
     provider_meta = getattr(provider, "meta", {}) or {}
+    custom_channel = _header_value(
+        _provider_custom_headers(provider),
+        "X-Channel",
+    )
     return (
         _clean_text(
             parameters.get("mxapiChannel")
             or parameters.get("channel")
+            or custom_channel
             or provider_meta.get("channel")
             or os.environ.get("MXAPI_CHANNEL")
             or "default",
@@ -2800,11 +2849,12 @@ async def _mxapi_submit_task(
     url = _mxapi_submit_url(provider, adapter)
     return await _mxapi_submit_request(
         url,
-        {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "X-Channel": channel,
-        },
+        _mxapi_headers(
+            provider,
+            api_key,
+            channel=channel,
+            json_content=True,
+        ),
         body,
         accepted_codes={None, 200},
         error_message="MXAPI task submission failed.",
@@ -2852,7 +2902,7 @@ async def _mxapi_query_task(
             try:
                 response = await client.get(
                     url,
-                    headers={"Authorization": f"Bearer {api_key}"},
+                    headers=_mxapi_headers(provider, api_key),
                 )
                 response.raise_for_status()
             except httpx.TimeoutException:
@@ -3276,10 +3326,7 @@ async def _mxapi_seedance_submit_task(
     url = _mxapi_seedance_submit_url(provider, model, job)
     return await _mxapi_submit_request(
         url,
-        {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
+        _mxapi_headers(provider, api_key, json_content=True),
         body,
         accepted_codes={None, 200, "200"},
         error_message="MXAPI Seedance task submission failed.",
@@ -3351,7 +3398,7 @@ async def _mxapi_seedance_query_task(
         try:
             response = await client.get(
                 url,
-                headers={"Authorization": f"Bearer {api_key}"},
+                headers=_mxapi_headers(provider, api_key),
             )
             response.raise_for_status()
         except httpx.TimeoutException:
@@ -3582,10 +3629,7 @@ async def _mxapi_jimeng_submit_task(
     body = _mxapi_jimeng_submit_body(request, model, job)
     return await _mxapi_submit_request(
         url,
-        {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
+        _mxapi_headers(provider, api_key, json_content=True),
         body,
         accepted_codes={None, 0, 200, "200"},
         error_message="MXAPI Jimeng task submission failed.",
@@ -3730,11 +3774,12 @@ async def _mxapi_grok_submit_task(
     url = f"{_mxapi_base_url(provider)}/api/v2/video/grok"
     return await _mxapi_submit_request(
         url,
-        {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "X-Channel": channel,
-        },
+        _mxapi_headers(
+            provider,
+            api_key,
+            channel=channel,
+            json_content=True,
+        ),
         body,
         accepted_codes={None, 0, 200, "200"},
         error_message="MXAPI Grok task submission failed.",
@@ -3795,7 +3840,7 @@ async def _mxapi_grok_query_task(
         try:
             response = await client.get(
                 url,
-                headers={"Authorization": f"Bearer {api_key}"},
+                headers=_mxapi_headers(provider, api_key),
             )
             response.raise_for_status()
         except httpx.TimeoutException:

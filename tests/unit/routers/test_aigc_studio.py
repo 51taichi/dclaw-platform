@@ -591,6 +591,11 @@ class FakeMxapiProviderManager:
             name="MXAPI",
             api_key="mxapi-test-key",
             base_url="https://open.mxapi.org",
+            custom_headers={
+                "X-Channel": "official",
+                "X-Provider-Trace": "enabled",
+                "Authorization": "must-not-override-api-key",
+            },
             meta={"aigc_adapter": "mxapi_gpt_image", "channel": "default"},
             models=[
                 ModelInfo(
@@ -3598,9 +3603,10 @@ async def test_run_mxapi_gpt_image_job_polls_and_saves_url_image(
     post_call = next(item for item in requests if item["type"] == "post")
     assert post_call["url"] == "https://open.mxapi.org/api/v2/gpt-image-2"
     assert post_call["kwargs"]["headers"] == {
+        "X-Provider-Trace": "enabled",
         "Authorization": "Bearer mxapi-test-key",
         "Content-Type": "application/json",
-        "X-Channel": "default",
+        "X-Channel": "official",
     }
     assert post_call["kwargs"]["json"] == {
         "prompt": "一只可爱的猫咪",
@@ -3612,6 +3618,11 @@ async def test_run_mxapi_gpt_image_job_polls_and_saves_url_image(
         item["type"] == "get"
         and item["url"]
         == "https://open.mxapi.org/api/v2/gpt-image/task?task_id=task-123"
+        and item["kwargs"]["headers"] == {
+            "X-Channel": "official",
+            "X-Provider-Trace": "enabled",
+            "Authorization": "Bearer mxapi-test-key",
+        }
         for item in requests
     )
     assert any(
@@ -4082,9 +4093,10 @@ async def test_run_mxapi_nano2_job_uses_nano2_protocol(
     post_call = next(item for item in requests if item["type"] == "post")
     assert post_call["url"] == "https://open.mxapi.org/api/v2/nano2"
     assert post_call["kwargs"]["headers"] == {
+        "X-Provider-Trace": "enabled",
         "Authorization": "Bearer mxapi-test-key",
         "Content-Type": "application/json",
-        "X-Channel": "default",
+        "X-Channel": "official",
     }
     assert post_call["kwargs"]["json"] == {
         "prompt": "一只可爱的猫咪",
