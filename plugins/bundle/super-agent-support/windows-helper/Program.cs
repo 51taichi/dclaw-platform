@@ -19,13 +19,21 @@ internal sealed record HelperConfig(
 
 internal static class HelperMetadata
 {
-    internal const string Version = "1.3.0";
+    internal const string Version = "1.4.0";
     internal const string ProtocolVersion = "2";
+}
+
+internal static class HelperStorage
+{
+    internal static string Root => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "DClawLocalTool");
 }
 
 internal sealed class Program
 {
-    private static async Task<int> Main(string[] args)
+    [STAThread]
+    private static int Main(string[] args)
     {
         if (args.Length != 1 || !File.Exists(args[0])) return 2;
         using var singleInstance = new Mutex(
@@ -35,10 +43,21 @@ internal sealed class Program
         if (!ownsMutex) return 0;
         var configPath = Path.GetFullPath(args[0]);
         var config = JsonSerializer.Deserialize<HelperConfig>(
-            await File.ReadAllTextAsync(configPath), JsonOptions.Default);
+            File.ReadAllText(configPath), JsonOptions.Default);
         if (config is null) return 2;
+        using var cancellation = new CancellationTokenSource();
         var runtime = new HelperRuntime(configPath, config);
-        await runtime.RunAsync(CancellationToken.None);
+        var runtimeTask = Task.Run(() => runtime.RunAsync(cancellation.Token));
+        LocalAssistantUi.Run(HelperStorage.Root, () => runtime.Connected);
+        cancellation.Cancel();
+        try
+        {
+            runtimeTask.GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal application shutdown.
+        }
         return 0;
     }
 }
@@ -57,13 +76,13 @@ internal sealed class HelperRuntime
     private ClientWebSocket? _socket;
     private volatile bool _connected;
 
+    internal bool Connected => _connected;
+
     public HelperRuntime(string configPath, HelperConfig config)
     {
         _configPath = configPath;
         _config = config;
-        _root = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "DClawLocalTool");
+        _root = HelperStorage.Root;
         Directory.CreateDirectory(_root);
         Directory.CreateDirectory(Path.Combine(_root, "Capabilities"));
         Directory.CreateDirectory(Path.Combine(_root, "Components"));
@@ -748,13 +767,16 @@ internal sealed class HelperRuntime
     {
         var task = continuation ? message : message.GetProperty("task");
         var taskId = task.GetProperty("task_id").GetString()!;
+        string? taskRoot = null;
+        string? agentName = null;
+        string? capabilityId = null;
         try
         {
-            var agentName = continuation
+            agentName = continuation
                 ? ReadAgentName(taskId)
                 : task.GetProperty("task_root_name").GetString()!;
-            var taskRoot = FindOrCreateTaskRoot(agentName, taskId);
-            var capabilityId = continuation
+            taskRoot = FindOrCreateTaskRoot(agentName, taskId);
+            capabilityId = continuation
                 ? ReadTaskCapability(taskId)
                 : task.GetProperty("capability_id").GetString()!;
             var descriptorPath = FindDescriptor(capabilityId);
@@ -804,6 +826,14 @@ internal sealed class HelperRuntime
                     continuationInput.ToJsonString(JsonOptions.Default),
                     cancellationToken);
             }
+            await TaskHistory.TryWriteAsync(
+                taskRoot,
+                taskId,
+                agentName,
+                capabilityId,
+                "running",
+                null,
+                cancellationToken);
             await SendEventAsync(taskId, "started", new JsonObject(), cancellationToken);
             var packageRoot = Path.GetDirectoryName(descriptorPath)!;
             var entrypoint = descriptor.GetProperty("entrypoint");
@@ -861,10 +891,16 @@ internal sealed class HelperRuntime
             DeleteCredentialFile(taskRoot);
             if (_cancelled.TryRemove(taskId, out _))
             {
+                await TaskHistory.TryWriteAsync(
+                    taskRoot, taskId, agentName, capabilityId,
+                    "cancelled", null, cancellationToken);
                 await SendEventAsync(taskId, "cancelled", new JsonObject(), cancellationToken);
             }
             else if (resourceMonitor.Result is string resourceError)
             {
+                await TaskHistory.TryWriteAsync(
+                    taskRoot, taskId, agentName, capabilityId,
+                    "failed", resourceError, cancellationToken);
                 await SendEventAsync(taskId, "failed", new JsonObject
                 {
                     ["code"] = resourceError,
@@ -872,6 +908,9 @@ internal sealed class HelperRuntime
             }
             else if (OutputSize(taskRoot) > maxOutputBytes)
             {
+                await TaskHistory.TryWriteAsync(
+                    taskRoot, taskId, agentName, capabilityId,
+                    "failed", "RUNNER.OUTPUT_LIMIT_EXCEEDED", cancellationToken);
                 await SendEventAsync(taskId, "failed", new JsonObject
                 {
                     ["code"] = "RUNNER.OUTPUT_LIMIT_EXCEEDED",
@@ -880,14 +919,23 @@ internal sealed class HelperRuntime
             else if (process.ExitCode == 0)
             {
                 await RegisterManagedArtifactsAsync(taskId, taskRoot, cancellationToken);
+                await TaskHistory.TryWriteAsync(
+                    taskRoot, taskId, agentName, capabilityId,
+                    "completed", null, cancellationToken);
                 await SendFileEventAsync(taskId, "completed", Path.Combine(taskRoot, "result.json"), cancellationToken);
             }
             else if (process.ExitCode == 10)
             {
+                await TaskHistory.TryWriteAsync(
+                    taskRoot, taskId, agentName, capabilityId,
+                    "waiting", null, cancellationToken);
                 await SendFileEventAsync(taskId, "checkpoint", Path.Combine(taskRoot, "checkpoint.json"), cancellationToken);
             }
             else
             {
+                await TaskHistory.TryWriteAsync(
+                    taskRoot, taskId, agentName, capabilityId,
+                    "failed", "CAPABILITY.PROCESS_FAILED", cancellationToken);
                 var error = new JsonObject
                 {
                     ["code"] = "CAPABILITY.PROCESS_FAILED",
@@ -898,6 +946,10 @@ internal sealed class HelperRuntime
         }
         catch (LocalFileException exception)
         {
+            if (taskRoot is not null && agentName is not null && capabilityId is not null)
+                await TaskHistory.TryWriteAsync(
+                    taskRoot, taskId, agentName, capabilityId,
+                    "failed", exception.Code, cancellationToken);
             await SendEventAsync(taskId, "failed", new JsonObject
             {
                 ["code"] = exception.Code,
@@ -905,6 +957,10 @@ internal sealed class HelperRuntime
         }
         catch (Exception exception)
         {
+            if (taskRoot is not null && agentName is not null && capabilityId is not null)
+                await TaskHistory.TryWriteAsync(
+                    taskRoot, taskId, agentName, capabilityId,
+                    "failed", "RUNNER.EXECUTION_FAILED", cancellationToken);
             var error = new JsonObject
             {
                 ["code"] = "RUNNER.EXECUTION_FAILED",
@@ -953,14 +1009,9 @@ internal sealed class HelperRuntime
         string taskRoot,
         CancellationToken cancellationToken)
     {
-        var ignored = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        foreach (var output in TaskHistory.DiscoverOutputs(taskRoot))
         {
-            "input.json", "continuation.json", "result.json", "checkpoint.json",
-            "capability.id", "agent.name", ".credentials.json", ".sequence",
-        };
-        foreach (var source in Directory.EnumerateFiles(taskRoot, "*", SearchOption.TopDirectoryOnly))
-        {
-            if (ignored.Contains(Path.GetFileName(source))) continue;
+            var source = output.FullPath;
             var artifactId = "artifact_" + Convert.ToHexString(
                 RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
             var artifactRoot = Path.Combine(_root, "ManagedArtifacts", artifactId);
@@ -1048,7 +1099,7 @@ internal sealed class HelperRuntime
                         var start = action == "preview"
                             ? new ProcessStartInfo(path) { UseShellExecute = true }
                             : new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"")
-                                { UseShellExecute = true };
+                            { UseShellExecute = true };
                         Process.Start(start);
                     }
                     else
@@ -1131,15 +1182,8 @@ internal sealed class HelperRuntime
         .EnumerateFiles(root, "*", SearchOption.AllDirectories)
         .Sum(path => new FileInfo(path).Length);
 
-    private static long OutputSize(string taskRoot) => Directory
-        .EnumerateFiles(taskRoot, "*", SearchOption.TopDirectoryOnly)
-        .Where(path => !Path.GetFileName(path).StartsWith('.'))
-        .Where(path => !new[]
-        {
-            "input.json", "continuation.json", "result.json", "checkpoint.json",
-            "capability.id", "agent.name",
-        }.Contains(Path.GetFileName(path), StringComparer.OrdinalIgnoreCase))
-        .Sum(path => new FileInfo(path).Length);
+    private static long OutputSize(string taskRoot) =>
+        TaskHistory.DiscoverOutputs(taskRoot).Sum(output => output.SizeBytes);
 
     private async Task SendFileEventAsync(
         string taskId,
