@@ -168,12 +168,11 @@ export function modelSelectionState(
       (!boundCapability || model.capability === boundCapability),
   );
   const fallback = modelForNewNode(options, effectiveDefault);
+  const invalidSavedModel = Boolean(snapshot && !matched && !workflowBound);
   return {
-    selected: matched ?? (workflowBound ? fallback : snapshot ?? fallback),
+    selected: matched ?? fallback ?? (invalidSavedModel ? snapshot : null),
     fallback,
-    invalidSavedModel: Boolean(
-      snapshot && options.length > 0 && !matched && !workflowBound,
-    ),
+    invalidSavedModel,
   };
 }
 
@@ -193,19 +192,11 @@ export function modelOptionsForNode(
   capability: string,
 ) {
   const categoryOptions = modelOptionsForCapability(capabilities, capability);
-  const snapshot = modelSnapshotFromNode(node, capability);
   const workflowBound = Boolean(textValue(node.data.workflowLogicalNodeId));
   if (workflowBound) {
     return categoryOptions.filter((model) => model.capability === capability);
   }
-  const options = categoryOptions;
-  if (
-    !snapshot ||
-    options.some((model) => modelKey(model) === modelKey(snapshot))
-  ) {
-    return options;
-  }
-  return [snapshot, ...options];
+  return categoryOptions;
 }
 
 export function modelLabelForNode(
@@ -215,8 +206,19 @@ export function modelLabelForNode(
   fallback: string,
   effectiveDefault?: AigcModelRef | null,
 ) {
-  const model = modelForNode(capabilities, node, capability, effectiveDefault);
+  const selection = modelSelectionState(
+    capabilities,
+    node,
+    capability,
+    effectiveDefault,
+  );
+  const model = selection.selected;
   return String(
-    node.data.modelLabel ?? model?.model_name ?? model?.model_id ?? fallback,
+    selection.invalidSavedModel
+      ? model?.model_name ?? model?.model_id ?? fallback
+      : node.data.modelLabel ??
+          model?.model_name ??
+          model?.model_id ??
+          fallback,
   );
 }

@@ -45,7 +45,7 @@ describe("nodeModelSelection", () => {
     ).toEqual(preferred);
   });
 
-  it("keeps an invalid saved model visible until switching is confirmed", () => {
+  it("shows the configured fallback while preserving migration state", () => {
     const fallback = imageModel("text_to_image", "fallback");
     const node: AigcCanvasNode = {
       id: "image-1",
@@ -65,9 +65,12 @@ describe("nodeModelSelection", () => {
       model_id: "fallback",
     });
     expect(state.invalidSavedModel).toBe(true);
-    expect(state.selected?.model_id).toBe("removed-model");
+    expect(state.selected?.model_id).toBe("fallback");
     expect(state.fallback).toEqual(fallback);
     expect(node.data.modelId).toBe("removed-model");
+    expect(modelOptionsForNode([fallback], node, "text_to_image")).toEqual([
+      fallback,
+    ]);
   });
 
   it("deduplicates multi-capability image models for component model pickers", () => {
@@ -87,7 +90,7 @@ describe("nodeModelSelection", () => {
     ]);
   });
 
-  it("keeps a stale node snapshot visible when configured options exist", () => {
+  it("excludes a stale node snapshot from configured options", () => {
     const configuredModel = model("storyboard", "glm-4-7", "GLM-4.7");
     const node: AigcCanvasNode = {
       id: "text-1",
@@ -103,12 +106,30 @@ describe("nodeModelSelection", () => {
     };
 
     expect(modelOptionsForNode([configuredModel], node, "storyboard")).toEqual([
-      expect.objectContaining({ model_id: "Qwen/Qwen3.5-122B-A10B" }),
       configuredModel,
     ]);
     expect(modelForNode([configuredModel], node, "storyboard")).toEqual(
-      expect.objectContaining({ model_id: "Qwen/Qwen3.5-122B-A10B" }),
+      configuredModel,
     );
+  });
+
+  it("blocks a stale snapshot when no configured model is available", () => {
+    const node: AigcCanvasNode = {
+      id: "image-1",
+      type: "image_generate",
+      position: { x: 0, y: 0 },
+      data: {
+        providerId: "volcengine",
+        modelId: "removed-model",
+        modelLabel: "Removed model",
+      },
+    };
+
+    const state = modelSelectionState([], node, "text_to_image");
+
+    expect(state.invalidSavedModel).toBe(true);
+    expect(state.fallback).toBeNull();
+    expect(state.selected?.model_id).toBe("removed-model");
   });
 
   it("offers every compatible configured model for a workflow-bound node", () => {

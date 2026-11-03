@@ -5,13 +5,14 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { message as antdMessage } from "antd";
+import { message as antdMessage, Modal } from "antd";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AigcStudioPage from "./index";
 import { SCRIPT_SHOTS } from "./components/ScriptNode/scriptNodeState";
 
 const mockAigcStudioApi = vi.hoisted(() => ({
   listCapabilities: vi.fn(),
+  listWorkflowCapabilities: vi.fn(),
   listVisualDnaDimensions: vi.fn(),
   listVisualDnaElements: vi.fn(),
   listStyleTemplates: vi.fn(),
@@ -397,6 +398,10 @@ function storyboardScriptJobFixture() {
 
 describe("AigcStudioPage", () => {
   afterEach(() => {
+    Modal.destroyAll();
+    document
+      .querySelectorAll(".ant-modal-root")
+      .forEach((element) => element.remove());
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     document
@@ -442,6 +447,9 @@ describe("AigcStudioPage", () => {
           source: "model_registry",
         },
       ],
+    });
+    mockAigcStudioApi.listWorkflowCapabilities.mockResolvedValue({
+      available_models: [],
     });
     mockAigcStudioApi.listStyleTemplates.mockResolvedValue({
       templates: [
@@ -679,7 +687,7 @@ describe("AigcStudioPage", () => {
     });
   });
 
-  it("runs image generation from a saved image-node model even when capabilities are unavailable", async () => {
+  it("blocks a saved image-node model when no configured capability is available", async () => {
     const canvas = canvasFixture();
     mockAigcStudioApi.listCapabilities.mockResolvedValueOnce({
       capabilities: [],
@@ -717,14 +725,174 @@ describe("AigcStudioPage", () => {
       within(composer).getByRole("button", { name: "提交图片节点输入" }),
     );
 
+    expect(
+      await screen.findByText("该模型已不可用，且当前没有可切换的默认模型。"),
+    ).toBeInTheDocument();
+    expect(mockAigcStudioApi.submitJob).not.toHaveBeenCalled();
+  });
+
+  it("offers the configured default instead of a stale saved image model", async () => {
+    const canvas = canvasFixture();
+    mockAigcStudioApi.listCapabilities.mockResolvedValueOnce({
+      capabilities: [
+        {
+          provider_id: "openai",
+          provider_name: "OpenAI",
+          model_id: "gpt-image-2",
+          model_name: "GPT Image 2",
+          capability: "text_to_image",
+          source: "model_registry",
+        },
+      ],
+      defaults: {
+        image: {
+          configured: true,
+          configured_default: {
+            provider_id: "openai",
+            model_id: "gpt-image-2",
+          },
+          effective_default: {
+            provider_id: "openai",
+            model_id: "gpt-image-2",
+          },
+          fallback_active: false,
+          fallback_reason: [],
+        },
+      },
+    });
+    mockAigcStudioApi.listCanvases.mockResolvedValueOnce({
+      canvases: [
+        {
+          ...canvas,
+          nodes: [
+            {
+              ...canvas.nodes[1]!,
+              data: {
+                title: "主视觉图片",
+                text: "",
+                composerText: "修仙的，背着葫芦的小姑娘",
+                imageMode: "blank",
+                providerId: "volcengine",
+                modelId: "doubao-seedream-4-5-251128",
+                modelLabel: "doubao-seedream-4-5",
+              },
+            },
+          ],
+          edges: [],
+        },
+      ],
+    });
+
+    render(<AigcStudioPage />);
+
+    const composer = await screen.findByTestId("aigc-image-composer");
+    expect(within(composer).getByText("GPT Image 2")).toBeInTheDocument();
+    expect(
+      within(composer).queryByText("doubao-seedream-4-5"),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(
+      within(composer).getByRole("button", { name: "提交图片节点输入" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "该模型已不可用",
+    });
+    expect(dialog).toHaveTextContent(
+      "是否切换到当前默认模型 GPT Image 2 后继续？",
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "切换并继续" }));
+
+    await waitFor(() => {
+      expect(mockAigcStudioApi.submitJob).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider_id: "openai",
+          model_id: "gpt-image-2",
+        }),
+      );
+    });
+  });
+
+  it("keeps workflow-only models available without adding them to the ordinary catalog", async () => {
+    const canvas = canvasFixture();
+    mockAigcStudioApi.listCapabilities.mockResolvedValueOnce({
+      capabilities: [
+        {
+          provider_id: "openai",
+          provider_name: "OpenAI",
+          model_id: "gpt-image-2",
+          model_name: "GPT Image 2",
+          capability: "text_to_image",
+          source: "model_registry",
+        },
+      ],
+      defaults: {
+        image: {
+          configured: true,
+          configured_default: {
+            provider_id: "openai",
+            model_id: "gpt-image-2",
+          },
+          effective_default: {
+            provider_id: "openai",
+            model_id: "gpt-image-2",
+          },
+          fallback_active: false,
+          fallback_reason: [],
+        },
+      },
+    });
+    mockAigcStudioApi.listWorkflowCapabilities.mockResolvedValueOnce({
+      available_models: [
+        {
+          provider_id: "volcengine",
+          provider_name: "Volcano Engine",
+          model_id: "workflow-seedream",
+          model_name: "Workflow Seedream",
+          capability: "text_to_image",
+          source: "model_registry",
+        },
+      ],
+    });
+    mockAigcStudioApi.listCanvases.mockResolvedValueOnce({
+      canvases: [
+        {
+          ...canvas,
+          meta: { workflow_id: "expert-workflow" },
+          nodes: [
+            {
+              ...canvas.nodes[1]!,
+              data: {
+                title: "主视觉图片",
+                text: "",
+                composerText: "专家工作流图片",
+                imageMode: "blank",
+                workflowLogicalNodeId: "hero_image",
+                providerId: "volcengine",
+                providerName: "Volcano Engine",
+                modelId: "workflow-seedream",
+                modelLabel: "Workflow Seedream",
+                modelCapability: "text_to_image",
+              },
+            },
+          ],
+          edges: [],
+        },
+      ],
+    });
+
+    render(<AigcStudioPage />);
+
+    const composer = await screen.findByTestId("aigc-image-composer");
+    expect(within(composer).getByText("Workflow Seedream")).toBeInTheDocument();
+    fireEvent.click(
+      within(composer).getByRole("button", { name: "提交图片节点输入" }),
+    );
+
     await waitFor(() => {
       expect(mockAigcStudioApi.submitJob).toHaveBeenCalledWith(
         expect.objectContaining({
           provider_id: "volcengine",
-          model_id: "doubao-seedream-4-5-251128",
-          inputs: expect.objectContaining({
-            prompt: "修仙的，背着葫芦的小姑娘",
-          }),
+          model_id: "workflow-seedream",
         }),
       );
     });

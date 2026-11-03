@@ -389,6 +389,11 @@ export const aigcStudioApi = {
       defaults: AigcCapabilityDefaultsByCategory;
     }>("/aigc-studio/capabilities"),
 
+  listWorkflowCapabilities: () =>
+    request<{ available_models: AigcCapabilityInfo[] }>(
+      "/aigc-studio/workflow-capabilities",
+    ),
+
   listVisualDnaDimensions: () =>
     request<{ dimensions: VisualDnaDimensionInfo[] }>(
       "/aigc-studio/visual-dna/dimensions",

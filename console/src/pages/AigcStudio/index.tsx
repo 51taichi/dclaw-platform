@@ -496,6 +496,7 @@ export default function AigcStudioPage() {
     autoSaveTimerRef,
     savedCanvasSignatureRef,
     capabilities,
+    workflowCapabilities,
     capabilityDefaults,
     canvases,
     setCanvases,
@@ -657,6 +658,15 @@ export default function AigcStudioPage() {
   const selectedNode = activeCanvas?.nodes.find(
     (node) => node.id === selectedNodeId,
   );
+  const canvasUsesWorkflowCapabilities = Boolean(
+    String(activeCanvas?.meta?.workflow_id ?? "").trim() ||
+      activeCanvas?.nodes.some((node) =>
+        Boolean(String(node.data.workflowLogicalNodeId ?? "").trim()),
+      ),
+  );
+  const nodeCapabilities = canvasUsesWorkflowCapabilities
+    ? workflowCapabilities
+    : capabilities;
   const capabilityForCanvasNode = (node: AigcCanvasNode) => {
     const boundCapability = String(node.data.modelCapability ?? "").trim();
     return boundCapability || capabilityForNode(node.type);
@@ -676,7 +686,7 @@ export default function AigcStudioPage() {
   const selectedNodeModel =
     selectedNodeUsesModel && selectedNode
       ? modelForNode(
-          capabilities,
+          nodeCapabilities,
           selectedNode,
           selectedCapability,
           effectiveDefaultForCapability(capabilityDefaults, selectedCapability),
@@ -685,7 +695,7 @@ export default function AigcStudioPage() {
   const selectedNodeModelState =
     selectedNodeUsesModel && selectedNode
       ? modelSelectionState(
-          capabilities,
+          nodeCapabilities,
           selectedNode,
           selectedCapability,
           effectiveDefaultForCapability(capabilityDefaults, selectedCapability),
@@ -693,7 +703,7 @@ export default function AigcStudioPage() {
       : null;
   const selectedNodeModelOptions =
     selectedNodeUsesModel && selectedNode
-      ? modelOptionsForNode(capabilities, selectedNode, selectedCapability)
+      ? modelOptionsForNode(nodeCapabilities, selectedNode, selectedCapability)
       : [];
   const selectedNodeModelKey = modelKey(selectedNodeModel);
   const runningNodeKey = (canvasId: string, nodeId: string) =>
@@ -970,13 +980,17 @@ export default function AigcStudioPage() {
   const modelOptionsForCanvasNode = (node: AigcCanvasNode) =>
     isWorkflowOnlyNodeType(node.type)
       ? []
-      : modelOptionsForNode(capabilities, node, capabilityForCanvasNode(node));
+      : modelOptionsForNode(
+          nodeCapabilities,
+          node,
+          capabilityForCanvasNode(node),
+        );
 
   const currentModelForCanvasNode = (node: AigcCanvasNode) =>
     isWorkflowOnlyNodeType(node.type)
       ? null
       : modelForNode(
-          capabilities,
+          nodeCapabilities,
           node,
           capabilityForCanvasNode(node),
           effectiveDefaultForCapability(
@@ -1031,7 +1045,7 @@ export default function AigcStudioPage() {
     if (!canvasForRunSource || !nodeToRun) return;
     const nodeCapability = capabilityForCanvasNode(nodeToRun);
     const selection = modelSelectionState(
-      capabilities,
+      nodeCapabilities,
       nodeToRun,
       nodeCapability,
       effectiveDefaultForCapability(capabilityDefaults, nodeCapability),
@@ -1136,7 +1150,7 @@ export default function AigcStudioPage() {
       return base;
     };
     const runModel = modelForNode(
-      capabilities,
+      nodeCapabilities,
       nodeToRun,
       nodeCapability,
       effectiveDefaultForCapability(capabilityDefaults, nodeCapability),
@@ -2065,7 +2079,7 @@ export default function AigcStudioPage() {
     commitCanvas,
     updateNodeData,
     setSelectedNodeId,
-    modelOptions: capabilities,
+    modelOptions: nodeCapabilities,
     t,
     createAssetPreviewUrl,
     uploadAsset: aigcStudioApi.uploadAsset,
@@ -2084,7 +2098,7 @@ export default function AigcStudioPage() {
     commitCanvas,
     updateNodeData,
     setSelectedNodeId,
-    modelOptions: capabilities,
+    modelOptions: nodeCapabilities,
     t,
     createAssetPreviewUrl,
     uploadAsset: aigcStudioApi.uploadAsset,
@@ -2093,7 +2107,7 @@ export default function AigcStudioPage() {
 
   const audioWorkflow = useAudioNodeWorkflow({
     updateNodeData,
-    modelOptions: capabilities,
+    modelOptions: nodeCapabilities,
   });
 
   const directorStageWorkflow = useDirectorStageWorkflow({
@@ -2118,7 +2132,7 @@ export default function AigcStudioPage() {
     setPortMenu,
     nodeVisualWidth,
     connectCanvasNodes,
-    modelOptions: capabilities,
+    modelOptions: nodeCapabilities,
     t,
   });
 
@@ -3166,7 +3180,7 @@ export default function AigcStudioPage() {
                   selected={selectedNodeId === node.id}
                   currentModel={currentModelForCanvasNode(node)}
                   modelOptions={modelOptionsForNode(
-                    capabilities,
+                    nodeCapabilities,
                     node,
                     "text_to_image",
                   )}
@@ -3476,18 +3490,15 @@ export default function AigcStudioPage() {
                     </div>
                     <div className={styles.parameterBar}>
                       <span>
-                        {String(
-                          node.data.modelLabel ??
-                            modelLabelForNode(
-                              capabilities,
-                              node,
-                              capabilityForCanvasNode(node),
-                              "",
-                              effectiveDefaultForCapability(
-                                capabilityDefaults,
-                                capabilityForCanvasNode(node),
-                              ),
-                            ),
+                        {modelLabelForNode(
+                          nodeCapabilities,
+                          node,
+                          capabilityForCanvasNode(node),
+                          "",
+                          effectiveDefaultForCapability(
+                            capabilityDefaults,
+                            capabilityForCanvasNode(node),
+                          ),
                         )}
                       </span>
                       <span>16:9</span>
@@ -3718,18 +3729,7 @@ export default function AigcStudioPage() {
                   }}
                   options={selectedNodeModelOptions.map((item) => ({
                     value: `${item.provider_id}:${item.model_id}`,
-                    label: `${item.provider_name} / ${item.model_name}${
-                      selectedNodeModelState?.invalidSavedModel &&
-                      modelKey(item) === selectedNodeModelKey
-                        ? ` · ${t(
-                            "aigcStudio.modelUnavailable",
-                            "该模型已不可用",
-                          )}`
-                        : ""
-                    }`,
-                    disabled:
-                      selectedNodeModelState?.invalidSavedModel &&
-                      modelKey(item) === selectedNodeModelKey,
+                    label: `${item.provider_name} / ${item.model_name}`,
                   }))}
                 />
                 {selectedNodeModelState?.invalidSavedModel && (

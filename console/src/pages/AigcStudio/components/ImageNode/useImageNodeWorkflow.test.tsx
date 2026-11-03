@@ -234,10 +234,7 @@ describe("useImageNodeWorkflow", () => {
     };
 
     expect(
-      imageModelForNode(workflowNode, null, [
-        textCapability,
-        mxapiImageModel,
-      ]),
+      imageModelForNode(workflowNode, null, [textCapability, mxapiImageModel]),
     ).toBe(mxapiImageModel);
   });
 
@@ -257,6 +254,25 @@ describe("useImageNodeWorkflow", () => {
         [selectedVideoModel, selectedModel],
       ),
     ).toBe(selectedModel);
+  });
+
+  it("preserves a removed saved image model until migration is confirmed", () => {
+    const removedModelNode: AigcCanvasNode = {
+      ...imageNode,
+      data: {
+        ...imageNode.data,
+        providerId: "volcengine",
+        modelId: "removed-seedream",
+        modelLabel: "Removed Seedream",
+      },
+    };
+
+    expect(imageModelForNode(removedModelNode, null, [selectedModel])).toEqual(
+      expect.objectContaining({
+        provider_id: "volcengine",
+        model_id: "removed-seedream",
+      }),
+    );
   });
 
   it("uploads image-to-image references before creating the connected source node", async () => {

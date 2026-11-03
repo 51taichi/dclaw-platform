@@ -93,9 +93,8 @@ const imageCapabilityRank = (capability: string) => {
   return index === -1 ? IMAGE_CAPABILITY_PRIORITY.length : index;
 };
 
-export const isImageCapabilityModel = (
-  model?: AigcCapabilityInfo | null,
-) => Boolean(model && IMAGE_GENERATION_CAPABILITIES.has(model.capability));
+export const isImageCapabilityModel = (model?: AigcCapabilityInfo | null) =>
+  Boolean(model && IMAGE_GENERATION_CAPABILITIES.has(model.capability));
 
 export const imageModelOptionsFrom = (modelOptions: AigcCapabilityInfo[]) => {
   const uniqueModels = new Map<string, AigcCapabilityInfo>();
@@ -136,10 +135,14 @@ export const imageModelForNode = (
     (model) => imageModelKey(model) === nodeModelKey,
   );
   if (matchedNodeModel) return matchedNodeModel;
+  const savedModelIsKnown = modelOptions.some(
+    (model) => imageModelKey(model) === nodeModelKey,
+  );
   if (
     nodeProviderId &&
     nodeModelId &&
-    (!imageModelOptions.length ||
+    (!savedModelIsKnown ||
+      !imageModelOptions.length ||
       IMAGE_GENERATION_CAPABILITIES.has(nodeModelCapability))
   ) {
     return {

@@ -10,6 +10,7 @@ import { canvasSignature } from "./canvasAssetFactory";
 
 const mockAigcStudioApi = vi.hoisted(() => ({
   listCapabilities: vi.fn(),
+  listWorkflowCapabilities: vi.fn(),
   listCanvases: vi.fn(),
   createCanvas: vi.fn(),
   saveCanvas: vi.fn(),
@@ -56,6 +57,9 @@ describe("useCanvasPersistence", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useRealTimers();
+    mockAigcStudioApi.listWorkflowCapabilities.mockResolvedValue({
+      available_models: [],
+    });
   });
 
   it("loads capabilities, localizes legacy canvases, and tracks saved state", async () => {
@@ -71,6 +75,15 @@ describe("useCanvasPersistence", () => {
       },
     ];
     mockAigcStudioApi.listCapabilities.mockResolvedValue({ capabilities });
+    mockAigcStudioApi.listWorkflowCapabilities.mockResolvedValue({
+      available_models: [
+        {
+          ...capabilities[0],
+          model_id: "workflow-image-model",
+          model_name: "Workflow Image Model",
+        },
+      ],
+    });
     mockAigcStudioApi.listCanvases.mockResolvedValue({
       canvases: [canvasFixture()],
     });
@@ -83,6 +96,9 @@ describe("useCanvasPersistence", () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     expect(result.current.capabilities).toEqual(capabilities);
+    expect(result.current.workflowCapabilities).toEqual([
+      expect.objectContaining({ model_id: "workflow-image-model" }),
+    ]);
     expect(result.current.canvases).toHaveLength(1);
     expect(result.current.activeCanvas?.name).toBe("未命名 AIGC 画布");
     expect(result.current.activeCanvas?.nodes[0].data.title).toBe("营销提示词");
