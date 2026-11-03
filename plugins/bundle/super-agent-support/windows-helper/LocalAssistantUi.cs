@@ -6,7 +6,7 @@ internal static class LocalAssistantUi
 {
     private const string BallClass = "DClawLocalAssistantBall";
     private const string DashboardClass = "DClawLocalAssistantDashboard";
-    private const int BallSize = 68;
+    private const int BallSize = 60;
     private const int DashboardWidth = 320;
     private const int DashboardHeight = 390;
     private const int TaskCardHeight = 120;
@@ -261,13 +261,13 @@ internal static class LocalAssistantUi
             using var status = new GdiObject(CreateSolidBrush(attention.Color));
             var oldPen = SelectObject(dc, GetStockObject(8));
             var oldBrush = SelectObject(dc, ring.Handle);
-            Ellipse(dc, 1, 1, 67, 67);
+            Ellipse(dc, 1, 1, BallSize - 1, BallSize - 1);
             SelectObject(dc, white.Handle);
-            Ellipse(dc, 5, 5, 63, 63);
-            DrawLogo(dc, 6, 6, 56);
-            Ellipse(dc, 50, 50, 66, 66);
+            Ellipse(dc, 5, 5, BallSize - 5, BallSize - 5);
+            DrawLogo(dc, 6, 6, BallSize - 12);
+            Ellipse(dc, BallSize - 18, BallSize - 18, BallSize - 2, BallSize - 2);
             SelectObject(dc, status.Handle);
-            Ellipse(dc, 52, 52, 64, 64);
+            Ellipse(dc, BallSize - 16, BallSize - 16, BallSize - 4, BallSize - 4);
             SelectObject(dc, oldBrush);
             SelectObject(dc, oldPen);
         }
@@ -298,7 +298,7 @@ internal static class LocalAssistantUi
 
     private static void PaintMainPage(IntPtr dc)
     {
-        DrawLogo(dc, 18, 18, 42);
+        DrawLogo(dc, 20, 20, 38);
         DrawLabel(dc, "DClaw本地助手", 66, 18, 190, 26, 19, 600, ColorRef(25, 29, 36));
         DrawLabel(dc, $"版本 {HelperMetadata.Version}", 66, 44, 185, 18, 12, 400, ColorRef(107, 114, 128));
         DrawRounded(dc, new Rect(264, 20, 302, 58), 38, ColorRef(239, 244, 255));
@@ -436,7 +436,7 @@ internal static class LocalAssistantUi
         try
         {
             using var resource = typeof(LocalAssistantUi).Assembly.GetManifestResourceStream(
-                "DClaw.LocalHelper.Assets.DClaw-Bot-icon-round.png");
+                "DClaw.LocalHelper.Assets.DClaw-Bot-icon.png");
             if (resource is null) return;
             var logoPath = Path.Combine(root, "assistant-logo.png");
             using (var output = File.Create(logoPath)) resource.CopyTo(output);
@@ -462,6 +462,9 @@ internal static class LocalAssistantUi
         if (GdipCreateFromHDC(dc, out var graphics) != 0) return;
         try
         {
+            GdipSetInterpolationMode(graphics, 7);
+            GdipSetSmoothingMode(graphics, 4);
+            GdipSetPixelOffsetMode(graphics, 4);
             if (GdipCreatePath(0, out var path) != 0) return;
             try
             {
@@ -1029,6 +1032,15 @@ internal static class LocalAssistantUi
 
     [DllImport("gdiplus.dll", ExactSpelling = true)]
     private static extern int GdipDrawImageRectI(IntPtr graphics, IntPtr image, int x, int y, int width, int height);
+
+    [DllImport("gdiplus.dll", ExactSpelling = true)]
+    private static extern int GdipSetInterpolationMode(IntPtr graphics, int mode);
+
+    [DllImport("gdiplus.dll", ExactSpelling = true)]
+    private static extern int GdipSetSmoothingMode(IntPtr graphics, int mode);
+
+    [DllImport("gdiplus.dll", ExactSpelling = true)]
+    private static extern int GdipSetPixelOffsetMode(IntPtr graphics, int mode);
 
     [DllImport("gdi32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

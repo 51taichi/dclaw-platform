@@ -19,7 +19,7 @@ internal sealed record HelperConfig(
 
 internal static class HelperMetadata
 {
-    internal const string Version = "1.4.1";
+    internal const string Version = "1.4.2";
     internal const string ProtocolVersion = "2";
 }
 

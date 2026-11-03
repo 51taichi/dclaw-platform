@@ -100,9 +100,9 @@ def test_standalone_plugin_release_contains_canonical_standard(
     helper = tmp_path / "DClaw.LocalHelper.exe"
     helper.write_bytes(b"MZ\x00signed-helper-fixture")
     metadata = release.build(output, windows_helper_binary=helper)
-    assert metadata["plugin_version"] == "1.18.1"
+    assert metadata["plugin_version"] == "1.18.2"
     assert metadata["standard_version"] == "2.24"
-    assert metadata["windows_helper_version"] == "1.4.1"
+    assert metadata["windows_helper_version"] == "1.4.2"
     with zipfile.ZipFile(output) as archive:
         standard = archive.read(release.STANDARD_IN_PLUGIN)
         assert b"2.24" in standard
@@ -118,7 +118,7 @@ def test_standalone_plugin_release_contains_canonical_standard(
             "protocol_version": "2",
             "sha256": hashlib.sha256(helper.read_bytes()).hexdigest(),
             "size_bytes": len(helper.read_bytes()),
-            "version": "1.4.1",
+            "version": "1.4.2",
         }
         archive.extractall(tmp_path / "extracted")
     root = tmp_path / "extracted" / "super-agent-support"
@@ -327,8 +327,8 @@ def test_plugin_archive_embeds_current_standard_and_is_reproducible(tmp_path):
     assert first == second
     assert metadata == repeated
     assert metadata["plugin_id"] == "dclaw.super-agent-support"
-    assert metadata["version"] == "1.18.1"
-    assert metadata["windows_helper_version"] == "1.4.1"
+    assert metadata["version"] == "1.18.2"
+    assert metadata["windows_helper_version"] == "1.4.2"
     assert metadata["sha256"] == hashlib.sha256(first).hexdigest()
     with zipfile.ZipFile(io.BytesIO(first)) as archive:
         names = set(archive.namelist())
@@ -348,7 +348,7 @@ def test_plugin_archive_embeds_current_standard_and_is_reproducible(tmp_path):
     assert embedded == standard.read_bytes()
     assert "plugin.json" in names
     assert "windows-helper/LocalAssistantUi.cs" in names
-    assert "windows-helper/Assets/DClaw-Bot-icon-round.png" in names
+    assert "windows-helper/Assets/DClaw-Bot-icon.png" in names
     assert "windows-helper/TaskHistory.cs" in names
     assert b"<OutputType>WinExe</OutputType>" in helper_project
     assert b"LocalAssistantUi.Run" in helper_program

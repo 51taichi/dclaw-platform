@@ -9,7 +9,7 @@
     <RootNamespace>DClaw.LocalHelper</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <EmbeddedResource Include="Assets/DClaw-Bot-icon-round.png"
-                      LogicalName="DClaw.LocalHelper.Assets.DClaw-Bot-icon-round.png" />
+    <EmbeddedResource Include="Assets/DClaw-Bot-icon.png"
+                      LogicalName="DClaw.LocalHelper.Assets.DClaw-Bot-icon.png" />
   </ItemGroup>
 </Project>
