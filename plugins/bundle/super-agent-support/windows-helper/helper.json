@@ -1,6 +1,6 @@
 {
   "platform": "windows-x64",
-  "version": "1.4.3",
+  "version": "1.4.4",
   "protocol_version": "2",
   "executable": "DClaw.LocalHelper.exe"
 }

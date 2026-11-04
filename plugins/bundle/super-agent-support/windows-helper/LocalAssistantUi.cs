@@ -59,6 +59,7 @@ internal static class LocalAssistantUi
     private static bool _dragging;
     private static bool _dragged;
     private static bool _layeredBallFailed;
+    private static bool _layeredDashboardFailed;
     private static bool _taskPage;
     private static bool _outputPage;
     private static Point _dragCursor;
@@ -97,7 +98,7 @@ internal static class LocalAssistantUi
             instance,
             IntPtr.Zero);
         _dashboard = CreateWindowEx(
-            WsExTopmost | WsExToolWindow,
+            WsExTopmost | WsExToolWindow | WsExLayered,
             DashboardClass,
             "DClaw 本地助手",
             WsPopup,
@@ -111,7 +112,6 @@ internal static class LocalAssistantUi
             IntPtr.Zero);
         if (_ball == IntPtr.Zero || _dashboard == IntPtr.Zero)
             throw new InvalidOperationException("无法创建本地助手窗口");
-        SetWindowRgn(_dashboard, CreateRoundRectRgn(0, 0, DashboardWidth, DashboardHeight, 48, 48), true);
         SetTimer(_ball, 1, 2000, IntPtr.Zero);
         SetTimer(_dashboard, 2, 3000, IntPtr.Zero);
         ReloadTasks();
@@ -234,7 +234,17 @@ internal static class LocalAssistantUi
         switch (message)
         {
             case WmPaint:
-                PaintDashboard(window);
+                if (_layeredDashboardFailed)
+                    PaintDashboard(window);
+                else
+                {
+                    var dc = BeginPaint(window, out var paint);
+                    EndPaint(window, ref paint);
+                    bool painted;
+                    try { painted = PaintDashboardLayered(window); }
+                    catch { painted = false; }
+                    if (!painted) EnableDashboardFallback(window);
+                }
                 return IntPtr.Zero;
             case WmTimer:
                 ReloadTasks();
@@ -434,15 +444,159 @@ internal static class LocalAssistantUi
             using var white = new GdiObject(CreateSolidBrush(ColorRef(255, 255, 255)));
             var client = new Rect(0, 0, DashboardWidth, DashboardHeight);
             FillRect(dc, ref client, white.Handle);
-            SetBkMode(dc, Transparent);
-            if (_outputPage) PaintOutputPage(dc);
-            else if (_taskPage) PaintTaskPage(dc);
-            else PaintMainPage(dc);
+            PaintDashboardContent(dc);
         }
         finally
         {
             EndPaint(window, ref paint);
         }
+    }
+
+    private static bool PaintDashboardLayered(IntPtr window)
+    {
+        var screen = GetDC(IntPtr.Zero);
+        if (screen == IntPtr.Zero) return false;
+        var memory = CreateCompatibleDC(screen);
+        if (memory == IntPtr.Zero)
+        {
+            ReleaseDC(IntPtr.Zero, screen);
+            return false;
+        }
+        var bitmapInfo = new BitmapInfo
+        {
+            Header = new BitmapInfoHeader
+            {
+                Size = (uint)Marshal.SizeOf<BitmapInfoHeader>(),
+                Width = DashboardWidth,
+                Height = -DashboardHeight,
+                Planes = 1,
+                BitCount = 32,
+                SizeImage = DashboardWidth * DashboardHeight * 4,
+            },
+        };
+        var dib = CreateDIBSection(screen, ref bitmapInfo, 0, out var pixels, IntPtr.Zero, 0);
+        if (dib == IntPtr.Zero || pixels == IntPtr.Zero)
+        {
+            if (dib != IntPtr.Zero) DeleteObject(dib);
+            DeleteDC(memory);
+            ReleaseDC(IntPtr.Zero, screen);
+            return false;
+        }
+        var previous = SelectObject(memory, dib);
+        try
+        {
+            var whiteRow = new byte[DashboardWidth * 4];
+            Array.Fill(whiteRow, (byte)255);
+            for (var y = 0; y < DashboardHeight; y++)
+                Marshal.Copy(whiteRow, 0, IntPtr.Add(pixels, y * whiteRow.Length), whiteRow.Length);
+            PaintDashboardContent(memory);
+            if (!ApplyDashboardCornerMask(pixels)) return false;
+
+            GetWindowRect(window, out var bounds);
+            var destination = new Point(bounds.Left, bounds.Top);
+            var size = new WindowSize(DashboardWidth, DashboardHeight);
+            var source = new Point(0, 0);
+            var blend = new BlendFunction { SourceConstantAlpha = 255, AlphaFormat = 1 };
+            return UpdateLayeredWindow(window, screen, ref destination, ref size,
+                memory, ref source, 0, ref blend, 2);
+        }
+        finally
+        {
+            SelectObject(memory, previous);
+            DeleteObject(dib);
+            DeleteDC(memory);
+            ReleaseDC(IntPtr.Zero, screen);
+        }
+    }
+
+    private static bool ApplyDashboardCornerMask(IntPtr pixels)
+    {
+        if (GdipCreateBitmapFromScan0(DashboardWidth, DashboardHeight, 0,
+                PixelFormat32bppPArgb, IntPtr.Zero, out var mask) != 0)
+            return false;
+        try
+        {
+            if (GdipGetImageGraphicsContext(mask, out var graphics) != 0)
+                return false;
+            try
+            {
+                if (GdipGraphicsClear(graphics, 0) != 0
+                    || GdipSetSmoothingMode(graphics, 4) != 0
+                    || GdipSetPixelOffsetMode(graphics, 4) != 0)
+                    return false;
+                if (GdipCreateSolidFill(unchecked((int)0xFFFFFFFF), out var brush) != 0)
+                    return false;
+                try
+                {
+                    if (!FillRoundedSurface(graphics, brush,
+                            new Rect(0, 0, DashboardWidth, DashboardHeight), 24))
+                        return false;
+                }
+                finally
+                {
+                    GdipDeleteBrush(brush);
+                }
+            }
+            finally
+            {
+                GdipDeleteGraphics(graphics);
+            }
+
+            var area = new GdipRect { Width = DashboardWidth, Height = DashboardHeight };
+            if (GdipBitmapLockBits(mask, ref area, 1,
+                    PixelFormat32bppPArgb, out var data) != 0)
+                return false;
+            try
+            {
+                var maskRow = new byte[DashboardWidth * 4];
+                var colorRow = new byte[DashboardWidth * 4];
+                for (var y = 0; y < DashboardHeight; y++)
+                {
+                    var destination = IntPtr.Add(pixels, y * colorRow.Length);
+                    Marshal.Copy(IntPtr.Add(data.Scan0, y * data.Stride), maskRow, 0, maskRow.Length);
+                    Marshal.Copy(destination, colorRow, 0, colorRow.Length);
+                    for (var x = 0; x < DashboardWidth; x++)
+                    {
+                        var offset = x * 4;
+                        var alpha = maskRow[offset + 3];
+                        if (alpha != 255)
+                        {
+                            colorRow[offset] = (byte)((colorRow[offset] * alpha + 127) / 255);
+                            colorRow[offset + 1] = (byte)((colorRow[offset + 1] * alpha + 127) / 255);
+                            colorRow[offset + 2] = (byte)((colorRow[offset + 2] * alpha + 127) / 255);
+                        }
+                        colorRow[offset + 3] = alpha;
+                    }
+                    Marshal.Copy(colorRow, 0, destination, colorRow.Length);
+                }
+            }
+            finally
+            {
+                GdipBitmapUnlockBits(mask, ref data);
+            }
+            return true;
+        }
+        finally
+        {
+            GdipDisposeImage(mask);
+        }
+    }
+
+    private static void EnableDashboardFallback(IntPtr window)
+    {
+        _layeredDashboardFailed = true;
+        SetLayeredWindowAttributes(window, 0, 255, 2);
+        SetWindowRgn(window,
+            CreateRoundRectRgn(0, 0, DashboardWidth, DashboardHeight, 48, 48), true);
+        InvalidateRect(window, IntPtr.Zero, true);
+    }
+
+    private static void PaintDashboardContent(IntPtr dc)
+    {
+        SetBkMode(dc, Transparent);
+        if (_outputPage) PaintOutputPage(dc);
+        else if (_taskPage) PaintTaskPage(dc);
+        else PaintMainPage(dc);
     }
 
     private static void PaintMainPage(IntPtr dc)
@@ -454,12 +608,7 @@ internal static class LocalAssistantUi
         DrawGlyph(dc, "\uE896", 264, 20, 38, 38, 18, ColorRef(37, 99, 235));
         DrawRounded(dc, new Rect(18, 76, 302, 124), 12, ColorRef(243, 247, 255));
         var attention = AttentionState();
-        using var status = new GdiObject(CreateSolidBrush(attention.Color));
-        var oldPen = SelectObject(dc, GetStockObject(8));
-        var oldBrush = SelectObject(dc, status.Handle);
-        Ellipse(dc, 31, 95, 41, 105);
-        SelectObject(dc, oldBrush);
-        SelectObject(dc, oldPen);
+        DrawRounded(dc, new Rect(31, 95, 41, 105), 5, attention.Color);
         DrawLabel(dc, attention.Label, 51, 86, 229, 28,
             14, 400, ColorRef(55, 65, 81));
         DrawRounded(dc, new Rect(39, 205, 97, 263), 58, ColorRef(47, 52, 64));
@@ -498,12 +647,8 @@ internal static class LocalAssistantUi
                 ColorRef(249, 250, 251), ColorRef(229, 231, 235));
             DrawLabel(dc, task.AgentName, 31, top + 10, 225, 24, 14, 600,
                 ColorRef(25, 29, 36));
-            using var status = new GdiObject(CreateSolidBrush(StatusColor(task.Status)));
-            var oldPen = SelectObject(dc, GetStockObject(8));
-            var oldBrush = SelectObject(dc, status.Handle);
-            Ellipse(dc, 274, top + 15, 286, top + 27);
-            SelectObject(dc, oldBrush);
-            SelectObject(dc, oldPen);
+            DrawRounded(dc, new Rect(274, top + 15, 286, top + 27),
+                6, StatusColor(task.Status));
             var shortId = task.TaskId[..Math.Min(8, task.TaskId.Length)];
             DrawLabel(dc, $"任务 {shortId} · {task.UpdatedAt.ToLocalTime():MM-dd HH:mm}",
                 31, top + 37, 252, 18, 11, 400, ColorRef(107, 114, 128));
@@ -559,6 +704,47 @@ internal static class LocalAssistantUi
 
     private static void DrawRounded(IntPtr dc, Rect bounds, int radius, uint fill, uint? border = null)
     {
+        if (GdipCreateFromHDC(dc, out var graphics) == 0)
+        {
+            try
+            {
+                if (GdipSetSmoothingMode(graphics, 4) == 0
+                    && GdipSetPixelOffsetMode(graphics, 4) == 0
+                    && GdipCreateSolidFill(ToArgb(border ?? fill), out var outer) == 0)
+                {
+                    bool outerPainted;
+                    try
+                    {
+                        outerPainted = FillRoundedSurface(graphics, outer, bounds, radius);
+                    }
+                    finally
+                    {
+                        GdipDeleteBrush(outer);
+                    }
+                    if (outerPainted && border is null) return;
+                    if (outerPainted && GdipCreateSolidFill(ToArgb(fill), out var inner) == 0)
+                    {
+                        bool innerPainted;
+                        try
+                        {
+                            innerPainted = FillRoundedSurface(graphics, inner,
+                                new Rect(bounds.Left + 1, bounds.Top + 1,
+                                    bounds.Right - 1, bounds.Bottom - 1), radius - 1);
+                        }
+                        finally
+                        {
+                            GdipDeleteBrush(inner);
+                        }
+                        if (innerPainted) return;
+                    }
+                }
+            }
+            finally
+            {
+                GdipDeleteGraphics(graphics);
+            }
+        }
+
         using var brush = new GdiObject(CreateSolidBrush(fill));
         using var pen = new GdiObject(CreatePen(0, 1, border ?? fill));
         var oldBrush = SelectObject(dc, brush.Handle);
@@ -568,11 +754,43 @@ internal static class LocalAssistantUi
         SelectObject(dc, oldBrush);
     }
 
+    private static bool FillRoundedSurface(IntPtr graphics, IntPtr brush, Rect bounds, int radius)
+    {
+        var width = bounds.Width;
+        var height = bounds.Height;
+        radius = Math.Clamp(radius, 0, Math.Min(width, height) / 2);
+        if (radius == 0)
+        {
+            return GdipFillRectangleI(graphics, brush,
+                bounds.Left, bounds.Top, width, height) == 0;
+        }
+        var diameter = radius * 2;
+        var painted = true;
+        if (width > diameter)
+            painted = GdipFillRectangleI(graphics, brush, bounds.Left + radius,
+                bounds.Top, width - diameter, height) == 0 && painted;
+        if (height > diameter)
+            painted = GdipFillRectangleI(graphics, brush, bounds.Left,
+                bounds.Top + radius, width, height - diameter) == 0 && painted;
+        painted = GdipFillEllipseI(graphics, brush,
+            bounds.Left, bounds.Top, diameter, diameter) == 0 && painted;
+        if (width > diameter)
+            painted = GdipFillEllipseI(graphics, brush, bounds.Right - diameter,
+                bounds.Top, diameter, diameter) == 0 && painted;
+        if (height > diameter)
+            painted = GdipFillEllipseI(graphics, brush, bounds.Left,
+                bounds.Bottom - diameter, diameter, diameter) == 0 && painted;
+        if (width > diameter && height > diameter)
+            painted = GdipFillEllipseI(graphics, brush, bounds.Right - diameter,
+                bounds.Bottom - diameter, diameter, diameter) == 0 && painted;
+        return painted;
+    }
+
     private static void DrawGlyph(IntPtr dc, string glyph, int x, int y,
         int width, int height, int size, uint color)
     {
         using var font = new GdiObject(CreateFont(-size, 0, 0, 0, 400,
-            0, 0, 0, 1, 0, 0, 5, 0, "Segoe MDL2 Assets"));
+            0, 0, 0, 1, 0, 0, 4, 0, "Segoe MDL2 Assets"));
         var oldFont = SelectObject(dc, font.Handle);
         SetTextColor(dc, color);
         var bounds = new Rect(x, y, x + width, y + height);
@@ -1280,6 +1498,10 @@ internal static class LocalAssistantUi
 
     [DllImport("gdiplus.dll", ExactSpelling = true)]
     private static extern int GdipFillEllipseI(IntPtr graphics, IntPtr brush,
+        int x, int y, int width, int height);
+
+    [DllImport("gdiplus.dll", ExactSpelling = true)]
+    private static extern int GdipFillRectangleI(IntPtr graphics, IntPtr brush,
         int x, int y, int width, int height);
 
     [DllImport("gdiplus.dll", ExactSpelling = true)]
