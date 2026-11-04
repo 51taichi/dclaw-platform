@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.1 - 2026-11-04
+
+- Bundles development standard 2.25 and DevKit 1.9.0.
+- Documents the plugin operator's versioned cross-installation state restore
+  contract; Agent runtime and signing formats remain unchanged.
+
 ## 1.10.0 - 2026-11-03
 
 - Bundles development standard 2.24 and DevKit 1.9.0.
