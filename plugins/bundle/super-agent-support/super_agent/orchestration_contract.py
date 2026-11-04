@@ -77,7 +77,7 @@ class WorkspaceTurnFailure(BaseModel):
     error_code: str = Field(
         pattern=(
             r"^(orchestration_error|orchestration_timeout|runtime_failed|"
-            r"unauthorized_capability|invalid_completion)$"
+            r"unauthorized_capability|invalid_completion|INVALID_TURN_RESULT)$"
         ),
     )
     diagnostic_ref: str | None = Field(default=None, max_length=200)

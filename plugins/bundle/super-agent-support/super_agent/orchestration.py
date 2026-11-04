@@ -699,6 +699,16 @@ def _agent_execute_mode(arguments: dict[str, Any]) -> str:
     return "agent_loop"
 
 
+def _agent_execute_message(item: Any) -> Msg:
+    if isinstance(item, Msg):
+        return item
+    if isinstance(item, dict) and "name" not in item and item.get("role") in {
+        "system", "user", "assistant", "tool",
+    }:
+        item = {"name": item["role"], **item}
+    return Msg.from_dict(item)
+
+
 async def run_workspace_orchestration_turn(
     *,
     agent: Any,
@@ -868,10 +878,7 @@ async def run_workspace_orchestration_turn(
         if not isinstance(raw_messages, list) or not raw_messages:
             raise WorkspaceOrchestrationError("orchestration_error")
         try:
-            messages = [
-                item if isinstance(item, Msg) else Msg.from_dict(item)
-                for item in raw_messages
-            ]
+            messages = [_agent_execute_message(item) for item in raw_messages]
         except Exception as exc:
             raise WorkspaceOrchestrationError("orchestration_error") from exc
         agent_execute_call_number += 1

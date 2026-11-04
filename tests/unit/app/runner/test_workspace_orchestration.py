@@ -16,6 +16,7 @@ from qwenpaw.app.workspace.orchestration_contract import (
     HOST_CAPABILITIES_V1,
     OrchestrationConfig,
     WorkspaceTurnCompletion,
+    WorkspaceTurnFailure,
     WorkspaceTurnRequest,
 )
 from qwenpaw.app.workspace.orchestration import (
@@ -1439,6 +1440,19 @@ async def test_runtime_failure_preserves_safe_diagnostic_ref(tmp_path):
     )
 
 
+def test_runtime_failure_accepts_declared_invalid_turn_result_code():
+    failure = WorkspaceTurnFailure.model_validate({
+        "invocation_id": "inv-1",
+        "error_code": "INVALID_TURN_RESULT",
+    })
+    assert failure.error_code == "INVALID_TURN_RESULT"
+    with pytest.raises(ValidationError):
+        WorkspaceTurnFailure.model_validate({
+            "invocation_id": "inv-1",
+            "error_code": "arbitrary_error",
+        })
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("runtime_body", "expected_error"),
@@ -1858,7 +1872,10 @@ async def test_runner_adapter_executes_internal_candidate_without_streaming(
         """
         class Runtime:
             async def handle(self, request, host):
-                candidate = await host.call("agent.execute", {"messages": [{"name": "user", "role": "user", "content": "internal"}]})
+                candidate = await host.call("agent.execute", {"messages": [
+                    {"role": "system", "content": "instructions"},
+                    {"role": "user", "content": "internal"},
+                ]})
                 await host.call("runtime.complete", {
                     "invocation_id": request.invocation_id,
                     "message": {"name": "assistant", "role": "assistant", "content": "final:" + candidate["text"]},
@@ -1905,6 +1922,9 @@ async def test_runner_adapter_executes_internal_candidate_without_streaming(
     assert result.message["content"] == "final:draft"
     assert len(agent.calls) == 1
     assert agent.calls[0][0].content == "internal"
+    assert agent.calls[0][0].name == "user"
+    assert agent.calls[0][1].name == "workspace_runtime"
+    assert "instructions" in agent.calls[0][1].content
     trace_events = [
         json.loads(line)
         for line in runtime_trace_path(
@@ -1932,7 +1952,7 @@ async def test_runner_adapter_can_opt_into_the_standard_agent_loop(tmp_path):
         class Runtime:
             async def handle(self, request, host):
                 candidate = await host.call("agent.execute", {
-                    "messages": request.normalized_input["messages"],
+                    "messages": [{"role": "system", "content": "instructions"}, *request.normalized_input["messages"]],
                     "execution_mode": "agent_loop",
                 })
                 await host.call("runtime.complete", {
@@ -1993,7 +2013,9 @@ async def test_runner_adapter_can_opt_into_the_standard_agent_loop(tmp_path):
 
     assert result.message["content"] == "full agent loop"
     assert len(agent.calls) == 1
-    assert agent.calls[0][0].get_text_content() == "hello"
+    assert agent.calls[0][0].name == "system"
+    assert agent.calls[0][0].get_text_content() == "instructions"
+    assert agent.calls[0][1].get_text_content() == "hello"
 
 
 @pytest.mark.asyncio
