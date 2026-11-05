@@ -19,6 +19,7 @@ from ..chat_access import current_user_id, ensure_chat_access, ensure_chat_ids_a
 from ..artifact_filter import extract_user_task_files_from_texts, is_internal_task_file
 from ...security.local_access import (
     LOCAL_ACCESS_MODE_META_KEY,
+    NEW_CHAT_DEFAULT_LOCAL_ACCESS_MODE,
     parse_local_access_mode,
 )
 
@@ -129,13 +130,18 @@ async def create_chat(
     """
     _validate_local_access_meta(payload.meta)
     chat_id = str(uuid4())
+    meta = dict(payload.meta or {})
+    meta.setdefault(
+        LOCAL_ACCESS_MODE_META_KEY,
+        NEW_CHAT_DEFAULT_LOCAL_ACCESS_MODE.value,
+    )
     spec = ChatSpec(
         id=chat_id,
         name=payload.name,
         session_id=payload.session_id or chat_id,
         user_id=current_user_id(request),
         channel=payload.channel,
-        meta=payload.meta,
+        meta=meta,
     )
     return await mgr.create_chat(spec)
 

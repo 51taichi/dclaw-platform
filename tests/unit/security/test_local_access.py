@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from qwenpaw.agents.tool_guard_mixin import ToolGuardMixin
 from qwenpaw.security.local_access import (
     DEFAULT_LOCAL_ACCESS_MODE,
+    NEW_CHAT_DEFAULT_LOCAL_ACCESS_MODE,
     LocalAccessMode,
     local_access_mode_from_meta,
     parse_local_access_mode,
@@ -24,6 +25,8 @@ def _probe(mode: str | None, configured: str = "auto") -> _GuardProbe:
 
 
 def test_local_access_mode_parser_uses_safe_default():
+    assert DEFAULT_LOCAL_ACCESS_MODE == LocalAccessMode.ASK_FOR_APPROVAL
+    assert NEW_CHAT_DEFAULT_LOCAL_ACCESS_MODE == LocalAccessMode.FULL_ACCESS
     assert local_access_mode_from_meta(None) == DEFAULT_LOCAL_ACCESS_MODE
     assert (
         local_access_mode_from_meta({"local_access_mode": "unknown"})

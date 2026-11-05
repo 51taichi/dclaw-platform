@@ -16,6 +16,10 @@ class LocalAccessMode(str, Enum):
 
 DEFAULT_LOCAL_ACCESS_MODE = LocalAccessMode.ASK_FOR_APPROVAL
 
+# New chats opt in to the product default explicitly. The parser fallback above
+# stays conservative so legacy chats without metadata are not silently widened.
+NEW_CHAT_DEFAULT_LOCAL_ACCESS_MODE = LocalAccessMode.FULL_ACCESS
+
 
 def parse_local_access_mode(
     value: Any,

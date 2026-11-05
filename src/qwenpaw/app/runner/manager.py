@@ -10,6 +10,10 @@ from typing import Optional
 from .models import ChatSpec, ChatUpdate
 from .repo import BaseChatRepository
 from ..channels.schema import DEFAULT_CHANNEL
+from ...security.local_access import (
+    LOCAL_ACCESS_MODE_META_KEY,
+    NEW_CHAT_DEFAULT_LOCAL_ACCESS_MODE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +141,11 @@ class ChatManager:
                 user_id=user_id,
                 channel=channel,
                 name=name,
+                meta={
+                    LOCAL_ACCESS_MODE_META_KEY: (
+                        NEW_CHAT_DEFAULT_LOCAL_ACCESS_MODE.value
+                    ),
+                },
             )
             logger.debug(f"get_or_create_chat: created spec={spec.id}")
             # Call internal create without lock (already locked)

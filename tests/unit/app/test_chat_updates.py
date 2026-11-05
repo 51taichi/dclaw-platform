@@ -15,6 +15,7 @@ from qwenpaw.app.runner.api import get_chat_manager, router
 from qwenpaw.app.runner.manager import ChatManager
 from qwenpaw.app.runner.models import ChatSpec, ChatUpdate
 from qwenpaw.app.runner.repo.json_repo import JsonChatRepository
+from qwenpaw.security.local_access import LOCAL_ACCESS_MODE_META_KEY
 
 
 @pytest.fixture
@@ -155,6 +156,41 @@ async def test_get_or_create_chat_reuses_existing_chat_id_as_session_id(
     assert resolved.session_id == chat.session_id
     chats = await chat_manager.list_chats()
     assert len(chats) == 1
+
+
+async def test_get_or_create_chat_defaults_new_chat_to_full_access(
+    chat_manager: ChatManager,
+) -> None:
+    created = await chat_manager.get_or_create_chat(
+        session_id="console:new-user",
+        user_id="new-user",
+        channel="console",
+    )
+
+    assert created.meta[LOCAL_ACCESS_MODE_META_KEY] == "full_access"
+
+
+async def test_get_or_create_chat_does_not_change_existing_chat_without_mode(
+    chat_manager: ChatManager,
+) -> None:
+    existing = ChatSpec(
+        id="legacy-chat",
+        name="Legacy Chat",
+        session_id="console:legacy-user",
+        user_id="legacy-user",
+        channel="console",
+        meta={},
+    )
+    await chat_manager.create_chat(existing)
+
+    resolved = await chat_manager.get_or_create_chat(
+        session_id=existing.session_id,
+        user_id=existing.user_id,
+        channel=existing.channel,
+    )
+
+    assert resolved.id == existing.id
+    assert LOCAL_ACCESS_MODE_META_KEY not in resolved.meta
 
 
 @pytest.mark.parametrize(
