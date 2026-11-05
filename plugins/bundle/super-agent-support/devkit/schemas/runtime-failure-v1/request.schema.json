@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/schemas/runtime-failure-v1/request.schema.json",
+  "title": "runtime.failure.read/1 request",
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}

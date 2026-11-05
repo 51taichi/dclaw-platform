@@ -43,6 +43,7 @@ from .orchestration_contract import (
 from . import aigc_tools as _aigc_tools
 from . import composition as _composition
 from . import empty_reply as _empty_reply
+from . import failure_diagnostics as _failure_diagnostics
 from . import interaction_contract as _interaction_contract
 from . import interaction_tools as _interaction_tools
 from . import media_delivery as _media_delivery
@@ -1620,6 +1621,27 @@ class WorkspaceRuntimeHost:
                     ),
                 )
             return {"accepted": True}
+        if capability == "runtime.failure.read/1":
+            if arguments:
+                raise WorkspaceOrchestrationError("orchestration_error")
+            try:
+                return _failure_diagnostics.read_latest_failure(
+                    storage_root=self.request.transaction_root.parents[1],
+                    grants=_composition.get_super_expert_platform_service().grant_repository,
+                    installation_id=self.request.installation_id,
+                    release_id=self.request.release_id,
+                    agent_id=self.request.agent_id,
+                    user_id=self.request.user_id,
+                    session_id=self.request.session_id,
+                    owner_resolver=_composition.resolve_event_scope,
+                    exclude_invocation_id=self.request.invocation_id,
+                )
+            except _failure_diagnostics.FailureDiagnosticsUnauthorized as exc:
+                raise WorkspaceOrchestrationError("unauthorized_capability") from exc
+            except _failure_diagnostics.FailureDiagnosticsUnavailable as exc:
+                raise WorkspaceOrchestrationError(
+                    "orchestration_error", "failure_diagnostics_unavailable",
+                ) from exc
         if capability == "runtime.complete":
             completion = WorkspaceTurnCompletion.model_validate(arguments)
             if completion.invocation_id != self.request.invocation_id:

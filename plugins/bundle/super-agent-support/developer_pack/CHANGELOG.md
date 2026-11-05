@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.10.6 - 2026-11-05
+
+- Bundles development standard 2.30 and DevKit 1.9.1.
+- Adds optional owner-scoped `runtime.failure.read/1` across installations,
+  with closed schemas and a 30-day read window.
+- Documents the existing `agent.execute` JSON object request boundary.
+
 ## 1.10.5 - 2026-11-05
 
 - Bundles development standard 2.29 and DevKit 1.9.0.

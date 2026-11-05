@@ -4,9 +4,9 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.29`
+当前版本：`2.30`
 
-发布日期：`2026-11-03`
+发布日期：`2026-11-05`
 
 ## 1. 文档目的
 
@@ -494,8 +494,13 @@ Host 调用合同：
 | `runtime.trace` | 结构化、无 Secret 的诊断对象 | `{"accepted":true}` |
 | `runtime.complete` | 当前 `invocation_id`、合法 assistant `message`、可选 `diagnostics` | `{"accepted":true}` 并原子提交 |
 | `runtime.fail` | 当前 `invocation_id`、稳定 `error_code`、可选 `diagnostic_ref` | `{"accepted":true}` 并丢弃事务 |
+| `runtime.failure.read/1` | 可选授权能力；请求必须为 `{}` | 同一任务、用户、租户和专家最近一次失败的脱敏诊断，或 `no_record` |
 
 `runtime.complete` 与 `runtime.fail` 每轮只能二选一调用一次。DevKit 的 `templates/minimal/agent/runtime.py` 是不依赖服务器源码的最小可运行示例。
+
+`agent.execute` 的正式控制边界：默认候选模式可选传 `response_format="json_object"`，Host 会以无工具的模型调用请求 JSON object，但模型是否返回可见文本、是否符合业务 Schema 仍必须由 Agent 校验。`response_format` 不得与 `execution_mode="agent_loop"` 同用。当前合同不支持强制业务 JSON Schema、调用方指定 `max_tokens` 或调用方控制 thinking。`agent_loop` 可使用 `instruction`、`require_interaction`、`public_stream` 及 `recover_empty_reply` 的已实现参数；其中空回复恢复只尝试一次无工具的文本生成，不保证结构化 JSON，不得代替 Agent 自己的候选校验。
+
+`runtime.failure.read/1` 是可选能力，不加入既有 V1 基础闭包。新发布包须在 manifest 和授权清单中显式声明后才能调用；旧发布包与旧 grant 保持原状。Host 只接受空对象请求，使用可信会话 ID、用户 ID、agent ID 和安装授权核对任务所有权，并仅在同租户同专家的历史 installation 中查找。返回最近 30 天内最后一次失败的 invocation、实际 release/installation、开始及失败时间、首个脱敏 `phase/category/attempt`、诊断来源、错误码和 `transaction_status=discarded`；无记录返回 `status=no_record`。`first_failure_source=agent_trace` 表示阶段与类别由专家写入的 trace 报告，Host 只核实授权和终态；没有该记录时返回 `not_recorded` 和空字段，不得臆造。请求越权或参数不合法失败关闭。该能力在失败事务丢弃后仍可读取，也支持同一专家新安装续接旧安装的失败诊断；不返回模型正文、thinking、对话、客户素材或 Secret。请求与响应 Schema 位于 DevKit `schemas/runtime-failure-v1/`。
 
 ### 10.3 状态设计
 
@@ -2222,10 +2227,10 @@ Agent 名称：<可选，中文显示名称>
 2. 开发方自己的业务目标、源 Agent 材料和测试凭证；
 3. 从目标 DClaw 认证调用元数据接口并按其 `download_path` 下载、核对 SHA-256 的官方开发包；兼容自动化可以继续单独下载同版本官方 DevKit。
 
-开发包 `1.10.3` 是推荐的单一离线移交物，必须提供：
+开发包 `1.10.6` 是推荐的单一离线移交物，必须提供：
 
 - 唯一标准文件与明确的标准版本，不复制第二套人工规则；
-- 官方 DevKit `1.9.0` 及其完整离线加密依赖；
+- 官方 DevKit `1.9.1` 及其完整离线加密依赖；
 - `dclaw_developer.py` 的 `doctor`、`info`、`init`、`validate`、`test`、`keygen`、`capability-build`、`build`、`upgrade` 和 `demo`；
 - 超级专家、业务服务和本地能力包模板，以及职责边界示例；
 - Agent 自主出站、公共业务服务、本地执行和能力包 Schema/SDK；
@@ -2237,7 +2242,7 @@ Agent 名称：<可选，中文显示名称>
 
 开发包本身不得包含平台管理员凭据、生产地址、签名私钥、供应商 Secret、客户数据或 DClaw 私有实现。包内公开工具不得导入 `qwenpaw` 或要求开发者克隆服务器仓库。
 
-DevKit `1.9.0` 必须提供：
+DevKit `1.9.1` 必须提供：
 
 - `dclaw_agent_devkit.py`：`doctor`、`contracts`、`digest`、`validate`、`keygen`、`build`、`verify`；
 - `capability-catalog.json`：当前可声明的能力、版本、组和依赖；
@@ -2249,6 +2254,7 @@ DevKit `1.9.0` 必须提供：
 - `schemas/agent-outbound-v1/`：Agent 自主第三方请求、响应、安装凭证绑定和稳定错误合同；
 - `schemas/agent-outbound-stream-v1/`：HTTPS/WSS 流式出站请求、资源引用响应和稳定错误合同；
 - `schemas/resource-exchange-v1/`：短时资源创建、完成、读取、撤销、响应和稳定错误合同；
+- `schemas/runtime-failure-v1/`：授权读取本任务上次脱敏失败的请求、响应和错误合同；
 - `operation-catalog.json`：正式 MCP 入口、客户端键、工具名、调用顺序和平台注入参数；
 - `business_identity_verifier.py` 与 `fixtures/business-identity/`：公开 JWK 离线验签、持久化 `jti` 防重放、断言 Header 运输和正反夹具；
 - `templates/minimal/`：最小 manifest、`agent.json` 和 `runtime.py`。
@@ -2261,6 +2267,12 @@ DevKit `1.9.0` 必须提供：
 平台内部实现文件、测试文件和维护文档可以继续存在，但它们只服务平台维护者，不属于开发方输入。开发方缺少字段或行为定义时应报告标准或 DevKit 缺陷；平台不得用“请克隆服务器源码”回答。
 
 ## 34. 版本记录
+
+### 2.30 - 2026-11-05
+
+- 插件 `1.18.12` 新增可选 `runtime.failure.read/1`，按可信任务和授权主体读取同一专家跨安装、30 天内的最近一次脱敏失败；旧专家基础能力闭包不变。
+- 明确 `agent.execute` 候选模式的 `json_object` 请求边界与不支持的强制 Schema、可配置输出上限和 thinking 控制。
+- Developer Pack `1.10.6` 与 DevKit `1.9.1` 提供正式调用说明和闭合 Schema。
 
 ### 2.29 - 2026-11-05
 

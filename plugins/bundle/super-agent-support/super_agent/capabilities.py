@@ -61,6 +61,7 @@ PLATFORM_CAPABILITY_CATALOG_V1 = {
             dependencies=_HOST,
         ),
         *(_definition(capability, "runtime_host") for capability in _HOST),
+        _definition("runtime.failure.read/1", "runtime_host"),
         _definition("card.create", "card"),
         _definition("card.update", "card", dependencies=("card.create",)),
         _definition("aigc.capabilities.list/1", "aigc"),

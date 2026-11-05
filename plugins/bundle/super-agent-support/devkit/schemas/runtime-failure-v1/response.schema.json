@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/schemas/runtime-failure-v1/response.schema.json",
+  "title": "runtime.failure.read/1 response",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["contract", "status", "reason"],
+      "properties": {
+        "contract": {"const": "runtime.failure.read/1"},
+        "status": {"const": "no_record"},
+        "reason": {"const": "no_failure_in_retention_window"}
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["contract", "status", "invocation_id", "installation_id", "release_id", "started_at", "failed_at", "first_failure", "first_failure_source", "error_code", "transaction_status"],
+      "properties": {
+        "contract": {"const": "runtime.failure.read/1"},
+        "status": {"const": "found"},
+        "invocation_id": {"type": "string", "minLength": 1},
+        "installation_id": {"type": "string", "minLength": 1},
+        "release_id": {"type": "string", "minLength": 1},
+        "started_at": {"type": ["string", "null"], "format": "date-time"},
+        "failed_at": {"type": "string", "format": "date-time"},
+        "first_failure": {
+          "type": "object",
+          "required": ["phase", "category", "attempt"],
+          "properties": {
+            "phase": {"type": ["string", "null"]},
+            "category": {"type": ["string", "null"]},
+            "attempt": {"type": ["integer", "null"], "minimum": 1}
+          },
+          "additionalProperties": false
+        },
+        "first_failure_source": {"enum": ["agent_trace", "not_recorded"]},
+        "error_code": {"type": ["string", "null"]},
+        "transaction_status": {"const": "discarded"}
+      },
+      "additionalProperties": false
+    }
+  ]
+}

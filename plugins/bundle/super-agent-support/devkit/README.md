@@ -1,5 +1,18 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.1 adds the optional `runtime.failure.read/1` Host capability and
+closed request/response schemas in `schemas/runtime-failure-v1/`. A signed
+Agent must declare and be granted this capability; the request is `{}`. The
+Host checks the trusted task owner and returns only the latest sanitized
+failure for the same tenant and Agent across installations within 30 days.
+`no_record` is a normal response. Existing signed Agents need no change.
+
+`agent.execute` accepts `response_format="json_object"` only in default
+candidate mode. This requests a JSON object from the provider, but does not
+enforce an Agent business schema or guarantee visible text. It cannot be
+combined with `execution_mode="agent_loop"`. The Host has no public
+per-call `max_tokens`, thinking, or JSON Schema control argument.
+
 Version 1.9.0 adds owner-scoped self-service publishing for signed-in DClaw
 developers. `keygen` keeps the private key local; `publish register-signer`
 registers only the public key, and `publish upload` validates and globally
