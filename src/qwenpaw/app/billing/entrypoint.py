@@ -70,6 +70,14 @@ class PreparedBillingExecution:
         )
         return self.finalize(state)
 
+    def renew(self, *, lease_seconds: float = 600) -> bool:
+        """Extend this producer's execution lease while it still owns it."""
+        return self.execution_repository.renew(
+            self.session.execution_id,
+            self.fence,
+            lease_seconds=lease_seconds,
+        )
+
     def pause_insufficient(
         self,
         *,

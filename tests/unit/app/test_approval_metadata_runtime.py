@@ -6,7 +6,11 @@ import asyncio
 import pytest
 
 from qwenpaw.app.approvals.service import ApprovalService
-from qwenpaw.app.runtime.approval_store import MemoryApprovalStore, RedisApprovalStore
+from qwenpaw.agents.tool_guard_mixin import ToolGuardMixin
+from qwenpaw.app.runtime.approval_store import (
+    MemoryApprovalStore,
+    RedisApprovalStore,
+)
 from qwenpaw.security.tool_guard.approval import ApprovalDecision
 from qwenpaw.security.tool_guard.models import (
     GuardFinding,
@@ -73,6 +77,27 @@ async def test_approval_service_writes_and_deletes_metadata_records():
 
 
 @pytest.mark.asyncio
+async def test_tool_guard_timeout_resolves_pending_approval_metadata():
+    store = MemoryApprovalStore(max_records=10, max_age_seconds=60)
+    svc = ApprovalService(metadata_store=store)
+    pending = await _create_pending(svc)
+
+    guard = ToolGuardMixin()
+    guard._tool_guard_approval_service = svc
+
+    decision = await guard._wait_for_approval_with_heartbeat(
+        pending.request_id,
+        pending.future,
+        timeout_seconds=0.01,
+    )
+
+    assert decision == ApprovalDecision.TIMEOUT
+    assert await svc.get_request(pending.request_id) is None
+    assert await svc.list_all_pending() == []
+    assert (await svc.metadata_stats())["pending_count"] == 0
+
+
+@pytest.mark.asyncio
 async def test_approval_service_can_share_metadata_through_redis_store():
     fakeredis = pytest.importorskip("fakeredis.aioredis")
     server = fakeredis.FakeServer()
@@ -95,7 +120,9 @@ async def test_approval_service_can_share_metadata_through_redis_store():
 
     pending = await _create_pending(writer)
 
-    assert [record.request_id for record in await reader.list_all_pending()] == [
+    assert [
+        record.request_id for record in await reader.list_all_pending()
+    ] == [
         pending.request_id,
     ]
 

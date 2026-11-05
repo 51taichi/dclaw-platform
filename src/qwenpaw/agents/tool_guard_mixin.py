@@ -602,6 +602,10 @@ class ToolGuardMixin:
                 timeout_seconds,
             )
             wait_task.cancel()
+            await self._tool_guard_approval_service.resolve_request(
+                request_id,
+                ApprovalDecision.TIMEOUT,
+            )
             return ApprovalDecision.TIMEOUT
         except asyncio.CancelledError:
             # Task cancelled (e.g., user /stop or SSE disconnect)

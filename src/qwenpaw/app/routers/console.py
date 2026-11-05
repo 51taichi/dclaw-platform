@@ -46,6 +46,9 @@ from ...security.local_access import (
 
 logger = logging.getLogger(__name__)
 
+_BILLING_EXECUTION_LEASE_SECONDS = 600.0
+_BILLING_EXECUTION_RENEW_INTERVAL_SECONDS = 60.0
+
 router = APIRouter(prefix="/console", tags=["console"])
 
 _title_tasks: dict[tuple[str, str], asyncio.Task] = {}
@@ -374,6 +377,7 @@ async def post_console_chat(
                 resumed_prepared = resume_user_billing_execution(
                     latest_run.billing_usage_order_id,
                     request_user_id,
+                    lease_seconds=_BILLING_EXECUTION_LEASE_SECONDS,
                 )
                 resumed_run = (
                     resume_expert_team_run(latest_run.id, request_user_id)
@@ -486,6 +490,37 @@ async def post_console_chat(
                 ),
                 request_key,
                 request_fingerprint,
+                lease_seconds=_BILLING_EXECUTION_LEASE_SECONDS,
+            )
+
+            async def renew_billing_execution_lease():
+                while True:
+                    await asyncio.sleep(
+                        _BILLING_EXECUTION_RENEW_INTERVAL_SECONDS,
+                    )
+                    try:
+                        renewed = prepared.renew(
+                            lease_seconds=_BILLING_EXECUTION_LEASE_SECONDS,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Billing execution lease renewal errored: "
+                            "execution_id=%s chat_id=%s",
+                            prepared.session.execution_id,
+                            chat.id,
+                        )
+                        continue
+                    if not renewed:
+                        logger.error(
+                            "Billing execution lease renewal failed: "
+                            "execution_id=%s chat_id=%s",
+                            prepared.session.execution_id,
+                            chat.id,
+                        )
+                        return
+
+            lease_renewal_task = asyncio.create_task(
+                renew_billing_execution_lease(),
             )
             try:
                 with prepared.activate():
@@ -574,6 +609,11 @@ async def post_console_chat(
                     else:
                         prepared.finalize_completed()
             finally:
+                lease_renewal_task.cancel()
+                await asyncio.gather(
+                    lease_renewal_task,
+                    return_exceptions=True,
+                )
                 if permit is not None:
                     await permit.release()
 
