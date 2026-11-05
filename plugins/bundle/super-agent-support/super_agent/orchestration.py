@@ -143,9 +143,10 @@ def workspace_raw_model_trace_enabled() -> bool:
 
 
 class WorkspaceOrchestrationError(RuntimeError):
-    def __init__(self, error_code: str) -> None:
+    def __init__(self, error_code: str, diagnostic_ref: str | None = None) -> None:
         super().__init__(error_code)
         self.error_code = error_code
+        self.diagnostic_ref = diagnostic_ref
 
 
 class WorkspaceTurnResult(BaseModel):
@@ -378,6 +379,47 @@ def _validate_render_bound_message(message: dict[str, Any]) -> None:
 
 def _scope_key(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _state_binding_path(storage_root: Path, installation_id: str, session_id: str) -> Path:
+    return (
+        Path(storage_root) / "migrations" / "bindings"
+        / _scope_key(installation_id) / f"{_scope_key(session_id)}.json"
+    )
+
+
+def _validate_state_binding(
+    binding_path: Path,
+    transaction_root: Path,
+    installation_id: str,
+    session_id: str,
+) -> None:
+    if not binding_path.exists():
+        return
+    if binding_path.is_symlink():
+        raise WorkspaceOrchestrationError("orchestration_error", "state_scope_conflict")
+    try:
+        binding = json.loads(binding_path.read_text(encoding="utf-8"))
+        filename = binding["filename"]
+    except (OSError, UnicodeError, ValueError, KeyError, TypeError) as exc:
+        raise WorkspaceOrchestrationError("orchestration_error", "state_scope_conflict") from exc
+    if (
+        binding.get("installation_id") != installation_id
+        or binding.get("session_id") != session_id
+        or not isinstance(filename, str)
+        or Path(filename).name != filename
+        or not filename.endswith(".json")
+    ):
+        raise WorkspaceOrchestrationError("orchestration_error", "state_scope_conflict")
+    state_files = {
+        item.name for item in transaction_root.iterdir() if item.suffix == ".json"
+    }
+    if (
+        state_files != {filename}
+        or (transaction_root / filename).is_symlink()
+        or not (transaction_root / filename).is_file()
+    ):
+        raise WorkspaceOrchestrationError("orchestration_error", "state_scope_conflict")
 
 
 def runtime_trace_path(
@@ -1395,11 +1437,17 @@ class WorkspaceStateTransaction:
         state_root: Path,
         transaction_root: Path,
         base_digest: str | None,
+        installation_id: str,
+        session_id: str,
+        binding_path: Path,
     ) -> None:
         self.invocation_id = invocation_id
         self.state_root = state_root
         self.transaction_root = transaction_root
         self.base_digest = base_digest
+        self.installation_id = installation_id
+        self.session_id = session_id
+        self.binding_path = binding_path
         self._finished = False
 
     @classmethod
@@ -1437,6 +1485,9 @@ class WorkspaceStateTransaction:
             state_root=state_root,
             transaction_root=transaction_root,
             base_digest=base_digest,
+            installation_id=installation_id,
+            session_id=session_id,
+            binding_path=_state_binding_path(storage, installation_id, session_id),
         )
 
     def commit(self) -> None:
@@ -1447,6 +1498,10 @@ class WorkspaceStateTransaction:
             f"{self.state_root.name}.backup-{_scope_key(self.invocation_id)[:12]}",
         )
         with _exclusive_state_lock(self.state_root.with_suffix(".lock")):
+            _validate_state_binding(
+                self.binding_path, self.transaction_root,
+                self.installation_id, self.session_id,
+            )
             current_digest = (
                 _directory_digest(self.state_root)
                 if self.state_root.exists()
@@ -1693,7 +1748,7 @@ class WorkspaceTurnOrchestrator:
             transaction.discard()
             return WorkspaceTurnResult(
                 error_code=exc.error_code,
-                diagnostic_ref=f"WorkspaceOrchestrationError:{exc.error_code}",
+                diagnostic_ref=(exc.diagnostic_ref or f"WorkspaceOrchestrationError:{exc.error_code}"),
             )
         except Exception as exc:
             transaction.discard()

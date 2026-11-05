@@ -11,7 +11,12 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .orchestration import WorkspaceStateTransaction, _exclusive_state_lock, _scope_key
+from .orchestration import (
+    WorkspaceStateTransaction,
+    _exclusive_state_lock,
+    _scope_key,
+    _state_binding_path,
+)
 
 
 class StateMigrationError(ValueError):
@@ -26,6 +31,35 @@ def _filename(value: str) -> str:
     if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,126}\.json", value):
         raise StateMigrationError("invalid state filename")
     return value
+
+
+def _bind_state_file(
+    root: Path, installation_id: str, session_id: str, filename: str, receipt_id: str,
+    *, replace_filename: str | None = None,
+) -> bool:
+    path = _state_binding_path(root, installation_id, session_id)
+    binding = {
+        "contract": "workspace.state.binding/1",
+        "installation_id": installation_id,
+        "session_id": session_id,
+        "filename": _filename(filename),
+        "receipt_id": receipt_id,
+    }
+    if path.exists() or path.is_symlink():
+        if path.is_symlink():
+            raise StateMigrationError("state binding is unsafe")
+        existing = json.loads(path.read_text(encoding="utf-8"))
+        if any(existing.get(key) != binding[key] for key in ("contract", "installation_id", "session_id")):
+            raise StateMigrationError("state binding conflicts with target filename")
+        if existing.get("filename") == filename:
+            return False
+        if existing.get("filename") != replace_filename:
+            raise StateMigrationError("state binding conflicts with target filename")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+    temporary.write_text(json.dumps(binding, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+    return True
 
 
 def _value_digest(value: Any) -> str:
@@ -179,6 +213,8 @@ def migrate_empty_field(
         raise StateMigrationError("state changed since preview")
 
     migration_id = uuid.uuid4().hex
+    binding_created = False
+    committed = False
     transaction = WorkspaceStateTransaction.begin(
         root,
         installation_id=target_installation_id,
@@ -234,9 +270,15 @@ def migrate_empty_field(
         temporary = receipt_path.with_suffix(".tmp")
         temporary.write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="utf-8")
         os.replace(temporary, receipt_path)
+        binding_created = _bind_state_file(
+            root, target_installation_id, session_id, target_file.name, migration_id,
+        )
         transaction.commit()
+        committed = True
     except Exception:
         transaction.discard()
+        if binding_created and not committed:
+            _state_binding_path(root, target_installation_id, session_id).unlink(missing_ok=True)
         raise
     receipt["status"] = "committed"
     temporary.write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="utf-8")
@@ -335,4 +377,57 @@ def reconcile_shadowed_migration(
     temporary = receipts / f"{repair_id}.tmp"
     temporary.write_text(json.dumps(result, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(temporary, receipts / f"{repair_id}.json")
+    _bind_state_file(
+        root, installation_id, session_id, active_filename, repair_id,
+        replace_filename=migrated_filename,
+    )
     return result
+
+
+def bind_reconciled_state(
+    *,
+    storage_root: Path,
+    grants: Any,
+    installation_id: str,
+    session_id: str,
+    user_id: str,
+    repair_id: str,
+    expected_state_sha256: str,
+) -> dict[str, Any]:
+    """Register the runtime guard for a completed pre-binding reconciliation."""
+    root = Path(storage_root).resolve(strict=True)
+    grant = grants.get(installation_id)
+    if grant is None or not re.fullmatch(r"[0-9a-f]{32}", repair_id):
+        raise StateMigrationError("installation or repair receipt missing")
+    receipt = json.loads((root / "migrations" / "receipts" / f"{repair_id}.json").read_text(encoding="utf-8"))
+    if (
+        receipt.get("contract") != "workspace.state.shadowed-migration-reconcile/1"
+        or receipt.get("status") != "committed"
+        or receipt.get("installation_id") != installation_id
+        or receipt.get("session_id") != session_id
+        or receipt.get("agent_id") != grant.agent_id
+        or receipt.get("release_id") != grant.release_id
+        or not isinstance(receipt.get("activated_sha256"), str)
+        or not re.fullmatch(r"[0-9a-f]{64}", receipt["activated_sha256"])
+    ):
+        raise StateMigrationError("repair receipt does not match state")
+    filename = _filename(receipt["active_filename"])
+    path = _state_file(root, installation_id, session_id)
+    if path.name != filename:
+        raise StateMigrationError("active state filename mismatch")
+    _, current_sha = _read_state(path, installation_id, session_id, user_id)
+    if current_sha != expected_state_sha256:
+        raise StateMigrationError("active state changed since repair")
+    _bind_state_file(
+        root, installation_id, session_id, filename, repair_id,
+        replace_filename=_filename(receipt["migrated_filename"]),
+    )
+    return {
+        "contract": "workspace.state.binding/1",
+        "status": "registered",
+        "installation_id": installation_id,
+        "session_id": session_id,
+        "filename": filename,
+        "state_sha256": current_sha,
+        "receipt_id": repair_id,
+    }

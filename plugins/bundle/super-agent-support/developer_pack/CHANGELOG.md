@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.10.5 - 2026-11-05
+
+- Bundles development standard 2.29 and DevKit 1.9.0.
+- Documents fail-closed state filename bindings for migrated tasks.
+
 ## 1.10.4 - 2026-11-05
 
 - Bundles development standard 2.28 and DevKit 1.9.0.

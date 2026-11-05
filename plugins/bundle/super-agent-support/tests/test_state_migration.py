@@ -9,9 +9,11 @@ import pytest
 
 from super_agent.state_migration import (
     StateMigrationError,
+    bind_reconciled_state,
     migrate_empty_field,
     reconcile_shadowed_migration,
 )
+from super_agent.orchestration import WorkspaceOrchestrationError, WorkspaceStateTransaction
 
 
 def _write_state(root: Path, installation: str, session: str, user: str, revisions: dict) -> Path:
@@ -124,6 +126,40 @@ def test_bootstraps_missing_target_then_migrates_one_field(tmp_path):
     assert next(target_dir.glob("*.json")).name == "work-new.json"
 
 
+def test_wrong_migrated_filename_cannot_commit_a_shadow_state(tmp_path):
+    source = _write_state(tmp_path, "old", "task", "57", {
+        "story": [{"version": "v1", "content": "story"}],
+    })
+    document = json.loads(source.read_text())
+    document.update(schema_version=1, confirmed={}, pending_cards={}, processed_interactions=[])
+    source.write_text(json.dumps(document), encoding="utf-8")
+    args = {
+        **_input(tmp_path), "bootstrap_empty_target": True,
+        "target_state_filename": "work-wrong.json",
+    }
+    preview = migrate_empty_field(**args)
+    migrate_empty_field(
+        **args, apply=True,
+        expected_source_file_sha256=preview["source_file_sha256"],
+        expected_target_file_sha256=preview["target_file_sha256"],
+    )
+    transaction = WorkspaceStateTransaction.begin(
+        tmp_path, installation_id="new", session_id="task", invocation_id="turn",
+    )
+    (transaction.transaction_root / "work-actual.json").write_text(
+        json.dumps({"identity": {
+            "installation_id": "new", "session_id": "task", "user_id": "57",
+        }, "revisions": {"design": [{"version": "v1"}]}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(WorkspaceOrchestrationError) as error:
+        transaction.commit()
+    assert error.value.diagnostic_ref == "state_scope_conflict"
+    transaction.discard()
+    target_dir = tmp_path / "state" / hashlib.sha256(b"new").hexdigest() / hashlib.sha256(b"task").hexdigest()
+    assert [item.name for item in target_dir.glob("*.json")] == ["work-wrong.json"]
+
+
 def test_bootstrap_requires_target_filename(tmp_path):
     source = _write_state(tmp_path, "old", "task", "57", {
         "story": [{"version": "v1"}],
@@ -163,6 +199,13 @@ def test_reconciles_shadowed_migration_without_losing_either_state(tmp_path):
         "target_release_id": "0.2.1", "agent_id": "comic", "session_id": "task",
         "target_file_sha256_after": migrated_sha,
     }), encoding="utf-8")
+    binding = tmp_path / "migrations" / "bindings" / hashlib.sha256(b"new").hexdigest() / f"{hashlib.sha256(b'task').hexdigest()}.json"
+    binding.parent.mkdir(parents=True)
+    binding.write_text(json.dumps({
+        "contract": "workspace.state.binding/1",
+        "installation_id": "new", "session_id": "task",
+        "filename": migrated.name, "receipt_id": migration_id,
+    }), encoding="utf-8")
     reconcile_args = dict(
         storage_root=tmp_path, grants=_grants(), installation_id="new",
         session_id="task", user_id="57", migration_id=migration_id,
@@ -181,6 +224,21 @@ def test_reconciles_shadowed_migration_without_losing_either_state(tmp_path):
     assert hashlib.sha256(active.read_bytes()).hexdigest() == migrated_sha
     archived = tmp_path / "migrations" / "shadowed" / result["repair_id"] / active.name
     assert hashlib.sha256(archived.read_bytes()).hexdigest() == active_sha
+    assert json.loads(binding.read_text())["filename"] == active.name
+    binding.write_text(json.dumps({
+        "contract": "workspace.state.binding/1",
+        "installation_id": "new", "session_id": "task",
+        "filename": migrated.name, "receipt_id": migration_id,
+    }), encoding="utf-8")
+    active.write_text(active.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    current_sha = hashlib.sha256(active.read_bytes()).hexdigest()
+    registered = bind_reconciled_state(
+        storage_root=tmp_path, grants=_grants(), installation_id="new",
+        session_id="task", user_id="57", repair_id=result["repair_id"],
+        expected_state_sha256=current_sha,
+    )
+    assert registered["status"] == "registered"
+    assert json.loads(binding.read_text())["filename"] == active.name
 
 
 def test_reconcile_rejects_migration_receipt_mismatch(tmp_path):
