@@ -2639,14 +2639,16 @@
     "usernameEmpty": "Username cannot be blank"
   },
   "approval": {
-    "title": "Security Approval Required",
+    "title": "Your authorization is required",
+    "reason": "This operation needs access to local resources. To protect your data, your authorization is required. Allow it to continue?",
+    "sensitiveReason": "This operation may read, modify, or delete local data. To protect your data, your explicit authorization is required. Allow it to continue?",
     "ownerAgent": "Owner Agent",
     "executingAgent": "Executing Agent",
     "tool": "Tool",
     "severity": "Severity",
     "findings": "Findings",
     "parameters": "Parameters",
-    "approve": "Approve",
+    "approve": "Allow",
     "deny": "Deny",
     "source": "Source",
     "subSession": "Sub-Agent",

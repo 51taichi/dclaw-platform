@@ -2648,14 +2648,16 @@
     "localModelsNotice": "备份文件不包含本地模型文件。如需跨设备迁移，请在目标设备上重新下载所需的本地模型。"
   },
   "approval": {
-    "title": "安全审批",
+    "title": "需要您的授权",
+    "reason": "当前操作需要访问本地资源。为保障您的数据安全，需要获得您的授权。是否允许继续？",
+    "sensitiveReason": "当前操作可能会读取、修改或删除本地数据。为保障您的数据安全，需要获得您的明确授权。是否允许继续？",
     "ownerAgent": "归属Agent",
     "executingAgent": "执行Agent",
     "tool": "工具",
     "severity": "严重性",
     "findings": "发现",
     "parameters": "参数",
-    "approve": "批准",
+    "approve": "允许",
     "deny": "拒绝",
     "source": "来源",
     "subSession": "子Agent",

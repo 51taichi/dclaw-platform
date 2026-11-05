@@ -25,7 +25,7 @@ vi.mock("@/hooks/useAppMessage", () => ({
 vi.mock("../sessionApi", () => ({
   default: { getLocalAccessMode, setLocalAccessMode },
   DRAFT_SESSION_ID: "draft-session",
-  DEFAULT_LOCAL_ACCESS_MODE: "ask_for_approval",
+  DEFAULT_LOCAL_ACCESS_MODE: "full_access",
 }));
 
 describe("LocalAccessSelector", () => {

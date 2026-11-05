@@ -2071,20 +2071,24 @@
     "usernameEmpty": "Username cannot be blank"
   },
   "approval": {
-    "title": "Seguranca Approval Obrigatorio",
+    "title": "Sua autorização é necessária",
+    "reason": "Esta operação precisa acessar recursos locais. Para proteger seus dados, precisamos da sua autorização. Deseja permitir que ela continue?",
+    "sensitiveReason": "Esta operação pode ler, alterar ou excluir dados locais. Para proteger seus dados, precisamos da sua autorização explícita. Deseja permitir que ela continue?",
     "tool": "Tool",
     "severity": "Severity",
     "findings": "Findings",
     "parameters": "Parameters",
-    "approve": "Approve",
-    "deny": "Deny",
+    "approve": "Permitir",
+    "deny": "Recusar",
     "source": "Origem",
     "subSession": "Sub-Agent",
     "approved": "Tool call approved",
     "denied": "Tool call denied",
     "approveFailed": "Falhou to approve",
     "cancelTask": "Cancelar Task",
-    "denyFailed": "Falhou to deny"
+    "denyFailed": "Falha ao recusar",
+    "timeoutAutoDenied": "O tempo esgotou; a solicitação foi recusada automaticamente",
+    "acknowledge": "Entendi"
   },
   "pluginManager": {
     "title": "Gerenciador de Plugins",

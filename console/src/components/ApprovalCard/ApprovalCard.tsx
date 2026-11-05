@@ -1,9 +1,6 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
-import { Tag } from "antd";
-import { Shield, Check, X, Clock, Copy } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Check, Clock, Shield, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { useAgentStore } from "../../stores/agentStore";
-import { getAgentDisplayName } from "../../utils/agentDisplayName";
 import styles from "./ApprovalCard.module.less";
 export interface ApprovalCardProps {
   requestId: string;
@@ -28,63 +25,24 @@ export interface ApprovalCardProps {
 
 export function ApprovalCard({
   requestId,
-  toolName,
   severity,
-  findingsCount,
-  findingsSummary,
-  toolParams,
   createdAt,
   timeoutSeconds,
-  agentId,
-  ownerAgentId,
-  showInboxAgentContext = false,
-  showParamsExpanded = false,
-  sessionId,
-  rootSessionId,
   onApprove,
   onDeny,
   onCancel,
   onAcknowledge,
 }: ApprovalCardProps) {
   const { t } = useTranslation();
-  const agents = useAgentStore((state) => state.agents);
-  const agentsById = useMemo(
-    () => new Map(agents.map((agent) => [agent.id, agent])),
-    [agents],
-  );
   const [loading, setLoading] = useState<
     "approve" | "deny" | "acknowledge" | null
   >(null);
   const [remaining, setRemaining] = useState<number>(timeoutSeconds);
-  const [copiedField, setCopiedField] = useState<string | null>(null);
-
-  const handleCopy = useCallback(async (text: string, field: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopiedField(field);
-      setTimeout(() => setCopiedField(null), 1500);
-    } catch {
-      /* clipboard not available */
-    }
-  }, []);
-
-  // Check if this is a cross-session approval
-  const isCrossSession =
-    sessionId && rootSessionId && sessionId !== rootSessionId;
   const isTimedOut = remaining <= 0;
-  const executionAgentDisplayName = useMemo(() => {
-    const matched = agentsById.get(agentId);
-    if (matched) return getAgentDisplayName(matched, t);
-    return agentId || t("common.unknown", "Unknown");
-  }, [agentsById, agentId, t]);
-  const ownerAgentDisplayName = useMemo(() => {
-    const ownerId = ownerAgentId || agentId;
-    const matched = agentsById.get(ownerId);
-    if (matched) return getAgentDisplayName(matched, t);
-    return ownerId || t("common.unknown", "Unknown");
-  }, [agentsById, ownerAgentId, agentId, t]);
-  const shouldShowExecutionAgent =
-    showInboxAgentContext && Boolean(isCrossSession);
+  const normalizedSeverity = severity.toLowerCase();
+  const isSensitiveOperation = ["medium", "high", "critical"].includes(
+    normalizedSeverity,
+  );
 
   useEffect(() => {
     const elapsed = Date.now() / 1000 - createdAt;
@@ -136,20 +94,13 @@ export function ApprovalCard({
     }
   };
 
-  const getSeverityColor = (sev: string) => {
-    const s = sev.toLowerCase();
-    if (s === "critical" || s === "high") return "error";
-    if (s === "medium") return "warning";
-    return "default";
-  };
-
   return (
-    <div className={`${styles.approvalCard} ${styles[getSeverityColor(severity)]}`}>
+    <div className={styles.approvalCard}>
       <div className={styles.header}>
         <div className={styles.titleRow}>
           <Shield size={18} className={styles.icon} />
           <span className={styles.title}>
-            {t("approval.title", "Security Approval Required")}
+            {t("approval.title", "Your authorization is required")}
           </span>
         </div>
         <div className={styles.timer}>
@@ -162,104 +113,17 @@ export function ApprovalCard({
       </div>
 
       <div className={styles.content}>
-        {showInboxAgentContext ? (
-          <>
-            <div className={styles.infoRow}>
-              <span className={styles.label}>
-                {t("approval.ownerAgent", "Owner Agent")}:
-              </span>
-              <Tag color="success" className={styles.ownerAgentTag}>
-                {ownerAgentDisplayName}
-              </Tag>
-            </div>
-            {shouldShowExecutionAgent ? (
-              <div className={styles.infoRow}>
-                <span className={styles.label}>
-                  {t("approval.executingAgent", "Executing Agent")}:
-                </span>
-                <Tag color="blue" className={styles.crossSessionTag}>
-                  {executionAgentDisplayName}
-                </Tag>
-              </div>
-            ) : null}
-          </>
-        ) : null}
-
-        <div className={styles.infoRow}>
-          <span className={styles.label}>{t("approval.tool", "Tool")}:</span>
-          <span className={styles.value}>
-            <code>{toolName}</code>
-          </span>
-        </div>
-
-        <div className={styles.infoRow}>
-          <span className={styles.label}>
-            {t("approval.severity", "Severity")}:
-          </span>
-          <Tag
-            color={getSeverityColor(severity)}
-            className={styles.severityTag}
-          >
-            {severity.toUpperCase()}
-          </Tag>
-        </div>
-
-        <div className={styles.infoRow}>
-          <span className={styles.label}>
-            {t("approval.findings", "Findings")}:
-          </span>
-          <span className={styles.value}>{findingsCount}</span>
-        </div>
-
-        {isCrossSession && !showInboxAgentContext && (
-          <div className={styles.infoRow}>
-            <span className={styles.label}>
-              {t("approval.source", "Source")}:
-            </span>
-            <Tag color="blue" className={styles.crossSessionTag}>
-              {t("approval.subSession", "Sub-Agent")} ({sessionId?.slice(0, 8)})
-            </Tag>
-          </div>
-        )}
-
-        {findingsSummary && (
-          <div className={styles.summaryBox}>
-            <span className={styles.summaryText}>{findingsSummary}</span>
-            <button
-              className={`${styles.copyButton} ${
-                copiedField === "summary" ? styles.copied : ""
-              }`}
-              onClick={() => handleCopy(findingsSummary, "summary")}
-              title={t("common.copy", "Copy")}
-            >
-              <Copy size={12} />
-            </button>
-          </div>
-        )}
-
-        {toolParams && Object.keys(toolParams).length > 0 && (
-          <details className={styles.paramsDetails} open={showParamsExpanded}>
-            <summary className={styles.paramsSummary}>
-              {t("approval.parameters", "Parameters")}
-            </summary>
-            <div className={styles.paramsCodeWrapper}>
-              <pre className={styles.paramsCode}>
-                {JSON.stringify(toolParams, null, 2)}
-              </pre>
-              <button
-                className={`${styles.copyButton} ${
-                  copiedField === "params" ? styles.copied : ""
-                }`}
-                onClick={() =>
-                  handleCopy(JSON.stringify(toolParams, null, 2), "params")
-                }
-                title={t("common.copy", "Copy")}
-              >
-                <Copy size={12} />
-              </button>
-            </div>
-          </details>
-        )}
+        <p className={styles.reason}>
+          {isSensitiveOperation
+            ? t(
+                "approval.sensitiveReason",
+                "This operation may read, modify, or delete local data. To protect your data, your explicit authorization is required. Allow it to continue?",
+              )
+            : t(
+                "approval.reason",
+                "This operation needs access to local resources. To protect your data, your authorization is required. Allow it to continue?",
+              )}
+        </p>
       </div>
 
       <div className={styles.actions}>
@@ -275,7 +139,12 @@ export function ApprovalCard({
                 disabled={loading !== null}
               >
                 {loading === "acknowledge" ? (
-                  <span className="animate-spin" style={{ display: "inline-block" }}>⏳</span>
+                  <span
+                    className="animate-spin"
+                    style={{ display: "inline-block" }}
+                  >
+                    ⏳
+                  </span>
                 ) : (
                   <Check size={14} />
                 )}
@@ -303,7 +172,12 @@ export function ApprovalCard({
               disabled={loading !== null}
             >
               {loading === "deny" ? (
-                <span className="animate-spin" style={{ display: "inline-block" }}>⏳</span>
+                <span
+                  className="animate-spin"
+                  style={{ display: "inline-block" }}
+                >
+                  ⏳
+                </span>
               ) : (
                 <X size={14} />
               )}
@@ -315,11 +189,16 @@ export function ApprovalCard({
               disabled={loading !== null}
             >
               {loading === "approve" ? (
-                <span className="animate-spin" style={{ display: "inline-block" }}>⏳</span>
+                <span
+                  className="animate-spin"
+                  style={{ display: "inline-block" }}
+                >
+                  ⏳
+                </span>
               ) : (
                 <Check size={14} />
               )}
-              {t("approval.approve", "Approve")}
+              {t("approval.approve", "Allow")}
             </button>
           </>
         )}

@@ -231,9 +231,20 @@ describe("Chat sessionApi", () => {
     expect((window as any).currentSessionId).toBeUndefined();
   });
 
-  it("uses ask-for-approval as the safe default for a draft", async () => {
+  it("uses full access as the default for a new draft", async () => {
     expect(await sessionApi.getLocalAccessMode(DRAFT_SESSION_ID)).toBe(
       DEFAULT_LOCAL_ACCESS_MODE,
+    );
+  });
+
+  it("keeps the safe ask-for-approval fallback for a legacy chat", async () => {
+    mockListChats.mockResolvedValueOnce([
+      makeChatSpec("legacy-chat-id", { meta: {} }),
+    ]);
+    await sessionApi.getSessionList();
+
+    expect(await sessionApi.getLocalAccessMode("legacy-chat-id")).toBe(
+      "ask_for_approval",
     );
   });
 
