@@ -29,6 +29,7 @@ def main() -> int:
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--expected-source-file-sha256")
     parser.add_argument("--expected-target-file-sha256")
+    parser.add_argument("--bootstrap-empty-target", action="store_true")
     args = parser.parse_args()
     try:
         result = migrate_empty_field(
@@ -42,6 +43,7 @@ def main() -> int:
             apply=args.apply,
             expected_source_file_sha256=args.expected_source_file_sha256,
             expected_target_file_sha256=args.expected_target_file_sha256,
+            bootstrap_empty_target=args.bootstrap_empty_target,
         )
     except (StateMigrationError, OSError, ValueError) as exc:
         print(json.dumps({"status": "rejected", "reason": str(exc)}))

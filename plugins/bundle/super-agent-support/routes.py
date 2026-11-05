@@ -369,13 +369,16 @@ def create_app(
         ),
     )
     public_keys_rate_limiter = _PublicKeysRateLimiter()
+    plugin_version = json.loads(
+        (Path(__file__).parent / "plugin.json").read_text(encoding="utf-8"),
+    )["version"]
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
         return {
             "status": "ok",
             "plugin": "dclaw.super-agent-support",
-            "version": "1.18.6",
+            "version": plugin_version,
             "protocols": {
                 "local_execution": "1.2",
                 "device": "2",

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.2 - 2026-11-05
+
+- Bundles development standard 2.26 and DevKit 1.9.0.
+- Documents explicit empty-target initialization for operator-controlled
+  cross-installation state recovery; Agent runtime contracts are unchanged.
+
 ## 1.10.1 - 2026-11-04
 
 - Bundles development standard 2.25 and DevKit 1.9.0.

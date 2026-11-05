@@ -5,7 +5,7 @@ Agents. It contains the human standard, standalone DevKit, schemas, templates,
 SDK helpers, fixtures, and a single cross-platform command line tool. DClaw
 server source is not required.
 
-Version 1.10.1 bundles development standard 2.25 and DevKit 1.9.0. New
+Version 1.10.2 bundles development standard 2.26 and DevKit 1.9.0. New
 projects default to `super_expert_public`: any signed-in DClaw developer can
 register a public signing key, upload a verified package, and activate it for
 all users without administrator credentials. The private key stays local.

@@ -88,6 +88,39 @@ def test_rejects_stale_preview_without_changing_target(tmp_path):
     assert new.read_bytes() == before
 
 
+def test_bootstraps_missing_target_then_migrates_one_field(tmp_path):
+    source = _write_state(tmp_path, "old", "task", "57", {
+        "story": [{"version": "v1", "content": "story"}],
+        "script": [{"version": "v1", "content": "script"}],
+    })
+    document = json.loads(source.read_text())
+    document.update(schema_version=1, confirmed={}, pending_cards={}, processed_interactions=[])
+    source.write_text(json.dumps(document), encoding="utf-8")
+    args = {**_input(tmp_path), "bootstrap_empty_target": True}
+
+    preview = migrate_empty_field(**args)
+    assert preview["target_file_sha256"] == "missing"
+    assert preview["target_bootstrap_required"] is True
+    receipt = migrate_empty_field(
+        **args, apply=True,
+        expected_source_file_sha256=preview["source_file_sha256"],
+        expected_target_file_sha256=preview["target_file_sha256"],
+    )
+
+    target_dir = tmp_path / "state" / hashlib.sha256(b"new").hexdigest() / hashlib.sha256(b"task").hexdigest()
+    restored = json.loads(next(target_dir.glob("*.json")).read_text())
+    assert restored["revisions"]["story"] == document["revisions"]["story"]
+    assert restored["revisions"]["script"] == []
+    assert restored["identity"]["installation_id"] == "new"
+    assert receipt["status"] == "committed"
+
+
+def test_missing_target_requires_explicit_bootstrap(tmp_path):
+    _write_state(tmp_path, "old", "task", "57", {"story": [{"version": "v1"}]})
+    with pytest.raises(StateMigrationError, match="state directory missing"):
+        migrate_empty_field(**_input(tmp_path))
+
+
 @pytest.mark.parametrize("target_user,target_agent", [
     ("other", "comic"),
     ("57", "other-agent"),

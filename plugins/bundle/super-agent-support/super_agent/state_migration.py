@@ -56,6 +56,29 @@ def _state_file(root: Path, installation_id: str, session_id: str) -> Path:
     return files[0]
 
 
+def _empty_target_state(source: dict[str, Any], installation_id: str) -> dict[str, Any]:
+    """Derive an empty schema from a source state without copying business values."""
+    def empty(value: Any) -> Any:
+        if isinstance(value, list):
+            return []
+        if isinstance(value, dict):
+            if not value:
+                return {}
+            if all(isinstance(item, (list, dict)) for item in value.values()):
+                return {key: empty(item) for key, item in value.items()}
+        raise StateMigrationError("source state cannot define an empty target schema")
+
+    if not isinstance(source.get("schema_version"), int):
+        raise StateMigrationError("source state schema version missing")
+    identity = source["identity"]
+    return {
+        "schema_version": source["schema_version"],
+        "identity": {**identity, "installation_id": installation_id},
+        **{key: empty(value) for key, value in source.items()
+           if key not in {"schema_version", "identity"}},
+    }
+
+
 def _read_state(path: Path, installation_id: str, session_id: str, user_id: str) -> tuple[dict[str, Any], str]:
     raw = path.read_bytes()
     try:
@@ -83,6 +106,7 @@ def migrate_empty_field(
     apply: bool = False,
     expected_source_file_sha256: str | None = None,
     expected_target_file_sha256: str | None = None,
+    bootstrap_empty_target: bool = False,
 ) -> dict[str, Any]:
     """Copy a nonempty JSON array into an empty field; preserve all other target state."""
     source_grant = grants.get(source_installation_id)
@@ -98,9 +122,21 @@ def migrate_empty_field(
     tokens = _tokens(pointer)
     root = Path(storage_root).resolve(strict=True)
     source_file = _state_file(root, source_installation_id, session_id)
-    target_file = _state_file(root, target_installation_id, session_id)
     source, source_sha = _read_state(source_file, source_installation_id, session_id, user_id)
-    target, target_sha = _read_state(target_file, target_installation_id, session_id, user_id)
+    try:
+        target_file = _state_file(root, target_installation_id, session_id)
+    except StateMigrationError as exc:
+        target_dir = root / "state" / _scope_key(target_installation_id) / _scope_key(session_id)
+        if (
+            not bootstrap_empty_target or target_dir.exists() or target_dir.is_symlink()
+            or target_dir.parent.is_symlink()
+        ):
+            raise exc
+        target_file = target_dir / source_file.name
+        target = _empty_target_state(source, target_installation_id)
+        target_sha = "missing"
+    else:
+        target, target_sha = _read_state(target_file, target_installation_id, session_id, user_id)
     source_value = _field(source, tokens)
     target_value = _field(target, tokens)
     if not isinstance(source_value, list) or not source_value or target_value != []:
@@ -118,6 +154,7 @@ def migrate_empty_field(
             "pointer": pointer,
             "source_file_sha256": source_sha,
             "target_file_sha256": target_sha,
+            "target_bootstrap_required": target_sha == "missing",
             "source_value_sha256": _value_digest(source_value),
             "source_versions": [item.get("version") for item in source_value if isinstance(item, dict)],
             "target_count": 0,
@@ -134,11 +171,16 @@ def migrate_empty_field(
     )
     try:
         staged_file = transaction.transaction_root / target_file.name
-        staged, staged_sha = _read_state(
-            staged_file, target_installation_id, session_id, user_id,
-        )
-        if staged_sha != target_sha or _field(staged, tokens) != []:
-            raise StateMigrationError("target changed during migration")
+        if target_sha == "missing":
+            if staged_file.exists() or any(transaction.transaction_root.iterdir()):
+                raise StateMigrationError("target changed during migration")
+            staged = target
+        else:
+            staged, staged_sha = _read_state(
+                staged_file, target_installation_id, session_id, user_id,
+            )
+            if staged_sha != target_sha or _field(staged, tokens) != []:
+                raise StateMigrationError("target changed during migration")
         current_source, current_source_sha = _read_state(
             source_file, source_installation_id, session_id, user_id,
         )
