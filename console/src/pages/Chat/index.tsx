@@ -44,7 +44,7 @@ import { IconButton } from "@agentscope-ai/design";
 import ChatActionGroup from "./components/ChatActionGroup";
 import ChatHeaderTitle from "./components/ChatHeaderTitle";
 import ChatSessionInitializer from "./components/ChatSessionInitializer";
-import { ApprovalCard } from "../../components/ApprovalCard/ApprovalCard";
+import { ApprovalDialog } from "../../components/ApprovalCard/ApprovalDialog";
 import { commandsApi } from "../../api/modules/commands";
 import { useApprovalContext } from "../../contexts/ApprovalContext";
 import { planApi } from "../../api/modules/plan";
@@ -2266,70 +2266,35 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
             </div>
           )}
 
-          {/* Render approval cards as overlays */}
-          {Array.from(approvalRequests.values()).map((request) => (
-            <div
-              key={request.requestId}
-              data-approval-id={request.requestId}
-              style={{
-                position: "fixed",
-                bottom: 80,
-                right: 24,
-                zIndex: 1000,
-                maxWidth: 480,
-                width: "calc(100vw - 48px)",
-              }}
-            >
-              <ApprovalCard
-                requestId={request.requestId}
-                agentId={request.agentId}
-                toolName={request.toolName}
-                severity={request.severity}
-                findingsCount={request.findingsCount}
-                findingsSummary={request.findingsSummary}
-                toolParams={request.toolParams}
-                createdAt={request.createdAt}
-                timeoutSeconds={request.timeoutSeconds}
-                sessionId={request.sessionId}
-                rootSessionId={request.rootSessionId}
-                onApprove={handleApprove}
-                onDeny={handleDeny}
-                onCancel={() => {
-                  const sessionId =
-                    request.rootSessionId || window.currentSessionId || "";
-                  const resolvedChatId =
-                    sessionApi.getRealIdForSession(sessionId) ??
-                    chatIdRef.current ??
-                    sessionId;
+          <ApprovalDialog
+            requests={approvalRequests}
+            onApprove={handleApprove}
+            onDeny={handleDeny}
+            onCancelTask={(request) => {
+              const sessionId =
+                request.rootSessionId || window.currentSessionId || "";
+              const resolvedChatId =
+                sessionApi.getRealIdForSession(sessionId) ??
+                chatIdRef.current ??
+                sessionId;
 
-                  if (resolvedChatId) {
-                    console.log(
-                      "[Chat] Calling stopChat with:",
-                      resolvedChatId,
+              if (resolvedChatId) {
+                chatApi
+                  .stopChat(resolvedChatId)
+                  .then(() => {
+                    setApprovals((prev) =>
+                      prev.filter(
+                        (item) =>
+                          item.root_session_id !== request.rootSessionId,
+                      ),
                     );
-                    chatApi
-                      .stopChat(resolvedChatId)
-                      .then(() => {
-                        console.log("[Chat] stopChat succeeded");
-                        setApprovals((prev) =>
-                          prev.filter(
-                            (item) =>
-                              item.root_session_id !== request.rootSessionId,
-                          ),
-                        );
-                      })
-                      .catch((err) => {
-                        console.error("[Chat] stopChat failed:", err);
-                      });
-                  } else {
-                    console.warn(
-                      "[Chat] No chat_id resolved, cannot cancel task",
-                    );
-                  }
-                }}
-              />
-            </div>
-          ))}
+                  })
+                  .catch((err) => {
+                    console.error("[Chat] stopChat failed:", err);
+                  });
+              }
+            }}
+          />
 
           <Modal
             open={showModelPrompt}

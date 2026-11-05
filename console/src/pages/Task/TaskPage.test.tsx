@@ -288,8 +288,8 @@ vi.mock("../Chat/components/ChatHeaderTitle", () => ({
   default: () => <div data-testid="header-title" />,
 }));
 
-vi.mock("../../components/ApprovalCard/ApprovalCard", () => ({
-  ApprovalCard: () => <div data-testid="approval-card" />,
+vi.mock("../../components/ApprovalCard/ApprovalDialog", () => ({
+  ApprovalDialog: () => <div data-testid="approval-dialog" />,
 }));
 
 vi.mock("../Chat/components/ArtifactPanel", () => ({

@@ -93,7 +93,7 @@ describe("ConsolePollService runtime events", () => {
     const view = renderService();
 
     await waitFor(() => {
-      expect(consoleApi.getPushMessages).toHaveBeenCalledWith();
+      expect(consoleApi.getPushMessages).toHaveBeenCalledWith("session-1");
     });
 
     runtimeEvents = [
@@ -130,7 +130,7 @@ describe("ConsolePollService runtime events", () => {
     const view = renderService();
 
     await waitFor(() => {
-      expect(consoleApi.getPushMessages).toHaveBeenCalledWith();
+      expect(consoleApi.getPushMessages).toHaveBeenCalledWith("session-1");
     });
 
     runtimeEvents = [
@@ -169,7 +169,7 @@ describe("ConsolePollService runtime events", () => {
     const view = renderService();
 
     await waitFor(() => {
-      expect(consoleApi.getPushMessages).toHaveBeenCalledWith();
+      expect(consoleApi.getPushMessages).toHaveBeenCalledWith("session-1");
     });
 
     runtimeEvents = [
@@ -193,5 +193,19 @@ describe("ConsolePollService runtime events", () => {
       expect(consoleApi.getPushMessages).toHaveBeenCalledWith("session-1");
     });
     expect(await screen.findByText("任务已完成")).toBeInTheDocument();
+  });
+
+  it("finds approvals through regular polling when no runtime event arrives", async () => {
+    vi.mocked(consoleApi.getPushMessages).mockResolvedValue({
+      messages: [],
+      pending_approvals: [makeApproval()],
+    });
+
+    renderService();
+
+    await waitFor(() => {
+      expect(consoleApi.getPushMessages).toHaveBeenCalledWith("session-1");
+      expect(screen.getByTestId("approval-count")).toHaveTextContent("1");
+    });
   });
 });

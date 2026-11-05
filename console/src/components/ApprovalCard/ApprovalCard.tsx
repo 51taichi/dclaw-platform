@@ -17,6 +17,7 @@ export interface ApprovalCardProps {
   agentId: string;
   ownerAgentId?: string;
   showInboxAgentContext?: boolean;
+  showParamsExpanded?: boolean;
   sessionId?: string;
   rootSessionId?: string;
   onApprove: (requestId: string) => Promise<void>;
@@ -37,6 +38,7 @@ export function ApprovalCard({
   agentId,
   ownerAgentId,
   showInboxAgentContext = false,
+  showParamsExpanded = false,
   sessionId,
   rootSessionId,
   onApprove,
@@ -69,7 +71,7 @@ export function ApprovalCard({
   // Check if this is a cross-session approval
   const isCrossSession =
     sessionId && rootSessionId && sessionId !== rootSessionId;
-  const isTimedOut = showInboxAgentContext && remaining <= 0;
+  const isTimedOut = remaining <= 0;
   const executionAgentDisplayName = useMemo(() => {
     const matched = agentsById.get(agentId);
     if (matched) return getAgentDisplayName(matched, t);
@@ -236,7 +238,7 @@ export function ApprovalCard({
         )}
 
         {toolParams && Object.keys(toolParams).length > 0 && (
-          <details className={styles.paramsDetails}>
+          <details className={styles.paramsDetails} open={showParamsExpanded}>
             <summary className={styles.paramsSummary}>
               {t("approval.parameters", "Parameters")}
             </summary>

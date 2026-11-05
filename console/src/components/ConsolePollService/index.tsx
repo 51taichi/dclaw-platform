@@ -129,7 +129,7 @@ export default function ConsolePollService() {
       }
       pollInFlightRef.current = true;
       void consoleApi
-        .getPushMessages()
+        .getPushMessages(activeSessionId || undefined)
         .then(applyPushMessages)
         .catch(() => {})
         .finally(() => {
@@ -152,7 +152,7 @@ export default function ConsolePollService() {
       if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [applyPushMessages]);
+  }, [activeSessionId, applyPushMessages]);
 
   useEffect(() => {
     if (items.length === 0) return;
