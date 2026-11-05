@@ -90,7 +90,7 @@ def test_porting_requires_explicitly_approved_behavior_equivalence():
     for phrase in required:
         assert phrase in text
 
-    assert "当前版本：`2.26`" in text
+    assert "当前版本：`2.27`" in text
     assert "平台统一工具链发布闭环" in text
     assert "Super Expert signer 预登记" in text
 

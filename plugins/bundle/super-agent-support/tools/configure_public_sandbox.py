@@ -45,7 +45,7 @@ def configure(
         raise ValueError("sandbox socket is already configured")
     host = working_host_path.resolve(strict=True)
     for name in (
-        "plugins/dclaw.super-agent-support", "sealed_agents",
+        "plugins", "plugins/dclaw.super-agent-support", "sealed_agents",
         "workspace_runtime_state", "super-agent-sandbox",
     ):
         if not (host / name).is_dir():
@@ -64,8 +64,7 @@ def configure(
             "no-new-privileges:true",
         ],
         "volumes": [
-            f"{host}/plugins/dclaw.super-agent-support:"
-            "/app/working/plugins/dclaw.super-agent-support:ro",
+            f"{host}/plugins:/app/working/plugins:ro",
             f"{host}/sealed_agents:/app/working/sealed_agents:ro",
             f"{host}/workspace_runtime_state:"
             "/app/working/workspace_runtime_state:rw",

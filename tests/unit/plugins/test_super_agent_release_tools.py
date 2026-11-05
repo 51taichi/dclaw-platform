@@ -67,6 +67,7 @@ def test_public_sandbox_compose_keeps_existing_server_settings(tmp_path):
     assert sandbox["read_only"] is True
     assert sandbox["cap_add"] == ["SYS_ADMIN"]
     assert all(volume.endswith(":ro") for volume in sandbox["volumes"][:2])
+    assert sandbox["volumes"][0] == f"{working}/plugins:/app/working/plugins:ro"
 
 
 def test_standalone_plugin_release_contains_canonical_standard(
@@ -100,12 +101,12 @@ def test_standalone_plugin_release_contains_canonical_standard(
     helper = tmp_path / "DClaw.LocalHelper.exe"
     helper.write_bytes(b"MZ\x00signed-helper-fixture")
     metadata = release.build(output, windows_helper_binary=helper)
-    assert metadata["plugin_version"] == "1.18.7"
-    assert metadata["standard_version"] == "2.26"
+    assert metadata["plugin_version"] == "1.18.8"
+    assert metadata["standard_version"] == "2.27"
     assert metadata["windows_helper_version"] == "1.4.4"
     with zipfile.ZipFile(output) as archive:
         standard = archive.read(release.STANDARD_IN_PLUGIN)
-        assert b"2.26" in standard
+        assert b"2.27" in standard
         assert archive.read(release.HELPER_EXECUTABLE_IN_PLUGIN) == (
             helper.read_bytes()
         )
@@ -130,7 +131,7 @@ def test_standalone_plugin_release_contains_canonical_standard(
     spec.loader.exec_module(module)
     payload, pack_metadata = module.build_archive(root)
     assert payload
-    assert pack_metadata["standard"]["version"] == "2.26"
+    assert pack_metadata["standard"]["version"] == "2.27"
 
 
 def _zip(files: dict[str, bytes]) -> bytes:
@@ -327,7 +328,7 @@ def test_plugin_archive_embeds_current_standard_and_is_reproducible(tmp_path):
     assert first == second
     assert metadata == repeated
     assert metadata["plugin_id"] == "dclaw.super-agent-support"
-    assert metadata["version"] == "1.18.7"
+    assert metadata["version"] == "1.18.8"
     assert metadata["windows_helper_version"] == "1.4.4"
     assert metadata["sha256"] == hashlib.sha256(first).hexdigest()
     with zipfile.ZipFile(io.BytesIO(first)) as archive:

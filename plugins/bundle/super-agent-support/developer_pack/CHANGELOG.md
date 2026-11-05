@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.3 - 2026-11-05
+
+- Bundles development standard 2.27 and DevKit 1.9.0.
+- Documents stable parent-directory mounts for the public runtime sidecar
+  across support-plugin hot updates.
+
 ## 1.10.2 - 2026-11-05
 
 - Bundles development standard 2.26 and DevKit 1.9.0.
