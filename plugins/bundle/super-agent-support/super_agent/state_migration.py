@@ -5,11 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import shutil
 import uuid
 from pathlib import Path
 from typing import Any
 
-from .orchestration import WorkspaceStateTransaction, _scope_key
+from .orchestration import WorkspaceStateTransaction, _exclusive_state_lock, _scope_key
 
 
 class StateMigrationError(ValueError):
@@ -18,6 +20,12 @@ class StateMigrationError(ValueError):
 
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _filename(value: str) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,126}\.json", value):
+        raise StateMigrationError("invalid state filename")
+    return value
 
 
 def _value_digest(value: Any) -> str:
@@ -107,6 +115,7 @@ def migrate_empty_field(
     expected_source_file_sha256: str | None = None,
     expected_target_file_sha256: str | None = None,
     bootstrap_empty_target: bool = False,
+    target_state_filename: str | None = None,
 ) -> dict[str, Any]:
     """Copy a nonempty JSON array into an empty field; preserve all other target state."""
     source_grant = grants.get(source_installation_id)
@@ -120,6 +129,8 @@ def migrate_empty_field(
     ):
         raise StateMigrationError("installations do not belong to one agent and tenant")
     tokens = _tokens(pointer)
+    if target_state_filename is not None:
+        target_state_filename = _filename(target_state_filename)
     root = Path(storage_root).resolve(strict=True)
     source_file = _state_file(root, source_installation_id, session_id)
     source, source_sha = _read_state(source_file, source_installation_id, session_id, user_id)
@@ -132,10 +143,14 @@ def migrate_empty_field(
             or target_dir.parent.is_symlink()
         ):
             raise exc
-        target_file = target_dir / source_file.name
+        if target_state_filename is None:
+            raise StateMigrationError("target state filename required for bootstrap")
+        target_file = target_dir / target_state_filename
         target = _empty_target_state(source, target_installation_id)
         target_sha = "missing"
     else:
+        if target_state_filename is not None and target_file.name != target_state_filename:
+            raise StateMigrationError("target state filename mismatch")
         target, target_sha = _read_state(target_file, target_installation_id, session_id, user_id)
     source_value = _field(source, tokens)
     target_value = _field(target, tokens)
@@ -155,6 +170,7 @@ def migrate_empty_field(
             "source_file_sha256": source_sha,
             "target_file_sha256": target_sha,
             "target_bootstrap_required": target_sha == "missing",
+            "target_state_filename": target_file.name,
             "source_value_sha256": _value_digest(source_value),
             "source_versions": [item.get("version") for item in source_value if isinstance(item, dict)],
             "target_count": 0,
@@ -205,6 +221,7 @@ def migrate_empty_field(
             "target_installation_id": target_installation_id,
             "target_release_id": target_grant.release_id,
             "pointer": pointer,
+            "target_state_filename": target_file.name,
             "source_file_sha256": source_sha,
             "target_file_sha256_before": target_sha,
             "target_file_sha256_after": after_sha,
@@ -225,3 +242,97 @@ def migrate_empty_field(
     temporary.write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(temporary, receipt_path)
     return receipt
+
+
+def reconcile_shadowed_migration(
+    *,
+    storage_root: Path,
+    grants: Any,
+    installation_id: str,
+    session_id: str,
+    user_id: str,
+    migration_id: str,
+    migrated_filename: str,
+    active_filename: str,
+    apply: bool = False,
+    expected_migrated_sha256: str | None = None,
+    expected_active_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Activate migrated history and archive a shadow state without changing JSON."""
+    grant = grants.get(installation_id)
+    if grant is None or not re.fullmatch(r"[0-9a-f]{32}", migration_id):
+        raise StateMigrationError("installation or migration receipt missing")
+    migrated_filename = _filename(migrated_filename)
+    active_filename = _filename(active_filename)
+    if migrated_filename == active_filename:
+        raise StateMigrationError("state filenames must differ")
+    root = Path(storage_root).resolve(strict=True)
+    receipt_path = root / "migrations" / "receipts" / f"{migration_id}.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    if (
+        receipt.get("status") != "committed"
+        or receipt.get("target_installation_id") != installation_id
+        or receipt.get("target_release_id") != grant.release_id
+        or receipt.get("agent_id") != grant.agent_id
+        or receipt.get("session_id") != session_id
+    ):
+        raise StateMigrationError("migration receipt does not match installation")
+    directory = root / "state" / _scope_key(installation_id) / _scope_key(session_id)
+    if not directory.is_dir() or directory.is_symlink():
+        raise StateMigrationError("state directory missing or unsafe")
+    files = list(directory.iterdir())
+    if (
+        len(files) != 2 or {item.name for item in files} != {migrated_filename, active_filename}
+        or any(item.is_symlink() or not item.is_file() for item in files)
+    ):
+        raise StateMigrationError("expected exactly two regular state files")
+    migrated_path = directory / migrated_filename
+    active_path = directory / active_filename
+    _, migrated_sha = _read_state(migrated_path, installation_id, session_id, user_id)
+    _, active_sha = _read_state(active_path, installation_id, session_id, user_id)
+    if receipt.get("target_file_sha256_after") != migrated_sha:
+        raise StateMigrationError("migrated state differs from committed receipt")
+    result = {
+        "contract": "workspace.state.shadowed-migration-reconcile/1",
+        "status": "preview",
+        "agent_id": grant.agent_id,
+        "release_id": grant.release_id,
+        "installation_id": installation_id,
+        "session_id": session_id,
+        "migration_id": migration_id,
+        "migrated_filename": migrated_filename,
+        "active_filename": active_filename,
+        "migrated_sha256": migrated_sha,
+        "active_sha256": active_sha,
+    }
+    if not apply:
+        return result
+    if migrated_sha != expected_migrated_sha256 or active_sha != expected_active_sha256:
+        raise StateMigrationError("state changed since preview")
+    repair_id = uuid.uuid4().hex
+    archive = root / "migrations" / "shadowed" / repair_id
+    with _exclusive_state_lock(directory.with_suffix(".lock")):
+        if (
+            _sha256(migrated_path.read_bytes()) != migrated_sha
+            or _sha256(active_path.read_bytes()) != active_sha
+        ):
+            raise StateMigrationError("state changed during reconciliation")
+        archive.mkdir(parents=True, exist_ok=False)
+        archived_file = archive / active_filename
+        shutil.copy2(active_path, archived_file)
+        if _sha256(archived_file.read_bytes()) != active_sha:
+            raise StateMigrationError("shadow archive verification failed")
+        os.replace(migrated_path, active_path)
+        if _sha256(active_path.read_bytes()) != migrated_sha:
+            raise StateMigrationError("activated state verification failed")
+    result.update(
+        status="committed",
+        repair_id=repair_id,
+        archived_shadow_sha256=active_sha,
+        activated_sha256=migrated_sha,
+    )
+    receipts = root / "migrations" / "receipts"
+    temporary = receipts / f"{repair_id}.tmp"
+    temporary.write_text(json.dumps(result, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(temporary, receipts / f"{repair_id}.json")
+    return result

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.10.4 - 2026-11-05
+
+- Bundles development standard 2.28 and DevKit 1.9.0.
+- Documents target state filenames for platform-managed installation migration.
+
 ## 1.10.3 - 2026-11-05
 
 - Bundles development standard 2.27 and DevKit 1.9.0.

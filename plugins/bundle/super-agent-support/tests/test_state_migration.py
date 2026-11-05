@@ -7,7 +7,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from super_agent.state_migration import StateMigrationError, migrate_empty_field
+from super_agent.state_migration import (
+    StateMigrationError,
+    migrate_empty_field,
+    reconcile_shadowed_migration,
+)
 
 
 def _write_state(root: Path, installation: str, session: str, user: str, revisions: dict) -> Path:
@@ -96,7 +100,11 @@ def test_bootstraps_missing_target_then_migrates_one_field(tmp_path):
     document = json.loads(source.read_text())
     document.update(schema_version=1, confirmed={}, pending_cards={}, processed_interactions=[])
     source.write_text(json.dumps(document), encoding="utf-8")
-    args = {**_input(tmp_path), "bootstrap_empty_target": True}
+    args = {
+        **_input(tmp_path),
+        "bootstrap_empty_target": True,
+        "target_state_filename": "work-new.json",
+    }
 
     preview = migrate_empty_field(**args)
     assert preview["target_file_sha256"] == "missing"
@@ -113,6 +121,85 @@ def test_bootstraps_missing_target_then_migrates_one_field(tmp_path):
     assert restored["revisions"]["script"] == []
     assert restored["identity"]["installation_id"] == "new"
     assert receipt["status"] == "committed"
+    assert next(target_dir.glob("*.json")).name == "work-new.json"
+
+
+def test_bootstrap_requires_target_filename(tmp_path):
+    source = _write_state(tmp_path, "old", "task", "57", {
+        "story": [{"version": "v1"}],
+    })
+    document = json.loads(source.read_text())
+    document.update(schema_version=1, confirmed={}, pending_cards={}, processed_interactions=[])
+    source.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(StateMigrationError, match="target state filename required"):
+        migrate_empty_field(**_input(tmp_path), bootstrap_empty_target=True)
+
+
+def test_reconciles_shadowed_migration_without_losing_either_state(tmp_path):
+    source = _write_state(tmp_path, "old", "task", "57", {
+        "story": [{"version": "v1", "content": "story"}],
+        "design": [{"version": "v1", "content": "old design"}],
+    })
+    document = json.loads(source.read_text())
+    document.update(schema_version=1, confirmed={}, pending_cards={}, processed_interactions=[])
+    source.write_text(json.dumps(document), encoding="utf-8")
+    # Reproduce a migration made before target filenames were required.
+    target_dir = tmp_path / "state" / hashlib.sha256(b"new").hexdigest() / hashlib.sha256(b"task").hexdigest()
+    target_dir.mkdir(parents=True)
+    migrated = target_dir / "work-old.json"
+    migrated_document = dict(document)
+    migrated_document["identity"] = {**document["identity"], "installation_id": "new"}
+    migrated.write_text(json.dumps(migrated_document), encoding="utf-8")
+    active = target_dir / "work-new.json"
+    active_document = {**migrated_document, "revisions": {"story": [], "design": [{"version": "v1", "content": "new design"}]}}
+    active.write_text(json.dumps(active_document), encoding="utf-8")
+    migrated_sha = hashlib.sha256(migrated.read_bytes()).hexdigest()
+    active_sha = hashlib.sha256(active.read_bytes()).hexdigest()
+    receipts = tmp_path / "migrations" / "receipts"
+    receipts.mkdir(parents=True)
+    migration_id = "a" * 32
+    (receipts / f"{migration_id}.json").write_text(json.dumps({
+        "status": "committed", "target_installation_id": "new",
+        "target_release_id": "0.2.1", "agent_id": "comic", "session_id": "task",
+        "target_file_sha256_after": migrated_sha,
+    }), encoding="utf-8")
+    reconcile_args = dict(
+        storage_root=tmp_path, grants=_grants(), installation_id="new",
+        session_id="task", user_id="57", migration_id=migration_id,
+        migrated_filename=migrated.name, active_filename=active.name,
+    )
+    preview = reconcile_shadowed_migration(**reconcile_args)
+    assert preview["status"] == "preview"
+    assert hashlib.sha256(active.read_bytes()).hexdigest() == active_sha
+    result = reconcile_shadowed_migration(
+        **reconcile_args, apply=True,
+        expected_migrated_sha256=preview["migrated_sha256"],
+        expected_active_sha256=preview["active_sha256"],
+    )
+    assert result["status"] == "committed"
+    assert not migrated.exists()
+    assert hashlib.sha256(active.read_bytes()).hexdigest() == migrated_sha
+    archived = tmp_path / "migrations" / "shadowed" / result["repair_id"] / active.name
+    assert hashlib.sha256(archived.read_bytes()).hexdigest() == active_sha
+
+
+def test_reconcile_rejects_migration_receipt_mismatch(tmp_path):
+    source = _write_state(tmp_path, "new", "task", "57", {"story": []})
+    shadow = source.with_name("other.json")
+    shadow.write_bytes(source.read_bytes())
+    receipts = tmp_path / "migrations" / "receipts"
+    receipts.mkdir(parents=True)
+    (receipts / ("a" * 32 + ".json")).write_text(json.dumps({
+        "status": "committed", "target_installation_id": "new",
+        "target_release_id": "0.2.1", "agent_id": "comic", "session_id": "task",
+        "target_file_sha256_after": "0" * 64,
+    }), encoding="utf-8")
+    with pytest.raises(StateMigrationError, match="differs from committed receipt"):
+        reconcile_shadowed_migration(
+            storage_root=tmp_path, grants=_grants(), installation_id="new",
+            session_id="task", user_id="57", migration_id="a" * 32,
+            migrated_filename="other.json", active_filename="work.json",
+        )
 
 
 def test_missing_target_requires_explicit_bootstrap(tmp_path):
