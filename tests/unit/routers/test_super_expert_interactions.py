@@ -11,6 +11,7 @@ from httpx import ASGITransport, AsyncClient
 from qwenpaw.app.runtime.event_bus import MemoryRuntimeEventBus
 from qwenpaw.app.super_experts.interaction_cards import (
     InteractionCardRepository,
+    InteractionError,
     InteractionService,
 )
 from qwenpaw.app.super_experts.interaction_contract import (
@@ -154,6 +155,52 @@ async def test_platform_create_persists_card_and_publishes_separate_event(
     assert envelope["event_type"] == "interaction.card.created"
     assert "material_task_id" not in envelope
     assert envelope["interaction"]["card"]["options"][0]["text"] == "方案甲"
+
+
+def test_create_after_submission_replays_or_reports_semantic_conflict(tmp_path):
+    interactions = InteractionService(InteractionCardRepository(tmp_path))
+    request = _question_request()
+    card = interactions.create(
+        installation_id="installation-1",
+        conversation_id="conversation-1",
+        request=request,
+        idempotency_key="create-original",
+    )
+    submitted = interactions.submit(
+        interaction_id=card.interaction_id,
+        installation_id="installation-1",
+        conversation_id="conversation-1",
+        version=card.version,
+        answers=[{"id": "scope", "value": "空调维修"}],
+        idempotency_key="submit-original",
+    )
+
+    replayed = interactions.create(
+        installation_id="installation-1",
+        conversation_id="conversation-1",
+        request=request,
+        idempotency_key="create-retry",
+    )
+
+    assert replayed == submitted
+
+    changed = request.model_copy(
+        update={
+            "card": request.card.model_copy(
+                update={"description": "请补充最新信息"},
+            ),
+        },
+    )
+    with pytest.raises(InteractionError) as caught:
+        interactions.create(
+            installation_id="installation-1",
+            conversation_id="conversation-1",
+            request=changed,
+            idempotency_key="create-changed",
+        )
+
+    assert caught.value.code == "IDEMPOTENCY_CONFLICT"
+    assert caught.value.retryable is False
 
 
 @pytest.mark.asyncio

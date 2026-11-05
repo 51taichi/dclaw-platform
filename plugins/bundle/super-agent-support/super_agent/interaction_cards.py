@@ -912,7 +912,7 @@ class InteractionCardRepository:
             interaction_revision=card.interaction_revision,
             component_type=card.component_type,
             input_policy=card.input_policy,
-            card=card.card,
+            card=card.card.model_dump(mode="json"),
             replaces_interaction_id=None,
             expires_at=card.expires_at,
         )
