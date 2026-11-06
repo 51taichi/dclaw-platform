@@ -113,16 +113,29 @@ def _read_state(
     return state, _sha256(raw)
 
 
-def _only_state_file(directory: Path) -> Path:
+def _committed_state_file(directory: Path) -> Path | None:
+    if directory.parent.is_symlink():
+        raise StateContinuityError("state_scope_conflict")
+    if not directory.exists() and not directory.is_symlink():
+        return None
     if directory.is_symlink() or not directory.is_dir():
         raise StateContinuityError("state_scope_conflict")
     files = list(directory.iterdir())
+    if not files:
+        return None
     if (
         len(files) != 1 or files[0].is_symlink() or not files[0].is_file()
         or files[0].suffix != ".json"
     ):
         raise StateContinuityError("state_scope_conflict")
     return files[0]
+
+
+def _only_state_file(directory: Path) -> Path:
+    state_file = _committed_state_file(directory)
+    if state_file is None:
+        raise StateContinuityError("state_scope_conflict")
+    return state_file
 
 
 def _binding_matches(
@@ -230,14 +243,24 @@ def _contract_for_release(
 def _source_grant(
     root: Path, grants: Any, target: Any, session_id: str,
 ) -> Any | None:
-    candidates = [
-        grant for grant in grants.list_grants()
-        if grant.agent_id == target.agent_id
-        and grant.tenant_id == target.tenant_id
-        and grant.installation_id != target.installation_id
-        and grant.granted_at < target.granted_at
-        and _state_dir(root, grant.installation_id, session_id).exists()
-    ]
+    candidates = []
+    for grant in grants.list_grants():
+        if (
+            grant.agent_id != target.agent_id
+            or grant.tenant_id != target.tenant_id
+            or grant.installation_id == target.installation_id
+            or grant.granted_at >= target.granted_at
+        ):
+            continue
+        state_file = _committed_state_file(
+            _state_dir(root, grant.installation_id, session_id),
+        )
+        if state_file is not None:
+            candidates.append(grant)
+        else:
+            binding = _state_binding_path(root, grant.installation_id, session_id)
+            if binding.exists() or binding.is_symlink():
+                raise StateContinuityError("state_scope_conflict")
     return max(candidates, key=lambda item: item.granted_at) if candidates else None
 
 
@@ -296,6 +319,12 @@ def ensure_state_continuity(
         raise StateContinuityError("state_source_changed")
     target_dir = _state_dir(root, target_grant.installation_id, session_id)
     if source_grant is None:
+        target_binding = _state_binding_path(
+            root, target_grant.installation_id, session_id,
+        )
+        if (_committed_state_file(target_dir) is None
+                and (target_binding.exists() or target_binding.is_symlink())):
+            raise StateContinuityError("state_scope_conflict")
         return {"contract": CONTRACT, "status": "new_or_existing"}
     source_dir = _state_dir(root, source_grant.installation_id, session_id)
     locks = sorted({
@@ -354,8 +383,8 @@ def ensure_state_continuity(
         receipt_path = _receipt_path(
             root, target_grant.installation_id, session_id,
         )
-        if target_dir.exists() or target_dir.is_symlink():
-            target_file = _only_state_file(target_dir)
+        target_file = _committed_state_file(target_dir)
+        if target_file is not None:
             if target_file.name != target_filename:
                 raise StateContinuityError("state_filename_incompatible")
             target_state, target_sha = _read_state(
@@ -491,7 +520,7 @@ def preview_activation_continuity(
         ):
             continue
         installation_dir = root / "state" / _scope_key(grant.installation_id)
-        if not installation_dir.exists():
+        if not installation_dir.exists() and not installation_dir.is_symlink():
             continue
         if installation_dir.is_symlink() or not installation_dir.is_dir():
             raise StateContinuityError("state_scope_conflict")
@@ -501,7 +530,18 @@ def preview_activation_continuity(
                 and session_dir.is_file() and not session_dir.is_symlink()
             ):
                 continue
-            state_file = _only_state_file(session_dir)
+            if not re.fullmatch(r"[0-9a-f]{64}", session_dir.name):
+                raise StateContinuityError("state_scope_conflict")
+            state_file = _committed_state_file(session_dir)
+            if state_file is None:
+                binding = (
+                    root / "migrations" / "bindings"
+                    / _scope_key(grant.installation_id)
+                    / f"{session_dir.name}.json"
+                )
+                if binding.exists() or binding.is_symlink():
+                    raise StateContinuityError("state_scope_conflict")
+                continue
             try:
                 identity = json.loads(state_file.read_text(encoding="utf-8"))["identity"]
                 session_id = identity["session_id"]
@@ -518,6 +558,9 @@ def preview_activation_continuity(
             previous_user = sessions.setdefault(session_id, user_id)
             if previous_user != user_id:
                 raise StateContinuityError("state_identity_mismatch")
+            _binding_matches(
+                root, grant.installation_id, session_id, state_file.name,
+            )
     for session_id, user_id in sessions.items():
         ensure_state_continuity(
             storage_root=root, sealed_root=sealed_root, grants=grants,

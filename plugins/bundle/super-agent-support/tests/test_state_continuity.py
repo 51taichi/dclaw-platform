@@ -130,6 +130,133 @@ def test_activation_preflight_checks_existing_task_before_release_switch(tmp_pat
     assert source_file.read_bytes() == before
 
 
+def test_empty_legacy_scope_is_not_a_committed_task(tmp_path):
+    sealed, storage, record, repository, grants, source_file = setup_chain(tmp_path)
+    empty_task = continuity._state_dir(storage, "installation-1", "task")
+    empty_task.mkdir(parents=True)
+    empty_other = continuity._state_dir(storage, "installation-1", "other-task")
+    empty_other.mkdir(parents=True)
+    record.active_release_id = "release-2"
+    before = source_file.read_bytes()
+
+    def preflight():
+        return continuity.preview_activation_continuity(
+            storage_root=storage, sealed_root=sealed, grants=repository,
+            record=record, target_grant=grants[2],
+        )
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        outcomes = list(executor.map(lambda _: preflight(), range(4)))
+    assert all(item["checked_tasks"] == 1 for item in outcomes)
+    assert all(item["status"] == "ready" for item in outcomes)
+    preview = resume(sealed, storage, record, repository, grants[2], apply=False)
+    assert preview["source_installation_id"] == "installation-0"
+    assert source_file.read_bytes() == before
+    assert not continuity._state_dir(storage, "installation-2", "task").exists()
+
+
+def test_empty_target_scope_can_receive_verified_state(tmp_path):
+    sealed, storage, record, repository, grants, source_file = setup_chain(tmp_path)
+    target_dir = continuity._state_dir(storage, "installation-1", "task")
+    target_dir.mkdir(parents=True)
+    before = source_file.read_bytes()
+    assert resume(sealed, storage, record, repository, grants[1], apply=False)["status"] == "preview"
+    first = resume(sealed, storage, record, repository, grants[1])
+    assert first["status"] == "committed"
+    assert resume(sealed, storage, record, repository, grants[1])["status"] == "already_migrated"
+    assert source_file.read_bytes() == before
+    assert json.loads(continuity._only_state_file(target_dir).read_text())["revisions"] == REVISIONS
+
+
+def test_empty_target_scope_recovers_after_interrupted_promotion(tmp_path, monkeypatch):
+    sealed, storage, record, repository, grants, source_file = setup_chain(tmp_path)
+    target_dir = continuity._state_dir(storage, "installation-1", "task")
+    target_dir.mkdir(parents=True)
+    before = source_file.read_bytes()
+    original_replace = continuity.os.replace
+    failed = False
+
+    def fail_promotion(source, destination):
+        nonlocal failed
+        if not failed and Path(destination) == target_dir:
+            failed = True
+            raise OSError("promotion interrupted")
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(continuity.os, "replace", fail_promotion)
+    with pytest.raises(OSError, match="promotion interrupted"):
+        resume(sealed, storage, record, repository, grants[1])
+    assert not list(target_dir.iterdir())
+    assert source_file.read_bytes() == before
+    assert resume(sealed, storage, record, repository, grants[1])["status"] == "committed"
+    assert json.loads(continuity._only_state_file(target_dir).read_text())["revisions"] == REVISIONS
+
+
+def test_empty_scope_does_not_hide_conflicts_or_wrong_binding(tmp_path):
+    sealed, storage, record, repository, grants, source_file = setup_chain(tmp_path)
+    legacy_dir = continuity._state_dir(storage, "installation-0", "other-task")
+    legacy_dir.mkdir(parents=True)
+    (legacy_dir / "unexpected.txt").write_text("unexpected")
+    with pytest.raises(continuity.StateContinuityError, match="state_scope_conflict"):
+        continuity.preview_activation_continuity(
+            storage_root=storage, sealed_root=sealed, grants=repository,
+            record=record, target_grant=grants[1],
+        )
+    (legacy_dir / "unexpected.txt").unlink()
+    target_dir = continuity._state_dir(storage, "installation-1", "task")
+    target_dir.mkdir(parents=True)
+    continuity._state_binding_path(storage, "installation-1", "task").parent.mkdir(parents=True)
+    continuity._state_binding_path(storage, "installation-1", "task").write_text("{}")
+    with pytest.raises(continuity.StateContinuityError, match="state_scope_conflict"):
+        resume(sealed, storage, record, repository, grants[1])
+    assert source_file.is_file()
+
+
+def test_empty_legacy_scope_with_binding_fails_closed(tmp_path):
+    sealed, storage, record, repository, grants, _ = setup_chain(tmp_path)
+    empty_dir = continuity._state_dir(storage, "installation-1", "other-task")
+    empty_dir.mkdir(parents=True)
+    binding = continuity._state_binding_path(storage, "installation-1", "other-task")
+    binding.parent.mkdir(parents=True)
+    binding.write_text("{}")
+    record.active_release_id = "release-2"
+    with pytest.raises(continuity.StateContinuityError, match="state_scope_conflict"):
+        continuity.preview_activation_continuity(
+            storage_root=storage, sealed_root=sealed, grants=repository,
+            record=record, target_grant=grants[2],
+        )
+    with pytest.raises(continuity.StateContinuityError, match="state_scope_conflict"):
+        continuity.ensure_state_continuity(
+            storage_root=storage, sealed_root=sealed, grants=repository,
+            record=record, target_grant=grants[2],
+            session_id="other-task", user_id="user", apply=False,
+        )
+
+
+def test_empty_target_without_source_rejects_stale_binding(tmp_path):
+    sealed, storage, record, repository, grants, source_file = setup_chain(tmp_path)
+    source_file.unlink()
+    target_dir = continuity._state_dir(storage, "installation-1", "task")
+    target_dir.mkdir(parents=True)
+    assert resume(sealed, storage, record, repository, grants[1])["status"] == "new_or_existing"
+    binding = continuity._state_binding_path(storage, "installation-1", "task")
+    binding.parent.mkdir(parents=True)
+    binding.write_text("{}")
+    with pytest.raises(continuity.StateContinuityError, match="state_scope_conflict"):
+        resume(sealed, storage, record, repository, grants[1])
+
+
+def test_symlinked_installation_scope_fails_closed(tmp_path):
+    sealed, storage, record, repository, grants, _ = setup_chain(tmp_path)
+    installation = storage / "state" / continuity._scope_key("installation-1")
+    installation.symlink_to(storage / "state" / continuity._scope_key("installation-0"))
+    with pytest.raises(continuity.StateContinuityError, match="state_scope_conflict"):
+        continuity.preview_activation_continuity(
+            storage_root=storage, sealed_root=sealed, grants=repository,
+            record=record, target_grant=grants[2],
+        )
+
+
 def test_activation_preflight_accepts_attested_legacy_source(tmp_path):
     sealed, storage, record, repository, grants, source_file = setup_chain(tmp_path)
     record.active_release_id = grants[0].release_id
