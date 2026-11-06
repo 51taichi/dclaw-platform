@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.10 - 2026-11-06
+
+- Bundles development standard 2.34 and DevKit 1.9.4.
+- Documents activation preflight for existing task states and its publication
+  receipt; internal model candidates stay out of chat history.
+
 ## 1.10.9 - 2026-11-06
 
 - Bundles development standard 2.33 and DevKit 1.9.3.

@@ -12,6 +12,16 @@
     "capability_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "signer_id": {"type": "string"},
     "state": {"const": "active"},
-    "visibility": {"const": "public"}
+    "visibility": {"const": "public"},
+    "state_continuity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "status", "checked_tasks"],
+      "properties": {
+        "contract": {"const": "workspace.state.continuity/1"},
+        "status": {"const": "ready"},
+        "checked_tasks": {"type": "integer", "minimum": 0}
+      }
+    }
   }
 }

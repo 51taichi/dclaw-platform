@@ -97,6 +97,71 @@ def test_continuous_two_upgrades_are_atomic_and_idempotent(tmp_path):
     assert target["identity"]["installation_id"] == "installation-2"
 
 
+def test_activation_preflight_checks_existing_task_before_release_switch(tmp_path):
+    sealed, storage, record, repository, grants, source_file = setup_chain(tmp_path)
+    record.active_release_id = grants[0].release_id
+    source_file.parent.with_suffix(".lock").write_text("")
+    before = source_file.read_bytes()
+    preview = continuity.preview_activation_continuity(
+        storage_root=storage, sealed_root=sealed, grants=repository,
+        record=record, target_grant=grants[1],
+    )
+    assert preview == {
+        "contract": continuity.CONTRACT, "status": "ready", "checked_tasks": 1,
+    }
+    assert record.active_release_id == grants[0].release_id
+    assert source_file.read_bytes() == before
+    assert not continuity._state_dir(storage, "installation-1", "task").exists()
+
+    descriptor = sealed / "releases" / "comic" / "release-1" / "agent" / "state-contract.json"
+    descriptor.write_text(
+        CONTRACT.model_copy(update={"schema_version": 2}).model_dump_json(),
+        encoding="utf-8",
+    )
+    digest, _ = inspect_extracted_payload(descriptor.parent.parent)
+    record.releases[1].content_digest = digest
+    grants[1].package_digest = digest
+    with pytest.raises(continuity.StateContinuityError, match="state_schema_incompatible"):
+        continuity.preview_activation_continuity(
+            storage_root=storage, sealed_root=sealed, grants=repository,
+            record=record, target_grant=grants[1],
+        )
+    assert record.active_release_id == grants[0].release_id
+    assert source_file.read_bytes() == before
+
+
+def test_activation_preflight_accepts_attested_legacy_source(tmp_path):
+    sealed, storage, record, repository, grants, source_file = setup_chain(tmp_path)
+    record.active_release_id = grants[0].release_id
+    old_descriptor = (
+        sealed / "releases" / "comic" / "release-0"
+        / "agent" / "state-contract.json"
+    )
+    old_descriptor.unlink()
+    old_release_root = old_descriptor.parent.parent
+    old_digest, _ = inspect_extracted_payload(old_release_root)
+    record.releases[0].content_digest = old_digest
+    grants[0].package_digest = old_digest
+    evidence = old_release_root / "agent" / "workflow.py"
+    continuity._write_json(storage / continuity._REGISTRY, {
+        "schema_version": 1,
+        "contracts": [{
+            "agent_id": "comic", "release_id": "release-0",
+            "content_digest": old_digest, "signer_id": "developer.one",
+            "evidence_module": "agent/workflow.py",
+            "evidence_sha256": hashlib.sha256(evidence.read_bytes()).hexdigest(),
+            "state_contract": CONTRACT.model_dump(),
+        }],
+    })
+    before = source_file.read_bytes()
+    assert continuity.preview_activation_continuity(
+        storage_root=storage, sealed_root=sealed, grants=repository,
+        record=record, target_grant=grants[1],
+    )["checked_tasks"] == 1
+    assert source_file.read_bytes() == before
+    assert not continuity._state_dir(storage, "installation-1", "task").exists()
+
+
 def test_concurrent_resume_commits_once(tmp_path):
     sealed, storage, record, repository, grants, _ = setup_chain(tmp_path)
     with ThreadPoolExecutor(max_workers=4) as executor:

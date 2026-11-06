@@ -11,6 +11,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import APIRouter, Depends, FastAPI
 from fastapi.testclient import TestClient
+from jsonschema import Draft202012Validator
 
 from qwenpaw.app.guards import require_user
 from qwenpaw.app.sealed_agents.package import build_signed_package_bytes
@@ -254,6 +255,12 @@ def test_normal_user_registers_publishes_and_cannot_take_another_agent(
     assert published.status_code == 200, published.text
     assert published.json()["state"] == "active"
     assert published.json()["visibility"] == "public"
+    response_schema = json.loads((
+        Path(publication_module.__file__).parents[1]
+        / "devkit" / "schemas" / "publishing-v1"
+        / "release-response.schema.json"
+    ).read_text(encoding="utf-8"))
+    Draft202012Validator(response_schema).validate(published.json())
     record = service.get_agent("self-service-example")
     assert record.active_release.package_type == "super_expert_public"
     grant = handler.grant_repository.find_release_grant(
@@ -313,3 +320,38 @@ def test_normal_user_registers_publishes_and_cannot_take_another_agent(
     )
     assert retry.status_code == 200, retry.text
     assert retry.json()["release_id"] == detail["release_id"]
+
+    StateContinuityError = _plugin_module("state_continuity").StateContinuityError
+
+    def incompatible(**_):
+        raise StateContinuityError("state_schema_incompatible")
+
+    monkeypatch.setattr(publication_module, "preview_activation_continuity", incompatible)
+    previous_active = service.get_agent("self-service-example").active_release_id
+    blocked = client.post(
+        f"{path}/releases",
+        files={"file": (
+            "agent.zip", _signed_package(signer_a, key_a, version="0.3.0"),
+            "application/zip",
+        )},
+        headers={"x-user": "alice"},
+    )
+    assert blocked.status_code == 422
+    blocked_detail = blocked.json()["detail"]
+    assert blocked_detail["category"] == "state_schema_incompatible"
+    assert blocked_detail["uploaded"] is True
+    assert blocked_detail["active"] is False
+    assert service.get_agent("self-service-example").active_release_id == previous_active
+
+    monkeypatch.setattr(
+        publication_module, "preview_activation_continuity",
+        lambda **_: {"contract": "workspace.state.continuity/1",
+                    "status": "ready", "checked_tasks": 1},
+    )
+    resumed = client.post(
+        f"{path}/agents/self-service-example/releases/"
+        f"{blocked_detail['release_id']}/activate",
+        headers={"x-user": "alice"},
+    )
+    assert resumed.status_code == 200, resumed.text
+    assert resumed.json()["state_continuity"]["checked_tasks"] == 1

@@ -10,6 +10,7 @@ import shutil
 import uuid
 from contextlib import ExitStack
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -467,6 +468,67 @@ def ensure_state_continuity(
             if stage.exists():
                 shutil.rmtree(stage)
         return receipt
+
+
+def preview_activation_continuity(
+    *, storage_root: Path, sealed_root: Path, grants: Any, record: Any,
+    target_grant: Any,
+) -> dict[str, Any]:
+    """Check every existing task before a newly installed release becomes active."""
+    root = Path(storage_root).resolve(strict=True)
+    target_record = SimpleNamespace(
+        agent_id=record.agent_id,
+        active_release_id=target_grant.release_id,
+        releases=record.releases,
+    )
+    sessions: dict[str, str] = {}
+    for grant in grants.list_grants():
+        if (
+            grant.agent_id != target_grant.agent_id
+            or grant.tenant_id != target_grant.tenant_id
+            or grant.installation_id == target_grant.installation_id
+            or grant.granted_at >= target_grant.granted_at
+        ):
+            continue
+        installation_dir = root / "state" / _scope_key(grant.installation_id)
+        if not installation_dir.exists():
+            continue
+        if installation_dir.is_symlink() or not installation_dir.is_dir():
+            raise StateContinuityError("state_scope_conflict")
+        for session_dir in installation_dir.iterdir():
+            if (
+                re.fullmatch(r"[0-9a-f]{64}\.lock", session_dir.name)
+                and session_dir.is_file() and not session_dir.is_symlink()
+            ):
+                continue
+            state_file = _only_state_file(session_dir)
+            try:
+                identity = json.loads(state_file.read_text(encoding="utf-8"))["identity"]
+                session_id = identity["session_id"]
+                user_id = identity["user_id"]
+            except (OSError, UnicodeError, ValueError, KeyError, TypeError) as exc:
+                raise StateContinuityError("state_source_invalid") from exc
+            if (
+                not isinstance(session_id, str)
+                or not isinstance(user_id, str)
+                or identity.get("installation_id") != grant.installation_id
+                or session_dir.name != _scope_key(session_id)
+            ):
+                raise StateContinuityError("state_identity_mismatch")
+            previous_user = sessions.setdefault(session_id, user_id)
+            if previous_user != user_id:
+                raise StateContinuityError("state_identity_mismatch")
+    for session_id, user_id in sessions.items():
+        ensure_state_continuity(
+            storage_root=root, sealed_root=sealed_root, grants=grants,
+            record=target_record, target_grant=target_grant,
+            session_id=session_id, user_id=user_id, apply=False,
+        )
+    return {
+        "contract": CONTRACT,
+        "status": "ready",
+        "checked_tasks": len(sessions),
+    }
 
 
 def register_legacy_pair(

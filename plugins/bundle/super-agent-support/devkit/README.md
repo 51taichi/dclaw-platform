@@ -1,5 +1,10 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.4 adds an activation preflight receipt to the closed self-service
+publishing response schema. The Host checks all existing task-state contracts
+before switching the active Release; a conflict leaves the previous Release
+active. Existing signed packages and the sealing format are unchanged.
+
 Version 1.9.3 validates optional signed `agent/state-contract.json` for
 `workspace.state.continuity/1`. Stateful Agents declare a stable `format_id`,
 `schema_version`, and `filename_template` containing exactly one

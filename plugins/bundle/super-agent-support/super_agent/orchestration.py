@@ -2159,16 +2159,12 @@ async def handle_workspace_turn(
     if last_stream_id is not None:
         response_message.id = last_stream_id
     should_save_session = True
-    if result.error_code is not None:
-        restore_memory = getattr(memory, "load_state_dict", None)
-        if memory_snapshot is None or not callable(restore_memory):
-            should_save_session = False
-        else:
-            try:
-                restore_memory(deepcopy(memory_snapshot), strict=False)
-            except Exception:
-                logger.exception("Failed to restore workspace memory after failed turn")
-                should_save_session = False
+    restore_memory = getattr(memory, "load_state_dict", None)
+    try:
+        restore_memory(deepcopy(memory_snapshot), strict=False)
+    except Exception:
+        logger.exception("Failed to restore workspace memory after turn")
+        should_save_session = False
     add_to_memory = getattr(memory, "add", None)
     if should_save_session and callable(add_to_memory):
         for message in messages:

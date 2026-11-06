@@ -176,6 +176,51 @@ async def test_failed_runtime_restores_memory_before_persisting_reply(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_completed_runtime_does_not_persist_internal_candidate(monkeypatch, tmp_path):
+    _allow_state_preflight(monkeypatch)
+    memory = InMemoryMemory()
+    prior = Msg(name="user", role="user", content="prior request")
+    await memory.add(prior)
+    monkeypatch.setattr(
+        orchestration, "resolve_active_workspace_authorization",
+        lambda **_: SimpleNamespace(
+            installation_id="installation", granted_capabilities={},
+        ),
+    )
+    monkeypatch.setattr(
+        orchestration._composition, "get_super_expert_platform_service",
+        lambda: SimpleNamespace(list_session_events=lambda **_: []),
+    )
+    monkeypatch.setattr(
+        orchestration._media_review_context, "current_review_input",
+        lambda **_: None,
+    )
+
+    async def completed_stream(**_):
+        await memory.add(Msg(name="workspace_runtime", role="system", content="internal rule"))
+        await memory.add(Msg(name="assistant", role="assistant", content='{"candidate": true}'))
+        yield True, orchestration.WorkspaceTurnResult(message={
+            "role": "assistant", "name": "Comic", "content": "approved reply",
+        })
+
+    monkeypatch.setattr(
+        orchestration._public_stream, "stream_workspace_turn", completed_stream,
+    )
+    incoming = Msg(name="user", role="user", content="new request")
+    result = [item async for item in orchestration.handle_workspace_turn(
+        agent=SimpleNamespace(memory=memory), messages=[incoming],
+        request=SimpleNamespace(session_id="task", user_id="user", tenant_id="local"),
+        query="new request", mission_info=None, agent_id="comic",
+        agent_name="Comic", workspace_root=tmp_path,
+        orchestration=SimpleNamespace(), standard_stream=None,
+    )]
+    response, last, should_save_session = result[0]
+    assert last is True and should_save_session is True
+    assert [item[0].id for item in memory.content] == [prior.id, incoming.id, response.id]
+    assert response.get_text_content() == "approved reply"
+
+
+@pytest.mark.asyncio
 async def test_unhandled_runtime_exception_restores_memory(monkeypatch, tmp_path):
     _allow_state_preflight(monkeypatch)
     memory = InMemoryMemory()

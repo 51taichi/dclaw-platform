@@ -5,6 +5,11 @@ Agents. It contains the human standard, standalone DevKit, schemas, templates,
 SDK helpers, fixtures, and a single cross-platform command line tool. DClaw
 server source is not required.
 
+Version 1.10.10 bundles development standard 2.34 and DevKit 1.9.4. Stateful
+releases are checked against existing task states before activation. The
+activation response includes a state-continuity preflight receipt. Existing
+signed packages remain valid.
+
 Version 1.10.9 bundles development standard 2.33 and DevKit 1.9.3. Stateful
 releases can sign a `state-contract.json` declaration for complete task-state
 continuity across compatible installations. Version 1.10.8 added that new

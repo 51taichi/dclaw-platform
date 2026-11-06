@@ -23,10 +23,15 @@ from qwenpaw.app.sealed_agents.standard_workspace import (
 )
 from qwenpaw.config.config import AgentProfileRef
 from qwenpaw.config.utils import load_config, save_config
+from qwenpaw.constant import WORKING_DIR
 
 from .package_handler import PublicSuperAgentPackageHandler
 from .public_runtime import isolation_available as runtime_isolation_available
 from .publishers import PublisherError, PublisherRepository
+from .state_continuity import (
+    StateContinuityError,
+    preview_activation_continuity,
+)
 
 
 class SignerRegistration(BaseModel):
@@ -126,6 +131,29 @@ class PublisherPublication:
                     "granted": True, "active": False,
                 },
             ) from exc
+        state_root = Path(WORKING_DIR) / "workspace_runtime_state"
+        state_root.mkdir(parents=True, exist_ok=True)
+        current_record = service.get_agent(agent_id)
+        target_grant = self.handler.grant_repository.find_release_grant(
+            agent_id, release, tenant_id=tenant_id,
+        )
+        try:
+            if current_record is None or target_grant is None:
+                raise StateContinuityError("state_release_identity_mismatch")
+            continuity = preview_activation_continuity(
+                storage_root=state_root,
+                sealed_root=Path(WORKING_DIR) / "sealed_agents",
+                grants=self.handler.grant_repository,
+                record=current_record,
+                target_grant=target_grant,
+            )
+        except StateContinuityError as exc:
+            raise HTTPException(status_code=422, detail={
+                "error": "state continuity preflight failed",
+                "category": exc.category,
+                "release_id": release_id, "uploaded": True,
+                "granted": True, "active": False,
+            }) from exc
         config = load_config()
         previous_profile = config.agents.profiles.get(agent_id)
         previous_record = service.get_agent(agent_id)
@@ -184,6 +212,7 @@ class PublisherPublication:
             "signer_id": release.signer_id,
             "state": "active",
             "visibility": "public",
+            "state_continuity": continuity,
         }
 
     def _register_routes(self) -> None:

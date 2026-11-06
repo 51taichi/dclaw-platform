@@ -24,7 +24,7 @@ from urllib.request import Request, urlopen
 import zipfile
 
 
-DEVKIT_VERSION = "1.9.3"
+DEVKIT_VERSION = "1.9.4"
 CRYPTOGRAPHY_VERSION = "46.0.3"
 SUPPORTED_PYTHON = ">=3.10,<3.14"
 SUPPORTED_PLATFORMS = {
