@@ -75,7 +75,9 @@ from . import failure_diagnostics
 _diagnostic_audit = logging.getLogger("dclaw.super_agent.diagnostics.audit")
 
 
-def _history_counts(task_id: str, agent_id: str, user_id: str) -> dict[str, int | None]:
+def _history_snapshot(
+    task_id: str, agent_id: str, user_id: str,
+) -> tuple[dict[str, int | None], set[str]]:
     from sqlalchemy import func, or_, select
     from qwenpaw.app.storage.engine import get_app_engine
     from qwenpaw.app.storage.schema import chats, messages, session_states
@@ -106,12 +108,27 @@ def _history_counts(task_id: str, agent_id: str, user_id: str) -> dict[str, int 
         state = json.loads(state_json) if state_json else {}
         memory = state.get("agent", {}).get("memory", {}).get("content")
         memory_count = len(memory) if isinstance(memory, list) else None
+        memory_ids = _memory_message_ids(memory)
     except (TypeError, ValueError, AttributeError):
         memory_count = None
+        memory_ids = set()
     return {
         "messages_table_count": message_count,
         "agent_memory_count": memory_count,
-    }
+    }, memory_ids
+
+
+def _memory_message_ids(memory: Any) -> set[str]:
+    if not isinstance(memory, list):
+        return set()
+    result = set()
+    for item in memory:
+        message = (
+            item[0] if isinstance(item, list) and item else item
+        )
+        if isinstance(message, dict) and isinstance(message.get("id"), str):
+            result.add(message["id"])
+    return result
 
 
 class InteractionSubmitRequest(BaseModel):
@@ -341,6 +358,7 @@ async def read_developer_runtime_diagnostics(
     if not user_id or len(task_id) > 128 or len(agent_id) > 128:
         raise HTTPException(status_code=404, detail="task not found")
     try:
+        history, message_ids = _history_snapshot(task_id, agent_id, user_id)
         result = failure_diagnostics.read_owner_failures(
             storage_root=Path(WORKING_DIR) / "workspace_runtime_state",
             grants=get_super_expert_platform_service().grant_repository,
@@ -348,8 +366,9 @@ async def read_developer_runtime_diagnostics(
             user_id=user_id,
             session_id=task_id,
             owner_resolver=resolve_event_scope,
+            persisted_message_ids=message_ids,
         )
-        result["history_readback"] = _history_counts(task_id, agent_id, user_id)
+        result["history_readback"] = history
         _diagnostic_audit.info(
             "developer failure diagnostics read actor=%s agent=%s task_scope=%s count=%d",
             failure_diagnostics._scope(user_id)[:12], agent_id,

@@ -63,13 +63,18 @@ def _trace_failure(path: Path, installation_id: str, session_id: str) -> list[di
                 event = record.get("event_type")
                 if event not in {
                     "orchestration.started", "runtime.trace", "orchestration.failed",
-                    "orchestration.preflight_failed",
+                    "orchestration.preflight_failed", "orchestration.message_staged",
                 }:
                     continue
                 invocation = invocations.setdefault(record["invocation_id"], {})
                 when = _timestamp(record.get("timestamp"))
                 if event == "orchestration.started":
                     invocation["started_at"] = when
+                elif event == "orchestration.message_staged":
+                    payload = record.get("payload") or {}
+                    invocation["assistant_message_id"] = _token(
+                        payload.get("assistant_message_id"),
+                    )
                 elif event == "orchestration.preflight_failed":
                     payload = record.get("payload") or {}
                     invocation["started_at"] = _timestamp(payload.get("started_at"))
@@ -174,6 +179,7 @@ def read_owner_failures(
     owner_resolver: Callable[[str], dict[str, Any] | None],
     now: datetime | None = None,
     limit: int = 50,
+    persisted_message_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """Developer-facing history, scoped to the authenticated chat owner."""
     owner = owner_resolver(session_id)
@@ -195,6 +201,7 @@ def read_owner_failures(
             when = failure["failed_at"]
             if cutoff <= when <= now:
                 first = failure.get("first_failure")
+                message_id = failure.get("assistant_message_id")
                 candidates.append({
                     "invocation_id": failure["invocation_id"],
                     "installation_id": grant.installation_id,
@@ -207,6 +214,11 @@ def read_owner_failures(
                     ),
                     "error_code": failure.get("error_code"),
                     "transaction_status": "discarded",
+                    "message_status": (
+                        "unknown" if message_id is None or persisted_message_ids is None
+                        else "persisted" if message_id in persisted_message_ids
+                        else "missing"
+                    ),
                 })
     candidates.sort(key=lambda item: item["failed_at"], reverse=True)
     return {

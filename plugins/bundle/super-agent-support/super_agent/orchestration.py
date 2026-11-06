@@ -158,6 +158,7 @@ class WorkspaceTurnResult(BaseModel):
     verified_interaction_ids: tuple[str, ...] = ()
     error_code: str | None = None
     diagnostic_ref: str | None = Field(default=None, max_length=200)
+    invocation_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1427,7 +1428,9 @@ async def run_workspace_orchestration_turn(
             event_type="orchestration.continuation.limit_reached",
             payload={"max_passes": _MAX_AUTOMATIC_CONTINUATION_PASSES},
         )
-    return attach_created_interactions(result)
+    return attach_created_interactions(result).model_copy(
+        update={"invocation_id": invocation_id},
+    )
 
 
 class WorkspaceStateTransaction:
@@ -1878,6 +1881,7 @@ async def handle_workspace_turn(
     last_stream_id = None
     preflight_started_at = datetime.now(timezone.utc)
     setup_phase = "release_authorization"
+    diagnostic_installation_id = None
     result = WorkspaceTurnResult(error_code="orchestration_error")
     try:
         tenant_id = str(getattr(request, "tenant_id", "local") or "local")
@@ -1887,6 +1891,7 @@ async def handle_workspace_turn(
             tenant_id=tenant_id,
             config=orchestration,
         )
+        diagnostic_installation_id = authorization.installation_id
         setup_phase = "turn_context"
         platform_service = _composition.get_super_expert_platform_service()
         platform_events = platform_service.list_session_events(
@@ -2069,11 +2074,13 @@ async def handle_workspace_turn(
                     agent_id, release, tenant_id=tenant_id,
                 )
                 if grant is not None:
+                    diagnostic_installation_id = grant.installation_id
+                    preflight_invocation_id = f"preflight-{uuid.uuid4().hex}"
                     _append_runtime_trace(
                         Path(WORKING_DIR) / "workspace_runtime_state",
                         installation_id=grant.installation_id,
                         session_id=str(request.session_id),
-                        invocation_id=f"preflight-{uuid.uuid4().hex}",
+                        invocation_id=preflight_invocation_id,
                         event_type="orchestration.preflight_failed",
                         payload={
                             "started_at": preflight_started_at.isoformat(),
@@ -2082,9 +2089,12 @@ async def handle_workspace_turn(
                             "error_code": exc.error_code,
                         },
                     )
+                    result = WorkspaceTurnResult(
+                        error_code="orchestration_error",
+                        invocation_id=preflight_invocation_id,
+                    )
         except Exception:
             logger.exception("Failed to record workspace preflight failure")
-        result = WorkspaceTurnResult(error_code="orchestration_error")
 
     response_message = workspace_result_to_message(
         result,
@@ -2098,4 +2108,20 @@ async def handle_workspace_turn(
         for message in messages:
             await add_to_memory(message)
         await add_to_memory(response_message)
+    if (
+        result.error_code is not None
+        and diagnostic_installation_id is not None
+        and result.invocation_id is not None
+    ):
+        try:
+            _append_runtime_trace(
+                Path(WORKING_DIR) / "workspace_runtime_state",
+                installation_id=diagnostic_installation_id,
+                session_id=str(request.session_id),
+                invocation_id=result.invocation_id,
+                event_type="orchestration.message_staged",
+                payload={"assistant_message_id": str(response_message.id)},
+            )
+        except Exception:
+            logger.exception("Failed to record workspace message staging")
     yield response_message, True, True

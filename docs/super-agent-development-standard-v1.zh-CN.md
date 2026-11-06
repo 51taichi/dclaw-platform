@@ -2271,7 +2271,7 @@ DevKit `1.9.2` 必须提供：
 ### 2.31 - 2026-11-06
 
 - 插件 `1.18.13` 将发布目录摘要不符等启动前失败记录为脱敏 `platform_preflight`，可由原有 `runtime.failure.read/1` 跨同一专家安装版本读取；失败回合的聊天消息仍保存，作品状态事务保持丢弃。
-- 普通开发者可用已登录身份读取自己的任务诊断：`GET /api/user/super-expert-platform/runtime-diagnostics/v1/tasks/{task_id}?agent_id=...`。返回最近 30 天同一专家跨安装的失败记录及当前消息表、Agent memory 的只读数量；越权返回 404，读取写审计日志，不返回正文。历史上未记录的失败及逐轮持久化状态不能据此补造。
+- 普通开发者可用已登录身份读取自己的任务诊断：`GET /api/user/super-expert-platform/runtime-diagnostics/v1/tasks/{task_id}?agent_id=...`。返回最近 30 天同一专家跨安装的失败记录、失败回复的 `persisted/missing/unknown` 回读状态，以及当前消息表与 Agent memory 的只读数量；越权返回 404，读取写审计日志，不返回正文。历史上未记录的失败及逐轮持久化状态不能据此补造。
 - DevKit `1.9.2` 构建密封包时排除 `.pyc`、`__pycache__` 等生成缓存，避免可变缓存成为签名发布内容；旧已签包继续按原摘要校验。Developer Pack `1.10.7` 提供新版 Schema。签名发布目录不得直接导入执行验证，须使用隔离副本。
 
 ### 2.30 - 2026-11-05

@@ -18,6 +18,7 @@ from super_agent.failure_diagnostics import (
 )
 from super_agent.capabilities import compute_capability_set_digest, validate_super_expert_manifest
 from super_agent.orchestration import WorkspaceOrchestrationError, WorkspaceRuntimeHost
+from super_agent.router import _memory_message_ids
 from super_agent.trust import SuperExpertTrustStore
 
 
@@ -131,6 +132,11 @@ def test_preflight_failure_is_readable_without_runtime_invocation(tmp_path):
             "category": "release_digest_mismatch",
             "error_code": "orchestration_error",
         },
+    }, {
+        "timestamp": (when + timedelta(milliseconds=1)).isoformat(),
+        "invocation_id": "preflight-one",
+        "event_type": "orchestration.message_staged",
+        "payload": {"assistant_message_id": "reply-one"},
     }])
     result = read_latest_failure(**_args(tmp_path))
     assert result["first_failure_source"] == "platform_preflight"
@@ -143,10 +149,17 @@ def test_preflight_failure_is_readable_without_runtime_invocation(tmp_path):
     history = read_owner_failures(
         storage_root=tmp_path, grants=_grants(), agent_id="comic",
         user_id="57", session_id="task", owner_resolver=_args(tmp_path)["owner_resolver"],
-        now=NOW,
+        now=NOW, persisted_message_ids={"reply-one"},
     )
     assert history["status"] == "found"
     assert history["failures"][0]["invocation_id"] == "preflight-one"
+    assert history["failures"][0]["message_status"] == "persisted"
+    missing = read_owner_failures(
+        storage_root=tmp_path, grants=_grants(), agent_id="comic",
+        user_id="57", session_id="task", owner_resolver=_args(tmp_path)["owner_resolver"],
+        now=NOW, persisted_message_ids=set(),
+    )
+    assert missing["failures"][0]["message_status"] == "missing"
     history["history_readback"] = {
         "messages_table_count": 0, "agent_memory_count": 60,
     }
@@ -161,6 +174,14 @@ def test_developer_history_rejects_other_owner(tmp_path):
             user_id="58", session_id="task", owner_resolver=_args(tmp_path)["owner_resolver"],
             now=NOW,
         )
+
+
+def test_memory_message_ids_supports_persisted_agent_format():
+    assert _memory_message_ids([
+        [{"id": "user-one"}, []],
+        [{"id": "reply-one"}, []],
+        {"id": "direct-message"},
+    ]) == {"user-one", "reply-one", "direct-message"}
 
 
 def test_host_failure_without_agent_trace_does_not_invent_phase(tmp_path):

@@ -13,7 +13,7 @@
       "maxItems": 50,
       "items": {
         "type": "object",
-        "required": ["invocation_id", "installation_id", "release_id", "started_at", "failed_at", "first_failure", "first_failure_source", "error_code", "transaction_status"],
+        "required": ["invocation_id", "installation_id", "release_id", "started_at", "failed_at", "first_failure", "first_failure_source", "error_code", "transaction_status", "message_status"],
         "properties": {
           "invocation_id": {"type": "string"},
           "installation_id": {"type": "string"},
@@ -32,7 +32,8 @@
           },
           "first_failure_source": {"enum": ["agent_trace", "platform_preflight", "not_recorded"]},
           "error_code": {"type": ["string", "null"]},
-          "transaction_status": {"const": "discarded"}
+          "transaction_status": {"const": "discarded"},
+          "message_status": {"enum": ["persisted", "missing", "unknown"]}
         },
         "additionalProperties": false
       }
