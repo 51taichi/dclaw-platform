@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from pathlib import Path
 from tempfile import SpooledTemporaryFile
 from types import SimpleNamespace
@@ -68,6 +70,48 @@ from .models import (
     AigcWorkflowGuideEvent,
 )
 from .interaction_cards import InteractionError
+from . import failure_diagnostics
+
+_diagnostic_audit = logging.getLogger("dclaw.super_agent.diagnostics.audit")
+
+
+def _history_counts(task_id: str, agent_id: str, user_id: str) -> dict[str, int | None]:
+    from sqlalchemy import func, or_, select
+    from qwenpaw.app.storage.engine import get_app_engine
+    from qwenpaw.app.storage.schema import chats, messages, session_states
+
+    with get_app_engine().connect() as connection:
+        rows = connection.execute(
+            select(chats.c.id).where(
+                or_(chats.c.id == task_id, chats.c.session_id == task_id),
+                chats.c.agent_id == agent_id, chats.c.user_id == user_id,
+            ).limit(2),
+        ).all()
+        if len(rows) != 1:
+            raise failure_diagnostics.FailureDiagnosticsUnauthorized(
+                "failure diagnostic scope denied",
+            )
+        chat_id = rows[0][0]
+        message_count = connection.execute(
+            select(func.count()).select_from(messages).where(
+                messages.c.chat_id == chat_id,
+            ),
+        ).scalar_one()
+        state_json = connection.execute(
+            select(session_states.c.state_json).where(
+                session_states.c.chat_id == chat_id,
+            ),
+        ).scalar_one_or_none()
+    try:
+        state = json.loads(state_json) if state_json else {}
+        memory = state.get("agent", {}).get("memory", {}).get("content")
+        memory_count = len(memory) if isinstance(memory, list) else None
+    except (TypeError, ValueError, AttributeError):
+        memory_count = None
+    return {
+        "messages_table_count": message_count,
+        "agent_memory_count": memory_count,
+    }
 
 
 class InteractionSubmitRequest(BaseModel):
@@ -282,6 +326,50 @@ def _review_runtime_installation_id(
 
 user_routes = APIRouter()
 frontend_read_routes = APIRouter()
+
+
+@user_routes.get("/runtime-diagnostics/v1/tasks/{task_id}")
+async def read_developer_runtime_diagnostics(
+    task_id: str,
+    agent_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    """Return sanitized failures only for a developer's own task."""
+    from .composition import resolve_event_scope
+
+    user_id = str(getattr(request.state, "user_id", "") or "")
+    if not user_id or len(task_id) > 128 or len(agent_id) > 128:
+        raise HTTPException(status_code=404, detail="task not found")
+    try:
+        result = failure_diagnostics.read_owner_failures(
+            storage_root=Path(WORKING_DIR) / "workspace_runtime_state",
+            grants=get_super_expert_platform_service().grant_repository,
+            agent_id=agent_id,
+            user_id=user_id,
+            session_id=task_id,
+            owner_resolver=resolve_event_scope,
+        )
+        result["history_readback"] = _history_counts(task_id, agent_id, user_id)
+        _diagnostic_audit.info(
+            "developer failure diagnostics read actor=%s agent=%s task_scope=%s count=%d",
+            failure_diagnostics._scope(user_id)[:12], agent_id,
+            failure_diagnostics._scope(task_id)[:12], len(result["failures"]),
+        )
+        return result
+    except failure_diagnostics.FailureDiagnosticsUnauthorized as exc:
+        _diagnostic_audit.warning(
+            "developer failure diagnostics denied actor=%s task_scope=%s",
+            failure_diagnostics._scope(user_id)[:12],
+            failure_diagnostics._scope(task_id)[:12],
+        )
+        raise HTTPException(status_code=404, detail="task not found") from exc
+    except failure_diagnostics.FailureDiagnosticsUnavailable as exc:
+        _diagnostic_audit.error(
+            "developer failure diagnostics unavailable actor=%s task_scope=%s",
+            failure_diagnostics._scope(user_id)[:12],
+            failure_diagnostics._scope(task_id)[:12],
+        )
+        raise HTTPException(status_code=503, detail="diagnostics unavailable") from exc
 
 
 from .service import (

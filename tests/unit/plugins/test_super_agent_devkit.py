@@ -230,7 +230,7 @@ def test_devkit_has_no_server_source_import_and_runs_standalone():
     )
     result = json.loads(completed.stdout)
     assert result["status"] == "ok"
-    assert result["devkit_version"] == "1.9.1"
+    assert result["devkit_version"] == "1.9.2"
     assert result["dependency_mode"] == "bundled-wheelhouse"
     assert result["cryptography_version"] == "46.0.3"
     assert "schemas/super-expert-manifest.schema.json" in result["schemas"]
@@ -443,7 +443,7 @@ def test_devkit_bundles_and_verifies_locked_encryption_dependencies():
     )
     result = json.loads(completed.stdout)
     assert result["status"] == "ok"
-    assert result["devkit_version"] == "1.9.1"
+    assert result["devkit_version"] == "1.9.2"
     assert result["wheelhouse_verified"] is True
     assert result["wheelhouse_files"] == 26
 
@@ -586,6 +586,19 @@ def test_devkit_build_is_accepted_and_matches_server_package(tmp_path):
     package_path.write_bytes(devkit_package)
     verified = devkit.verify_package(package_path, public_path)
     assert verified["agent_id"] == "generic-orchestration"
+
+
+def test_devkit_excludes_mutable_python_caches_from_signed_payload(tmp_path):
+    devkit = _devkit()
+    source = tmp_path / "agent"
+    source.mkdir()
+    (source / "runtime.py").write_text("pass\n", encoding="utf-8")
+    cache = source / "__pycache__"
+    cache.mkdir()
+    (cache / "runtime.cpython-311.pyc").write_bytes(b"compiled")
+    (source / "other.pyc").write_bytes(b"compiled")
+
+    assert devkit._collect_source(source) == {"agent/runtime.py": b"pass\n"}
 
 
 def test_devkit_copies_canonical_local_execution_schemas():

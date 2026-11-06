@@ -61,12 +61,26 @@ def _trace_failure(path: Path, installation_id: str, session_id: str) -> list[di
                 ):
                     raise FailureDiagnosticsUnavailable("failure trace scope mismatch")
                 event = record.get("event_type")
-                if event not in {"orchestration.started", "runtime.trace", "orchestration.failed"}:
+                if event not in {
+                    "orchestration.started", "runtime.trace", "orchestration.failed",
+                    "orchestration.preflight_failed",
+                }:
                     continue
                 invocation = invocations.setdefault(record["invocation_id"], {})
                 when = _timestamp(record.get("timestamp"))
                 if event == "orchestration.started":
                     invocation["started_at"] = when
+                elif event == "orchestration.preflight_failed":
+                    payload = record.get("payload") or {}
+                    invocation["started_at"] = _timestamp(payload.get("started_at"))
+                    invocation["failed_at"] = when
+                    invocation["error_code"] = _token(payload.get("error_code"))
+                    invocation["first_failure"] = {
+                        "phase": _token(payload.get("phase")),
+                        "category": _token(payload.get("category")),
+                        "attempt": None,
+                    }
+                    invocation["first_failure_source"] = "platform_preflight"
                 elif event == "orchestration.failed":
                     invocation["failed_at"] = when
                     payload = record.get("payload") or {}
@@ -142,7 +156,62 @@ def read_latest_failure(
         "started_at": failure.get("started_at").isoformat() if failure.get("started_at") else None,
         "failed_at": failure["failed_at"].isoformat(),
         "first_failure": first_failure or {"phase": None, "category": None, "attempt": None},
-        "first_failure_source": "agent_trace" if first_failure else "not_recorded",
+        "first_failure_source": failure.get("first_failure_source") or (
+            "agent_trace" if first_failure else "not_recorded"
+        ),
         "error_code": failure.get("error_code"),
         "transaction_status": "discarded",
+    }
+
+
+def read_owner_failures(
+    *,
+    storage_root: Path,
+    grants: Any,
+    agent_id: str,
+    user_id: str,
+    session_id: str,
+    owner_resolver: Callable[[str], dict[str, Any] | None],
+    now: datetime | None = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Developer-facing history, scoped to the authenticated chat owner."""
+    owner = owner_resolver(session_id)
+    if (
+        owner is None
+        or str(owner.get("user_id")) != user_id
+        or owner.get("agent_id") != agent_id
+        or not owner.get("tenant_id")
+    ):
+        raise FailureDiagnosticsUnauthorized("failure diagnostic scope denied")
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    cutoff = now - READ_WINDOW
+    candidates = []
+    for grant in grants.list_grants():
+        if grant.tenant_id != owner["tenant_id"] or grant.agent_id != agent_id:
+            continue
+        path = Path(storage_root) / "traces" / _scope(grant.installation_id) / f"{_scope(session_id)}.ndjson"
+        for failure in _trace_failure(path, grant.installation_id, session_id):
+            when = failure["failed_at"]
+            if cutoff <= when <= now:
+                first = failure.get("first_failure")
+                candidates.append({
+                    "invocation_id": failure["invocation_id"],
+                    "installation_id": grant.installation_id,
+                    "release_id": grant.release_id,
+                    "started_at": failure.get("started_at").isoformat() if failure.get("started_at") else None,
+                    "failed_at": when.isoformat(),
+                    "first_failure": first or {"phase": None, "category": None, "attempt": None},
+                    "first_failure_source": failure.get("first_failure_source") or (
+                        "agent_trace" if first else "not_recorded"
+                    ),
+                    "error_code": failure.get("error_code"),
+                    "transaction_status": "discarded",
+                })
+    candidates.sort(key=lambda item: item["failed_at"], reverse=True)
+    return {
+        "contract": "developer.runtime.diagnostics.read/1",
+        "status": "found" if candidates else "no_record",
+        "retention_days": READ_WINDOW.days,
+        "failures": candidates[:limit],
     }

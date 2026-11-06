@@ -208,7 +208,9 @@ def authorize_workspace_release(
     except (OSError, SealedPackageError) as exc:
         raise WorkspaceOrchestrationError("orchestration_error") from exc
     if actual_digest != release.content_digest:
-        raise WorkspaceOrchestrationError("orchestration_error")
+        raise WorkspaceOrchestrationError(
+            "orchestration_error", "release_digest_mismatch",
+        )
     declared = dict(release.declared_capabilities)
     if declared.get("workspace.turn.orchestrate/1") != config.contract_version:
         raise WorkspaceOrchestrationError("unauthorized_capability")
@@ -1874,6 +1876,8 @@ async def handle_workspace_turn(
         return
 
     last_stream_id = None
+    preflight_started_at = datetime.now(timezone.utc)
+    setup_phase = "release_authorization"
     result = WorkspaceTurnResult(error_code="orchestration_error")
     try:
         tenant_id = str(getattr(request, "tenant_id", "local") or "local")
@@ -1883,6 +1887,7 @@ async def handle_workspace_turn(
             tenant_id=tenant_id,
             config=orchestration,
         )
+        setup_phase = "turn_context"
         platform_service = _composition.get_super_expert_platform_service()
         platform_events = platform_service.list_session_events(
             installation_id=authorization.installation_id,
@@ -2050,11 +2055,35 @@ async def handle_workspace_turn(
             else:
                 last_stream_id = value.id
                 yield value, False, True
-    except WorkspaceOrchestrationError:
+    except WorkspaceOrchestrationError as exc:
         logger.exception(
             "Workspace orchestration failed closed for agent %s",
             agent_id,
         )
+        try:
+            record = get_sealed_agent_registry().get_agent(agent_id)
+            release = record.active_release if record is not None else None
+            if release is not None:
+                sealed_root = Path(WORKING_DIR) / "sealed_agents"
+                grant = SuperExpertGrantRepository(sealed_root).find_release_grant(
+                    agent_id, release, tenant_id=tenant_id,
+                )
+                if grant is not None:
+                    _append_runtime_trace(
+                        Path(WORKING_DIR) / "workspace_runtime_state",
+                        installation_id=grant.installation_id,
+                        session_id=str(request.session_id),
+                        invocation_id=f"preflight-{uuid.uuid4().hex}",
+                        event_type="orchestration.preflight_failed",
+                        payload={
+                            "started_at": preflight_started_at.isoformat(),
+                            "phase": setup_phase,
+                            "category": exc.diagnostic_ref or exc.error_code,
+                            "error_code": exc.error_code,
+                        },
+                    )
+        except Exception:
+            logger.exception("Failed to record workspace preflight failure")
         result = WorkspaceTurnResult(error_code="orchestration_error")
 
     response_message = workspace_result_to_message(
@@ -2063,11 +2092,10 @@ async def handle_workspace_turn(
     )
     if last_stream_id is not None:
         response_message.id = last_stream_id
-    if result.error_code is None:
-        memory = getattr(agent, "memory", None)
-        add_to_memory = getattr(memory, "add", None)
-        if callable(add_to_memory):
-            for message in messages:
-                await add_to_memory(message)
-            await add_to_memory(response_message)
-    yield response_message, True, result.error_code is None
+    memory = getattr(agent, "memory", None)
+    add_to_memory = getattr(memory, "add", None)
+    if callable(add_to_memory):
+        for message in messages:
+            await add_to_memory(message)
+        await add_to_memory(response_message)
+    yield response_message, True, True

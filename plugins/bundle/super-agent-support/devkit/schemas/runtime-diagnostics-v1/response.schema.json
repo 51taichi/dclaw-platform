@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/schemas/runtime-diagnostics-v1/response.schema.json",
+  "title": "developer.runtime.diagnostics.read/1 response",
+  "type": "object",
+  "required": ["contract", "status", "retention_days", "failures", "history_readback"],
+  "properties": {
+    "contract": {"const": "developer.runtime.diagnostics.read/1"},
+    "status": {"enum": ["found", "no_record"]},
+    "retention_days": {"const": 30},
+    "failures": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "required": ["invocation_id", "installation_id", "release_id", "started_at", "failed_at", "first_failure", "first_failure_source", "error_code", "transaction_status"],
+        "properties": {
+          "invocation_id": {"type": "string"},
+          "installation_id": {"type": "string"},
+          "release_id": {"type": "string"},
+          "started_at": {"type": ["string", "null"], "format": "date-time"},
+          "failed_at": {"type": "string", "format": "date-time"},
+          "first_failure": {
+            "type": "object",
+            "required": ["phase", "category", "attempt"],
+            "properties": {
+              "phase": {"type": ["string", "null"]},
+              "category": {"type": ["string", "null"]},
+              "attempt": {"type": ["integer", "null"], "minimum": 1}
+            },
+            "additionalProperties": false
+          },
+          "first_failure_source": {"enum": ["agent_trace", "platform_preflight", "not_recorded"]},
+          "error_code": {"type": ["string", "null"]},
+          "transaction_status": {"const": "discarded"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "history_readback": {
+      "type": "object",
+      "required": ["messages_table_count", "agent_memory_count"],
+      "properties": {
+        "messages_table_count": {"type": "integer", "minimum": 0},
+        "agent_memory_count": {"type": ["integer", "null"], "minimum": 0}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

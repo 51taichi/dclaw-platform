@@ -14,6 +14,7 @@ from super_agent.failure_diagnostics import (
     FailureDiagnosticsUnauthorized,
     FailureDiagnosticsUnavailable,
     read_latest_failure,
+    read_owner_failures,
 )
 from super_agent.capabilities import compute_capability_set_digest, validate_super_expert_manifest
 from super_agent.orchestration import WorkspaceOrchestrationError, WorkspaceRuntimeHost
@@ -116,6 +117,50 @@ def test_no_record_and_retention_window(tmp_path):
     validate(result, json.loads((SCHEMAS / "response.schema.json").read_text()))
     _trace(tmp_path, "old", "task", _failure("expired", NOW - timedelta(days=31)))
     assert read_latest_failure(**_args(tmp_path))["status"] == "no_record"
+
+
+def test_preflight_failure_is_readable_without_runtime_invocation(tmp_path):
+    when = NOW - timedelta(minutes=1)
+    _trace(tmp_path, "new", "task", [{
+        "timestamp": when.isoformat(),
+        "invocation_id": "preflight-one",
+        "event_type": "orchestration.preflight_failed",
+        "payload": {
+            "started_at": (when - timedelta(seconds=1)).isoformat(),
+            "phase": "release_authorization",
+            "category": "release_digest_mismatch",
+            "error_code": "orchestration_error",
+        },
+    }])
+    result = read_latest_failure(**_args(tmp_path))
+    assert result["first_failure_source"] == "platform_preflight"
+    assert result["first_failure"] == {
+        "phase": "release_authorization",
+        "category": "release_digest_mismatch",
+        "attempt": None,
+    }
+    validate(result, json.loads((SCHEMAS / "response.schema.json").read_text()))
+    history = read_owner_failures(
+        storage_root=tmp_path, grants=_grants(), agent_id="comic",
+        user_id="57", session_id="task", owner_resolver=_args(tmp_path)["owner_resolver"],
+        now=NOW,
+    )
+    assert history["status"] == "found"
+    assert history["failures"][0]["invocation_id"] == "preflight-one"
+    history["history_readback"] = {
+        "messages_table_count": 0, "agent_memory_count": 60,
+    }
+    developer_schema = SCHEMAS.parent / "runtime-diagnostics-v1" / "response.schema.json"
+    validate(history, json.loads(developer_schema.read_text()))
+
+
+def test_developer_history_rejects_other_owner(tmp_path):
+    with pytest.raises(FailureDiagnosticsUnauthorized):
+        read_owner_failures(
+            storage_root=tmp_path, grants=_grants(), agent_id="comic",
+            user_id="58", session_id="task", owner_resolver=_args(tmp_path)["owner_resolver"],
+            now=NOW,
+        )
 
 
 def test_host_failure_without_agent_trace_does_not_invent_phase(tmp_path):

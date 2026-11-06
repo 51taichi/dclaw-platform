@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.7 - 2026-11-06
+
+- Bundles development standard 2.31 and DevKit 1.9.2.
+- Excludes mutable Python caches from signed Agent builds and documents
+  owner-scoped startup failure diagnostics.
+
 ## 1.10.6 - 2026-11-05
 
 - Bundles development standard 2.30 and DevKit 1.9.1.

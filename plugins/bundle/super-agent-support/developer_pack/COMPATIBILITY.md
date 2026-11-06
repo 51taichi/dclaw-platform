@@ -3,7 +3,7 @@
 | Component | Supported version |
 |---|---|
 | Developer pack | 1.0.x through 1.10.x |
-| Development standard | 2.1 through 2.30 |
+| Development standard | 2.1 through 2.31 |
 | Super Agent DevKit | 1.2.x through 1.9.x |
 | Super Expert manifest | 3 |
 | Runtime / runtime host | 1 |
@@ -31,6 +31,7 @@
 | Support plugin for developer pack >= 1.9.3 download | >= 1.16.0 |
 | Support plugin for self-service package type and developer pack >= 1.10.0 | >= 1.17.0 |
 | Support plugin for `runtime.failure.read/1` | >= 1.18.12 |
+| Support plugin for startup failure diagnostics and durable failed turns | >= 1.18.13 |
 | DClaw Windows client for required preflight | >= 2.6.12 |
 | DClaw Windows client for local file workflows | >= 2.6.13 |
 | Runner | >= 1.0.0; >= 1.1.0 for device protocol 2 file workflows; >= 1.2.0 for public Components; >= 1.3.0 for explicit non-entry Component export bindings |

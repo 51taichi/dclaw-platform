@@ -34,7 +34,7 @@
           },
           "additionalProperties": false
         },
-        "first_failure_source": {"enum": ["agent_trace", "not_recorded"]},
+        "first_failure_source": {"enum": ["agent_trace", "platform_preflight", "not_recorded"]},
         "error_code": {"type": ["string", "null"]},
         "transaction_status": {"const": "discarded"}
       },

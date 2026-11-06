@@ -24,7 +24,7 @@ from urllib.request import Request, urlopen
 import zipfile
 
 
-DEVKIT_VERSION = "1.9.1"
+DEVKIT_VERSION = "1.9.2"
 CRYPTOGRAPHY_VERSION = "46.0.3"
 SUPPORTED_PYTHON = ">=3.10,<3.14"
 SUPPORTED_PLATFORMS = {
@@ -490,10 +490,17 @@ def validate_workspace(source: Path, manifest: dict) -> dict:
 def _collect_source(source: Path) -> dict[str, bytes]:
     files: dict[str, bytes] = {}
     for path in source.rglob("*"):
+        relative_path = path.relative_to(source)
+        if (
+            any(part in {"__pycache__", ".git", ".venv"} for part in relative_path.parts)
+            or path.suffix == ".pyc"
+            or path.name == ".DS_Store"
+        ):
+            continue
         if path.is_symlink():
             raise DevKitError(f"workspace contains a symlink: {path.name}")
         if path.is_file():
-            relative = path.relative_to(source).as_posix()
+            relative = relative_path.as_posix()
             data = path.read_bytes()
             if len(data) > MAX_FILE_BYTES:
                 raise DevKitError(

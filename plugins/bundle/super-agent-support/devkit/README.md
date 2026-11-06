@@ -1,7 +1,9 @@
 # DClaw Super Agent DevKit
 
-Version 1.9.1 adds the optional `runtime.failure.read/1` Host capability and
-closed request/response schemas in `schemas/runtime-failure-v1/`. A signed
+Version 1.9.2 excludes Python bytecode caches from signed packages and adds a
+schema for owner-scoped developer diagnostics. The optional
+`runtime.failure.read/1` Host capability has closed request/response schemas
+in `schemas/runtime-failure-v1/`. A signed
 Agent must declare and be granted this capability; the request is `{}`. The
 Host checks the trusted task owner and returns only the latest sanitized
 failure for the same tenant and Agent across installations within 30 days.
