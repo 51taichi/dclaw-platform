@@ -5,7 +5,9 @@ Agents. It contains the human standard, standalone DevKit, schemas, templates,
 SDK helpers, fixtures, and a single cross-platform command line tool. DClaw
 server source is not required.
 
-Version 1.10.8 bundles development standard 2.32 and DevKit 1.9.2. New
+Version 1.10.9 bundles development standard 2.33 and DevKit 1.9.3. Stateful
+releases can sign a `state-contract.json` declaration for complete task-state
+continuity across compatible installations. Version 1.10.8 added that new
 releases may declare `runtime.failure.read/1` to inspect their own task's last
 sanitized failure across installations. The capability is optional and does
 not change prior signed releases. See the DevKit runtime-failure schemas.

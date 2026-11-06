@@ -10,6 +10,7 @@ import io
 import json
 from pathlib import Path
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -230,7 +231,7 @@ def test_devkit_has_no_server_source_import_and_runs_standalone():
     )
     result = json.loads(completed.stdout)
     assert result["status"] == "ok"
-    assert result["devkit_version"] == "1.9.2"
+    assert result["devkit_version"] == "1.9.3"
     assert result["dependency_mode"] == "bundled-wheelhouse"
     assert result["cryptography_version"] == "46.0.3"
     assert "schemas/super-expert-manifest.schema.json" in result["schemas"]
@@ -443,7 +444,7 @@ def test_devkit_bundles_and_verifies_locked_encryption_dependencies():
     )
     result = json.loads(completed.stdout)
     assert result["status"] == "ok"
-    assert result["devkit_version"] == "1.9.2"
+    assert result["devkit_version"] == "1.9.3"
     assert result["wheelhouse_verified"] is True
     assert result["wheelhouse_files"] == 26
 
@@ -586,6 +587,35 @@ def test_devkit_build_is_accepted_and_matches_server_package(tmp_path):
     package_path.write_bytes(devkit_package)
     verified = devkit.verify_package(package_path, public_path)
     assert verified["agent_id"] == "generic-orchestration"
+
+
+def test_devkit_signs_and_validates_state_continuity_contract(tmp_path):
+    devkit = _devkit()
+    _, private_path, public_path = _key_files(tmp_path)
+    source = tmp_path / "agent"
+    shutil.copytree(FIXTURE / "agent", source)
+    contract = {
+        "contract": "workspace.state.continuity/1",
+        "format_id": "generic.v1",
+        "schema_version": 1,
+        "filename_template": "work-{identity_sha256_24}.json",
+    }
+    descriptor = source / "state-contract.json"
+    descriptor.write_text(json.dumps(contract), encoding="utf-8")
+    package = devkit.build_package(
+        source, FIXTURE / "manifest.template.json", private_path,
+    )
+    archive = tmp_path / "release.zip"
+    archive.write_bytes(package)
+    assert devkit.verify_package(archive, public_path)["agent_id"] == "generic-orchestration"
+    with zipfile.ZipFile(io.BytesIO(package)) as sealed:
+        assert json.loads(sealed.read("agent/state-contract.json")) == contract
+    contract["filename_template"] = "../unsafe.json"
+    descriptor.write_text(json.dumps(contract), encoding="utf-8")
+    with pytest.raises(devkit.DevKitError, match="state continuity contract is invalid"):
+        devkit.build_package(
+            source, FIXTURE / "manifest.template.json", private_path,
+        )
 
 
 def test_devkit_excludes_mutable_python_caches_from_signed_payload(tmp_path):

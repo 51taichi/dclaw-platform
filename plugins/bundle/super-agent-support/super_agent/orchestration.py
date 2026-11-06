@@ -1909,6 +1909,37 @@ async def handle_workspace_turn(
             config=orchestration,
         )
         diagnostic_installation_id = authorization.installation_id
+        setup_phase = "state_continuity"
+        from .state_continuity import StateContinuityError, ensure_state_continuity
+
+        sealed_root = Path(WORKING_DIR) / "sealed_agents"
+        record = get_sealed_agent_registry().get_agent(agent_id)
+        target_grant = SuperExpertGrantRepository(sealed_root).get(
+            authorization.installation_id,
+        )
+        if record is None or target_grant is None:
+            raise WorkspaceOrchestrationError(
+                "orchestration_error", "state_release_identity_mismatch",
+            )
+        try:
+            ensure_state_continuity(
+                storage_root=Path(WORKING_DIR) / "workspace_runtime_state",
+                sealed_root=sealed_root,
+                grants=SuperExpertGrantRepository(sealed_root),
+                record=record,
+                target_grant=target_grant,
+                session_id=str(request.session_id),
+                user_id=str(request.user_id),
+            )
+        except StateContinuityError as exc:
+            raise WorkspaceOrchestrationError(
+                "orchestration_error", exc.category,
+            ) from exc
+        except Exception as exc:
+            logger.exception("Workspace state continuity failed closed")
+            raise WorkspaceOrchestrationError(
+                "orchestration_error", "state_continuity_failed",
+            ) from exc
         setup_phase = "turn_context"
         platform_service = _composition.get_super_expert_platform_service()
         platform_events = platform_service.list_session_events(

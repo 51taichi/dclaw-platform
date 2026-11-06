@@ -4,9 +4,9 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.32`
+当前版本：`2.33`
 
-发布日期：`2026-11-05`
+发布日期：`2026-11-06`
 
 ## 1. 文档目的
 
@@ -569,7 +569,13 @@ stateDiagram-v2
 
 ### 跨 Release 安装与工作状态恢复
 
-同一个超级专家发布新版时，每个 Release 独立签发 installation ID。旧安装的状态按 installation ID 与 session ID 隔离保存，不会因激活新版而删除或自动合并。需要在原任务上续接时，开发方先验证旧状态与新版业务模型的兼容性；平台维护方随后使用插件内版本化操作合同 `workspace.state.empty-field-migration/1` 恢复经验证的历史字段。Agent 的 `propose` 等新建修订操作不得冒充历史恢复。
+同一个超级专家发布新版时，每个 Release 独立签发 installation ID。旧安装的状态按 installation ID 与 session ID 隔离保存，不会因激活新版而删除。插件 `1.18.15` 起，使用正式合同 `workspace.state.continuity/1` 在新版第一个业务回合进入 Agent runtime 前自动续接同一租户、同一专家、同一任务和用户的完整状态；不再逐字段搬运作品修订。Agent 的 `propose` 等新建修订操作不得冒充历史恢复。
+
+有持久作品状态的新版 Agent 须在签名包内附 `agent/state-contract.json`，按 DevKit `1.9.3` 的 `schemas/workspace-state-continuity-v1/state-contract.schema.json` 声明 `contract`、稳定的 `format_id`、整数 `schema_version` 和含一个 `{identity_sha256_24}` 占位符的 `filename_template`。该占位符按 `installation_id`、`user_id`、`session_id` 依次用 `\x1f` 连接后取 SHA-256 前 24 位。只有来源和目标签名者相同、声明的格式和 Schema 版本相同、状态文件名均符合各自声明、来源签名目录摘要与发布记录一致，插件才将来源整个任务状态复制到新 installation，唯一替换 `identity.installation_id`。状态正文不写入迁移回执；来源文件不变。
+
+目标状态已有内容但没有可信的续接回执、来源或目标声明缺失、Schema/签名/身份/文件名不一致，以及来源修订未完整保留时，插件在 runtime 启动前失败关闭，记录可定位的脱敏 `state_*` 类别；不得创建空作品或覆盖已有修订。复制通过安装和任务锁串行化，先写准备回执，再原子提升目标目录并绑定 Agent 实际读取的状态文件名，最后写提交回执。中断后只允许验证目标摘要并恢复未完成的绑定；重复调用读取相同提交回执，目标已经新增修订时须保持来源修订前缀，不再回写旧状态。连续两次兼容升级按同一合同逐次续接。
+
+已签名的旧 Release 无法补写声明时，插件维护方可使用 `tools/continue_workspace_state.py register-legacy-pair` 对两个发布摘要和完全一致的已签名状态代码做一次兼容登记；必须先只读预检，再以预检摘要提交。此登记不修改签名包，也不推断业务兼容。管理员可用同一工具的 `resume` 子命令先预检再提交指定任务，之后由业务回合自动续接。新版状态结构不兼容时，开发方须先提供显式迁移方案，插件不得假装兼容。以下 `workspace.state.empty-field-migration/1` 是历史逐字段恢复合同，仅用于旧版特殊修复，不是兼容新版的默认升级流程。
 
 该合同由 `dclaw.super-agent-support/tools/migrate_workspace_state.py` 提供，只有持有生产主机维护权限的插件维护方执行，不开放给 Agent 或普通开发者，也不要求修改 DClaw 核心。预检默认只读；指定来源和目标 installation ID、同一 session ID、状态所属 user ID 及 JSON Pointer。插件核对两项安装授权属于同一租户和 Agent、不同 Release，且两份状态的安装/会话/用户身份正确。合同 v1 仅支持把来源状态 JSON 中一个非空数组填入目标状态中同位置的空数组；目标已有值、身份字段、跨租户/Agent/用户/会话、多个状态文件或符号链接均失败关闭。不解释业务字段或自动改写现有引用。首次初始化目标状态时，还必须由开发方给出新版 Agent 实际读取的目标状态文件名，平台在预检和提交时核对该文件名；不得沿用旧安装的文件名。
 
@@ -2227,10 +2233,10 @@ Agent 名称：<可选，中文显示名称>
 2. 开发方自己的业务目标、源 Agent 材料和测试凭证；
 3. 从目标 DClaw 认证调用元数据接口并按其 `download_path` 下载、核对 SHA-256 的官方开发包；兼容自动化可以继续单独下载同版本官方 DevKit。
 
-开发包 `1.10.7` 是推荐的单一离线移交物，必须提供：
+开发包 `1.10.9` 是推荐的单一离线移交物，必须提供：
 
 - 唯一标准文件与明确的标准版本，不复制第二套人工规则；
-- 官方 DevKit `1.9.2` 及其完整离线加密依赖；
+- 官方 DevKit `1.9.3` 及其完整离线加密依赖；
 - `dclaw_developer.py` 的 `doctor`、`info`、`init`、`validate`、`test`、`keygen`、`capability-build`、`build`、`upgrade` 和 `demo`；
 - 超级专家、业务服务和本地能力包模板，以及职责边界示例；
 - Agent 自主出站、公共业务服务、本地执行和能力包 Schema/SDK；
@@ -2242,12 +2248,13 @@ Agent 名称：<可选，中文显示名称>
 
 开发包本身不得包含平台管理员凭据、生产地址、签名私钥、供应商 Secret、客户数据或 DClaw 私有实现。包内公开工具不得导入 `qwenpaw` 或要求开发者克隆服务器仓库。
 
-DevKit `1.9.2` 必须提供：
+DevKit `1.9.3` 必须提供：
 
 - `dclaw_agent_devkit.py`：`doctor`、`contracts`、`digest`、`validate`、`keygen`、`build`、`verify`；
 - `capability-catalog.json`：当前可声明的能力、版本、组和依赖；
 - `schemas/super-expert-manifest.schema.json` 与 `schemas/agent-profile.schema.json`；
 - `schemas/publishing-v1/`：普通开发者公钥登记、自助发布与公开激活回执的关闭合同；
+- `schemas/workspace-state-continuity-v1/`：签名包状态格式声明的关闭合同；
 - `schemas/local-execution-v1/`：本地请求、响应和错误合同；
 - `schemas/super-agent-support-v1/`：能力包、设备命令、设备消息和凭证绑定合同；
 - `schemas/business-identity-v1/`：安装级业务服务身份签发、出站、在线验证、管理和稳定错误合同；
@@ -2267,6 +2274,11 @@ DevKit `1.9.2` 必须提供：
 平台内部实现文件、测试文件和维护文档可以继续存在，但它们只服务平台维护者，不属于开发方输入。开发方缺少字段或行为定义时应报告标准或 DevKit 缺陷；平台不得用“请克隆服务器源码”回答。
 
 ## 34. 版本记录
+
+### 2.33 - 2026-11-06
+
+- 插件 `1.18.15` 增加签名声明驱动的 `workspace.state.continuity/1`：同一专家兼容 Release 的完整任务状态在首次业务回合前原子续接，不兼容或目标冲突时失败关闭；旧签名包可由插件维护方依据相同签名状态代码和发布摘要登记一次兼容关系。
+- Developer Pack `1.10.9` 携带本标准和 DevKit `1.9.3`；DevKit 校验可选 `agent/state-contract.json` 并提供关闭 Schema。既有已签包保持原样，历史逐字段迁移工具保留作特殊恢复用途。
 
 ### 2.32 - 2026-11-06
 

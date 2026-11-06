@@ -1,5 +1,13 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.3 validates optional signed `agent/state-contract.json` for
+`workspace.state.continuity/1`. Stateful Agents declare a stable `format_id`,
+`schema_version`, and `filename_template` containing exactly one
+`{identity_sha256_24}` placeholder. Compatible releases with the same signer
+and state format resume the complete task state before the next business turn;
+incompatible releases fail closed. See
+`schemas/workspace-state-continuity-v1/state-contract.schema.json`.
+
 Version 1.9.2 excludes Python bytecode caches from signed packages and adds a
 schema for owner-scoped developer diagnostics. The optional
 `runtime.failure.read/1` Host capability has closed request/response schemas

@@ -24,7 +24,7 @@ from urllib.request import Request, urlopen
 import zipfile
 
 
-DEVKIT_VERSION = "1.9.2"
+DEVKIT_VERSION = "1.9.3"
 CRYPTOGRAPHY_VERSION = "46.0.3"
 SUPPORTED_PYTHON = ">=3.10,<3.14"
 SUPPORTED_PLATFORMS = {
@@ -484,7 +484,39 @@ def validate_workspace(source: Path, manifest: dict) -> dict:
     runtime_path = (root / module_path).resolve()
     if not runtime_path.is_relative_to(root) or not runtime_path.is_file():
         raise DevKitError("orchestration entrypoint file is missing")
+    contract_path = root / "state-contract.json"
+    if contract_path.exists() or contract_path.is_symlink():
+        if contract_path.is_symlink() or not contract_path.is_file():
+            raise DevKitError("state continuity contract is unsafe")
+        _validate_state_contract(contract_path.read_bytes())
     return config
+
+
+def _validate_state_contract(data: bytes) -> None:
+    try:
+        value = json.loads(data)
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise DevKitError("state continuity contract is invalid") from exc
+    placeholder = "{identity_sha256_24}"
+    if not isinstance(value, dict) or set(value) != {
+        "contract", "format_id", "schema_version", "filename_template",
+    }:
+        raise DevKitError("state continuity contract is invalid")
+    filename = value["filename_template"]
+    if (
+        value["contract"] != "workspace.state.continuity/1"
+        or not isinstance(value["format_id"], str)
+        or re.fullmatch(r"[a-z][a-z0-9_.-]{0,127}", value["format_id"]) is None
+        or type(value["schema_version"]) is not int
+        or value["schema_version"] < 1
+        or not isinstance(filename, str)
+        or filename.count(placeholder) != 1
+        or re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._-]{0,126}\.json",
+            filename.replace(placeholder, "x" * 24),
+        ) is None
+    ):
+        raise DevKitError("state continuity contract is invalid")
 
 
 def _collect_source(source: Path) -> dict[str, bytes]:
@@ -669,6 +701,8 @@ def verify_package(package_path: Path, public_key_path: Path) -> dict:
         raise DevKitError("sealed package payload digest mismatch")
     if manifest["entrypoint"] not in payload:
         raise DevKitError("sealed package entrypoint is missing")
+    if "agent/state-contract.json" in payload:
+        _validate_state_contract(payload["agent/state-contract.json"])
     return manifest
 
 

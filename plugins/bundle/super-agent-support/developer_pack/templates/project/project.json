@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "agent_id": "{{AGENT_ID}}",
-  "developer_pack_version": "1.10.8",
-  "standard": {"id": "dclaw.super-agent-development", "version": "2.32"},
-  "devkit_version": "1.9.2",
+  "developer_pack_version": "1.10.9",
+  "standard": {"id": "dclaw.super-agent-development", "version": "2.33"},
+  "devkit_version": "1.9.3",
   "local_helper": "none",
   "tests": {
     "adapter": "unittest",

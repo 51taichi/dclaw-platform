@@ -9,6 +9,22 @@ from agentscope.message import Msg
 from super_agent import orchestration
 
 
+def _allow_state_preflight(monkeypatch):
+    from super_agent import state_continuity
+
+    monkeypatch.setattr(
+        orchestration, "get_sealed_agent_registry",
+        lambda: SimpleNamespace(get_agent=lambda _: SimpleNamespace()),
+    )
+    monkeypatch.setattr(
+        orchestration, "SuperExpertGrantRepository",
+        lambda _: SimpleNamespace(get=lambda __: SimpleNamespace()),
+    )
+    monkeypatch.setattr(
+        state_continuity, "ensure_state_continuity", lambda **_: None,
+    )
+
+
 @pytest.mark.asyncio
 async def test_preflight_failure_remains_in_chat_history(monkeypatch, tmp_path):
     memory = InMemoryMemory()
@@ -47,7 +63,60 @@ async def test_preflight_failure_remains_in_chat_history(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_incompatible_state_blocks_runtime_and_records_category(monkeypatch, tmp_path):
+    from super_agent import state_continuity
+
+    memory = InMemoryMemory()
+    traces = []
+    monkeypatch.setattr(
+        orchestration, "_append_runtime_trace",
+        lambda *_, **payload: traces.append(payload),
+    )
+    monkeypatch.setattr(
+        orchestration, "resolve_active_workspace_authorization",
+        lambda **_: SimpleNamespace(installation_id="installation", granted_capabilities={}),
+    )
+    monkeypatch.setattr(
+        orchestration, "get_sealed_agent_registry",
+        lambda: SimpleNamespace(get_agent=lambda _: SimpleNamespace(
+            active_release=SimpleNamespace(),
+        )),
+    )
+    monkeypatch.setattr(
+        orchestration, "SuperExpertGrantRepository",
+        lambda _: SimpleNamespace(
+            get=lambda __: SimpleNamespace(installation_id="installation"),
+            find_release_grant=lambda *_, **__: SimpleNamespace(
+                installation_id="installation",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        state_continuity, "ensure_state_continuity",
+        lambda **_: (_ for _ in ()).throw(
+            state_continuity.StateContinuityError("state_schema_incompatible"),
+        ),
+    )
+    async def no_runtime(**_):
+        pytest.fail("incompatible state must block runtime")
+        yield
+    monkeypatch.setattr(orchestration._public_stream, "stream_workspace_turn", no_runtime)
+    result = [item async for item in orchestration.handle_workspace_turn(
+        agent=SimpleNamespace(memory=memory),
+        messages=[Msg(name="user", role="user", content="continue")],
+        request=SimpleNamespace(session_id="task", user_id="user", tenant_id="local"),
+        query="continue", mission_info=None, agent_id="comic",
+        agent_name="Comic", workspace_root=tmp_path,
+        orchestration=SimpleNamespace(), standard_stream=None,
+    )]
+    assert len(result) == 1
+    assert "本轮处理未能安全完成" in result[0][0].get_text_content()
+    assert traces[0]["payload"]["category"] == "state_schema_incompatible"
+
+
+@pytest.mark.asyncio
 async def test_failed_runtime_restores_memory_before_persisting_reply(monkeypatch, tmp_path):
+    _allow_state_preflight(monkeypatch)
     memory = InMemoryMemory()
     prior = [
         Msg(name="user", role="user", content=f"request {index}")
@@ -108,6 +177,7 @@ async def test_failed_runtime_restores_memory_before_persisting_reply(monkeypatc
 
 @pytest.mark.asyncio
 async def test_unhandled_runtime_exception_restores_memory(monkeypatch, tmp_path):
+    _allow_state_preflight(monkeypatch)
     memory = InMemoryMemory()
     prior = Msg(name="user", role="user", content="prior request")
     await memory.add(prior)
