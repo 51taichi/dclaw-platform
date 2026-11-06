@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.10.8 - 2026-11-06
+
+- Bundles development standard 2.32 and DevKit 1.9.2.
+- Documents preservation of prior Agent memory when a runtime turn fails.
+
 ## 1.10.7 - 2026-11-06
 
 - Bundles development standard 2.31 and DevKit 1.9.2.

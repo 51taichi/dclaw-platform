@@ -1879,6 +1879,23 @@ async def handle_workspace_turn(
         return
 
     last_stream_id = None
+    memory = getattr(agent, "memory", None)
+    memory_snapshot = None
+    state_dict = getattr(memory, "state_dict", None)
+    if callable(state_dict):
+        try:
+            memory_snapshot = deepcopy(state_dict())
+        except Exception:
+            logger.exception("Failed to snapshot workspace memory before turn")
+    if memory_snapshot is None or not callable(
+        getattr(memory, "load_state_dict", None),
+    ):
+        logger.error("Workspace memory cannot be restored for agent %s", agent_id)
+        yield workspace_result_to_message(
+            WorkspaceTurnResult(error_code="orchestration_error"),
+            agent_name=agent_name,
+        ), True, False
+        return
     preflight_started_at = datetime.now(timezone.utc)
     setup_phase = "release_authorization"
     diagnostic_installation_id = None
@@ -2095,6 +2112,14 @@ async def handle_workspace_turn(
                     )
         except Exception:
             logger.exception("Failed to record workspace preflight failure")
+    except BaseException:
+        restore_memory = getattr(memory, "load_state_dict", None)
+        if memory_snapshot is not None and callable(restore_memory):
+            try:
+                restore_memory(deepcopy(memory_snapshot), strict=False)
+            except Exception:
+                logger.exception("Failed to restore workspace memory after exception")
+        raise
 
     response_message = workspace_result_to_message(
         result,
@@ -2102,9 +2127,19 @@ async def handle_workspace_turn(
     )
     if last_stream_id is not None:
         response_message.id = last_stream_id
-    memory = getattr(agent, "memory", None)
+    should_save_session = True
+    if result.error_code is not None:
+        restore_memory = getattr(memory, "load_state_dict", None)
+        if memory_snapshot is None or not callable(restore_memory):
+            should_save_session = False
+        else:
+            try:
+                restore_memory(deepcopy(memory_snapshot), strict=False)
+            except Exception:
+                logger.exception("Failed to restore workspace memory after failed turn")
+                should_save_session = False
     add_to_memory = getattr(memory, "add", None)
-    if callable(add_to_memory):
+    if should_save_session and callable(add_to_memory):
         for message in messages:
             await add_to_memory(message)
         await add_to_memory(response_message)
@@ -2124,4 +2159,4 @@ async def handle_workspace_turn(
             )
         except Exception:
             logger.exception("Failed to record workspace message staging")
-    yield response_message, True, True
+    yield response_message, True, should_save_session
