@@ -875,7 +875,7 @@ def test_developer_pack_is_downloadable_and_self_describing(
         downloaded = client.get("/developer-pack/download")
 
     assert health.status_code == 200
-    assert health.json()["version"] == "1.18.16"
+    assert health.json()["version"] == "1.18.18"
     assert metadata.status_code == 200
     payload = metadata.json()
     assert payload["version"] == "1.10.10"

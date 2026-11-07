@@ -115,6 +115,85 @@ async def test_incompatible_state_blocks_runtime_and_records_category(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_missing_legacy_state_contract_falls_back_to_standard_agent(
+    monkeypatch,
+    tmp_path,
+):
+    from super_agent import state_continuity
+
+    memory = InMemoryMemory()
+    incoming = Msg(name="user", role="user", content="今日话题")
+    calls = []
+
+    class Agent:
+        def __init__(self):
+            self.memory = memory
+
+        async def __call__(self, messages):
+            calls.append(messages)
+
+    agent = Agent()
+    monkeypatch.setattr(
+        orchestration,
+        "resolve_active_workspace_authorization",
+        lambda **_: SimpleNamespace(
+            installation_id="installation", granted_capabilities={},
+        ),
+    )
+    monkeypatch.setattr(
+        orchestration, "get_sealed_agent_registry",
+        lambda: SimpleNamespace(get_agent=lambda _: SimpleNamespace()),
+    )
+    monkeypatch.setattr(
+        orchestration, "SuperExpertGrantRepository",
+        lambda _: SimpleNamespace(get=lambda __: SimpleNamespace()),
+    )
+    monkeypatch.setattr(
+        state_continuity, "ensure_state_continuity",
+        lambda **_: (_ for _ in ()).throw(
+            state_continuity.StateContinuityError("state_contract_missing"),
+        ),
+    )
+
+    async def no_super_agent_runtime(**_):
+        pytest.fail("legacy compatibility must use the standard Agent path")
+        yield
+
+    monkeypatch.setattr(
+        orchestration._public_stream,
+        "stream_workspace_turn",
+        no_super_agent_runtime,
+    )
+
+    async def standard_stream(*, agents, coroutine_task):
+        assert agents == [agent]
+        await coroutine_task
+        yield Msg(name="Comic", role="assistant", content="基础专家回复"), True
+
+    result = [item async for item in orchestration.handle_workspace_turn(
+        agent=agent,
+        messages=[incoming],
+        request=SimpleNamespace(
+            session_id="legacy-task", user_id="user", tenant_id="local",
+        ),
+        query="今日话题",
+        mission_info=None,
+        agent_id="comic",
+        agent_name="Comic",
+        workspace_root=tmp_path,
+        orchestration=SimpleNamespace(),
+        standard_stream=standard_stream,
+    )]
+
+    assert calls == [[incoming]]
+    assert len(result) == 1
+    response, last, should_save_session = result[0]
+    assert response.get_text_content() == "基础专家回复"
+    assert last is True
+    assert should_save_session is True
+
+
+@pytest.mark.asyncio
 async def test_failed_runtime_restores_memory_before_persisting_reply(monkeypatch, tmp_path):
     _allow_state_preflight(monkeypatch)
     memory = InMemoryMemory()

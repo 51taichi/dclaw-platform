@@ -1932,6 +1932,18 @@ async def handle_workspace_turn(
                 user_id=str(request.user_id),
             )
         except StateContinuityError as exc:
+            if exc.category == "state_contract_missing":
+                logger.warning(
+                    "Falling back to the standard Agent turn for %s because "
+                    "the release predates workspace state contracts",
+                    agent_id,
+                )
+                async for msg, last in standard_stream(
+                    agents=[agent],
+                    coroutine_task=agent(messages),
+                ):
+                    yield msg, last, True
+                return
             raise WorkspaceOrchestrationError(
                 "orchestration_error", exc.category,
             ) from exc
