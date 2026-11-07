@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.13 - 2026-11-07
+
+- Bundles development standard 2.37 and DevKit 1.9.6.
+- Makes plugin interface stability, active-release impact assessment, and
+  coordinated updates of affected signed Agents explicit release gates.
+
 ## 1.10.12 - 2026-11-07
 
 - Bundles development standard 2.36 and DevKit 1.9.6.

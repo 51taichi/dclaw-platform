@@ -1,5 +1,10 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.13 bundles development standard 2.37 and DevKit 1.9.6. The
+standard now requires per-capability impact checks against active releases and
+coordinated updates for every affected Super Agent before an incompatible
+plugin contract can replace an existing one.
+
 Version 1.10.12 bundles development standard 2.36 and DevKit 1.9.6. The
 optional `interaction.card.read/1` Host call reads a card's persisted status,
 normalized submitted answer and trusted receipt under the current installation
