@@ -13,7 +13,7 @@
       "maxItems": 50,
       "items": {
         "type": "object",
-        "required": ["invocation_id", "installation_id", "release_id", "started_at", "failed_at", "first_failure", "first_failure_source", "error_code", "transaction_status", "message_status"],
+        "required": ["invocation_id", "installation_id", "release_id", "started_at", "failed_at", "first_failure", "first_failure_source", "error_code", "transaction_status", "stages", "message_status"],
         "properties": {
           "invocation_id": {"type": "string"},
           "installation_id": {"type": "string"},
@@ -30,9 +30,30 @@
             },
             "additionalProperties": false
           },
-          "first_failure_source": {"enum": ["agent_trace", "platform_preflight", "not_recorded"]},
+          "first_failure_source": {"enum": ["agent_trace", "host_stage", "platform_preflight", "not_recorded"]},
           "error_code": {"type": ["string", "null"]},
           "transaction_status": {"const": "discarded"},
+          "stages": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "required": ["event", "source", "at", "duration_ms"],
+              "properties": {
+                "event": {"type": "string"},
+                "source": {"enum": ["host", "agent"]},
+                "at": {"type": "string", "format": "date-time"},
+                "duration_ms": {"type": ["integer", "null"], "minimum": 0},
+                "call_number": {"type": "integer", "minimum": 1},
+                "has_text": {"type": "boolean"},
+                "text_length": {"type": "integer", "minimum": 0},
+                "complete_json_object": {"type": "boolean"},
+                "execution_mode": {"type": "string"},
+                "response_format": {"type": "string"}
+              },
+              "additionalProperties": false
+            }
+          },
           "message_status": {"enum": ["persisted", "missing", "unknown"]}
         },
         "additionalProperties": false

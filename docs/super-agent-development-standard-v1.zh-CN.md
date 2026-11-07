@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.34`
+当前版本：`2.35`
 
 发布日期：`2026-11-06`
 
@@ -500,7 +500,7 @@ Host 调用合同：
 
 `agent.execute` 的正式控制边界：默认候选模式可选传 `response_format="json_object"`，Host 会以无工具的模型调用请求 JSON object，但模型是否返回可见文本、是否符合业务 Schema 仍必须由 Agent 校验。`response_format` 不得与 `execution_mode="agent_loop"` 同用。当前合同不支持强制业务 JSON Schema、调用方指定 `max_tokens` 或调用方控制 thinking。`agent_loop` 可使用 `instruction`、`require_interaction`、`public_stream` 及 `recover_empty_reply` 的已实现参数；其中空回复恢复只尝试一次无工具的文本生成，不保证结构化 JSON，不得代替 Agent 自己的候选校验。
 
-`runtime.failure.read/1` 是可选能力，不加入既有 V1 基础闭包。新发布包须在 manifest 和授权清单中显式声明后才能调用；旧发布包与旧 grant 保持原状。Host 只接受空对象请求，使用可信会话 ID、用户 ID、agent ID 和安装授权核对任务所有权，并仅在同租户同专家的历史 installation 中查找。返回最近 30 天内最后一次失败的 invocation、实际 release/installation、开始及失败时间、首个脱敏 `phase/category/attempt`、诊断来源、错误码和 `transaction_status=discarded`；无记录返回 `status=no_record`。`first_failure_source=agent_trace` 表示阶段与类别由专家写入的 trace 报告；`platform_preflight` 表示插件在专家 runtime 启动前记录的首错，此时 invocation ID 带 `preflight-` 前缀，不代表专家已执行；没有记录时返回 `not_recorded` 和空字段，不得臆造。请求越权或参数不合法失败关闭。该能力在失败事务丢弃后仍可读取，也支持同一专家新安装续接旧安装的失败诊断；不返回模型正文、thinking、对话、客户素材或 Secret。请求与响应 Schema 位于 DevKit `schemas/runtime-failure-v1/`。
+`runtime.failure.read/1` 是可选能力，不加入既有 V1 基础闭包。新发布包须在 manifest 和授权清单中显式声明后才能调用；旧发布包与旧 grant 保持原状。Host 只接受空对象请求，使用可信会话 ID、用户 ID、agent ID 和安装授权核对任务所有权，并仅在同租户同专家的历史 installation 中查找。返回最近 30 天内最后一次失败的 invocation、实际 release/installation、开始及失败时间、首个脱敏 `phase/category/attempt`、诊断来源、错误码和 `transaction_status=discarded`；无记录返回 `status=no_record`。`first_failure_source=agent_trace` 表示阶段与类别由专家写入的 trace 报告；`host_stage` 表示 Host 记录的候选调用异常；`platform_preflight` 表示插件在专家 runtime 启动前记录的首错，此时 invocation ID 带 `preflight-` 前缀，不代表专家已执行；没有记录时返回 `not_recorded` 和空字段，不得臆造。请求越权或参数不合法失败关闭。该能力在失败事务丢弃后仍可读取，也支持同一专家新安装续接旧安装的失败诊断；不返回模型正文、thinking、对话、客户素材或 Secret。请求与响应 Schema 位于 DevKit `schemas/runtime-failure-v1/`。
 
 ### 10.3 状态设计
 
@@ -714,7 +714,9 @@ DClaw 平台负责卡片持久化、渲染、提交和可信回传；开发方�
 | `interaction_card_status(interaction_id="")` | 查询指定卡片或当前活动阻塞卡 |
 | `interaction_card_cancel(interaction_id, operation_key)` | 以稳定操作键取消仍为 `PENDING` 的卡片 |
 
-请求采用实时目录返回的严格 Schema，未知字段必须拒绝。成功证据只有真实 `interaction.interaction_id` 与 `PENDING` 状态；工具参数、组件字段和枚举不得从平台源码或模型记忆中猜测。
+请求采用实时目录返回的严格 Schema，未知字段必须拒绝。建卡成功须核对真实 `interaction.interaction_id`、`PENDING` 状态及 `interaction.card.receipt/1` 的 `created` 回执；工具参数、组件字段和枚举不得从平台源码或模型记忆中猜测。
+
+插件 `1.18.19` 起，建卡工具和卡片提交接口返回同一关闭 Schema 的 `interaction.card.receipt/1`。回执绑定 `interaction_id`、installation、conversation、`task_key`、修订、版本、状态、转换事件和时间；提交回执另含规范化答案的 SHA-256，不包含答案正文。`session.context.interaction_receipts` 只读返回当前可信 installation 与任务最近更新的最多 20 张待提交或已提交卡片的回执。超级专家须按回执中的 `interaction_id` 调用 `interaction_card_status` 读取实际卡片及答案，核对状态与版本后推进业务；客户端转交的 `user_input` 只作可读摘要，不构成点击或提交证明。回执和上下文数组 Schema 在 DevKit `schemas/interaction-card-receipt-v1/`，旧签名包继续按既有合同运行。
 
 强制规则：
 
@@ -2237,10 +2239,10 @@ Agent 名称：<可选，中文显示名称>
 2. 开发方自己的业务目标、源 Agent 材料和测试凭证；
 3. 从目标 DClaw 认证调用元数据接口并按其 `download_path` 下载、核对 SHA-256 的官方开发包；兼容自动化可以继续单独下载同版本官方 DevKit。
 
-开发包 `1.10.10` 是推荐的单一离线移交物，必须提供：
+开发包 `1.10.11` 是推荐的单一离线移交物，必须提供：
 
 - 唯一标准文件与明确的标准版本，不复制第二套人工规则；
-- 官方 DevKit `1.9.4` 及其完整离线加密依赖；
+- 官方 DevKit `1.9.5` 及其完整离线加密依赖；
 - `dclaw_developer.py` 的 `doctor`、`info`、`init`、`validate`、`test`、`keygen`、`capability-build`、`build`、`upgrade` 和 `demo`；
 - 超级专家、业务服务和本地能力包模板，以及职责边界示例；
 - Agent 自主出站、公共业务服务、本地执行和能力包 Schema/SDK；
@@ -2252,13 +2254,14 @@ Agent 名称：<可选，中文显示名称>
 
 开发包本身不得包含平台管理员凭据、生产地址、签名私钥、供应商 Secret、客户数据或 DClaw 私有实现。包内公开工具不得导入 `qwenpaw` 或要求开发者克隆服务器仓库。
 
-DevKit `1.9.4` 必须提供：
+DevKit `1.9.5` 必须提供：
 
 - `dclaw_agent_devkit.py`：`doctor`、`contracts`、`digest`、`validate`、`keygen`、`build`、`verify`；
 - `capability-catalog.json`：当前可声明的能力、版本、组和依赖；
 - `schemas/super-expert-manifest.schema.json` 与 `schemas/agent-profile.schema.json`；
 - `schemas/publishing-v1/`：普通开发者公钥登记、自助发布与公开激活回执的关闭合同；
 - `schemas/workspace-state-continuity-v1/`：签名包状态格式声明的关闭合同；
+- `schemas/interaction-card-receipt-v1/`：可信建卡、提交回执与运行时回执列表的关闭合同；
 - `schemas/local-execution-v1/`：本地请求、响应和错误合同；
 - `schemas/super-agent-support-v1/`：能力包、设备命令、设备消息和凭证绑定合同；
 - `schemas/business-identity-v1/`：安装级业务服务身份签发、出站、在线验证、管理和稳定错误合同；
@@ -2278,6 +2281,12 @@ DevKit `1.9.4` 必须提供：
 平台内部实现文件、测试文件和维护文档可以继续存在，但它们只服务平台维护者，不属于开发方输入。开发方缺少字段或行为定义时应报告标准或 DevKit 缺陷；平台不得用“请克隆服务器源码”回答。
 
 ## 34. 版本记录
+
+### 2.35 - 2026-11-07
+
+- 插件 `1.18.19` 为卡片建卡与提交提供版本化机器回执；`session.context` 只返回同安装、同任务最近的持久化回执，普通输入文本不能证明卡片已提交。
+- 新失败回合记录不含模型正文的运行时调用、`session.context`、`agent.execute` 与事务阶段、耗时和候选形状；开发者只读诊断在已有 30 天权限与审计边界内返回这些阶段。每条阶段标明 `source=host|agent`，Agent 自写 trace 不构成 Host 提交证据；运行时调用耗时包含沙箱启动与执行，排队时间尚未单独留存。Host 调用首错标记 `first_failure_source=host_stage`，历史未留存字段保持未知。失败提示显示安全类别、下一步动作和 invocation 关联 ID；作品状态事务仍在失败时丢弃。
+- Developer Pack `1.10.11` 与 DevKit `1.9.5` 增加关闭 Schema，既有签名包、核心 SPI 和卡片字段保持兼容。
 
 ### 2.34 - 2026-11-06
 

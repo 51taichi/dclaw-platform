@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/schemas/interaction-card-receipt-v1/receipt.schema.json",
+  "title": "interaction.card.receipt/1",
+  "type": "object",
+  "required": ["contract", "action", "event_id", "interaction_id", "installation_id", "conversation_id", "task_key", "interaction_revision", "version", "status", "answer_sha256", "occurred_at"],
+  "properties": {
+    "contract": {"const": "interaction.card.receipt/1"},
+    "action": {"enum": ["created", "submitted"]},
+    "event_id": {"type": "string", "minLength": 1},
+    "interaction_id": {"type": "string", "minLength": 1},
+    "installation_id": {"type": "string", "minLength": 1},
+    "conversation_id": {"type": "string", "minLength": 1},
+    "task_key": {"type": "string", "minLength": 1, "maxLength": 160},
+    "interaction_revision": {"type": "integer", "minimum": 1},
+    "version": {"type": "integer", "minimum": 1},
+    "status": {"enum": ["PENDING", "SUBMITTED"]},
+    "answer_sha256": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+    "occurred_at": {"type": "string", "format": "date-time"}
+  },
+  "allOf": [
+    {"if": {"properties": {"action": {"const": "created"}}}, "then": {"properties": {"status": {"const": "PENDING"}, "answer_sha256": {"type": "null"}}}},
+    {"if": {"properties": {"action": {"const": "submitted"}}}, "then": {"properties": {"status": {"const": "SUBMITTED"}, "answer_sha256": {"type": "string"}}}}
+  ],
+  "additionalProperties": false
+}

@@ -27,6 +27,7 @@ from .events import SuperExpertEventEnvelope, SuperExpertEventRepository
 from .interaction_cards import InteractionError, InteractionService
 from .interaction_contract import InteractionCreateRequest
 from .interaction_events import InteractionEventEnvelope
+from .interaction_receipts import card_receipt
 
 if TYPE_CHECKING:
     from .grants import SuperExpertGrantRepository
@@ -263,8 +264,15 @@ class SuperExpertPlatformService:
             raise SuperExpertPlatformError(
                 "interaction request is invalid",
             ) from exc
-        await self.publish_interaction_event(card, event_type=event_type)
-        return {"interaction": card.model_dump(mode="json")}
+        if not (
+            capability == "interaction.card.create/1"
+            and card.status.value != "PENDING"
+        ):
+            await self.publish_interaction_event(card, event_type=event_type)
+        result = {"interaction": card.model_dump(mode="json")}
+        if capability == "interaction.card.create/1":
+            result["receipt"] = card_receipt(card, "created")
+        return result
 
     async def publish_interaction_event(
         self,

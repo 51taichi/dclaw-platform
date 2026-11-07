@@ -1,5 +1,18 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.5 adds closed `interaction.card.receipt/1` schemas under
+`schemas/interaction-card-receipt-v1/`. The `interaction_card_create` tool and
+card submission HTTP response include a receipt for the persisted transition.
+`session.context.interaction_receipts` contains the 20 most recently updated
+pending or submitted cards for the trusted installation and task, with no
+answer body. Read `interaction_card_status(interaction_id)` for the submitted
+answer. Free-text `user_input` is display text and cannot prove submission.
+`developer.runtime.diagnostics.read/1` now includes sanitized execution stage
+timestamps, durations and candidate shape on newly recorded failures. Each
+stage identifies `source=host` or `source=agent`; an Agent trace never proves a
+Host transaction committed. Runtime invocation timing includes sandbox startup
+and execution, while queue time is not currently recorded.
+
 Version 1.9.4 adds an activation preflight receipt to the closed self-service
 publishing response schema. The Host checks all existing task-state contracts
 before switching the active Release; a conflict leaves the previous Release

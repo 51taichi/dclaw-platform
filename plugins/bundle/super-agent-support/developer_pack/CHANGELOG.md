@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.11 - 2026-11-07
+
+- Bundles development standard 2.35 and DevKit 1.9.5.
+- Adds closed interaction card receipt schemas and sanitized per-invocation
+  execution stages; older signed packages and card responses remain compatible.
+
 ## 1.10.10 - 2026-11-06
 
 - Bundles development standard 2.34 and DevKit 1.9.4.

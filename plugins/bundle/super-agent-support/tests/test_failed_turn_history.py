@@ -9,6 +9,24 @@ from agentscope.message import Msg
 from super_agent import orchestration
 
 
+def test_failed_turn_notice_uses_safe_category_action_and_invocation_id():
+    result = orchestration.WorkspaceTurnResult(
+        error_code="INVALID_TURN_RESULT",
+        invocation_id="invocation-123",
+        diagnostics={"first_failure": {
+            "phase": "model_validation", "category": "json_parse", "attempt": 1,
+        }},
+    )
+    notice = orchestration.workspace_result_to_message(result, agent_name="Expert")
+    assert "专家输出格式校验失败" in notice.get_text_content()
+    assert "联系专家开发者" in notice.get_text_content()
+    assert "invocation-123" in notice.get_text_content()
+    assert notice.metadata["dclaw_failure"] == {
+        "invocation_id": "invocation-123", "error_code": "INVALID_TURN_RESULT",
+        "phase": "model_validation", "category": "json_parse", "attempt": 1,
+    }
+
+
 def _allow_state_preflight(monkeypatch):
     from super_agent import state_continuity
 

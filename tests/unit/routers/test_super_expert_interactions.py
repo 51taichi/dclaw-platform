@@ -156,6 +156,21 @@ async def test_platform_create_persists_card_and_publishes_separate_event(
     assert "material_task_id" not in envelope
     assert envelope["interaction"]["card"]["options"][0]["text"] == "方案甲"
 
+    interaction_service.submit(
+        interaction_id=result["interaction"]["interaction_id"],
+        installation_id="installation-1", conversation_id="conversation-1",
+        version=1, selected=[{"id": "a"}],
+        idempotency_key="submit-1",
+    )
+    replay = await service.execute_interaction(
+        tenant_id="local", installation_id="installation-1",
+        conversation_id="conversation-1", capability="interaction.card.create/1",
+        contract_version="1", arguments={"request": _request().model_dump(mode="json")},
+        idempotency_key="create-1",
+    )
+    assert replay["receipt"] == result["receipt"]
+    assert len(await bus.replay(session_id="conversation-1", since_id=None)) == 1
+
 
 def test_create_after_submission_replays_or_reports_semantic_conflict(tmp_path):
     interactions = InteractionService(InteractionCardRepository(tmp_path))
@@ -340,7 +355,10 @@ async def test_submit_returns_trusted_user_input_without_running_the_agent(
     assert submitted.json() == {
         "interaction": submitted.json()["interaction"],
         "user_input": "方案甲",
+        "receipt": submitted.json()["receipt"],
     }
+    assert submitted.json()["receipt"]["action"] == "submitted"
+    assert submitted.json()["receipt"]["interaction_id"] == card.interaction_id
     events = await service.event_bus.replay(
         session_id="conversation-1",
         since_id=None,

@@ -1647,10 +1647,9 @@ async def test_runner_level_cancellation_records_a_terminal_trace(tmp_path):
         await task
 
     events = [json.loads(line) for line in trace_path.read_text().splitlines()]
-    assert [event["event_type"] for event in events] == [
-        "orchestration.started",
-        "orchestration.cancelled",
-    ]
+    assert events[0]["event_type"] == "orchestration.started"
+    assert events[-1]["event_type"] == "orchestration.cancelled"
+    assert all(event["invocation_id"] == events[0]["invocation_id"] for event in events)
 
 
 @pytest.mark.asyncio
@@ -1935,10 +1934,15 @@ async def test_runner_adapter_executes_internal_candidate_without_streaming(
         .read_text(encoding="utf-8")
         .splitlines()
     ]
-    assert [event["event_type"] for event in trace_events] == [
-        "orchestration.started",
-        "orchestration.completed",
-    ]
+    assert trace_events[0]["event_type"] == "orchestration.started"
+    assert trace_events[-1]["event_type"] == "orchestration.completed"
+    assert {
+        event["event_type"] for event in trace_events
+    } >= {"runtime.trace", "agent.execute.safe_started", "agent.execute.safe_completed"}
+    assert {
+        event["payload"]["payload"]["event"]
+        for event in trace_events if event["event_type"] == "runtime.trace"
+    } >= {"runtime.invoke.started", "runtime.invoke.finished", "transaction.committed"}
     assert all(event["invocation_id"] for event in trace_events)
 
 

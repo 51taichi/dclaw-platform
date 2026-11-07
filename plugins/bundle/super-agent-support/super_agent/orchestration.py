@@ -46,6 +46,7 @@ from . import empty_reply as _empty_reply
 from . import failure_diagnostics as _failure_diagnostics
 from . import interaction_contract as _interaction_contract
 from . import interaction_tools as _interaction_tools
+from .interaction_receipts import card_receipt
 from . import media_delivery as _media_delivery
 from . import media_review_context as _media_review_context
 from . import public_stream as _public_stream
@@ -278,10 +279,38 @@ def workspace_result_to_message(
     agent_name: str,
 ) -> Msg:
     if result.error_code is not None or result.message is None:
+        first = (result.diagnostics or {}).get("first_failure") or {}
+        phase = _failure_diagnostics._token(first.get("phase"))
+        category = _failure_diagnostics._token(first.get("category"))
+        if phase == "model_validation":
+            label = "专家输出格式校验失败"
+            action = "请联系专家开发者修复输出格式后重试"
+        elif phase == "agent_execute":
+            label = "模型调用失败"
+            action = "请检查模型服务与专家配置后重试"
+        elif phase in {"turn_context", "platform_preflight"}:
+            label = "专家运行环境检查失败"
+            action = "请联系平台维护人员核查"
+        else:
+            label = "专家运行失败"
+            action = "请稍后重试；若再次发生，请联系平台维护人员核查"
+        reference = result.invocation_id or "未生成"
         return Msg(
             name=agent_name,
             role="assistant",
-            content="本轮处理未能安全完成，请稍后重试。",
+            content=(
+                f"本轮处理未能安全完成：{label}。{action}。"
+                f"关联 ID：{reference}"
+            ),
+            metadata={
+                "dclaw_failure": {
+                    "invocation_id": result.invocation_id,
+                    "error_code": _failure_diagnostics._token(result.error_code),
+                    "phase": phase,
+                    "category": category,
+                    "attempt": first.get("attempt") if type(first.get("attempt")) is int else None,
+                },
+            },
         )
     message = result.message
     verified_interaction_ids = tuple(
@@ -770,6 +799,7 @@ async def run_workspace_orchestration_turn(
     read_aigc_task: Callable[[str], dict[str, Any] | None] | None = None,
     read_interaction_card: Callable[[str], dict[str, Any] | None]
     | None = None,
+    interaction_receipts: list[dict[str, Any]] | None = None,
     on_public_message: Callable | None = None,
     safe_metadata: dict[str, Any] | None = None,
     timeout_seconds: float | None = None,
@@ -803,6 +833,7 @@ async def run_workspace_orchestration_turn(
             granted_capabilities=authorization.granted_capabilities,
             invocation_id=invocation_id,
         )
+        trusted_context["interaction_receipts"] = list(interaction_receipts or [])
     except Exception as exc:
         logger.exception("Plugin workspace context enrichment failed")
         raise WorkspaceOrchestrationError("orchestration_error") from exc
@@ -931,6 +962,18 @@ async def run_workspace_orchestration_turn(
         call_number = agent_execute_call_number
         call_id = uuid.uuid4().hex
         started_at = time.perf_counter()
+        _append_runtime_trace(
+            state_storage_root,
+            installation_id=authorization.installation_id,
+            session_id=turn_request.session_id,
+            invocation_id=invocation_id,
+            event_type="agent.execute.safe_started",
+            payload={
+                "call_number": call_number,
+                "execution_mode": execution_mode,
+                "response_format": response_format,
+            },
+        )
         trace_raw = workspace_raw_model_trace_enabled()
         if trace_raw:
             _append_runtime_trace(
@@ -1049,6 +1092,18 @@ async def run_workspace_orchestration_turn(
                     response_format=response_format,
                 )
         except Exception as exc:
+            _append_runtime_trace(
+                state_storage_root,
+                installation_id=authorization.installation_id,
+                session_id=turn_request.session_id,
+                invocation_id=invocation_id,
+                event_type="agent.execute.safe_failed",
+                payload={
+                    "call_number": call_number,
+                    "duration_ms": max(0, round((time.perf_counter() - started_at) * 1000)),
+                    "category": type(exc).__name__,
+                },
+            )
             if trace_raw:
                 _append_runtime_trace(
                     state_storage_root,
@@ -1114,6 +1169,25 @@ async def run_workspace_orchestration_turn(
             candidate.get_text_content()
             if hasattr(candidate, "get_text_content")
             else str(serialized.get("content", ""))
+        )
+        try:
+            parsed_json = json.loads(text)
+            complete_json_object = isinstance(parsed_json, dict)
+        except (ValueError, TypeError):
+            complete_json_object = False
+        _append_runtime_trace(
+            state_storage_root,
+            installation_id=authorization.installation_id,
+            session_id=turn_request.session_id,
+            invocation_id=invocation_id,
+            event_type="agent.execute.safe_completed",
+            payload={
+                "call_number": call_number,
+                "duration_ms": max(0, round((time.perf_counter() - started_at) * 1000)),
+                "has_text": bool(text.strip()),
+                "text_length": len(text),
+                "complete_json_object": complete_json_object,
+            },
         )
         result = {"message": serialized, "text": text}
         if public_stream:
@@ -1217,6 +1291,23 @@ async def run_workspace_orchestration_turn(
             else {}
         ),
     )
+    if result.error_code is not None:
+        try:
+            failure = _failure_diagnostics.read_invocation_failure(
+                storage_root=state_storage_root,
+                installation_id=authorization.installation_id,
+                session_id=turn_request.session_id,
+                invocation_id=invocation_id,
+            )
+            if failure is not None:
+                result = result.model_copy(update={
+                    "diagnostics": {
+                        **(result.diagnostics or {}),
+                        "first_failure": failure.get("first_failure"),
+                    },
+                })
+        except _failure_diagnostics.FailureDiagnosticsUnavailable:
+            logger.warning("Failed to project safe failure for invocation %s", invocation_id)
     continuation_source_request = turn_request
     if accepted_aigc_review and turn_request.safe_metadata.get(
         "aigcReviewInput",
@@ -1604,6 +1695,23 @@ class WorkspaceRuntimeHost:
         self.completion: WorkspaceTurnCompletion | None = None
         self.failure: WorkspaceTurnFailure | None = None
 
+    async def _trace_stage(self, event: str, duration_ms: int | None = None) -> None:
+        if self._trace_sink is None:
+            return
+        payload: dict[str, Any] = {"event": event}
+        if duration_ms is not None:
+            payload["duration_ms"] = duration_ms
+        try:
+            await _maybe_await(self._trace_sink({
+                "invocation_id": self.request.invocation_id,
+                "agent_id": self.request.agent_id,
+                "session_id": self.request.session_id,
+                "origin": "host",
+                "payload": payload,
+            }))
+        except Exception:
+            logger.warning("Failed to write safe host stage %s", event)
+
     async def call(self, capability: str, arguments: dict[str, Any]) -> Any:
         if self.completion is not None or self.failure is not None:
             raise WorkspaceOrchestrationError("invalid_completion")
@@ -1612,7 +1720,21 @@ class WorkspaceRuntimeHost:
         if capability == "agent.execute":
             return await _maybe_await(self._execute_agent(arguments))
         if capability == "session.context":
-            return await _maybe_await(self._session_context())
+            started_at = time.perf_counter()
+            try:
+                result = await _maybe_await(self._session_context())
+            except Exception:
+                await self._trace_stage(
+                    "session.context.failed",
+                    max(0, round((time.perf_counter() - started_at) * 1000)),
+                )
+                raise
+            else:
+                await self._trace_stage(
+                    "session.context.completed",
+                    max(0, round((time.perf_counter() - started_at) * 1000)),
+                )
+                return result
         if capability == "runtime.trace":
             if self._trace_sink is not None:
                 await _maybe_await(
@@ -1621,6 +1743,7 @@ class WorkspaceRuntimeHost:
                             "invocation_id": self.request.invocation_id,
                             "agent_id": self.request.agent_id,
                             "session_id": self.request.session_id,
+                            "origin": "agent",
                             "payload": dict(arguments),
                         },
                     ),
@@ -1652,12 +1775,14 @@ class WorkspaceRuntimeHost:
             if completion.invocation_id != self.request.invocation_id:
                 raise WorkspaceOrchestrationError("invalid_completion")
             self.completion = completion
+            await self._trace_stage("runtime.complete.accepted")
             return {"accepted": True}
         if capability == "runtime.fail":
             failure = WorkspaceTurnFailure.model_validate(arguments)
             if failure.invocation_id != self.request.invocation_id:
                 raise WorkspaceOrchestrationError("invalid_completion")
             self.failure = failure
+            await self._trace_stage("runtime.fail.accepted")
             return {"accepted": True}
         if self._business_call is None:
             raise WorkspaceOrchestrationError("unauthorized_capability")
@@ -1722,28 +1847,43 @@ class WorkspaceTurnOrchestrator:
             trace_sink=self.trace_sink,
         )
         try:
+            runtime_started_at = time.perf_counter()
+            await host._trace_stage("runtime.invoke.started")
             if self.public_runtime:
                 if self.signed_workspace_root is None:
                     raise WorkspaceOrchestrationError("runtime_isolation_unavailable")
-                await invoke_public_runtime(
-                    source_root=self.signed_workspace_root,
-                    entrypoint=self.config.entrypoint,
-                    request=request,
-                    host=host,
-                    timeout_seconds=self.timeout_seconds,
-                )
+                try:
+                    await invoke_public_runtime(
+                        source_root=self.signed_workspace_root,
+                        entrypoint=self.config.entrypoint,
+                        request=request,
+                        host=host,
+                        timeout_seconds=self.timeout_seconds,
+                    )
+                finally:
+                    await host._trace_stage(
+                        "runtime.invoke.finished",
+                        max(0, round((time.perf_counter() - runtime_started_at) * 1000)),
+                    )
             else:
-                runtime = self._load_runtime()
-                result = runtime.handle(request, host)
-                if not inspect.isawaitable(result):
-                    raise WorkspaceOrchestrationError("orchestration_error")
-                await asyncio.wait_for(result, timeout=self.timeout_seconds)
+                try:
+                    runtime = self._load_runtime()
+                    result = runtime.handle(request, host)
+                    if not inspect.isawaitable(result):
+                        raise WorkspaceOrchestrationError("orchestration_error")
+                    await asyncio.wait_for(result, timeout=self.timeout_seconds)
+                finally:
+                    await host._trace_stage(
+                        "runtime.invoke.finished",
+                        max(0, round((time.perf_counter() - runtime_started_at) * 1000)),
+                    )
             if host.failure is not None:
                 logger.error(
                     "Workspace runtime reported failure (%s)",
                     host.failure.diagnostic_ref or host.failure.error_code,
                 )
                 transaction.discard()
+                await host._trace_stage("transaction.discarded")
                 return WorkspaceTurnResult(
                     error_code=host.failure.error_code,
                     diagnostic_ref=host.failure.diagnostic_ref,
@@ -1752,33 +1892,39 @@ class WorkspaceTurnOrchestrator:
                 raise WorkspaceOrchestrationError("invalid_completion")
             _validate_render_bound_message(host.completion.message)
             transaction.commit()
+            await host._trace_stage("transaction.committed")
             return WorkspaceTurnResult(
                 message=host.completion.message,
                 diagnostics=host.completion.diagnostics,
             )
         except asyncio.CancelledError:
             transaction.discard()
+            await host._trace_stage("transaction.discarded")
             raise
         except asyncio.TimeoutError:
             transaction.discard()
+            await host._trace_stage("transaction.discarded")
             return WorkspaceTurnResult(
                 error_code="orchestration_timeout",
                 diagnostic_ref="asyncio.TimeoutError",
             )
         except PublicRuntimeError as exc:
             transaction.discard()
+            await host._trace_stage("transaction.discarded")
             return WorkspaceTurnResult(
                 error_code="orchestration_error",
                 diagnostic_ref=str(exc),
             )
         except WorkspaceOrchestrationError as exc:
             transaction.discard()
+            await host._trace_stage("transaction.discarded")
             return WorkspaceTurnResult(
                 error_code=exc.error_code,
                 diagnostic_ref=(exc.diagnostic_ref or f"WorkspaceOrchestrationError:{exc.error_code}"),
             )
         except Exception as exc:
             transaction.discard()
+            await host._trace_stage("transaction.discarded")
             return WorkspaceTurnResult(
                 error_code="orchestration_error",
                 diagnostic_ref=type(exc).__name__,
@@ -1958,6 +2104,19 @@ async def handle_workspace_turn(
             installation_id=authorization.installation_id,
             conversation_id=str(request.session_id),
         )
+        interaction_receipts = []
+        interaction_service = getattr(platform_service, "interactions", None)
+        if interaction_service is not None:
+            cards = interaction_service.list_owned(
+                installation_id=authorization.installation_id,
+                conversation_ids={str(request.session_id)},
+            )
+            for card in sorted(cards, key=lambda item: item.updated_at)[-20:]:
+                if card.status.value in {"PENDING", "SUBMITTED"}:
+                    interaction_receipts.append(card_receipt(
+                        card,
+                        "submitted" if card.status.value == "SUBMITTED" else "created",
+                    ))
         review_input = _media_review_context.current_review_input(
             user_id=str(request.user_id),
             installation_id=authorization.installation_id,
@@ -2104,6 +2263,7 @@ async def handle_workspace_turn(
             business_call=business_call,
             read_aigc_task=read_aigc_task,
             read_interaction_card=read_interaction_card,
+            interaction_receipts=interaction_receipts,
             safe_metadata={
                 "platformEvents": [
                     event.model_dump(mode="json") for event in platform_events
@@ -2152,6 +2312,11 @@ async def handle_workspace_turn(
                     result = WorkspaceTurnResult(
                         error_code="orchestration_error",
                         invocation_id=preflight_invocation_id,
+                        diagnostics={"first_failure": {
+                            "phase": setup_phase,
+                            "category": _failure_diagnostics._token(exc.diagnostic_ref or exc.error_code),
+                            "attempt": None,
+                        }},
                     )
         except Exception:
             logger.exception("Failed to record workspace preflight failure")

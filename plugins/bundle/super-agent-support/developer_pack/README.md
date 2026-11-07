@@ -1,5 +1,12 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.11 bundles development standard 2.35 and DevKit 1.9.5. Card
+creation and submission return a versioned receipt, and `session.context`
+exposes up to 20 recent owner-scoped card receipts. Agent code must read the
+persisted card by `interaction_id` before treating an answer as submitted;
+the client-visible `user_input` remains display text, not proof of a click.
+Developer diagnostics include sanitized execution stages for new invocations.
+
 This package is the offline, public development surface for DClaw Super
 Agents. It contains the human standard, standalone DevKit, schemas, templates,
 SDK helpers, fixtures, and a single cross-platform command line tool. DClaw

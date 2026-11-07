@@ -64,19 +64,53 @@ def _trace_failure(path: Path, installation_id: str, session_id: str) -> list[di
                 if event not in {
                     "orchestration.started", "runtime.trace", "orchestration.failed",
                     "orchestration.preflight_failed", "orchestration.message_staged",
+                    "agent.execute.safe_started", "agent.execute.safe_completed",
+                    "agent.execute.safe_failed",
                 }:
                     continue
                 invocation = invocations.setdefault(record["invocation_id"], {})
                 when = _timestamp(record.get("timestamp"))
+                payload = record.get("payload") or {}
+                stage_name = event
+                if event == "runtime.trace":
+                    source = "host" if payload.get("origin") == "host" else "agent"
+                    stage_name = _token((payload.get("payload") or {}).get("event"))
+                    payload = payload.get("payload") or {}
+                else:
+                    source = "host"
+                if stage_name:
+                    duration = payload.get("duration_ms")
+                    call_number = payload.get("call_number")
+                    text_length = payload.get("text_length")
+                    stage = {
+                        "event": stage_name,
+                        "source": source,
+                        "at": when.isoformat(),
+                        "duration_ms": (
+                            duration if type(duration) is int and 0 <= duration <= 900_000
+                            else None
+                        ),
+                    }
+                    if type(call_number) is int and 1 <= call_number <= 100:
+                        stage["call_number"] = call_number
+                    if type(payload.get("has_text")) is bool:
+                        stage["has_text"] = payload["has_text"]
+                    if type(text_length) is int and 0 <= text_length <= 1_000_000:
+                        stage["text_length"] = text_length
+                    if type(payload.get("complete_json_object")) is bool:
+                        stage["complete_json_object"] = payload["complete_json_object"]
+                    if _token(payload.get("execution_mode")):
+                        stage["execution_mode"] = payload["execution_mode"]
+                    if _token(payload.get("response_format")):
+                        stage["response_format"] = payload["response_format"]
+                    invocation.setdefault("stages", []).append(stage)
                 if event == "orchestration.started":
                     invocation["started_at"] = when
                 elif event == "orchestration.message_staged":
-                    payload = record.get("payload") or {}
                     invocation["assistant_message_id"] = _token(
                         payload.get("assistant_message_id"),
                     )
                 elif event == "orchestration.preflight_failed":
-                    payload = record.get("payload") or {}
                     invocation["started_at"] = _timestamp(payload.get("started_at"))
                     invocation["failed_at"] = when
                     invocation["error_code"] = _token(payload.get("error_code"))
@@ -88,17 +122,27 @@ def _trace_failure(path: Path, installation_id: str, session_id: str) -> list[di
                     invocation["first_failure_source"] = "platform_preflight"
                 elif event == "orchestration.failed":
                     invocation["failed_at"] = when
-                    payload = record.get("payload") or {}
                     invocation["error_code"] = _token(payload.get("error_code"))
-                else:
-                    payload = (record.get("payload") or {}).get("payload") or {}
-                    if payload.get("event") == "agent.turn.failure" and "first_failure" not in invocation:
-                        attempt = payload.get("attempt")
+                elif event == "runtime.trace":
+                    trace = payload
+                    if trace.get("event") == "agent.turn.failure" and "first_failure" not in invocation:
+                        attempt = trace.get("attempt")
                         invocation["first_failure"] = {
-                            "phase": _token(payload.get("phase")),
-                            "category": _token(payload.get("category")),
+                            "phase": _token(trace.get("phase")),
+                            "category": _token(trace.get("category")),
                             "attempt": attempt if type(attempt) is int and 1 <= attempt <= 100 else None,
                         }
+                elif event == "agent.execute.safe_failed" and "first_failure" not in invocation:
+                    invocation["first_failure"] = {
+                        "phase": "agent_execute",
+                        "category": _token(payload.get("category")),
+                        "attempt": (
+                            payload["call_number"]
+                            if type(payload.get("call_number")) is int
+                            and 1 <= payload["call_number"] <= 100 else None
+                        ),
+                    }
+                    invocation["first_failure_source"] = "host_stage"
     except (OSError, UnicodeError, json.JSONDecodeError, AttributeError) as exc:
         raise FailureDiagnosticsUnavailable("failure trace cannot be read") from exc
     return [
@@ -106,6 +150,20 @@ def _trace_failure(path: Path, installation_id: str, session_id: str) -> list[di
         for invocation_id, value in invocations.items()
         if "failed_at" in value
     ]
+
+
+def read_invocation_failure(
+    *, storage_root: Path, installation_id: str, session_id: str,
+    invocation_id: str,
+) -> dict[str, Any] | None:
+    path = Path(storage_root) / "traces" / _scope(installation_id) / f"{_scope(session_id)}.ndjson"
+    return next(
+        (
+            failure for failure in _trace_failure(path, installation_id, session_id)
+            if failure["invocation_id"] == invocation_id
+        ),
+        None,
+    )
 
 
 def read_latest_failure(
@@ -214,6 +272,7 @@ def read_owner_failures(
                     ),
                     "error_code": failure.get("error_code"),
                     "transaction_status": "discarded",
+                    "stages": failure.get("stages", [])[:100],
                     "message_status": (
                         "unknown" if message_id is None or persisted_message_ids is None
                         else "persisted" if message_id in persisted_message_ids

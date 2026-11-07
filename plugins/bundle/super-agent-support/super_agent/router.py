@@ -70,6 +70,7 @@ from .models import (
     AigcWorkflowGuideEvent,
 )
 from .interaction_cards import InteractionError
+from .interaction_receipts import card_receipt
 from . import failure_diagnostics
 
 _diagnostic_audit = logging.getLogger("dclaw.super_agent.diagnostics.audit")
@@ -725,6 +726,7 @@ async def submit_super_expert_interaction(
             return {
                 "interaction": card.model_dump(mode="json"),
                 "user_input": _interaction_submission_summary(card),
+                "receipt": card_receipt(card, "submitted"),
             }
     except InteractionError as exc:
         raise _interaction_http_error(exc) from exc

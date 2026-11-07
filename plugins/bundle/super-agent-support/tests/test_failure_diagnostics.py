@@ -15,6 +15,7 @@ from super_agent.failure_diagnostics import (
     FailureDiagnosticsUnavailable,
     read_latest_failure,
     read_owner_failures,
+    read_invocation_failure,
 )
 from super_agent.capabilities import compute_capability_set_digest, validate_super_expert_manifest
 from super_agent.orchestration import WorkspaceOrchestrationError, WorkspaceRuntimeHost
@@ -107,6 +108,70 @@ def test_reads_latest_cross_installation_failure_without_raw_payload(tmp_path):
     validate(result, json.loads((SCHEMAS / "response.schema.json").read_text()))
     assert "private model text" not in json.dumps(result)
     assert read_latest_failure(**_args(tmp_path), exclude_invocation_id="new-failure")["invocation_id"] == "old-failure"
+
+
+def test_stage_projection_omits_candidate_and_preserves_first_failure(tmp_path):
+    rows = _failure("one", NOW - timedelta(minutes=1))
+    rows.insert(1, {
+        "timestamp": (NOW - timedelta(minutes=1) + timedelta(milliseconds=100)).isoformat(),
+        "invocation_id": "one", "event_type": "agent.execute.safe_started",
+        "payload": {"call_number": 1, "execution_mode": "candidate", "response_format": "json_object"},
+    })
+    rows.insert(2, {
+        "timestamp": (NOW - timedelta(minutes=1) + timedelta(milliseconds=900)).isoformat(),
+        "invocation_id": "one", "event_type": "agent.execute.safe_completed",
+        "payload": {"call_number": 1, "duration_ms": 800, "has_text": True,
+                    "text_length": 4200, "complete_json_object": False,
+                    "text": "private model text"},
+    })
+    rows.insert(3, {
+        "timestamp": (NOW - timedelta(minutes=1) + timedelta(milliseconds=950)).isoformat(),
+        "invocation_id": "one", "event_type": "runtime.trace",
+        "payload": {"origin": "agent", "payload": {
+            "event": "transaction.committed", "model_text": "private model text",
+        }},
+    })
+    _trace(tmp_path, "new", "task", rows)
+    result = read_owner_failures(
+        storage_root=tmp_path, grants=_grants(), agent_id="comic",
+        user_id="57", session_id="task", owner_resolver=_args(tmp_path)["owner_resolver"],
+        now=NOW,
+    )
+    failure = result["failures"][0]
+    assert failure["first_failure"]["category"] == "model_response_shape"
+    assert failure["stages"][0]["source"] == "host"
+    assert failure["stages"][2]["source"] == "host"
+    assert failure["stages"][2]["complete_json_object"] is False
+    assert failure["stages"][3]["event"] == "transaction.committed"
+    assert failure["stages"][3]["source"] == "agent"
+    assert "private model text" not in json.dumps(result)
+    schema = json.loads((
+        Path(__file__).parents[1] / "devkit" / "schemas"
+        / "runtime-diagnostics-v1" / "response.schema.json"
+    ).read_text())
+    validate(result | {"history_readback": {"messages_table_count": 0, "agent_memory_count": 0}}, schema)
+    assert read_invocation_failure(
+        storage_root=tmp_path, installation_id="new", session_id="task",
+        invocation_id="one",
+    )["first_failure"]["phase"] == "model_validation"
+
+
+def test_host_candidate_exception_is_labeled_as_host_stage(tmp_path):
+    rows = _failure("one", NOW - timedelta(minutes=1))
+    rows = [row for row in rows if row["event_type"] != "runtime.trace"]
+    rows.insert(1, {
+        "timestamp": (NOW - timedelta(minutes=1) + timedelta(seconds=1)).isoformat(),
+        "invocation_id": "one", "event_type": "agent.execute.safe_failed",
+        "payload": {"call_number": 2, "duration_ms": 800,
+                    "category": "TimeoutError"},
+    })
+    _trace(tmp_path, "new", "task", rows)
+    result = read_latest_failure(**_args(tmp_path))
+    assert result["first_failure"] == {
+        "phase": "agent_execute", "category": "TimeoutError", "attempt": 2,
+    }
+    assert result["first_failure_source"] == "host_stage"
+    validate(result, json.loads((SCHEMAS / "response.schema.json").read_text()))
 
 
 def test_no_record_and_retention_window(tmp_path):
@@ -265,3 +330,28 @@ async def test_host_requires_declared_grant_and_empty_request(tmp_path, monkeypa
     with pytest.raises(WorkspaceOrchestrationError) as error:
         await host.call("runtime.failure.read/1", {})
     assert error.value.error_code == "unauthorized_capability"
+
+
+@pytest.mark.asyncio
+async def test_host_stages_are_correlated_without_context_or_message_body():
+    request = SimpleNamespace(
+        invocation_id="one", agent_id="comic", session_id="task",
+        granted_capabilities={
+            "session.context": "1", "runtime.fail": "1",
+        },
+    )
+    stages = []
+    host = WorkspaceRuntimeHost(
+        request=request, execute_agent=lambda _: None,
+        session_context=lambda: {"private": "customer content"},
+        trace_sink=lambda item: stages.append(item),
+    )
+    assert (await host.call("session.context", {}))["private"] == "customer content"
+    await host.call("runtime.fail", {
+        "invocation_id": "one", "error_code": "INVALID_TURN_RESULT",
+    })
+    assert [item["payload"]["event"] for item in stages] == [
+        "session.context.completed", "runtime.fail.accepted",
+    ]
+    assert all(item["invocation_id"] == "one" for item in stages)
+    assert "customer content" not in json.dumps(stages)
