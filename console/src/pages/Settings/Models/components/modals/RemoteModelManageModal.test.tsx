@@ -145,4 +145,29 @@ describe("RemoteModelManageModal", () => {
       screen.getAllByRole("button", { name: "common.delete" }),
     ).toHaveLength(2);
   });
+
+  it("shows billing status without the internal catalog version", () => {
+    const billingProvider: ProviderInfo = {
+      ...provider,
+      models: [
+        {
+          ...provider.models[0],
+          billing_eligible: true,
+          billing_catalog_version: "unpublish-20261017102109835081-47e37ee5",
+        },
+      ],
+    };
+
+    render(
+      <RemoteModelManageModal
+        provider={billingProvider}
+        open
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("计费已发布")).toBeInTheDocument();
+    expect(screen.queryByText(/unpublish-20261017/)).not.toBeInTheDocument();
+  });
 });

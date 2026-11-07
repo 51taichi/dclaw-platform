@@ -931,9 +931,6 @@ export function RemoteModelManageModal({
                     {m.billing_eligible != null ? (
                       <Tag color={m.billing_eligible ? "green" : "default"}>
                         {m.billing_eligible ? "计费已发布" : "计费未发布"}
-                        {m.billing_catalog_version
-                          ? ` · ${m.billing_catalog_version}`
-                          : ""}
                       </Tag>
                     ) : null}
                     {m.is_free && (
