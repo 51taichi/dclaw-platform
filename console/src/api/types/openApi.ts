@@ -121,3 +121,17 @@ export interface ListOpenApiInvocationsParams {
   limit?: number;
   offset?: number;
 }
+
+export interface OpenApiFallbackModelConfig {
+  enabled: boolean;
+  provider_id: string;
+  model: string;
+  json_object: boolean;
+}
+
+export interface OpenApiFallbackModelOption {
+  provider_id: string;
+  provider_name: string;
+  model: string;
+  model_name: string;
+}

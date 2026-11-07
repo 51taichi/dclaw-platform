@@ -30,6 +30,9 @@ const {
       createKey: vi.fn(),
       revokeKey: vi.fn(),
       listInvocations: vi.fn(),
+      getFallbackModel: vi.fn(),
+      listFallbackModelOptions: vi.fn(),
+      updateFallbackModel: vi.fn(),
     },
     mockAgentsApi: {
       listAgents: vi.fn(),
@@ -123,6 +126,26 @@ describe("OpenApiPage", () => {
     ]);
     mockOpenApiApi.listKeys.mockResolvedValue([]);
     mockOpenApiApi.listInvocations.mockResolvedValue([]);
+    mockOpenApiApi.getFallbackModel.mockResolvedValue({
+      enabled: false,
+      provider_id: "",
+      model: "",
+      json_object: true,
+    });
+    mockOpenApiApi.listFallbackModelOptions.mockResolvedValue([
+      {
+        provider_id: "volcengine-cn",
+        provider_name: "Volcano Engine",
+        model: "deepseek-v4-flash-ga-260731",
+        model_name: "DeepSeek V4 Flash",
+      },
+    ]);
+    mockOpenApiApi.updateFallbackModel.mockResolvedValue({
+      enabled: true,
+      provider_id: "volcengine-cn",
+      model: "deepseek-v4-flash-ga-260731",
+      json_object: true,
+    });
     mockOpenApiApi.deletePublication.mockResolvedValue({
       deleted: true,
       id: "pub-disabled",
@@ -141,6 +164,44 @@ describe("OpenApiPage", () => {
         created_at: "2026-07-02T09:05:00Z",
       },
     });
+  });
+
+  it("configures one shared fallback model for OpenAPI agents", async () => {
+    const user = userEvent.setup();
+    render(<OpenApiPage />);
+
+    await user.click(await screen.findByRole("tab", { name: "备用大模型" }));
+    await user.click(screen.getByRole("switch", { name: "启用备用大模型" }));
+    await user.click(screen.getByRole("combobox"));
+    await user.click(
+      await screen.findByText("Volcano Engine / DeepSeek V4 Flash"),
+    );
+    await user.click(screen.getByRole("button", { name: "保存配置" }));
+
+    await waitFor(() => {
+      expect(mockOpenApiApi.updateFallbackModel).toHaveBeenCalledWith({
+        enabled: true,
+        provider_id: "volcengine-cn",
+        model: "deepseek-v4-flash-ga-260731",
+        json_object: true,
+      });
+    });
+  });
+
+  it("keeps save disabled when no DeepSeek fallback is available", async () => {
+    const user = userEvent.setup();
+    mockOpenApiApi.listFallbackModelOptions.mockResolvedValue([]);
+    render(<OpenApiPage />);
+
+    await user.click(await screen.findByRole("tab", { name: "备用大模型" }));
+    await user.click(screen.getByRole("switch", { name: "启用备用大模型" }));
+
+    expect(
+      await screen.findByText(
+        "暂无可用的 DeepSeek 模型，请先前往“模型”页面配置并启用。",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存配置" })).toBeDisabled();
   });
 
   it("loads publications and shows a one-time secret after creating a key", async () => {

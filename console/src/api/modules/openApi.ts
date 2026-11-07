@@ -7,6 +7,8 @@ import type {
   ListOpenApiInvocationsParams,
   ListOpenApiKeysParams,
   OpenApiExternalApp,
+  OpenApiFallbackModelConfig,
+  OpenApiFallbackModelOption,
   OpenApiInvocation,
   OpenApiKey,
   OpenApiPublication,
@@ -27,6 +29,18 @@ function buildQuery(params: object) {
 }
 
 export const openApiApi = {
+  getFallbackModel: () =>
+    request<OpenApiFallbackModelConfig>("/open-api/fallback-model"),
+
+  listFallbackModelOptions: () =>
+    request<OpenApiFallbackModelOption[]>("/open-api/fallback-model/options"),
+
+  updateFallbackModel: (payload: OpenApiFallbackModelConfig) =>
+    request<OpenApiFallbackModelConfig>("/open-api/fallback-model", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+
   listPublications: () =>
     request<OpenApiPublication[]>("/open-api/publications"),
 

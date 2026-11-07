@@ -43,6 +43,8 @@ import type {
   AgentSummary,
   ExpertTeamTemplate,
   OpenApiExternalApp,
+  OpenApiFallbackModelConfig,
+  OpenApiFallbackModelOption,
   OpenApiInvocation,
   OpenApiKey,
   OpenApiPublication,
@@ -158,6 +160,7 @@ export default function OpenApiPage() {
   const [appForm] = Form.useForm<AppFormValues>();
   const [keyForm] = Form.useForm<KeyFormValues>();
   const [publicationOwnerForm] = Form.useForm<PublicationOwnerFormValues>();
+  const [fallbackForm] = Form.useForm<OpenApiFallbackModelConfig>();
   const [publications, setPublications] = useState<OpenApiPublication[]>([]);
   const [apps, setApps] = useState<OpenApiExternalApp[]>([]);
   const [keys, setKeys] = useState<OpenApiKey[]>([]);
@@ -165,6 +168,10 @@ export default function OpenApiPage() {
   const [agents, setAgents] = useState<AgentSummary[]>([]);
   const [expertTeams, setExpertTeams] = useState<ExpertTeamTemplate[]>([]);
   const [users, setUsers] = useState<AdminUser[]>([]);
+  const [fallbackOptions, setFallbackOptions] = useState<
+    OpenApiFallbackModelOption[]
+  >([]);
+  const [savingFallback, setSavingFallback] = useState(false);
   const [selectedPublicationId, setSelectedPublicationId] = useState<string>();
   const [initialLoading, setInitialLoading] = useState(false);
   const [scopedLoading, setScopedLoading] = useState(false);
@@ -250,14 +257,23 @@ export default function OpenApiPage() {
     async (preferredPublicationId?: string) => {
       setInitialLoading(true);
       try {
-        const [publicationRows, appRows, agentRows, teamRows, userRows] =
-          await Promise.all([
-            openApiApi.listPublications(),
-            openApiApi.listApps(),
-            agentsApi.listAgents(),
-            expertTeamsApi.listAdminExpertTeams(),
-            adminUsersApi.listUsers(),
-          ]);
+        const [
+          publicationRows,
+          appRows,
+          agentRows,
+          teamRows,
+          userRows,
+          fallbackConfig,
+          availableFallbacks,
+        ] = await Promise.all([
+          openApiApi.listPublications(),
+          openApiApi.listApps(),
+          agentsApi.listAgents(),
+          expertTeamsApi.listAdminExpertTeams(),
+          adminUsersApi.listUsers(),
+          openApiApi.getFallbackModel(),
+          openApiApi.listFallbackModelOptions(),
+        ]);
         const enabledPublicationRows = publicationRows.filter(
           (item) => item.status === "enabled",
         );
@@ -274,6 +290,8 @@ export default function OpenApiPage() {
         setAgents(agentRows.agents || []);
         setExpertTeams(teamRows || []);
         setUsers(userRows || []);
+        setFallbackOptions(availableFallbacks || []);
+        fallbackForm.setFieldsValue(fallbackConfig);
         if (!publicationForm.getFieldValue("bound_user_id") && userRows[0]) {
           publicationForm.setFieldValue("bound_user_id", userRows[0].id);
         }
@@ -285,7 +303,7 @@ export default function OpenApiPage() {
         setInitialLoading(false);
       }
     },
-    [message, publicationForm, setKeyDefaults],
+    [fallbackForm, message, publicationForm, setKeyDefaults],
   );
 
   const fetchScopedData = useCallback(
@@ -343,6 +361,9 @@ export default function OpenApiPage() {
   }, [fetchScopedData, keyForm, publications, selectedPublicationId]);
 
   const targetType = Form.useWatch("target_type", publicationForm) || "agent";
+  const fallbackEnabled = Form.useWatch("enabled", fallbackForm) || false;
+  const fallbackProviderId = Form.useWatch("provider_id", fallbackForm);
+  const fallbackModelId = Form.useWatch("model", fallbackForm);
   const targetOptions =
     targetType === "agent"
       ? agents.map((agent) => ({
@@ -390,6 +411,23 @@ export default function OpenApiPage() {
   const userNameById = new Map(
     users.map((user) => [String(user.id), user.username]),
   );
+
+  const fallbackModelOptions = fallbackOptions.map((option) => ({
+    label: `${option.provider_name} / ${option.model_name}`,
+    value: `${option.provider_id}\u0000${option.model}`,
+  }));
+
+  const handleSaveFallback = async (values: OpenApiFallbackModelConfig) => {
+    setSavingFallback(true);
+    try {
+      await openApiApi.updateFallbackModel(values);
+      message.success("备用大模型配置已保存");
+    } catch (error) {
+      message.error(getErrorMessage(error, "保存备用大模型失败"));
+    } finally {
+      setSavingFallback(false);
+    }
+  };
 
   const visiblePublications = publications.filter((publication) => {
     if (onlyEnabled && publication.status !== "enabled") return false;
@@ -1076,6 +1114,100 @@ export default function OpenApiPage() {
                 children: (
                   <div className={styles.tabPanel}>
                     <AgentExperienceLibrary />
+                  </div>
+                ),
+              },
+              {
+                key: "fallback-model",
+                label: "备用大模型",
+                children: (
+                  <div className={styles.tabPanel}>
+                    <Alert
+                      className={styles.inlineNotice}
+                      type="info"
+                      showIcon
+                      message="仅用于外部应用调用已发布专家；不影响工作台及平台内部模型调用。"
+                    />
+                    <Form
+                      className={styles.fallbackForm}
+                      form={fallbackForm}
+                      layout="vertical"
+                      initialValues={{
+                        enabled: false,
+                        provider_id: "",
+                        model: "",
+                        json_object: true,
+                      }}
+                      onFinish={handleSaveFallback}
+                    >
+                      <Form.Item
+                        name="enabled"
+                        label="启用备用大模型"
+                        valuePropName="checked"
+                      >
+                        <Switch />
+                      </Form.Item>
+                      {fallbackEnabled && fallbackOptions.length === 0 ? (
+                        <Alert
+                          className={styles.inlineNotice}
+                          type="warning"
+                          showIcon
+                          message="暂无可用的 DeepSeek 模型，请先前往“模型”页面配置并启用。"
+                        />
+                      ) : null}
+                      <Form.Item
+                        label="备用模型"
+                        required={fallbackEnabled}
+                        extra="只展示当前平台中已启用的 DeepSeek 聊天模型。与专家默认模型相同时仍会再次调用，但仅属于同源重试。"
+                      >
+                        <Select
+                          disabled={!fallbackEnabled}
+                          showSearch
+                          optionFilterProp="label"
+                          placeholder="选择 DeepSeek 备用模型"
+                          options={fallbackModelOptions}
+                          value={
+                            fallbackProviderId && fallbackModelId
+                              ? `${fallbackProviderId}\u0000${fallbackModelId}`
+                              : undefined
+                          }
+                          onChange={(value: string) => {
+                            const [providerId, model] = value.split(
+                              "\u0000",
+                              2,
+                            );
+                            fallbackForm.setFieldsValue({
+                              provider_id: providerId,
+                              model,
+                            });
+                          }}
+                        />
+                      </Form.Item>
+                      <Form.Item name="provider_id" hidden>
+                        <Input />
+                      </Form.Item>
+                      <Form.Item name="model" hidden>
+                        <Input />
+                      </Form.Item>
+                      <Form.Item
+                        name="json_object"
+                        label="JSON Object"
+                        valuePropName="checked"
+                        extra="开启后，OpenAPI Agent 的最终回复使用 JSON Object；规划和工具调用阶段不强制 JSON。"
+                      >
+                        <Switch disabled={!fallbackEnabled} />
+                      </Form.Item>
+                      <Button
+                        type="primary"
+                        htmlType="submit"
+                        loading={savingFallback}
+                        disabled={
+                          fallbackEnabled && fallbackOptions.length === 0
+                        }
+                      >
+                        保存配置
+                      </Button>
+                    </Form>
                   </div>
                 ),
               },
