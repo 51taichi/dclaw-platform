@@ -39,6 +39,7 @@ from ..open_api.agent_response_format import (
     install_open_api_agent_response_format,
     is_trusted_direct_agent_open_api,
 )
+from ..open_api.model_failover import install_open_api_model_failover
 from ...agents.react_agent import QwenPawAgent
 from ...exceptions import convert_model_exception
 from ...agents.utils.file_handling import (
@@ -742,7 +743,45 @@ class AgentRunner(Runner):
                 plan_notebook=plan_notebook,
             )
             if base_request_context["_open_api_direct_agent_execution"]:
-                install_open_api_agent_response_format(agent)
+                from ...config.utils import load_config
+
+                fallback_config = load_config().open_api.fallback_model
+                if (
+                    fallback_config.enabled
+                    and fallback_config.provider_id
+                    and fallback_config.model
+                ):
+                    from ...agents.model_factory import (
+                        create_wrapped_model_for_slot,
+                    )
+
+                    try:
+                        fallback_model = create_wrapped_model_for_slot(
+                            fallback_config.provider_id,
+                            fallback_config.model,
+                            json_object=fallback_config.json_object,
+                        )
+                        install_open_api_model_failover(
+                            agent,
+                            fallback_model,
+                            fallback_label=(
+                                f"{fallback_config.provider_id}/"
+                                f"{fallback_config.model}"
+                            ),
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Configured OpenAPI fallback model is unavailable; "
+                            "continuing with the primary model",
+                            exc_info=True,
+                        )
+                if fallback_config.enabled and fallback_config.json_object:
+                    install_open_api_agent_response_format(
+                        agent,
+                        force_json_object=True,
+                    )
+                else:
+                    install_open_api_agent_response_format(agent)
             await agent.register_mcp_clients()
             agent.set_console_output_enabled(enabled=False)
 

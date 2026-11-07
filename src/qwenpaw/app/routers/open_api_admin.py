@@ -9,8 +9,10 @@ from typing import Any
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field
 
-from ...config.utils import load_config
+from ...config.config import OpenApiFallbackModelConfig
+from ...config.utils import load_config, save_config
 from ...mindspace import MindspaceScope
+from ...providers import ProviderManager
 from ..expert_teams import get_expert_team_template
 from ..open_api import knowledge as experience_knowledge
 from ..open_api.auth import generate_open_api_key, hash_open_api_key
@@ -53,6 +55,80 @@ class PublicationStatusUpdateRequest(BaseModel):
 
 class PublicationBoundUserUpdateRequest(BaseModel):
     bound_user_id: int = Field(gt=0)
+
+
+class OpenApiFallbackModelRequest(OpenApiFallbackModelConfig):
+    """Admin-managed fallback shared by direct OpenAPI Agent calls."""
+
+
+def _deepseek_model_options() -> list[dict[str, str]]:
+    manager = ProviderManager.get_instance()
+    options: list[dict[str, str]] = []
+    providers = list(manager.builtin_providers.values()) + list(
+        manager.custom_providers.values(),
+    )
+    for provider in providers:
+        if getattr(provider, "disabled", False):
+            continue
+        if (
+            getattr(provider, "require_api_key", True)
+            and not getattr(provider, "is_local", False)
+            and not str(getattr(provider, "api_key", "") or "").strip()
+        ):
+            continue
+        for model in list(provider.models or []) + list(
+            provider.extra_models or [],
+        ):
+            if getattr(model, "model_type", "llm") != "llm":
+                continue
+            if "deepseek" not in f"{model.id} {model.name}".lower():
+                continue
+            options.append(
+                {
+                    "provider_id": provider.id,
+                    "provider_name": provider.name,
+                    "model": model.id,
+                    "model_name": model.name,
+                },
+            )
+    return options
+
+
+@router.get("/fallback-model/options")
+def list_fallback_model_options(request: Request) -> list[dict[str, str]]:
+    _require_admin(request)
+    return _deepseek_model_options()
+
+
+@router.get("/fallback-model")
+def get_fallback_model(request: Request) -> dict[str, Any]:
+    _require_admin(request)
+    return load_config().open_api.fallback_model.model_dump()
+
+
+@router.put("/fallback-model")
+def update_fallback_model(
+    payload: OpenApiFallbackModelRequest,
+    request: Request,
+) -> dict[str, Any]:
+    _require_admin(request)
+    if payload.enabled:
+        selected = (payload.provider_id, payload.model)
+        available = {
+            (item["provider_id"], item["model"])
+            for item in _deepseek_model_options()
+        }
+        if selected not in available:
+            raise HTTPException(
+                status_code=400,
+                detail="Select an enabled DeepSeek chat model",
+            )
+    config = load_config()
+    config.open_api.fallback_model = OpenApiFallbackModelConfig(
+        **payload.model_dump(),
+    )
+    save_config(config)
+    return config.open_api.fallback_model.model_dump()
 
 
 def _require_admin(request: Request) -> str:

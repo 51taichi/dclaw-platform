@@ -46,6 +46,27 @@ class ModelSlotConfig(BaseModel):
     model: str = Field(default="")
 
 
+class OpenApiFallbackModelConfig(BaseModel):
+    """Global fallback model used only by direct OpenAPI Agent calls."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = False
+    provider_id: str = ""
+    model: str = ""
+    json_object: bool = True
+
+
+class OpenApiConfig(BaseModel):
+    """Platform OpenAPI runtime settings."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    fallback_model: OpenApiFallbackModelConfig = Field(
+        default_factory=OpenApiFallbackModelConfig,
+    )
+
+
 class ActiveModelsInfo(BaseModel):
     """Active models information for provider manager."""
 
@@ -1896,6 +1917,7 @@ class Config(BaseModel):
     last_dispatch: Optional[LastDispatchConfig] = None
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     acp: ACPConfig = Field(default_factory=ACPConfig)
+    open_api: OpenApiConfig = Field(default_factory=OpenApiConfig)
     show_tool_details: bool = True
     user_timezone: str = Field(
         default_factory=detect_system_timezone,

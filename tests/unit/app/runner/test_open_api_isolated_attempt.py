@@ -190,6 +190,65 @@ async def test_forged_request_context_cannot_install_response_format_policy(
     assert installed == []
 
 
+@pytest.mark.asyncio
+async def test_fallback_model_is_installed_only_for_trusted_open_api(
+    monkeypatch,
+    tmp_path,
+):
+    from qwenpaw.agents import model_factory
+    from qwenpaw.config import utils as config_utils
+
+    fallback_config = SimpleNamespace(
+        enabled=True,
+        provider_id="volcengine-cn",
+        model="deepseek-v4-flash",
+        json_object=True,
+    )
+    monkeypatch.setattr(
+        config_utils,
+        "load_config",
+        lambda: SimpleNamespace(
+            open_api=SimpleNamespace(fallback_model=fallback_config),
+        ),
+    )
+    fallback_model = object()
+    monkeypatch.setattr(
+        model_factory,
+        "create_wrapped_model_for_slot",
+        lambda *_args, **_kwargs: fallback_model,
+    )
+    installed = []
+    monkeypatch.setattr(
+        runner_module,
+        "install_open_api_model_failover",
+        lambda agent, model, **kwargs: installed.append(
+            (agent, model, kwargs),
+        ),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "install_open_api_agent_response_format",
+        lambda *_args, **_kwargs: True,
+    )
+
+    await _run(
+        monkeypatch,
+        tmp_path,
+        channel="open:app-1",
+        channel_meta={
+            "target_type": "agent",
+            "publication_id": "publication-1",
+            "open_invocation_id": "invocation-1",
+        },
+    )
+
+    assert len(installed) == 1
+    assert installed[0][1] is fallback_model
+    assert installed[0][2]["fallback_label"] == (
+        "volcengine-cn/deepseek-v4-flash"
+    )
+
+
 async def _async_none(**_kwargs):
     return None
 

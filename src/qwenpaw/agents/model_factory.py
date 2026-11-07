@@ -1028,6 +1028,35 @@ def _wrap_chat_model(
     )
 
 
+def create_wrapped_model_for_slot(
+    provider_id: str,
+    model_id: str,
+    *,
+    json_object: bool,
+) -> ChatModelBase:
+    """Create a metered model for a request-scoped secondary model slot."""
+    from ..app.open_api.runtime import get_current_billing_meter
+
+    manager = ProviderManager.get_instance()
+    provider = manager.get_provider(provider_id)
+    if provider is None:
+        raise ProviderError(message=f"Provider '{provider_id}' not found.")
+    raw_model = provider.get_chat_model_instance(model_id)
+    generate_kwargs = dict(getattr(raw_model, "generate_kwargs", {}) or {})
+    if json_object:
+        generate_kwargs["response_format"] = {"type": "json_object"}
+    else:
+        generate_kwargs.pop("response_format", None)
+    raw_model.generate_kwargs = generate_kwargs
+    return _wrap_chat_model(
+        provider_id,
+        raw_model,
+        retry_config=RetryConfig(enabled=False),
+        rate_limit_config=None,
+        billing_meter=get_current_billing_meter(),
+    )
+
+
 def _build_auto_routing_model_and_formatter(
     manager: ProviderManager,
     *,

@@ -67,7 +67,11 @@ def is_trusted_direct_agent_open_api(
     )
 
 
-def install_open_api_agent_response_format(agent: Any) -> bool:
+def install_open_api_agent_response_format(
+    agent: Any,
+    *,
+    force_json_object: bool = False,
+) -> bool:
     """Install the phase adapter on an eligible request-owned model."""
     model = getattr(agent, "model", None)
     raw_model = _find_openai_compat_model(model)
@@ -78,6 +82,8 @@ def install_open_api_agent_response_format(agent: Any) -> bool:
     configured = getattr(raw_model, "generate_kwargs", {}).get(
         "response_format",
     )
+    if force_json_object:
+        configured = deepcopy(_JSON_OBJECT_RESPONSE_FORMAT)
     if configured != _JSON_OBJECT_RESPONSE_FORMAT:
         return False
 

@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException, Request
 
 from qwenpaw.app.routers import open_api_admin
+from qwenpaw.config.config import Config
 
 
 class FakeOpenApiRepository:
@@ -923,6 +924,68 @@ def test_open_api_admin_router_is_mounted_under_admin_prefix():
 
     assert "/api/admin/open-api/publications" in api_paths
     assert not any(path.startswith("/api/user/open-api") for path in api_paths)
+
+
+def test_fallback_model_config_accepts_enabled_deepseek(monkeypatch):
+    config = Config()
+    saved = []
+    model = SimpleNamespace(
+        id="deepseek-v4-flash",
+        name="DeepSeek V4 Flash",
+        model_type="llm",
+    )
+    provider = SimpleNamespace(
+        id="volcengine-cn",
+        name="Volcano Engine",
+        disabled=False,
+        require_api_key=True,
+        is_local=False,
+        api_key="configured",
+        models=[model],
+        extra_models=[],
+    )
+    manager = SimpleNamespace(
+        builtin_providers={provider.id: provider},
+        custom_providers={},
+    )
+    monkeypatch.setattr(open_api_admin, "load_config", lambda: config)
+    monkeypatch.setattr(open_api_admin, "save_config", saved.append)
+    monkeypatch.setattr(
+        open_api_admin.ProviderManager,
+        "get_instance",
+        lambda: manager,
+    )
+
+    result = open_api_admin.update_fallback_model(
+        open_api_admin.OpenApiFallbackModelRequest(
+            enabled=True,
+            provider_id="volcengine-cn",
+            model="deepseek-v4-flash",
+            json_object=True,
+        ),
+        _request(),
+    )
+
+    assert result["enabled"] is True
+    assert result["json_object"] is True
+    assert saved == [config]
+
+
+def test_fallback_model_config_rejects_non_deepseek(monkeypatch):
+    monkeypatch.setattr(open_api_admin, "_deepseek_model_options", lambda: [])
+
+    with pytest.raises(HTTPException) as exc_info:
+        open_api_admin.update_fallback_model(
+            open_api_admin.OpenApiFallbackModelRequest(
+                enabled=True,
+                provider_id="other",
+                model="other-chat",
+                json_object=False,
+            ),
+            _request(),
+        )
+
+    assert exc_info.value.status_code == 400
 
 
 def test_api_key_request_accepts_generic_diagnostics_scope():
