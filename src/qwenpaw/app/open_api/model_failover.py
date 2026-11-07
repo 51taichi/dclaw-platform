@@ -7,6 +7,8 @@ import asyncio
 import inspect
 import logging
 from collections.abc import AsyncIterator
+from copy import deepcopy
+from threading import Lock
 from typing import Any, Literal, Type
 
 from agentscope.model import ChatModelBase
@@ -24,6 +26,79 @@ _RETRYABLE_TYPE_MARKERS = (
     "rate_limit",
     "internalserver",
 )
+
+_route_lock = Lock()
+_route_by_invocation: dict[str, dict[str, Any]] = {}
+
+
+def _model_label(model: ChatModelBase) -> str:
+    return str(
+        getattr(model, "model_key", None)
+        or getattr(model, "model_name", None)
+        or type(model).__name__
+    )
+
+
+def _failure_summary(exc: BaseException) -> str:
+    status_code = getattr(exc, "status_code", None)
+    if status_code is not None:
+        return f"HTTP {status_code}"
+    return type(exc).__name__
+
+
+def begin_model_route(
+    invocation_id: str,
+    *,
+    primary_model: str,
+) -> None:
+    if not invocation_id:
+        return
+    with _route_lock:
+        _route_by_invocation[invocation_id] = {
+            "model_route": "primary",
+            "fallback_used": False,
+            "primary_model": primary_model,
+            "effective_model": primary_model,
+        }
+
+
+def _mark_fallback_started(
+    invocation_id: str,
+    *,
+    fallback_model: str,
+    primary_error: str,
+) -> None:
+    if not invocation_id:
+        return
+    with _route_lock:
+        route = _route_by_invocation.setdefault(invocation_id, {})
+        route.update(
+            {
+                "model_route": "fallback",
+                "fallback_used": True,
+                "primary_error": primary_error,
+                "fallback_model": fallback_model,
+                "fallback_succeeded": False,
+                "effective_model": fallback_model,
+            },
+        )
+
+
+def _mark_fallback_succeeded(invocation_id: str) -> None:
+    if not invocation_id:
+        return
+    with _route_lock:
+        route = _route_by_invocation.get(invocation_id)
+        if route is not None:
+            route["fallback_succeeded"] = True
+
+
+def take_model_route(invocation_id: str) -> dict[str, Any]:
+    """Return and clear route metadata after durable invocation finalization."""
+    if not invocation_id:
+        return {}
+    with _route_lock:
+        return deepcopy(_route_by_invocation.pop(invocation_id, {}))
 
 
 def _is_retryable_failure(exc: BaseException) -> bool:
@@ -46,13 +121,19 @@ class OpenApiModelFailover(ChatModelBase):
         primary: ChatModelBase,
         fallback: ChatModelBase,
         fallback_label: str,
+        invocation_id: str = "",
         timeout_seconds: float = PRIMARY_TIMEOUT_SECONDS,
     ) -> None:
         super().__init__(model_name=primary.model_name, stream=primary.stream)
         self._inner = primary
         self._fallback = fallback
         self._fallback_label = fallback_label
+        self._invocation_id = invocation_id
         self._timeout_seconds = timeout_seconds
+        begin_model_route(
+            invocation_id,
+            primary_model=_model_label(primary),
+        )
 
     @property
     def model_key(self) -> str | None:
@@ -83,7 +164,11 @@ class OpenApiModelFailover(ChatModelBase):
                 raise
             return await self._invoke_fallback(call_kwargs, exc)
 
-        if inspect.isasyncgen(result) or hasattr(result, "__aiter__"):
+        if inspect.isasyncgen(result) or getattr(
+            type(result),
+            "__aiter__",
+            None,
+        ):
             return self._stream_with_failover(result, call_kwargs)
         return result
 
@@ -93,12 +178,54 @@ class OpenApiModelFailover(ChatModelBase):
         exc: BaseException,
     ) -> ChatResponse | AsyncIterator[ChatResponse]:
         logger.warning(
-            "OpenAPI primary model failed; using fallback model=%s "
-            "reason=%s",
+            "OpenAPI primary model failed; using fallback "
+            "invocation_id=%s model=%s reason=%s",
+            self._invocation_id,
             self._fallback_label,
-            type(exc).__name__,
+            _failure_summary(exc),
         )
-        return await self._fallback(**call_kwargs)
+        _mark_fallback_started(
+            self._invocation_id,
+            fallback_model=self._fallback_label,
+            primary_error=_failure_summary(exc),
+        )
+        try:
+            result = await self._fallback(**call_kwargs)
+        except BaseException as fallback_exc:
+            logger.error(
+                "OpenAPI fallback model failed invocation_id=%s "
+                "model=%s reason=%s",
+                self._invocation_id,
+                self._fallback_label,
+                _failure_summary(fallback_exc),
+            )
+            raise
+        if inspect.isasyncgen(result) or getattr(
+            type(result),
+            "__aiter__",
+            None,
+        ):
+            return self._track_fallback_stream(result)
+        _mark_fallback_succeeded(self._invocation_id)
+        logger.info(
+            "OpenAPI fallback model succeeded invocation_id=%s model=%s",
+            self._invocation_id,
+            self._fallback_label,
+        )
+        return result
+
+    async def _track_fallback_stream(
+        self,
+        stream: AsyncIterator[ChatResponse],
+    ) -> AsyncIterator[ChatResponse]:
+        async for item in stream:
+            yield item
+        _mark_fallback_succeeded(self._invocation_id)
+        logger.info(
+            "OpenAPI fallback model succeeded invocation_id=%s model=%s",
+            self._invocation_id,
+            self._fallback_label,
+        )
 
     async def _stream_with_failover(
         self,
@@ -122,9 +249,10 @@ class OpenApiModelFailover(ChatModelBase):
             if emitted or not _is_retryable_failure(exc):
                 raise
             fallback_result = await self._invoke_fallback(call_kwargs, exc)
-            if inspect.isasyncgen(fallback_result) or hasattr(
-                fallback_result,
+            if inspect.isasyncgen(fallback_result) or getattr(
+                type(fallback_result),
                 "__aiter__",
+                None,
             ):
                 async for item in fallback_result:
                     yield item
@@ -137,6 +265,7 @@ def install_open_api_model_failover(
     fallback_model: ChatModelBase,
     *,
     fallback_label: str,
+    invocation_id: str = "",
 ) -> bool:
     """Install failover on a request-owned Agent model instance."""
     primary = getattr(agent, "model", None)
@@ -146,5 +275,6 @@ def install_open_api_model_failover(
         primary=primary,
         fallback=fallback_model,
         fallback_label=fallback_label,
+        invocation_id=invocation_id,
     )
     return True

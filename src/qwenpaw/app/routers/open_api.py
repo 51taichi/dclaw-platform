@@ -900,6 +900,20 @@ async def _shielded_finalize(
             updated = billing.open_api_repository.get_invocation(
                 session.invocation_id,
             )
+        from ..open_api.model_failover import take_model_route
+
+        model_route = take_model_route(session.invocation_id)
+        if model_route and updated is not None:
+            token_summary = dict(updated.get("token_summary") or {})
+            token_summary.update(model_route)
+            updated = repository.update_invocation_status(
+                session.invocation_id,
+                status=str(updated.get("status") or status),
+                status_code=int(updated.get("status_code") or status_code),
+                latency_ms=int(updated.get("latency_ms") or 0),
+                error_summary=str(updated.get("error_summary") or ""),
+                token_summary=token_summary,
+            )
         sealed = (updated or {}).get("terminal_event_json")
         if not isinstance(sealed, dict):
             raise ExecutionLeaseLostError(

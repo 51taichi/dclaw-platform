@@ -768,6 +768,9 @@ class AgentRunner(Runner):
                                 f"{fallback_config.provider_id}/"
                                 f"{fallback_config.model}"
                             ),
+                            invocation_id=str(
+                                channel_meta.get("open_invocation_id") or ""
+                            ),
                         )
                     except Exception:
                         logger.warning(

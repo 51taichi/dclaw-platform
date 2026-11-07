@@ -7,7 +7,10 @@ import pytest
 from agentscope.model import ChatModelBase
 from agentscope.model._model_response import ChatResponse
 
-from qwenpaw.app.open_api.model_failover import OpenApiModelFailover
+from qwenpaw.app.open_api.model_failover import (
+    OpenApiModelFailover,
+    take_model_route,
+)
 
 
 def _text(value: str) -> ChatResponse:
@@ -44,6 +47,7 @@ async def test_uses_fallback_for_retryable_http_failure():
         primary=primary,
         fallback=fallback,
         fallback_label="volcengine/deepseek",
+        invocation_id="inv-fallback",
     )
 
     response = await model(messages=[])
@@ -51,6 +55,60 @@ async def test_uses_fallback_for_retryable_http_failure():
     assert response.content[0]["text"] == "fallback"
     assert primary.calls == 1
     assert fallback.calls == 1
+    assert take_model_route("inv-fallback") == {
+        "model_route": "fallback",
+        "fallback_used": True,
+        "primary_model": "deepseek",
+        "primary_error": "HTTP 500",
+        "fallback_model": "volcengine/deepseek",
+        "fallback_succeeded": True,
+        "effective_model": "volcengine/deepseek",
+    }
+
+
+@pytest.mark.asyncio
+async def test_records_primary_route_without_fallback():
+    model = OpenApiModelFailover(
+        primary=StubModel([_text("primary")]),
+        fallback=StubModel([_text("fallback")]),
+        fallback_label="volcengine/deepseek",
+        invocation_id="inv-primary",
+    )
+
+    response = await model(messages=[])
+
+    assert response.content[0]["text"] == "primary"
+    assert take_model_route("inv-primary") == {
+        "model_route": "primary",
+        "fallback_used": False,
+        "primary_model": "deepseek",
+        "effective_model": "deepseek",
+    }
+
+
+@pytest.mark.asyncio
+async def test_records_failed_fallback_and_keeps_routes_isolated():
+    first = OpenApiModelFailover(
+        primary=StubModel([StatusError(500)]),
+        fallback=StubModel([StatusError(503)]),
+        fallback_label="volcengine/deepseek",
+        invocation_id="inv-failed-fallback",
+    )
+    second = OpenApiModelFailover(
+        primary=StubModel([_text("primary")]),
+        fallback=StubModel([_text("unused")]),
+        fallback_label="volcengine/deepseek",
+        invocation_id="inv-isolated",
+    )
+
+    with pytest.raises(StatusError):
+        await first(messages=[])
+    await second(messages=[])
+
+    failed_route = take_model_route("inv-failed-fallback")
+    assert failed_route["model_route"] == "fallback"
+    assert failed_route["fallback_succeeded"] is False
+    assert take_model_route("inv-isolated")["model_route"] == "primary"
 
 
 @pytest.mark.asyncio
