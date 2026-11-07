@@ -8,6 +8,7 @@ import {
   Input,
   Modal,
   Popconfirm,
+  Segmented,
   Select,
   Space,
   Switch,
@@ -83,6 +84,8 @@ interface PublicationOwnerFormValues {
   bound_user_id: number;
 }
 
+type InvocationRouteFilter = "all" | "primary" | "fallback";
+
 const SCOPE_OPTIONS: { label: string; value: OpenApiScope }[] = [
   { label: "messages:create", value: "messages:create" },
   { label: "messages:read", value: "messages:read" },
@@ -127,6 +130,12 @@ function formatDate(value?: string | null) {
   if (!value) return "-";
   const parsed = dayjs(value);
   return parsed.isValid() ? parsed.format("YYYY-MM-DD HH:mm") : value;
+}
+
+function invocationRoute(record: OpenApiInvocation): "primary" | "fallback" {
+  return record.token_summary?.model_route === "fallback"
+    ? "fallback"
+    : "primary";
 }
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -186,6 +195,8 @@ export default function OpenApiPage() {
   const [revokeBusyId, setRevokeBusyId] = useState<string>();
   const [onlyEnabled, setOnlyEnabled] = useState(true);
   const [publicationSearch, setPublicationSearch] = useState("");
+  const [invocationRouteFilter, setInvocationRouteFilter] =
+    useState<InvocationRouteFilter>("all");
   const [activeTab, setActiveTab] = useState("publications");
   const [openForm, setOpenForm] = useState<
     "publication" | "app" | "key" | null
@@ -225,6 +236,17 @@ export default function OpenApiPage() {
     );
     return labels;
   }, [publications]);
+
+  const visibleInvocations = useMemo(
+    () =>
+      invocationRouteFilter === "all"
+        ? invocations
+        : invocations.filter(
+            (invocation) =>
+              invocationRoute(invocation) === invocationRouteFilter,
+          ),
+    [invocationRouteFilter, invocations],
+  );
 
   const keyScopeOptions = useMemo(
     () =>
@@ -836,18 +858,11 @@ export default function OpenApiPage() {
 
   const invocationColumns: ColumnsType<OpenApiInvocation> = [
     {
-      title: "调用",
+      title: "发布对象",
       key: "invocation",
-      width: 240,
-      render: (_, record) => (
-        <Space direction="vertical" size={2}>
-          <Typography.Text strong>{record.id}</Typography.Text>
-          <Typography.Text type="secondary">
-            {publicationNameById.get(record.publication_id) ||
-              record.publication_id}
-          </Typography.Text>
-        </Space>
-      ),
+      width: 180,
+      render: (_, record) =>
+        publicationNameById.get(record.publication_id) || record.publication_id,
     },
     {
       title: "外部应用",
@@ -855,14 +870,43 @@ export default function OpenApiPage() {
       render: (appId: string) => appNameById.get(appId) || appId,
     },
     {
-      title: "外部用户",
+      title: "客户",
       dataIndex: "external_user_id",
       render: (value?: string | null) => value || "-",
     },
     {
-      title: "会话",
-      dataIndex: "external_session_id",
-      render: (value?: string | null) => value || "-",
+      title: "模型路线",
+      key: "model_route",
+      width: 210,
+      render: (_, record) => {
+        const route = invocationRoute(record);
+        const summary = record.token_summary || {};
+        if (route === "fallback") {
+          return (
+            <Space direction="vertical" size={2}>
+              <Tag color="blue">备用模型</Tag>
+              <Typography.Text type="secondary">
+                {String(summary.fallback_model || "-")}
+              </Typography.Text>
+              {summary.primary_error ? (
+                <Typography.Text type="danger">
+                  默认失败：{String(summary.primary_error)}
+                </Typography.Text>
+              ) : null}
+            </Space>
+          );
+        }
+        return (
+          <Space direction="vertical" size={2}>
+            <Tag>默认模型</Tag>
+            {summary.primary_model ? (
+              <Typography.Text type="secondary">
+                {String(summary.primary_model)}
+              </Typography.Text>
+            ) : null}
+          </Space>
+        );
+      },
     },
     {
       title: "状态",
@@ -1223,23 +1267,35 @@ export default function OpenApiPage() {
                           查看调用状态、耗时和错误摘要。
                         </Typography.Text>
                       </div>
-                      <Select
-                        className={styles.publicationFilter}
-                        value={selectedPublicationId}
-                        options={publicationOptions}
-                        showSearch
-                        optionFilterProp="label"
-                        placeholder="选择发布对象"
-                        onChange={(value) => setSelectedPublicationId(value)}
-                      />
+                      <Space wrap>
+                        <Segmented<InvocationRouteFilter>
+                          aria-label="模型路线筛选"
+                          value={invocationRouteFilter}
+                          options={[
+                            { label: "全部", value: "all" },
+                            { label: "默认模型", value: "primary" },
+                            { label: "备用模型", value: "fallback" },
+                          ]}
+                          onChange={setInvocationRouteFilter}
+                        />
+                        <Select
+                          className={styles.publicationFilter}
+                          value={selectedPublicationId}
+                          options={publicationOptions}
+                          showSearch
+                          optionFilterProp="label"
+                          placeholder="选择发布对象"
+                          onChange={(value) => setSelectedPublicationId(value)}
+                        />
+                      </Space>
                     </div>
                     <Table
                       columns={invocationColumns}
-                      dataSource={invocations}
+                      dataSource={visibleInvocations}
                       loading={scopedLoading}
                       rowKey="id"
                       pagination={{ pageSize: 10, showSizeChanger: false }}
-                      scroll={{ x: 1180 }}
+                      scroll={{ x: 1120 }}
                     />
                   </div>
                 ),

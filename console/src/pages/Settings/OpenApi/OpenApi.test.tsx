@@ -204,6 +204,76 @@ describe("OpenApiPage", () => {
     expect(screen.getByRole("button", { name: "保存配置" })).toBeDisabled();
   });
 
+  it("filters invocation routes and keeps the table human-readable", async () => {
+    const user = userEvent.setup();
+    mockOpenApiApi.listInvocations.mockResolvedValue([
+      {
+        id: "inv-primary-uuid",
+        app_id: "app-1",
+        publication_id: "pub-1",
+        api_key_id: "key-1",
+        target_type: "agent",
+        target_id: "agent-1",
+        external_user_id: "张三",
+        external_session_id: "opaque-session-primary",
+        status: "succeeded",
+        status_code: 200,
+        latency_ms: 1200,
+        token_summary: {
+          model_route: "primary",
+          primary_model: "deepseek/deepseek-chat",
+        },
+      },
+      {
+        id: "inv-fallback-uuid",
+        app_id: "app-1",
+        publication_id: "pub-1",
+        api_key_id: "key-1",
+        target_type: "agent",
+        target_id: "agent-1",
+        external_user_id: "李四",
+        external_session_id: "opaque-session-fallback",
+        status: "succeeded",
+        status_code: 200,
+        latency_ms: 2200,
+        token_summary: {
+          model_route: "fallback",
+          primary_error: "HTTP 500",
+          fallback_model: "volcengine-cn/deepseek-v4-flash-ga-260731",
+        },
+      },
+    ]);
+    render(<OpenApiPage />);
+
+    await user.click(await screen.findByRole("tab", { name: "调用记录" }));
+    const panel = await screen.findByRole("tabpanel", { name: "调用记录" });
+
+    expect(within(panel).getAllByText("客户").length).toBeGreaterThan(0);
+    expect(within(panel).queryByText("外部用户")).not.toBeInTheDocument();
+    expect(within(panel).queryByText("会话")).not.toBeInTheDocument();
+    expect(
+      within(panel).queryByText("inv-primary-uuid"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(panel).queryByText("opaque-session-primary"),
+    ).not.toBeInTheDocument();
+    expect(within(panel).getByText("张三")).toBeInTheDocument();
+    expect(within(panel).getByText("李四")).toBeInTheDocument();
+
+    await user.click(
+      within(panel).getByRole("radio", { name: "备用模型" }).closest("label")!,
+    );
+    expect(within(panel).queryByText("张三")).not.toBeInTheDocument();
+    expect(within(panel).getByText("李四")).toBeInTheDocument();
+    expect(within(panel).getByText("默认失败：HTTP 500")).toBeInTheDocument();
+
+    await user.click(
+      within(panel).getByRole("radio", { name: "默认模型" }).closest("label")!,
+    );
+    expect(within(panel).getByText("张三")).toBeInTheDocument();
+    expect(within(panel).queryByText("李四")).not.toBeInTheDocument();
+  });
+
   it("loads publications and shows a one-time secret after creating a key", async () => {
     const user = userEvent.setup();
 
