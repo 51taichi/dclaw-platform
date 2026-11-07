@@ -1,5 +1,10 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.12 bundles development standard 2.36 and DevKit 1.9.6. The
+optional `interaction.card.read/1` Host call reads a card's persisted status,
+normalized submitted answer and trusted receipt under the current installation
+and task. Existing card tools and signed releases remain compatible.
+
 Version 1.10.11 bundles development standard 2.35 and DevKit 1.9.5. Card
 creation and submission return a versioned receipt, and `session.context`
 exposes up to 20 recent owner-scoped card receipts. Agent code must read the

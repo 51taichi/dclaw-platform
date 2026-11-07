@@ -14,6 +14,7 @@
     {"capability_id":"interaction.capabilities.list/1","contract_version":"1","group":"interaction","dependencies":[]},
     {"capability_id":"interaction.card.create/1","contract_version":"1","group":"interaction","dependencies":["interaction.capabilities.list/1"]},
     {"capability_id":"interaction.card.cancel/1","contract_version":"1","group":"interaction","dependencies":["interaction.card.create/1"]},
+    {"capability_id":"interaction.card.read/1","contract_version":"1","group":"interaction","dependencies":[]},
     {"capability_id":"interaction.file.select/1","contract_version":"1","group":"interaction","dependencies":["interaction.card.create/1"]},
     {"capability_id":"aigc.workflow.capabilities.list/1","contract_version":"1","group":"aigc","dependencies":[]},
     {"capability_id":"aigc.workflow.create/1","contract_version":"1","group":"aigc","dependencies":["aigc.workflow.capabilities.list/1"]},

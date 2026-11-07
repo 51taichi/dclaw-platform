@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.12 - 2026-11-07
+
+- Bundles development standard 2.36 and DevKit 1.9.6.
+- Adds the optional, scoped `interaction.card.read/1` contract without changing
+  existing interaction capabilities or signed packages.
+
 ## 1.10.11 - 2026-11-07
 
 - Bundles development standard 2.35 and DevKit 1.9.5.

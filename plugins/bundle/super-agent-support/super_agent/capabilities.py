@@ -76,6 +76,7 @@ PLATFORM_CAPABILITY_CATALOG_V1 = {
             "interaction",
             dependencies=("interaction.card.create/1",),
         ),
+        _definition("interaction.card.read/1", "interaction"),
         _definition(
             "interaction.file.select/1",
             "interaction",

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+import re
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 import uuid
 
@@ -273,6 +274,63 @@ class SuperExpertPlatformService:
         if capability == "interaction.card.create/1":
             result["receipt"] = card_receipt(card, "created")
         return result
+
+    def read_interaction(
+        self,
+        *,
+        tenant_id: str,
+        installation_id: str,
+        conversation_id: str,
+        contract_version: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Read one persisted card using only Host-supplied scope."""
+        decision = self.grant_repository.authorize_capability(
+            installation_id,
+            "interaction.card.read/1",
+            contract_version,
+            tenant_id=tenant_id,
+        )
+        if not decision.allowed:
+            raise SuperExpertPlatformError("capability is not authorized")
+        interaction_id = arguments.get("interaction_id")
+        if (
+            set(arguments) != {"interaction_id"}
+            or not isinstance(interaction_id, str)
+            or re.fullmatch(r"interaction-[a-f0-9]{32}", interaction_id) is None
+        ):
+            raise InteractionError(
+                "INVALID_INTERACTION_REQUEST", field="interaction_id",
+                retryable=False,
+            )
+        if self.interactions is None:
+            raise SuperExpertPlatformError("interaction service is unavailable")
+        try:
+            card = self.interactions.get_owned(
+                interaction_id,
+                installation_id=installation_id,
+                conversation_id=conversation_id,
+            )
+        except InteractionError as exc:
+            if exc.code == "INTERACTION_NOT_FOUND":
+                return {"contract": "interaction.card.read/1", "result": "not_found"}
+            raise
+        submitted = card.status.value == "SUBMITTED"
+        return {
+            "contract": "interaction.card.read/1",
+            "result": "found",
+            "interaction_id": card.interaction_id,
+            "task_key": card.task_key,
+            "interaction_revision": card.interaction_revision,
+            "component_type": card.component_type.value,
+            "status": card.status.value,
+            "version": card.version,
+            "answer": (
+                card.answer.model_dump(mode="json")
+                if submitted and card.answer else None
+            ),
+            "submission_receipt": card_receipt(card, "submitted") if submitted else None,
+        }
 
     async def publish_interaction_event(
         self,

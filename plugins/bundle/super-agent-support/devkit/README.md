@@ -1,5 +1,13 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.6 adds the optional Host call `interaction.card.read/1` with closed
+request and response schemas in `schemas/interaction-card-read-v1/`. Pass only
+the persisted `interaction_id`; the Host supplies the trusted installation,
+task and tenant scope. The result returns the stored status and, only after
+submission, the normalized answer and its `interaction.card.receipt/1`.
+Unknown and out-of-scope IDs both return `result=not_found`. No idempotency key
+is needed for this read. Earlier card tools and signed packages are unchanged.
+
 Version 1.9.5 adds closed `interaction.card.receipt/1` schemas under
 `schemas/interaction-card-receipt-v1/`. The `interaction_card_create` tool and
 card submission HTTP response include a receipt for the persisted transition.

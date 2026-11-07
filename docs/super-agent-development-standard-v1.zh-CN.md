@@ -4,9 +4,9 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.35`
+当前版本：`2.36`
 
-发布日期：`2026-11-06`
+发布日期：`2026-11-07`
 
 ## 1. 文档目的
 
@@ -716,7 +716,13 @@ DClaw 平台负责卡片持久化、渲染、提交和可信回传；开发方�
 
 请求采用实时目录返回的严格 Schema，未知字段必须拒绝。建卡成功须核对真实 `interaction.interaction_id`、`PENDING` 状态及 `interaction.card.receipt/1` 的 `created` 回执；工具参数、组件字段和枚举不得从平台源码或模型记忆中猜测。
 
-插件 `1.18.19` 起，建卡工具和卡片提交接口返回同一关闭 Schema 的 `interaction.card.receipt/1`。回执绑定 `interaction_id`、installation、conversation、`task_key`、修订、版本、状态、转换事件和时间；提交回执另含规范化答案的 SHA-256，不包含答案正文。`session.context.interaction_receipts` 只读返回当前可信 installation 与任务最近更新的最多 20 张待提交或已提交卡片的回执。超级专家须按回执中的 `interaction_id` 调用 `interaction_card_status` 读取实际卡片及答案，核对状态与版本后推进业务；客户端转交的 `user_input` 只作可读摘要，不构成点击或提交证明。回执和上下文数组 Schema 在 DevKit `schemas/interaction-card-receipt-v1/`，旧签名包继续按既有合同运行。
+插件 `1.18.19` 起，建卡工具和卡片提交接口返回同一关闭 Schema 的 `interaction.card.receipt/1`。回执绑定 `interaction_id`、installation、conversation、`task_key`、修订、版本、状态、转换事件和时间；提交回执另含规范化答案的 SHA-256，不包含答案正文。`session.context.interaction_receipts` 只读返回当前可信 installation 与任务最近更新的最多 20 张待提交或已提交卡片的回执。旧能力路径使用 `interaction_card_status` 读取实际卡片及答案，核对状态与版本后推进业务；客户端转交的 `user_input` 只作可读摘要，不构成点击或提交证明。回执和上下文数组 Schema 在 DevKit `schemas/interaction-card-receipt-v1/`，旧签名包继续按既有合同运行。
+
+插件 `1.18.20` 起新增可选 `interaction.card.read/1` Host 调用。新专家在签名能力清单中显式声明并取得安装授权后，使用 `await host.call("interaction.card.read/1", {"interaction_id": interaction_id})` 读取本安装、本任务持久化卡片；Host 注入可信租户、安装与任务身份，不接受调用方传入这些作用域字段，也不要求 `idempotency_key`。结果为关闭 Schema 的 `found` 或 `not_found`：未找到与跨任务、跨安装均为同一个 `not_found`，不可探测其他专家的卡片。`found` 返回 `task_key`、`interaction_revision`、组件类型、当前状态和版本；仅 `SUBMITTED` 返回规范化答案与 `submission_receipt`，其余状态均返回 `null`。请求与响应 Schema 位于 DevKit `schemas/interaction-card-read-v1/`。旧签名包无需增加能力，原有 `interaction_card_status` 工具保持可用。
+
+收到回执后，专家须以保存的 `interaction_id` 查询，逐项核对 `task_key`、`interaction_revision`、`status=SUBMITTED`、版本及提交回执的 `event_id`，再推进业务。`answer_sha256` 对 `answer` 的 JSON 对象按键排序、保留 Unicode、无多余空格编码为 UTF-8 后计算 SHA-256；与回执不一致时停止处理。已处理的 `event_id` 应持久记录在专家自己的任务状态中；重复读取或重复点击不得重复执行有副作用的业务步骤。未提交、已取消、已替换、已过期和旧的任务修订均不能被当作新答案。卡片答案是否满足业务要求仍由专家判断，平台不替专家解释业务字段。
+
+交互接口按版本化合同演进。已发布的能力 ID、必填字段、含义、授权与隔离语义保持稳定；需要改变这些约束时新增合同版本并并行保留旧合同，不在原 `/1` 上静默改变。插件每次修改须按能力 ID 盘点现役专家的声明和调用路径，覆盖旧版回归；若确实需要专家适配，由各专家责任方在其版本中更新、密封和验证，平台不能仅发布插件后让已上线专家报错。新增可选能力不自动改写既有专家的签名清单或授权。
 
 强制规则：
 
@@ -2254,7 +2260,7 @@ Agent 名称：<可选，中文显示名称>
 
 开发包本身不得包含平台管理员凭据、生产地址、签名私钥、供应商 Secret、客户数据或 DClaw 私有实现。包内公开工具不得导入 `qwenpaw` 或要求开发者克隆服务器仓库。
 
-DevKit `1.9.5` 必须提供：
+DevKit `1.9.6` 必须提供：
 
 - `dclaw_agent_devkit.py`：`doctor`、`contracts`、`digest`、`validate`、`keygen`、`build`、`verify`；
 - `capability-catalog.json`：当前可声明的能力、版本、组和依赖；
@@ -2269,6 +2275,7 @@ DevKit `1.9.5` 必须提供：
 - `schemas/agent-outbound-stream-v1/`：HTTPS/WSS 流式出站请求、资源引用响应和稳定错误合同；
 - `schemas/resource-exchange-v1/`：短时资源创建、完成、读取、撤销、响应和稳定错误合同；
 - `schemas/runtime-failure-v1/`：授权读取本任务上次脱敏失败的请求、响应和错误合同；
+- `schemas/interaction-card-read-v1/`：按可信安装与任务读取卡片状态、规范化答案和提交回执的关闭合同；
 - `operation-catalog.json`：正式 MCP 入口、客户端键、工具名、调用顺序和平台注入参数；
 - `business_identity_verifier.py` 与 `fixtures/business-identity/`：公开 JWK 离线验签、持久化 `jti` 防重放、断言 Header 运输和正反夹具；
 - `templates/minimal/`：最小 manifest、`agent.json` 和 `runtime.py`。
@@ -2281,6 +2288,11 @@ DevKit `1.9.5` 必须提供：
 平台内部实现文件、测试文件和维护文档可以继续存在，但它们只服务平台维护者，不属于开发方输入。开发方缺少字段或行为定义时应报告标准或 DevKit 缺陷；平台不得用“请克隆服务器源码”回答。
 
 ## 34. 版本记录
+
+### 2.36 - 2026-11-07
+
+- 插件 `1.18.20` 增加可选 `interaction.card.read/1`，密封运行时可按可信作用域直接读取已提交的规范化卡片答案；未找到与越域读取统一返回不可枚举结果，旧卡片能力和旧签名包保持不变。
+- 明确回执答案摘要算法、修订与事件去重、接口版本演进及现役专家影响检查。Developer Pack `1.10.12` 与 DevKit `1.9.6` 发布关闭 Schema。
 
 ### 2.35 - 2026-11-07
 

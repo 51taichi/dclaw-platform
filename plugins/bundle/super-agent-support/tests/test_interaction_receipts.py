@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,8 +10,9 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from super_agent.interaction_cards import InteractionCardRepository, InteractionService
-from super_agent.interaction_contract import InteractionCreateRequest
+from super_agent.interaction_contract import InteractionAnswer, InteractionCreateRequest
 from super_agent.interaction_receipts import card_receipt
+from super_agent.capabilities import PLATFORM_CAPABILITY_CATALOG_V1
 from super_agent.service import SuperExpertPlatformService
 
 
@@ -62,6 +64,111 @@ def test_create_submit_and_replay_have_stable_scoped_receipts(tmp_path):
         supplement=None, answers=None, files=None,
         idempotency_key="submit-1", now=now,
     ), "submitted") == submitted_receipt
+
+
+def test_card_read_is_opt_in_scoped_and_schema_valid(tmp_path):
+    now = datetime(2026, 11, 7, tzinfo=timezone.utc)
+    interactions = InteractionService(
+        InteractionCardRepository(tmp_path), clock=lambda: now,
+    )
+    grants = SimpleNamespace(
+        authorize_capability=lambda installation, capability, version, *, tenant_id: SimpleNamespace(
+            allowed=(tenant_id == "tenant-a"
+                     and capability == "interaction.card.read/1" and version == "1"),
+        ),
+    )
+    service = SuperExpertPlatformService(
+        grant_repository=grants, task_repository=SimpleNamespace(),
+        event_repository=SimpleNamespace(), event_bus=SimpleNamespace(),
+        interaction_service=interactions,
+    )
+    request = InteractionCreateRequest.model_validate({
+        "task_key": "choice", "interaction_revision": 2,
+        "component_type": "single_select",
+        "card": {"title": "Choice", "options": [
+            {"id": "a", "text": "A"}, {"id": "b", "text": "B"},
+        ]},
+    })
+    card = interactions.create(
+        installation_id="install-a", conversation_id="task-a",
+        request=request, idempotency_key="create-2",
+    )
+    schema_root = Path(__file__).parents[1] / "devkit" / "schemas" / "interaction-card-read-v1"
+    request_schema = json.loads((schema_root / "request.schema.json").read_text())
+    response_schema = json.loads((schema_root / "response.schema.json").read_text())
+    arguments = {"interaction_id": card.interaction_id}
+    Draft202012Validator(request_schema).validate(arguments)
+
+    def read(*, installation_id="install-a", conversation_id="task-a", tenant_id="tenant-a", args=None):
+        return service.read_interaction(
+            tenant_id=tenant_id, installation_id=installation_id,
+            conversation_id=conversation_id, contract_version="1",
+            arguments=arguments if args is None else args,
+        )
+
+    pending = read()
+    Draft202012Validator(response_schema).validate(pending)
+    assert pending["status"] == "PENDING"
+    assert pending["answer"] is None
+    assert pending["submission_receipt"] is None
+    for scope in ({"conversation_id": "task-b"}, {"installation_id": "install-b"}):
+        missing = read(**scope)
+        Draft202012Validator(response_schema).validate(missing)
+        assert missing == {"contract": "interaction.card.read/1", "result": "not_found"}
+    assert read(args={"interaction_id": "interaction-" + "0" * 32}) == missing
+
+    submitted = interactions.submit(
+        interaction_id=card.interaction_id, installation_id="install-a",
+        conversation_id="task-a", version=card.version,
+        selected=[{"id": "a"}], supplement=None, answers=None, files=None,
+        idempotency_key="submit-2",
+    )
+    result = read()
+    Draft202012Validator(response_schema).validate(result)
+    assert result["answer"] == submitted.answer.model_dump(mode="json")
+    assert result["submission_receipt"] == card_receipt(submitted, "submitted")
+    encoded_answer = json.dumps(
+        result["answer"], sort_keys=True, ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    assert result["submission_receipt"]["answer_sha256"] == hashlib.sha256(
+        encoded_answer,
+    ).hexdigest()
+    assert read() == result
+    assert "interaction.card.read/1" in PLATFORM_CAPABILITY_CATALOG_V1
+
+    from super_agent.interaction_cards import InteractionError
+    from super_agent.service import SuperExpertPlatformError
+    with pytest.raises(InteractionError, match="INVALID_INTERACTION_REQUEST"):
+        read(args={"interaction_id": card.interaction_id, "idempotency_key": "forbidden"})
+    with pytest.raises(SuperExpertPlatformError, match="not authorized"):
+        read(tenant_id="tenant-b")
+
+
+@pytest.mark.parametrize("component_type,fields", [
+    ("multi_select", {"selected": [{"id": "a", "text": "A"}], "supplement": None}),
+    ("question_form", {"answers": [{"id": "q", "question": "Question", "value": "Answer"}]}),
+    ("file_selector", {"files": [{
+        "local_file_ref": "lfr_" + "a" * 32,
+        "display_name": "clip.mp4", "mime_type": "video/mp4",
+        "size_bytes": 2, "device_id": "device-a", "last_modified_ms": 1,
+    }]}),
+])
+def test_card_read_answer_schema_covers_all_component_shapes(component_type, fields):
+    schema = json.loads((
+        Path(__file__).parents[1] / "devkit" / "schemas"
+        / "interaction-card-read-v1" / "response.schema.json"
+    ).read_text())
+    answer = InteractionAnswer.model_validate({
+        "interaction_id": "interaction-" + "a" * 32,
+        "component_type": component_type,
+        "submitted_at": "2026-11-07T00:00:00Z",
+        **fields,
+    })
+    Draft202012Validator({
+        "$schema": schema["$schema"], "$defs": schema["$defs"],
+        "$ref": "#/$defs/answer",
+    }).validate(answer.model_dump(mode="json"))
 
 
 @pytest.mark.asyncio

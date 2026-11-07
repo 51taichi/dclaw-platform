@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/schemas/interaction-card-read-v1/request.schema.json",
+  "title": "interaction.card.read/1 request",
+  "type": "object",
+  "required": ["interaction_id"],
+  "properties": {
+    "interaction_id": {"type": "string", "pattern": "^interaction-[a-f0-9]{32}$"}
+  },
+  "additionalProperties": false
+}

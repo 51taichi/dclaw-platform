@@ -2152,6 +2152,14 @@ async def handle_workspace_turn(
                 return _interaction_contract.build_interaction_catalog(
                     payload.get("component_types", []),
                 )
+            if capability == "interaction.card.read/1":
+                return platform_service.read_interaction(
+                    tenant_id=tenant_id,
+                    installation_id=authorization.installation_id,
+                    conversation_id=str(request.session_id),
+                    contract_version=contract_version,
+                    arguments=payload,
+                )
             idempotency_key = str(payload.pop("idempotency_key", ""))
             if not idempotency_key:
                 raise WorkspaceOrchestrationError("orchestration_error")
