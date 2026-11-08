@@ -1,5 +1,10 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.14 bundles development standard 2.38 and DevKit 1.9.7. It adds
+the optional reference diagnostics, AIGC task snapshot, and local task Host
+receipt contracts. Capability-package signer public keys require separate
+plugin administrator trust registration before a signed descriptor is accepted.
+
 Version 1.10.13 bundles development standard 2.37 and DevKit 1.9.6. The
 standard now requires per-capability impact checks against active releases and
 coordinated updates for every affected Super Agent before an incompatible

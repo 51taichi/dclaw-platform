@@ -163,7 +163,14 @@ class SuperAgentSupportPlugin:
             Path(__file__).parent
             / "schemas"
             / "capability-descriptor.schema.json",
-            dict(api.config.get("trusted_package_signers") or {}),
+            {
+                **(
+                    json.loads((root / "trusted_package_signers.json").read_text(encoding="utf-8"))
+                    if (root / "trusted_package_signers.json").is_file() else {}
+                ),
+                **dict(api.config.get("trusted_package_signers") or {}),
+            },
+            trust_path=root / "trusted_package_signers.json",
         )
         component_signers = _trusted_component_signers(
             root,
@@ -190,6 +197,9 @@ class SuperAgentSupportPlugin:
             credentials,
             public_components=public_components,
         )
+        from .super_agent.local_host import bind_local_service
+
+        bind_local_service(service)
         sealed_root = Path(WORKING_DIR) / "sealed_agents"
         official_signers = load_trusted_signers(
             sealed_root / "official_super_expert_signers.json",

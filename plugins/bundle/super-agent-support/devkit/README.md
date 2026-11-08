@@ -1,5 +1,10 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.7 adds optional `aigc.task.snapshot/1`, `local.task.start/1`,
+`local.task.read/1`, and `local.task.cancel/1` Host contracts with closed
+schemas. It also adds `developer.runtime.diagnostics.by-reference/1` for a
+signed-in developer who owns the expert. Existing signed releases are unchanged.
+
 Version 1.9.6 adds the optional Host call `interaction.card.read/1` with closed
 request and response schemas in `schemas/interaction-card-read-v1/`. Pass only
 the persisted `interaction_id`; the Host supplies the trusted installation,

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.10.14 - 2026-11-08
+
+- Bundles development standard 2.38 and DevKit 1.9.7.
+- Adds owner-scoped reference diagnostics, bound AIGC asset snapshots, and
+  deterministic local-task Host receipts. Existing signed Agents keep their
+  prior capabilities and contracts.
+
 ## 1.10.13 - 2026-11-07
 
 - Bundles development standard 2.37 and DevKit 1.9.6.

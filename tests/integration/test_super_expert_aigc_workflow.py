@@ -41,7 +41,7 @@ class Bus:
         self.events.append(event)
 
 
-def _release():
+def _release(capabilities=CAPABILITIES):
     return SealedReleaseRecord(
         release_id="release-workflow-v2",
         version="1.0.0",
@@ -49,7 +49,7 @@ def _release():
         signer_id="official-test",
         package_type="super_expert",
         capability_digest=f"sha256:{'b' * 64}",
-        declared_capabilities=CAPABILITIES,
+        declared_capabilities=capabilities,
         orchestration_capability_id="workspace.turn.orchestrate/1",
         orchestration_contract_version="1",
     )
@@ -90,7 +90,7 @@ async def _catalog():
     ]))
 
 
-def _service(tmp_path):
+def _service(tmp_path, capabilities=CAPABILITIES):
     from qwenpaw.app.aigc.asset_service import AigcAssetService
     from qwenpaw.app.aigc.canvas_service import AigcCanvasService
     from qwenpaw.app.aigc.resource_store import AigcResourceStore
@@ -98,7 +98,7 @@ def _service(tmp_path):
 
     grants = SuperExpertGrantRepository(tmp_path / "grants")
     grant = grants.grant_installation(
-        grants.preview("luyu-workflow-v2", _release(), tenant_id="tenant-a"),
+        grants.preview("luyu-workflow-v2", _release(capabilities), tenant_id="tenant-a"),
         administrator_id="admin",
     )
     service = SuperExpertPlatformService(
@@ -182,6 +182,42 @@ async def test_fixture_manifest_and_one_node_request_are_compatible(
 
     assert result["task"]["binding"]["execution_mode"] == "PREBUILT_WORKFLOW"
     assert set(result["task"]["binding"]["node_bindings"]) == {"clip"}
+
+
+@pytest.mark.asyncio
+async def test_customer_can_start_bound_workflow_without_agent_resume_grant(tmp_path, monkeypatch):
+    from qwenpaw.app.routers import aigc_studio
+    from qwenpaw.app.super_experts.service import SuperExpertPlatformError
+
+    monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
+    aigc_studio._resource_store.cache_clear()
+    monkeypatch.setattr(platform_router, "_load_workflow_capability_catalog", _catalog)
+    capabilities = tuple(item for item in CAPABILITIES if item[0] != "aigc.task.resume")
+    service, grant = _service(tmp_path, capabilities)
+    created = await service.execute(
+        tenant_id="tenant-a", user_id="user-a",
+        installation_id=grant.installation_id,
+        capability="aigc.workflow.create/1", contract_version="1",
+        arguments=_fixture("one-node.json", grant.installation_id),
+        idempotency_key="one-node",
+    )
+    binding = created["task"]["binding"]
+    resume = {"binding": binding, "event_id": "customer-start"}
+    with pytest.raises(SuperExpertPlatformError, match="not authorized"):
+        await service.execute(
+            tenant_id="tenant-a", user_id="user-a",
+            installation_id=grant.installation_id,
+            capability="aigc.task.resume", contract_version="1",
+            arguments=resume, idempotency_key="customer-start",
+        )
+    result = await service.execute(
+        tenant_id="tenant-a", user_id="user-a",
+        installation_id=grant.installation_id,
+        capability="aigc.task.resume", contract_version="1",
+        arguments=resume, idempotency_key="customer-start",
+        frontend_workflow_resume=True,
+    )
+    assert result["task"]["status"] == "IN_PROGRESS"
 
 
 @pytest.mark.asyncio

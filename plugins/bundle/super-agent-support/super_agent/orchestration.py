@@ -2160,6 +2160,40 @@ async def handle_workspace_turn(
                     contract_version=contract_version,
                     arguments=payload,
                 )
+            if capability == "aigc.task.snapshot/1":
+                if set(payload) != {"material_task_id"} or not isinstance(
+                    payload.get("material_task_id"), str,
+                ):
+                    raise WorkspaceOrchestrationError("orchestration_error")
+                from .aigc_snapshot import project_owned_aigc_snapshot
+
+                task = platform_service.get_task(payload["material_task_id"])
+                if task is None:
+                    return {"contract": capability, "status": "not_found"}
+                return project_owned_aigc_snapshot(
+                    task=task,
+                    adapter=platform_service.aigc,
+                    user_id=str(request.user_id),
+                    installation_id=authorization.installation_id,
+                    conversation_id=str(request.session_id),
+                )
+            if capability in {
+                "local.task.start/1", "local.task.read/1", "local.task.cancel/1",
+            }:
+                from .local_host import dispatch_local_task
+
+                return await dispatch_local_task(
+                    capability=capability,
+                    arguments=payload,
+                    tenant_id=tenant_id,
+                    user_id=str(request.user_id),
+                    session_id=str(request.session_id),
+                    agent_id=agent_id,
+                    installation_id=authorization.installation_id,
+                    release_id=authorization.release_id,
+                    invocation_id=invocation_id,
+                    granted_capabilities=tuple(authorization.granted_capabilities),
+                )
             idempotency_key = str(payload.pop("idempotency_key", ""))
             if not idempotency_key:
                 raise WorkspaceOrchestrationError("orchestration_error")

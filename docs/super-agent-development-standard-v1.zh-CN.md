@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.37`
+当前版本：`2.38`
 
 发布日期：`2026-11-07`
 
@@ -2257,7 +2257,7 @@ Agent 名称：<可选，中文显示名称>
 2. 开发方自己的业务目标、源 Agent 材料和测试凭证；
 3. 从目标 DClaw 认证调用元数据接口并按其 `download_path` 下载、核对 SHA-256 的官方开发包；兼容自动化可以继续单独下载同版本官方 DevKit。
 
-开发包 `1.10.11` 是推荐的单一离线移交物，必须提供：
+开发包 `1.10.14` 是推荐的单一离线移交物，必须提供：
 
 - 唯一标准文件与明确的标准版本，不复制第二套人工规则；
 - 官方 DevKit `1.9.5` 及其完整离线加密依赖；
@@ -2272,7 +2272,7 @@ Agent 名称：<可选，中文显示名称>
 
 开发包本身不得包含平台管理员凭据、生产地址、签名私钥、供应商 Secret、客户数据或 DClaw 私有实现。包内公开工具不得导入 `qwenpaw` 或要求开发者克隆服务器仓库。
 
-DevKit `1.9.6` 必须提供：
+DevKit `1.9.7` 必须提供：
 
 - `dclaw_agent_devkit.py`：`doctor`、`contracts`、`digest`、`validate`、`keygen`、`build`、`verify`；
 - `capability-catalog.json`：当前可声明的能力、版本、组和依赖；
@@ -2288,6 +2288,10 @@ DevKit `1.9.6` 必须提供：
 - `schemas/resource-exchange-v1/`：短时资源创建、完成、读取、撤销、响应和稳定错误合同；
 - `schemas/runtime-failure-v1/`：授权读取本任务上次脱敏失败的请求、响应和错误合同；
 - `schemas/interaction-card-read-v1/`：按可信安装与任务读取卡片状态、规范化答案和提交回执的关闭合同；
+- `schemas/runtime-diagnostics-v1/by-reference-response.schema.json`：开发者按客户可见关联 ID 读取本专家脱敏失败的关闭合同；
+- `schemas/aigc-task-snapshot-v1/`：密封专家按可信安装与任务读取工作流状态和已验证产物资产 ID 的关闭合同；
+- `schemas/local-task-host-v1/`：密封专家确定性启动、读取、取消本地任务及读取受限回执的关闭合同；
+- `schemas/capability-package-signer-v1/`：管理员登记本地能力包签名公钥的关闭请求与回执合同；
 - `operation-catalog.json`：正式 MCP 入口、客户端键、工具名、调用顺序和平台注入参数；
 - `business_identity_verifier.py` 与 `fixtures/business-identity/`：公开 JWK 离线验签、持久化 `jti` 防重放、断言 Header 运输和正反夹具；
 - `templates/minimal/`：最小 manifest、`agent.json` 和 `runtime.py`。
@@ -2300,6 +2304,14 @@ DevKit `1.9.6` 必须提供：
 平台内部实现文件、测试文件和维护文档可以继续存在，但它们只服务平台维护者，不属于开发方输入。开发方缺少字段或行为定义时应报告标准或 DevKit 缺陷；平台不得用“请克隆服务器源码”回答。
 
 ## 34. 版本记录
+
+### 2.38 - 2026-11-08
+
+- `developer.runtime.diagnostics.by-reference/1`：已登录开发者只能按自己拥有的 `agent_id` 和客户可见 invocation 关联 ID，查询最近 30 天内该专家的脱敏失败。路径为 `/api/user/super-expert-publishing/runtime-diagnostics/v1/references/{invocation_id}?agent_id=...`；不存在、越权与跨专家不得泄露其他客户内容。原按任务 ID 接口仍可用。
+- 客户点击 `aigc.workflow.create/1` 生成的绑定工作流卡时，前端受认证的 `aigc.task.resume` 操作可继承该任务的工作流创建授权；Agent 自身调用 `aigc.task.resume` 仍须独立声明和授权。`aigc.task.snapshot/1` 是新的可选 Host 只读调用，请求仅含 `material_task_id`；结果只包含绑定身份、任务状态、版本以及同画布同节点、同用户验证过的资产 ID 与类型。未提交图片不等于已审核作品，非绑定画布输出不进入回执。
+- `local.task.start/1`、`local.task.read/1`、`local.task.cancel/1` 为新的可选 Host 调用。Host 使用可信租户、用户、任务、专家及安装作用域，给幂等键加作用域，回执固定为 `local.task.receipt/1`，只返回任务 ID、能力 ID、原幂等键、状态、稳定错误、结果 SHA-256 和格式合格的不透明本地产物 ID；不返回本机路径或文件字节。跨作用域读取统一 `not_found`。原 `local_*` MCP 合同不变。
+- 能力包是独立信任域。开发者生成并保管 Ed25519 私钥，只向平台管理员交付公钥和 `signer_id`；管理员经插件 `POST /api/super-agent-support/capability-packages/signers` 登记不可覆盖的公钥信任，再由管理员用插件原有 `/capability-packages/register` 接收签名描述符。未经信任、摘要或签名不符均失败关闭。当前不开放普通开发者自行登记能力包 signer；这不影响超级专家密封包的普通账号自助发布。
+- 插件 `1.18.21`、Developer Pack `1.10.14`、DevKit `1.9.7` 发布上述新增接口；既有签名包、旧接口和旧安装授权无需改变。
 
 ### 2.37 - 2026-11-07
 

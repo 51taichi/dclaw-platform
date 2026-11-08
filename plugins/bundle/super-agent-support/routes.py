@@ -94,6 +94,12 @@ class PackageRegistration(BaseModel):
     signature: str = Field(min_length=1, max_length=1024)
 
 
+class PackageSignerRegistration(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    signer_id: str = Field(min_length=1, max_length=128)
+    public_key: str = Field(min_length=40, max_length=100)
+
+
 class PublicComponentRegistration(BaseModel):
     model_config = ConfigDict(extra="forbid")
     descriptor: dict[str, Any]
@@ -694,6 +700,16 @@ def create_app(
             "package_version": body.descriptor["package_version"],
             "capability_id": body.descriptor["capability_id"],
         }
+
+    @app.post("/capability-packages/signers")
+    async def register_package_signer(
+        body: PackageSignerRegistration, request: Request,
+    ) -> dict[str, str]:
+        _require_admin(request)
+        try:
+            return packages.trust_signer(body.signer_id, body.public_key)
+        except PackageError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/capability-packages")
     async def list_packages(request: Request) -> dict[str, Any]:

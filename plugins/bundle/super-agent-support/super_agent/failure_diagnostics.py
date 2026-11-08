@@ -286,3 +286,104 @@ def read_owner_failures(
         "retention_days": READ_WINDOW.days,
         "failures": candidates[:limit],
     }
+
+
+def read_developer_failure_by_reference(
+    *,
+    storage_root: Path,
+    grants: Any,
+    agent_id: str,
+    tenant_id: str,
+    invocation_id: str,
+    owner_resolver: Callable[[str], dict[str, Any] | None],
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Resolve a customer-visible ID only inside one developer-owned expert."""
+    if re.fullmatch(r"(?:[0-9a-f]{32}|preflight-[0-9a-f]{32})", invocation_id) is None:
+        raise FailureDiagnosticsUnauthorized("invalid diagnostic reference")
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    cutoff = current - READ_WINDOW
+    matches: list[tuple[Any, str, dict[str, Any]]] = []
+    inspected = 0
+    for grant in grants.list_grants():
+        if grant.tenant_id != tenant_id or grant.agent_id != agent_id:
+            continue
+        directory = Path(storage_root) / "traces" / _scope(grant.installation_id)
+        if directory.is_symlink():
+            raise FailureDiagnosticsUnavailable("unsafe failure trace directory")
+        if not directory.exists():
+            continue
+        for path in directory.glob("*.ndjson"):
+            inspected += 1
+            if inspected > 5000:
+                raise FailureDiagnosticsUnavailable("failure trace search limit exceeded")
+            if path.is_symlink() or not path.is_file():
+                raise FailureDiagnosticsUnavailable("unsafe failure trace")
+            try:
+                if datetime.fromtimestamp(path.stat().st_mtime, timezone.utc) < cutoff:
+                    continue
+                matching_row = None
+                with path.open(encoding="utf-8") as stream:
+                    for line in stream:
+                        if invocation_id not in line:
+                            continue
+                        candidate = json.loads(line)
+                        if not isinstance(candidate, dict):
+                            raise FailureDiagnosticsUnavailable("failure trace cannot be read")
+                        if candidate.get("invocation_id") == invocation_id:
+                            matching_row = candidate
+                            break
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise FailureDiagnosticsUnavailable("failure trace cannot be read") from exc
+            if not isinstance(matching_row, dict) or matching_row.get("invocation_id") != invocation_id:
+                continue
+            session_id = matching_row.get("session_id")
+            if (
+                not isinstance(session_id, str)
+                or matching_row.get("installation_id") != grant.installation_id
+                or path.name != f"{_scope(session_id)}.ndjson"
+            ):
+                raise FailureDiagnosticsUnavailable("failure trace scope mismatch")
+            owner = owner_resolver(session_id)
+            if (
+                owner is None
+                or owner.get("tenant_id") != tenant_id
+                or owner.get("agent_id") != agent_id
+            ):
+                raise FailureDiagnosticsUnauthorized("failure diagnostic scope denied")
+            failure = read_invocation_failure(
+                storage_root=storage_root,
+                installation_id=grant.installation_id,
+                session_id=session_id,
+                invocation_id=invocation_id,
+            )
+            if failure is not None and cutoff <= failure["failed_at"] <= current:
+                matches.append((grant, session_id, failure))
+    if not matches:
+        return {
+            "contract": "developer.runtime.diagnostics.by-reference/1",
+            "status": "no_record",
+            "retention_days": READ_WINDOW.days,
+        }
+    if len(matches) != 1:
+        raise FailureDiagnosticsUnavailable("diagnostic reference is ambiguous")
+    grant, session_id, failure = matches[0]
+    first = failure.get("first_failure")
+    return {
+        "contract": "developer.runtime.diagnostics.by-reference/1",
+        "status": "found",
+        "retention_days": READ_WINDOW.days,
+        "task_id": session_id,
+        "invocation_id": invocation_id,
+        "installation_id": grant.installation_id,
+        "release_id": grant.release_id,
+        "started_at": failure.get("started_at").isoformat() if failure.get("started_at") else None,
+        "failed_at": failure["failed_at"].isoformat(),
+        "first_failure": first or {"phase": None, "category": None, "attempt": None},
+        "first_failure_source": failure.get("first_failure_source") or (
+            "agent_trace" if first else "not_recorded"
+        ),
+        "error_code": failure.get("error_code"),
+        "transaction_status": "discarded",
+        "stages": failure.get("stages", [])[:100],
+    }

@@ -384,6 +384,7 @@ class SuperExpertPlatformService:
         idempotency_key: str,
         asset_validator: Callable[[AigcTaskBinding, str, Any], Awaitable[None]]
         | None = None,
+        frontend_workflow_resume: bool = False,
     ) -> dict[str, Any]:
         decision = self.grant_repository.authorize_capability(
             installation_id,
@@ -391,6 +392,27 @@ class SuperExpertPlatformService:
             contract_version,
             tenant_id=tenant_id,
         )
+        if not decision.allowed and frontend_workflow_resume and capability == "aigc.task.resume":
+            workflow_decision = self.grant_repository.authorize_capability(
+                installation_id,
+                "aigc.workflow.create/1",
+                "1",
+                tenant_id=tenant_id,
+            )
+            task_binding = arguments.get("binding")
+            task = (
+                self.task_repository.get(str(task_binding.get("material_task_id") or ""))
+                if isinstance(task_binding, dict)
+                else None
+            )
+            if (
+                workflow_decision.allowed
+                and task is not None
+                and task.workflow is not None
+                and task.binding.model_dump(mode="json") == task_binding
+                and task.binding.installation_id == installation_id
+            ):
+                decision = workflow_decision
         if not decision.allowed:
             raise SuperExpertPlatformError("capability is not authorized")
         if capability not in _EVENT_TYPES:

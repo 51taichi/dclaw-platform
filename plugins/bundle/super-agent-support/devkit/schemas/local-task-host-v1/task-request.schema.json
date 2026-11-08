@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "local.task.read/1 and local.task.cancel/1 request",
+  "type": "object",
+  "required": ["task_id"],
+  "properties": {
+    "task_id": {"type": "string", "minLength": 1, "maxLength": 160}
+  },
+  "additionalProperties": false
+}

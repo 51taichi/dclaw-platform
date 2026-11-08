@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "aigc.task.snapshot/1 response",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["contract", "status"],
+      "properties": {
+        "contract": {"const": "aigc.task.snapshot/1"},
+        "status": {"enum": ["not_found", "unavailable"]}
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["contract", "status", "material_task_id", "workflow_id", "canvas_id", "task_status", "task_version", "submitted_asset_id", "node_jobs", "generation_assets"],
+      "properties": {
+        "contract": {"const": "aigc.task.snapshot/1"},
+        "status": {"const": "found"},
+        "material_task_id": {"type": "string"},
+        "workflow_id": {"type": ["string", "null"]},
+        "canvas_id": {"type": "string"},
+        "task_status": {"type": "string"},
+        "task_version": {"type": "integer", "minimum": 1},
+        "submitted_asset_id": {"type": ["string", "null"]},
+        "node_jobs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["node_id", "job_id", "job_status"],
+            "properties": {
+              "node_id": {"type": "string"},
+              "job_id": {"type": "string"},
+              "job_status": {"enum": ["queued", "running", "succeeded", "failed", "cancelled"]}
+            },
+            "additionalProperties": false
+          }
+        },
+        "generation_assets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["node_id", "job_id", "asset_id", "asset_kind"],
+            "properties": {
+              "node_id": {"type": "string"},
+              "job_id": {"type": "string"},
+              "asset_id": {"type": "string"},
+              "asset_kind": {"enum": ["image", "video", "audio", "file"]}
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  ]
+}

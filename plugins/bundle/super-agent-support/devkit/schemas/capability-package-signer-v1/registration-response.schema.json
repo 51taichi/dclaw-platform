@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Capability-package signer trust receipt",
+  "type": "object",
+  "required": ["signer_id", "public_key_sha256", "status"],
+  "properties": {
+    "signer_id": {"type": "string"},
+    "public_key_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "status": {"enum": ["registered", "already_registered"]}
+  },
+  "additionalProperties": false
+}

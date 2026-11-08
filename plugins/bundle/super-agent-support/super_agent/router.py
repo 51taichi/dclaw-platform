@@ -1006,7 +1006,9 @@ async def execute_frontend_super_expert_command(
                 "arguments": {**command.arguments, "binding": expected},
             },
         )
-    return await execute_super_expert_command(capability, command, request)
+    return await _execute_super_expert_command(
+        capability, command, request, frontend_workflow_resume=True,
+    )
 
 
 @user_routes.post("/commands/{capability:path}")
@@ -1014,6 +1016,16 @@ async def execute_super_expert_command(
     capability: str,
     command: PlatformCommandRequest,
     request: Request,
+) -> dict[str, Any]:
+    return await _execute_super_expert_command(capability, command, request)
+
+
+async def _execute_super_expert_command(
+    capability: str,
+    command: PlatformCommandRequest,
+    request: Request,
+    *,
+    frontend_workflow_resume: bool = False,
 ) -> dict[str, Any]:
     tenant_id = str(getattr(request.state, "tenant_id", "local") or "local")
     binding = (
@@ -1084,6 +1096,7 @@ async def execute_super_expert_command(
             arguments=command.arguments,
             idempotency_key=command.idempotency_key,
             asset_validator=asset_validator,
+            frontend_workflow_resume=frontend_workflow_resume,
         )
         if capability == "aigc.asset.submit":
             submit_event_id = str(command.arguments.get("event_id") or "")

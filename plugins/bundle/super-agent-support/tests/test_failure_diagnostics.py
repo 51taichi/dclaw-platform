@@ -16,6 +16,7 @@ from super_agent.failure_diagnostics import (
     read_latest_failure,
     read_owner_failures,
     read_invocation_failure,
+    read_developer_failure_by_reference,
 )
 from super_agent.capabilities import compute_capability_set_digest, validate_super_expert_manifest
 from super_agent.orchestration import WorkspaceOrchestrationError, WorkspaceRuntimeHost
@@ -237,6 +238,39 @@ def test_developer_history_rejects_other_owner(tmp_path):
         read_owner_failures(
             storage_root=tmp_path, grants=_grants(), agent_id="comic",
             user_id="58", session_id="task", owner_resolver=_args(tmp_path)["owner_resolver"],
+            now=NOW,
+        )
+
+
+def test_developer_can_resolve_customer_reference_only_within_owned_expert(tmp_path):
+    invocation = "a" * 32
+    _trace(tmp_path, "old", "customer-task", _failure(invocation, NOW - timedelta(minutes=1)))
+    owner = lambda session: {
+        "user_id": "customer", "agent_id": "comic", "tenant_id": "local",
+    } if session == "customer-task" else None
+    result = read_developer_failure_by_reference(
+        storage_root=tmp_path, grants=_grants(), agent_id="comic",
+        tenant_id="local", invocation_id=invocation,
+        owner_resolver=owner, now=NOW,
+    )
+    assert result["status"] == "found"
+    assert result["task_id"] == "customer-task"
+    assert result["release_id"] == "0.2.3"
+    assert result["first_failure"]["category"] == "model_response_shape"
+    assert "private model text" not in json.dumps(result)
+    validate(result, json.loads((
+        SCHEMAS.parent / "runtime-diagnostics-v1" / "by-reference-response.schema.json"
+    ).read_text()))
+    assert read_developer_failure_by_reference(
+        storage_root=tmp_path, grants=_grants(), agent_id="another",
+        tenant_id="local", invocation_id=invocation,
+        owner_resolver=owner, now=NOW,
+    )["status"] == "no_record"
+    with pytest.raises(FailureDiagnosticsUnauthorized):
+        read_developer_failure_by_reference(
+            storage_root=tmp_path, grants=_grants(), agent_id="comic",
+            tenant_id="local", invocation_id=invocation,
+            owner_resolver=lambda _: {**owner("customer-task"), "tenant_id": "elsewhere"},
             now=NOW,
         )
 
