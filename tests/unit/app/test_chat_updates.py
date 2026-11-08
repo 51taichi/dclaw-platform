@@ -15,7 +15,6 @@ from qwenpaw.app.runner.api import get_chat_manager, router
 from qwenpaw.app.runner.manager import ChatManager
 from qwenpaw.app.runner.models import ChatSpec, ChatUpdate
 from qwenpaw.app.runner.repo.json_repo import JsonChatRepository
-from qwenpaw.security.local_access import LOCAL_ACCESS_MODE_META_KEY
 
 
 @pytest.fixture
@@ -100,45 +99,6 @@ async def test_put_chat_accepts_partial_rename_payload(
     assert saved.meta == {"source": "test"}
 
 
-async def test_put_chat_persists_valid_local_access_mode(
-    api_client: AsyncClient,
-    chat_manager: ChatManager,
-) -> None:
-    chat = await _seed_chat(chat_manager)
-
-    async with api_client:
-        response = await api_client.put(
-            f"/api/chats/{chat.id}",
-            json={"meta": {"local_access_mode": "full_access"}},
-        )
-
-    assert response.status_code == 200
-    saved = await chat_manager.get_chat(chat.id)
-    assert saved is not None
-    assert saved.meta == {
-        "source": "test",
-        "local_access_mode": "full_access",
-    }
-
-
-async def test_put_chat_rejects_invalid_local_access_mode(
-    api_client: AsyncClient,
-    chat_manager: ChatManager,
-) -> None:
-    chat = await _seed_chat(chat_manager)
-
-    async with api_client:
-        response = await api_client.put(
-            f"/api/chats/{chat.id}",
-            json={"meta": {"local_access_mode": "always_allow"}},
-        )
-
-    assert response.status_code == 422
-    saved = await chat_manager.get_chat(chat.id)
-    assert saved is not None
-    assert saved.meta == {"source": "test"}
-
-
 async def test_get_or_create_chat_reuses_existing_chat_id_as_session_id(
     chat_manager: ChatManager,
 ) -> None:
@@ -156,41 +116,6 @@ async def test_get_or_create_chat_reuses_existing_chat_id_as_session_id(
     assert resolved.session_id == chat.session_id
     chats = await chat_manager.list_chats()
     assert len(chats) == 1
-
-
-async def test_get_or_create_chat_defaults_new_chat_to_full_access(
-    chat_manager: ChatManager,
-) -> None:
-    created = await chat_manager.get_or_create_chat(
-        session_id="console:new-user",
-        user_id="new-user",
-        channel="console",
-    )
-
-    assert created.meta[LOCAL_ACCESS_MODE_META_KEY] == "full_access"
-
-
-async def test_get_or_create_chat_does_not_change_existing_chat_without_mode(
-    chat_manager: ChatManager,
-) -> None:
-    existing = ChatSpec(
-        id="legacy-chat",
-        name="Legacy Chat",
-        session_id="console:legacy-user",
-        user_id="legacy-user",
-        channel="console",
-        meta={},
-    )
-    await chat_manager.create_chat(existing)
-
-    resolved = await chat_manager.get_or_create_chat(
-        session_id=existing.session_id,
-        user_id=existing.user_id,
-        channel=existing.channel,
-    )
-
-    assert resolved.id == existing.id
-    assert LOCAL_ACCESS_MODE_META_KEY not in resolved.meta
 
 
 @pytest.mark.parametrize(

@@ -17,27 +17,9 @@ from .models import (
 from .utils import agentscope_msg_to_message
 from ..chat_access import current_user_id, ensure_chat_access, ensure_chat_ids_access
 from ..artifact_filter import extract_user_task_files_from_texts, is_internal_task_file
-from ...security.local_access import (
-    LOCAL_ACCESS_MODE_META_KEY,
-    NEW_CHAT_DEFAULT_LOCAL_ACCESS_MODE,
-    parse_local_access_mode,
-)
 
 
 router = APIRouter(prefix="/chats", tags=["chats"])
-
-
-def _validate_local_access_meta(meta: dict[str, Any] | None) -> None:
-    if not meta or LOCAL_ACCESS_MODE_META_KEY not in meta:
-        return
-    if parse_local_access_mode(
-        meta[LOCAL_ACCESS_MODE_META_KEY],
-        default=None,
-    ) is None:
-        raise HTTPException(
-            status_code=422,
-            detail="Invalid local access mode",
-        )
 
 
 async def get_workspace(request: Request):
@@ -128,20 +110,14 @@ async def create_chat(
     Returns:
         Created chat spec with UUID
     """
-    _validate_local_access_meta(payload.meta)
     chat_id = str(uuid4())
-    meta = dict(payload.meta or {})
-    meta.setdefault(
-        LOCAL_ACCESS_MODE_META_KEY,
-        NEW_CHAT_DEFAULT_LOCAL_ACCESS_MODE.value,
-    )
     spec = ChatSpec(
         id=chat_id,
         name=payload.name,
         session_id=payload.session_id or chat_id,
         user_id=current_user_id(request),
         channel=payload.channel,
-        meta=meta,
+        meta=payload.meta,
     )
     return await mgr.create_chat(spec)
 
@@ -385,7 +361,6 @@ async def update_chat(
     Raises:
         HTTPException: If chat not found (404)
     """
-    _validate_local_access_meta(spec.meta)
     chat_row = ensure_chat_access(request, chat_id)
     updated = await mgr.patch_chat(chat_row["id"], spec)
     if updated is None:

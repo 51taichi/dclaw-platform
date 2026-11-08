@@ -81,21 +81,6 @@ class TestConsoleChannelUnit:
         assert "aigc_studio/canvas-old/output.png" not in snapshot
         assert "sessions_data/session-current/report.md" in snapshot
 
-    def test_build_request_carries_local_access_mode(self, channel):
-        request = channel.build_agent_request_from_native(
-            {
-                "channel_id": "console",
-                "sender_id": "default",
-                "content_parts": [],
-                "meta": {
-                    "session_id": "chat-1",
-                    "local_access_mode": "full_access",
-                },
-            },
-        )
-
-        assert request.request_context["local_access_mode"] == "full_access"
-
     @pytest.mark.asyncio
     async def test_send_prints_to_stdout(self, channel, capsys):
         """send() should print message to stdout when enabled."""

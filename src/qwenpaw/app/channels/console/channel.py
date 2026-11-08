@@ -530,13 +530,6 @@ class ConsoleChannel(BaseChannel):
             channel_meta=meta,
         )
         request.channel_meta = meta
-        local_access_mode = meta.get("local_access_mode")
-        if isinstance(local_access_mode, str) and local_access_mode:
-            request_context = getattr(request, "request_context", None)
-            if not isinstance(request_context, dict):
-                request_context = {}
-            request_context["local_access_mode"] = local_access_mode
-            request.request_context = request_context
         return request
 
     async def _extract_media_message(self, message: Message) -> Message | None:
