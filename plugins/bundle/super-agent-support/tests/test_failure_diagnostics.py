@@ -374,6 +374,39 @@ def test_reference_v2_reports_card_validation_field_without_request_body(tmp_pat
     ).read_text()))
 
 
+def test_reference_v2_uses_later_agent_failure_after_recoverable_tool_rejection(tmp_path):
+    invocation = "d" * 32
+    when = NOW - timedelta(minutes=1)
+    _trace(tmp_path, "old", "customer-task", [
+        {"timestamp": when.isoformat(), "invocation_id": invocation,
+         "event_type": "interaction.tool.rejected", "payload": {
+             "capability": "interaction.card.create/1",
+             "category": "INVALID_INTERACTION_REQUEST",
+             "field_path": "card.options[0].text", "constraint": "FIELD_REQUIRED",
+         }},
+        {"timestamp": (when + timedelta(seconds=1)).isoformat(),
+         "invocation_id": invocation, "event_type": "runtime.trace",
+         "payload": {"origin": "agent", "payload": {
+             "event": "agent.turn.failure", "phase": "model_validation",
+             "category": "json_parse", "attempt": 2,
+         }}},
+        {"timestamp": (when + timedelta(seconds=2)).isoformat(),
+         "invocation_id": invocation, "event_type": "orchestration.failed",
+         "payload": {"error_code": "INVALID_TURN_RESULT"}},
+    ])
+    result = read_developer_failure_by_reference_v2(
+        storage_root=tmp_path, grants=_grants(), agent_id="comic", tenant_id="local",
+        invocation_id=invocation,
+        owner_resolver=lambda _: {"user_id": "customer", "agent_id": "comic", "tenant_id": "local"},
+        now=NOW,
+    )
+    assert result["final_blocker"]["phase"] == "model_validation"
+    assert [event["outcome"] for event in result["failure_events"]] == [
+        "not_recorded", "terminal",
+    ]
+    assert result["unrecorded_fields"] == []
+
+
 def test_memory_message_ids_supports_persisted_agent_format():
     assert _memory_message_ids([
         [{"id": "user-one"}, []],

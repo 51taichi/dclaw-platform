@@ -185,6 +185,15 @@ def _trace_failure(path: Path, installation_id: str, session_id: str) -> list[di
                             "attempt": failure["attempt"],
                         }
                         invocation["first_failure_source"] = "host_stage"
+                elif event == "interaction.operation.failed":
+                    invocation.setdefault("failure_events", []).append({
+                        "phase": "interaction_operation",
+                        "category": _token(payload.get("category")) or "not_recorded",
+                        "attempt": None, "source": "host", "at": when.isoformat(),
+                        "status_code": None, "provider_code": None,
+                        "provider_param": None,
+                        "contract": payload.get("capability") if isinstance(payload.get("capability"), str) and _CAPABILITY_ID.fullmatch(payload["capability"]) else None,
+                    })
                 elif event == "interaction.tool.rejected":
                     invocation.setdefault("failure_events", []).append({
                         "phase": "interaction_tool_validation",
@@ -464,7 +473,10 @@ def read_developer_failure_by_reference_v2(**kwargs: Any) -> dict[str, Any]:
         default="",
     )
     unresolved = [event for event in events if event["at"] >= last_success_at]
-    terminal = next((event for event in reversed(unresolved) if event["source"] != "agent"), None)
+    terminal = next((
+        event for event in reversed(unresolved)
+        if event["phase"] in {"agent_execute", "interaction_operation"}
+    ), None)
     if terminal is None and unresolved:
         terminal = unresolved[-1]
     for event in events:
@@ -508,8 +520,8 @@ def read_developer_failure_by_reference_v2(**kwargs: Any) -> dict[str, Any]:
             blocker["contract"] = terminal["contract"]
     result["failure_events"] = events
     result["final_blocker"] = blocker
-    result["unrecorded_fields"] = [
-        field for field in ("provider_code", "provider_param")
-        if terminal is None or terminal[field] is None
-    ]
+    result["unrecorded_fields"] = (
+        [field for field in ("provider_code", "provider_param") if terminal.get(field) is None]
+        if terminal is not None and blocker["responsibility"] == "model_provider" else []
+    )
     return result
