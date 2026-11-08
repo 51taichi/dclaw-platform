@@ -42,7 +42,6 @@ import {
 import { buildAutoRoutingModelSlotRequest } from "./chatToolbarModelSelection";
 import { getRouteChatId } from "../routeSession";
 import styles from "./ChatToolbar.module.less";
-import LocalAccessSelector from "./LocalAccessSelector";
 
 function getSkillUIProps(name: string) {
   let hash = 0;
@@ -982,18 +981,6 @@ export default function ChatToolbar({
           </div>
         )}
       </div>
-
-      <LocalAccessSelector
-        chatId={chatId}
-        agentId={selectedExpertTeam?.leader_agent_id || selectedAgent}
-        disabled={disabled}
-        onOpen={() => {
-          setShowExpertMenu(false);
-          setShowModelMenu(false);
-          setShowSkills(false);
-          setShowConnectors(false);
-        }}
-      />
 
       <span className={styles.toolbarDivider} />
 

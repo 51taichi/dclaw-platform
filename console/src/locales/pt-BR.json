@@ -2266,14 +2266,6 @@
     "importSkill": "Adicionar habilidade",
     "connect": "Conectar",
     "connected": "Conectado",
-    "manageConnectors": "Gerenciar conectores",
-    "localAccess": {
-      "question": "Como o DClaw deve obter aprovação antes de agir?",
-      "askApproval": "Perguntar antes das ações",
-      "askApprovalDescription": "Sempre pedir aprovação antes de executar ações de ferramentas",
-      "fullAccess": "Permitir acesso total",
-      "fullAccessDescription": "Executar ações de ferramentas sem restrições ou pedidos de aprovação",
-      "saveFailed": "Falha ao salvar as configurações de acesso"
-    }
+    "manageConnectors": "Gerenciar conectores"
   }
 }

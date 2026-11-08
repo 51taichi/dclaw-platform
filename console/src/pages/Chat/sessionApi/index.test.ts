@@ -1,24 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatSpec } from "../../../api";
-import sessionApi, {
-  DEFAULT_LOCAL_ACCESS_MODE,
-  DRAFT_SESSION_ID,
-} from "./index";
+import sessionApi, { DRAFT_SESSION_ID } from "./index";
 import { appendLiveResponseText } from "./liveResponseStore";
 
-const { mockListChats, mockGetChat, mockGetPushMessages, mockUpdateChat } =
-  vi.hoisted(() => ({
-    mockListChats: vi.fn<() => Promise<ChatSpec[]>>(() => Promise.resolve([])),
-    mockGetChat: vi.fn(),
-    mockGetPushMessages: vi.fn(),
-    mockUpdateChat: vi.fn(),
-  }));
+const { mockListChats, mockGetChat, mockGetPushMessages } = vi.hoisted(() => ({
+  mockListChats: vi.fn<() => Promise<ChatSpec[]>>(() => Promise.resolve([])),
+  mockGetChat: vi.fn(),
+  mockGetPushMessages: vi.fn(),
+}));
 
 vi.mock("../../../api", () => ({
   default: {
     listChats: mockListChats,
     getChat: mockGetChat,
-    updateChat: mockUpdateChat,
     deleteChat: vi.fn(),
   },
 }));
@@ -61,7 +55,6 @@ describe("Chat sessionApi", () => {
       messages: [],
       pending_approvals: [],
     });
-    mockUpdateChat.mockResolvedValue(makeChatSpec("chat-id"));
     delete (window as any).currentSessionId;
   });
 
@@ -229,60 +222,6 @@ describe("Chat sessionApi", () => {
     sessionApi.reset();
 
     expect((window as any).currentSessionId).toBeUndefined();
-  });
-
-  it("uses full access as the default for a new draft", async () => {
-    expect(await sessionApi.getLocalAccessMode(DRAFT_SESSION_ID)).toBe(
-      DEFAULT_LOCAL_ACCESS_MODE,
-    );
-  });
-
-  it("keeps the safe ask-for-approval fallback for a legacy chat", async () => {
-    mockListChats.mockResolvedValueOnce([
-      makeChatSpec("legacy-chat-id", { meta: {} }),
-    ]);
-    await sessionApi.getSessionList();
-
-    expect(await sessionApi.getLocalAccessMode("legacy-chat-id")).toBe(
-      "ask_for_approval",
-    );
-  });
-
-  it("keeps the selected local access mode on a draft", async () => {
-    await sessionApi.setLocalAccessMode(DRAFT_SESSION_ID, "full_access");
-
-    expect(await sessionApi.getLocalAccessMode(DRAFT_SESSION_ID)).toBe(
-      "full_access",
-    );
-    expect(mockUpdateChat).not.toHaveBeenCalled();
-  });
-
-  it("persists the selected local access mode for an existing chat", async () => {
-    mockListChats.mockResolvedValueOnce([
-      makeChatSpec("chat-id", {
-        meta: { local_access_mode: "ask_for_approval" },
-      }),
-    ]);
-    mockUpdateChat.mockResolvedValueOnce(
-      makeChatSpec("chat-id", {
-        meta: { local_access_mode: "full_access" },
-      }),
-    );
-    await sessionApi.getSessionList();
-
-    const saved = await sessionApi.setLocalAccessMode(
-      "chat-id",
-      "full_access",
-      "agent-1",
-    );
-
-    expect(mockUpdateChat).toHaveBeenCalledWith(
-      "chat-id",
-      { meta: { local_access_mode: "full_access" } },
-      "agent-1",
-    );
-    expect(saved).toBe("full_access");
-    expect(await sessionApi.getLocalAccessMode("chat-id")).toBe("full_access");
   });
 
   it("resolves the backend session id from the current URL chat id", async () => {

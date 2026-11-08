@@ -752,14 +752,6 @@
     "importSkill": "Tambahkan skill",
     "connect": "Hubungkan",
     "connected": "Terhubung",
-    "manageConnectors": "Kelola konektor",
-    "localAccess": {
-      "question": "Bagaimana DClaw harus meminta persetujuan sebelum bertindak?",
-      "askApproval": "Tanya sebelum bertindak",
-      "askApprovalDescription": "Selalu minta persetujuan sebelum menjalankan tindakan alat",
-      "fullAccess": "Izinkan akses penuh",
-      "fullAccessDescription": "Jalankan tindakan alat tanpa batasan atau permintaan persetujuan",
-      "saveFailed": "Gagal menyimpan pengaturan akses"
-    }
+    "manageConnectors": "Kelola konektor"
   }
 }

@@ -1668,9 +1668,6 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
         ? await sessionApi.getSessionIdForChatId(routeChatId)
         : null;
       const isNewRoute = !routeChatId || isDraftSessionId(routeChatId);
-      const localAccessMode = await sessionApi.getLocalAccessMode(
-        isNewRoute ? DRAFT_SESSION_ID : routeChatId,
-      );
 
       const requestBody = {
         input: rewrittenInput,
@@ -1707,7 +1704,6 @@ export default function ChatPage({ isClawMode }: { isClawMode?: boolean }) {
           channel: requestBody.channel,
           meta: {
             ...(isClawMode ? { mode: "claw" } : {}),
-            local_access_mode: localAccessMode,
             ...(selectedExpertTeam
               ? {
                   expert_team_id: selectedExpertTeam.id,

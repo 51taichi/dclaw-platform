@@ -2231,14 +2231,6 @@
     "importSkill": "スキルを追加",
     "connect": "接続",
     "connected": "接続済み",
-    "manageConnectors": "コネクターを管理",
-    "localAccess": {
-      "question": "DClaw が操作を実行する際、どのように承認しますか？",
-      "askApproval": "操作前に確認",
-      "askApprovalDescription": "ツール操作を実行する前に常に確認します",
-      "fullAccess": "フルアクセスを許可",
-      "fullAccessDescription": "制限や承認確認なしでツール操作を実行します",
-      "saveFailed": "アクセス設定を保存できませんでした"
-    }
+    "manageConnectors": "コネクターを管理"
   }
 }

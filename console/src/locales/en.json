@@ -2820,14 +2820,6 @@
         "codeAnalysis": "Code logic analysis",
         "frameworkKnowledge": "Framework and library knowledge"
       }
-    },
-    "localAccess": {
-      "question": "How should DClaw get approval before taking actions?",
-      "askApproval": "Ask before actions",
-      "askApprovalDescription": "Always ask for approval before running tool actions",
-      "fullAccess": "Allow full access",
-      "fullAccessDescription": "Run tool actions without restrictions or approval prompts",
-      "saveFailed": "Failed to save access settings"
     }
   }
 }

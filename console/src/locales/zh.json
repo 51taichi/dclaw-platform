@@ -2829,14 +2829,6 @@
         "codeAnalysis": "代码逻辑分析",
         "frameworkKnowledge": "框架库知识检索"
       }
-    },
-    "localAccess": {
-      "question": "DClaw 执行操作时应如何获得批准？",
-      "askApproval": "操作前询问",
-      "askApprovalDescription": "执行工具操作前始终请求你的批准",
-      "fullAccess": "允许完全访问",
-      "fullAccessDescription": "不受限制地执行工具操作，不再请求批准",
-      "saveFailed": "权限设置保存失败"
     }
   }
 }
