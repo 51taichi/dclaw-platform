@@ -29,6 +29,18 @@
       "response_schema": "schemas/publishing-v1/release-response.schema.json"
     }
   },
+  "developer_reference_diagnostics": {
+    "contract": "developer.runtime.diagnostics.by-reference/2",
+    "minimum_plugin_version": "1.18.22",
+    "method": "GET",
+    "path_template": "/api/user/super-expert-publishing/runtime-diagnostics/v2/references/{invocation_id}?agent_id={agent_id}",
+    "authentication": "signed-in owner of the expert",
+    "request_schema": "schemas/runtime-diagnostics-v2/by-reference-request.schema.json",
+    "response_schema": "schemas/runtime-diagnostics-v2/by-reference-response.schema.json",
+    "error_schema": "schemas/runtime-diagnostics-v2/error.schema.json",
+    "retention_days": 30,
+    "limit_per_minute": 30
+  },
   "capability_id": "business.service.installation-identity/1",
   "capability_ids": [
     "business.service.installation-identity/1",

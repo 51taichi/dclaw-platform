@@ -4,9 +4,9 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.38`
+当前版本：`2.39`
 
-发布日期：`2026-11-07`
+发布日期：`2026-11-09`
 
 ## 1. 文档目的
 
@@ -2257,10 +2257,10 @@ Agent 名称：<可选，中文显示名称>
 2. 开发方自己的业务目标、源 Agent 材料和测试凭证；
 3. 从目标 DClaw 认证调用元数据接口并按其 `download_path` 下载、核对 SHA-256 的官方开发包；兼容自动化可以继续单独下载同版本官方 DevKit。
 
-开发包 `1.10.14` 是推荐的单一离线移交物，必须提供：
+开发包 `1.10.15` 是推荐的单一离线移交物，必须提供：
 
 - 唯一标准文件与明确的标准版本，不复制第二套人工规则；
-- 官方 DevKit `1.9.5` 及其完整离线加密依赖；
+- 官方 DevKit `1.9.8` 及其完整离线加密依赖；
 - `dclaw_developer.py` 的 `doctor`、`info`、`init`、`validate`、`test`、`keygen`、`capability-build`、`build`、`upgrade` 和 `demo`；
 - 超级专家、业务服务和本地能力包模板，以及职责边界示例；
 - Agent 自主出站、公共业务服务、本地执行和能力包 Schema/SDK；
@@ -2272,7 +2272,7 @@ Agent 名称：<可选，中文显示名称>
 
 开发包本身不得包含平台管理员凭据、生产地址、签名私钥、供应商 Secret、客户数据或 DClaw 私有实现。包内公开工具不得导入 `qwenpaw` 或要求开发者克隆服务器仓库。
 
-DevKit `1.9.7` 必须提供：
+DevKit `1.9.8` 必须提供：
 
 - `dclaw_agent_devkit.py`：`doctor`、`contracts`、`digest`、`validate`、`keygen`、`build`、`verify`；
 - `capability-catalog.json`：当前可声明的能力、版本、组和依赖；
@@ -2289,6 +2289,7 @@ DevKit `1.9.7` 必须提供：
 - `schemas/runtime-failure-v1/`：授权读取本任务上次脱敏失败的请求、响应和错误合同；
 - `schemas/interaction-card-read-v1/`：按可信安装与任务读取卡片状态、规范化答案和提交回执的关闭合同；
 - `schemas/runtime-diagnostics-v1/by-reference-response.schema.json`：开发者按客户可见关联 ID 读取本专家脱敏失败的关闭合同；
+- `schemas/runtime-diagnostics-v2/`：开发者按同一关联 ID 读取有界错误顺序、已恢复错误和最终阻断的关闭请求、响应及错误合同；
 - `schemas/aigc-task-snapshot-v1/`：密封专家按可信安装与任务读取工作流状态和已验证产物资产 ID 的关闭合同；
 - `schemas/local-task-host-v1/`：密封专家确定性启动、读取、取消本地任务及读取受限回执的关闭合同；
 - `schemas/capability-package-signer-v1/`：管理员登记本地能力包签名公钥的关闭请求与回执合同；
@@ -2303,7 +2304,43 @@ DevKit `1.9.7` 必须提供：
 
 平台内部实现文件、测试文件和维护文档可以继续存在，但它们只服务平台维护者，不属于开发方输入。开发方缺少字段或行为定义时应报告标准或 DevKit 缺陷；平台不得用“请克隆服务器源码”回答。
 
+### 33.1 普通开发者终止根因诊断
+
+插件 `1.18.22` 起，已登录且拥有该专家的开发者可按客户可见 invocation ID 调用 `GET /api/user/super-expert-publishing/runtime-diagnostics/v2/references/{invocation_id}?agent_id={agent_id}`。该接口按租户、开发者拥有的专家、真实任务和安装授权隔离，查询 30 天内失败记录，每账号每分钟至多 30 次，并记录脱敏审计。`404` 对不存在、跨租户、跨专家及无权查询的引用一视同仁；`429` 表示限流；`503` 表示诊断暂不可读。无需客户密码、管理员身份或密封包新增能力。旧 `/v1/` 接口保持原状。
+
+普通开发账号在本机完成 DClaw 登录后，可使用其短期访问令牌调用；令牌只存在本机受控进程环境，不写入 Skill、日志或交付包：
+
+```bash
+curl --fail-with-body -H "Authorization: Bearer ${DCLAW_ACCESS_TOKEN}" \
+  "https://dclaw.deepmega.cn/api/user/super-expert-publishing/runtime-diagnostics/v2/references/0123456789abcdef0123456789abcdef?agent_id=your_agent_id"
+```
+
+路径中的示例 ID 仅展示格式。正式请求/响应/错误以 DevKit `schemas/runtime-diagnostics-v2/` 为准；`found` 返回实际 Release、installation、阶段与失败顺序，`no_record` 是正常结果。
+
+开发者先查看 `failure_events` 的时间顺序及 `outcome`，再以 `final_blocker` 判断本轮最终阻断。`first_failure` 仅为兼容字段，可能是已恢复的早期错误，不能单独当作整轮原因。`status=not_recorded`、`unrecorded_fields` 或 `provider_code/param=null` 表示当时没有留存，不得用模型解释补造。新回合的卡片参数校验失败返回 `field_path`、稳定 `constraint` 及 `contract`；提供方拒绝只记录 HTTP 状态、稳定 code 与 param，不记录错误正文、模型原文、提示词或客户数据。`stages` 中 `interaction.tool.invoked` 才证明模型进入了插件工具；`interaction.operation.started/completed/failed` 分别证明已发起、已完成或已失败的平台卡片操作。没有这些记录的旧回合不能据此推断工具未执行。
+
+`agent.execute(execution_mode="agent_loop")` 会使用普通文本/工具调用模式，不继承模型配置里的 JSON-only 默认值。开发者仍须根据实时 `interaction_component_catalog` 的详细 Schema 创建卡片；`task_key` 是字符串、`interaction_revision` 是正整数、`card` 是对象，创建成功必须取得真实 `PENDING` 回执。`response_format="json_object"` 只适用于候选模式，不与 `agent_loop` 组合。历史已签名专家无需变更请求；新增合同是可选的开发者读接口。
+
+### 33.2 六部分公共能力验收
+
+| 部分 | 正式接入和失败关闭证据 |
+|---|---|
+| 开发输入与盘点 | 使用目标实例的 Pack、DevKit、实时目录和当前 Agent 的真实需求；来源、版本和能力授权不明时停止相关节点。 |
+| 业务编排与状态 | 专家负责流程、第三方 API 和版本状态；Host 回执、事务结果和同任务续接分别验证，不以模型正文代替。 |
+| 交互卡 | 先读实时目录和详细 Schema，再建卡并核对 `PENDING`；客户提交后用 `interaction.card.read/1` 按真实 `interaction_id` 读取 `SUBMITTED`、规范化答案和提交回执，对 `event_id` 去重。`not_found`、未提交和回执缺失不推进业务状态。重复点击、刷新、旧卡和失败事务分别留证。 |
+| AIGC | 先读实时工作流目录；`aigc.workflow.create/1` 返回任务并不代表生成完成。仅用 `aigc.task.snapshot/1` 的绑定 `material_task_id` 核对终态和同画布、同节点、同用户的资产 ID；向后续图生视频工作流传资产前还须满足该工作流实时输入 Schema 和访问权限，不能从模型正文猜 ID。 |
+| 本地助手 | 只在真实需要时声明能力。能力包由独立 signer 签名，公钥由平台管理员通过插件登记，注册表及安装授权先核对；用 `local.task.start/1` 的同一幂等键取得受理回执，按 `task_id` 用 `local.task.read/1` 回读终态和不透明产物 ID。设备离线、回执丢失或状态不明时原键查询并停止下游，不换键重复启动。 |
+| 密封、发布与诊断 | 用正式 Pack 验证、测试、密封和独立验签；普通账号自助发布后核对实际 Release/installation。失败时凭关联 ID 查询 `/v2/` 的最终阻断，旧 `/v1/`、已签包与现役专家合同并行；没有真实客户端及产物回执不得称端到端验收通过。 |
+
+以上是通用 Skill 的平台合同输入。Skill 维护方应在其 `references/capability-verification.md` 补 `/v2/` 的首错和终止根因区分，在 `scripts/runtime_diagnostics_with_login.py` 增加按官方 DevKit v2 Schema 查询和摘要，在相关脚本测试加入已恢复错误、最终阻断、`no_record`、越权及旧版回退案例。平台不直接覆盖 Skill 发布仓库，也不把单个专家的业务字段写成公共规则。
+
 ## 34. 版本记录
+
+### 2.39 - 2026-11-09
+
+- 插件 `1.18.22` 修复普通 `agent_loop` 继承 DeepSeek JSON-only 默认响应模式导致卡片工具调用被提供方拒绝的问题，并为建卡工具的关键参数生成有类型的工具 Schema；新增无正文的工具进入和平台操作 trace。候选模式、公开流式模式、旧卡片合同和已签名专家请求保持兼容。
+- DevKit `1.9.8` 增加 `developer.runtime.diagnostics.by-reference/2` 的关闭请求、响应和错误 Schema，按有界顺序区分已恢复的早期错误与最终阻断；旧 `/1` 不变。历史未留存的提供方细节如实返回未知。
+- Developer Pack `1.10.15` 同步唯一标准与 DevKit；补齐交互卡、AIGC、本地助手及通用 Skill 六部分接入与验收规则。
 
 ### 2.38 - 2026-11-08
 

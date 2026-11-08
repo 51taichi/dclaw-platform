@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 from jsonschema import validate
 from qwenpaw.app.sealed_agents.package import SealedPackageManifest
 
@@ -17,9 +18,11 @@ from super_agent.failure_diagnostics import (
     read_owner_failures,
     read_invocation_failure,
     read_developer_failure_by_reference,
+    read_developer_failure_by_reference_v2,
 )
 from super_agent.capabilities import compute_capability_set_digest, validate_super_expert_manifest
 from super_agent.orchestration import WorkspaceOrchestrationError, WorkspaceRuntimeHost
+from super_agent.publication import PublisherPublication
 from super_agent.router import _memory_message_ids
 from super_agent.trust import SuperExpertTrustStore
 
@@ -273,6 +276,102 @@ def test_developer_can_resolve_customer_reference_only_within_owned_expert(tmp_p
             owner_resolver=lambda _: {**owner("customer-task"), "tenant_id": "elsewhere"},
             now=NOW,
         )
+
+
+def test_reference_v2_identifies_terminal_host_failure_after_recovered_json_error(tmp_path):
+    invocation = "b" * 32
+    when = NOW - timedelta(minutes=1)
+    rows = _failure(invocation, when)
+    rows.insert(2, {
+        "timestamp": (when + timedelta(milliseconds=1500)).isoformat(),
+        "invocation_id": invocation, "event_type": "agent.execute.safe_completed",
+        "payload": {"call_number": 3, "duration_ms": 500},
+    })
+    rows.insert(3, {
+        "timestamp": (when + timedelta(milliseconds=1700)).isoformat(),
+        "invocation_id": invocation, "event_type": "agent.execute.safe_failed",
+        "payload": {"call_number": 4, "duration_ms": 1000, "category": "BadRequestError",
+                    "status_code": 400, "provider_code": "invalid_request_error",
+                    "provider_param": "response_format", "error": "private model text"},
+    })
+    rows.insert(4, {
+        "timestamp": (when + timedelta(milliseconds=1800)).isoformat(),
+        "invocation_id": invocation, "event_type": "runtime.trace",
+        "payload": {"origin": "agent", "payload": {
+            "event": "agent.turn.failure", "phase": "card_receipt_read",
+            "category": "host_or_input", "attempt": 0,
+        }},
+    })
+    _trace(tmp_path, "old", "customer-task", rows)
+    owner = lambda _: {"user_id": "customer", "agent_id": "comic", "tenant_id": "local"}
+    result = read_developer_failure_by_reference_v2(
+        storage_root=tmp_path, grants=_grants(), agent_id="comic",
+        tenant_id="local", invocation_id=invocation, owner_resolver=owner, now=NOW,
+    )
+    assert result["first_failure"]["category"] == "model_response_shape"
+    assert [event["outcome"] for event in result["failure_events"]] == [
+        "recovered", "terminal", "not_recorded",
+    ]
+    assert result["final_blocker"] == {
+        "status": "recorded", "phase": "agent_execute", "category": "BadRequestError",
+        "attempt": 4, "responsibility": "model_provider",
+        "reason": "provider_rejected_request",
+    }
+    assert result["failure_events"][1]["provider_param"] == "response_format"
+    assert "private model text" not in json.dumps(result)
+    validate(result, json.loads((
+        SCHEMAS.parent / "runtime-diagnostics-v2" / "by-reference-response.schema.json"
+    ).read_text()))
+    assert read_developer_failure_by_reference_v2(
+        storage_root=tmp_path, grants=_grants(), agent_id="another",
+        tenant_id="local", invocation_id=invocation, owner_resolver=owner, now=NOW,
+    )["status"] == "no_record"
+
+
+def test_reference_v2_rate_limit_is_actor_scoped():
+    publication = object.__new__(PublisherPublication)
+    publication._diagnostic_read_times = {}
+    for _ in range(30):
+        publication._limit_diagnostic_reads("tenant", "developer")
+    with pytest.raises(HTTPException) as error:
+        publication._limit_diagnostic_reads("tenant", "developer")
+    assert error.value.status_code == 429
+    publication._limit_diagnostic_reads("tenant", "another-developer")
+    publication._limit_diagnostic_reads("another-tenant", "developer")
+
+
+def test_reference_v2_reports_card_validation_field_without_request_body(tmp_path):
+    invocation = "c" * 32
+    when = NOW - timedelta(minutes=1)
+    _trace(tmp_path, "old", "customer-task", [
+        {"timestamp": when.isoformat(), "invocation_id": invocation,
+         "event_type": "orchestration.started", "payload": {}},
+        {"timestamp": (when + timedelta(seconds=1)).isoformat(),
+         "invocation_id": invocation, "event_type": "interaction.tool.rejected",
+         "payload": {"capability": "interaction.card.create/1",
+                     "category": "INVALID_INTERACTION_REQUEST",
+                     "field_path": "interaction_revision", "constraint": "INVALID_VALUE",
+                     "secret": "private"}},
+        {"timestamp": (when + timedelta(seconds=2)).isoformat(),
+         "invocation_id": invocation, "event_type": "orchestration.failed",
+         "payload": {"error_code": "INVALID_TURN_RESULT"}},
+    ])
+    owner = lambda _: {"user_id": "customer", "agent_id": "comic", "tenant_id": "local"}
+    result = read_developer_failure_by_reference_v2(
+        storage_root=tmp_path, grants=_grants(), agent_id="comic",
+        tenant_id="local", invocation_id=invocation, owner_resolver=owner, now=NOW,
+    )
+    assert result["final_blocker"] == {
+        "status": "recorded", "phase": "interaction_tool_validation",
+        "category": "INVALID_INTERACTION_REQUEST", "attempt": None,
+        "responsibility": "request_validation", "reason": "request_rejected",
+        "field_path": "interaction_revision", "constraint": "INVALID_VALUE",
+        "contract": "interaction.card.create/1",
+    }
+    assert "private" not in json.dumps(result)
+    validate(result, json.loads((
+        SCHEMAS.parent / "runtime-diagnostics-v2" / "by-reference-response.schema.json"
+    ).read_text()))
 
 
 def test_memory_message_ids_supports_persisted_agent_format():

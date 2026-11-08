@@ -319,6 +319,34 @@ def test_tool_schema_and_docstrings_make_component_choice_unambiguous():
         assert schemas["interaction_card_create"]["parameters"]["properties"][
             "input_policy"
         ]["default"] == "card_only"
+        parameters = schemas["interaction_card_create"]["parameters"]["properties"]
+        assert parameters["task_key"]["type"] == "string"
+        assert parameters["interaction_revision"]["type"] == "integer"
+        assert "object" in json.dumps(parameters["card"])
+
+
+@pytest.mark.asyncio
+async def test_card_request_rejection_emits_only_contract_field_and_constraint():
+    events = []
+
+    async def no_business_call(*_args):
+        raise AssertionError("invalid card must not reach platform storage")
+
+    tools = build_interaction_tools(
+        grants={CATALOG: "1", CREATE: "1"},
+        installation_id="installation", conversation_id="task",
+        business_call=no_business_call, read_card=None,
+        diagnostic_event=lambda event, payload: events.append((event, payload)),
+    )
+    response = _result(await tools["interaction_card_create"](
+        task_key="choice", interaction_revision=0,
+        component_type="single_select", card=_single_card(),
+    ))
+    assert response["error"] == "INVALID_INTERACTION_REQUEST"
+    assert events[-1] == ("interaction.tool.rejected", {
+        "capability": CREATE, "category": "INVALID_INTERACTION_REQUEST",
+        "field_path": "interaction_revision", "constraint": "INVALID_VALUE",
+    })
 
 
 def test_toolkit_is_restored_after_binding_success_and_failure():
@@ -373,8 +401,13 @@ def create_runtime(): return Runtime()
     class Agent:
         def __init__(self):
             self.toolkit = Toolkit()
+            self.model = SimpleNamespace(generate_kwargs={
+                "response_format": {"type": "json_object"},
+            })
+            self.original_model = self.model
 
         async def __call__(self, _messages):
+            assert self.model is not self.original_model
             assert "aigc_workflow_catalog" in self.toolkit.tools
             assert "interaction_component_catalog" in self.toolkit.tools
             assert "interaction_card_create" in self.toolkit.tools
@@ -423,3 +456,4 @@ def create_runtime(): return Runtime()
 
     assert response.error_code is None
     assert agent.toolkit.tools == {}
+    assert agent.model is agent.original_model

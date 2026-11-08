@@ -1,5 +1,20 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.8 adds `developer.runtime.diagnostics.by-reference/2` at
+`GET /api/user/super-expert-publishing/runtime-diagnostics/v2/references/{invocation_id}?agent_id=...`.
+The signed-in developer must own that expert; a customer-visible invocation
+reference resolves only within the same tenant and expert. The response keeps
+the v1 fields and adds bounded `failure_events`, `final_blocker`, and
+`unrecorded_fields`. Early errors followed by a successful `agent.execute`
+are marked recovered. A Host call failure takes precedence over a later Agent
+trace that merely reports the failed Host result. Historic provider metadata
+that was not recorded stays null; no model text or request body is returned.
+New card validation failures expose only a safe field path, constraint code,
+and contract ID. New provider failures retain only HTTP status and stable
+code/param when the provider supplies them.
+The endpoint is audited and limited to 30 reads per actor per minute.
+The v1 route and schemas remain available unchanged.
+
 Version 1.9.7 adds optional `aigc.task.snapshot/1`, `local.task.start/1`,
 `local.task.read/1`, and `local.task.cancel/1` Host contracts with closed
 schemas. It also adds `developer.runtime.diagnostics.by-reference/1` for a

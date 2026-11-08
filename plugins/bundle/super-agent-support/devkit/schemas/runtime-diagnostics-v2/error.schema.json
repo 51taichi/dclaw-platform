@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "developer.runtime.diagnostics.by-reference/2 HTTP error",
+  "type": "object",
+  "required": ["detail"],
+  "properties": {"detail": {"enum": ["authentication required", "diagnostic not found", "diagnostics unavailable", "diagnostic rate limit exceeded"]}},
+  "additionalProperties": false
+}

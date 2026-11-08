@@ -13,6 +13,8 @@ from typing import Any, Callable
 READ_CONTRACT = "runtime.failure.read/1"
 READ_WINDOW = timedelta(days=30)
 _TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}\Z")
+_FIELD_PATH = re.compile(r"[A-Za-z][A-Za-z0-9_.\[\]-]{0,127}\Z")
+_CAPABILITY_ID = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}/[0-9]{1,3}\Z")
 
 
 class FailureDiagnosticsUnauthorized(ValueError):
@@ -66,6 +68,9 @@ def _trace_failure(path: Path, installation_id: str, session_id: str) -> list[di
                     "orchestration.preflight_failed", "orchestration.message_staged",
                     "agent.execute.safe_started", "agent.execute.safe_completed",
                     "agent.execute.safe_failed",
+                    "interaction.operation.started", "interaction.operation.completed",
+                    "interaction.operation.failed", "interaction.tool.invoked",
+                    "interaction.tool.rejected",
                 }:
                     continue
                 invocation = invocations.setdefault(record["invocation_id"], {})
@@ -104,6 +109,16 @@ def _trace_failure(path: Path, installation_id: str, session_id: str) -> list[di
                     if _token(payload.get("response_format")):
                         stage["response_format"] = payload["response_format"]
                     invocation.setdefault("stages", []).append(stage)
+                    extended_stage = dict(stage)
+                    if isinstance(payload.get("capability"), str) and _CAPABILITY_ID.fullmatch(payload["capability"]):
+                        extended_stage["capability"] = payload["capability"]
+                    if _token(payload.get("category")):
+                        extended_stage["category"] = payload["category"]
+                    if isinstance(payload.get("field_path"), str) and _FIELD_PATH.fullmatch(payload["field_path"]):
+                        extended_stage["field_path"] = payload["field_path"]
+                    if _token(payload.get("constraint")):
+                        extended_stage["constraint"] = payload["constraint"]
+                    invocation.setdefault("stages_v2", []).append(extended_stage)
                 if event == "orchestration.started":
                     invocation["started_at"] = when
                 elif event == "orchestration.message_staged":
@@ -120,11 +135,30 @@ def _trace_failure(path: Path, installation_id: str, session_id: str) -> list[di
                         "attempt": None,
                     }
                     invocation["first_failure_source"] = "platform_preflight"
+                    invocation.setdefault("failure_events", []).append({
+                        "phase": _token(payload.get("phase")) or "not_recorded",
+                        "category": _token(payload.get("category")) or "not_recorded",
+                        "attempt": None, "source": "platform_preflight", "at": when.isoformat(),
+                        "status_code": None, "provider_code": None,
+                        "provider_param": None,
+                    })
                 elif event == "orchestration.failed":
                     invocation["failed_at"] = when
                     invocation["error_code"] = _token(payload.get("error_code"))
                 elif event == "runtime.trace":
                     trace = payload
+                    if trace.get("event") == "agent.turn.failure":
+                        attempt = trace.get("attempt")
+                        invocation.setdefault("failure_events", []).append({
+                            "phase": _token(trace.get("phase")) or "not_recorded",
+                            "category": _token(trace.get("category")) or "not_recorded",
+                            "attempt": attempt if type(attempt) is int and 1 <= attempt <= 100 else None,
+                            "source": "agent",
+                            "at": when.isoformat(),
+                            "status_code": None,
+                            "provider_code": None,
+                            "provider_param": None,
+                        })
                     if trace.get("event") == "agent.turn.failure" and "first_failure" not in invocation:
                         attempt = trace.get("attempt")
                         invocation["first_failure"] = {
@@ -132,17 +166,36 @@ def _trace_failure(path: Path, installation_id: str, session_id: str) -> list[di
                             "category": _token(trace.get("category")),
                             "attempt": attempt if type(attempt) is int and 1 <= attempt <= 100 else None,
                         }
-                elif event == "agent.execute.safe_failed" and "first_failure" not in invocation:
-                    invocation["first_failure"] = {
+                elif event == "agent.execute.safe_failed":
+                    attempt = payload.get("call_number")
+                    failure = {
                         "phase": "agent_execute",
-                        "category": _token(payload.get("category")),
-                        "attempt": (
-                            payload["call_number"]
-                            if type(payload.get("call_number")) is int
-                            and 1 <= payload["call_number"] <= 100 else None
-                        ),
+                        "category": _token(payload.get("category")) or "not_recorded",
+                        "attempt": attempt if type(attempt) is int and 1 <= attempt <= 100 else None,
+                        "source": "host",
+                        "at": when.isoformat(),
+                        "status_code": payload.get("status_code") if type(payload.get("status_code")) is int and 400 <= payload["status_code"] <= 599 else None,
+                        "provider_code": _token(payload.get("provider_code")),
+                        "provider_param": _token(payload.get("provider_param")),
                     }
-                    invocation["first_failure_source"] = "host_stage"
+                    invocation.setdefault("failure_events", []).append(failure)
+                    if "first_failure" not in invocation:
+                        invocation["first_failure"] = {
+                            "phase": failure["phase"], "category": failure["category"],
+                            "attempt": failure["attempt"],
+                        }
+                        invocation["first_failure_source"] = "host_stage"
+                elif event == "interaction.tool.rejected":
+                    invocation.setdefault("failure_events", []).append({
+                        "phase": "interaction_tool_validation",
+                        "category": _token(payload.get("category")) or "not_recorded",
+                        "attempt": None, "source": "host", "at": when.isoformat(),
+                        "status_code": None, "provider_code": None,
+                        "provider_param": None,
+                        "field_path": payload.get("field_path") if isinstance(payload.get("field_path"), str) and _FIELD_PATH.fullmatch(payload["field_path"]) else None,
+                        "constraint": _token(payload.get("constraint")),
+                        "contract": payload.get("capability") if isinstance(payload.get("capability"), str) and _CAPABILITY_ID.fullmatch(payload["capability"]) else None,
+                    })
     except (OSError, UnicodeError, json.JSONDecodeError, AttributeError) as exc:
         raise FailureDiagnosticsUnavailable("failure trace cannot be read") from exc
     return [
@@ -387,3 +440,76 @@ def read_developer_failure_by_reference(
         "transaction_status": "discarded",
         "stages": failure.get("stages", [])[:100],
     }
+
+
+def read_developer_failure_by_reference_v2(**kwargs: Any) -> dict[str, Any]:
+    """Expose the final recorded blocker separately from recoverable failures."""
+    prior = read_developer_failure_by_reference(**kwargs)
+    result = {**prior, "contract": "developer.runtime.diagnostics.by-reference/2"}
+    if prior["status"] == "no_record":
+        return result
+    failure = read_invocation_failure(
+        storage_root=kwargs["storage_root"],
+        installation_id=prior["installation_id"],
+        session_id=prior["task_id"],
+        invocation_id=prior["invocation_id"],
+    )
+    if failure is None:
+        raise FailureDiagnosticsUnavailable("diagnostic reference disappeared")
+    events = list(failure.get("failure_events", []))[-50:]
+    stages = failure.get("stages", [])
+    result["stages"] = failure.get("stages_v2", [])[:100]
+    last_success_at = max(
+        (stage["at"] for stage in stages if stage["event"] == "agent.execute.safe_completed"),
+        default="",
+    )
+    unresolved = [event for event in events if event["at"] >= last_success_at]
+    terminal = next((event for event in reversed(unresolved) if event["source"] != "agent"), None)
+    if terminal is None and unresolved:
+        terminal = unresolved[-1]
+    for event in events:
+        event["outcome"] = (
+            "recovered" if event["at"] < last_success_at
+            else "terminal" if event is terminal
+            else "not_recorded"
+        )
+    if terminal is None:
+        blocker = {"status": "not_recorded", "phase": "not_recorded", "category": "not_recorded",
+                   "attempt": None, "responsibility": "not_recorded", "reason": "not_recorded"}
+    else:
+        provider_rejection = terminal["status_code"] is not None or terminal["category"] in {
+            "BadRequestError", "AuthenticationError", "PermissionDeniedError",
+            "RateLimitError", "UnprocessableEntityError", "APIStatusError",
+        }
+        responsibility = (
+            "model_provider" if provider_rejection
+            else "platform_preflight" if terminal["source"] == "platform_preflight"
+            else "request_validation" if terminal["phase"] == "interaction_tool_validation"
+            else "agent" if terminal["source"] == "agent"
+            else "host_or_tool"
+        )
+        reason = (
+            "provider_rejected_request" if provider_rejection
+            else "preflight_rejected" if terminal["source"] == "platform_preflight"
+            else "request_rejected" if terminal["phase"] == "interaction_tool_validation"
+            else "agent_reported_failure" if terminal["source"] == "agent"
+            else "host_call_failed"
+        )
+        blocker = {
+            "status": "recorded", "phase": terminal["phase"],
+            "category": terminal["category"], "attempt": terminal["attempt"],
+            "responsibility": responsibility, "reason": reason,
+        }
+        if terminal.get("field_path"):
+            blocker["field_path"] = terminal["field_path"]
+        if terminal.get("constraint"):
+            blocker["constraint"] = terminal["constraint"]
+        if terminal.get("contract"):
+            blocker["contract"] = terminal["contract"]
+    result["failure_events"] = events
+    result["final_blocker"] = blocker
+    result["unrecorded_fields"] = [
+        field for field in ("provider_code", "provider_param")
+        if terminal is None or terminal[field] is None
+    ]
+    return result

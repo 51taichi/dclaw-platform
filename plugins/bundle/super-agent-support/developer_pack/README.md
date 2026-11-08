@@ -1,6 +1,8 @@
 # DClaw Super Agent Developer Pack
 
-Version 1.10.14 bundles development standard 2.38 and DevKit 1.9.7. It adds
+Version 1.10.15 bundles development standard 2.39 and DevKit 1.9.8. It adds
+the owner-scoped final-blocker diagnostics v2 contract and Agent-loop card
+compatibility guidance. Version 1.10.14 added
 the optional reference diagnostics, AIGC task snapshot, and local task Host
 receipt contracts. Capability-package signer public keys require separate
 plugin administrator trust registration before a signed descriptor is accepted.

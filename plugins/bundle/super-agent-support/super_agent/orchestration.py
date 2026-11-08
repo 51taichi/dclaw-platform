@@ -774,6 +774,25 @@ def _agent_execute_mode(arguments: dict[str, Any]) -> str:
     return "agent_loop"
 
 
+def _safe_provider_error(exc: Exception) -> dict[str, Any]:
+    status = getattr(exc, "status_code", None)
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict) and isinstance(body.get("error"), dict):
+        body = body["error"]
+    if not isinstance(body, dict):
+        body = {}
+
+    def field(name: str) -> str | None:
+        value = getattr(exc, name, None) or body.get(name)
+        return value if isinstance(value, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", value) else None
+
+    return {
+        "status_code": status if type(status) is int and 400 <= status <= 599 else None,
+        "provider_code": field("code"),
+        "provider_param": field("param"),
+    }
+
+
 def _agent_execute_message(item: Any) -> Msg:
     if isinstance(item, Msg):
         return item
@@ -872,7 +891,37 @@ async def run_workspace_orchestration_turn(
         nonlocal accepted_aigc_review
         if business_call is None:
             raise WorkspaceOrchestrationError("unauthorized_capability")
-        value = await _maybe_await(business_call(capability, arguments))
+        if capability.startswith("interaction.card."):
+            _append_runtime_trace(
+                state_storage_root,
+                installation_id=authorization.installation_id,
+                session_id=turn_request.session_id,
+                invocation_id=invocation_id,
+                event_type="interaction.operation.started",
+                payload={"capability": capability},
+            )
+        try:
+            value = await _maybe_await(business_call(capability, arguments))
+        except Exception as exc:
+            if capability.startswith("interaction.card."):
+                _append_runtime_trace(
+                    state_storage_root,
+                    installation_id=authorization.installation_id,
+                    session_id=turn_request.session_id,
+                    invocation_id=invocation_id,
+                    event_type="interaction.operation.failed",
+                    payload={"capability": capability, "category": type(exc).__name__},
+                )
+            raise
+        if capability.startswith("interaction.card."):
+            _append_runtime_trace(
+                state_storage_root,
+                installation_id=authorization.installation_id,
+                session_id=turn_request.session_id,
+                invocation_id=invocation_id,
+                event_type="interaction.operation.completed",
+                payload={"capability": capability},
+            )
         if (
             capability == "aigc.review.complete"
             and arguments.get("decision") == "ACCEPTED"
@@ -1011,17 +1060,24 @@ async def run_workspace_orchestration_turn(
                     )
                 return await agent(messages)
 
-            with _require_active_interaction_before_text(
-                agent,
-                read_interaction_card,
-                enabled=require_interaction,
-            ):
-                result = await _execute_with_runtime_system_instruction(
+            original_model = getattr(agent, "model", None)
+            if not public_stream and original_model is not None:
+                agent.model = _public_stream.public_text_model(original_model)
+            try:
+                with _require_active_interaction_before_text(
                     agent,
-                    instruction,
-                    invoke,
-                    required=instruction is not None,
-                )
+                    read_interaction_card,
+                    enabled=require_interaction,
+                ):
+                    result = await _execute_with_runtime_system_instruction(
+                        agent,
+                        instruction,
+                        invoke,
+                        required=instruction is not None,
+                    )
+            finally:
+                if not public_stream and original_model is not None:
+                    agent.model = original_model
             if require_interaction and (
                 read_interaction_card is None
                 or read_interaction_card("") is None
@@ -1052,6 +1108,14 @@ async def run_workspace_orchestration_turn(
                         conversation_id=turn_request.session_id,
                         business_call=effective_business_call,
                         read_card=read_interaction_card,
+                        diagnostic_event=lambda event_type, payload: _append_runtime_trace(
+                            state_storage_root,
+                            installation_id=authorization.installation_id,
+                            session_id=turn_request.session_id,
+                            invocation_id=invocation_id,
+                            event_type=event_type,
+                            payload=payload,
+                        ),
                     )
                 )
                 if review_only or aigc_tools or interaction_tools:
@@ -1102,6 +1166,7 @@ async def run_workspace_orchestration_turn(
                     "call_number": call_number,
                     "duration_ms": max(0, round((time.perf_counter() - started_at) * 1000)),
                     "category": type(exc).__name__,
+                    **_safe_provider_error(exc),
                 },
             )
             if trace_raw:

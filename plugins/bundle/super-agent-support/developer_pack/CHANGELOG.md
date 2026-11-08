@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.10.15 - 2026-11-09
+
+- Bundles development standard 2.39 and DevKit 1.9.8.
+- Documents final-blocker diagnostics v2, Agent-loop model defaults, and the existing trusted card, AIGC, and local task receipts.
+
 ## 1.10.14 - 2026-11-08
 
 - Bundles development standard 2.38 and DevKit 1.9.7.

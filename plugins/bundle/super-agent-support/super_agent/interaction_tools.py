@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from copy import copy
 import hashlib
 import json
+import re
 from typing import Any, Callable, Literal
 
 from agentscope.message import TextBlock
@@ -90,11 +91,30 @@ def build_interaction_tools(
     conversation_id: str,
     business_call: Callable,
     read_card: Callable[[str], dict[str, Any] | None] | None,
+    diagnostic_event: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> dict[str, Callable]:
     """Build only tools authorized for this installation and request."""
 
     def authorized(capability: str) -> bool:
         return grants.get(capability) == "1"
+
+    def trace(event_type: str, capability: str, **fields: Any) -> None:
+        if diagnostic_event is not None:
+            diagnostic_event(event_type, {"capability": capability, **fields})
+
+    def trace_rejected(capability: str, category: str, issues: list[dict[str, str]]) -> None:
+        first = issues[0] if issues else {}
+        field_path = first.get("field")
+        constraint = first.get("code")
+        trace(
+            "interaction.tool.rejected", capability, category=category,
+            field_path=(field_path if isinstance(field_path, str) and re.fullmatch(
+                r"[A-Za-z][A-Za-z0-9_.\[\]-]{0,127}", field_path,
+            ) else None),
+            constraint=(constraint if constraint in {
+                "FIELD_REQUIRED", "FIELD_NOT_ALLOWED", "INVALID_VALUE",
+            } else None),
+        )
 
     async def dispatch(
         capability: str,
@@ -134,10 +154,14 @@ def build_interaction_tools(
         Args:
             component_types: 精确类型列表：single_select、multi_select、question_form 或 file_selector。
         """
+        trace("interaction.tool.invoked", CATALOG)
         if not isinstance(component_types, list) or any(
             not isinstance(item, str) or not item.strip()
             for item in component_types
         ):
+            trace_rejected(CATALOG, "INVALID_CATALOG_REQUEST", [
+                {"field": "component_types", "code": "INVALID_VALUE"},
+            ])
             return _response(
                 {
                     "error": "INVALID_CATALOG_REQUEST",
@@ -153,8 +177,8 @@ def build_interaction_tools(
         )
 
     async def interaction_card_create(
-        task_key: Any = None,
-        interaction_revision: Any = None,
+        task_key: str = "",
+        interaction_revision: int = 0,
         component_type: Literal[
             "single_select",
             "multi_select",
@@ -162,7 +186,7 @@ def build_interaction_tools(
             "file_selector",
         ]
         | None = None,
-        card: Any = None,
+        card: dict[str, Any] | None = None,
         input_policy: Literal[
             "card_only",
             "card_or_text",
@@ -194,7 +218,12 @@ def build_interaction_tools(
             replaces_interaction_id: 显式替换当前阻塞卡时传其真实 ID，否则留空。
             expires_at: 可选 RFC 3339 时区时间；留空表示不自动过期。
         """
+        trace("interaction.tool.invoked", CREATE)
         if unexpected:
+            trace_rejected(CREATE, "INVALID_INTERACTION_REQUEST", [
+                {"field": field, "code": "FIELD_NOT_ALLOWED"}
+                for field in sorted(unexpected)
+            ])
             return _response(
                 {
                     "error": "INVALID_INTERACTION_REQUEST",
@@ -220,6 +249,7 @@ def build_interaction_tools(
         try:
             request = InteractionCreateRequest.model_validate(raw)
         except InteractionValidationError as exc:
+            trace_rejected(CREATE, exc.code, exc.issues)
             return _response(
                 {
                     "error": exc.code,
@@ -229,10 +259,12 @@ def build_interaction_tools(
                 },
             )
         except ValidationError as exc:
+            issues = _validation_issues(exc)
+            trace_rejected(CREATE, "INVALID_INTERACTION_REQUEST", issues)
             return _response(
                 {
                     "error": "INVALID_INTERACTION_REQUEST",
-                    "issues": _validation_issues(exc),
+                    "issues": issues,
                     "retryable": True,
                     "guidance": "Refresh the selected component contract and correct these fields.",
                 },
