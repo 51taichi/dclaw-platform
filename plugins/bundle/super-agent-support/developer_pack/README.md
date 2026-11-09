@@ -1,5 +1,10 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.16 bundles development standard 2.40 and DevKit 1.9.8. New and
+updated Agents generate internal business text first, then generate a separate
+card draft from the live catalog and call the trusted Host create capability
+after runtime validation. Existing signed Agents retain their card tool path.
+
 Version 1.10.15 bundles development standard 2.39 and DevKit 1.9.8. It adds
 the owner-scoped final-blocker diagnostics v2 contract and Agent-loop card
 compatibility guidance. Version 1.10.14 added

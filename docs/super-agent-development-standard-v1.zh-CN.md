@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.39`
+当前版本：`2.40`
 
 发布日期：`2026-11-09`
 
@@ -502,7 +502,7 @@ Host 调用合同：
 | 调用 | 请求要点 | 成功结果 |
 |---|---|---|
 | `session.context` | `{}` | 当前可信会话上下文 |
-| `agent.execute` | 至少传本轮 `messages`；需要完整工具循环时传 `execution_mode="agent_loop"` | 内部模型候选，不自动成为客户回复 |
+| `agent.execute` | 至少传本轮 `messages`；普通文本和 JSON 候选使用默认无工具模式，其他确需模型工具调用的能力才传 `execution_mode="agent_loop"` | 内部模型候选，不自动成为客户回复 |
 | `runtime.trace` | 结构化、无 Secret 的诊断对象 | `{"accepted":true}` |
 | `runtime.complete` | 当前 `invocation_id`、合法 assistant `message`、可选 `diagnostics` | `{"accepted":true}` 并原子提交 |
 | `runtime.fail` | 当前 `invocation_id`、稳定 `error_code`、可选 `diagnostic_ref` | `{"accepted":true}` 并丢弃事务 |
@@ -717,7 +717,18 @@ stateDiagram-v2
 
 DClaw 平台负责卡片持久化、渲染、提交和可信回传；开发方负责业务问题、选项、输入策略和收到答案后的业务动作。
 
-超级专家通过 `agent.execute` 的 `execution_mode="agent_loop"` 使用平台按授权动态注册的四个模型工具：
+### 13.1 统一建卡顺序
+
+新建或更新的超级专家使用相同的两段式业务回复与建卡流程；业务内容仍由各专家自己的需求和状态机决定，卡片组件、字段与回执统一遵守插件实时合同：
+
+1. 专家运行时用默认无工具模式调用 `agent.execute`，取得内部业务文本候选。此调用不设置 `response_format="json_object"`，不直接流式展示给客户，也不以候选正文证明卡片已创建。
+2. 若已确认业务流程或状态机需要客户输入，运行时先调用 Host `interaction.capabilities.list/1` 取得本轮所需组件的实时详细 Schema，再以第一段文本、可信业务状态及该 Schema 为输入，第二次调用无工具的 `agent.execute` 生成卡片草案。第二次调用可以设置 `response_format="json_object"`；模型只建议组件类型和参数，不调用建卡工具，不增加、删除或改写第一段确定的业务问题和选项。无需客户输入的回合不创建卡片。
+3. 运行时解析第二段候选，核对业务问题、字段顺序、必填关系、选项、状态、`task_key` 和 `interaction_revision`，并按实时组件 Schema 校验。校验失败时只针对第二段做有界重试；仍不合格则记录脱敏错误并失败关闭。需要卡片的回合禁止降级为仅输出文本问题。
+4. 只有校验通过后，运行时才以稳定幂等键调用 Host `interaction.card.create/1`；插件再次执行权威 Schema、授权和作用域校验。运行时核对真实 `interaction_id`、`PENDING` 状态及 `interaction.card.receipt/1` 的 `created` 回执，再调用 `runtime.complete` 原子提交客户回复及卡片。任何内部候选、失败草案和未经确认的建卡结果都不得提前展示为已完成回复。
+
+这两段模型调用分别处理业务回复和卡片表达；修改通用卡片表达规则时，只调整第二段的候选与校验模块，不改变第一段的业务目标、原始需求或既有状态机。`json_object` 只帮助第二段返回可解析对象，不能替代实时组件 Schema、业务不变量或 Host 最终校验。已签名旧专家的固定卡直建和模型工具建卡路径继续受原合同支持；各责任方在更新其发布包时迁入上述统一流程并验证旧任务续接，不由插件静默改写业务实现。
+
+既有专家可能通过 `agent.execute(execution_mode="agent_loop")` 使用平台按授权动态注册的以下模型工具；它们属于兼容路径，不是新建或更新专家的默认建卡入口：
 
 | 工具 | 用途 |
 |---|---|
@@ -2257,7 +2268,7 @@ Agent 名称：<可选，中文显示名称>
 2. 开发方自己的业务目标、源 Agent 材料和测试凭证；
 3. 从目标 DClaw 认证调用元数据接口并按其 `download_path` 下载、核对 SHA-256 的官方开发包；兼容自动化可以继续单独下载同版本官方 DevKit。
 
-开发包 `1.10.15` 是推荐的单一离线移交物，必须提供：
+开发包 `1.10.16` 是推荐的单一离线移交物，必须提供：
 
 - 唯一标准文件与明确的标准版本，不复制第二套人工规则；
 - 官方 DevKit `1.9.8` 及其完整离线加密依赖；
@@ -2319,7 +2330,7 @@ curl --fail-with-body -H "Authorization: Bearer ${DCLAW_ACCESS_TOKEN}" \
 
 开发者先查看 `failure_events` 的时间顺序及 `outcome`，再以 `final_blocker` 判断本轮最终阻断。`first_failure` 仅为兼容字段，可能是已恢复的早期错误，不能单独当作整轮原因。`status=not_recorded`、`unrecorded_fields` 或 `provider_code/param=null` 表示当时没有留存，不得用模型解释补造。新回合的卡片参数校验失败返回 `field_path`、稳定 `constraint` 及 `contract`；提供方拒绝只记录 HTTP 状态、稳定 code 与 param，不记录错误正文、模型原文、提示词或客户数据。`stages` 中 `interaction.tool.invoked` 才证明模型进入了插件工具；`interaction.operation.started/completed/failed` 分别证明已发起、已完成或已失败的平台卡片操作。没有这些记录的旧回合不能据此推断工具未执行。
 
-`agent.execute(execution_mode="agent_loop")` 会使用普通文本/工具调用模式，不继承模型配置里的 JSON-only 默认值。开发者仍须根据实时 `interaction_component_catalog` 的详细 Schema 创建卡片；`task_key` 是字符串、`interaction_revision` 是正整数、`card` 是对象，创建成功必须取得真实 `PENDING` 回执。`response_format="json_object"` 只适用于候选模式，不与 `agent_loop` 组合。历史已签名专家无需变更请求；新增合同是可选的开发者读接口。
+`agent.execute(execution_mode="agent_loop")` 会使用普通文本/工具调用模式，不继承模型配置里的 JSON-only 默认值。旧专家继续通过实时 `interaction_component_catalog` 的详细 Schema 使用建卡模型工具；新建或更新专家按第 13.1 节使用 Host 目录、两段无工具候选及直接 Host 建卡。两条路径都要求 `task_key` 为字符串、`interaction_revision` 为正整数、`card` 为对象，并取得真实 `PENDING` 回执。`response_format="json_object"` 只适用于候选模式，不与 `agent_loop` 组合。历史已签名专家无需变更请求；新增合同是可选的开发者读接口。
 
 ### 33.2 六部分公共能力验收
 
@@ -2335,6 +2346,11 @@ curl --fail-with-body -H "Authorization: Bearer ${DCLAW_ACCESS_TOKEN}" \
 以上是通用 Skill 的平台合同输入。Skill 维护方应在其 `references/capability-verification.md` 补 `/v2/` 的首错和终止根因区分，在 `scripts/runtime_diagnostics_with_login.py` 增加按官方 DevKit v2 Schema 查询和摘要，在相关脚本测试加入已恢复错误、最终阻断、`no_record`、越权及旧版回退案例。平台不直接覆盖 Skill 发布仓库，也不把单个专家的业务字段写成公共规则。
 
 ## 34. 版本记录
+
+### 2.40 - 2026-11-09
+
+- 统一新建及更新超级专家的交互卡流程：普通无工具调用生成内部业务文本，第二次无工具模型调用根据实时组件 Schema 生成卡片草案，专家运行时校验后通过 `interaction.card.create/1` 建卡并核对可信回执。首段文本在卡片提交前不对客户展示，第二段校验失败不降级为文本提问。
+- 既有模型工具建卡路径保持兼容，已签名专家由各责任方更新发布包并验证状态续接。Developer Pack `1.10.16` 同步本标准，DevKit `1.9.8` 的现有 Host 与候选调用合同不变。
 
 ### 2.39 - 2026-11-09
 

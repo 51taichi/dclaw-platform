@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.16 - 2026-11-09
+
+- Bundles development standard 2.40 and DevKit 1.9.8.
+- Documents the two-stage internal text and card-draft flow, followed by
+  validated Host card creation. Existing signed Agent tool paths remain valid.
+
 ## 1.10.15 - 2026-11-09
 
 - Bundles development standard 2.39 and DevKit 1.9.8.
