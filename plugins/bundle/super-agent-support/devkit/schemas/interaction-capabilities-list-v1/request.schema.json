@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/schemas/interaction-capabilities-list-v1/request.schema.json",
+  "title": "interaction.capabilities.list/1 Host request",
+  "type": "object",
+  "properties": {
+    "component_types": {
+      "type": "array",
+      "items": {
+        "enum": ["single_select", "multi_select", "question_form", "file_selector"]
+      }
+    }
+  },
+  "additionalProperties": false
+}

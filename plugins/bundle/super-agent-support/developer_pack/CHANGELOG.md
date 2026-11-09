@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.17 - 2026-11-09
+
+- Bundles development standard 2.41 and DevKit 1.9.9.
+- Adds direct Host interaction catalog/create schemas and a validated
+  `single_select` success example, including idempotency and receipt linkage.
+
 ## 1.10.16 - 2026-11-09
 
 - Bundles development standard 2.40 and DevKit 1.9.8.

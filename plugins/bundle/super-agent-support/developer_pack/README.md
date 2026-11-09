@@ -1,5 +1,11 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.17 bundles development standard 2.41 and DevKit 1.9.9. Direct
+Host interaction catalog and card creation now have request/response schemas
+and a verified `single_select` success example under `devkit/examples/`.
+The live card schema remains at `components[].schema` in the Host catalog;
+the public Component Registry is a separate local-helper dependency catalog.
+
 Version 1.10.16 bundles development standard 2.40 and DevKit 1.9.8. New and
 updated Agents generate internal business text first, then generate a separate
 card draft from the live catalog and call the trusted Host create capability

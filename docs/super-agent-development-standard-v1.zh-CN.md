@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.40`
+当前版本：`2.41`
 
 发布日期：`2026-11-09`
 
@@ -727,6 +727,10 @@ DClaw 平台负责卡片持久化、渲染、提交和可信回传；开发方�
 4. 只有校验通过后，运行时才以稳定幂等键调用 Host `interaction.card.create/1`；插件再次执行权威 Schema、授权和作用域校验。运行时核对真实 `interaction_id`、`PENDING` 状态及 `interaction.card.receipt/1` 的 `created` 回执，再调用 `runtime.complete` 原子提交客户回复及卡片。任何内部候选、失败草案和未经确认的建卡结果都不得提前展示为已完成回复。
 
 这两段模型调用分别处理业务回复和卡片表达；修改通用卡片表达规则时，只调整第二段的候选与校验模块，不改变第一段的业务目标、原始需求或既有状态机。`json_object` 只帮助第二段返回可解析对象，不能替代实时组件 Schema、业务不变量或 Host 最终校验。已签名旧专家的固定卡直建和模型工具建卡路径继续受原合同支持；各责任方在更新其发布包时迁入上述统一流程并验证旧任务续接，不由插件静默改写业务实现。
+
+直接 Host 调用的关闭外层请求/响应 Schema 分别位于 DevKit `schemas/interaction-capabilities-list-v1/` 与 `schemas/interaction-card-create-v1/`，成功的 `single_select` 建卡请求、规范化结果和 `created` 回执位于 `examples/interaction-host-v1/single-select-success.json`。调用 `await host.call("interaction.capabilities.list/1", {"component_types": ["single_select"]})` 后，实时组件 Schema 在响应 `components[0].schema`；空数组或省略类型只返回精简索引，没有组件 Schema。开发方须先按详细目录的 Schema 校验 `request.card`，再按业务不变量校验候选。公共 Component Registry 是本地助手依赖目录，不是交互卡目录，不得替代此 Host 调用。
+
+直接建卡请求的 `idempotency_key` 与 `request` 同级；`request` 包含稳定 `task_key`、正整数 `interaction_revision`、类型、卡片对象及可选输入策略，默认 `card_only`。`card_only` 的待提交卡阻塞普通文本输入；`card_or_text`、`concurrent` 均保留文本输入，但文本本身不证明卡片已提交。Host 从可信执行上下文注入租户、installation 和任务身份，调用方不得传入这些作用域字段。相同作用域、问题、修订和载荷的重试沿用原幂等键；实质改动须递增修订并换键，已存在阻塞卡须显式提供其 `replaces_interaction_id`。首次成功时核对 `interaction.status=PENDING`、真实 `interaction_id`，以及 `receipt.contract=interaction.card.receipt/1`、`action=created`、`status=PENDING`；回执的交互 ID、可信作用域、`task_key`、修订、版本和 `event_id` 应与创建结果的 `create` 转换一致。后续 `session.context.interaction_receipts` 中的同一 `created` 回执以 `event_id` 和 `interaction_id` 关联。卡片已提交后重放原幂等请求可能返回当前非 `PENDING` 的卡片状态，但原 `created` 回执仍为 `PENDING`；不得把该重放当作新卡展示。
 
 既有专家可能通过 `agent.execute(execution_mode="agent_loop")` 使用平台按授权动态注册的以下模型工具；它们属于兼容路径，不是新建或更新专家的默认建卡入口：
 
@@ -2346,6 +2350,10 @@ curl --fail-with-body -H "Authorization: Bearer ${DCLAW_ACCESS_TOKEN}" \
 以上是通用 Skill 的平台合同输入。Skill 维护方应在其 `references/capability-verification.md` 补 `/v2/` 的首错和终止根因区分，在 `scripts/runtime_diagnostics_with_login.py` 增加按官方 DevKit v2 Schema 查询和摘要，在相关脚本测试加入已恢复错误、最终阻断、`no_record`、越权及旧版回退案例。平台不直接覆盖 Skill 发布仓库，也不把单个专家的业务字段写成公共规则。
 
 ## 34. 版本记录
+
+### 2.41 - 2026-11-09
+
+- DevKit `1.9.9` 增加直接 Host 交互卡目录与建卡的关闭外层请求/响应 Schema、`single_select` 成功示例，明确实时 Schema、输入策略、幂等键及 `created` 回执关联；Developer Pack `1.10.17` 同步收录。插件 `1.18.24` 仅补公开开发材料，既有 Host 能力语义不变。
 
 ### 2.40 - 2026-11-09
 

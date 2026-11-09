@@ -1,5 +1,13 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.9 adds direct Host `interaction.capabilities.list/1` and
+`interaction.card.create/1` request/response schemas in
+`schemas/interaction-capabilities-list-v1/` and
+`schemas/interaction-card-create-v1/`. The successful `single_select` call,
+result and `created` receipt are in
+`examples/interaction-host-v1/single-select-success.json`; see that example's
+README for live Schema location, input policy and idempotent replay rules.
+
 Version 1.9.8 adds `developer.runtime.diagnostics.by-reference/2` at
 `GET /api/user/super-expert-publishing/runtime-diagnostics/v2/references/{invocation_id}?agent_id=...`.
 The signed-in developer must own that expert; a customer-visible invocation

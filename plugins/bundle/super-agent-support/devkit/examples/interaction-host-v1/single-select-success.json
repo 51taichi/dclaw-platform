@@ -1,0 +1,101 @@
+{
+  "trusted_scope_example": {
+    "installation_id": "install-demo",
+    "conversation_id": "task-demo"
+  },
+  "catalog_call": {
+    "capability": "interaction.capabilities.list/1",
+    "arguments": {"component_types": ["single_select"]},
+    "live_card_schema_location": "components[0].schema"
+  },
+  "create_call": {
+    "capability": "interaction.card.create/1",
+    "arguments": {
+      "idempotency_key": "primary-channel-rev-1",
+      "request": {
+        "task_key": "primary-channel",
+        "interaction_revision": 1,
+        "component_type": "single_select",
+        "input_policy": "card_only",
+        "card": {
+          "title": "请选择主要获客渠道",
+          "options": [
+            {"id": "short-video", "text": "短视频平台"},
+            {"id": "search", "text": "搜索渠道"}
+          ]
+        }
+      }
+    }
+  },
+  "create_result": {
+    "interaction": {
+      "interaction_id": "interaction-f70cf9b7ab80cf6154e51812e1e3748c",
+      "binding": {
+        "installation_id": "install-demo",
+        "conversation_id": "task-demo",
+        "agent_task_id": "interaction-task-eb6f835069048319ca4177f366a4eff4"
+      },
+      "task_key": "primary-channel",
+      "interaction_revision": 1,
+      "component_type": "single_select",
+      "input_policy": "card_only",
+      "card": {
+        "title": "请选择主要获客渠道",
+        "description": null,
+        "options": [
+          {
+            "id": "short-video",
+            "text": "短视频平台",
+            "description": null,
+            "recommended": false,
+            "default_selected": false
+          },
+          {
+            "id": "search",
+            "text": "搜索渠道",
+            "description": null,
+            "recommended": false,
+            "default_selected": false
+          }
+        ],
+        "supplement": {
+          "enabled": false,
+          "label": "补充信息",
+          "placeholder": "如有其他情况可以补充",
+          "required": false,
+          "max_length": 2000
+        },
+        "layout": "auto"
+      },
+      "status": "PENDING",
+      "version": 1,
+      "transitions": [
+        {
+          "event_id": "create-46df85f74cde8a377d566814dfb1aac3",
+          "action": "create",
+          "from_status": null,
+          "to_status": "PENDING",
+          "occurred_at": "2026-11-09T00:00:00Z"
+        }
+      ],
+      "answer": null,
+      "expires_at": null,
+      "created_at": "2026-11-09T00:00:00Z",
+      "updated_at": "2026-11-09T00:00:00Z"
+    },
+    "receipt": {
+      "contract": "interaction.card.receipt/1",
+      "action": "created",
+      "event_id": "create-46df85f74cde8a377d566814dfb1aac3",
+      "interaction_id": "interaction-f70cf9b7ab80cf6154e51812e1e3748c",
+      "installation_id": "install-demo",
+      "conversation_id": "task-demo",
+      "task_key": "primary-channel",
+      "interaction_revision": 1,
+      "version": 1,
+      "status": "PENDING",
+      "answer_sha256": null,
+      "occurred_at": "2026-11-09T00:00:00+00:00"
+    }
+  }
+}

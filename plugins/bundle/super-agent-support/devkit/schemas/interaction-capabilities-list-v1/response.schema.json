@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/schemas/interaction-capabilities-list-v1/response.schema.json",
+  "title": "interaction.capabilities.list/1 Host response",
+  "type": "object",
+  "required": ["catalog_version", "components"],
+  "properties": {
+    "catalog_version": {"const": "1"},
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "required": ["component_type", "contract_version", "summary", "use_when", "do_not_use_when"],
+        "properties": {
+          "component_type": {"enum": ["single_select", "multi_select", "question_form", "file_selector"]},
+          "contract_version": {"const": "1"},
+          "summary": {"type": "string", "minLength": 1},
+          "use_when": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+          "do_not_use_when": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+          "required_capability": {"const": "interaction.file.select/1"},
+          "defaults": {"type": "object"},
+          "schema": {"type": "object"},
+          "create_example": {"type": "object"},
+          "error_examples": {"type": "array", "items": {"type": "object"}}
+        },
+        "dependentRequired": {
+          "schema": ["defaults", "create_example", "error_examples"],
+          "defaults": ["schema", "create_example", "error_examples"]
+        },
+        "additionalProperties": false
+      }
+    },
+    "answer_schema": {"type": "object"}
+  },
+  "additionalProperties": false
+}
