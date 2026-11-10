@@ -61,6 +61,38 @@
       "success_example": "examples/interaction-host-v1/single-select-success.json"
     }
   },
+  "aigc_workflow_host": {
+    "owner": "dclaw.super-agent-support",
+    "model_tool_transport": "agent.execute(agent_loop)",
+    "catalog_tool": "aigc_workflow_catalog",
+    "create_tool": "aigc_workflow_create",
+    "catalog_capability_id": "aigc.workflow.capabilities.list/1",
+    "create_capability_id": "aigc.workflow.create/1",
+    "live_workflow_schema_location": "aigc_workflow_catalog.workflow_schema",
+    "live_node_catalog_location": "aigc_workflow_catalog.catalog.nodes",
+    "snapshot": {
+      "transport": "sealed-agent-host.call",
+      "capability_id": "aigc.task.snapshot/1",
+      "request_schema": "schemas/aigc-task-snapshot-v1/request.schema.json",
+      "response_schema": "schemas/aigc-task-snapshot-v1/response.schema.json"
+    },
+    "api_demo": "aigc_workflow_api_demo.py",
+    "example": "examples/aigc-workflow-v1/README.md",
+    "snapshot_example": "examples/aigc-workflow-v1/submitted-snapshot.sample.json"
+  },
+  "local_task_host": {
+    "owner": "dclaw.super-agent-support",
+    "transport": "sealed-agent-host.call",
+    "start_capability_id": "local.task.start/1",
+    "read_capability_id": "local.task.read/1",
+    "cancel_capability_id": "local.task.cancel/1",
+    "start_request_schema": "schemas/local-task-host-v1/start-request.schema.json",
+    "task_request_schema": "schemas/local-task-host-v1/task-request.schema.json",
+    "receipt_schema": "schemas/local-task-host-v1/receipt.schema.json",
+    "api_demo": "local_task_api_demo.py",
+    "example": "examples/local-task-host-v1/README.md",
+    "receipt_example": "examples/local-task-host-v1/task-success.sample.json"
+  },
   "capability_id": "business.service.installation-identity/1",
   "capability_ids": [
     "business.service.installation-identity/1",

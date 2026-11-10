@@ -1,5 +1,13 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.12 adds `aigc_workflow_api_demo.py` and `local_task_api_demo.py`
+with call-order, live-catalog, bound-result, idempotency and terminal-result
+examples under `examples/aigc-workflow-v1/` and `examples/local-task-host-v1/`.
+The AIGC catalog/create calls are dynamically granted model tools in
+`agent_loop`; the AIGC snapshot and local tasks are direct Host calls. These
+examples add no new Host capabilities. Keep their schemas and `jsonschema`
+dependency with a signed Agent when adapting them at runtime.
+
 Version 1.9.11 adds the runnable direct Host reference
 `interaction_card_api_demo.py`. Its `create_card` covers all four published
 components. It obtains the selected live card Schema,

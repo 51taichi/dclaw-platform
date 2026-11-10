@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.43`
+当前版本：`2.44`
 
 发布日期：`2026-11-10`
 
@@ -562,6 +562,8 @@ stateDiagram-v2
 代码不得根据能力名称猜参数；使用前读取对应版本协议或实时目录。
 
 使用公共 AIGC 时，超级专家必须通过 `agent.execute(execution_mode="agent_loop")` 调用按授权动态注册的 `aigc_workflow_catalog`、`aigc_workflow_create`、`aigc_task_status`、`aigc_task_resume` 和 `aigc_task_review`。先读取实时目录及 `WorkflowBlueprint` Schema，再创建或恢复任务；创建任务不等于生成完成，最终仍按真实任务状态和产物验收。未授权的工具不会注册，Agent 不得自行构造内部接口。
+
+DevKit `aigc_workflow_api_demo.py` 与 `examples/aigc-workflow-v1/README.md` 给出目录、建任务、客户操作后快照及资产校验的参考实现。AIGC 任务卡由工作流创建操作投影，不使用问答卡的 `interaction.card.create/1`；模型工具通过 `agent_loop` 动态注册，`aigc.task.snapshot/1` 是独立的只读 Host 调用。`agent_loop` 不得叠加 `response_format="json_object"`。本地助手的 `local_task_api_demo.py` 和 `examples/local-task-host-v1/README.md` 给出启动、按真实任务 ID 回读和终态产物校验的参考实现。两个示例都只说明已发布合同，不授权新能力，也不能替代目标实例实时目录与客户端验收。
 
 能力出现在 manifest 目录、文档或 Schema 中，只证明平台识别该能力声明，不证明对应运行服务已经生产可用。开发方必须同时核对目标环境的能力可用状态、生产入口和最低组件版本；平台未发布这些信息时不得自行猜测地址或把业务参考实现当作公共平台。
 
@@ -2311,6 +2313,7 @@ DevKit `1.9.8` 必须提供：
 - `schemas/runtime-diagnostics-v2/`：开发者按同一关联 ID 读取有界错误顺序、已恢复错误和最终阻断的关闭请求、响应及错误合同；
 - `schemas/aigc-task-snapshot-v1/`：密封专家按可信安装与任务读取工作流状态和已验证产物资产 ID 的关闭合同；
 - `schemas/local-task-host-v1/`：密封专家确定性启动、读取、取消本地任务及读取受限回执的关闭合同；
+- `aigc_workflow_api_demo.py`、`local_task_api_demo.py` 及各自 `examples/`：现有 AIGC 模型工具/快照和本地任务 Host 调用的可运行参考、成功/拒绝门禁；
 - `schemas/capability-package-signer-v1/`：管理员登记本地能力包签名公钥的关闭请求与回执合同；
 - `operation-catalog.json`：正式 MCP 入口、客户端键、工具名、调用顺序和平台注入参数；
 - `business_identity_verifier.py` 与 `fixtures/business-identity/`：公开 JWK 离线验签、持久化 `jti` 防重放、断言 Header 运输和正反夹具；
@@ -2351,9 +2354,26 @@ curl --fail-with-body -H "Authorization: Bearer ${DCLAW_ACCESS_TOKEN}" \
 | 本地助手 | 只在真实需要时声明能力。能力包由独立 signer 签名，公钥由平台管理员通过插件登记，注册表及安装授权先核对；用 `local.task.start/1` 的同一幂等键取得受理回执，按 `task_id` 用 `local.task.read/1` 回读终态和不透明产物 ID。设备离线、回执丢失或状态不明时原键查询并停止下游，不换键重复启动。 |
 | 密封、发布与诊断 | 用正式 Pack 验证、测试、密封和独立验签；普通账号自助发布后核对实际 Release/installation。失败时凭关联 ID 查询 `/v2/` 的最终阻断，旧 `/v1/`、已签包与现役专家合同并行；没有真实客户端及产物回执不得称端到端验收通过。 |
 
+### 33.3 三种公共交互的可执行示例门禁
+
+| 路径 | 开发方实际入口 | 成功判据 | 失败时动作 | DevKit 参考 |
+|---|---|---|---|---|
+| 问答/文件交互卡 | `interaction.capabilities.list/1` → `interaction.card.create/1` → 客户提交后 `interaction.card.read/1` | 实时完整 Schema 验证通过；建卡的 `PENDING`、`created` 回执与作用域、ID、修订、事件匹配；提交后再验 `SUBMITTED` 和答案摘要 | 不显示虚假卡片；同一问题按原幂等键回读，业务变更才递增修订 | `interaction_card_api_demo.py` 与 `examples/interaction-host-v1/` |
+| AIGC 任务卡与生成 | `agent.execute(agent_loop)` 中获授权的 `aigc_workflow_catalog` → `aigc_workflow_create`；后续 `aigc.task.snapshot/1` | 蓝图通过实时 `workflow_schema`，节点和模型来自实时目录；创建事件与任务绑定一致；客户生成/提交后同任务、画布、节点和成功 job 的资产 ID 匹配 | 创建未确认按同一 `task_key`、`content_revision` 和蓝图查询/重试；未提交、失败 job 或资产不匹配不得进入下游 | `aigc_workflow_api_demo.py` 与 `examples/aigc-workflow-v1/` |
+| 本地助手任务 | `local.task.start/1` → `local.task.read/1`，需要时显式 `local.task.cancel/1` | 同一能力、任务 ID 和幂等键；`succeeded` 且有符合 Schema 的不透明产物 ID 与结果摘要；Agent 再检查业务完成条件 | 离线、拒绝、丢回执或非终态保持原键与原任务 ID，不换键盲启 | `local_task_api_demo.py` 与 `examples/local-task-host-v1/` |
+
+AIGC 任务卡与问答交互卡是不同合同，不能用一者的创建回执代替另一者。AIGC 的目录/创建由授权后动态注册的模型工具暴露，DevKit 示例中传入的工具 callable 仅用于合同测试；密封运行时通过 `agent.execute(execution_mode="agent_loop")` 触发同一工具，不直接获得平台内部 Python 对象。`aigc.task.snapshot/1` 和本地任务接口由 Host 从可信上下文注入租户、用户、安装、任务与调用身份；Agent 不得自行传这些物理作用域。AIGC 静态示例中的模型 ID、本地示例中的能力 ID 均为演示值，发布前须换成目标实例实时目录/注册表中实际存在且获授权的值。没有本地任务的 Agent 不调用本地助手。
+
+Skill 和专家发布前须对每条实际使用的路径同时验证：正确目录与 Schema、真实授权、可确认的回执、错误/超时/重放/跨作用域反例，以及一次客户端“触发 → 展示 → 客户操作 → 同任务续接”。参考脚本通过单元测试只证明入参、回执和失败关闭规则，不能证明生产模型、客户端 AIGC 控件或客户设备已经可用。使用 `jsonschema` 等第三方校验器的签名运行时须自带适配版本及依赖，不能从开发包安装状态推断生产沙箱可用。
+
 以上是通用 Skill 的平台合同输入。Skill 维护方应在其 `references/capability-verification.md` 补 `/v2/` 的首错和终止根因区分，在 `scripts/runtime_diagnostics_with_login.py` 增加按官方 DevKit v2 Schema 查询和摘要，在相关脚本测试加入已恢复错误、最终阻断、`no_record`、越权及旧版回退案例。平台不直接覆盖 Skill 发布仓库，也不把单个专家的业务字段写成公共规则。
 
 ## 34. 版本记录
+
+### 2.44 - 2026-11-10
+
+- DevKit `1.9.12` 与 Developer Pack `1.10.20` 补齐 AIGC 工作流任务卡及本地助手的 API 示例、调用顺序、实时目录、绑定回执、幂等与失败关闭门禁；插件 `1.18.27` 只发布参考材料和标准，不改变既有 Host 能力或已签名专家。
+- 三种公共路径分别用真实合同验收，AIGC 任务卡不冒充问答交互卡；模型工具与直接 Host 调用的边界明确列出。
 
 ### 2.43 - 2026-11-10
 

@@ -1,5 +1,10 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.20 bundles development standard 2.44 and DevKit 1.9.12. The
+interaction card, AIGC workflow task card and local helper task each have a
+separate runnable API reference and documented failure gate. Existing Host
+contracts and signed Agent releases are unchanged.
+
 Version 1.10.19 bundles development standard 2.43 and DevKit 1.9.11. The
 direct Host API demo shows the same catalog, validation, create and receipt
 boundary for every newly built or updated Super Agent. It changes no existing

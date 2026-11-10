@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.20 - 2026-11-10
+
+- Bundles development standard 2.44 and DevKit 1.9.12.
+- Adds runnable AIGC workflow/task-card and local-helper task API references
+  with live catalog, scoped receipt, retry and terminal-asset examples.
+
 ## 1.10.19 - 2026-11-10
 
 - Bundles development standard 2.43 and DevKit 1.9.11.

@@ -1,0 +1,16 @@
+{
+  "contract": "aigc.task.snapshot/1",
+  "status": "found",
+  "material_task_id": "material-example",
+  "workflow_id": "workflow-example",
+  "canvas_id": "canvas-example",
+  "task_status": "SUBMITTED",
+  "task_version": 2,
+  "submitted_asset_id": "asset-example",
+  "node_jobs": [
+    {"node_id": "image-node", "job_id": "job-example", "job_status": "succeeded"}
+  ],
+  "generation_assets": [
+    {"node_id": "image-node", "job_id": "job-example", "asset_id": "asset-example", "asset_kind": "image"}
+  ]
+}
