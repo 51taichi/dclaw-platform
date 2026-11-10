@@ -1,5 +1,10 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.18 bundles development standard 2.42 and DevKit 1.9.10. It adds
+the actual `single_select` live catalog fixture and full Schema validation
+reference so Agent tests catch unsupported `$defs` and `$ref` before sealing.
+The Host card contracts and existing signed Agent behavior are unchanged.
+
 Version 1.10.17 bundles development standard 2.41 and DevKit 1.9.9. Direct
 Host interaction catalog and card creation now have request/response schemas
 and a verified `single_select` success example under `devkit/examples/`.

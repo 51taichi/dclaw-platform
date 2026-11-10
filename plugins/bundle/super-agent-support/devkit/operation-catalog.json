@@ -48,7 +48,9 @@
       "capability_id": "interaction.capabilities.list/1",
       "request_schema": "schemas/interaction-capabilities-list-v1/request.schema.json",
       "response_schema": "schemas/interaction-capabilities-list-v1/response.schema.json",
-      "live_card_schema_location": "components[].schema"
+      "live_card_schema_location": "components[].schema",
+      "single_select_live_fixture": "fixtures/interaction-host-v1/single-select-live-catalog.json",
+      "validation_reference": "validate_live_card.py"
     },
     "card_create": {
       "capability_id": "interaction.card.create/1",

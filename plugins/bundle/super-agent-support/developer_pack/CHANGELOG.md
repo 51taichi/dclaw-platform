@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.18 - 2026-11-10
+
+- Bundles development standard 2.42 and DevKit 1.9.10.
+- Adds the complete live `single_select` catalog snapshot, full Draft 2020-12
+  validation reference, and positive and negative card tests.
+
 ## 1.10.17 - 2026-11-09
 
 - Bundles development standard 2.41 and DevKit 1.9.9.

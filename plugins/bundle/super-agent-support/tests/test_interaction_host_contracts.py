@@ -16,11 +16,13 @@ from super_agent.interaction_contract import (
     build_interaction_catalog,
 )
 from super_agent.interaction_receipts import card_receipt
+from devkit.validate_live_card import validate_live_card
 
 
 PLUGIN_ROOT = Path(__file__).parents[1]
 SCHEMAS = PLUGIN_ROOT / "devkit" / "schemas"
 EXAMPLE = PLUGIN_ROOT / "devkit" / "examples" / "interaction-host-v1" / "single-select-success.json"
+LIVE_CATALOG = PLUGIN_ROOT / "devkit" / "fixtures" / "interaction-host-v1" / "single-select-live-catalog.json"
 
 
 def _schema(relative: str) -> dict:
@@ -110,6 +112,22 @@ def test_direct_host_catalog_and_single_select_example_match_runtime(tmp_path):
     assert replay_result["receipt"] == receipt
 
 
+def test_live_catalog_fixture_exercises_complete_schema():
+    catalog = json.loads(LIVE_CATALOG.read_text(encoding="utf-8"))
+    assert catalog == build_interaction_catalog(["single_select"])
+    component = catalog["components"][0]
+    assert "$defs" in component["schema"]
+    assert component["schema"]["properties"]["supplement"]["$ref"].startswith("#/$defs/")
+    example = component["create_example"]["card"]
+    validate_live_card(catalog, "single_select", example)
+    with pytest.raises(ValidationError) as missing_title:
+        validate_live_card(catalog, "single_select", {"options": example["options"]})
+    assert missing_title.value.validator == "required"
+    with pytest.raises(ValidationError) as extra_field:
+        validate_live_card(catalog, "single_select", {**example, "unknown": True})
+    assert extra_field.value.validator == "additionalProperties"
+
+
 def test_direct_host_schemas_reject_extra_fields_and_bad_created_receipt():
     example = json.loads(EXAMPLE.read_text(encoding="utf-8"))
     create_request = example["create_call"]["arguments"]
@@ -137,6 +155,8 @@ def test_public_archives_include_direct_host_contracts_and_example():
         "devkit/schemas/interaction-card-create-v1/response.schema.json",
         "devkit/examples/interaction-host-v1/single-select-success.json",
         "devkit/examples/interaction-host-v1/README.md",
+        "devkit/fixtures/interaction-host-v1/single-select-live-catalog.json",
+        "devkit/validate_live_card.py",
         "devkit/operation-catalog.json",
     ]
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:

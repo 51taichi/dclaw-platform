@@ -41,3 +41,13 @@ The outer Host request and response schemas are in
 against the selected live `components[].schema`; the outer create schema does
 not replace it. The independently versioned receipt schema is in
 `schemas/interaction-card-receipt-v1/`.
+
+For a pre-publication regression, validate the included `create_example.card`
+against `fixtures/interaction-host-v1/single-select-live-catalog.json` and
+reject cards missing `title` or carrying unknown fields. This fixture contains
+real `$defs` and nested `$ref` nodes. `devkit/validate_live_card.py` shows
+complete Draft 2020-12 validation; it requires `jsonschema>=4.20,<5` in the
+developer test environment. A custom keyword whitelist is insufficient even
+if it accepts one version of the catalog. Repeat validation against the target
+Host's detailed catalog before creating a card. Keep option IDs, order and
+business state checks separate from structural Schema validation.
