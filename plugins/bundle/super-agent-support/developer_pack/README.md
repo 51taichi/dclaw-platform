@@ -1,5 +1,10 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.19 bundles development standard 2.43 and DevKit 1.9.11. The
+direct Host API demo shows the same catalog, validation, create and receipt
+boundary for every newly built or updated Super Agent. It changes no existing
+Host capability or signed Agent release.
+
 Version 1.10.18 bundles development standard 2.42 and DevKit 1.9.10. It adds
 the actual `single_select` live catalog fixture and full Schema validation
 reference so Agent tests catch unsupported `$defs` and `$ref` before sealing.

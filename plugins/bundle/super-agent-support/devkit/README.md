@@ -1,5 +1,13 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.11 adds the runnable direct Host reference
+`interaction_card_api_demo.py`. It obtains the selected live card Schema,
+validates the card and approved business option IDs, creates the card with a
+stable idempotency key, and verifies the persisted `created` receipt before
+returning an interaction ID. See `examples/interaction-host-v1/README.md` for
+the call and required pre-publication tests. This is reference source for the
+Agent runtime, not a new Host capability.
+
 Version 1.9.10 adds a complete `single_select` live catalog fixture at
 `fixtures/interaction-host-v1/single-select-live-catalog.json` and a Draft
 2020-12 validation reference at `validate_live_card.py`. The reference requires

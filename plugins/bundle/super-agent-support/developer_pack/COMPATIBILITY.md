@@ -3,7 +3,7 @@
 | Component | Supported version |
 |---|---|
 | Developer pack | 1.0.x through 1.10.x |
-| Development standard | 2.1 through 2.42 |
+| Development standard | 2.1 through 2.43 |
 | Super Agent DevKit | 1.2.x through 1.9.x |
 | Super Expert manifest | 3 |
 | Runtime / runtime host | 1 |
@@ -31,6 +31,7 @@
 | Support plugin for developer pack >= 1.9.3 download | >= 1.16.0 |
 | Support plugin for self-service package type and developer pack >= 1.10.0 | >= 1.17.0 |
 | Support plugin for developer pack >= 1.10.18 download | >= 1.18.25 |
+| Support plugin for developer pack >= 1.10.19 download | >= 1.18.26 |
 | Support plugin for `runtime.failure.read/1` | >= 1.18.12 |
 | Support plugin for startup failure diagnostics and durable failed turns | >= 1.18.13 |
 | Support plugin for preserving prior memory on failed turns | >= 1.18.14 |

@@ -4,6 +4,42 @@
 create call and its persisted Host result. The `trusted_scope_example` values
 are illustrative Host context, never caller-supplied arguments.
 
+`devkit/interaction_card_api_demo.py` is an executable reference for the two
+direct Host calls. A signed Agent can adapt its shared card module to this
+boundary after its own first model call has determined the business question
+and its second model call has proposed only a card presentation:
+
+```python
+from devkit.interaction_card_api_demo import create_single_select
+
+interaction_id = await create_single_select(
+    host,
+    task_key="customer-choice",
+    interaction_revision=1,
+    card={
+        "title": "请选择最贴近的一项",
+        "options": [
+            {"id": "option-a", "text": "选项甲"},
+            {"id": "option-b", "text": "选项乙"},
+        ],
+    },
+    expected_title="请选择最贴近的一项",
+    expected_option_ids=["option-a", "option-b"],
+    idempotency_key="customer-choice-rev-1",
+)
+# Only now may runtime.complete commit the customer message and card reference.
+```
+
+The function calls `interaction.capabilities.list/1` with the exact component
+type, validates against `components[0].schema`, checks the fixed business
+question and IDs, calls `interaction.card.create/1`, and requires the returned
+`interaction` and `interaction.card.receipt/1` to match. It raises on any
+failure. The calling Agent must keep the business state, stable key, revision,
+replacement rules and `runtime.complete/fail` transaction handling. Copy or
+adapt the reference in each signed Agent; if using `jsonschema`, include it
+and its dependencies in that Agent's signed private package. A Developer Pack
+file is not automatically importable by the sealed runtime.
+
 1. Declare and obtain grants for `interaction.capabilities.list/1` and
    `interaction.card.create/1`. Call
    `await host.call("interaction.capabilities.list/1", {"component_types": ["single_select"]})`.
@@ -51,3 +87,10 @@ developer test environment. A custom keyword whitelist is insufficient even
 if it accepts one version of the catalog. Repeat validation against the target
 Host's detailed catalog before creating a card. Keep option IDs, order and
 business state checks separate from structural Schema validation.
+
+The Skill's release gate must run the API reference or an equivalent shared
+Agent implementation against the real catalog fixture, invalid cards and a
+bad `created` receipt. It must also check that the target instance's detailed
+catalog accepts its own `create_example.card`. A passing offline mock cannot
+prove that a customer click and same-task continuation work; verify those in
+the client after activation.

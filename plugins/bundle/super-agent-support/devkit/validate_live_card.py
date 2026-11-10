@@ -10,7 +10,7 @@ from jsonschema import Draft202012Validator, FormatChecker, ValidationError
 
 
 def validate_live_card(catalog: dict, component_type: str, card: dict) -> None:
-    if catalog.get("catalog_version") != "1":
+    if not isinstance(catalog, dict) or catalog.get("catalog_version") != "1":
         raise ValueError("unsupported interaction catalog")
     components = [
         component for component in catalog.get("components", [])

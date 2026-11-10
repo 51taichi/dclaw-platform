@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.42`
+当前版本：`2.43`
 
 发布日期：`2026-11-10`
 
@@ -731,6 +731,8 @@ DClaw 平台负责卡片持久化、渲染、提交和可信回传；开发方�
 直接 Host 调用的关闭外层请求/响应 Schema 分别位于 DevKit `schemas/interaction-capabilities-list-v1/` 与 `schemas/interaction-card-create-v1/`，成功的 `single_select` 建卡请求、规范化结果和 `created` 回执位于 `examples/interaction-host-v1/single-select-success.json`。调用 `await host.call("interaction.capabilities.list/1", {"component_types": ["single_select"]})` 后，实时组件 Schema 在响应 `components[0].schema`；空数组或省略类型只返回精简索引，没有组件 Schema。开发方须先按详细目录的 Schema 校验 `request.card`，再按业务不变量校验候选。公共 Component Registry 是本地助手依赖目录，不是交互卡目录，不得替代此 Host 调用。
 
 实时组件 Schema 是完整 JSON Schema，可能包含 `$defs`、`$ref`、`anyOf` 等关键词。运行时必须用支持该 Schema 草案的完整校验器验证 `request.card`，不得用手写关键词白名单或简化模拟 Schema 代替；否则即使平台给出的 `create_example` 合法，也可能在 Host 建卡前被专家自身拒绝。DevKit `fixtures/interaction-host-v1/single-select-live-catalog.json` 是当前 `single_select` 的完整脱敏目录快照，`validate_live_card.py` 提供 Draft 2020-12 验证示例。发布前应验证快照中的合法示例和反例，再用目标实例实时目录验证；静态快照不是目标实例的权威 Schema。若专家运行时使用第三方校验库，开发方负责将其适配版本作为专家依赖纳入签名包，不能假定 DevKit 开发环境或当前沙箱的偶然预装会永久存在。业务选项 ID、顺序、状态及可信回执仍须另行校验。此要求仅针对新建或更新专家，不改变已签名旧包和 Host 卡片合同。
+
+所有新建及更新超级专家的选项建卡实现必须以 DevKit `interaction_card_api_demo.py` 的同一 Host 边界为基线：按确定类型读取实时详细目录，验证平台 `create_example.card` 与本轮草案；核对业务问题和选项 ID 顺序；使用稳定 `task_key`、递增修订和幂等键调用 `interaction.card.create/1`；仅在真实 `PENDING` 卡片与 `interaction.card.receipt/1` 的 `created` 回执在 ID、作用域、版本和事件上匹配后，才提交客户回复。业务内容可不同，但不得跳过上述公共调用与失败关闭门禁。Skill 和各专家的发布前测试至少要覆盖合法实时示例、非法字段、业务选项被改写、错误创建回执及同任务点击续接；模拟 Host 只能辅助测试，不能替代目标实例实时目录校验。现有签名专家不受静默改写，下一次更新时按本节迁入并复测。
 
 直接建卡请求的 `idempotency_key` 与 `request` 同级；`request` 包含稳定 `task_key`、正整数 `interaction_revision`、类型、卡片对象及可选输入策略，默认 `card_only`。`card_only` 的待提交卡阻塞普通文本输入；`card_or_text`、`concurrent` 均保留文本输入，但文本本身不证明卡片已提交。Host 从可信执行上下文注入租户、installation 和任务身份，调用方不得传入这些作用域字段。相同作用域、问题、修订和载荷的重试沿用原幂等键；实质改动须递增修订并换键，已存在阻塞卡须显式提供其 `replaces_interaction_id`。首次成功时核对 `interaction.status=PENDING`、真实 `interaction_id`，以及 `receipt.contract=interaction.card.receipt/1`、`action=created`、`status=PENDING`；回执的交互 ID、可信作用域、`task_key`、修订、版本和 `event_id` 应与创建结果的 `create` 转换一致。后续 `session.context.interaction_receipts` 中的同一 `created` 回执以 `event_id` 和 `interaction_id` 关联。卡片已提交后重放原幂等请求可能返回当前非 `PENDING` 的卡片状态，但原 `created` 回执仍为 `PENDING`；不得把该重放当作新卡展示。
 
@@ -2352,6 +2354,11 @@ curl --fail-with-body -H "Authorization: Bearer ${DCLAW_ACCESS_TOKEN}" \
 以上是通用 Skill 的平台合同输入。Skill 维护方应在其 `references/capability-verification.md` 补 `/v2/` 的首错和终止根因区分，在 `scripts/runtime_diagnostics_with_login.py` 增加按官方 DevKit v2 Schema 查询和摘要，在相关脚本测试加入已恢复错误、最终阻断、`no_record`、越权及旧版回退案例。平台不直接覆盖 Skill 发布仓库，也不把单个专家的业务字段写成公共规则。
 
 ## 34. 版本记录
+
+### 2.43 - 2026-11-10
+
+- DevKit `1.9.11` 增加可运行的 `interaction_card_api_demo.py`，用统一 Host API 演示读取实时目录、完整 Schema 与业务不变量校验、幂等建卡和 `created` 回执核对；Developer Pack `1.10.19` 同步收录。插件 `1.18.26` 不改变既有 Host 合同与已签名专家的行为。
+- 新建及更新超级专家以该示例的公共边界和正反例测试为发布前门禁；Skill 维护方负责把同一门禁接入通用开发流程，专家责任方仍负责各自业务逻辑及签名包。
 
 ### 2.42 - 2026-11-10
 

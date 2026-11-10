@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import io
 import json
 import zipfile
@@ -17,6 +18,10 @@ from super_agent.interaction_contract import (
 )
 from super_agent.interaction_receipts import card_receipt
 from devkit.validate_live_card import validate_live_card
+from devkit.interaction_card_api_demo import (
+    CardContractError,
+    create_single_select,
+)
 
 
 PLUGIN_ROOT = Path(__file__).parents[1]
@@ -128,6 +133,76 @@ def test_live_catalog_fixture_exercises_complete_schema():
     assert extra_field.value.validator == "additionalProperties"
 
 
+@pytest.mark.asyncio
+async def test_api_demo_uses_live_catalog_and_verifies_created_receipt(tmp_path):
+    catalog = build_interaction_catalog(["single_select"])
+    example = catalog["components"][0]["create_example"]
+    repo = InteractionCardRepository(tmp_path)
+
+    class Host:
+        calls = []
+        corrupt_receipt = False
+        catalog_override = None
+
+        async def call(self, capability, arguments):
+            self.calls.append((capability, arguments))
+            if capability == "interaction.capabilities.list/1":
+                return self.catalog_override or catalog
+            assert capability == "interaction.card.create/1"
+            card = repo.create(
+                installation_id="install-demo",
+                conversation_id="task-demo",
+                request=InteractionCreateRequest.model_validate(arguments["request"]),
+                idempotency_key=arguments["idempotency_key"],
+                now=datetime(2026, 11, 10, tzinfo=timezone.utc),
+            )
+            receipt = card_receipt(card, "created")
+            if self.corrupt_receipt:
+                receipt["interaction_id"] = "wrong-interaction"
+            return {"interaction": card.model_dump(mode="json"), "receipt": receipt}
+
+    host = Host()
+    arguments = {
+        "task_key": example["task_key"],
+        "interaction_revision": example["interaction_revision"],
+        "card": example["card"],
+        "expected_title": example["card"]["title"],
+        "expected_option_ids": [item.get("id") for item in example["card"]["options"]],
+        "idempotency_key": "customer-choice-rev-1",
+    }
+    interaction_id = await create_single_select(host, **arguments)
+    assert interaction_id.startswith("interaction-")
+    assert [name for name, _ in host.calls] == [
+        "interaction.capabilities.list/1", "interaction.card.create/1",
+    ]
+    assert host.calls[1][1]["request"]["card"] == example["card"]
+
+    host.calls.clear()
+    with pytest.raises(ValidationError):
+        await create_single_select(host, **{**arguments, "card": {
+            **example["card"], "unknown": True,
+        }})
+    assert [name for name, _ in host.calls] == ["interaction.capabilities.list/1"]
+
+    host.calls.clear()
+    with pytest.raises(CardContractError, match="option IDs or order"):
+        await create_single_select(host, **{
+            **arguments, "expected_option_ids": ["other"],
+        })
+    assert [name for name, _ in host.calls] == ["interaction.capabilities.list/1"]
+
+    host.corrupt_receipt = True
+    with pytest.raises(CardContractError, match="created receipt"):
+        await create_single_select(host, **arguments)
+
+    host.calls.clear()
+    host.catalog_override = copy.deepcopy(catalog)
+    host.catalog_override["components"][0]["create_example"]["card"]["unknown"] = True
+    with pytest.raises(ValidationError):
+        await create_single_select(host, **arguments)
+    assert [name for name, _ in host.calls] == ["interaction.capabilities.list/1"]
+
+
 def test_direct_host_schemas_reject_extra_fields_and_bad_created_receipt():
     example = json.loads(EXAMPLE.read_text(encoding="utf-8"))
     create_request = example["create_call"]["arguments"]
@@ -157,6 +232,7 @@ def test_public_archives_include_direct_host_contracts_and_example():
         "devkit/examples/interaction-host-v1/README.md",
         "devkit/fixtures/interaction-host-v1/single-select-live-catalog.json",
         "devkit/validate_live_card.py",
+        "devkit/interaction_card_api_demo.py",
         "devkit/operation-catalog.json",
     ]
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
@@ -166,4 +242,7 @@ def test_public_archives_include_direct_host_contracts_and_example():
         assert catalog["interaction_host"]["catalog"]["live_card_schema_location"] == "components[].schema"
         assert catalog["interaction_host"]["card_create"]["success_example"] == (
             "examples/interaction-host-v1/single-select-success.json"
+        )
+        assert catalog["interaction_host"]["catalog"]["api_demo"] == (
+            "interaction_card_api_demo.py"
         )

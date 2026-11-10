@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.19 - 2026-11-10
+
+- Bundles development standard 2.43 and DevKit 1.9.11.
+- Adds a runnable direct Host API reference and contract regression for the
+  shared card create and trusted receipt flow.
+
 ## 1.10.18 - 2026-11-10
 
 - Bundles development standard 2.42 and DevKit 1.9.10.
