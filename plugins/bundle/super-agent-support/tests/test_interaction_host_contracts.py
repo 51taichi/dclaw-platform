@@ -20,7 +20,9 @@ from super_agent.interaction_receipts import card_receipt
 from devkit.validate_live_card import validate_live_card
 from devkit.interaction_card_api_demo import (
     CardContractError,
+    create_card,
     create_single_select,
+    verify_created,
 )
 
 
@@ -131,6 +133,95 @@ def test_live_catalog_fixture_exercises_complete_schema():
     with pytest.raises(ValidationError) as extra_field:
         validate_live_card(catalog, "single_select", {**example, "unknown": True})
     assert extra_field.value.validator == "additionalProperties"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", [
+    "single_select", "multi_select", "question_form", "file_selector",
+])
+async def test_api_demo_uses_same_host_boundary_for_each_component(kind):
+    catalog = build_interaction_catalog([kind])
+    example = catalog["components"][0]["create_example"]
+    checked = []
+
+    class Host:
+        calls = []
+
+        async def call(self, capability, arguments):
+            self.calls.append((capability, arguments))
+            if capability == "interaction.capabilities.list/1":
+                assert arguments == {"component_types": [kind]}
+                return catalog
+            assert capability == "interaction.card.create/1"
+            request = arguments["request"]
+            InteractionCreateRequest.model_validate(request)
+            return {
+                "interaction": {
+                    "interaction_id": "interaction-demo",
+                    "status": "PENDING",
+                    "version": 1,
+                    "task_key": request["task_key"],
+                    "interaction_revision": request["interaction_revision"],
+                    "component_type": kind,
+                    "input_policy": request["input_policy"],
+                    "binding": {
+                        "installation_id": "install-demo",
+                        "conversation_id": "task-demo",
+                    },
+                    "transitions": [{"action": "create", "event_id": "created-demo"}],
+                },
+                "receipt": {
+                    "contract": "interaction.card.receipt/1",
+                    "action": "created",
+                    "status": "PENDING",
+                    "interaction_id": "interaction-demo",
+                    "event_id": "created-demo",
+                    "version": 1,
+                    "task_key": request["task_key"],
+                    "interaction_revision": request["interaction_revision"],
+                    "installation_id": "install-demo",
+                    "conversation_id": "task-demo",
+                },
+            }
+
+    host = Host()
+    interaction_id = await create_card(
+        host,
+        component_type=kind,
+        task_key=example["task_key"],
+        interaction_revision=example["interaction_revision"],
+        card=example["card"],
+        check_business=lambda candidate: checked.append(candidate),
+        idempotency_key=f"{kind}-rev-1",
+    )
+    assert interaction_id == "interaction-demo"
+    assert checked == [example["card"]]
+    assert [name for name, _ in host.calls] == [
+        "interaction.capabilities.list/1", "interaction.card.create/1",
+    ]
+
+
+def test_api_demo_rejects_missing_created_event_id():
+    request = {
+        "task_key": "task-demo", "interaction_revision": 1,
+        "component_type": "single_select", "input_policy": "card_only",
+    }
+    result = {
+        "interaction": {
+            "interaction_id": "interaction-demo", "status": "PENDING",
+            "version": 1, **request,
+            "binding": {"installation_id": "install-demo", "conversation_id": "task-demo"},
+            "transitions": [{"action": "create"}],
+        },
+        "receipt": {
+            "contract": "interaction.card.receipt/1", "action": "created",
+            "status": "PENDING", "interaction_id": "interaction-demo",
+            "version": 1, "task_key": "task-demo", "interaction_revision": 1,
+            "installation_id": "install-demo", "conversation_id": "task-demo",
+        },
+    }
+    with pytest.raises(CardContractError, match="created receipt"):
+        verify_created(result, request)
 
 
 @pytest.mark.asyncio

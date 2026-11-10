@@ -5,7 +5,11 @@ create call and its persisted Host result. The `trusted_scope_example` values
 are illustrative Host context, never caller-supplied arguments.
 
 `devkit/interaction_card_api_demo.py` is an executable reference for the two
-direct Host calls. A signed Agent can adapt its shared card module to this
+direct Host calls. `create_card` uses the same boundary for `single_select`,
+`multi_select`, `question_form`, and `file_selector`; its required
+`check_business` callback checks each Agent's own fixed business fields.
+The `create_single_select` wrapper below shows option ID and order checks.
+A signed Agent can adapt its shared card module to this
 boundary after its own first model call has determined the business question
 and its second model call has proposed only a card presentation:
 

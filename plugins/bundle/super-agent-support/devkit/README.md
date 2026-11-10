@@ -1,7 +1,8 @@
 # DClaw Super Agent DevKit
 
 Version 1.9.11 adds the runnable direct Host reference
-`interaction_card_api_demo.py`. It obtains the selected live card Schema,
+`interaction_card_api_demo.py`. Its `create_card` covers all four published
+components. It obtains the selected live card Schema,
 validates the card and approved business option IDs, creates the card with a
 stable idempotency key, and verifies the persisted `created` receipt before
 returning an interaction ID. See `examples/interaction-host-v1/README.md` for
