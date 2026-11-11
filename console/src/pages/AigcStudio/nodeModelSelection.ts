@@ -160,7 +160,9 @@ export function modelSelectionState(
   const boundCapability = textValue(node.data.modelCapability);
   const workflowBound = Boolean(textValue(node.data.workflowLogicalNodeId));
   const options = workflowBound
-    ? categoryOptions.filter((model) => model.capability === capability)
+    ? uniqueModelOptions(
+        capabilities.filter((model) => model.capability === capability),
+      )
     : categoryOptions;
   const matched = options.find(
     (model) =>
@@ -194,7 +196,9 @@ export function modelOptionsForNode(
   const categoryOptions = modelOptionsForCapability(capabilities, capability);
   const workflowBound = Boolean(textValue(node.data.workflowLogicalNodeId));
   if (workflowBound) {
-    return categoryOptions.filter((model) => model.capability === capability);
+    return uniqueModelOptions(
+      capabilities.filter((model) => model.capability === capability),
+    );
   }
   return categoryOptions;
 }
