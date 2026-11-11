@@ -31,6 +31,14 @@
     "yes": "Sim",
     "no": "Nao"
   },
+  "taskLoading": {
+    "taskTitle": "Preparando a tarefa",
+    "taskSubtitle": "O agente esta se preparando. Aguarde um momento.",
+    "conversationTitle": "Restaurando a conversa",
+    "conversationSubtitle": "Carregando o historico de mensagens e o status da tarefa.",
+    "openFailed": "Nao foi possivel abrir esta tarefa. Verifique o acesso da conta atual e tente novamente.",
+    "retry": "Tentar novamente"
+  },
   "chunkError": {
     "title": "Falha ao carregar pagina",
     "subTitle": "This may be caused by a network issue or an application update.",

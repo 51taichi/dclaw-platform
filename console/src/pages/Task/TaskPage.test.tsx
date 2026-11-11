@@ -236,6 +236,8 @@ vi.mock("../Chat/sessionApi", () => ({
     onSessionRemoved: null,
     onSessionSelected: null,
     onSessionCreated: null,
+    onSessionLoadStart: null,
+    onSessionLoadEnd: null,
     onGeneratingStatusChange: null,
     getSessionIdForChatId: vi.fn((chatId: string) => Promise.resolve(chatId)),
     getRealIdForSession: vi.fn(() => null),
@@ -305,7 +307,9 @@ vi.mock("../Chat/components/ExpertTeamStatusStrip", () => ({
 }));
 
 vi.mock("../Chat/components/PreparingOverlay", () => ({
-  default: () => <div data-testid="preparing-overlay" />,
+  default: ({ mode }: { mode?: string }) => (
+    <div data-testid="preparing-overlay" data-mode={mode} />
+  ),
 }));
 
 vi.mock("../Chat/components/TaskArtifactCard", () => ({
@@ -636,9 +640,7 @@ describe("TaskPage", () => {
       initialEntries: ["/task/demo-chat"],
     });
 
-    fireEvent.click(
-      await screen.findByRole("radio", { name: /扩大增长/ }),
-    );
+    fireEvent.click(await screen.findByRole("radio", { name: /扩大增长/ }));
     fireEvent.click(screen.getByRole("button", { name: "提交选择" }));
 
     await waitFor(() =>
@@ -823,7 +825,7 @@ describe("TaskPage", () => {
     expect(mockSetActiveSessionId).toHaveBeenCalledWith(null);
   });
 
-  it("clears the preparing overlay when the task route changes during initial loading", async () => {
+  it("keeps loading feedback visible until the selected task history settles", async () => {
     renderWithProviders(
       <>
         <LocationProbe />
@@ -836,9 +838,20 @@ describe("TaskPage", () => {
     await screen.findByTestId("preparing-overlay");
     fireEvent.click(screen.getByRole("button", { name: "switch task route" }));
 
-    await waitFor(
-      () => expect(screen.queryByTestId("preparing-overlay")).toBeNull(),
-      { timeout: 2500 },
+    expect(await screen.findByTestId("preparing-overlay")).toHaveAttribute(
+      "data-mode",
+      "conversation",
+    );
+
+    await act(async () => {
+      (await import("../Chat/sessionApi")).default.onSessionLoadEnd?.(
+        "replacement-task",
+        null,
+      );
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("preparing-overlay")).toBeNull(),
     );
   });
 

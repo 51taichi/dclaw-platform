@@ -31,6 +31,14 @@
     "yes": "是",
     "no": "否"
   },
+  "taskLoading": {
+    "taskTitle": "正在准备任务",
+    "taskSubtitle": "Agent 正在进入工作状态，请稍候",
+    "conversationTitle": "正在恢复会话",
+    "conversationSubtitle": "正在加载历史消息与任务状态，请稍候",
+    "openFailed": "暂时无法打开这个任务，请确认当前账号有访问权限后重试。",
+    "retry": "重试"
+  },
   "chunkError": {
     "title": "页面加载失败",
     "subTitle": "可能由网络问题或应用更新导致，请稍后重试。",

@@ -45,6 +45,8 @@ describe("Chat sessionApi", () => {
     sessionApi.reset();
     sessionApi.onSessionRemoved = null;
     sessionApi.onSessionSelected = null;
+    sessionApi.onSessionLoadStart = null;
+    sessionApi.onSessionLoadEnd = null;
     window.history.pushState({}, "", "/");
     mockListChats.mockResolvedValue([
       makeChatSpec("chat-id"),
@@ -56,6 +58,31 @@ describe("Chat sessionApi", () => {
       pending_approvals: [],
     });
     delete (window as any).currentSessionId;
+  });
+
+  it("reports the complete history loading lifecycle", async () => {
+    const onStart = vi.fn();
+    const onEnd = vi.fn();
+    sessionApi.onSessionLoadStart = onStart;
+    sessionApi.onSessionLoadEnd = onEnd;
+
+    await sessionApi.getSession("chat-id");
+
+    expect(onStart).toHaveBeenCalledWith("chat-id");
+    expect(onEnd).toHaveBeenCalledWith("chat-id", null);
+  });
+
+  it("ends the history loading lifecycle when restoration fails", async () => {
+    const error = new Error("history unavailable");
+    const onEnd = vi.fn();
+    mockGetChat.mockRejectedValueOnce(error);
+    sessionApi.onSessionLoadEnd = onEnd;
+
+    await expect(sessionApi.getSession("chat-id")).rejects.toThrow(
+      "history unavailable",
+    );
+
+    expect(onEnd).toHaveBeenCalledWith("chat-id", error);
   });
 
   it("records a submitted draft session's real backend chat id", () => {

@@ -1,15 +1,18 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useLocation } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { superExpertPlatformApi } from "../../api/modules/superExpertPlatform";
 import { useAgentStore } from "../../stores/agentStore";
 import { getRouteChatId } from "../Chat/routeSession";
 import sessionApi, { isDraftSessionId } from "../Chat/sessionApi";
+import PreparingOverlay from "../Chat/components/PreparingOverlay";
 
 export default function TaskConversationRoute({
   children,
 }: {
   children: ReactNode;
 }) {
+  const { t } = useTranslation();
   const { pathname } = useLocation();
   const chatId = getRouteChatId(pathname);
   const requiresResolution = !!chatId && !isDraftSessionId(chatId);
@@ -53,12 +56,19 @@ export default function TaskConversationRoute({
   if (requiresResolution && !opened) {
     return errorId === chatId ? (
       <div role="alert" style={{ padding: 24 }}>
-        <p>暂时无法打开这个任务，请确认当前账号有访问权限后重试。</p>
-        <button onClick={() => setRetry((value) => value + 1)}>重试</button>
+        <p>
+          {t(
+            "taskLoading.openFailed",
+            "暂时无法打开这个任务，请确认当前账号有访问权限后重试。",
+          )}
+        </p>
+        <button onClick={() => setRetry((value) => value + 1)}>
+          {t("taskLoading.retry", "重试")}
+        </button>
       </div>
     ) : (
-      <div role="status" style={{ padding: 24 }}>
-        正在打开任务会话…
+      <div style={{ position: "relative", width: "100%", height: "100%" }}>
+        <PreparingOverlay mode="conversation" />
       </div>
     );
   }

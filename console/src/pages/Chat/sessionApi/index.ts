@@ -519,6 +519,12 @@ class SessionApi implements IAgentScopeRuntimeWebUISessionAPI {
     | ((sessionId: string | null | undefined, realId: string | null) => void)
     | null = null;
 
+  /** Called around history restoration so the task view can show stable feedback. */
+  onSessionLoadStart: ((sessionId: string) => void) | null = null;
+  onSessionLoadEnd:
+    | ((sessionId: string, error: unknown | null) => void)
+    | null = null;
+
   /**
    * Called when a new session is created.
    * Consumers can register here to update the URL with the new session id.
@@ -843,9 +849,11 @@ class SessionApi implements IAgentScopeRuntimeWebUISessionAPI {
     const existingRequest = this.sessionRequests.get(sessionId);
     if (existingRequest) return existingRequest;
 
+    this.onSessionLoadStart?.(sessionId);
     const requestPromise = this._doGetSession(sessionId);
     this.sessionRequests.set(sessionId, requestPromise);
 
+    let loadError: unknown | null = null;
     try {
       const session = await requestPromise;
       const fellBackToDraft =
@@ -860,8 +868,12 @@ class SessionApi implements IAgentScopeRuntimeWebUISessionAPI {
         this.onSessionSelected?.(sessionId, realId);
       }
       return session;
+    } catch (error) {
+      loadError = error;
+      throw error;
     } finally {
       this.sessionRequests.delete(sessionId);
+      this.onSessionLoadEnd?.(sessionId, loadError);
     }
   }
 

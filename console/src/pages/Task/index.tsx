@@ -585,6 +585,9 @@ export default function ChatPage() {
   const [showModelPrompt, setShowModelPrompt] = useState(false);
   const [showArtifactPanel, setShowArtifactPanel] = useState(false);
   const [isPreparing, setIsPreparing] = useState(false);
+  const [preparingMode, setPreparingMode] = useState<"task" | "conversation">(
+    "task",
+  );
   const [isGenerating, setIsGenerating] = useState(false);
   const [runtimeReloadKey, setRuntimeReloadKey] = useState(0);
   const [interactionBlocked, setInteractionBlocked] = useState(false);
@@ -1162,7 +1165,7 @@ export default function ChatPage() {
   //
   // Case 2 (Direct URL entry): chatId is set from the URL (e.g. /task/UUID).
   //   We show the overlay until existing messages load into the component.
-  const hasShownPreparingRef = useRef(false);
+  const preparingForIntentRef = useRef(false);
   // Track which navigation (by location.key) has been processed, so repeated
   // navigations from Workbench each get their own intent execution — even though
   // the Task page component never unmounts in the SPA.
@@ -1224,6 +1227,7 @@ export default function ChatPage() {
             console.error("[Task] Error submitting intent:", err);
           }
           setIntentToSubmit(null);
+          preparingForIntentRef.current = false;
           setIsPreparing(false);
           processingIntentRef.current = false;
         } else if (attempts < 40) {
@@ -1231,6 +1235,7 @@ export default function ChatPage() {
         } else {
           console.warn("[Task] Chat input ref not ready after 2s. Aborting.");
           setIntentToSubmit(null);
+          preparingForIntentRef.current = false;
           setIsPreparing(false);
           processingIntentRef.current = false;
         }
@@ -1244,7 +1249,8 @@ export default function ChatPage() {
     // Case 1: Intent-driven entry from Workbench
     if (intentRef.current && processedLocationKeyRef.current !== location.key) {
       processedLocationKeyRef.current = location.key;
-      hasShownPreparingRef.current = true; // Prevent Case 2 from re-triggering when URL updates to /task/UUID
+      preparingForIntentRef.current = true;
+      setPreparingMode("task");
       setIsPreparing(true);
 
       const intentPrompt = intentRef.current.prompt;
@@ -1288,6 +1294,7 @@ export default function ChatPage() {
               queueIntentSubmission();
             } else {
               clearPendingTaskIntent(chatId);
+              preparingForIntentRef.current = false;
               setIsPreparing(false);
             }
           })
@@ -1302,6 +1309,7 @@ export default function ChatPage() {
       const fallbackTimeout = setTimeout(() => {
         if (pendingIntentRef.current) {
           pendingIntentRef.current = null;
+          preparingForIntentRef.current = false;
           setIsPreparing(false);
         }
       }, 10000);
@@ -1312,30 +1320,14 @@ export default function ChatPage() {
       };
     }
 
-    // Case 2: Direct URL entry (returning to existing task /task/UUID)
-    if (!hasShownPreparingRef.current) {
-      hasShownPreparingRef.current = true;
-      if (chatId) {
-        setIsPreparing(true);
-
-        // We poll up to 4 times (1.2 seconds) to hide the flicker of messages loading.
-        // If the chat is actually empty, this will gracefully time out and show the empty state,
-        // rather than freezing the UI for 9 seconds.
-        let attempts = 0;
-        const interval = setInterval(() => {
-          attempts++;
-          const messages = chatRef.current?.messages?.getMessages?.();
-          if ((messages && messages.length > 0) || attempts >= 4) {
-            clearInterval(interval);
-            setIsPreparing(false);
-          }
-        }, 300);
-
-        return () => {
-          clearInterval(interval);
-          setIsPreparing(false);
-        };
-      }
+    // Case 2: returning to an existing task. The session API clears this
+    // state only after history restoration has actually settled.
+    preparingForIntentRef.current = false;
+    if (chatId) {
+      setPreparingMode("conversation");
+      setIsPreparing(true);
+    } else {
+      setIsPreparing(false);
     }
     // NOTE: location.state is intentionally excluded from deps. The intent
     // is captured into intentRef during render, so the effect only needs to
@@ -1382,8 +1374,25 @@ export default function ChatPage() {
         chatIdRef.current || "",
       );
       if (chatIdRef.current === removedId || currentRealId === removedId) {
+        preparingForIntentRef.current = false;
+        setIsPreparing(false);
         lastSessionIdRef.current = null;
         navigateRef.current("/task", { replace: true });
+      }
+    };
+
+    sessionApi.onSessionLoadStart = (sessionId) => {
+      if (!isChatActiveRef.current || preparingForIntentRef.current) return;
+      if (chatIdRef.current === sessionId) {
+        setPreparingMode("conversation");
+        setIsPreparing(true);
+      }
+    };
+
+    sessionApi.onSessionLoadEnd = (sessionId) => {
+      if (!isChatActiveRef.current || preparingForIntentRef.current) return;
+      if (chatIdRef.current === sessionId) {
+        setIsPreparing(false);
       }
     };
 
@@ -1456,6 +1465,8 @@ export default function ChatPage() {
       sessionApi.onSessionRemoved = null;
       sessionApi.onSessionSelected = null;
       sessionApi.onSessionCreated = null;
+      sessionApi.onSessionLoadStart = null;
+      sessionApi.onSessionLoadEnd = null;
     };
   }, []);
 
@@ -2158,7 +2169,7 @@ export default function ChatPage() {
             position: "relative",
           }}
         >
-          {isPreparing && <PreparingOverlay />}
+          {isPreparing && <PreparingOverlay mode={preparingMode} />}
           <div className={styles.chatMessagesArea}>
             <div className={styles.runtimeViewport}>
               <AgentScopeRuntimeWebUI

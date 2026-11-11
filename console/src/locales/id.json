@@ -31,6 +31,14 @@
     "yes": "Ya",
     "no": "Tidak"
   },
+  "taskLoading": {
+    "taskTitle": "Menyiapkan tugas",
+    "taskSubtitle": "Agen sedang bersiap untuk bekerja. Mohon tunggu.",
+    "conversationTitle": "Memulihkan percakapan",
+    "conversationSubtitle": "Memuat riwayat pesan dan status tugas. Mohon tunggu.",
+    "openFailed": "Tugas ini belum dapat dibuka. Periksa akses akun saat ini, lalu coba lagi.",
+    "retry": "Coba lagi"
+  },
   "chunkError": {
     "title": "Gagal memuat halaman",
     "subTitle": "Ini mungkin disebabkan oleh masalah jaringan atau pembaruan aplikasi.",

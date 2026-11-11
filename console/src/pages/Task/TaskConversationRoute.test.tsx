@@ -51,6 +51,7 @@ describe("TaskConversationRoute", () => {
     );
     show();
     expect(screen.queryByText(/会话所属专家/)).toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent("正在恢复会话");
     await act(async () => {
       finish({ conversation_id: "first", agent_id: "luyu" });
     });

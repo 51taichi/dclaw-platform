@@ -54,7 +54,7 @@
   left: -50%;
   width: 50%;
   height: 100%;
-  background-color: #6366f1;
+  background-color: var(--ant-color-primary, #315efb);
   border-radius: 2px;
   animation: sweep 1.5s ease-in-out infinite;
 }
@@ -69,7 +69,8 @@
 }
 
 @keyframes float {
-  0%, 100% {
+  0%,
+  100% {
     transform: translateY(0);
   }
   50% {
@@ -78,6 +79,19 @@
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overlay,
+  .mascot,
+  .progressInner {
+    animation-duration: 1ms;
+    animation-iteration-count: 1;
+  }
 }
