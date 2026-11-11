@@ -668,7 +668,6 @@ class FakeMxapiProviderManager:
                 ),
             ],
         )
-
     def get_provider(self, provider_id: str):
         return self.provider if provider_id == self.provider.id else None
 
@@ -760,6 +759,31 @@ class FakeMxapiProviderManager:
                 ],
             ),
         ]
+
+
+def test_mxapi_channel_header_is_opt_in_per_adapter():
+    provider = SimpleNamespace(
+        custom_headers={
+            "X-Channel": "official",
+            "X-Provider-Trace": "enabled",
+        },
+    )
+
+    default_headers = aigc_studio._mxapi_headers(
+        provider,
+        "mxapi-test-key",
+        json_content=True,
+    )
+    explicit_headers = aigc_studio._mxapi_headers(
+        provider,
+        "mxapi-test-key",
+        channel="official",
+        json_content=True,
+    )
+
+    assert "X-Channel" not in default_headers
+    assert default_headers["X-Provider-Trace"] == "enabled"
+    assert explicit_headers["X-Channel"] == "official"
 
 
 def make_app(tmp_path: Path) -> FastAPI:
@@ -4111,7 +4135,6 @@ async def test_run_mxapi_nano2_job_uses_nano2_protocol(
         "X-Provider-Trace": "enabled",
         "Authorization": "Bearer mxapi-test-key",
         "Content-Type": "application/json",
-        "X-Channel": "official",
     }
     assert post_call["kwargs"]["json"] == {
         "prompt": "一只可爱的猫咪",
@@ -4384,7 +4407,7 @@ async def test_run_mxapi_veo_text_to_video_job_polls_and_saves_video(
     post_call = next(item for item in requests if item["type"] == "post")
     assert post_call["url"] == "https://open.mxapi.org/api/v2/veo/generate"
     assert post_call["kwargs"]["headers"]["Authorization"] == "Bearer mxapi-test-key"
-    assert post_call["kwargs"]["headers"]["X-Channel"] == "official"
+    assert "X-Channel" not in post_call["kwargs"]["headers"]
     assert post_call["kwargs"]["json"] == {
         "model": "veo-3.1-fast",
         "prompt": "海边日落，镜头缓慢向前移动",

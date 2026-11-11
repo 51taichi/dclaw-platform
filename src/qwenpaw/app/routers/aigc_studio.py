@@ -2421,11 +2421,11 @@ def _mxapi_headers(
     channel: str | None = None,
     json_content: bool = False,
 ) -> dict[str, str]:
-    protected = {"authorization"}
+    # Channel routing is opt-in per adapter. A provider-level custom header
+    # must not silently pin every MXAPI model to the same upstream channel.
+    protected = {"authorization", "x-channel"}
     if json_content:
         protected.add("content-type")
-    if channel is not None:
-        protected.add("x-channel")
     headers = {
         key: value
         for key, value in _provider_custom_headers(provider).items()
@@ -2841,7 +2841,11 @@ async def _mxapi_submit_task(
             f"Provider '{job.provider_id}' is missing an API key.",
         )
 
-    channel = _mxapi_channel(provider, job.parameters)
+    channel = (
+        _mxapi_channel(provider, job.parameters)
+        if adapter == "mxapi_gpt_image"
+        else None
+    )
     body = _mxapi_submit_body(
         job,
         prompt=prompt,
@@ -2905,7 +2909,15 @@ async def _mxapi_query_task(
             try:
                 response = await client.get(
                     url,
-                    headers=_mxapi_headers(provider, api_key),
+                    headers=_mxapi_headers(
+                        provider,
+                        api_key,
+                        channel=(
+                            _mxapi_channel(provider, {})
+                            if adapter == "mxapi_gpt_image"
+                            else None
+                        ),
+                    ),
                 )
                 response.raise_for_status()
             except httpx.TimeoutException:
@@ -3773,14 +3785,12 @@ async def _mxapi_grok_submit_task(
         )
 
     body = _mxapi_grok_submit_body(request, model, job)
-    channel = _mxapi_channel(provider, job.parameters)
     url = f"{_mxapi_base_url(provider)}/api/v2/video/grok"
     return await _mxapi_submit_request(
         url,
         _mxapi_headers(
             provider,
             api_key,
-            channel=channel,
             json_content=True,
         ),
         body,
