@@ -259,6 +259,10 @@ export function SuperExpertAigcCards({
             }}
             onCommand={async (_, materialTaskId) => {
               setIntroducedTaskId(null);
+              if (projection.status === "IN_PROGRESS") {
+                navigate(buildAigcTaskRoute(materialTaskId));
+                return;
+              }
               const currentLifetime = lifetime.current;
               const current = await superExpertPlatformApi.getTask(
                 materialTaskId,

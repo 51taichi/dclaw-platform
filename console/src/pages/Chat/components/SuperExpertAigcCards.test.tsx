@@ -5,16 +5,18 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEvent } from "../../../api/modules/runtimeEvents";
 import { SuperExpertAigcCards } from "./SuperExpertAigcCards";
 
 const listCards = vi.hoisted(() => vi.fn());
 const dismissTask = vi.hoisted(() => vi.fn());
+const getTask = vi.hoisted(() => vi.fn());
+const command = vi.hoisted(() => vi.fn());
 const runtimeEvents = vi.hoisted(() => ({ current: [] as RuntimeEvent[] }));
 vi.mock("../../../api/modules/superExpertPlatform", () => ({
-  superExpertPlatformApi: { listCards, dismissTask },
+  superExpertPlatformApi: { listCards, dismissTask, getTask, command },
 }));
 vi.mock("../../../contexts/RuntimeEventContext", () => ({
   useRuntimeEvents: () => ({
@@ -45,12 +47,37 @@ function snapshot(status: string) {
   };
 }
 
+function LocationProbe() {
+  const location = useLocation();
+  return (
+    <output data-testid="location">{`${location.pathname}${location.search}`}</output>
+  );
+}
+
 describe("conversation card status refresh", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     runtimeEvents.current = [];
     localStorage.clear();
     dismissTask.mockResolvedValue(undefined);
+  });
+  it("opens an in-progress material task immediately without refetching it", async () => {
+    localStorage.setItem("dclaw:aigc-card-introduced:c1", "true");
+    listCards.mockResolvedValue(snapshot("IN_PROGRESS"));
+    render(
+      <MemoryRouter>
+        <SuperExpertAigcCards conversationId="c1" />
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "继续制作" }));
+
+    expect(await screen.findByTestId("location")).toHaveTextContent(
+      "/aigc-studio?task=m1",
+    );
+    expect(getTask).not.toHaveBeenCalled();
+    expect(command).not.toHaveBeenCalled();
   });
   it("defaults to compact cards, expands and remembers the choice across remounts", async () => {
     localStorage.setItem("dclaw:aigc-card-introduced:c1", "true");
