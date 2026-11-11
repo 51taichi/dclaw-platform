@@ -36,9 +36,6 @@ export function useCanvasPersistence({
   const pendingSaveCanvasRef = useRef<AigcCanvas | null>(null);
   const savedCanvasSignatureRef = useRef<string | null>(null);
   const [capabilities, setCapabilities] = useState<AigcCapabilityInfo[]>([]);
-  const [workflowCapabilities, setWorkflowCapabilities] = useState<
-    AigcCapabilityInfo[]
-  >([]);
   const [capabilityDefaults, setCapabilityDefaults] =
     useState<AigcCapabilityDefaultsByCategory>({});
   const [canvases, setCanvases] = useState<AigcCanvas[]>([]);
@@ -94,14 +91,11 @@ export function useCanvasPersistence({
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [capabilityRes, workflowCapabilityRes, canvasRes] =
-        await Promise.all([
-          aigcStudioApi.listCapabilities(),
-          aigcStudioApi.listWorkflowCapabilities(),
-          aigcStudioApi.listCanvases(),
-        ]);
+      const [capabilityRes, canvasRes] = await Promise.all([
+        aigcStudioApi.listCapabilities(),
+        aigcStudioApi.listCanvases(),
+      ]);
       setCapabilities(capabilityRes.capabilities);
-      setWorkflowCapabilities(workflowCapabilityRes.available_models);
       setCapabilityDefaults(capabilityRes.defaults ?? {});
 
       const localizedCanvases = canvasRes.canvases.map(
@@ -194,8 +188,6 @@ export function useCanvasPersistence({
     savedCanvasSignatureRef,
     capabilities,
     setCapabilities,
-    workflowCapabilities,
-    setWorkflowCapabilities,
     capabilityDefaults,
     setCapabilityDefaults,
     canvases,

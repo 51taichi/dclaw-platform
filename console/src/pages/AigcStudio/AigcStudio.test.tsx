@@ -812,7 +812,7 @@ describe("AigcStudioPage", () => {
     });
   });
 
-  it("keeps workflow-only models available without adding them to the ordinary catalog", async () => {
+  it("uses the ordinary model catalog for workflow-bound canvases", async () => {
     const canvas = canvasFixture();
     mockAigcStudioApi.listCapabilities.mockResolvedValueOnce({
       capabilities: [
@@ -883,7 +883,7 @@ describe("AigcStudioPage", () => {
     render(<AigcStudioPage />);
 
     const composer = await screen.findByTestId("aigc-image-composer");
-    expect(within(composer).getByText("Workflow Seedream")).toBeInTheDocument();
+    expect(within(composer).getByText("GPT Image 2")).toBeInTheDocument();
     fireEvent.click(
       within(composer).getByRole("button", { name: "提交图片节点输入" }),
     );
@@ -891,8 +891,8 @@ describe("AigcStudioPage", () => {
     await waitFor(() => {
       expect(mockAigcStudioApi.submitJob).toHaveBeenCalledWith(
         expect.objectContaining({
-          provider_id: "volcengine",
-          model_id: "workflow-seedream",
+          provider_id: "openai",
+          model_id: "gpt-image-2",
         }),
       );
     });

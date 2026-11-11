@@ -496,7 +496,6 @@ export default function AigcStudioPage() {
     autoSaveTimerRef,
     savedCanvasSignatureRef,
     capabilities,
-    workflowCapabilities,
     capabilityDefaults,
     canvases,
     setCanvases,
@@ -658,15 +657,10 @@ export default function AigcStudioPage() {
   const selectedNode = activeCanvas?.nodes.find(
     (node) => node.id === selectedNodeId,
   );
-  const canvasUsesWorkflowCapabilities = Boolean(
-    String(activeCanvas?.meta?.workflow_id ?? "").trim() ||
-      activeCanvas?.nodes.some((node) =>
-        Boolean(String(node.data.workflowLogicalNodeId ?? "").trim()),
-      ),
-  );
-  const nodeCapabilities = canvasUsesWorkflowCapabilities
-    ? workflowCapabilities
-    : capabilities;
+  // Model availability is a platform policy, independent of how the canvas
+  // was opened. Workflow-bound nodes retain their operation constraints, but
+  // use the same live model inventory as ordinary AIGC canvases.
+  const nodeCapabilities = capabilities;
   const capabilityForCanvasNode = (node: AigcCanvasNode) => {
     const boundCapability = String(node.data.modelCapability ?? "").trim();
     return boundCapability || capabilityForNode(node.type);
