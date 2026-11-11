@@ -22,7 +22,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 
-PACK_VERSION = "1.10.21"
+PACK_VERSION = "1.10.22"
 STANDARD_ID = "dclaw.super-agent-development"
 STANDARD_VERSION = "2.45"
 DEVKIT_VERSION = "1.9.13"
@@ -1018,12 +1018,20 @@ def release_gate(project_path: Path) -> dict:
             "local_helper must be none, optional, or required",
         )
     local = {item for item in declared if item.startswith("local.")}
-    expected_local = {
+    required_local = {
         "none": set(),
         "optional": {LOCAL_SESSION},
         "required": {LOCAL_SESSION, LOCAL_PREFLIGHT},
     }[mode]
-    if local != expected_local:
+    allowed_local = set(required_local)
+    if mode == "required":
+        catalog = _read_json(_devkit_root() / "capability-catalog.json")
+        allowed_local.update(
+            item["capability_id"] for item in catalog["capabilities"]
+            if item["capability_id"].startswith("local.task.")
+            and item["group"] == "local_execution"
+        )
+    if not required_local.issubset(local) or not local.issubset(allowed_local):
         raise DeveloperPackError(
             "local helper declaration does not match capability set",
         )

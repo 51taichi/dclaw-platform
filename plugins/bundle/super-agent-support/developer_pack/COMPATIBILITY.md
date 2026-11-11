@@ -34,6 +34,7 @@
 | Support plugin for developer pack >= 1.10.19 download | >= 1.18.26 |
 | Support plugin for developer pack >= 1.10.20 download | >= 1.18.27 |
 | Support plugin for developer pack >= 1.10.21 download | >= 1.18.28 |
+| Support plugin for developer pack >= 1.10.22 download | >= 1.18.28 |
 | Support plugin for `runtime.failure.read/1` | >= 1.18.12 |
 | Support plugin for startup failure diagnostics and durable failed turns | >= 1.18.13 |
 | Support plugin for preserving prior memory on failed turns | >= 1.18.14 |

@@ -36,16 +36,16 @@ def test_developer_pack_archive_is_complete_and_reproducible():
     second, repeated = archive.build_archive(PLUGIN_ROOT)
     assert first == second
     assert metadata == repeated
-    assert metadata["version"] == "1.10.17"
+    assert metadata["version"] == "1.10.22"
     assert metadata["standard"] == {
         "id": "dclaw.super-agent-development",
-        "version": "2.41",
+        "version": "2.45",
     }
-    assert metadata["devkit_version"] == "1.9.9"
+    assert metadata["devkit_version"] == "1.9.13"
     assert metadata["server_source_required"] is False
     assert metadata["sha256"] == hashlib.sha256(first).hexdigest()
 
-    prefix = "dclaw-super-agent-developer-pack-1.10.17/"
+    prefix = "dclaw-super-agent-developer-pack-1.10.22/"
     with zipfile.ZipFile(io.BytesIO(first)) as package:
         names = set(package.namelist())
         manifest = json.loads(package.read(prefix + "PACKAGE-MANIFEST.json"))
@@ -72,7 +72,7 @@ def test_developer_pack_archive_is_complete_and_reproducible():
         "examples/minimal-local/example.json",
     }
     assert {prefix + name for name in expected} <= names
-    assert manifest["version"] == "1.10.17"
+    assert manifest["version"] == "1.10.22"
     assert "devkit/wheelhouse/cryptography-46.0.3" in checksums
     assert not any(
         "src/qwenpaw" in name
@@ -148,11 +148,11 @@ def test_upgrade_updates_devkit_version_and_immediately_validates(tmp_path):
     result = cli.upgrade_project(project, accept_standard=False)
 
     upgraded = json.loads(metadata_path.read_text(encoding="utf-8"))
-    assert upgraded["developer_pack_version"] == "1.10.17"
-    assert upgraded["standard"]["version"] == "2.41"
-    assert upgraded["devkit_version"] == "1.9.9"
+    assert upgraded["developer_pack_version"] == "1.10.22"
+    assert upgraded["standard"]["version"] == "2.45"
+    assert upgraded["devkit_version"] == "1.9.13"
     assert result["previous"]["devkit_version"] == "1.4.0"
-    assert result["current"]["devkit_version"] == "1.9.9"
+    assert result["current"]["devkit_version"] == "1.9.13"
     assert cli.release_gate(project)["status"] == "valid"
 
 
@@ -446,6 +446,83 @@ def test_release_gate_accepts_complete_resource_metadata(tmp_path):
 
     assert result["status"] == "valid"
     assert result["resources"] == 1
+
+
+def test_required_local_task_declarations_pass_all_pack_commands(tmp_path):
+    cli = _module("developer_pack_local_task_gate_test", PACK_CLI)
+    project = tmp_path / "agent"
+    cli.initialize_project(project, "test-agent", "Test Agent", "required")
+    _make_release_ready(cli, project)
+    _write_resource_lock(project, _release_ready_resource_lock())
+    manifest_path = project / "manifest.template.json"
+    metadata_path = project / "project.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    for capability_id in ("local.task.start/1", "local.task.read/1"):
+        manifest["capabilities"].append({
+            "capability_id": capability_id, "contract_version": "1",
+        })
+        metadata["declared_platform_capabilities"].append(capability_id)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    private_key = tmp_path / "signer-private.b64"
+    public_key = tmp_path / "signer-public.b64"
+    cli._devkit_command(
+        "keygen", "--private-key", str(private_key),
+        "--public-key", str(public_key),
+    )
+    common = [sys.executable, str(PACK_CLI)]
+    for command, extra in (
+        ("validate", []),
+        ("test", []),
+        ("capability-build", [
+            "--private-key", str(private_key),
+            "--artifact-url", "https://downloads.deepmega.cn/capabilities/test.zip",
+        ]),
+        ("build", [
+            "--private-key", str(private_key),
+            "--public-key", str(public_key),
+            "--output", str(tmp_path / "agent.zip"),
+            "--capability-artifact-url",
+            "https://downloads.deepmega.cn/capabilities/test.zip",
+        ]),
+    ):
+        result = subprocess.run(
+            [*common, command, "--project", str(project), *extra],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, (command, result.stdout, result.stderr)
+
+    manifest["capabilities"].append({
+        "capability_id": "local.task.unknown/1", "contract_version": "1",
+    })
+    metadata["declared_platform_capabilities"].append("local.task.unknown/1")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    with pytest.raises(cli.DeveloperPackError, match="local helper declaration"):
+        cli.release_gate(project)
+
+
+@pytest.mark.parametrize("mode", ["none", "optional"])
+def test_other_local_helper_modes_keep_their_declaration_boundary(tmp_path, mode):
+    cli = _module(f"developer_pack_{mode}_local_boundary_test", PACK_CLI)
+    project = tmp_path / "agent"
+    cli.initialize_project(project, "test-agent", "Test Agent", mode)
+    _make_release_ready(cli, project)
+    manifest_path = project / "manifest.template.json"
+    metadata_path = project / "project.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    manifest["capabilities"].append({
+        "capability_id": "local.task.start/1", "contract_version": "1",
+    })
+    metadata["declared_platform_capabilities"].append("local.task.start/1")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    with pytest.raises(cli.DeveloperPackError, match="local helper declaration"):
+        cli.release_gate(project)
 
 
 def test_secret_scan_ignores_generated_roots_but_scans_sources(tmp_path):

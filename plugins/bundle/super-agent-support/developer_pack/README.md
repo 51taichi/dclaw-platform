@@ -1,5 +1,9 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.22 bundles development standard 2.45 and DevKit 1.9.13. It
+accepts cataloged `local.task.*` Host capabilities alongside the required
+local helper declarations. Unknown local capabilities remain invalid.
+
 Version 1.10.21 bundles development standard 2.45 and DevKit 1.9.13. It
 adds a redacted Host rejection lookup and a 24-hour failure-reference search
 for the signed-in expert owner. Existing v1/v2 diagnostics and sealed Agents

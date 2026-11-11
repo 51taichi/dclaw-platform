@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.10.22 - 2026-11-11
+
+- Accepts cataloged optional `local.task.*` Host capabilities when a project
+  requires the local helper, while preserving mandatory local declarations.
+
 ## 1.10.21 - 2026-11-11
 
 - Bundles development standard 2.45 and DevKit 1.9.13.
