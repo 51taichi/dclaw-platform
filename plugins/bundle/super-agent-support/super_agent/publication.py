@@ -6,6 +6,7 @@ import asyncio
 import logging
 import shutil
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -235,6 +236,65 @@ class PublisherPublication:
         }
 
     def _register_routes(self) -> None:
+        @self.router.get("/runtime-diagnostics/v3/references/{invocation_id}")
+        async def read_diagnostic_reference_v3(
+            invocation_id: str, agent_id: str, request: Request,
+        ) -> dict[str, Any]:
+            tenant_id, user_id = _actor(request)
+            if self.repository.agent_owner(agent_id) != (tenant_id, user_id):
+                raise HTTPException(status_code=404, detail="diagnostic not found")
+            self._limit_diagnostic_reads(tenant_id, user_id)
+            from .composition import resolve_event_scope
+
+            try:
+                result = failure_diagnostics.read_developer_failure_by_reference_v3(
+                    storage_root=Path(WORKING_DIR) / "workspace_runtime_state",
+                    grants=self.handler.grant_repository,
+                    agent_id=agent_id, tenant_id=tenant_id,
+                    invocation_id=invocation_id,
+                    owner_resolver=resolve_event_scope,
+                )
+            except failure_diagnostics.FailureDiagnosticsUnauthorized as exc:
+                raise HTTPException(status_code=404, detail="diagnostic not found") from exc
+            except failure_diagnostics.FailureDiagnosticsUnavailable as exc:
+                raise HTTPException(status_code=503, detail="diagnostics unavailable") from exc
+            _diagnostic_audit.info(
+                "developer reference v3 read actor=%s agent=%s reference=%s status=%s",
+                failure_diagnostics._scope(user_id)[:12], agent_id,
+                failure_diagnostics._scope(invocation_id)[:12], result["status"],
+            )
+            return result
+
+        @self.router.get("/runtime-diagnostics/v1/search")
+        async def search_diagnostic_references(
+            agent_id: str, start: datetime, end: datetime, request: Request,
+            limit: int = 50, cursor: str | None = None,
+        ) -> dict[str, Any]:
+            tenant_id, user_id = _actor(request)
+            if self.repository.agent_owner(agent_id) != (tenant_id, user_id):
+                raise HTTPException(status_code=404, detail="diagnostic not found")
+            self._limit_diagnostic_reads(tenant_id, user_id)
+            from .composition import resolve_event_scope
+
+            try:
+                result = failure_diagnostics.search_developer_failures(
+                    storage_root=Path(WORKING_DIR) / "workspace_runtime_state",
+                    grants=self.handler.grant_repository,
+                    agent_id=agent_id, tenant_id=tenant_id,
+                    owner_resolver=resolve_event_scope,
+                    start=start, end=end, limit=limit, cursor=cursor,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail="invalid diagnostic search window") from exc
+            except failure_diagnostics.FailureDiagnosticsUnavailable as exc:
+                raise HTTPException(status_code=503, detail="diagnostics unavailable") from exc
+            _diagnostic_audit.info(
+                "developer diagnostic search actor=%s agent=%s status=%s count=%s",
+                failure_diagnostics._scope(user_id)[:12], agent_id,
+                result["status"], len(result["failures"]),
+            )
+            return result
+
         @self.router.get("/runtime-diagnostics/v2/references/{invocation_id}")
         async def read_diagnostic_reference_v2(
             invocation_id: str, agent_id: str, request: Request,

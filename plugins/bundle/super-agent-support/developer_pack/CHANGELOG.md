@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.21 - 2026-11-11
+
+- Bundles development standard 2.45 and DevKit 1.9.13.
+- Adds owner-scoped Host rejection diagnostics v3 and bounded failure-reference
+  search without changing v1/v2 responses or existing signed Agent contracts.
+
 ## 1.10.20 - 2026-11-10
 
 - Bundles development standard 2.44 and DevKit 1.9.12.

@@ -41,6 +41,34 @@
     "retention_days": 30,
     "limit_per_minute": 30
   },
+  "developer_reference_diagnostics_v3": {
+    "contract": "developer.runtime.diagnostics.by-reference/3",
+    "minimum_plugin_version": "1.18.28",
+    "method": "GET",
+    "path_template": "/api/user/super-expert-publishing/runtime-diagnostics/v3/references/{invocation_id}?agent_id={agent_id}",
+    "authentication": "signed-in owner of the expert",
+    "request_schema": "schemas/runtime-diagnostics-v3/by-reference-request.schema.json",
+    "response_schema": "schemas/runtime-diagnostics-v3/by-reference-response.schema.json",
+    "error_schema": "schemas/runtime-diagnostics-v3/error.schema.json",
+    "api_demo": "runtime_diagnostics_api_demo.py",
+    "retention_days": 30,
+    "limit_per_minute": 30
+  },
+  "developer_diagnostic_search": {
+    "contract": "developer.runtime.diagnostics.search/1",
+    "minimum_plugin_version": "1.18.28",
+    "method": "GET",
+    "path_template": "/api/user/super-expert-publishing/runtime-diagnostics/v1/search?agent_id={agent_id}&start={start}&end={end}",
+    "authentication": "signed-in owner of the expert",
+    "request_schema": "schemas/runtime-diagnostics-search-v1/request.schema.json",
+    "response_schema": "schemas/runtime-diagnostics-search-v1/response.schema.json",
+    "error_schema": "schemas/runtime-diagnostics-search-v1/error.schema.json",
+    "api_demo": "runtime_diagnostics_api_demo.py",
+    "maximum_window_hours": 24,
+    "maximum_results": 50,
+    "retention_days": 30,
+    "limit_per_minute": 30
+  },
   "interaction_host": {
     "owner": "dclaw.super-agent-support",
     "transport": "sealed-agent-host.call",

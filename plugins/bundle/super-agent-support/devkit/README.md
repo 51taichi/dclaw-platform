@@ -1,5 +1,24 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.13 adds closed schemas for
+`developer.runtime.diagnostics.by-reference/3` and
+`developer.runtime.diagnostics.search/1`, plus
+`runtime_diagnostics_api_demo.py`. The owner can find failures in a bounded
+time window, then read the final Host rejection's stable code, safe field,
+constraint, and recovery action. Historical missing details remain
+`not_recorded`. Both endpoints require local sign-in, are audited, and share
+the 30 reads/minute limit. Existing v1/v2 response schemas are unchanged.
+After signing in locally, run:
+
+```bash
+python runtime_diagnostics_api_demo.py --base-url https://dclaw.deepmega.cn \
+  --agent-id your_agent_id --invocation-id 0123456789abcdef0123456789abcdef
+```
+
+Without an invocation ID, use `--start` and `--end` with UTC ISO-8601 values;
+pass the returned `next_cursor` with `--cursor` for the next page. The command
+reads `DCLAW_ACCESS_TOKEN` from its environment and never prints the token.
+
 Version 1.9.12 adds `aigc_workflow_api_demo.py` and `local_task_api_demo.py`
 with call-order, live-catalog, bound-result, idempotency and terminal-result
 examples under `examples/aigc-workflow-v1/` and `examples/local-task-host-v1/`.

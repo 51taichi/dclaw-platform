@@ -910,7 +910,11 @@ async def run_workspace_orchestration_turn(
                     session_id=turn_request.session_id,
                     invocation_id=invocation_id,
                     event_type="interaction.operation.failed",
-                    payload={"capability": capability, "category": type(exc).__name__},
+                    payload={
+                        "capability": capability,
+                        "category": type(exc).__name__,
+                        **_failure_diagnostics.classify_interaction_failure(exc, capability),
+                    },
                 )
             raise
         if capability.startswith("interaction.card."):

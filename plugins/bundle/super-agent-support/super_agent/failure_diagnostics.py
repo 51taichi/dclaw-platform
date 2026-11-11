@@ -9,12 +9,38 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from pydantic import ValidationError
+
+from .interaction_cards import InteractionError
+from .interaction_contract import InteractionValidationError
+
 
 READ_CONTRACT = "runtime.failure.read/1"
 READ_WINDOW = timedelta(days=30)
 _TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}\Z")
 _FIELD_PATH = re.compile(r"[A-Za-z][A-Za-z0-9_.\[\]-]{0,127}\Z")
 _CAPABILITY_ID = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}/[0-9]{1,3}\Z")
+_ERROR_CODE = re.compile(r"[A-Z][A-Z0-9_]{0,63}\Z")
+_INTERACTION_FIELDS = frozenset({
+    "request", "task_key", "interaction_revision", "component_type", "card",
+    "input_policy", "replaces_interaction_id", "expires_at", "title",
+    "description", "options", "supplement", "layout", "id", "text",
+    "recommended", "default_selected", "action_url", "auto_submit_on_desktop",
+    "enabled", "label", "placeholder", "required", "max_length",
+    "min_selections", "max_selections", "items", "question", "button_label",
+    "accept_mime_types", "accept_extensions", "multiple", "min_files",
+    "max_files", "max_file_size_bytes", "max_total_size_bytes",
+    "selected", "answers",
+})
+_CONSTRAINTS = {
+    "missing": "FIELD_REQUIRED", "extra_forbidden": "EXTRA_FIELD",
+    "string_type": "STRING_REQUIRED", "int_type": "INTEGER_REQUIRED",
+    "greater_than": "OUT_OF_RANGE", "greater_than_equal": "OUT_OF_RANGE",
+    "less_than": "OUT_OF_RANGE", "less_than_equal": "OUT_OF_RANGE",
+    "string_too_short": "TOO_SHORT", "string_too_long": "TOO_LONG",
+    "too_short": "TOO_SHORT", "too_long": "TOO_LONG",
+    "literal_error": "INVALID_VALUE", "enum": "INVALID_VALUE",
+}
 
 
 class FailureDiagnosticsUnauthorized(ValueError):
@@ -23,6 +49,60 @@ class FailureDiagnosticsUnauthorized(ValueError):
 
 class FailureDiagnosticsUnavailable(ValueError):
     pass
+
+
+def _safe_interaction_field(value: Any) -> str:
+    if (
+        isinstance(value, str) and _FIELD_PATH.fullmatch(value)
+        and all(part in _INTERACTION_FIELDS for part in re.findall(r"[A-Za-z][A-Za-z0-9_]*", value))
+    ):
+        return value
+    return "not_recorded"
+
+
+def classify_interaction_failure(exc: Exception, capability: str) -> dict[str, str]:
+    """Capture only stable contract metadata; never serialize exception text or input."""
+    result = {
+        "error_code": "HOST_INTERNAL_ERROR",
+        "field_path": "not_recorded",
+        "constraint": "not_recorded",
+        "recovery_action": "contact_platform_with_invocation_id",
+        "contract": capability,
+    }
+    source = exc
+    if not isinstance(source, (InteractionError, InteractionValidationError, ValidationError)):
+        source = exc.__cause__ if isinstance(exc.__cause__, ValidationError) else exc
+    if isinstance(source, InteractionError):
+        result["error_code"] = source.code if _ERROR_CODE.fullmatch(source.code) else "INTERACTION_REJECTED"
+        result["field_path"] = _safe_interaction_field(source.field)
+        result["constraint"] = result["error_code"]
+        result["recovery_action"] = (
+            "correct_request" if result["error_code"].startswith("INVALID_") else
+            "correct_request_or_resolve_conflict" if "CONFLICT" in result["error_code"]
+            or result["error_code"] == "ACTIVE_BLOCKING_INTERACTION_EXISTS" else
+            "retry_same_idempotency_key" if source.retryable else
+            "contact_platform_with_invocation_id"
+        )
+    elif isinstance(source, InteractionValidationError):
+        result["error_code"] = source.code if _ERROR_CODE.fullmatch(source.code) else "INVALID_INTERACTION_REQUEST"
+        issue = source.issues[0] if source.issues else {}
+        field = issue.get("field")
+        constraint = issue.get("code")
+        result["field_path"] = _safe_interaction_field(field)
+        result["constraint"] = constraint if isinstance(constraint, str) and _ERROR_CODE.fullmatch(constraint) else "INVALID_VALUE"
+        result["recovery_action"] = "correct_request"
+    elif isinstance(source, ValidationError):
+        result["error_code"] = "INVALID_INTERACTION_REQUEST"
+        issue = source.errors(include_url=False, include_context=False, include_input=False)[0]
+        parts = issue.get("loc", ())
+        field = "".join(
+            f"[{part}]" if isinstance(part, int) else ("." if index else "") + part
+            for index, part in enumerate(parts) if isinstance(part, (int, str))
+        )
+        result["field_path"] = _safe_interaction_field(field)
+        result["constraint"] = _CONSTRAINTS.get(issue.get("type"), "INVALID_VALUE")
+        result["recovery_action"] = "correct_request"
+    return result
 
 
 def _scope(value: str) -> str:
@@ -194,6 +274,17 @@ def _trace_failure(path: Path, installation_id: str, session_id: str) -> list[di
                         "provider_param": None,
                         "contract": payload.get("capability") if isinstance(payload.get("capability"), str) and _CAPABILITY_ID.fullmatch(payload["capability"]) else None,
                     })
+                    detail = {key: _token(payload.get(key)) for key in (
+                        "error_code", "constraint", "recovery_action",
+                    )}
+                    detail["field_path"] = (
+                        _safe_interaction_field(payload.get("field_path"))
+                    )
+                    detail["contract"] = (
+                        payload["contract"] if isinstance(payload.get("contract"), str)
+                        and _CAPABILITY_ID.fullmatch(payload["contract"]) else None
+                    )
+                    invocation.setdefault("host_failure_details", []).append(detail)
                 elif event == "interaction.tool.rejected":
                     invocation.setdefault("failure_events", []).append({
                         "phase": "interaction_tool_validation",
@@ -525,3 +616,114 @@ def read_developer_failure_by_reference_v2(**kwargs: Any) -> dict[str, Any]:
         if terminal is not None and blocker["responsibility"] == "model_provider" else []
     )
     return result
+
+
+def read_developer_failure_by_reference_v3(**kwargs: Any) -> dict[str, Any]:
+    """Return a stable Host rejection detail without changing the v2 envelope."""
+    prior = read_developer_failure_by_reference_v2(**kwargs)
+    result = {"contract": "developer.runtime.diagnostics.by-reference/3",
+              "status": prior["status"], "retention_days": READ_WINDOW.days}
+    if prior["status"] == "no_record":
+        return result
+    failure = read_invocation_failure(
+        storage_root=kwargs["storage_root"],
+        installation_id=prior["installation_id"],
+        session_id=prior["task_id"], invocation_id=prior["invocation_id"],
+    )
+    if failure is None:
+        raise FailureDiagnosticsUnavailable("diagnostic reference disappeared")
+    blocker = prior["final_blocker"]
+    details = failure.get("host_failure_details", [])
+    detail = details[-1] if details and blocker["phase"] == "interaction_operation" else None
+    result.update({key: prior[key] for key in (
+        "task_id", "invocation_id", "installation_id", "release_id",
+        "started_at", "failed_at", "transaction_status", "final_blocker",
+    )})
+    result["host_failure_detail"] = {
+        "status": (
+            "recorded" if detail and detail.get("error_code") else
+            "not_recorded" if blocker["phase"] == "interaction_operation" else
+            "not_applicable"
+        ),
+        **{key: detail.get(key) if detail else None for key in (
+            "error_code", "field_path", "constraint", "recovery_action", "contract",
+        )},
+    }
+    return result
+
+
+def search_developer_failures(
+    *, storage_root: Path, grants: Any, agent_id: str, tenant_id: str,
+    owner_resolver: Callable[[str], dict[str, Any] | None],
+    start: datetime, end: datetime, limit: int = 50,
+    cursor: str | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Find opaque failure references for an owned expert in a bounded window."""
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    if (
+        start.tzinfo is None or end.tzinfo is None or not 1 <= limit <= 50
+        or end <= start or end - start > timedelta(days=1)
+        or start < now - READ_WINDOW or end > now + timedelta(minutes=1)
+        or (cursor is not None and re.fullmatch(r"(?:[0-9a-f]{32}|preflight-[0-9a-f]{32})", cursor) is None)
+    ):
+        raise ValueError("invalid diagnostic search window")
+    start, end = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+    matches: list[dict[str, str]] = []
+    inspected = 0
+    for grant in grants.list_grants():
+        if grant.tenant_id != tenant_id or grant.agent_id != agent_id:
+            continue
+        directory = Path(storage_root) / "traces" / _scope(grant.installation_id)
+        if directory.is_symlink():
+            raise FailureDiagnosticsUnavailable("unsafe failure trace directory")
+        if not directory.exists():
+            continue
+        for path in directory.glob("*.ndjson"):
+            inspected += 1
+            if inspected > 5000:
+                raise FailureDiagnosticsUnavailable("failure trace search limit exceeded")
+            if path.is_symlink() or not path.is_file():
+                raise FailureDiagnosticsUnavailable("unsafe failure trace")
+            try:
+                with path.open(encoding="utf-8") as stream:
+                    first = json.loads(stream.readline())
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise FailureDiagnosticsUnavailable("failure trace cannot be read") from exc
+            session_id = first.get("session_id") if isinstance(first, dict) else None
+            if (
+                not isinstance(session_id, str) or
+                path.name != f"{_scope(session_id)}.ndjson" or
+                first.get("installation_id") != grant.installation_id
+            ):
+                raise FailureDiagnosticsUnavailable("failure trace scope mismatch")
+            owner = owner_resolver(session_id)
+            if (
+                owner is None or owner.get("tenant_id") != tenant_id
+                or owner.get("agent_id") != agent_id
+            ):
+                continue
+            for failure in _trace_failure(path, grant.installation_id, session_id):
+                when = failure["failed_at"]
+                if start <= when < end:
+                    matches.append({
+                        "task_id": session_id,
+                        "invocation_id": failure["invocation_id"],
+                        "failed_at": when.isoformat(),
+                        "release_id": grant.release_id,
+                    })
+    matches.sort(key=lambda item: (item["failed_at"], item["invocation_id"]), reverse=True)
+    if cursor is not None:
+        positions = [index for index, item in enumerate(matches) if item["invocation_id"] == cursor]
+        if len(positions) != 1:
+            raise ValueError("invalid diagnostic search cursor")
+        matches = matches[positions[0] + 1:]
+    page = matches[:limit]
+    return {
+        "contract": "developer.runtime.diagnostics.search/1",
+        "status": "found" if page else "no_record",
+        "retention_days": READ_WINDOW.days,
+        "failures": page,
+        "has_more": len(matches) > limit,
+        "next_cursor": page[-1]["invocation_id"] if len(matches) > limit else None,
+    }

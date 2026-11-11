@@ -1,5 +1,10 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.21 bundles development standard 2.45 and DevKit 1.9.13. It
+adds a redacted Host rejection lookup and a 24-hour failure-reference search
+for the signed-in expert owner. Existing v1/v2 diagnostics and sealed Agents
+retain their contracts.
+
 Version 1.10.20 bundles development standard 2.44 and DevKit 1.9.12. The
 interaction card, AIGC workflow task card and local helper task each have a
 separate runnable API reference and documented failure gate. Existing Host

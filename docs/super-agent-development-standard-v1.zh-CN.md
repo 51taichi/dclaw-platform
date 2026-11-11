@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.44`
+当前版本：`2.45`
 
 发布日期：`2026-11-10`
 
@@ -2278,7 +2278,7 @@ Agent 名称：<可选，中文显示名称>
 2. 开发方自己的业务目标、源 Agent 材料和测试凭证；
 3. 从目标 DClaw 认证调用元数据接口并按其 `download_path` 下载、核对 SHA-256 的官方开发包；兼容自动化可以继续单独下载同版本官方 DevKit。
 
-开发包 `1.10.16` 是推荐的单一离线移交物，必须提供：
+当前开发包 `1.10.21` 是推荐的单一离线移交物，必须提供：
 
 - 唯一标准文件与明确的标准版本，不复制第二套人工规则；
 - 官方 DevKit `1.9.8` 及其完整离线加密依赖；
@@ -2293,7 +2293,7 @@ Agent 名称：<可选，中文显示名称>
 
 开发包本身不得包含平台管理员凭据、生产地址、签名私钥、供应商 Secret、客户数据或 DClaw 私有实现。包内公开工具不得导入 `qwenpaw` 或要求开发者克隆服务器仓库。
 
-DevKit `1.9.8` 必须提供：
+当前 DevKit `1.9.13` 必须提供：
 
 - `dclaw_agent_devkit.py`：`doctor`、`contracts`、`digest`、`validate`、`keygen`、`build`、`verify`；
 - `capability-catalog.json`：当前可声明的能力、版本、组和依赖；
@@ -2311,6 +2311,8 @@ DevKit `1.9.8` 必须提供：
 - `schemas/interaction-card-read-v1/`：按可信安装与任务读取卡片状态、规范化答案和提交回执的关闭合同；
 - `schemas/runtime-diagnostics-v1/by-reference-response.schema.json`：开发者按客户可见关联 ID 读取本专家脱敏失败的关闭合同；
 - `schemas/runtime-diagnostics-v2/`：开发者按同一关联 ID 读取有界错误顺序、已恢复错误和最终阻断的关闭请求、响应及错误合同；
+- `schemas/runtime-diagnostics-v3/` 与 `schemas/runtime-diagnostics-search-v1/`：开发者查询脱敏 Host 拒绝细节，或在缺少关联 ID 时按专家和有界时间窗发现失败引用；
+- `runtime_diagnostics_api_demo.py`：使用本地登录身份和正式 Schema 的只读查询示例；
 - `schemas/aigc-task-snapshot-v1/`：密封专家按可信安装与任务读取工作流状态和已验证产物资产 ID 的关闭合同；
 - `schemas/local-task-host-v1/`：密封专家确定性启动、读取、取消本地任务及读取受限回执的关闭合同；
 - `aigc_workflow_api_demo.py`、`local_task_api_demo.py` 及各自 `examples/`：现有 AIGC 模型工具/快照和本地任务 Host 调用的可运行参考、成功/拒绝门禁；
@@ -2338,6 +2340,10 @@ curl --fail-with-body -H "Authorization: Bearer ${DCLAW_ACCESS_TOKEN}" \
 ```
 
 路径中的示例 ID 仅展示格式。正式请求/响应/错误以 DevKit `schemas/runtime-diagnostics-v2/` 为准；`found` 返回实际 Release、installation、阶段与失败顺序，`no_record` 是正常结果。
+
+插件 `1.18.28` 起，普通开发者可用相同的专家归属身份读取 `GET /api/user/super-expert-publishing/runtime-diagnostics/v3/references/{invocation_id}?agent_id={agent_id}`。`/v3/` 只增加独立的 Host 终止拒绝详情：稳定 `error_code`、安全 `field_path`、`constraint`、`contract` 和 `recovery_action`，不返回异常消息、请求体、模型输出或客户内容。未知内部异常统一给 `HOST_INTERNAL_ERROR` 与关联 ID；历史 trace 缺字段时返回 `not_recorded`，不能推断具体拒绝码。`/v1/`、`/v2/` 原响应保持不变。Agent 运行时的 `runtime.failure.read/1` 也保持不变。
+
+若客户端没有给 invocation ID，开发者可查 `GET /api/user/super-expert-publishing/runtime-diagnostics/v1/search?agent_id={agent_id}&start={UTC}&end={UTC}&limit=50`。时间窗至多 24 小时、只查最近 30 天、每页最多返回 50 条失败的任务 ID、invocation ID、Release ID 和时间；没有正文。`has_more=true` 时以 `next_cursor` 原样传入同一时间窗的下一次查询。按同租户及专家绑定的真实任务过滤，不能据此查询其他专家或租户。两种新查询共享每账号每分钟 30 次限流和脱敏审计，`404` 隐藏不存在与越权差别，`429` 限流，`503` 表示诊断不可读。正式 Schema、路径和可运行示例在 DevKit `1.9.13`。
 
 开发者先查看 `failure_events` 的时间顺序及 `outcome`，再以 `final_blocker` 判断本轮最终阻断。`first_failure` 仅为兼容字段，可能是已恢复的早期错误，不能单独当作整轮原因。`status=not_recorded`、`unrecorded_fields` 或 `provider_code/param=null` 表示当时没有留存，不得用模型解释补造。新回合的卡片参数校验失败返回 `field_path`、稳定 `constraint` 及 `contract`；提供方拒绝只记录 HTTP 状态、稳定 code 与 param，不记录错误正文、模型原文、提示词或客户数据。`stages` 中 `interaction.tool.invoked` 才证明模型进入了插件工具；`interaction.operation.started/completed/failed` 分别证明已发起、已完成或已失败的平台卡片操作。没有这些记录的旧回合不能据此推断工具未执行。
 
@@ -2369,6 +2375,11 @@ Skill 和专家发布前须对每条实际使用的路径同时验证：正确�
 以上是通用 Skill 的平台合同输入。Skill 维护方应在其 `references/capability-verification.md` 补 `/v2/` 的首错和终止根因区分，在 `scripts/runtime_diagnostics_with_login.py` 增加按官方 DevKit v2 Schema 查询和摘要，在相关脚本测试加入已恢复错误、最终阻断、`no_record`、越权及旧版回退案例。平台不直接覆盖 Skill 发布仓库，也不把单个专家的业务字段写成公共规则。
 
 ## 34. 版本记录
+
+### 2.45 - 2026-11-11
+
+- 插件 `1.18.28` 对新发生的交互卡 Host 失败只记录白名单化稳定错误码、安全字段、约束、合同与恢复动作；未知异常不泄露原文。旧 `/v1/`、`/v2/` 与已签名专家合同不变，历史未留存细节仍标为 `not_recorded`。
+- DevKit `1.9.13`、Developer Pack `1.10.21` 提供普通开发者按关联 ID 查询 Host 终止拒绝的 `/v3/` 关闭合同，以及按本人专家和 24 小时时间窗寻找失败引用的只读合同、Schema 与 API 示例。查询按租户、专家和真实任务隔离、限流并审计。
 
 ### 2.44 - 2026-11-10
 

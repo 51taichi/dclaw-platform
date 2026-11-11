@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi.testclient import TestClient
 from jsonschema import validate
 from qwenpaw.app.sealed_agents.package import SealedPackageManifest
 
@@ -19,12 +21,19 @@ from super_agent.failure_diagnostics import (
     read_invocation_failure,
     read_developer_failure_by_reference,
     read_developer_failure_by_reference_v2,
+    read_developer_failure_by_reference_v3,
+    search_developer_failures,
+    classify_interaction_failure,
 )
+from super_agent.interaction_cards import InteractionError
+from super_agent.interaction_contract import InteractionCreateRequest, InteractionValidationError
+from pydantic import ValidationError
 from super_agent.capabilities import compute_capability_set_digest, validate_super_expert_manifest
 from super_agent.orchestration import WorkspaceOrchestrationError, WorkspaceRuntimeHost
 from super_agent.publication import PublisherPublication
 from super_agent.router import _memory_message_ids
 from super_agent.trust import SuperExpertTrustStore
+from devkit import runtime_diagnostics_api_demo
 
 
 NOW = datetime(2026, 11, 5, 10, 0, tzinfo=timezone.utc)
@@ -326,6 +335,193 @@ def test_reference_v2_identifies_terminal_host_failure_after_recovered_json_erro
         storage_root=tmp_path, grants=_grants(), agent_id="another",
         tenant_id="local", invocation_id=invocation, owner_resolver=owner, now=NOW,
     )["status"] == "no_record"
+
+
+def test_v3_reports_safe_host_rejection_without_changing_v2(tmp_path):
+    invocation = "e" * 32
+    when = NOW - timedelta(minutes=1)
+    _trace(tmp_path, "old", "customer-task", [
+        {"timestamp": when.isoformat(), "invocation_id": invocation,
+         "event_type": "orchestration.started", "payload": {}},
+        {"timestamp": (when + timedelta(seconds=1)).isoformat(),
+         "invocation_id": invocation, "event_type": "interaction.operation.failed",
+         "payload": {"capability": "interaction.card.create/1", "category": "InteractionError",
+                     "error_code": "IDEMPOTENCY_CONFLICT", "field_path": "task_key",
+                     "constraint": "IDEMPOTENCY_CONFLICT",
+                     "recovery_action": "correct_request_or_resolve_conflict",
+                     "contract": "interaction.card.create/1", "request_body": "private"}},
+        {"timestamp": (when + timedelta(seconds=2)).isoformat(),
+         "invocation_id": invocation, "event_type": "orchestration.failed",
+         "payload": {"error_code": "INVALID_TURN_RESULT"}},
+    ])
+    kwargs = dict(storage_root=tmp_path, grants=_grants(), agent_id="comic",
+                  tenant_id="local", invocation_id=invocation,
+                  owner_resolver=lambda _: {"tenant_id": "local", "agent_id": "comic"}, now=NOW)
+    v2 = read_developer_failure_by_reference_v2(**kwargs)
+    validate(v2, json.loads((
+        SCHEMAS.parent / "runtime-diagnostics-v2" / "by-reference-response.schema.json"
+    ).read_text()))
+    assert "error_code" not in v2["failure_events"][0]
+    v3 = read_developer_failure_by_reference_v3(**kwargs)
+    assert v3["host_failure_detail"] == {
+        "status": "recorded", "error_code": "IDEMPOTENCY_CONFLICT",
+        "field_path": "task_key", "constraint": "IDEMPOTENCY_CONFLICT",
+        "recovery_action": "correct_request_or_resolve_conflict",
+        "contract": "interaction.card.create/1",
+    }
+    assert "private" not in json.dumps(v3)
+    validate(v3, json.loads((
+        SCHEMAS.parent / "runtime-diagnostics-v3" / "by-reference-response.schema.json"
+    ).read_text()))
+
+
+def test_v3_historic_host_failure_does_not_invent_details(tmp_path):
+    invocation = "f" * 32
+    when = NOW - timedelta(minutes=1)
+    _trace(tmp_path, "old", "customer-task", [
+        {"timestamp": when.isoformat(), "invocation_id": invocation,
+         "event_type": "interaction.operation.failed",
+         "payload": {"capability": "interaction.card.create/1", "category": "InteractionError"}},
+        {"timestamp": (when + timedelta(seconds=1)).isoformat(),
+         "invocation_id": invocation, "event_type": "orchestration.failed",
+         "payload": {"error_code": "INVALID_TURN_RESULT"}},
+    ])
+    result = read_developer_failure_by_reference_v3(
+        storage_root=tmp_path, grants=_grants(), agent_id="comic", tenant_id="local",
+        invocation_id=invocation,
+        owner_resolver=lambda _: {"tenant_id": "local", "agent_id": "comic"}, now=NOW,
+    )
+    assert result["host_failure_detail"]["status"] == "not_recorded"
+    assert result["host_failure_detail"]["error_code"] is None
+
+
+def test_interaction_failure_classifier_never_serializes_untrusted_values():
+    rejection = InteractionError("IDEMPOTENCY_CONFLICT", field="task_key", retryable=False)
+    assert classify_interaction_failure(rejection, "interaction.card.create/1")["error_code"] == "IDEMPOTENCY_CONFLICT"
+    assert classify_interaction_failure(rejection, "interaction.card.create/1")["recovery_action"] == "correct_request_or_resolve_conflict"
+    assert classify_interaction_failure(
+        InteractionError("INVALID_INTERACTION_REQUEST"), "interaction.card.create/1",
+    )["recovery_action"] == "correct_request"
+    assert classify_interaction_failure(
+        InteractionError("INVALID_SELECTION", field="answers.PRIVATE_SECRET"),
+        "interaction.card.create/1",
+    )["field_path"] == "not_recorded"
+    private = "customer private material"
+    assert private not in json.dumps(classify_interaction_failure(RuntimeError(private), "interaction.card.create/1"))
+    validation = InteractionValidationError("INVALID_CARD", [{"field": "card.options[0].text", "code": "FIELD_REQUIRED"}])
+    assert classify_interaction_failure(validation, "interaction.card.create/1")["field_path"] == "card.options[0].text"
+    try:
+        InteractionCreateRequest.model_validate({"task_key": private})
+    except ValidationError as exc:
+        result = classify_interaction_failure(exc, "interaction.card.create/1")
+        assert result["error_code"] == "INVALID_INTERACTION_REQUEST"
+        assert private not in json.dumps(result)
+
+
+def test_developer_window_search_is_bounded_and_scoped(tmp_path):
+    when = NOW - timedelta(minutes=5)
+    _trace(tmp_path, "old", "customer-task", _failure("a" * 32, when))
+    _trace(tmp_path, "other-tenant", "foreign-task", _failure("b" * 32, when))
+    _trace(tmp_path, "other-agent", "agent-task", _failure("c" * 32, when))
+    kwargs = dict(storage_root=tmp_path, grants=_grants(), agent_id="comic",
+                  tenant_id="local", start=NOW-timedelta(hours=1), end=NOW,
+                  owner_resolver=lambda task: {"tenant_id": "local", "agent_id": "comic"}
+                  if task == "customer-task" else None, now=NOW)
+    result = search_developer_failures(**kwargs)
+    assert [row["invocation_id"] for row in result["failures"]] == ["a" * 32]
+    assert "private model text" not in json.dumps(result)
+    validate(result, json.loads((SCHEMAS.parent / "runtime-diagnostics-search-v1" / "response.schema.json").read_text()))
+    with pytest.raises(ValueError):
+        search_developer_failures(**{**kwargs, "start": NOW - timedelta(days=2)})
+    with pytest.raises(ValueError):
+        search_developer_failures(**{**kwargs, "limit": 51})
+
+
+def test_developer_window_search_paginates_without_repeating_references(tmp_path):
+    rows = []
+    for index in range(3):
+        rows.extend(_failure(f"{index + 1:032x}", NOW - timedelta(minutes=index + 1)))
+    _trace(tmp_path, "old", "customer-task", rows)
+    kwargs = dict(storage_root=tmp_path, grants=_grants(), agent_id="comic",
+                  tenant_id="local", start=NOW-timedelta(hours=1), end=NOW,
+                  owner_resolver=lambda _: {"tenant_id": "local", "agent_id": "comic"},
+                  now=NOW, limit=2)
+    first = search_developer_failures(**kwargs)
+    assert first["has_more"] is True
+    assert first["next_cursor"] == first["failures"][-1]["invocation_id"]
+    second = search_developer_failures(**kwargs, cursor=first["next_cursor"])
+    assert second["has_more"] is False
+    assert second["next_cursor"] is None
+    assert len({row["invocation_id"] for row in first["failures"] + second["failures"]}) == 3
+    with pytest.raises(ValueError):
+        search_developer_failures(**kwargs, cursor="0" * 32)
+
+
+def test_developer_diagnostic_routes_enforce_expert_owner(tmp_path, monkeypatch):
+    invocation = "a" * 32
+    when = datetime.now(timezone.utc) - timedelta(minutes=3)
+    _trace(tmp_path / "workspace_runtime_state", "old", "customer-task",
+           _failure(invocation, when))
+    monkeypatch.setattr("super_agent.publication.WORKING_DIR", tmp_path)
+    monkeypatch.setattr(
+        "super_agent.composition.resolve_event_scope",
+        lambda _: {"tenant_id": "local", "agent_id": "comic"},
+    )
+    publication = object.__new__(PublisherPublication)
+    publication.repository = SimpleNamespace(
+        agent_owner=lambda agent: ("local", "developer") if agent == "comic" else None,
+    )
+    publication.handler = SimpleNamespace(grant_repository=_grants())
+    publication._diagnostic_read_times = {}
+    publication.router = APIRouter()
+    publication._register_routes()
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def actor(request, call_next):
+        request.state.tenant_id = "local"
+        request.state.user_id = "developer"
+        return await call_next(request)
+
+    app.include_router(publication.router)
+    client = TestClient(app)
+    reference = f"/runtime-diagnostics/v3/references/{invocation}"
+    assert client.get(reference, params={"agent_id": "foreign"}).status_code == 404
+    found = client.get(reference, params={"agent_id": "comic"})
+    assert found.status_code == 200
+    assert found.json()["host_failure_detail"]["status"] == "not_applicable"
+    searched = client.get("/runtime-diagnostics/v1/search", params={
+        "agent_id": "comic", "start": (when - timedelta(minutes=1)).isoformat(),
+        "end": (when + timedelta(minutes=1)).isoformat(),
+    })
+    assert searched.status_code == 200
+    assert searched.json()["failures"][0]["invocation_id"] == invocation
+    assert client.get("/runtime-diagnostics/v1/search", params={
+        "agent_id": "foreign", "start": when.isoformat(), "end": datetime.now(timezone.utc).isoformat(),
+    }).status_code == 404
+
+
+def test_developer_diagnostic_demo_uses_https_and_closed_schema(monkeypatch):
+    requested = []
+
+    def response(request, timeout):
+        requested.append((request.full_url, request.get_header("Authorization"), timeout))
+        return io.BytesIO(json.dumps({
+            "contract": "developer.runtime.diagnostics.by-reference/3",
+            "status": "no_record", "retention_days": 30,
+        }).encode())
+
+    monkeypatch.setattr(runtime_diagnostics_api_demo, "urlopen", response)
+    result = runtime_diagnostics_api_demo.lookup(
+        "https://dclaw.example", "comic", "a" * 32, "local-token",
+    )
+    assert result["status"] == "no_record"
+    assert requested[0][0].endswith("/" + "a" * 32 + "?agent_id=comic")
+    assert requested[0][1] == "Bearer local-token"
+    with pytest.raises(ValueError):
+        runtime_diagnostics_api_demo.lookup(
+            "http://dclaw.example", "comic", "a" * 32, "local-token",
+        )
 
 
 def test_reference_v2_rate_limit_is_actor_scoped():

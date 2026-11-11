@@ -3,7 +3,7 @@
 | Component | Supported version |
 |---|---|
 | Developer pack | 1.0.x through 1.10.x |
-| Development standard | 2.1 through 2.44 |
+| Development standard | 2.1 through 2.45 |
 | Super Agent DevKit | 1.2.x through 1.9.x |
 | Super Expert manifest | 3 |
 | Runtime / runtime host | 1 |
@@ -33,6 +33,7 @@
 | Support plugin for developer pack >= 1.10.18 download | >= 1.18.25 |
 | Support plugin for developer pack >= 1.10.19 download | >= 1.18.26 |
 | Support plugin for developer pack >= 1.10.20 download | >= 1.18.27 |
+| Support plugin for developer pack >= 1.10.21 download | >= 1.18.28 |
 | Support plugin for `runtime.failure.read/1` | >= 1.18.12 |
 | Support plugin for startup failure diagnostics and durable failed turns | >= 1.18.13 |
 | Support plugin for preserving prior memory on failed turns | >= 1.18.14 |
@@ -42,6 +43,7 @@
 | Support plugin for optional `interaction.card.read/1` | >= 1.18.20 |
 | Support plugin for reference diagnostics, AIGC snapshot and local Host task receipts | >= 1.18.21 |
 | Support plugin for final-blocker reference diagnostics v2 and Agent loop model-default isolation | >= 1.18.22 |
+| Support plugin for redacted Host rejection diagnostics v3 and bounded reference search | >= 1.18.28 |
 | DClaw Windows client for required preflight | >= 2.6.12 |
 | DClaw Windows client for local file workflows | >= 2.6.13 |
 | Runner | >= 1.0.0; >= 1.1.0 for device protocol 2 file workflows; >= 1.2.0 for public Components; >= 1.3.0 for explicit non-entry Component export bindings |

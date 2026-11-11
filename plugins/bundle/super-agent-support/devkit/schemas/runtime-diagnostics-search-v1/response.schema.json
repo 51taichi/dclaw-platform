@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "developer.runtime.diagnostics.search/1 response",
+  "type": "object",
+  "required": ["contract", "status", "retention_days", "failures", "has_more", "next_cursor"],
+  "properties": {
+    "contract": {"const": "developer.runtime.diagnostics.search/1"},
+    "status": {"enum": ["found", "no_record"]},
+    "retention_days": {"const": 30},
+    "has_more": {"type": "boolean"},
+    "next_cursor": {"type": ["string", "null"]},
+    "failures": {
+      "type": "array", "maxItems": 50,
+      "items": {
+        "type": "object",
+        "required": ["task_id", "invocation_id", "failed_at", "release_id"],
+        "properties": {
+          "task_id": {"type": "string"}, "invocation_id": {"type": "string"},
+          "failed_at": {"type": "string", "format": "date-time"},
+          "release_id": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
