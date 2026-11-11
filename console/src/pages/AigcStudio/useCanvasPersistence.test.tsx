@@ -93,6 +93,43 @@ describe("useCanvasPersistence", () => {
     expect(mockAigcStudioApi.saveCanvas).not.toHaveBeenCalled();
   });
 
+  it("refreshes the live model inventory on demand", async () => {
+    const initial = [
+      {
+        provider_id: "mxapi",
+        provider_name: "MXAPI",
+        model_id: "grok-imagine-video-1.5",
+        model_name: "Grok Imagine Video 1.5",
+        capability: "image_to_video",
+        source: "model_registry" as const,
+      },
+    ];
+    const refreshed = [
+      ...initial,
+      {
+        ...initial[0],
+        model_id: "veo-3.1-fast",
+        model_name: "Veo 3.1 Fast",
+      },
+    ];
+    mockAigcStudioApi.listCapabilities
+      .mockResolvedValueOnce({ capabilities: initial })
+      .mockResolvedValueOnce({ capabilities: refreshed });
+    mockAigcStudioApi.listCanvases.mockResolvedValue({ canvases: [] });
+    const setViewportScale = vi.fn();
+
+    const { result } = renderHook(() =>
+      useCanvasPersistence({ t, onViewportScaleChange: setViewportScale }),
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await act(async () => {
+      await result.current.refreshCapabilities();
+    });
+
+    expect(result.current.capabilities).toEqual(refreshed);
+  });
+
   it("does not auto-create a starter project when the account has no canvases", async () => {
     const setViewportScale = vi.fn();
     mockAigcStudioApi.listCapabilities.mockResolvedValue({ capabilities: [] });

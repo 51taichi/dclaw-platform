@@ -45,6 +45,13 @@ export function useCanvasPersistence({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
+  const refreshCapabilities = useCallback(async () => {
+    const result = await aigcStudioApi.listCapabilities();
+    setCapabilities(result.capabilities);
+    setCapabilityDefaults(result.defaults ?? {});
+    return result.capabilities;
+  }, []);
+
   const persistCanvas = useCallback((canvas: AigcCanvas): Promise<void> => {
     pendingSaveCanvasRef.current = canvas;
     if (saveInFlightRef.current) {
@@ -91,12 +98,10 @@ export function useCanvasPersistence({
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [capabilityRes, canvasRes] = await Promise.all([
-        aigcStudioApi.listCapabilities(),
+      const [, canvasRes] = await Promise.all([
+        refreshCapabilities(),
         aigcStudioApi.listCanvases(),
       ]);
-      setCapabilities(capabilityRes.capabilities);
-      setCapabilityDefaults(capabilityRes.defaults ?? {});
 
       const localizedCanvases = canvasRes.canvases.map(
         (canvas) =>
@@ -124,7 +129,7 @@ export function useCanvasPersistence({
     } finally {
       setLoading(false);
     }
-  }, [onViewportScaleChange, t]);
+  }, [onViewportScaleChange, refreshCapabilities, t]);
 
   const activateCanvasById = useCallback(
     async (canvasId: string) => {
@@ -188,6 +193,7 @@ export function useCanvasPersistence({
     savedCanvasSignatureRef,
     capabilities,
     setCapabilities,
+    refreshCapabilities,
     capabilityDefaults,
     setCapabilityDefaults,
     canvases,

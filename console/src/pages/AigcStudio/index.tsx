@@ -496,6 +496,7 @@ export default function AigcStudioPage() {
     autoSaveTimerRef,
     savedCanvasSignatureRef,
     capabilities,
+    refreshCapabilities,
     capabilityDefaults,
     canvases,
     setCanvases,
@@ -2537,6 +2538,11 @@ export default function AigcStudioPage() {
   };
 
   const toggleVideoComposerMenu = (nodeId: string, menu: VideoComposerMenu) => {
+    if (menu === "model") {
+      void refreshCapabilities().catch((error) => {
+        console.error("Failed to refresh AIGC model capabilities", error);
+      });
+    }
     setVideoComposerMenu((current) =>
       current?.nodeId === nodeId && current.menu === menu
         ? null
