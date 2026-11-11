@@ -17,7 +17,6 @@ import {
   Empty,
   Input,
   Select,
-  Spin,
   Modal,
   message as antdMessage,
 } from "antd";
@@ -147,6 +146,7 @@ import { CanvasMinimap } from "./components/CanvasMinimap/CanvasMinimap";
 import { CanvasAddMenu } from "./components/CanvasMenus/CanvasAddMenu";
 import { CanvasContextMenu } from "./components/CanvasMenus/CanvasContextMenu";
 import { CanvasEmptyProjectLauncher } from "./components/CanvasMenus/CanvasEmptyProjectLauncher";
+import FeedbackState from "../../components/FeedbackState";
 import { CanvasPortMenu } from "./components/CanvasMenus/CanvasPortMenu";
 import { CanvasQuickTemplateMenu } from "./components/CanvasMenus/CanvasQuickTemplateMenu";
 import { CanvasTemplateLauncher } from "./components/CanvasMenus/CanvasTemplateLauncher";
@@ -2714,7 +2714,9 @@ export default function AigcStudioPage() {
   );
 
   if (loading) {
-    return <Spin style={{ display: "block", margin: "20vh auto" }} />;
+    return (
+      <FeedbackState variant="loading" compact title={t("common.loading")} />
+    );
   }
 
   return (

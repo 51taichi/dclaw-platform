@@ -1,7 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Alert, Spin } from "antd";
+import { Button } from "antd";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { ClientScene } from "../../api/modules/auth";
+import FeedbackState from "../../components/FeedbackState";
 import styles from "../index.module.less";
 
 interface SceneWebviewBounds {
@@ -27,8 +29,10 @@ function measureHost(element: HTMLElement): SceneWebviewBounds | null {
 }
 
 export default function SceneWebviewHost({ scene }: { scene: ClientScene }) {
+  const { t } = useTranslation();
   const hostRef = useRef<HTMLDivElement>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   useLayoutEffect(() => {
     const host = hostRef.current;
@@ -36,6 +40,7 @@ export default function SceneWebviewHost({ scene }: { scene: ClientScene }) {
 
     let disposed = false;
     let resizeFrame = 0;
+    setError(false);
     const commandPayload = {
       sceneKey: scene.key,
       url: scene.url,
@@ -47,11 +52,12 @@ export default function SceneWebviewHost({ scene }: { scene: ClientScene }) {
         bounds: initialBounds,
       })
         .then(() => {
-          if (!disposed) setError(null);
+          if (!disposed) setError(false);
         })
         .catch((reason: unknown) => {
           if (!disposed) {
-            setError(reason instanceof Error ? reason.message : String(reason));
+            console.error("Failed to open scene webview:", reason);
+            setError(true);
           }
         });
     }
@@ -80,7 +86,7 @@ export default function SceneWebviewHost({ scene }: { scene: ClientScene }) {
       window.removeEventListener("resize", syncBounds);
       window.visualViewport?.removeEventListener("resize", syncBounds);
     };
-  }, [scene.key, scene.url]);
+  }, [attempt, scene.key, scene.url]);
 
   useEffect(
     () => () => {
@@ -96,14 +102,27 @@ export default function SceneWebviewHost({ scene }: { scene: ClientScene }) {
       data-scene-webview={scene.key}
     >
       {error ? (
-        <Alert
-          type="error"
-          showIcon
-          message="场景加载失败"
-          description={error}
+        <FeedbackState
+          variant="error"
+          compact
+          title={t("sceneFeedback.errorTitle")}
+          description={t("sceneFeedback.errorSubtitle")}
+          action={
+            <Button
+              type="primary"
+              onClick={() => setAttempt((value) => value + 1)}
+            >
+              {t("taskLoading.retry")}
+            </Button>
+          }
         />
       ) : (
-        <Spin tip="加载中" />
+        <FeedbackState
+          variant="loading"
+          compact
+          title={t("sceneFeedback.loadingTitle", { name: scene.title })}
+          description={t("sceneFeedback.loadingSubtitle")}
+        />
       )}
     </div>
   );

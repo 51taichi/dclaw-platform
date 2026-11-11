@@ -39,6 +39,12 @@
     "openFailed": "Tugas ini belum dapat dibuka. Periksa akses akun saat ini, lalu coba lagi.",
     "retry": "Coba lagi"
   },
+  "sceneFeedback": {
+    "loadingTitle": "Membuka {{name}}",
+    "loadingSubtitle": "Menghubungkan ke skenario ini. Mohon tunggu.",
+    "errorTitle": "Skenario ini tidak dapat dibuka saat ini",
+    "errorSubtitle": "Periksa koneksi jaringan, lalu coba lagi."
+  },
   "chunkError": {
     "title": "Gagal memuat halaman",
     "subTitle": "Ini mungkin disebabkan oleh masalah jaringan atau pembaruan aplikasi.",

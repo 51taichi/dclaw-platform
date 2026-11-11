@@ -68,7 +68,7 @@ describe("TaskConversationRoute", () => {
       conversation_id: "first",
       agent_id: "luyu",
     });
-    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    fireEvent.click(screen.getByRole("button", { name: /重\s*试/ }));
     expect(await screen.findByText("会话所属专家：luyu")).toBeInTheDocument();
   });
   it("ignores delayed ownership from a previous route", async () => {

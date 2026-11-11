@@ -39,6 +39,12 @@
     "openFailed": "This task cannot be opened right now. Check that this account has access, then try again.",
     "retry": "Retry"
   },
+  "sceneFeedback": {
+    "loadingTitle": "Opening {{name}}",
+    "loadingSubtitle": "Connecting to this scene. Please wait.",
+    "errorTitle": "This scene cannot be opened right now",
+    "errorSubtitle": "Check your network connection, then try again."
+  },
   "chunkError": {
     "title": "Failed to load page",
     "subTitle": "This may be caused by a network issue or an application update.",

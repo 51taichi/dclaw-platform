@@ -1,7 +1,8 @@
 import { Component } from "react";
 import type { ReactNode, ErrorInfo } from "react";
-import { Button, Result } from "antd";
+import { Button } from "antd";
 import i18n from "../i18n";
+import FeedbackState from "./FeedbackState";
 
 interface Props {
   children: ReactNode;
@@ -66,16 +67,15 @@ export class ChunkErrorBoundary extends Component<Props, State> {
         : "chunkError.genericSubTitle";
 
       return (
-        <Result
-          status="error"
+        <FeedbackState
+          variant={this.state.isChunkError ? "error" : "apology"}
           title={i18n.t(titleKey)}
-          subTitle={i18n.t(subTitleKey)}
-          extra={
+          description={i18n.t(subTitleKey)}
+          action={
             <Button type="primary" onClick={() => window.location.reload()}>
               {i18n.t("chunkError.reload")}
             </Button>
           }
-          style={{ marginTop: "10vh" }}
         />
       );
     }

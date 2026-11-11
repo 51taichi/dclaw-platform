@@ -39,6 +39,12 @@
     "openFailed": "暂时无法打开这个任务，请确认当前账号有访问权限后重试。",
     "retry": "重试"
   },
+  "sceneFeedback": {
+    "loadingTitle": "正在打开「{{name}}」",
+    "loadingSubtitle": "正在连接场景，请稍候",
+    "errorTitle": "暂时无法打开这个场景",
+    "errorSubtitle": "请检查网络连接后重试。"
+  },
   "chunkError": {
     "title": "页面加载失败",
     "subTitle": "可能由网络问题或应用更新导致，请稍后重试。",

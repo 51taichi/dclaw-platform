@@ -39,6 +39,12 @@
     "openFailed": "Nao foi possivel abrir esta tarefa. Verifique o acesso da conta atual e tente novamente.",
     "retry": "Tentar novamente"
   },
+  "sceneFeedback": {
+    "loadingTitle": "Abrindo {{name}}",
+    "loadingSubtitle": "Conectando a este cenário. Aguarde.",
+    "errorTitle": "Não foi possível abrir este cenário agora",
+    "errorSubtitle": "Verifique sua conexão de rede e tente novamente."
+  },
   "chunkError": {
     "title": "Falha ao carregar pagina",
     "subTitle": "This may be caused by a network issue or an application update.",

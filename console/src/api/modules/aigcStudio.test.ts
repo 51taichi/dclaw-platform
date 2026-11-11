@@ -413,7 +413,7 @@ describe("aigcStudioApi", () => {
       ],
     };
     let runRequests = 0;
-    vi.mocked(fetch).mockImplementation(async (input, init) => {
+    vi.mocked(fetch).mockImplementation(async (input, _init) => {
       const url = String(input);
       if (url.includes("/jobs/job-provider-pending/run?background=true")) {
         runRequests += 1;
