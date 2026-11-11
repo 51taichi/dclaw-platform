@@ -968,6 +968,7 @@ export default function AigcStudioPage() {
       providerName: model.provider_name,
       modelId: model.model_id,
       modelCapability: model.capability,
+      modelManuallySelected: true,
       ...extraData,
     });
   };

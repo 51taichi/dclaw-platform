@@ -205,7 +205,51 @@ describe("nodeModelSelection", () => {
         node,
         "image_to_video",
       ),
-    ).toEqual(grokImage);
+    ).toEqual(seedanceImage);
+  });
+
+  it("uses the configured video default until a workflow model is selected manually", () => {
+    const seedance = model("image_to_video", "seedance2", "Seedance 2.0");
+    const grok = model(
+      "image_to_video",
+      "grok-imagine-video-1.5",
+      "Grok Imagine Video 1.5",
+    );
+    const node: AigcCanvasNode = {
+      id: "video-1",
+      type: "video_generate",
+      position: { x: 0, y: 0 },
+      data: {
+        workflowLogicalNodeId: "video_generate_shot01",
+        providerId: "mxapi",
+        modelId: "grok-imagine-video-1.5",
+        modelCapability: "image_to_video",
+      },
+    };
+    const configuredDefault = {
+      provider_id: "mxapi",
+      model_id: "seedance2",
+    };
+
+    expect(
+      modelForNode(
+        [grok, seedance],
+        node,
+        "image_to_video",
+        configuredDefault,
+      ),
+    ).toEqual(seedance);
+    expect(
+      modelForNode(
+        [grok, seedance],
+        {
+          ...node,
+          data: { ...node.data, modelManuallySelected: true },
+        },
+        "image_to_video",
+        configuredDefault,
+      ),
+    ).toEqual(grok);
   });
 
   it("falls back to the configured default when a workflow model was removed", () => {

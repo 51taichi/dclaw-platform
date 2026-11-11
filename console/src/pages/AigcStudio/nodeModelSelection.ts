@@ -159,6 +159,7 @@ export function modelSelectionState(
   const currentKey = nodeModelKey(node);
   const boundCapability = textValue(node.data.modelCapability);
   const workflowBound = Boolean(textValue(node.data.workflowLogicalNodeId));
+  const manuallySelected = node.data.modelManuallySelected === true;
   const options = workflowBound
     ? uniqueModelOptions(
         capabilities.filter((model) => model.capability === capability),
@@ -171,8 +172,15 @@ export function modelSelectionState(
   );
   const fallback = modelForNewNode(options, effectiveDefault);
   const invalidSavedModel = Boolean(snapshot && !matched && !workflowBound);
+  const useWorkflowVideoDefault =
+    workflowBound &&
+    !manuallySelected &&
+    VIDEO_GENERATION_CAPABILITIES.has(capability);
   return {
-    selected: matched ?? fallback ?? (invalidSavedModel ? snapshot : null),
+    selected:
+      (useWorkflowVideoDefault ? fallback : matched) ??
+      fallback ??
+      (invalidSavedModel ? snapshot : null),
     fallback,
     invalidSavedModel,
   };
