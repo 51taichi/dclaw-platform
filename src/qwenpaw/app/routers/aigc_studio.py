@@ -66,6 +66,7 @@ from ..aigc.capability_service import (
     build_workflow_capability_catalog,
     _MXAPI_SEEDANCE_ENDPOINTS,
     _MXAPI_GROK_VIDEO_MODELS,
+    _MXAPI_VEO_VIDEO_MODELS,
     _MXAPI_JIMENG_VIDEO_MODELS,
 )
 from ...aigc.visual_dna import (
@@ -2112,6 +2113,8 @@ _MXAPI_NANO2_IMAGE_SIZES = {"1K", "2K", "4K"}
 _MXAPI_NANO2_ASPECT_RATIOS = {"1:1", "3:4", "4:3", "9:16", "16:9", "21:9"}
 _MXAPI_GROK_VIDEO_ASPECT_RATIOS = {"2:3", "3:2", "1:1", "9:16", "16:9"}
 _MXAPI_GROK_VIDEO_RESOLUTIONS = {"480p", "720p", "1080p"}
+_MXAPI_VEO_VIDEO_ASPECT_RATIOS = {"16:9", "9:16"}
+_MXAPI_VEO_VIDEO_RESOLUTIONS = {"720p", "1080p"}
 _MXAPI_JIMENG_VIDEO_ASPECT_RATIOS = {
     "16:9",
     "9:16",
@@ -3915,6 +3918,262 @@ def _mxapi_grok_response_meta(payload: dict[str, Any]) -> dict[str, Any]:
     return meta
 
 
+def _mxapi_veo_model_id(model: Any, job: AigcJob) -> str:
+    model_id = _clean_text(getattr(model, "id", "") or job.model_id).lower()
+    if model_id not in _MXAPI_VEO_VIDEO_MODELS:
+        raise RuntimeError(f"Unsupported MXAPI Veo video model: {model_id}")
+    return model_id
+
+
+def _mxapi_veo_aspect_ratio(parameters: dict[str, Any]) -> str:
+    ratio = _clean_text(
+        parameters.get("aspect_ratio")
+        or parameters.get("aspectRatio")
+        or parameters.get("ratio")
+        or "16:9",
+    )
+    return ratio if ratio in _MXAPI_VEO_VIDEO_ASPECT_RATIOS else "16:9"
+
+
+def _mxapi_veo_resolution(parameters: dict[str, Any]) -> str:
+    resolution = _clean_text(
+        parameters.get("resolution")
+        or parameters.get("videoResolution")
+        or parameters.get("video_resolution")
+        or "720p",
+    ).lower()
+    return (
+        resolution
+        if resolution in _MXAPI_VEO_VIDEO_RESOLUTIONS
+        else "720p"
+    )
+
+
+def _mxapi_veo_duration(model_id: str, parameters: dict[str, Any]) -> str:
+    raw = parameters.get(
+        "duration",
+        parameters.get("videoDuration", parameters.get("video_length", 8)),
+    )
+    try:
+        duration = int(float(str(raw)))
+    except (TypeError, ValueError):
+        duration = 8
+    allowed = {4, 6, 8, 10} if model_id == "omni-flash" else {8}
+    return str(duration if duration in allowed else 8)
+
+
+def _mxapi_veo_reference_media(
+    request: Request,
+    job: AigcJob,
+) -> tuple[list[str], list[str]]:
+    image_values: list[str] = []
+    video_values: list[str] = []
+    for key in (
+        "reference_images",
+        "referenceImages",
+        "styleReferenceImages",
+    ):
+        _append_reference_candidate(image_values, job.parameters.get(key))
+    for key in ("reference_videos", "referenceVideos"):
+        _append_reference_candidate(video_values, job.parameters.get(key))
+
+    for item in _seedance_reference_items(job):
+        if _is_text_reference_record(item):
+            continue
+        raw_url = _seedance_reference_url(item)
+        if not raw_url:
+            continue
+        kind = _seedance_reference_kind(item, raw_url)
+        if kind == "video":
+            video_values.append(raw_url)
+        elif kind == "image":
+            image_values.append(raw_url)
+
+    def normalize(values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            url = _mxapi_public_reference_media(request, value, service="Veo")
+            if url in seen:
+                continue
+            normalized.append(url)
+            seen.add(url)
+        return normalized
+
+    return normalize(image_values), normalize(video_values)
+
+
+def _mxapi_veo_submit_body(
+    request: Request,
+    model: Any,
+    job: AigcJob,
+) -> dict[str, Any]:
+    prompt = _video_prompt_from_job(job)
+    if not prompt:
+        raise RuntimeError("Prompt is required for Veo video generation.")
+
+    model_id = _mxapi_veo_model_id(model, job)
+    images, videos = _mxapi_veo_reference_media(request, job)
+    if len(images) > 3:
+        raise RuntimeError("MXAPI Veo supports at most 3 reference images.")
+    if len(videos) > 1:
+        raise RuntimeError("MXAPI Veo supports at most 1 reference video.")
+    if model_id != "omni-flash" and videos:
+        raise RuntimeError("Only Veo Omni Flash supports a reference video.")
+    if model_id == "omni-flash" and len(images) == 2:
+        raise RuntimeError("Veo Omni Flash supports 1 or 3 reference images, not 2.")
+    if job.capability == "image_to_video" and not images:
+        raise RuntimeError("MXAPI Veo image-to-video requires a reference image.")
+    if job.capability == "reference_video" and not videos:
+        raise RuntimeError("Veo Omni Flash reference-video mode requires a video.")
+
+    body: dict[str, Any] = {
+        "model": model_id,
+        "prompt": prompt,
+        "aspect_ratio": _mxapi_veo_aspect_ratio(job.parameters),
+        "resolution": _mxapi_veo_resolution(job.parameters),
+        "duration": _mxapi_veo_duration(model_id, job.parameters),
+    }
+    if images:
+        body["reference_images"] = images
+    if videos:
+        body["reference_videos"] = videos
+    generation_type = _clean_text(
+        job.parameters.get("generation_type")
+        or job.parameters.get("generationType"),
+    ).lower()
+    if generation_type in {"frame", "reference"}:
+        if generation_type == "frame" and len(images) != 1:
+            raise RuntimeError("Veo frame mode requires exactly 1 image.")
+        body["generation_type"] = generation_type
+    return body
+
+
+async def _mxapi_veo_submit_task(
+    request: Request,
+    provider: Any,
+    model: Any,
+    job: AigcJob,
+    *,
+    execution: ProviderExecution | None = None,
+) -> str:
+    api_key = _mxapi_config_value(provider, "api_key", "MXAPI_KEY")
+    if not api_key:
+        raise RuntimeError(
+            f"Provider '{job.provider_id}' is missing an API key.",
+        )
+    return await _mxapi_submit_request(
+        f"{_mxapi_base_url(provider)}/api/v2/veo/generate",
+        _mxapi_headers(provider, api_key, json_content=True),
+        _mxapi_veo_submit_body(request, model, job),
+        accepted_codes={None, 0, 200, "200"},
+        error_message="MXAPI Veo task submission failed.",
+        execution=execution,
+        slot="video",
+        adapter="mxapi_veo_video",
+    )
+
+
+def _mxapi_veo_task_query_url(provider: Any, task_id: str) -> str:
+    return (
+        f"{_mxapi_base_url(provider)}/api/v2/veo/task"
+        f"?task_id={quote(task_id)}"
+    )
+
+
+def _mxapi_veo_error_message(payload: dict[str, Any]) -> str:
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    return next(
+        (
+            _clean_text(value)
+            for value in (
+                data.get("error_message"),
+                data.get("error_msg"),
+                data.get("error"),
+                data.get("message"),
+                payload.get("error"),
+                payload.get("message"),
+            )
+            if _clean_text(value)
+        ),
+        "MXAPI Veo video generation failed.",
+    )
+
+
+async def _mxapi_veo_query_task(
+    provider: Any,
+    task_id: str,
+) -> tuple[str, str | None, dict[str, Any]]:
+    api_key = _mxapi_config_value(provider, "api_key", "MXAPI_KEY")
+    if not api_key:
+        raise RuntimeError("MXAPI_KEY not configured.")
+    url = _mxapi_veo_task_query_url(provider, task_id)
+    timeout = httpx.Timeout(30.0, connect=10.0)
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+        try:
+            response = await client.get(
+                url,
+                headers=_mxapi_headers(provider, api_key),
+            )
+            response.raise_for_status()
+        except httpx.TimeoutException:
+            return "running", None, {}
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(
+                _mxapi_http_error_message(exc.response),
+            ) from exc
+
+    payload = response.json()
+    if payload.get("code") not in {None, 0, 200, "200"}:
+        raise RuntimeError(_mxapi_veo_error_message(payload))
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    status = _clean_text(data.get("status") or payload.get("status")).lower()
+    video_url = _clean_text(
+        data.get("proxy_url")
+        or data.get("video_url")
+        or payload.get("proxy_url")
+        or payload.get("video_url"),
+    )
+    if status in _MXAPI_SEEDANCE_SUCCESS_STATUSES or (
+        not status and video_url
+    ):
+        if video_url:
+            return "completed", video_url, payload
+        raise RuntimeError("MXAPI Veo completed without a video URL.")
+    if status in _MXAPI_SEEDANCE_FAILED_STATUSES:
+        raise ProviderTaskFailed(_mxapi_veo_error_message(payload))
+    return "running", None, payload
+
+
+async def _mxapi_veo_poll_task(
+    provider: Any,
+    task_id: str,
+) -> tuple[str, dict[str, Any]]:
+    timeout_seconds = float(
+        os.environ.get("AIGC_STUDIO_VIDEO_POLL_TIMEOUT_SECONDS")
+        or os.environ.get("MXAPI_VEO_POLL_TIMEOUT_SECONDS")
+        or os.environ.get("MXAPI_POLL_TIMEOUT_SECONDS")
+        or 1800,
+    )
+    interval_seconds = float(
+        os.environ.get("AIGC_STUDIO_VIDEO_POLL_INTERVAL_SECONDS")
+        or os.environ.get("MXAPI_VEO_POLL_INTERVAL_SECONDS")
+        or os.environ.get("MXAPI_POLL_INTERVAL_SECONDS")
+        or 3,
+    )
+    loop = asyncio.get_running_loop()
+    started_at = loop.time()
+    while loop.time() - started_at < timeout_seconds:
+        status, video_url, payload = await _mxapi_veo_query_task(
+            provider,
+            task_id,
+        )
+        if status == "completed" and video_url:
+            return video_url, payload
+        await _mxapi_sleep(interval_seconds)
+    raise RuntimeError("MXAPI Veo video generation timed out.")
+
+
 def _image_resolution_tier(parameters: dict[str, Any]) -> str:
     resolution = str(
         parameters.get("resolution")
@@ -4005,6 +4264,13 @@ def _aigc_adapter_for(provider: Any, model: Any, job: AigcJob) -> str | None:
         and ("mxapi" in provider_id or "open.mxapi.org" in base_url)
     ):
         return "mxapi_grok_video"
+
+    if (
+        "video" in job.capability
+        and model_id in _MXAPI_VEO_VIDEO_MODELS
+        and ("mxapi" in provider_id or "open.mxapi.org" in base_url)
+    ):
+        return "mxapi_veo_video"
 
     provider_configured = provider_meta.get("aigc_adapter")
     if provider_configured:
@@ -4965,6 +5231,57 @@ async def _execute_mxapi_grok_video(
     return [asset]
 
 
+async def _execute_mxapi_veo_video(
+    request: Request,
+    job: AigcJob,
+    provider: Any,
+    model: Any,
+    *,
+    adapter: str,
+    execution: ProviderExecution | None = None,
+) -> list[AigcAsset]:
+    if job.capability not in {
+        "text_to_video",
+        "image_to_video",
+        "reference_video",
+    }:
+        raise RuntimeError(
+            f"MXAPI Veo adapter does not support {job.capability}.",
+        )
+
+    task_id = execution.accepted("video", adapter) if execution else None
+    if task_id is None:
+        task_id = await _mxapi_veo_submit_task(
+            request,
+            provider,
+            model,
+            job,
+            execution=execution,
+        )
+    video_url, payload = await _mxapi_veo_poll_task(provider, task_id)
+    content, mime_type = await _download_remote_asset(video_url)
+    suffix = _suffix_for_mime_type(mime_type, fallback="mp4")
+    asset = await _save_generated_asset(
+        request,
+        job,
+        content,
+        kind="video",
+        filename=_asset_filename_for_kind(job, "video", suffix=suffix),
+        mime_type=mime_type,
+        adapter=adapter,
+    )
+    asset.meta["mxapi_task_id"] = task_id
+    asset.meta["veo_task_id"] = task_id
+    asset.meta["source_url"] = video_url
+    asset.meta["model"] = _mxapi_veo_model_id(model, job)
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    for key in ("points_cost", "points_refunded"):
+        if key in data:
+            asset.meta[key] = data[key]
+    _write_json(_json_path("assets", asset.id), asset)
+    return [asset]
+
+
 async def _execute_mxapi_jimeng_video(
     request: Request,
     job: AigcJob,
@@ -5342,6 +5659,7 @@ async def _execute_job(
         not in {
             "mxapi_seedance2",
             "mxapi_grok_video",
+            "mxapi_veo_video",
             "mxapi_jimeng_video",
             "mxapi_gpt_image",
             "mxapi_nano2",
@@ -5385,6 +5703,15 @@ async def _execute_job(
         )
     if adapter == "mxapi_grok_video":
         return await _execute_mxapi_grok_video(
+            request,
+            job,
+            provider,
+            model,
+            adapter=adapter,
+            execution=execution,
+        )
+    if adapter == "mxapi_veo_video":
+        return await _execute_mxapi_veo_video(
             request,
             job,
             provider,

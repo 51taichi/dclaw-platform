@@ -657,6 +657,15 @@ class FakeMxapiProviderManager:
                         "reference_video",
                     ],
                 ),
+                ModelInfo(
+                    id="veo-3.1-fast",
+                    name="Veo 3.1 Fast",
+                    model_type="video",
+                    supports_image=True,
+                    probe_source="documentation",
+                    generate_kwargs={"aigc_adapter": "mxapi_veo_video"},
+                    aigc_capabilities=["text_to_video", "image_to_video"],
+                ),
             ],
         )
 
@@ -738,6 +747,15 @@ class FakeMxapiProviderManager:
                             "image_to_video",
                             "reference_video",
                         ],
+                    ),
+                    ModelInfo(
+                        id="veo-3.1-fast",
+                        name="Veo 3.1 Fast",
+                        model_type="video",
+                        supports_image=True,
+                        probe_source="documentation",
+                        generate_kwargs={"aigc_adapter": "mxapi_veo_video"},
+                        aigc_capabilities=["text_to_video", "image_to_video"],
                     ),
                 ],
             ),
@@ -4256,6 +4274,171 @@ async def test_run_mxapi_seedance_text_to_video_job_polls_and_saves_video(
         job["outputs"][0]["meta"]["source_url"]
         == "https://cdn.example.test/seedance.mp4"
     )
+
+
+async def test_run_mxapi_veo_text_to_video_job_polls_and_saves_video(
+    tmp_path,
+    monkeypatch,
+):
+    app = make_mxapi_app(tmp_path)
+    transport = ASGITransport(app=app)
+    requests: list[dict[str, object]] = []
+    task_payloads = [
+        {"code": 200, "data": {"status": "running"}},
+        {
+            "code": 200,
+            "data": {
+                "task_id": "veo-task",
+                "status": "completed",
+                "video_url": "https://upstream.example.test/veo.mp4",
+                "proxy_url": "https://cdn.example.test/veo.mp4",
+                "points_cost": 115,
+                "points_refunded": False,
+            },
+        },
+    ]
+
+    class FakeResponse:
+        def __init__(
+            self,
+            payload: dict[str, object],
+            *,
+            content: bytes = b"",
+            headers: dict[str, str] | None = None,
+        ):
+            self._payload = payload
+            self.content = content
+            self.headers = headers or {}
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            return None
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            requests.append({"type": "client", "kwargs": kwargs})
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, **kwargs):
+            requests.append({"type": "post", "url": url, "kwargs": kwargs})
+            return FakeResponse(
+                {"code": 200, "message": "任务提交成功", "data": {"task_id": "veo-task"}},
+            )
+
+        async def get(self, url, **kwargs):
+            requests.append({"type": "get", "url": url, "kwargs": kwargs})
+            if "/api/v2/veo/task" in url:
+                return FakeResponse(task_payloads.pop(0))
+            return FakeResponse(
+                {},
+                content=b"veo-mp4-bytes",
+                headers={"content-type": "video/mp4"},
+            )
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(aigc_studio.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(aigc_studio, "_mxapi_sleep", no_sleep, raising=False)
+
+    with patch("qwenpaw.app.routers.aigc_studio.STUDIO_ROOT", tmp_path / "studio"):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            canvas = await client.post(
+                "/api/aigc-studio/canvases",
+                json={
+                    "name": "Veo board",
+                    "nodes": [{"id": "video-1", "type": "video_generate"}],
+                    "edges": [],
+                },
+            )
+            created = await client.post(
+                "/api/aigc-studio/jobs",
+                json={
+                    "canvas_id": canvas.json()["id"],
+                    "node_id": "video-1",
+                    "capability": "text_to_video",
+                    "provider_id": "mxapi",
+                    "model_id": "veo-3.1-fast",
+                    "inputs": {"prompt": "海边日落，镜头缓慢向前移动"},
+                    "parameters": {
+                        "aspectRatio": "9:16",
+                        "videoResolution": "1080P",
+                        "videoDuration": 8,
+                    },
+                },
+            )
+            ran = await client.post(
+                f"/api/aigc-studio/jobs/{created.json()['id']}/run",
+            )
+
+    assert ran.status_code == 200
+    job = ran.json()
+    assert job["status"] == "succeeded"
+    post_call = next(item for item in requests if item["type"] == "post")
+    assert post_call["url"] == "https://open.mxapi.org/api/v2/veo/generate"
+    assert post_call["kwargs"]["headers"]["Authorization"] == "Bearer mxapi-test-key"
+    assert post_call["kwargs"]["headers"]["X-Channel"] == "official"
+    assert post_call["kwargs"]["json"] == {
+        "model": "veo-3.1-fast",
+        "prompt": "海边日落，镜头缓慢向前移动",
+        "aspect_ratio": "9:16",
+        "resolution": "1080p",
+        "duration": "8",
+    }
+    assert any(
+        item["type"] == "get"
+        and item["url"]
+        == "https://open.mxapi.org/api/v2/veo/task?task_id=veo-task"
+        for item in requests
+    )
+    assert any(
+        item["type"] == "get"
+        and item["url"] == "https://cdn.example.test/veo.mp4"
+        for item in requests
+    )
+    artifact = tmp_path / "workspace" / job["outputs"][0]["path"]
+    assert artifact.read_bytes() == b"veo-mp4-bytes"
+    assert job["outputs"][0]["meta"]["adapter"] == "mxapi_veo_video"
+    assert job["outputs"][0]["meta"]["veo_task_id"] == "veo-task"
+    assert job["outputs"][0]["meta"]["points_cost"] == 115
+
+
+def test_mxapi_veo_omni_flash_rejects_two_reference_images():
+    job = aigc_studio.AigcJob(
+        id="job",
+        canvas_id="canvas",
+        node_id="video",
+        capability="image_to_video",
+        provider_id="mxapi",
+        model_id="omni-flash",
+        status="queued",
+        created_at="2026-11-11T00:00:00Z",
+        updated_at="2026-11-11T00:00:00Z",
+        inputs={"prompt": "Animate these references"},
+        parameters={
+            "referenceImages": [
+                "https://assets.example/one.png",
+                "https://assets.example/two.png",
+            ],
+        },
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="supports 1 or 3 reference images",
+    ):
+        aigc_studio._mxapi_veo_submit_body(
+            SimpleNamespace(),
+            SimpleNamespace(id="omni-flash"),
+            job,
+        )
 
 
 async def test_run_mxapi_seedance_first_last_frames_maps_reference_roles(

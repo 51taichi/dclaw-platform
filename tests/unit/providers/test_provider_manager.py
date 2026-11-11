@@ -151,6 +151,10 @@ def test_builtin_mxapi_provider_registers_gpt_image_model(isolated_secret_dir) -
         "seedance2-mini",
         "grok-imagine-video-1.5-fast",
         "grok-imagine-video-1.5",
+        "veo-3.1-fast",
+        "veo-3.1-quality",
+        "veo-3.1-lite",
+        "omni-flash",
         "doubao-seedance-1-0-pro-fast-251015",
         "doubao-seedance-1-5-pro-251215",
     ]
@@ -183,6 +187,22 @@ def test_builtin_mxapi_provider_registers_gpt_image_model(isolated_secret_dir) -
     ]
     assert provider.models[3].generate_kwargs["mxapi_video_endpoint"] == "seedance2-fast"
     assert provider.models[4].generate_kwargs["mxapi_video_endpoint"] == "seedance2-mini"
+    veo_models = provider.models[7:11]
+    assert [model.name for model in veo_models] == [
+        "Veo 3.1 Fast",
+        "Veo 3.1 Quality",
+        "Veo 3.1 Lite",
+        "Veo Omni Flash",
+    ]
+    assert all(
+        model.generate_kwargs["aigc_adapter"] == "mxapi_veo_video"
+        for model in veo_models
+    )
+    assert veo_models[-1].aigc_capabilities == [
+        "text_to_video",
+        "image_to_video",
+        "reference_video",
+    ]
 
 
 async def test_add_custom_provider_and_reload_from_storage(

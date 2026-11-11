@@ -49,6 +49,12 @@ _MXAPI_GROK_VIDEO_MODELS = {
     "grok-imagine-video-1.5-fast",
     "grok-imagine-video-1.5",
 }
+_MXAPI_VEO_VIDEO_MODELS = {
+    "veo-3.1-fast",
+    "veo-3.1-quality",
+    "veo-3.1-lite",
+    "omni-flash",
+}
 _MXAPI_JIMENG_VIDEO_MODELS = {
     "doubao-seedance-1-0-pro-fast-251015",
     "doubao-seedance-1-5-pro-251215",
@@ -302,6 +308,39 @@ def _parameter_schema_for(
                     },
                 },
             )
+        elif normalized_model_id in _MXAPI_VEO_VIDEO_MODELS:
+            is_omni = normalized_model_id == "omni-flash"
+            common["max_reference_images"] = 3
+            common["properties"].update(
+                {
+                    "duration": {
+                        "type": "number",
+                        "enum": [4, 6, 8, 10] if is_omni else [8],
+                        "default": 8,
+                    },
+                    "aspect_ratio": {
+                        "type": "string",
+                        "enum": ["16:9", "9:16"],
+                        "default": "16:9",
+                    },
+                    "resolution": {
+                        "type": "string",
+                        "enum": ["720P", "1080P"],
+                        "default": "720P",
+                    },
+                    "referenceImages": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": 3,
+                    },
+                },
+            )
+            if is_omni:
+                common["properties"]["referenceVideos"] = {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 1,
+                }
         elif normalized_model_id in _MXAPI_JIMENG_VIDEO_MODELS:
             is_first_last = normalized_model_id == "doubao-seedance-1-5-pro-251215"
             reference_min = 2 if is_first_last else 0

@@ -10,7 +10,7 @@ from tests.unit.app.aigc.test_job_lifecycle import resources
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("adapter,count", [("mxapi_seedance2", 1), ("mxapi_grok_video", 1), ("mxapi_jimeng_video", 1), ("mxapi_gpt_image", 2), ("mxapi_nano2", 2)])
+@pytest.mark.parametrize("adapter,count", [("mxapi_seedance2", 1), ("mxapi_grok_video", 1), ("mxapi_veo_video", 1), ("mxapi_jimeng_video", 1), ("mxapi_gpt_image", 2), ("mxapi_nano2", 2)])
 async def test_accepted_tasks_recover_without_second_submission(resources, monkeypatch, adapter, count):
     from qwenpaw.app.routers import aigc_studio
     from qwenpaw.app.billing.model_publication import ModelPublicationService
@@ -23,6 +23,7 @@ async def test_accepted_tasks_recover_without_second_submission(resources, monke
     resources.job.model_id = {
         "mxapi_seedance2": "seedance2",
         "mxapi_grok_video": "grok-imagine-video-1.5-fast",
+        "mxapi_veo_video": "veo-3.1-fast",
         "mxapi_jimeng_video": "doubao-seedance-1-0-pro-fast-251015",
         "mxapi_gpt_image": "gpt-image-2",
         "mxapi_nano2": "nano-banana-2",
@@ -72,6 +73,7 @@ async def test_accepted_tasks_recover_without_second_submission(resources, monke
     monkeypatch.setattr(aigc_studio.httpx, "AsyncClient", ProviderHTTP)
     monkeypatch.setattr(aigc_studio, "_mxapi_seedance_poll_task", poll)
     monkeypatch.setattr(aigc_studio, "_mxapi_grok_poll_task", poll)
+    monkeypatch.setattr(aigc_studio, "_mxapi_veo_poll_task", poll)
     monkeypatch.setattr(aigc_studio, "_mxapi_poll_task", poll)
     monkeypatch.setattr(aigc_studio, "_download_remote_asset", download)
     monkeypatch.setattr(aigc_studio, "_save_generated_asset", save)
@@ -80,7 +82,7 @@ async def test_accepted_tasks_recover_without_second_submission(resources, monke
     assert interrupted.value.detail == "JOB_RESULT_RECONCILIATION_REQUIRED"
     def unavailable_input(*_args):
         raise RuntimeError("original asset cannot be signed again")
-    for name in ("_mxapi_seedance_submit_body", "_mxapi_grok_submit_body", "_mxapi_jimeng_submit_body", "_mxapi_reference_images"):
+    for name in ("_mxapi_seedance_submit_body", "_mxapi_grok_submit_body", "_mxapi_veo_submit_body", "_mxapi_jimeng_submit_body", "_mxapi_reference_images"):
         monkeypatch.setattr(aigc_studio, name, unavailable_input)
     monkeypatch.setattr(ModelPublicationService, "is_published", lambda *_: False)
     async def no_catalog(*_):
