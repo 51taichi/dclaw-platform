@@ -40,7 +40,7 @@ it("keeps icon-labelled footer actions outside the scrollable instructions", () 
   );
   const content = screen.getByRole("region", { name: "向导内容" });
   expect(content).toHaveAttribute("tabindex", "0");
-  for (const name of ["返回任务会话", "暂停向导", "提交审核并返回会话"]) {
+  for (const name of ["返回任务会话", "暂停向导", "完成并返回会话"]) {
     const button = screen.getByRole("button", { name });
     expect(content).not.toContainElement(button);
     expect(button.querySelector("svg")).not.toBeNull();
@@ -74,7 +74,7 @@ it.each([true, false])(
         onReturnToChat={back}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "提交审核并返回会话" }));
+    fireEvent.click(screen.getByRole("button", { name: "完成并返回会话" }));
     if (success) await waitFor(() => expect(back).toHaveBeenCalledOnce());
     else {
       await screen.findByRole("alert");
@@ -96,7 +96,7 @@ it("lets a submitted legacy task retry review", async () => {
     />,
   );
 
-  fireEvent.click(screen.getByRole("button", { name: "重新审核并返回会话" }));
+  fireEvent.click(screen.getByRole("button", { name: "完成并返回会话" }));
 
   await waitFor(() => expect(submit).toHaveBeenCalledOnce());
   expect(back).toHaveBeenCalledOnce();

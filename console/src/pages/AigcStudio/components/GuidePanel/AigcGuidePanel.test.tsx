@@ -84,7 +84,7 @@ describe("AigcGuidePanel", () => {
     );
     const content = screen.getByRole("region", { name: "向导内容" });
     expect(content).toHaveAttribute("tabindex", "0");
-    for (const name of ["返回任务会话", "暂停向导", "提交审核并返回会话"]) {
+    for (const name of ["返回任务会话", "暂停向导", "完成并返回会话"]) {
       const button = screen.getByRole("button", { name });
       expect(content).not.toContainElement(button);
       expect(button.querySelector("svg")).not.toBeNull();
@@ -118,7 +118,7 @@ describe("AigcGuidePanel", () => {
         onReturnToChat={back}
       />,
     );
-    const button = screen.getByRole("button", { name: "提交审核并返回会话" });
+    const button = screen.getByRole("button", { name: "完成并返回会话" });
     fireEvent.click(button);
     fireEvent.click(button);
     expect(submit).toHaveBeenCalledOnce();
@@ -138,7 +138,7 @@ describe("AigcGuidePanel", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "重新审核并返回会话" }));
+    fireEvent.click(screen.getByRole("button", { name: "完成并返回会话" }));
 
     await waitFor(() => expect(submit).toHaveBeenCalledOnce());
     expect(back).toHaveBeenCalledOnce();
@@ -162,13 +162,11 @@ describe("AigcGuidePanel", () => {
           onReturnToChat={back}
         />,
       );
-      fireEvent.click(
-        screen.getByRole("button", { name: "提交审核并返回会话" }),
-      );
+      fireEvent.click(screen.getByRole("button", { name: "完成并返回会话" }));
       expect(await screen.findByRole("alert")).toBeInTheDocument();
       expect(back).not.toHaveBeenCalled();
       expect(
-        screen.getByRole("button", { name: "提交审核并返回会话" }),
+        screen.getByRole("button", { name: "完成并返回会话" }),
       ).toBeEnabled();
     },
   );
@@ -318,7 +316,7 @@ describe("AigcGuidePanel", () => {
       screen.queryByRole("button", { name: /定位/ }),
     ).not.toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "提交审核并返回会话" }),
+      screen.getByRole("button", { name: "完成并返回会话" }),
     ).toBeInTheDocument();
   });
 

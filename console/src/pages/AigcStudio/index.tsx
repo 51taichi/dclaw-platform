@@ -2650,16 +2650,7 @@ export default function AigcStudioPage() {
     );
     // Submission already persisted; a projection refresh failure must not undo it.
     await guide.refresh().catch(() => undefined);
-    if (
-      submission.agentReview?.status !== "completed" &&
-      submission.agentReview
-    ) {
-      antdMessage.warning(submission.agentReview.reply);
-    } else if (submission.agentReview) {
-      antdMessage.success("素材已提交，专家已按当前业务阶段完成审核");
-    } else {
-      antdMessage.success("素材已提交，专家将按当前业务阶段审核");
-    }
+    antdMessage.success("素材任务已完成");
     return submission.submitted;
   };
 

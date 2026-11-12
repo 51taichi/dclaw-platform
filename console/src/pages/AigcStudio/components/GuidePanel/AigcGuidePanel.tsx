@@ -203,7 +203,7 @@ export function AigcGuidePanel({
       try {
         const submitted = await onSubmit?.();
         if (submitted !== true) {
-          setReviewReply("尚未提交审核，请确认绑定节点已有成品后再试。");
+          setReviewReply("尚未完成提交，请确认绑定节点已有成品后再试。");
           return;
         }
         try {
@@ -405,7 +405,7 @@ export function AigcGuidePanel({
             onClick={submitAndReturn}
           >
             <RotateCcw size={14} />
-            {pending ? "正在审核…" : "重新审核并返回会话"}
+            {pending ? "正在提交…" : "完成并返回会话"}
           </button>
         ) : task.status !== "ACCEPTED" ? (
           <>
@@ -427,7 +427,7 @@ export function AigcGuidePanel({
                 onClick={submitAndReturn}
               >
                 <Check size={14} />
-                {pending ? "正在提交…" : "提交审核并返回会话"}
+                {pending ? "正在提交…" : "完成并返回会话"}
               </button>
             ) : null}
           </>

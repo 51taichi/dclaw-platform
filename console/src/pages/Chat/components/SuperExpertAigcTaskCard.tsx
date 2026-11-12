@@ -89,9 +89,9 @@ const STATUS_LABELS: Record<SuperExpertAigcTaskStatus, string> = {
   WAITING_TO_START: "等待开始",
   IN_PROGRESS: "制作中",
   PAUSED: "已暂停",
-  SUBMITTED: "待审核",
+  SUBMITTED: "待完成",
   REVISION_REQUIRED: "需要修改",
-  ACCEPTED: "已审核",
+  ACCEPTED: "已完成",
   CANCELLED: "已取消",
   INVALIDATED: "已失效",
 };
@@ -123,9 +123,9 @@ export function SuperExpertAigcTaskCard({
   const route = buildAigcTaskRoute(projection.materialTaskId);
   const instruction =
     projection.status === "ACCEPTED"
-      ? "素材已通过审核，可查看成果并用于后续创作。"
+      ? "素材任务已完成，可查看成果并用于后续创作。"
       : projection.status === "SUBMITTED"
-      ? "素材已提交，等待陆羽审核。"
+      ? "素材已提交，等待完成任务。"
       : projection.instruction;
 
   const act = async () => {

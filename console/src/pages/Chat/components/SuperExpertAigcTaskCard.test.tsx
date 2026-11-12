@@ -10,9 +10,9 @@ const labels: Record<SuperExpertAigcTaskCardProjection["status"], string> = {
   WAITING_TO_START: "等待开始",
   IN_PROGRESS: "制作中",
   PAUSED: "已暂停",
-  SUBMITTED: "待审核",
+  SUBMITTED: "待完成",
   REVISION_REQUIRED: "需要修改",
-  ACCEPTED: "已审核",
+  ACCEPTED: "已完成",
   CANCELLED: "已取消",
   INVALIDATED: "已失效",
 };
@@ -53,11 +53,11 @@ describe("SuperExpertAigcTaskCard", () => {
       "/aigc-studio?task=task-1",
     );
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("已审核");
+    expect(screen.getByRole("status")).toHaveTextContent("已完成");
     expect(
       screen.queryByText("按照右侧向导完成视频制作。"),
     ).not.toBeInTheDocument();
-    expect(screen.getByText(/素材已通过审核/)).toBeInTheDocument();
+    expect(screen.getByText(/素材任务已完成/)).toBeInTheDocument();
   });
   for (const [status, label] of Object.entries(labels)) {
     it(`renders ${status}`, () => {
