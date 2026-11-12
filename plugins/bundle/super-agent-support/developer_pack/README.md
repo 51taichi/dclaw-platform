@@ -1,5 +1,11 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.24 bundles development standard 2.46 and DevKit 1.9.14. It adds
+the public AIGC asset handoff workflow, ownership boundary, minimum Helper and
+plugin versions, historical-digest compatibility rule, and canonical Schema
+and demo locations. Existing Agents that do not declare the new capabilities
+are unchanged.
+
 Version 1.10.23 bundles development standard 2.45 and DevKit 1.9.14. It adds
 the owner-scoped AIGC asset manifest and Local Helper delivery contracts.
 Intermediate assets are placed under `res/`; declared final outputs are placed

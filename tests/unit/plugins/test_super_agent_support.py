@@ -883,20 +883,20 @@ def test_developer_pack_is_downloadable_and_self_describing(
     assert health.json()["version"] == "1.18.31"
     assert metadata.status_code == 200
     payload = metadata.json()
-    assert payload["version"] == "1.10.23"
-    assert payload["standard"]["version"] == "2.45"
+    assert payload["version"] == "1.10.24"
+    assert payload["standard"]["version"] == "2.46"
     assert payload["devkit_version"] == "1.9.14"
     assert payload["server_source_required"] is False
     assert payload["download_path"].endswith("/developer-pack/download")
     assert payload["sha256"] == hashlib.sha256(downloaded.content).hexdigest()
     assert payload["content_sha256"] == payload["sha256"]
     assert downloaded.status_code == 200
-    assert "dclaw-super-agent-developer-pack-1.10.23.zip" in (
+    assert "dclaw-super-agent-developer-pack-1.10.24.zip" in (
         downloaded.headers["content-disposition"]
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-developer-pack-1.10.23"
+    prefix = "dclaw-super-agent-developer-pack-1.10.24"
     assert f"{prefix}/PACKAGE-MANIFEST.json" in names
     assert f"{prefix}/SHA256SUMS" in names
     assert f"{prefix}/dclaw_developer.py" in names

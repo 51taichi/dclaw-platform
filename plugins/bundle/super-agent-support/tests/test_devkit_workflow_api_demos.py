@@ -179,7 +179,7 @@ async def test_local_demo_requires_stable_key_and_terminal_verified_artifact():
 
 def test_pack_exposes_aigc_and_local_api_references():
     payload, metadata = build_archive(PLUGIN_ROOT)
-    assert metadata["standard"]["version"] == "2.45"
+    assert metadata["standard"]["version"] == "2.46"
     assert metadata["devkit_version"] == "1.9.14"
     prefix = f"dclaw-super-agent-developer-pack-{metadata['version']}/"
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
@@ -192,9 +192,24 @@ def test_pack_exposes_aigc_and_local_api_references():
             "devkit/examples/local-task-host-v1/README.md",
             "devkit/examples/local-task-host-v1/task-success.sample.json",
             "devkit/schemas/aigc-task-snapshot-v1/response.schema.json",
+            "devkit/schemas/aigc-task-assets-v1/list-request.schema.json",
+            "devkit/schemas/aigc-task-assets-v1/list-response.schema.json",
+            "devkit/schemas/aigc-task-assets-v1/localize-request.schema.json",
             "devkit/schemas/local-task-host-v1/receipt.schema.json",
         ):
             assert prefix + path in names
+        standard = archive.read(
+            prefix
+            + "standard/super-agent-development-standard-v1.zh-CN.md",
+        ).decode("utf-8")
+        for reference in (
+            "aigc.task.assets.list/1",
+            "aigc.task.assets.localize/1",
+            "schemas/aigc-task-assets-v1/",
+            "examples/aigc-workflow-v1/README.md",
+            "Helper `1.4.5`",
+        ):
+            assert reference in standard
         catalog = json.loads(archive.read(prefix + "devkit/operation-catalog.json"))
         assert catalog["aigc_workflow_host"]["api_demo"] == "aigc_workflow_api_demo.py"
         assert catalog["local_task_host"]["api_demo"] == "local_task_api_demo.py"

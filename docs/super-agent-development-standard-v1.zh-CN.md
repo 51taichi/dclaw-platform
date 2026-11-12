@@ -4,9 +4,9 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.45`
+当前版本：`2.46`
 
-发布日期：`2026-11-10`
+发布日期：`2026-11-12`
 
 ## 1. 文档目的
 
@@ -2370,11 +2370,33 @@ curl --fail-with-body -H "Authorization: Bearer ${DCLAW_ACCESS_TOKEN}" \
 
 AIGC 任务卡与问答交互卡是不同合同，不能用一者的创建回执代替另一者。AIGC 的目录/创建由授权后动态注册的模型工具暴露，DevKit 示例中传入的工具 callable 仅用于合同测试；密封运行时通过 `agent.execute(execution_mode="agent_loop")` 触发同一工具，不直接获得平台内部 Python 对象。`aigc.task.snapshot/1` 和本地任务接口由 Host 从可信上下文注入租户、用户、安装、任务与调用身份；Agent 不得自行传这些物理作用域。AIGC 静态示例中的模型 ID、本地示例中的能力 ID 均为演示值，发布前须换成目标实例实时目录/注册表中实际存在且获授权的值。没有本地任务的 Agent 不调用本地助手。
 
+### 33.4 AIGC 资产交接与本地化
+
+超级专家负责从业务目标决定素材用途、槽位、顺序和最终产物；AIGC 模块负责生成资产及其任务绑定；DClaw Host 负责所有权和作用域校验、短期下载授权与任务回执；通用本地助手只负责把已授权素材安全下载到客户电脑，不承担业务筛选、剪辑决策或内容判断。Agent 和模型禁止接收、持久化或转述签名下载 URL。
+
+标准流程固定为：
+
+1. 以 AIGC 创建回执中的真实 `material_task_id` 调用 `aigc.task.assets.list/1`，只读取当前用户、会话、安装、工作流、画布、节点和成功 job 绑定的资产事实。
+2. 从返回资产中选择实际需要的项，为每项填写唯一 `asset_id`、`usage`、`slot`、唯一非负 `order` 与 `destination`；请求数组顺序没有语义。`final_output` 只能写入任务根目录，其余素材只能写入 `res/`。
+3. 以稳定幂等键调用 `aigc.task.assets.localize/1`。Host 验证完整计划后才签发短期 URL，并只通过认证设备通道发送给本地助手。Helper 1.4.5 或更高版本下载、校验、原子落盘并生成 `assets.json`；Agent 通过既有本地任务回执读取终态。
+
+最低版本为 Support Plugin `1.18.31`、DClaw Windows Local Helper `1.4.5`、DevKit `1.9.14` 和 Developer Pack `1.10.24`。设备过旧、离线或派发断线必须失败关闭，不得留下长期 `queued`；断线终态为 `LOCAL_GATEWAY.DEVICE_NOT_READY`，连接恢复后使用新的幂等键重试。
+
+新资产的非零大小和非空 SHA-256 必须与 Helper 下载结果一致。历史资产若没有服务端 SHA-256，Helper 仍必须计算并回报下载后摘要，但该值只是本次下载证据，不能声称已与服务端权威摘要比对；若历史资产已有非零大小，大小仍须一致。
+
+正式机器合同位于 DevKit `schemas/aigc-task-assets-v1/`：`list-request.schema.json`、`list-response.schema.json` 和 `localize-request.schema.json`；本地化响应复用 `schemas/local-task-host-v1/receipt.schema.json`。完整调用示例位于 `examples/aigc-workflow-v1/README.md`，能力与操作入口分别以 `capability-catalog.json` 和 `operation-catalog.json` 为准。开发方不得从本文复制字段替代目标实例 DevKit Schema。
+
 Skill 和专家发布前须对每条实际使用的路径同时验证：正确目录与 Schema、真实授权、可确认的回执、错误/超时/重放/跨作用域反例，以及一次客户端“触发 → 展示 → 客户操作 → 同任务续接”。参考脚本通过单元测试只证明入参、回执和失败关闭规则，不能证明生产模型、客户端 AIGC 控件或客户设备已经可用。使用 `jsonschema` 等第三方校验器的签名运行时须自带适配版本及依赖，不能从开发包安装状态推断生产沙箱可用。
 
 以上是通用 Skill 的平台合同输入。Skill 维护方应在其 `references/capability-verification.md` 补 `/v2/` 的首错和终止根因区分，在 `scripts/runtime_diagnostics_with_login.py` 增加按官方 DevKit v2 Schema 查询和摘要，在相关脚本测试加入已恢复错误、最终阻断、`no_record`、越权及旧版回退案例。平台不直接覆盖 Skill 发布仓库，也不把单个专家的业务字段写成公共规则。
 
 ## 34. 版本记录
+
+### 2.46 - 2026-11-12
+
+- 新增 `aigc.task.assets.list/1` 与 `aigc.task.assets.localize/1` 的平台通用交接规范，明确超级专家、AIGC、Host 和本地助手的职责边界，以及“列举 → 选择 → 本地化 → 回读终态”的固定流程。
+- 最低版本为 Support Plugin `1.18.31`、Windows Local Helper `1.4.5`、DevKit `1.9.14` 和 Developer Pack `1.10.24`；旧 Helper 不接收新任务，派发断线必须进入明确失败终态。
+- 明确素材顺序、目录、摘要和大小校验规则；历史资产缺少服务端摘要时只把 Helper 计算值作为下载后证据。正式 Schema 和 Demo 路径收敛到第 33.4 节，既有 Agent 不声明新能力时无需迁移。
 
 ### 2.45 - 2026-11-11
 

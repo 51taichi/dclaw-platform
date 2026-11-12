@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.24 - 2026-11-12
+
+- Bundles development standard 2.46 and DevKit 1.9.14.
+- Documents the canonical AIGC asset listing, selection and Local Helper
+  delivery flow, including minimum versions and legacy digest semantics.
+
 ## 1.10.23 - 2026-11-12
 
 - Bundles development standard 2.45 and DevKit 1.9.14.
