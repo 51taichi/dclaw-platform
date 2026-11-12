@@ -120,16 +120,21 @@ is authorized by this audit.
 
 ## Source implementation update (2026-11-12)
 
-Support plugin 1.18.29 and Local Helper 1.4.5 close the generic
+Support plugin 1.18.31 and Local Helper 1.4.5 close the generic
 AIGC-to-local resource gap with two separately granted Host capabilities:
 `aigc.task.assets.list/1` lists successful assets bound to the current user,
 installation, conversation, workflow and canvas; `aigc.task.assets.localize/1`
 accepts a structured usage plan and delivers the selected assets over the
-authenticated device channel. Signed ten-minute OSS URLs are neither returned
+authenticated device channel. The Host selects only Helper 1.4.5 or newer.
+Signed ten-minute OSS URLs are neither returned
 to the Agent/model nor persisted in local-task input. The helper verifies
 available size/digest metadata, computes the resulting digest, writes
 intermediate assets under `res/`, declared final outputs in the task root, and
-records `assets.json` for downstream tools.
+records `assets.json` for downstream tools. When an AIGC asset has a stored
+size or SHA-256, the completion receipt must match it. A historical asset with
+no stored SHA-256 is a deliberate compatibility case: the Helper still reports
+its downloaded-file SHA-256, but that value is post-download evidence rather
+than a comparison against an authoritative server-side digest.
 
 This source implementation does not register a composition capability and
 does not itself run FFmpeg. A Super Agent still needs a separately granted,

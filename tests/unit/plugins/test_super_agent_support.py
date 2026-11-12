@@ -880,7 +880,7 @@ def test_developer_pack_is_downloadable_and_self_describing(
         downloaded = client.get("/developer-pack/download")
 
     assert health.status_code == 200
-    assert health.json()["version"] == "1.18.30"
+    assert health.json()["version"] == "1.18.31"
     assert metadata.status_code == 200
     payload = metadata.json()
     assert payload["version"] == "1.10.23"
@@ -1384,6 +1384,12 @@ class _FakeWebSocket:
         return None
 
 
+class _FailingWebSocket(_FakeWebSocket):
+    async def send_json(self, message):
+        self.messages.append(message)
+        raise ConnectionError("injected disconnect")
+
+
 @pytest.mark.asyncio
 async def test_aigc_asset_localization_is_device_only_and_idempotent(
     plugin_module,
@@ -1415,10 +1421,20 @@ async def test_aigc_asset_localization_is_device_only_and_idempotent(
 
     store.upsert_device(
         device_id="device-1", user_id="user-1", display_name="Windows",
-        runner_version="1.1.0", protocol_version="2", capabilities=[],
+        runner_version="1.4.4", protocol_version="2", capabilities=[],
     )
     websocket = _FakeWebSocket()
     await service.attach("device-1", websocket)
+
+    with pytest.raises(Exception) as outdated:
+        await service._aigc_assets_localize(arguments, identity, "trace-1")
+    assert getattr(outdated.value, "code", None) == "LOCAL_GATEWAY.DEVICE_NOT_READY"
+    assert websocket.messages == []
+
+    store.upsert_device(
+        device_id="device-1", user_id="user-1", display_name="Windows",
+        runner_version="1.4.5", protocol_version="2", capabilities=[],
+    )
 
     started = await service._aigc_assets_localize(arguments, identity, "trace-1")
     stored = store.get_task(started["task_id"], "user-1")
@@ -1426,7 +1442,7 @@ async def test_aigc_asset_localization_is_device_only_and_idempotent(
     assert "download_url" not in json.dumps(stored["input"])
     completed = {"files": [{
         "asset_id": "asset-1", "relative_path": "final_video.mp4",
-        "sha256": "b" * 64, "size_bytes": 42,
+        "sha256": "a" * 64, "size_bytes": 42,
         "usage": "final_output", "slot": "final_video", "order": 0,
     }]}
     assert service._valid_aigc_localize_result(stored, completed)
@@ -1434,6 +1450,65 @@ async def test_aigc_asset_localization_is_device_only_and_idempotent(
         stored,
         {"files": [{**completed["files"][0], "relative_path": "../escape.mp4"}]},
     )
+    assert not service._valid_aigc_localize_result(
+        stored,
+        {"files": [{**completed["files"][0], "sha256": "b" * 64}]},
+    )
+    assert not service._valid_aigc_localize_result(
+        stored,
+        {"files": [{**completed["files"][0], "size_bytes": 41}]},
+    )
+    legacy_stored = {
+        **stored,
+        "input": {
+            **stored["input"],
+            "assets": [{
+                **stored["input"]["assets"][0],
+                "sha256": "",
+                "size_bytes": 42,
+            }],
+        },
+    }
+    assert service._valid_aigc_localize_result(
+        legacy_stored,
+        {"files": [{
+            **completed["files"][0],
+            "sha256": "c" * 64,
+            "size_bytes": 42,
+        }]},
+    )
+    second_source = {
+        **stored["input"]["assets"][0],
+        "asset_id": "asset-2",
+        "usage": "timeline_clip",
+        "slot": "clip_01",
+        "order": 1,
+        "destination": "res",
+        "size_bytes": 7,
+        "sha256": "d" * 64,
+    }
+    first_source = {
+        **stored["input"]["assets"][0],
+        "order": 2,
+    }
+    unordered_task = {
+        **stored,
+        "input": {
+            **stored["input"],
+            "assets": [first_source, second_source],
+        },
+    }
+    assert service._valid_aigc_localize_result(unordered_task, {"files": [
+        {
+            "asset_id": "asset-2", "relative_path": "res/clip_01.mp4",
+            "sha256": "d" * 64, "size_bytes": 7,
+            "usage": "timeline_clip", "slot": "clip_01", "order": 1,
+        },
+        {
+            **completed["files"][0],
+            "order": 2,
+        },
+    ]})
     assert websocket.messages == [{
         "type": "aigc.assets.localize",
         "protocol_version": "2",
@@ -1455,6 +1530,58 @@ async def test_aigc_asset_localization_is_device_only_and_idempotent(
     with pytest.raises(Exception) as conflict:
         await service._aigc_assets_localize(changed, identity, "trace-3")
     assert getattr(conflict.value, "code", None) == "LOCAL_GATEWAY.IDEMPOTENCY_CONFLICT"
+
+
+@pytest.mark.asyncio
+async def test_aigc_asset_dispatch_failure_is_terminal_and_replayable(
+    plugin_module,
+    tmp_path,
+):
+    store, _signer, _broker, service = _runtime(plugin_module, tmp_path)
+    store.upsert_device(
+        device_id="device-1", user_id="user-1", display_name="Windows",
+        runner_version="1.4.5", protocol_version="2", capabilities=[],
+    )
+    websocket = _FailingWebSocket()
+    await service.attach("device-1", websocket)
+    identity = {
+        "t": "tenant-1", "u": "user-1", "s": "conversation-1",
+        "a": "agent-1", "n": "Video Agent", "g": "installation-1",
+        "r": "release-1", "i": "invocation-1",
+    }
+    arguments = {
+        "material_task_id": "material-1",
+        "idempotency_key": "scope:disconnect-1",
+        "assets": [{
+            "asset_id": "asset-1", "node_id": "node-1", "job_id": "job-1",
+            "kind": "video", "name": "result.mp4", "mime_type": "video/mp4",
+            "size_bytes": 42, "sha256": "a" * 64,
+            "usage": "final_output", "slot": "final_video", "order": 0,
+            "destination": "task_root",
+            "download_url": "https://oss.example/result.mp4?signed=secret",
+        }],
+    }
+
+    with pytest.raises(Exception) as disconnected:
+        await service._aigc_assets_localize(arguments, identity, "trace-1")
+    assert getattr(disconnected.value, "code", None) == "LOCAL_GATEWAY.DEVICE_NOT_READY"
+    stored = store.get_task_by_idempotency(
+        "user-1", "agent-1", "scope:disconnect-1",
+    )
+    assert stored["status"] == "failed"
+    assert stored["error"] == {
+        "code": "LOCAL_GATEWAY.DEVICE_NOT_READY",
+        "message": "DClaw 本地助手尚未连接或不支持所选能力。",
+        "retryable": True,
+        "user_action": "reconnect_runner",
+    }
+    assert "download_url" not in json.dumps(stored["input"])
+
+    replay = await service._aigc_assets_localize(arguments, identity, "trace-2")
+    assert replay["task_id"] == stored["task_id"]
+    assert replay["status"] == "failed"
+    assert replay["idempotent_replay"] is True
+    assert len(websocket.messages) == 1
 
 
 @pytest.mark.asyncio

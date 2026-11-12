@@ -204,3 +204,45 @@ def test_localize_request_schema_rejects_unstructured_usage_plan():
             "destination": "res",
         }],
     }, schema)
+
+
+def test_rejects_duplicate_asset_order_before_signing(monkeypatch):
+    assets = [
+        {
+            "asset_id": f"asset-{number}", "node_id": f"node-{number}",
+            "job_id": f"job-{number}", "kind": "video",
+            "name": f"clip-{number}.mp4", "mime_type": "video/mp4",
+            "size_bytes": 10, "sha256": str(number) * 64,
+            "_asset": SimpleNamespace(id=f"asset-{number}"),
+        }
+        for number in (1, 2)
+    ]
+    monkeypatch.setattr(
+        "super_agent.aigc_assets._bound_context",
+        lambda **_: (SimpleNamespace(), assets),
+    )
+    monkeypatch.setattr(
+        "super_agent.aigc_assets.get_object_storage_client",
+        lambda **_: "storage",
+    )
+    signed = []
+    adapter = SimpleNamespace(assets=SimpleNamespace(
+        signed_source=lambda asset, **_: signed.append(asset.id) or "https://oss.example",
+    ))
+
+    with pytest.raises(ValueError, match="invalid asset selection"):
+        prepare_owned_aigc_localization(
+            task=SimpleNamespace(), adapter=adapter, user_id="user-1",
+            installation_id="installation-1", conversation_id="conversation-1",
+            requested_assets=[
+                {
+                    "asset_id": "asset-1", "usage": "timeline_clip",
+                    "slot": "clip_01", "order": 1, "destination": "res",
+                },
+                {
+                    "asset_id": "asset-2", "usage": "timeline_clip",
+                    "slot": "clip_02", "order": 1, "destination": "res",
+                },
+            ],
+        )
+    assert signed == []

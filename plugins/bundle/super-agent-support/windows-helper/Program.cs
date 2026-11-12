@@ -1657,7 +1657,7 @@ internal sealed class HelperRuntime
 
     private string FindOrCreateTaskRoot(string agentName, string taskId)
     {
-        var path = Path.Combine(_root, "Tasks", SafeName(agentName), SafeName(taskId));
+        var path = HelperPathSafety.TaskRoot(_root, agentName, taskId);
         Directory.CreateDirectory(path);
         Directory.CreateDirectory(Path.Combine(path, "res"));
         return path;
@@ -1674,12 +1674,7 @@ internal sealed class HelperRuntime
         if (File.Exists(path)) File.Delete(path);
     }
 
-    private static string SafeName(string value)
-    {
-        var invalid = Path.GetInvalidFileNameChars().ToHashSet();
-        var normalized = new string(value.Select(character => invalid.Contains(character) ? '_' : character).ToArray()).Trim();
-        return string.IsNullOrWhiteSpace(normalized) ? "unnamed" : normalized[..Math.Min(normalized.Length, 80)];
-    }
+    private static string SafeName(string value) => HelperPathSafety.SafeName(value);
 }
 
 internal sealed class LocalFileException : Exception

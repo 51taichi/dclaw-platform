@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
+import subprocess
 
 import pytest
 from jsonschema import Draft202012Validator
@@ -270,6 +272,55 @@ def test_runner_resolves_explicit_public_component_exports():
     assert "PathInside(\n                component.Root,\n                relativePath)" in runner
     assert "undeclared component" in runner
     assert "export binding is missing" in runner
+
+
+def test_helper_task_roots_reject_navigation_and_reserved_names(tmp_path):
+    dotnet = shutil.which("dotnet")
+    if dotnet is None:
+        pytest.skip("dotnet is required for the Helper path-safety regression")
+    helper_source = (
+        Path(__file__).parents[3]
+        / "plugins/bundle/super-agent-support/windows-helper/HelperPathSafety.cs"
+    )
+    shutil.copy2(helper_source, tmp_path / "HelperPathSafety.cs")
+    (tmp_path / "PathSafetyProbe.csproj").write_text(
+        """<Project Sdk="Microsoft.NET.Sdk">
+<PropertyGroup>
+  <OutputType>Exe</OutputType>
+  <TargetFramework>net8.0</TargetFramework>
+  <ImplicitUsings>enable</ImplicitUsings>
+  <Nullable>enable</Nullable>
+  <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+</PropertyGroup>
+</Project>
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "Program.cs").write_text(
+        """
+var root = Path.Combine(Path.GetTempPath(), "dclaw-path-probe");
+var tasks = Path.GetFullPath(Path.Combine(root, "Tasks"))
+    .TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+foreach (var name in new[] { ".", "..", "../evil", "agent/../../evil", "CON" })
+{
+    var path = HelperPathSafety.TaskRoot(root, name, "task-1");
+    if (!path.StartsWith(tasks, StringComparison.OrdinalIgnoreCase)) return 2;
+}
+if (HelperPathSafety.SafeName(".") != "unnamed") return 3;
+if (HelperPathSafety.SafeName("..") != "unnamed") return 4;
+if (HelperPathSafety.SafeName("CON").Equals("CON", StringComparison.OrdinalIgnoreCase)) return 5;
+var normal = HelperPathSafety.TaskRoot(root, "大字报超级专家", "task-1");
+if (!normal.Contains("大字报超级专家", StringComparison.Ordinal)) return 6;
+return 0;
+""",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [dotnet, "run", "--project", str(tmp_path / "PathSafetyProbe.csproj")],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_local_execution_standard_requires_optional_plugin_isolation():

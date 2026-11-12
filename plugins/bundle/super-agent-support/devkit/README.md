@@ -6,6 +6,9 @@ to its current AIGC material task, assign each asset a structured usage, slot,
 order and destination, then request delivery to the connected DClaw Local
 Helper. Signed source URLs remain inside the trusted Host-to-device channel;
 they are not returned to the Agent or persisted in its local-task input.
+Localization requires Helper 1.4.5 or newer. Asset `order` values are unique
+within a request, and a dispatch disconnect produces a terminal failed receipt
+instead of leaving a queued task.
 
 Version 1.9.13 adds closed schemas for
 `developer.runtime.diagnostics.by-reference/3` and

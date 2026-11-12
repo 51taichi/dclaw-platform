@@ -71,5 +71,10 @@ Allowed usages are `cover`, `timeline_clip`, `reference_image`,
 Only `final_output` uses `task_root`; every other usage uses `res`. The receipt
 is read with the existing `local.task.read/1` contract. A replay with the same
 idempotency key and identical plan returns the original task; changing the plan
-requires a new key. The Host validates ownership and task binding before it
-sends short-lived source URLs directly to the authenticated Helper.
+requires a new key. `order` is a non-negative integer and must be unique within
+one localization request; request-array order has no semantic meaning. If the
+device disconnects after task creation but before dispatch, the Host terminates
+that task as `failed` with `LOCAL_GATEWAY.DEVICE_NOT_READY`; reconnect the
+Helper and retry with a new idempotency key. The Host validates ownership and
+task binding before it sends short-lived source URLs directly to Helper 1.4.5
+or newer.

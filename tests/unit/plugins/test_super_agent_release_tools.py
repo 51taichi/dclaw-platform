@@ -101,7 +101,7 @@ def test_standalone_plugin_release_contains_canonical_standard(
     helper = tmp_path / "DClaw.LocalHelper.exe"
     helper.write_bytes(b"MZ\x00signed-helper-fixture")
     metadata = release.build(output, windows_helper_binary=helper)
-    assert metadata["plugin_version"] == "1.18.30"
+    assert metadata["plugin_version"] == "1.18.31"
     assert metadata["standard_version"] == "2.45"
     assert metadata["windows_helper_version"] == "1.4.5"
     with zipfile.ZipFile(output) as archive:
@@ -328,7 +328,7 @@ def test_plugin_archive_embeds_current_standard_and_is_reproducible(tmp_path):
     assert first == second
     assert metadata == repeated
     assert metadata["plugin_id"] == "dclaw.super-agent-support"
-    assert metadata["version"] == "1.18.30"
+    assert metadata["version"] == "1.18.31"
     assert metadata["windows_helper_version"] == "1.4.5"
     assert metadata["sha256"] == hashlib.sha256(first).hexdigest()
     with zipfile.ZipFile(io.BytesIO(first)) as archive:

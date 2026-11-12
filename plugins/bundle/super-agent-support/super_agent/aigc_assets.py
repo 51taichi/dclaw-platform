@@ -119,10 +119,10 @@ def prepare_owned_aigc_localization(
         raise AigcResourceError("ASSET_NOT_FOUND")
     _, available = context
     by_id = {item["asset_id"]: item for item in available}
-    storage_client = get_object_storage_client(require_enabled=True)
-    normalized: list[dict[str, Any]] = []
+    validated: list[tuple[dict[str, Any], dict[str, Any]]] = []
     seen_ids: set[str] = set()
     seen_slots: set[str] = set()
+    seen_orders: set[int] = set()
     for selection in requested_assets:
         if not isinstance(selection, dict) or set(selection) != {
             "asset_id", "usage", "slot", "order", "destination",
@@ -139,6 +139,7 @@ def prepare_owned_aigc_localization(
             or not isinstance(slot, str) or not _TOKEN.fullmatch(slot)
             or slot in seen_slots
             or not isinstance(order, int) or isinstance(order, bool) or order < 0
+            or order in seen_orders
             or destination not in _DESTINATIONS
             or (usage == "final_output" and destination != "task_root")
             or (usage != "final_output" and destination != "res")
@@ -147,19 +148,22 @@ def prepare_owned_aigc_localization(
         source = by_id.get(asset_id)
         if source is None:
             raise AigcResourceError("ASSET_NOT_FOUND")
+        seen_ids.add(asset_id)
+        seen_slots.add(slot)
+        seen_orders.add(order)
+        validated.append((selection, source))
+
+    storage_client = get_object_storage_client(require_enabled=True)
+    normalized: list[dict[str, Any]] = []
+    for selection, source in validated:
         download_url = adapter.assets.signed_source(
             source["_asset"], storage_client=storage_client, ttl_seconds=600,
         )
         if not isinstance(download_url, str) or not download_url:
             raise AigcResourceError("ASSET_FILE_NOT_FOUND")
-        seen_ids.add(asset_id)
-        seen_slots.add(slot)
         normalized.append({
             **{key: value for key, value in source.items() if not key.startswith("_")},
-            "usage": usage,
-            "slot": slot,
-            "order": order,
-            "destination": destination,
+            **selection,
             "download_url": download_url,
         })
     return normalized

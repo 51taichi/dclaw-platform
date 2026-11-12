@@ -26,6 +26,7 @@ ACTIVE_STATES = {"queued", "running", "awaiting_input", "cancelling"}
 PROTOCOL_VERSION = "2"
 CATALOG_VERSION = "1"
 MIN_RUNNER_VERSION = "1.1.0"
+AIGC_TRANSFER_MIN_RUNNER_VERSION = "1.4.5"
 LEGACY_RUNNER_VERSION = "1.0.0"
 LOCAL_FILE_REF_PATTERN = re.compile(r"^lfr_[A-Za-z0-9_-]{32,156}$")
 ARTIFACT_ID_PATTERN = re.compile(r"^artifact_[A-Za-z0-9_-]{32,156}$")
@@ -219,7 +220,10 @@ class LocalExecutionService:
         for device in self._online_devices(user_id):
             if (
                 device.get("protocol_version") == PROTOCOL_VERSION
-                and _runner_supports(device, MIN_RUNNER_VERSION)
+                and _runner_supports(
+                    device,
+                    AIGC_TRANSFER_MIN_RUNNER_VERSION,
+                )
             ):
                 return device
         raise ERRORS["DEVICE_NOT_READY"]
@@ -666,20 +670,36 @@ class LocalExecutionService:
                 raise ERRORS["RESOURCE_EXHAUSTED"] from exc
             raise ERRORS["IDEMPOTENCY_CONFLICT"] from exc
         if created:
-            await self._send(
-                device["device_id"],
-                {
-                    "type": "aigc.assets.localize",
-                    "protocol_version": PROTOCOL_VERSION,
-                    "trace_id": current_trace,
-                    "task": {
-                        "task_id": task["task_id"],
-                        "material_task_id": material_task_id,
-                        "task_root_name": identity["n"],
-                        "assets": assets,
+            try:
+                await self._send(
+                    device["device_id"],
+                    {
+                        "type": "aigc.assets.localize",
+                        "protocol_version": PROTOCOL_VERSION,
+                        "trace_id": current_trace,
+                        "task": {
+                            "task_id": task["task_id"],
+                            "material_task_id": material_task_id,
+                            "task_root_name": identity["n"],
+                            "assets": assets,
+                        },
                     },
-                },
-            )
+                )
+            except PublicError as exc:
+                self.store.update_task(
+                    task["task_id"],
+                    status="failed",
+                    error={
+                        "code": exc.code,
+                        "message": exc.public_message,
+                        "retryable": exc.retryable,
+                        "user_action": exc.user_action,
+                    },
+                )
+                self._task_events.setdefault(
+                    task["task_id"], asyncio.Event(),
+                ).set()
+                raise
         return self._public_task(task) | {"idempotent_replay": not created}
 
     def _validate_local_file_bindings(
@@ -1316,7 +1336,24 @@ class LocalExecutionService:
             or len(files) != len(expected)
         ):
             return False
-        for result, source in zip(files, expected):
+        expected_by_id = {
+            item.get("asset_id"): item
+            for item in expected
+            if isinstance(item, dict) and isinstance(item.get("asset_id"), str)
+        }
+        result_by_id = {
+            item.get("asset_id"): item
+            for item in files
+            if isinstance(item, dict) and isinstance(item.get("asset_id"), str)
+        }
+        if (
+            len(expected_by_id) != len(expected)
+            or len(result_by_id) != len(files)
+            or set(result_by_id) != set(expected_by_id)
+        ):
+            return False
+        for asset_id, source in expected_by_id.items():
+            result = result_by_id[asset_id]
             if (
                 not isinstance(result, dict)
                 or set(result) != {
@@ -1339,9 +1376,20 @@ class LocalExecutionService:
                 )
                 or not isinstance(result.get("sha256"), str)
                 or re.fullmatch(r"[0-9a-f]{64}", result["sha256"]) is None
+                or (
+                    isinstance(source.get("sha256"), str)
+                    and bool(source["sha256"])
+                    and result["sha256"] != source["sha256"].lower()
+                )
                 or not isinstance(result.get("size_bytes"), int)
                 or isinstance(result["size_bytes"], bool)
                 or result["size_bytes"] < 0
+                or (
+                    isinstance(source.get("size_bytes"), int)
+                    and not isinstance(source["size_bytes"], bool)
+                    and source["size_bytes"] > 0
+                    and result["size_bytes"] != source["size_bytes"]
+                )
             ):
                 return False
         return True
