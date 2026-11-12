@@ -685,6 +685,26 @@ describe("AigcStudioPage", () => {
         "generated",
       );
     });
+    await waitFor(() => {
+      expect(mockAigcStudioApi.saveCanvas).toHaveBeenCalledWith(
+        "canvas-1",
+        expect.objectContaining({
+          nodes: expect.arrayContaining([
+            expect.objectContaining({
+              id: "image-1",
+              data: expect.objectContaining({
+                job_id: "job-2",
+                job_status: "succeeded",
+                imageState: "generated",
+                outputs: expect.arrayContaining([
+                  expect.objectContaining({ id: "asset-1" }),
+                ]),
+              }),
+            }),
+          ]),
+        }),
+      );
+    });
   });
 
   it("blocks a saved image-node model when no configured capability is available", async () => {

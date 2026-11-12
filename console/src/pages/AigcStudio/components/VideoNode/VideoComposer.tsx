@@ -125,9 +125,19 @@ const firstPositiveNumber = (values: unknown[]): number | null => {
 
 const clampVideoDuration = (
   value: unknown,
-  constraints: { min: number; max: number; defaultValue: number },
+  constraints: {
+    min: number;
+    max: number;
+    defaultValue: number;
+    allowedValues: number[];
+  },
 ) => {
   const parsed = numberFrom(value) ?? constraints.defaultValue;
+  if (constraints.allowedValues.length > 0) {
+    return constraints.allowedValues.includes(parsed)
+      ? parsed
+      : constraints.defaultValue;
+  }
   return Math.min(
     constraints.max,
     Math.max(constraints.min, Math.round(parsed)),
@@ -140,30 +150,47 @@ function videoDurationConstraintsFor(
   const schema = recordFrom(model?.parameter_schema);
   const properties = recordFrom(schema.properties);
   const duration = recordFrom(properties.duration);
+  const allowedValues = Array.isArray(duration.enum)
+    ? duration.enum
+        .map(numberFrom)
+        .filter((value): value is number => value !== null && value > 0)
+    : [];
   const min = Math.round(
-    firstPositiveNumber([
-      schema.min_duration,
-      schema.minDuration,
-      duration.minimum,
-      duration.min,
-    ]) ?? DEFAULT_VIDEO_DURATION_MIN,
+    (allowedValues.length > 0
+      ? Math.min(...allowedValues)
+      : firstPositiveNumber([
+          schema.min_duration,
+          schema.minDuration,
+          duration.minimum,
+          duration.min,
+        ])) ?? DEFAULT_VIDEO_DURATION_MIN,
   );
   const rawMax = Math.round(
-    firstPositiveNumber([
-      schema.max_duration,
-      schema.maxDuration,
-      schema.durationMax,
-      duration.maximum,
-      duration.max,
-    ]) ?? DEFAULT_VIDEO_DURATION_MAX,
+    (allowedValues.length > 0
+      ? Math.max(...allowedValues)
+      : firstPositiveNumber([
+          schema.max_duration,
+          schema.maxDuration,
+          schema.durationMax,
+          duration.maximum,
+          duration.max,
+        ])) ?? DEFAULT_VIDEO_DURATION_MAX,
   );
   const max = Math.max(min, rawMax);
-  const defaultValue = clampVideoDuration(
+  const configuredDefault =
     firstPositiveNumber([duration.default, schema.default_duration]) ??
-      DEFAULT_VIDEO_DURATION,
-    { min, max, defaultValue: DEFAULT_VIDEO_DURATION },
-  );
-  return { min, max, defaultValue };
+    DEFAULT_VIDEO_DURATION;
+  const normalizedDefault =
+    allowedValues.length > 0 && !allowedValues.includes(configuredDefault)
+      ? allowedValues[0]
+      : configuredDefault;
+  const defaultValue = clampVideoDuration(normalizedDefault, {
+    min,
+    max,
+    defaultValue: normalizedDefault,
+    allowedValues,
+  });
+  return { min, max, defaultValue, allowedValues };
 }
 
 function schemaStringOptionsFor(
@@ -447,9 +474,9 @@ export function VideoComposer({
       : VIDEO_CHARACTER_ASSETS.filter(
           (asset) => asset.kind === activeCharacterTab,
         );
-  const boundCapability = String(
-    node.data.modelCapability ?? "text_to_video",
-  ).trim() || "text_to_video";
+  const boundCapability =
+    String(node.data.modelCapability ?? "text_to_video").trim() ||
+    "text_to_video";
   const videoModelOptions = modelOptionsForCapability(
     modelOptions,
     boundCapability,
@@ -1141,21 +1168,42 @@ export function VideoComposer({
               data-platform-control-id="aigc.video.duration-select"
             >
               {t("aigcStudio.videoNode.duration", "视频时长")}
-              <input
-                type="range"
-                aria-label={t("aigcStudio.videoNode.duration", "视频时长")}
-                min={videoDurationConstraints.min}
-                max={videoDurationConstraints.max}
-                value={selectedVideoDuration}
-                onChange={(event) =>
-                  onUpdateNodeData(node.id, {
-                    videoDuration: clampVideoDuration(
-                      event.target.value,
-                      videoDurationConstraints,
-                    ),
-                  })
-                }
-              />
+              {videoDurationConstraints.allowedValues.length > 0 ? (
+                <select
+                  aria-label={t("aigcStudio.videoNode.duration", "视频时长")}
+                  value={selectedVideoDuration}
+                  onChange={(event) =>
+                    onUpdateNodeData(node.id, {
+                      videoDuration: clampVideoDuration(
+                        event.target.value,
+                        videoDurationConstraints,
+                      ),
+                    })
+                  }
+                >
+                  {videoDurationConstraints.allowedValues.map((duration) => (
+                    <option key={duration} value={duration}>
+                      {duration}s
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="range"
+                  aria-label={t("aigcStudio.videoNode.duration", "视频时长")}
+                  min={videoDurationConstraints.min}
+                  max={videoDurationConstraints.max}
+                  value={selectedVideoDuration}
+                  onChange={(event) =>
+                    onUpdateNodeData(node.id, {
+                      videoDuration: clampVideoDuration(
+                        event.target.value,
+                        videoDurationConstraints,
+                      ),
+                    })
+                  }
+                />
+              )}
               <span>{selectedVideoDuration}s</span>
             </label>
             {supportsVideoAudio && (

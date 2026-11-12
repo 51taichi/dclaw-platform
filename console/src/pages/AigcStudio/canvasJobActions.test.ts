@@ -1045,6 +1045,38 @@ describe("canvasJobActions", () => {
     expect(result.request.parameters).not.toHaveProperty("videoAudio");
   });
 
+  it("normalizes a stale card duration to the selected model default", () => {
+    const videoNode: AigcCanvasNode = {
+      id: "video-1",
+      type: "video_generate",
+      position: { x: 360, y: 90 },
+      data: { text: "镜头缓慢推进", videoDuration: 4 },
+    };
+    const veoModel: AigcCapabilityInfo = {
+      ...model,
+      provider_id: "mxapi",
+      model_id: "veo-3.1-fast",
+      model_name: "Veo 3.1 Fast",
+      capability: "text_to_video",
+      parameter_schema: {
+        properties: {
+          duration: { type: "number", enum: [8], default: 8 },
+        },
+      },
+    };
+
+    const result = buildRunNodeJobRequest({
+      canvas: { ...canvasFixture(), nodes: [videoNode], edges: [] },
+      selectedNode: videoNode,
+      selectedCapability: "text_to_video",
+      selectedModel: veoModel,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected video job request");
+    expect(result.request.parameters.videoDuration).toBe(8);
+  });
+
   it("counts connected media inputs for a video node", () => {
     const videoNode: AigcCanvasNode = {
       id: "video-1",

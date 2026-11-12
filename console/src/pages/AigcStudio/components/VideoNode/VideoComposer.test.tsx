@@ -694,6 +694,31 @@ describe("VideoComposer", () => {
     expect(within(menu).getByText("15s")).toBeInTheDocument();
   });
 
+  it("uses discrete model durations and corrects an unsupported saved value", () => {
+    renderComposer({
+      node: videoNode({ videoDuration: 4 }),
+      currentModel: {
+        ...seedanceFastModel,
+        model_id: "veo-3.1-fast",
+        model_name: "Veo 3.1 Fast",
+        parameter_schema: {
+          properties: {
+            duration: { type: "number", enum: [8], default: 8 },
+          },
+        },
+      },
+      videoComposerMenu: { nodeId: "video-1", menu: "settings" },
+    });
+
+    const menu = screen.getByTestId("aigc-video-settings-menu");
+    const durationSelect = within(menu).getByRole("combobox", {
+      name: "视频时长",
+    });
+    expect(durationSelect).toHaveValue("8");
+    expect(within(durationSelect).getAllByRole("option")).toHaveLength(1);
+    expect(within(menu).getAllByText("8s")).toHaveLength(2);
+  });
+
   it("uses Grok Fast duration, ratio, and resolution rules from its schema", () => {
     renderComposer({
       node: videoNode({

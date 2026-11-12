@@ -359,6 +359,30 @@ function modelSupportsVideoAudio(model: AigcCapabilityInfo) {
   );
 }
 
+function videoDurationForModel(model: AigcCapabilityInfo, value: unknown) {
+  const schema = model.parameter_schema ?? {};
+  const properties =
+    schema.properties && typeof schema.properties === "object"
+      ? (schema.properties as Record<string, unknown>)
+      : {};
+  const duration =
+    properties.duration && typeof properties.duration === "object"
+      ? (properties.duration as Record<string, unknown>)
+      : {};
+  const allowed = Array.isArray(duration.enum)
+    ? duration.enum
+        .map(numberValue)
+        .filter((item): item is number => item !== null && item > 0)
+    : [];
+  if (!allowed.length) return value;
+  const requested = numberValue(value);
+  if (requested !== null && allowed.includes(requested)) return requested;
+  const configuredDefault = numberValue(duration.default);
+  return configuredDefault !== null && allowed.includes(configuredDefault)
+    ? configuredDefault
+    : allowed[0];
+}
+
 export function referenceImageLimitForModel(model: AigcCapabilityInfo) {
   const configured = schemaNumber(model, [
     "max_reference_images",
@@ -566,6 +590,10 @@ function capabilityParametersForNode(
       "returnLastFrame",
       "return_last_frame",
     ]);
+    parameters.videoDuration = videoDurationForModel(
+      selectedModel,
+      parameters.videoDuration,
+    );
     if (!modelSupportsVideoAudio(selectedModel)) delete parameters.videoAudio;
     return parameters;
   }

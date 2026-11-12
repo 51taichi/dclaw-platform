@@ -1298,20 +1298,26 @@ export default function AigcStudioPage() {
         videoProgressSimulation.clearProgressSimulation(nodeToRun.id);
       }
       setJobs((prev) => replaceCanvasJob(prev, finished));
-      setActiveCanvas((canvas) => {
-        if (!canvas) return canvas;
+      const latestCanvas = activeCanvasRef.current;
+      if (latestCanvas?.id === canvasForRunSource.id) {
         const updated = applyFinishedJobToCanvas({
-          canvas,
+          canvas: latestCanvas,
           nodeId: nodeToRun.id,
           job: finished,
         });
-        activeCanvasRef.current = updated;
-        setCanvases((prev) =>
-          prev.map((item) => (item.id === updated.id ? updated : item)),
-        );
-        return updated;
-      });
-      if (guide.taskId) await guide.refresh();
+        commitCanvas(updated);
+        await persistCanvas(updated);
+      }
+      if (guide.taskId) {
+        try {
+          await guide.refresh();
+        } catch (error) {
+          console.error(
+            "Failed to refresh AIGC guide after job completion",
+            error,
+          );
+        }
+      }
     } catch (error) {
       console.error("Failed to run AIGC node", error);
       if (isFeedbackNode) {
