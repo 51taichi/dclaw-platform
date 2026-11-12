@@ -9,7 +9,7 @@
 | aigc_task_status | workflow.create、task.resume、review.complete 任一 | 读取当前安装、当前会话的任务；新流程以 `ACCEPTED` 为完成，历史审核状态保持可读 |
 | aigc_task_resume | aigc.task.resume + aigc.task.create | 恢复真实绑定的任务状态 |
 
-`aigc.asset.submit` 与 `aigc.review.complete` 能力 ID 保留用于旧安装包和历史记录解析，但非前端 submit 写入返回 `AIGC_ASSET_SUBMIT_RETIRED`，review 写入返回 `AIGC_REVIEW_RETIRED`，`aigc_task_review` 不再注册。客户在任务页点击“完成并返回会话”属于平台用户操作，只接受当前租户、当前安装实例及持久化任务的精确 binding，并继续校验画布、节点和素材所有权；它不依赖专家包声明提交或审核能力，也不触发模型审核。创建任务不启动生成；生成、计费、素材归属与事件均复用现有平台服务。RPA、MCP 不在本次工具集合内。Skill reader 和完整 Agent 循环沿用现有配置，不因 AIGC 授权自动打开。
+`aigc.asset.submit` 与 `aigc.review.complete` 能力 ID 保留用于旧安装包和历史记录解析，但非前端 submit 写入返回 `AIGC_ASSET_SUBMIT_RETIRED`，review 写入返回 `AIGC_REVIEW_RETIRED`。新专家不得依赖 `aigc_task_review`；仅对已签名且仍声明旧 review capability 的专家注册同名只读兼容工具，用于读取严格绑定的客户完成状态，不观察媒体、不触发模型审核且不写审核结论。客户在任务页点击“完成并返回会话”属于平台用户操作，只接受当前租户、当前安装实例及持久化任务的精确 binding，并继续校验画布、节点和素材所有权；它不依赖专家包声明提交或审核能力，也不触发模型审核。创建任务不启动生成；生成、计费、素材归属与事件均复用现有平台服务。RPA、MCP 不在本次工具集合内。Skill reader 和完整 Agent 循环沿用现有配置，不因 AIGC 授权自动打开。
 
 创建参数只含稳定 `task_key`、正整数 `content_revision` 和完整 `WorkflowBlueprint` 对象。工具注册时向模型暴露蓝图的全部嵌套字段、必填项与枚举，并移除 Gemini 不接受的 `$ref`、`$defs`、`const` 关键字；数值常量仍在执行前严格校验。安装与会话仍由宿主绑定。同任务同修订生成相同物料 ID 和幂等键，实质变更蓝图需新修订。
 

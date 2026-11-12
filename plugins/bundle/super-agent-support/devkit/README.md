@@ -1,10 +1,17 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.16 keeps direct customer completion as the only AIGC acceptance
+path. New and updated Agents must not depend on review writes. For already
+signed Agents that still declare `aigc.review.complete`, the Host may expose an
+`aigc_task_review` compatibility tool that only reads the exactly bound task
+status. It never observes media, invokes model review, or writes a decision;
+`ACCEPTED` lets the old Agent continue, while other states require customer
+action in the task page. New `aigc.review.complete` writes remain retired.
+
 Version 1.9.15 documents direct customer completion of exactly bound AIGC
 tasks. The platform reaches `ACCEPTED` without invoking Agent review or
 requiring the Agent package to declare `aigc.asset.submit`; legacy submitted
-and reviewing snapshots remain readable, while `aigc_task_review` is no longer
-registered and new `aigc.review.complete` writes are rejected as retired.
+and reviewing snapshots remain readable.
 
 Version 1.9.14 adds `aigc.task.assets.list/1` and
 `aigc.task.assets.localize/1`. A Super Agent can list successful assets bound

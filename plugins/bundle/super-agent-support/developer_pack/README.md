@@ -1,5 +1,10 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.26 bundles development standard 2.48 and DevKit 1.9.16. New and
+updated Agents must not depend on review writes. Already signed Agents may use
+the platform's same-name read-only compatibility tool to observe the strictly
+bound customer completion state; it never performs or records Agent review.
+
 Version 1.10.25 bundles development standard 2.47 and DevKit 1.9.15. Customer
 completion of an exactly bound AIGC task is a platform action that reaches
 `ACCEPTED` without Agent review or an Agent submit grant. Legacy submit/review

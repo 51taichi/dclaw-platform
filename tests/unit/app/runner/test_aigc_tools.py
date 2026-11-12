@@ -523,11 +523,95 @@ async def test_status_rejects_cross_session_task_without_disclosing_it():
 
 
 @pytest.mark.asyncio
-async def test_retired_review_grant_does_not_register_write_tool():
+async def test_retired_review_grant_registers_read_only_compatibility_tool():
     tools, calls = harness({'aigc.task.create': '1', 'aigc.review.complete': '1'})
-    assert 'aigc_task_review' not in tools
+    assert 'aigc_task_review' in tools
     assert 'aigc_task_status' in tools
     assert calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('task_status', 'customer_action_required'),
+    [('ACCEPTED', False), ('IN_PROGRESS', True)],
+)
+async def test_legacy_review_tool_reads_customer_completion_without_writing(
+    task_status,
+    customer_action_required,
+):
+    task = {
+        'binding': {
+            'installation_id': 'installation-a',
+            'conversation_id': 'session-a',
+            'agent_task_id': 'content-a',
+            'content_revision': 1,
+            'material_task_id': 'material-a',
+            'canvas_id': 'canvas-a',
+            'node_id': 'output-a',
+        },
+        'status': task_status,
+        'asset_id': 'asset-a',
+    }
+    tools, calls = harness(
+        {'aigc.review.complete': '1'},
+        tasks={'material-a': task},
+    )
+
+    receipt = result(
+        await tools['aigc_task_review'](
+            'material-a',
+            'ACCEPTED',
+            'legacy signed instruction',
+        ),
+    )
+
+    assert receipt['status'] == 'retired'
+    assert receipt['write_applied'] is False
+    assert receipt['customer_action_required'] is customer_action_required
+    assert receipt['task']['status'] == task_status
+    assert calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'binding_change',
+    [
+        {'installation_id': 'installation-b'},
+        {'conversation_id': 'session-b'},
+        {'material_task_id': 'material-b'},
+    ],
+)
+async def test_legacy_review_tool_cannot_read_foreign_task(binding_change):
+    binding = {
+        'installation_id': 'installation-a',
+        'conversation_id': 'session-a',
+        'agent_task_id': 'content-a',
+        'content_revision': 1,
+        'material_task_id': 'material-a',
+        'canvas_id': 'canvas-a',
+        'node_id': 'output-a',
+    }
+    binding.update(binding_change)
+    task = {'binding': binding, 'status': 'ACCEPTED', 'asset_id': 'asset-a'}
+    tools = build_aigc_tools(
+        grants={'aigc.review.complete': '1'},
+        installation_id='installation-a',
+        conversation_id='session-a',
+        business_call=lambda *_args: pytest.fail('must stay read-only'),
+        read_task=lambda _key: task,
+        review_input={'binding': binding},
+        media_delivery={},
+    )
+
+    receipt = result(
+        await tools['aigc_task_review'](
+            'material-a',
+            'ACCEPTED',
+            'legacy signed instruction',
+        ),
+    )
+
+    assert receipt == {'error': 'TASK_UNAVAILABLE'}
 
 
 def test_registration_is_temporary_even_on_failure():
@@ -740,7 +824,7 @@ def create_runtime(): return Runtime()
             self.toolkit.register_tool_function(execute_shell_command)
 
         async def __call__(self, _messages):
-            assert 'aigc_task_review' not in self.toolkit.tools
+            assert ('aigc_task_review' in self.toolkit.tools) is review_granted
             assert 'read_agent_skill' in self.toolkit.tools
             return Msg('assistant', 'reviewed', 'assistant')
 
@@ -798,6 +882,136 @@ def create_runtime(): return Runtime()
     )
 
     assert response.error_code is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('task_status', 'expected_reply', 'customer_action_required'),
+    [
+        ('ACCEPTED', '客户已完成素材任务，继续后续会话。', False),
+        ('IN_PROGRESS', '请先进入任务页完成素材任务。', True),
+    ],
+)
+async def test_legacy_luyu_agent_execute_path_adapts_retired_review_read_only(
+    tmp_path,
+    task_status,
+    expected_reply,
+    customer_action_required,
+):
+    """Exercise the signed 1.1.14 transparent runtime's agent.execute path."""
+    from agentscope.message import Msg
+    from qwenpaw.app.workspace.orchestration import (
+        AuthorizedWorkspaceRelease,
+        run_workspace_orchestration_turn,
+    )
+    from qwenpaw.app.workspace.orchestration_contract import (
+        HOST_CAPABILITIES_V1,
+        OrchestrationConfig,
+    )
+
+    root = tmp_path / 'legacy-luyu-workspace'
+    root.mkdir()
+    (root / 'runtime.py').write_text('''
+class TransparentRuntime:
+    async def handle(self, request, host):
+        await host.call('session.context', {})
+        candidate = await host.call('agent.execute', {
+            'messages': request.normalized_input['messages'],
+            'execution_mode': 'agent_loop',
+            'public_stream': True,
+        })
+        await host.call('runtime.complete', {
+            'invocation_id': request.invocation_id,
+            'message': candidate['message'],
+        })
+def create_runtime(): return TransparentRuntime()
+''')
+    binding = {
+        'installation_id': 'legacy-luyu-installation',
+        'conversation_id': 'session',
+        'agent_task_id': 'content',
+        'content_revision': 1,
+        'material_task_id': 'material',
+        'canvas_id': 'canvas',
+        'node_id': 'output',
+    }
+    task = {
+        'binding': binding,
+        'asset_id': 'asset',
+        'status': task_status,
+        'review_assets': [],
+    }
+    business_calls = []
+
+    async def business_call(capability, arguments):
+        business_calls.append((capability, arguments))
+        raise AssertionError('legacy review compatibility must not write')
+
+    class Agent:
+        def __init__(self):
+            self.toolkit = Toolkit()
+
+        async def __call__(self, _messages):
+            assert 'aigc_task_status' in self.toolkit.tools
+            assert 'aigc_task_review' in self.toolkit.tools
+            status_tool = self.toolkit.tools['aigc_task_status'].original_func
+            review_tool = self.toolkit.tools['aigc_task_review'].original_func
+            status = result(await status_tool('material'))
+            assert status['task']['status'] == task_status
+            receipt = result(
+                await review_tool(
+                    'material',
+                    'ACCEPTED',
+                    'legacy signed instruction requires this call',
+                ),
+            )
+            assert receipt['status'] == 'retired'
+            assert receipt['write_applied'] is False
+            assert (
+                receipt['customer_action_required']
+                is customer_action_required
+            )
+            return Msg('assistant', expected_reply, 'assistant')
+
+    authorization = AuthorizedWorkspaceRelease(
+        installation_id='legacy-luyu-installation',
+        release_id='luyu-dclaw-agent-1.1.14',
+        release_digest='sha256:' + 'a' * 64,
+        granted_capabilities={
+            **{key: '1' for key in HOST_CAPABILITIES_V1},
+            'aigc.task.create': '1',
+            'aigc.asset.submit': '1',
+            'aigc.review.complete': '1',
+        },
+        signed_workspace_files=frozenset({'runtime.py'}),
+    )
+    response = await run_workspace_orchestration_turn(
+        agent=Agent(),
+        original_messages=[Msg('user', '继续刚才的素材任务', 'user')],
+        request=SimpleNamespace(
+            session_id='session',
+            user_id='user',
+            channel='console',
+            channel_meta={},
+        ),
+        agent_id='luyu_dclaw_agent',
+        workspace_root=root,
+        state_storage_root=tmp_path / 'states',
+        config=OrchestrationConfig(
+            enabled=True,
+            entrypoint='runtime.py:create_runtime',
+            required_host_capabilities=HOST_CAPABILITIES_V1,
+        ),
+        authorization=authorization,
+        business_call=business_call,
+        read_aigc_task=lambda key: task if key == 'material' else None,
+    )
+
+    assert response.error_code is None
+    assert response.message['content'] == [
+        {'type': 'text', 'text': expected_reply},
+    ]
+    assert business_calls == []
 
 
 @pytest.mark.asyncio
@@ -1058,7 +1272,7 @@ async def test_uncertain_creation_returns_identity_for_status_recovery():
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="aigc_task_review is no longer registered")
+@pytest.mark.skip(reason="legacy Agent review write behavior is retired")
 @pytest.mark.parametrize('delivery_kind,expected', [('image', None), ('video', 'MEDIA_NOT_DELIVERED')])
 async def test_review_accepts_only_current_native_media(delivery_kind, expected):
     task = {'binding': {'installation_id': 'i', 'conversation_id': 's', 'material_task_id': 't'},
@@ -1081,7 +1295,7 @@ async def test_review_accepts_only_current_native_media(delivery_kind, expected)
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="aigc_task_review is no longer registered")
+@pytest.mark.skip(reason="legacy Agent review write behavior is retired")
 async def test_review_tool_accepts_a_trusted_task_from_the_previous_installation():
     binding = {
         'installation_id': 'historical-installation',
@@ -1249,16 +1463,16 @@ async def test_real_agent_loop_can_call_scoped_tool_then_answer():
     assert agent.toolkit is original
 
 
-def test_all_granted_aigc_tools_omit_retired_review_schema():
+def test_all_granted_aigc_tools_include_read_only_legacy_review_schema():
     tools, _ = harness({CATALOG: '1', CREATE: '1', 'aigc.task.create': '1',
                         'aigc.task.resume': '1', 'aigc.review.complete': '1'})
     agent = SimpleNamespace(toolkit=Toolkit())
     with bind_aigc_tools(agent, tools):
         schemas = agent.toolkit.get_json_schemas()
         names = {item['function']['name'] for item in schemas}
-        assert 'aigc_task_review' not in names
+        assert 'aigc_task_review' in names
         assert 'aigc_task_status' in names
-        assert len(schemas) == 4
+        assert len(schemas) == 5
 
 
 def test_review_binding_can_hide_unrelated_base_and_aigc_tools():

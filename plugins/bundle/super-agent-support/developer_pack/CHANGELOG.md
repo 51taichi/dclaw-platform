@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.26 - 2026-11-12
+
+- Bundles development standard 2.48 and DevKit 1.9.16.
+- Documents the read-only compatibility tool for already signed Agents while
+  keeping customer completion as the only acceptance path for new work.
+
 ## 1.10.25 - 2026-11-12
 
 - Bundles development standard 2.47 and DevKit 1.9.15.

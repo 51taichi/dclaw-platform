@@ -882,13 +882,11 @@ async def run_workspace_orchestration_turn(
     )
     agent_execute_call_number = 0
     created_interaction_ids: list[str] = []
-    accepted_aigc_review = False
 
     async def tracked_business_call(
         capability: str,
         arguments: dict[str, Any],
     ) -> Any:
-        nonlocal accepted_aigc_review
         if business_call is None:
             raise WorkspaceOrchestrationError("unauthorized_capability")
         if capability.startswith("interaction.card."):
@@ -926,11 +924,6 @@ async def run_workspace_orchestration_turn(
                 event_type="interaction.operation.completed",
                 payload={"capability": capability},
             )
-        if (
-            capability == "aigc.review.complete"
-            and arguments.get("decision") == "ACCEPTED"
-        ):
-            accepted_aigc_review = True
         if capability == "interaction.card.create/1" and isinstance(
             value,
             dict,
@@ -1356,109 +1349,6 @@ async def run_workspace_orchestration_turn(
         except _failure_diagnostics.FailureDiagnosticsUnavailable:
             logger.warning("Failed to project safe failure for invocation %s", invocation_id)
     continuation_source_request = turn_request
-    if accepted_aigc_review and turn_request.safe_metadata.get(
-        "aigcReviewInput",
-    ):
-        continuation_invocation_id = uuid.uuid4().hex
-        continuation_transaction = None
-        continuation_request = None
-        try:
-            continuation_transaction = WorkspaceStateTransaction.begin(
-                state_storage_root,
-                installation_id=authorization.installation_id,
-                session_id=turn_request.session_id,
-                invocation_id=continuation_invocation_id,
-            )
-            continuation_request = turn_request.model_copy(
-                update={
-                    "invocation_id": continuation_invocation_id,
-                    "state_root": continuation_transaction.state_root,
-                    "transaction_root": continuation_transaction.transaction_root,
-                    "normalized_input": {
-                        "messages": [
-                            {
-                                "name": "customer",
-                                "role": "user",
-                                "content": "",
-                            },
-                        ],
-                    },
-                    "safe_metadata": {
-                        key: deepcopy(value)
-                        for key, value in turn_request.safe_metadata.items()
-                        if key != "aigcReviewInput"
-                    }
-                    | {"aigcReviewContinuation": True},
-                },
-            )
-            continuation_request._runtime_continuation = True
-            _append_runtime_trace(
-                state_storage_root,
-                installation_id=authorization.installation_id,
-                session_id=turn_request.session_id,
-                invocation_id=continuation_invocation_id,
-                event_type="orchestration.review_continuation.started",
-            )
-            continued = attach_created_interactions(
-                await build_orchestrator(
-                    continuation_invocation_id,
-                    continuation_request.safe_metadata,
-                ).invoke(
-                    continuation_request,
-                    continuation_transaction,
-                ),
-            )
-            _append_runtime_trace(
-                state_storage_root,
-                installation_id=authorization.installation_id,
-                session_id=turn_request.session_id,
-                invocation_id=continuation_invocation_id,
-                event_type=(
-                    "orchestration.review_continuation.completed"
-                    if continued.error_code is None
-                    else "orchestration.review_continuation.failed"
-                ),
-                payload=(
-                    {}
-                    if continued.error_code is None
-                    else {
-                        "error_code": continued.error_code,
-                        "diagnostic_ref": continued.diagnostic_ref,
-                    }
-                ),
-            )
-        except asyncio.CancelledError:
-            if continuation_transaction is not None:
-                continuation_transaction.discard()
-            _append_runtime_trace(
-                state_storage_root,
-                installation_id=authorization.installation_id,
-                session_id=turn_request.session_id,
-                invocation_id=continuation_invocation_id,
-                event_type="orchestration.cancelled",
-                payload={"error_code": "cancelled"},
-            )
-            raise
-        except Exception as exc:
-            if continuation_transaction is not None:
-                continuation_transaction.discard()
-            logger.exception("AIGC review continuation setup failed")
-            continued = WorkspaceTurnResult(
-                error_code="orchestration_error",
-                diagnostic_ref=type(exc).__name__,
-            )
-        result = (
-            continued
-            if continued.error_code is None
-            else WorkspaceTurnResult(
-                message={
-                    "reply": ("素材审核已完成，但后续制作未能完整结束，" "请查看当前任务状态后再重试。"),
-                },
-                diagnostics={"review_continuation": "failed"},
-            )
-        )
-        if continuation_request is not None:
-            continuation_source_request = continuation_request
     last_committed_result = result if result.error_code is None else None
     continuation_pass = 0
     while (
@@ -2084,6 +1974,7 @@ def _retired_aigc_write_receipt(
         {
             "material_task_id": material_task_id,
             "task_status": task.status.value,
+            "customer_action_required": task.status.value != "ACCEPTED",
         },
     )
     return receipt

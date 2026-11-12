@@ -726,72 +726,36 @@ def build_aigc_tools(
         decision: Literal["ACCEPTED", "REVISION_REQUIRED"],
         assessment: str,
     ) -> ToolResponse:
-        """Record review of the current host-submitted asset set after observing it.
+        """Read customer completion state for a legacy signed Agent.
 
-        ACCEPTED requires native media delivery for every submitted modality;
-        text or URLs claiming media was inspected are insufficient. A single
-        material task acceptance is not approval of all business content.
+        This compatibility tool never reviews media and never writes a task
+        decision. The decision and assessment arguments are accepted only so
+        previously signed Agent instructions remain executable.
         """
+        _ = decision, assessment
         task = owned_task(material_task_id)
         if task is None:
             return _response({"error": "TASK_UNAVAILABLE"})
+        binding = task.get("binding")
         if (
-            decision not in {"ACCEPTED", "REVISION_REQUIRED"}
-            or not isinstance(assessment, str)
-            or not assessment.strip()
+            not isinstance(binding, dict)
+            or binding.get("installation_id") != installation_id
+            or binding.get("conversation_id") != conversation_id
+            or binding.get("material_task_id") != material_task_id
         ):
-            return _response({"error": "INVALID_REVIEW"})
-        if (
-            not review_input
-            or review_input.get("binding") != task["binding"]
-            or review_input.get("asset_id") != task.get("asset_id")
-            or (review_input.get("review_assets") or [])
-            != (task.get("review_assets") or [])
-            or not task.get("asset_id")
-            or task.get("status") not in {"SUBMITTED", "REVIEWING"}
-        ):
-            return _response({"error": "REVIEW_INPUT_UNAVAILABLE"})
-        if decision == "ACCEPTED":
-            blocks = review_input.get("review_blocks") or [
-                {
-                    "type": review_input.get("media_kind"),
-                    "digest": review_input.get("block_digest"),
-                },
-            ]
-            delivered = set(media_delivery.get("delivered_modalities", []))
-            identities = {
-                item["block_digest"]
-                for item in media_delivery.get("media_inputs", [])
-            }
-            if any(
-                block.get("type") != "text"
-                and (
-                    block.get("type") not in delivered
-                    or block.get("digest") not in identities
-                )
-                for block in blocks
-            ):
-                return _response({"error": "MEDIA_NOT_DELIVERED"})
-        key = "review-" + _identity(
-            installation_id,
-            conversation_id,
-            material_task_id,
-            task.get("asset_id"),
-            task.get("review_assets"),
-            decision,
-        )
-        return await dispatch(
-            REVIEW,
+            return _response({"error": "TASK_UNAVAILABLE"})
+        accepted = task.get("status") == "ACCEPTED"
+        return _response(
             {
-                "idempotency_key": key,
-                "event_id": key,
-                "binding": task["binding"],
-                "asset_id": task["asset_id"],
-                "decision": decision,
-                "payload": {
-                    "assessment": assessment,
-                    "assessment_bound": True,
-                },
+                "status": "retired",
+                "write_applied": False,
+                "customer_action_required": not accepted,
+                "task": task,
+                "guidance": (
+                    "Customer completion is already persisted; continue the conversation."
+                    if accepted
+                    else "Ask the customer to complete the material task in the task page."
+                ),
             },
         )
 
@@ -805,8 +769,8 @@ def build_aigc_tools(
             tools["aigc_task_status"] = aigc_task_status
         if authorized(RESUME) and authorized("aigc.task.create"):
             tools["aigc_task_resume"] = aigc_task_resume
-        # REVIEW remains cataloged so installed legacy manifests stay valid,
-        # but the retired write tool is never exposed to an Agent runtime.
+        if authorized(REVIEW):
+            tools["aigc_task_review"] = aigc_task_review
     return tools
 
 

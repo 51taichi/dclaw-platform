@@ -126,6 +126,30 @@ def test_retired_aigc_write_does_not_disclose_mismatched_task(binding_change):
     }
 
 
+def test_retired_aigc_write_does_not_request_action_for_accepted_task():
+    binding = AigcTaskBinding(
+        installation_id="installation-1",
+        conversation_id="session-1",
+        agent_task_id="content-1",
+        content_revision=1,
+        material_task_id="material-1",
+        canvas_id="canvas-1",
+        node_id="output-1",
+    )
+    task = SimpleNamespace(binding=binding, status=AigcTaskStatus.ACCEPTED)
+
+    receipt = orchestration_module._retired_aigc_write_receipt(
+        capability="aigc.review.complete",
+        arguments={"binding": binding.model_dump(mode="json")},
+        platform_service=SimpleNamespace(get_task=lambda _task_id: task),
+        installation_id="installation-1",
+        conversation_id="session-1",
+    )
+
+    assert receipt["task_status"] == "ACCEPTED"
+    assert receipt["customer_action_required"] is False
+
+
 @pytest.mark.asyncio
 async def test_sealed_agent_uses_the_same_command_path(monkeypatch):
     class SealedRegistry:
