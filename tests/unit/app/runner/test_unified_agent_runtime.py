@@ -293,7 +293,18 @@ async def test_declared_turn_never_falls_back_to_direct_model_on_failure(
     monkeypatch,
     tmp_path,
 ):
+    class Memory:
+        def state_dict(self):
+            return {"messages": []}
+
+        def load_state_dict(self, state, *, strict=True):
+            assert strict is False
+            assert state == {"messages": []}
+
     class Agent:
+        def __init__(self):
+            self.memory = Memory()
+
         async def __call__(self, _messages):
             pytest.fail(
                 "Runner must not directly invoke the model as fallback",
@@ -308,6 +319,32 @@ async def test_declared_turn_never_falls_back_to_direct_model_on_failure(
         "resolve_active_workspace_authorization",
         lambda **_kwargs: authorization,
         raising=False,
+    )
+    monkeypatch.setattr(
+        orchestration_module,
+        "get_sealed_agent_registry",
+        lambda: SimpleNamespace(
+            get_agent=lambda _agent_id: SimpleNamespace(),
+        ),
+    )
+    monkeypatch.setattr(
+        orchestration_module,
+        "SuperExpertGrantRepository",
+        lambda _root: SimpleNamespace(
+            get=lambda _installation_id: SimpleNamespace(),
+        ),
+    )
+    from qwenpaw.app.workspace import orchestration as _workspace_orchestration
+
+    state_continuity = __import__(
+        f"{_workspace_orchestration.__package__}.state_continuity",
+        fromlist=["ensure_state_continuity"],
+    )
+
+    monkeypatch.setattr(
+        state_continuity,
+        "ensure_state_continuity",
+        lambda **_kwargs: None,
     )
     from qwenpaw.app.super_experts import composition as platform_module
 
@@ -359,8 +396,11 @@ async def test_declared_turn_never_falls_back_to_direct_model_on_failure(
         )
     ]
 
-    assert actual[0][0].content == "本轮处理未能安全完成，请稍后重试。"
-    assert actual[0][1:] == (True, False)
+    assert actual[0][0].content == (
+        "本轮处理未能安全完成：专家运行失败。请稍后重试；"
+        "若再次发生，请联系平台维护人员核查。关联 ID：未生成"
+    )
+    assert actual[0][1:] == (True, True)
 
 
 @pytest.mark.asyncio
@@ -379,6 +419,13 @@ async def test_declared_turn_passes_loaded_conversation_history_to_runtime(
     class Memory:
         def __init__(self):
             self.added = []
+
+        def state_dict(self):
+            return {"added": list(self.added)}
+
+        def load_state_dict(self, state, *, strict=True):
+            assert strict is False
+            self.added = list(state["added"])
 
         async def get_memory(self, *, prepend_summary=True):
             assert prepend_summary is True
@@ -402,6 +449,32 @@ async def test_declared_turn_passes_loaded_conversation_history_to_runtime(
         "resolve_active_workspace_authorization",
         lambda **_kwargs: authorization,
         raising=False,
+    )
+    monkeypatch.setattr(
+        orchestration_module,
+        "get_sealed_agent_registry",
+        lambda: SimpleNamespace(
+            get_agent=lambda _agent_id: SimpleNamespace(),
+        ),
+    )
+    monkeypatch.setattr(
+        orchestration_module,
+        "SuperExpertGrantRepository",
+        lambda _root: SimpleNamespace(
+            get=lambda _installation_id: SimpleNamespace(),
+        ),
+    )
+    from qwenpaw.app.workspace import orchestration as _workspace_orchestration
+
+    state_continuity = __import__(
+        f"{_workspace_orchestration.__package__}.state_continuity",
+        fromlist=["ensure_state_continuity"],
+    )
+
+    monkeypatch.setattr(
+        state_continuity,
+        "ensure_state_continuity",
+        lambda **_kwargs: None,
     )
     from qwenpaw.app.super_experts import composition as platform_module
 
