@@ -1,5 +1,9 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.27 bundles development standard 2.49 and DevKit 1.9.17. The
+legacy read-only AIGC compatibility receipt exposes customer completion as
+`ACCEPTED` while explicitly stating that no Agent review or write occurred.
+
 Version 1.10.26 bundles development standard 2.48 and DevKit 1.9.16. New and
 updated Agents must not depend on review writes. Already signed Agents may use
 the platform's same-name read-only compatibility tool to observe the strictly

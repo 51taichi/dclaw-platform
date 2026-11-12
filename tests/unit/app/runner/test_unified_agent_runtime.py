@@ -76,9 +76,12 @@ def test_retired_aigc_write_returns_owned_read_only_receipt(capability):
 
     assert receipt == {
         "contract": capability,
-        "status": "retired",
+        "status": "IN_PROGRESS",
         "write_applied": False,
         "customer_action_required": True,
+        "compatibility_mode": "legacy_read_only",
+        "completion_source": None,
+        "review_performed": False,
         "material_task_id": "material-1",
         "task_status": "IN_PROGRESS",
     }
@@ -146,7 +149,12 @@ def test_retired_aigc_write_does_not_request_action_for_accepted_task():
         conversation_id="session-1",
     )
 
+    assert receipt["status"] == "ACCEPTED"
     assert receipt["task_status"] == "ACCEPTED"
+    assert receipt["compatibility_mode"] == "legacy_read_only"
+    assert receipt["completion_source"] == "customer"
+    assert receipt["review_performed"] is False
+    assert receipt["write_applied"] is False
     assert receipt["customer_action_required"] is False
 
 

@@ -1972,6 +1972,12 @@ def _retired_aigc_write_receipt(
         return receipt
     receipt.update(
         {
+            "status": task.status.value,
+            "compatibility_mode": "legacy_read_only",
+            "completion_source": (
+                "customer" if task.status.value == "ACCEPTED" else None
+            ),
+            "review_performed": False,
             "material_task_id": material_task_id,
             "task_status": task.status.value,
             "customer_action_required": task.status.value != "ACCEPTED",

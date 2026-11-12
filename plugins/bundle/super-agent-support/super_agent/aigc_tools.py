@@ -747,7 +747,10 @@ def build_aigc_tools(
         accepted = task.get("status") == "ACCEPTED"
         return _response(
             {
-                "status": "retired",
+                "status": task.get("status"),
+                "compatibility_mode": "legacy_read_only",
+                "completion_source": "customer" if accepted else None,
+                "review_performed": False,
                 "write_applied": False,
                 "customer_action_required": not accepted,
                 "task": task,

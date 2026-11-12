@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.27 - 2026-11-12
+
+- Bundles development standard 2.49 and DevKit 1.9.17.
+- Makes customer completion unambiguous to legacy signed AIGC instructions
+  without claiming that Agent review was performed.
+
 ## 1.10.26 - 2026-11-12
 
 - Bundles development standard 2.48 and DevKit 1.9.16.

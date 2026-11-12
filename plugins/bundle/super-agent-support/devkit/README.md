@@ -1,12 +1,18 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.17 specifies the unambiguous legacy read-only receipt: a
+customer-completed task returns top-level `status=ACCEPTED`,
+`completion_source=customer`, `review_performed=false`, and
+`write_applied=false`; unfinished tasks return their persisted status and
+require customer action. Exact installation, conversation, and task ownership
+remain mandatory.
+
 Version 1.9.16 keeps direct customer completion as the only AIGC acceptance
 path. New and updated Agents must not depend on review writes. For already
 signed Agents that still declare `aigc.review.complete`, the Host may expose an
 `aigc_task_review` compatibility tool that only reads the exactly bound task
-status. It never observes media, invokes model review, or writes a decision;
-`ACCEPTED` lets the old Agent continue, while other states require customer
-action in the task page. New `aigc.review.complete` writes remain retired.
+status. It never observes media, invokes model review, or writes a decision.
+New `aigc.review.complete` writes remain retired.
 
 Version 1.9.15 documents direct customer completion of exactly bound AIGC
 tasks. The platform reaches `ACCEPTED` without invoking Agent review or

@@ -179,8 +179,8 @@ async def test_local_demo_requires_stable_key_and_terminal_verified_artifact():
 
 def test_pack_exposes_aigc_and_local_api_references():
     payload, metadata = build_archive(PLUGIN_ROOT)
-    assert metadata["standard"]["version"] == "2.48"
-    assert metadata["devkit_version"] == "1.9.16"
+    assert metadata["standard"]["version"] == "2.49"
+    assert metadata["devkit_version"] == "1.9.17"
     prefix = f"dclaw-super-agent-developer-pack-{metadata['version']}/"
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         names = set(archive.namelist())

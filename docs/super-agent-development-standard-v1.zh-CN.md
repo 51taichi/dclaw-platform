@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.48`
+当前版本：`2.49`
 
 发布日期：`2026-11-12`
 
@@ -561,7 +561,7 @@ stateDiagram-v2
 
 代码不得根据能力名称猜参数；使用前读取对应版本协议或实时目录。
 
-使用公共 AIGC 时，超级专家通过 `agent.execute(execution_mode="agent_loop")` 调用按授权动态注册的 `aigc_workflow_catalog`、`aigc_workflow_create`、`aigc_task_status` 和按需的 `aigc_task_resume`。先读取实时目录及 `WorkflowBlueprint` Schema，再创建或恢复任务；创建任务不等于生成完成，最终只以平台持久化的 `ACCEPTED` 状态和绑定产物验收。客户点击“完成并返回会话”后由平台直接完成，不调用 Agent/模型审核。新建或更新的专家不得声明或依赖审核写能力，也不得把 `aigc_task_review` 当作验收步骤。`aigc.asset.submit` 与 `aigc.review.complete` 能力 ID 只为已安装旧包和历史记录解析保留；非前端 submit 与所有 review 新写入分别返回 `AIGC_ASSET_SUBMIT_RETIRED`、`AIGC_REVIEW_RETIRED`。对已经签名且仍声明 `aigc.review.complete` 的旧包，运行时可注册同名 `aigc_task_review` 只读兼容工具：它只按当前安装、会话和物料任务读取平台持久化状态，忽略旧 decision/assessment 参数，不观察媒体、不触发模型审核、不写审核结论；任务已是 `ACCEPTED` 时允许旧专家继续会话，未完成时只返回客户需进入任务页完成。历史 `SUBMITTED/REVIEWING` 状态及审核回执只读，并由客户完成按钮迁移为 `ACCEPTED`。未授权的工具不会注册，Agent 不得自行构造内部接口。
+使用公共 AIGC 时，超级专家通过 `agent.execute(execution_mode="agent_loop")` 调用按授权动态注册的 `aigc_workflow_catalog`、`aigc_workflow_create`、`aigc_task_status` 和按需的 `aigc_task_resume`。先读取实时目录及 `WorkflowBlueprint` Schema，再创建或恢复任务；创建任务不等于生成完成，最终只以平台持久化的 `ACCEPTED` 状态和绑定产物验收。客户点击“完成并返回会话”后由平台直接完成，不调用 Agent/模型审核。新建或更新的专家不得声明或依赖审核写能力，也不得把 `aigc_task_review` 当作验收步骤。`aigc.asset.submit` 与 `aigc.review.complete` 能力 ID 只为已安装旧包和历史记录解析保留；非前端 submit 与所有 review 新写入分别返回 `AIGC_ASSET_SUBMIT_RETIRED`、`AIGC_REVIEW_RETIRED`。对已经签名且仍声明 `aigc.review.complete` 的旧包，运行时可注册同名 `aigc_task_review` 只读兼容工具：它只按当前安装、会话和物料任务读取平台持久化状态，忽略旧 decision/assessment 参数，不观察媒体、不触发模型审核、不写审核结论；任务已由客户完成时返回顶层 `status=ACCEPTED`、`completion_source=customer`、`review_performed=false` 和 `write_applied=false`，允许旧专家继续会话；未完成时返回真实任务状态和 `customer_action_required=true`。历史 `SUBMITTED/REVIEWING` 状态及审核回执只读，并由客户完成按钮迁移为 `ACCEPTED`。未授权的工具不会注册，Agent 不得自行构造内部接口。
 
 DevKit `aigc_workflow_api_demo.py` 与 `examples/aigc-workflow-v1/README.md` 给出目录、建任务、客户操作后快照及资产校验的参考实现。AIGC 任务卡由工作流创建操作投影，不使用问答卡的 `interaction.card.create/1`；模型工具通过 `agent_loop` 动态注册，`aigc.task.snapshot/1` 是独立的只读 Host 调用。`agent_loop` 不得叠加 `response_format="json_object"`。本地助手的 `local_task_api_demo.py` 和 `examples/local-task-host-v1/README.md` 给出启动、按真实任务 ID 回读和终态产物校验的参考实现。两个示例都只说明已发布合同，不授权新能力，也不能替代目标实例实时目录与客户端验收。
 
@@ -2391,6 +2391,12 @@ Skill 和专家发布前须对每条实际使用的路径同时验证：正确�
 以上是通用 Skill 的平台合同输入。Skill 维护方应在其 `references/capability-verification.md` 补 `/v2/` 的首错和终止根因区分，在 `scripts/runtime_diagnostics_with_login.py` 增加按官方 DevKit v2 Schema 查询和摘要，在相关脚本测试加入已恢复错误、最终阻断、`no_record`、越权及旧版回退案例。平台不直接覆盖 Skill 发布仓库，也不把单个专家的业务字段写成公共规则。
 
 ## 34. 版本记录
+
+### 2.49 - 2026-11-12
+
+- 旧签名专家的只读 `aigc_task_review` 在客户已完成任务时返回顶层 `status=ACCEPTED`，并以 `completion_source=customer`、`review_performed=false`、`write_applied=false` 明确完成来源，避免旧提示把兼容回执误解为 Agent 审核。
+- 未完成任务返回真实持久化状态和 `customer_action_required=true`；严格绑定当前安装、会话和物料任务，跨安装、跨会话或跨任务均不可读。
+- 正式组合更新为 Developer Pack `1.10.27`、Support Plugin `1.18.35` 和 DevKit `1.9.17`；旧专家包无需修改、重签或重新发布。
 
 ### 2.48 - 2026-11-12
 

@@ -1,0 +1,35 @@
+{
+  "source_archive": "luyu-dclaw-agent-1.1.22-cloud.zip",
+  "archive_sha256": "1045847a0efc12e42aab313e12b7c378efd52b28f643ba3023d3789763474cb7",
+  "version": "1.1.22",
+  "signer_id": "luyu-dclaw-agent-release-v2",
+  "content_digest": "sha256:fe4f981e844624e8e0b7a6990d26e2b4690f4311024898a3edf50c4930752d2b",
+  "capability_digest": "sha256:df5e74c8f8d05bbdc9c001037c70a540c6ee27488c205c83d167ebfabefd36e0",
+  "manifest_sha256": "32a4133d4265c369bf061b01e7e84c35d202e15926c86866abb8e64064988273",
+  "capabilities": [
+    "workspace.turn.orchestrate/1",
+    "agent.execute",
+    "session.context",
+    "runtime.trace",
+    "runtime.complete",
+    "runtime.fail",
+    "aigc.workflow.capabilities.list/1",
+    "aigc.workflow.create/1",
+    "aigc.task.create",
+    "aigc.task.resume",
+    "aigc.asset.submit",
+    "aigc.review.complete",
+    "interaction.capabilities.list/1",
+    "interaction.card.create/1",
+    "interaction.card.cancel/1"
+  ],
+  "runtime": {
+    "sha256": "418f6d6de6cbab76dae04fa87af2427d4ce5543a67f6fc863687e0701654a295",
+    "adapter": "standard",
+    "entrypoint": "runtime.py:create_runtime",
+    "calls_agent_execute": true,
+    "calls_runtime_complete": true
+  },
+  "workflow_sha256": "989cf1c769d63af9040ade3704b166c587f1c6e5bd9c48cf4b2a8df444fdd2ff",
+  "workflow_rule": "需要修改时调用 aigc_task_review；全部必需模态满足时调用 ACCEPTED。工具失败后不能用自然语言宣称平台已通过。"
+}

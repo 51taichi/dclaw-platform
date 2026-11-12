@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -9,6 +10,12 @@ from qwenpaw.app.workspace.aigc_tools import build_aigc_tools, bind_aigc_tools
 
 CATALOG = 'aigc.workflow.capabilities.list/1'
 CREATE = 'aigc.workflow.create/1'
+LEGACY_LUYU_1_1_22 = json.loads(
+    (
+        Path(__file__).parents[3]
+        / 'fixtures/super_expert/luyu-aigc-v1/production-1.1.22.json'
+    ).read_text(encoding='utf-8'),
+)
 
 
 def harness(grants=None, session='session-a', tasks=None, catalog=None):
@@ -565,7 +572,12 @@ async def test_legacy_review_tool_reads_customer_completion_without_writing(
         ),
     )
 
-    assert receipt['status'] == 'retired'
+    assert receipt['status'] == task_status
+    assert receipt['compatibility_mode'] == 'legacy_read_only'
+    assert receipt['completion_source'] == (
+        'customer' if task_status == 'ACCEPTED' else None
+    )
+    assert receipt['review_performed'] is False
     assert receipt['write_applied'] is False
     assert receipt['customer_action_required'] is customer_action_required
     assert receipt['task']['status'] == task_status
@@ -892,13 +904,13 @@ def create_runtime(): return Runtime()
         ('IN_PROGRESS', '请先进入任务页完成素材任务。', True),
     ],
 )
-async def test_legacy_luyu_agent_execute_path_adapts_retired_review_read_only(
+async def test_production_1_1_22_luyu_path_adapts_review_tool_read_only(
     tmp_path,
     task_status,
     expected_reply,
     customer_action_required,
 ):
-    """Exercise the signed 1.1.14 transparent runtime's agent.execute path."""
+    """Exercise the signed 1.1.22 runtime's agent.execute compatibility path."""
     from agentscope.message import Msg
     from qwenpaw.app.workspace.orchestration import (
         AuthorizedWorkspaceRelease,
@@ -908,6 +920,13 @@ async def test_legacy_luyu_agent_execute_path_adapts_retired_review_read_only(
         HOST_CAPABILITIES_V1,
         OrchestrationConfig,
     )
+
+    assert LEGACY_LUYU_1_1_22['version'] == '1.1.22'
+    assert LEGACY_LUYU_1_1_22['runtime']['calls_agent_execute'] is True
+    assert LEGACY_LUYU_1_1_22['runtime']['calls_runtime_complete'] is True
+    assert 'aigc.review.complete' in LEGACY_LUYU_1_1_22['capabilities']
+    assert 'aigc_task_review' in LEGACY_LUYU_1_1_22['workflow_rule']
+    assert 'ACCEPTED' in LEGACY_LUYU_1_1_22['workflow_rule']
 
     root = tmp_path / 'legacy-luyu-workspace'
     root.mkdir()
@@ -965,7 +984,12 @@ def create_runtime(): return TransparentRuntime()
                     'legacy signed instruction requires this call',
                 ),
             )
-            assert receipt['status'] == 'retired'
+            assert receipt['status'] == task_status
+            assert receipt['compatibility_mode'] == 'legacy_read_only'
+            assert receipt['completion_source'] == (
+                'customer' if task_status == 'ACCEPTED' else None
+            )
+            assert receipt['review_performed'] is False
             assert receipt['write_applied'] is False
             assert (
                 receipt['customer_action_required']
@@ -975,8 +999,8 @@ def create_runtime(): return TransparentRuntime()
 
     authorization = AuthorizedWorkspaceRelease(
         installation_id='legacy-luyu-installation',
-        release_id='luyu-dclaw-agent-1.1.14',
-        release_digest='sha256:' + 'a' * 64,
+        release_id='luyu-dclaw-agent-1.1.22',
+        release_digest=LEGACY_LUYU_1_1_22['content_digest'],
         granted_capabilities={
             **{key: '1' for key in HOST_CAPABILITIES_V1},
             'aigc.task.create': '1',
