@@ -49,6 +49,7 @@
 | Support plugin for redacted Host rejection diagnostics v3 and bounded reference search | >= 1.18.28 |
 | Support plugin for task-bound AIGC asset listing and Local Helper delivery | >= 1.18.31 |
 | Customer task completion without Agent submit grant | >= 1.18.32 |
+| Read-only retirement adapter for legacy Agent submit/review writes | >= 1.18.33 |
 | DClaw Windows client for required preflight | >= 2.6.12 |
 | DClaw Windows client for local file workflows | >= 2.6.13 |
 | Runner | >= 1.0.0; >= 1.1.0 for device protocol 2 file workflows; >= 1.2.0 for public Components; >= 1.3.0 for explicit non-entry Component export bindings; >= 1.4.5 for AIGC asset delivery |

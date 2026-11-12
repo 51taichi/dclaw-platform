@@ -2049,6 +2049,46 @@ async def _list_aigc_workflow_capabilities(request: Any) -> dict[str, Any]:
     return result.model_dump(mode="json")
 
 
+def _retired_aigc_write_receipt(
+    *,
+    capability: str,
+    arguments: dict[str, Any],
+    platform_service: Any,
+    installation_id: str,
+    conversation_id: str,
+) -> dict[str, Any]:
+    """Adapt signed legacy writes to an owned, read-only task receipt."""
+    receipt: dict[str, Any] = {
+        "contract": capability,
+        "status": "retired",
+        "write_applied": False,
+        "customer_action_required": True,
+    }
+    binding = arguments.get("binding")
+    if not isinstance(binding, dict):
+        return receipt
+    material_task_id = binding.get("material_task_id")
+    if not isinstance(material_task_id, str) or not material_task_id:
+        return receipt
+    task = platform_service.get_task(material_task_id)
+    if task is None:
+        return receipt
+    persisted_binding = task.binding.model_dump(mode="json")
+    if (
+        persisted_binding != binding
+        or task.binding.installation_id != installation_id
+        or task.binding.conversation_id != conversation_id
+    ):
+        return receipt
+    receipt.update(
+        {
+            "material_task_id": material_task_id,
+            "task_status": task.status.value,
+        },
+    )
+    return receipt
+
+
 async def handle_workspace_turn(
     *,
     agent: Any,
@@ -2185,6 +2225,17 @@ async def handle_workspace_turn(
             )
             if contract_version is None:
                 raise WorkspaceOrchestrationError("unauthorized_capability")
+            if capability in {
+                "aigc.review.complete",
+                "aigc.asset.submit",
+            }:
+                return _retired_aigc_write_receipt(
+                    capability=capability,
+                    arguments=payload,
+                    platform_service=platform_service,
+                    installation_id=authorization.installation_id,
+                    conversation_id=str(request.session_id),
+                )
             if capability == "aigc.capabilities.list/1":
                 if payload:
                     raise WorkspaceOrchestrationError("orchestration_error")

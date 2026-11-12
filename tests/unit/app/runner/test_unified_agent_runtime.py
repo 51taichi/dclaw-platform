@@ -10,6 +10,7 @@ from qwenpaw.app.runner.runner import AgentRunner
 from qwenpaw.config.config import OrchestrationConfig
 from qwenpaw.app.workspace import orchestration as orchestration_module
 from qwenpaw.app.workspace.orchestration import WorkspaceTurnResult
+from qwenpaw.app.super_experts.models import AigcTaskBinding, AigcTaskStatus
 from qwenpaw.app.sealed_agents import registry as registry_module
 from qwenpaw.plugins.registry import PluginRegistry
 
@@ -41,6 +42,88 @@ def _request():
 
 def _command_message():
     return Msg(name="user", role="user", content="/new")
+
+
+@pytest.mark.parametrize(
+    "capability",
+    ["aigc.review.complete", "aigc.asset.submit"],
+)
+def test_retired_aigc_write_returns_owned_read_only_receipt(capability):
+    binding = AigcTaskBinding(
+        installation_id="installation-1",
+        conversation_id="session-1",
+        agent_task_id="content-1",
+        content_revision=1,
+        material_task_id="material-1",
+        canvas_id="canvas-1",
+        node_id="output-1",
+    )
+    task = SimpleNamespace(
+        binding=binding,
+        status=AigcTaskStatus.IN_PROGRESS,
+    )
+    service = SimpleNamespace(
+        get_task=lambda task_id: task if task_id == "material-1" else None,
+    )
+
+    receipt = orchestration_module._retired_aigc_write_receipt(
+        capability=capability,
+        arguments={"binding": binding.model_dump(mode="json")},
+        platform_service=service,
+        installation_id="installation-1",
+        conversation_id="session-1",
+    )
+
+    assert receipt == {
+        "contract": capability,
+        "status": "retired",
+        "write_applied": False,
+        "customer_action_required": True,
+        "material_task_id": "material-1",
+        "task_status": "IN_PROGRESS",
+    }
+    assert task.status == AigcTaskStatus.IN_PROGRESS
+
+
+@pytest.mark.parametrize(
+    "binding_change",
+    [
+        {"installation_id": "installation-2"},
+        {"conversation_id": "session-2"},
+        {"canvas_id": "canvas-2"},
+    ],
+)
+def test_retired_aigc_write_does_not_disclose_mismatched_task(binding_change):
+    binding = AigcTaskBinding(
+        installation_id="installation-1",
+        conversation_id="session-1",
+        agent_task_id="content-1",
+        content_revision=1,
+        material_task_id="material-1",
+        canvas_id="canvas-1",
+        node_id="output-1",
+    )
+    task = SimpleNamespace(
+        binding=binding,
+        status=AigcTaskStatus.ACCEPTED,
+    )
+    candidate = binding.model_dump(mode="json")
+    candidate.update(binding_change)
+
+    receipt = orchestration_module._retired_aigc_write_receipt(
+        capability="aigc.review.complete",
+        arguments={"binding": candidate},
+        platform_service=SimpleNamespace(get_task=lambda _task_id: task),
+        installation_id="installation-1",
+        conversation_id="session-1",
+    )
+
+    assert receipt == {
+        "contract": "aigc.review.complete",
+        "status": "retired",
+        "write_applied": False,
+        "customer_action_required": True,
+    }
 
 
 @pytest.mark.asyncio
