@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import {
+  projectSuperExpertAigcCards,
   SuperExpertAigcTaskCard,
   type SuperExpertAigcTaskCardProjection,
 } from "./SuperExpertAigcTaskCard";
@@ -11,6 +12,7 @@ const labels: Record<SuperExpertAigcTaskCardProjection["status"], string> = {
   IN_PROGRESS: "制作中",
   PAUSED: "已暂停",
   SUBMITTED: "待完成",
+  REVIEWING: "待完成",
   REVISION_REQUIRED: "需要修改",
   ACCEPTED: "已完成",
   CANCELLED: "已取消",
@@ -58,6 +60,41 @@ describe("SuperExpertAigcTaskCard", () => {
       screen.queryByText("按照右侧向导完成视频制作。"),
     ).not.toBeInTheDocument();
     expect(screen.getByText(/素材任务已完成/)).toBeInTheDocument();
+  });
+
+  it("projects completed history without a runtime status", () => {
+    const cards = projectSuperExpertAigcCards([
+      {
+        id: "event-1",
+        type: "super_expert_event",
+        scope: "session",
+        session_id: "chat-1",
+        payload: {
+          envelope: {
+            event_type: "aigc.asset.completed",
+            material_task_id: "task-1",
+          },
+        },
+      },
+    ]);
+
+    expect(cards).toHaveLength(1);
+    expect(cards[0].status).toBe("ACCEPTED");
+  });
+
+  it("keeps historical reviewing tasks actionable from chat", () => {
+    render(
+      <SuperExpertAigcTaskCard
+        projection={projection("REVIEWING")}
+        onCommand={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: "查看详情" })).toHaveAttribute(
+      "href",
+      "/aigc-studio?task=task-1",
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("待完成");
   });
   for (const [status, label] of Object.entries(labels)) {
     it(`renders ${status}`, () => {

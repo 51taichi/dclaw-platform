@@ -1,12 +1,10 @@
 import {
   superExpertPlatformApi,
   type BoundAigcTask,
-  type SuperExpertPlatformCommandResult,
 } from "../../api/modules/superExpertPlatform";
 
 export interface GuidedTaskSubmission {
   submitted: true;
-  agentReview: SuperExpertPlatformCommandResult["agent_review"];
 }
 
 export async function getGuidedConversationRoute(
@@ -27,12 +25,9 @@ export async function getGuidedConversationRoute(
 export async function submitGuidedTaskAsset(
   task: BoundAigcTask,
   assetId: string,
-  reviewAssets?: { node_id: string; asset_id: string }[],
 ): Promise<GuidedTaskSubmission> {
   if (!assetId) throw new Error("当前绑定节点还没有可提交的成品");
-  const selection = reviewAssets?.length
-    ? JSON.stringify(reviewAssets)
-    : assetId;
+  const selection = assetId;
   const currentVersion = Number.isInteger(task.version)
     ? (task.version as number)
     : null;
@@ -51,23 +46,22 @@ export async function submitGuidedTaskAsset(
       event_id: eventId,
       binding: task.binding,
       asset_id: assetId,
-      ...(reviewAssets?.length ? { review_assets: reviewAssets } : {}),
     },
   });
   const persisted = result.task;
   if (
     !persisted ||
     persisted.binding.material_task_id !== task.binding.material_task_id ||
-    persisted.asset_id !== assetId ||
-    (reviewAssets?.length &&
-      JSON.stringify(persisted.review_assets) !==
-        JSON.stringify(reviewAssets)) ||
-    !["SUBMITTED", "ACCEPTED", "REVISION_REQUIRED"].includes(persisted.status)
+    persisted.asset_id !== assetId
   ) {
     throw new Error("未取得有效的素材提交回执，请刷新任务状态后重试");
   }
+  if (persisted.status !== "ACCEPTED") {
+    throw new Error(
+      `素材任务尚未完成（当前状态：${persisted.status}），请留在当前页面重试`,
+    );
+  }
   return {
     submitted: true,
-    agentReview: result.agent_review,
   };
 }

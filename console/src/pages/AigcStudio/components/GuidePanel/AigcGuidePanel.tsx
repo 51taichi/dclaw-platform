@@ -210,11 +210,15 @@ export function AigcGuidePanel({
           await onReturnToChat?.();
         } catch {
           setReviewReply(
-            "素材已提交，但暂时无法返回会话。请点击返回任务会话重试。",
+            "素材任务已完成，但暂时无法返回会话。请点击返回任务会话重试。",
           );
         }
-      } catch {
-        setReviewReply("提交未能完成，素材和制作进度已保留，请重试。");
+      } catch (error) {
+        setReviewReply(
+          error instanceof Error && error.message
+            ? error.message
+            : "完成操作未能成功，素材和制作进度已保留，请重试。",
+        );
       }
     });
   };

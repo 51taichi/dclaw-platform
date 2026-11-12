@@ -213,7 +213,6 @@ import { focusPlatformControl } from "./components/GuidePanel/controlRegistry";
 import { superExpertPlatformApi } from "../../api/modules/superExpertPlatform";
 import {
   resolveWorkflowOutputAssetId,
-  resolveWorkflowReviewAssets,
 } from "./workflowOutput";
 
 function connectCanvasNodes(source: string, target: string): AigcCanvasEdge {
@@ -2617,27 +2616,14 @@ export default function AigcStudioPage() {
     }
     const outputNodeId =
       currentTask.binding.output_node_id ?? currentTask.binding.node_id;
-    const blueprint = currentTask.workflow?.blueprint as
-      | { review_node_ids?: string[] }
-      | undefined;
-    const declared = blueprint?.review_node_ids ?? [];
-    const reviewAssets =
-      activeCanvas && declared.length
-        ? resolveWorkflowReviewAssets(
-            activeCanvas.nodes,
-            activeCanvas.edges,
-            declared.map((id) => currentTask.binding.node_bindings?.[id] ?? ""),
-          )
-        : undefined;
     const assetId =
-      reviewAssets?.[0]?.asset_id ??
-      (activeCanvas
+      activeCanvas
         ? resolveWorkflowOutputAssetId(
             activeCanvas.nodes,
             activeCanvas.edges,
             outputNodeId,
           )
-        : "");
+        : "";
     if (!assetId) {
       antdMessage.error("当前绑定节点还没有可提交的成品");
       return false;
@@ -2646,7 +2632,6 @@ export default function AigcStudioPage() {
     const submission = await submitGuidedTaskAsset(
       currentTask,
       assetId,
-      reviewAssets,
     );
     // Submission already persisted; a projection refresh failure must not undo it.
     await guide.refresh().catch(() => undefined);

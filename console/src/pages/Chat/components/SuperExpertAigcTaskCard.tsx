@@ -15,6 +15,7 @@ export type SuperExpertAigcTaskStatus =
   | "IN_PROGRESS"
   | "PAUSED"
   | "SUBMITTED"
+  | "REVIEWING"
   | "REVISION_REQUIRED"
   | "ACCEPTED"
   | "CANCELLED"
@@ -35,6 +36,7 @@ const EVENT_STATUS: Record<string, SuperExpertAigcTaskStatus | undefined> = {
   "aigc.task.resumed": "IN_PROGRESS",
   "aigc.task.cancelled": "CANCELLED",
   "aigc.asset.submitted": "SUBMITTED",
+  "aigc.asset.completed": "ACCEPTED",
 };
 
 export function projectSuperExpertAigcCards(
@@ -90,6 +92,7 @@ const STATUS_LABELS: Record<SuperExpertAigcTaskStatus, string> = {
   IN_PROGRESS: "制作中",
   PAUSED: "已暂停",
   SUBMITTED: "待完成",
+  REVIEWING: "待完成",
   REVISION_REQUIRED: "需要修改",
   ACCEPTED: "已完成",
   CANCELLED: "已取消",
@@ -126,6 +129,8 @@ export function SuperExpertAigcTaskCard({
       ? "素材任务已完成，可查看成果并用于后续创作。"
       : projection.status === "SUBMITTED"
       ? "素材已提交，等待完成任务。"
+      : projection.status === "REVIEWING"
+      ? "历史审核任务待完成，请进入任务页完成并返回会话。"
       : projection.instruction;
 
   const act = async () => {

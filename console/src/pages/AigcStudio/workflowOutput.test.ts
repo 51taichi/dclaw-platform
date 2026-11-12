@@ -42,30 +42,3 @@ describe("resolveWorkflowOutputAssetId", () => {
     ).toBe("");
   });
 });
-
-it("collects the declared review nodes in order, independently of the final node", async () => {
-  const { resolveWorkflowReviewAssets } = await import("./workflowOutput");
-  const nodes = ["copy", "first", "second"].map((id) => ({
-    id,
-    type: "prompt",
-    position: { x: 0, y: 0 },
-    data: { outputs: [{ id: `asset-${id}` }] },
-  }));
-  expect(
-    resolveWorkflowReviewAssets(nodes as any, [], ["copy", "first", "second"]),
-  ).toEqual(nodes.map(({ id }) => ({ node_id: id, asset_id: `asset-${id}` })));
-  expect(() =>
-    resolveWorkflowReviewAssets(nodes as any, [], ["missing"]),
-  ).toThrow();
-});
-
-it("includes multiple outputs from one declared node", async () => {
-  const { resolveWorkflowReviewAssets } = await import("./workflowOutput");
-  const nodes = [
-    { id: "pictures", data: { outputs: [{ id: "one" }, { id: "two" }] } },
-  ];
-  expect(resolveWorkflowReviewAssets(nodes as any, [], ["pictures"])).toEqual([
-    { node_id: "pictures", asset_id: "one" },
-    { node_id: "pictures", asset_id: "two" },
-  ]);
-});

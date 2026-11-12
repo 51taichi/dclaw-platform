@@ -85,10 +85,14 @@ export function LegacyAigcGuidePanel({
         try {
           await onReturnToChat?.();
         } catch {
-          setError("素材已提交，但暂时无法返回会话。请点击返回任务会话重试。");
+          setError("素材任务已完成，但暂时无法返回会话。请点击返回任务会话重试。");
         }
-      } catch {
-        setError("提交未能完成，素材和制作进度已保留，请重试。");
+      } catch (error) {
+        setError(
+          error instanceof Error && error.message
+            ? error.message
+            : "完成操作未能成功，素材和制作进度已保留，请重试。",
+        );
       } finally {
         inFlight.current = false;
         setPending(false);

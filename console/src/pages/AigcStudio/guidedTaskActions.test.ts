@@ -25,12 +25,12 @@ describe("guided task actions", () => {
     localStorage.clear();
   });
 
-  it("uses a new submission identity after a revision cycle changes the task version", async () => {
+  it("uses a new submission identity after the task version changes", async () => {
     vi.mocked(superExpertPlatformApi.command)
       .mockResolvedValueOnce({
         task: {
           ...task,
-          status: "REVISION_REQUIRED",
+          status: "ACCEPTED",
           asset_id: "asset-1",
         },
       })
@@ -38,7 +38,7 @@ describe("guided task actions", () => {
         task: {
           ...task,
           version: 6,
-          status: "REVISION_REQUIRED",
+          status: "ACCEPTED",
           asset_id: "asset-1",
         },
       });
@@ -58,7 +58,9 @@ describe("guided task actions", () => {
         task: { ...task, status: "ACCEPTED", version: 4, asset_id: "asset-1" },
       });
 
-    await submitGuidedTaskAsset(task, "asset-1");
+    await expect(submitGuidedTaskAsset(task, "asset-1")).rejects.toThrow(
+      "素材任务尚未完成",
+    );
     await submitGuidedTaskAsset(
       { ...task, status: "SUBMITTED", version: 3 },
       "asset-1",
@@ -87,30 +89,41 @@ describe("guided task actions", () => {
     await expect(submitGuidedTaskAsset(task, "")).rejects.toThrow();
     expect(superExpertPlatformApi.command).not.toHaveBeenCalled();
   });
-  it("returns success only with a matching persisted submitted task and reuses idempotency on retry", async () => {
+  it("returns success only with a matching persisted accepted task and reuses idempotency on retry", async () => {
     vi.mocked(superExpertPlatformApi.command).mockResolvedValue({
-      task: { ...task, status: "SUBMITTED", asset_id: "asset-1" },
+      task: { ...task, status: "ACCEPTED", asset_id: "asset-1" },
     });
     expect(await submitGuidedTaskAsset(task, "asset-1")).toEqual({
       submitted: true,
-      agentReview: undefined,
     });
     expect(await submitGuidedTaskAsset(task, "asset-1")).toEqual({
       submitted: true,
-      agentReview: undefined,
     });
     const calls = vi.mocked(superExpertPlatformApi.command).mock.calls;
     expect(calls[0][0]).toBe("aigc.asset.submit");
     expect(calls[0][1].idempotency_key).toBe(calls[1][1].idempotency_key);
     expect(calls[0][1].arguments.asset_id).toBe("asset-1");
   });
-  it.each(["wrong-task", "not-submitted", "wrong-asset"])(
+  it.each([
+    "wrong-task",
+    "in-progress",
+    "submitted",
+    "revision-required",
+    "wrong-asset",
+  ])(
     "rejects %s receipt",
     async (reason) => {
       vi.mocked(superExpertPlatformApi.command).mockResolvedValue({
         task: {
           ...task,
-          status: reason === "not-submitted" ? "IN_PROGRESS" : "ACCEPTED",
+          status:
+            reason === "in-progress"
+              ? "IN_PROGRESS"
+              : reason === "submitted"
+                ? "SUBMITTED"
+                : reason === "revision-required"
+                  ? "REVISION_REQUIRED"
+                  : "ACCEPTED",
           asset_id: reason === "wrong-asset" ? "asset-2" : "asset-1",
           binding: {
             ...task.binding,
@@ -123,7 +136,7 @@ describe("guided task actions", () => {
   );
 });
 
-it("returns a nonterminal review explanation without treating submission as lost", async () => {
+it("rejects a nonterminal legacy review response", async () => {
   vi.mocked(superExpertPlatformApi.command).mockResolvedValue({
     task: { ...task, status: "SUBMITTED", asset_id: "asset-1" },
     agent_review: {
@@ -133,44 +146,7 @@ it("returns a nonterminal review explanation without treating submission as lost
     },
   });
 
-  expect(await submitGuidedTaskAsset(task, "asset-1")).toEqual({
-    submitted: true,
-    agentReview: {
-      status: "model_required",
-      reply: "需要支持图片识别的模型。",
-      required_modalities: ["image"],
-    },
-  });
-});
-
-it("sends the complete bundle and changes submission identity when any asset changes", async () => {
-  const entries = [
-    { node_id: "copy", asset_id: "copy-1" },
-    { node_id: "image", asset_id: "image-1" },
-  ];
-  const command = vi.mocked(superExpertPlatformApi.command);
-  command.mockClear();
-  command.mockResolvedValue({
-    task: {
-      ...task,
-      status: "SUBMITTED",
-      asset_id: "copy-1",
-      review_assets: entries,
-    },
-  });
-  await submitGuidedTaskAsset(task, "copy-1", entries);
-  expect(command.mock.calls[0][1].arguments.review_assets).toEqual(entries);
-  const changed = [entries[0], { node_id: "image", asset_id: "image-2" }];
-  command.mockResolvedValue({
-    task: {
-      ...task,
-      status: "SUBMITTED",
-      asset_id: "copy-1",
-      review_assets: changed,
-    },
-  });
-  await submitGuidedTaskAsset(task, "copy-1", changed);
-  expect(command.mock.calls[0][1].idempotency_key).not.toBe(
-    command.mock.calls[1][1].idempotency_key,
+  await expect(submitGuidedTaskAsset(task, "asset-1")).rejects.toThrow(
+    "素材任务尚未完成（当前状态：SUBMITTED）",
   );
 });
