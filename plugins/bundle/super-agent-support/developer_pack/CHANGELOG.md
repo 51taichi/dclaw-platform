@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.23 - 2026-11-12
+
+- Bundles development standard 2.45 and DevKit 1.9.14.
+- Adds task-bound AIGC asset listing and Local Helper delivery contracts while
+  keeping signed download URLs outside Agent-visible and persisted payloads.
+
 ## 1.10.22 - 2026-11-11
 
 - Accepts cataloged optional `local.task.*` Host capabilities when a project

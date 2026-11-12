@@ -13,6 +13,8 @@ Do not set `response_format="json_object"` on that call.
 | 2 | `aigc_workflow_create(task_key, content_revision, workflow)` | Stable logical key, positive revision, blueprint conforming to the live schema and model list | Persisted `event.event_type=aigc.task.created` plus matching task binding, real `material_task_id` and `canvas_id` |
 | 3 | Customer uses the resulting AIGC task card | Customer action on the real canvas | Task status changes; creation alone is not generation or acceptance |
 | 4 | `await host.call("aigc.task.snapshot/1", {"material_task_id": material_task_id})` | ID returned by step 2 | `found`, same material task/canvas, submitted status, successful node job and matching submitted asset ID |
+| 5 | `await host.call("aigc.task.assets.list/1", {"material_task_id": material_task_id})` | Same bound task ID | Owner-scoped asset facts only; no source URL |
+| 6 | `await host.call("aigc.task.assets.localize/1", usage_plan)` | Asset IDs from step 5 plus usage, slot, order, destination and a stable idempotency key | A scoped local-task receipt; the connected Helper downloads the selected files |
 
 `devkit/aigc_workflow_api_demo.py` is a runnable contract reference for steps
 1, 2 and 4. Its `catalog_tool` and `create_tool` arguments represent the
@@ -38,3 +40,36 @@ schemas are live, so a static example cannot replace the target catalog.
 The single submitted-asset helper is intentionally narrow. Multi-asset
 workflows must correlate every required node, job and asset under the same
 bound canvas and use the task's actual review submission contract.
+
+For downstream local processing, first read the bound asset manifest and then
+send an explicit plan. Do not invent asset IDs or pass URLs:
+
+```python
+manifest = await host.call(
+    "aigc.task.assets.list/1",
+    {"material_task_id": material_task_id},
+)
+assert manifest["status"] == "found"
+
+receipt = await host.call("aigc.task.assets.localize/1", {
+    "material_task_id": material_task_id,
+    "idempotency_key": f"localize:{material_task_id}:revision-1",
+    "assets": [
+        {
+            "asset_id": manifest["assets"][0]["asset_id"],
+            "usage": "timeline_clip",
+            "slot": "clip_01",
+            "order": 0,
+            "destination": "res",
+        },
+    ],
+})
+```
+
+Allowed usages are `cover`, `timeline_clip`, `reference_image`,
+`background_audio`, `voice_audio`, `subtitle`, `overlay`, and `final_output`.
+Only `final_output` uses `task_root`; every other usage uses `res`. The receipt
+is read with the existing `local.task.read/1` contract. A replay with the same
+idempotency key and identical plan returns the original task; changing the plan
+requires a new key. The Host validates ownership and task binding before it
+sends short-lived source URLs directly to the authenticated Helper.

@@ -215,6 +215,15 @@ class LocalExecutionService:
                 return device
         raise ERRORS["DEVICE_NOT_READY"]
 
+    def _select_aigc_transfer_device(self, user_id: str) -> dict[str, Any]:
+        for device in self._online_devices(user_id):
+            if (
+                device.get("protocol_version") == PROTOCOL_VERSION
+                and _runner_supports(device, MIN_RUNNER_VERSION)
+            ):
+                return device
+        raise ERRORS["DEVICE_NOT_READY"]
+
     def _task_protocol(self, task: dict[str, Any], user_id: str) -> str:
         if task.get("local_file_bindings"):
             return PROTOCOL_VERSION
@@ -601,6 +610,74 @@ class LocalExecutionService:
                     "trace_id": current_trace,
                     "task": task_payload,
                     "runtime_credentials": credentials,
+                },
+            )
+        return self._public_task(task) | {"idempotent_replay": not created}
+
+    async def _aigc_assets_localize(self, arguments, identity, current_trace):
+        material_task_id = arguments.get("material_task_id")
+        idempotency_key = arguments.get("idempotency_key")
+        assets = arguments.get("assets")
+        if (
+            not isinstance(material_task_id, str) or not material_task_id
+            or not isinstance(idempotency_key, str) or not idempotency_key
+            or not isinstance(assets, list) or not assets
+        ):
+            raise ERRORS["INVALID_ARGUMENTS"]
+        public_assets = [
+            {key: value for key, value in item.items() if key != "download_url"}
+            for item in assets if isinstance(item, dict)
+        ]
+        if len(public_assets) != len(assets):
+            raise ERRORS["INVALID_ARGUMENTS"]
+        task_input = {
+            "material_task_id": material_task_id,
+            "assets": public_assets,
+        }
+        replay = self.store.get_task_by_idempotency(
+            identity["u"], identity["a"], idempotency_key,
+        )
+        if replay is not None:
+            if (
+                replay["capability_id"] != "aigc.task.assets.localize/1"
+                or replay["input"] != task_input
+            ):
+                raise ERRORS["IDEMPOTENCY_CONFLICT"]
+            return self._public_task(replay) | {"idempotent_replay": True}
+        device = self._select_aigc_transfer_device(identity["u"])
+        try:
+            task, created = self.store.create_task(
+                user_id=identity["u"],
+                agent_id=identity["a"],
+                agent_name=identity["n"],
+                invocation_id=identity["i"],
+                capability_id="aigc.task.assets.localize/1",
+                task_input=task_input,
+                idempotency_key=idempotency_key,
+                device_id=device["device_id"],
+                max_concurrency=4,
+                tenant_id=str(identity.get("t") or "local"),
+                session_id=identity["s"],
+                installation_id=identity["g"],
+                release_id=identity["r"],
+            )
+        except ValueError as exc:
+            if str(exc) == "capacity":
+                raise ERRORS["RESOURCE_EXHAUSTED"] from exc
+            raise ERRORS["IDEMPOTENCY_CONFLICT"] from exc
+        if created:
+            await self._send(
+                device["device_id"],
+                {
+                    "type": "aigc.assets.localize",
+                    "protocol_version": PROTOCOL_VERSION,
+                    "trace_id": current_trace,
+                    "task": {
+                        "task_id": task["task_id"],
+                        "material_task_id": material_task_id,
+                        "task_root_name": identity["n"],
+                        "assets": assets,
+                    },
                 },
             )
         return self._public_task(task) | {"idempotent_replay": not created}
@@ -1225,6 +1302,50 @@ class LocalExecutionService:
             )
         }
 
+    @staticmethod
+    def _valid_aigc_localize_result(
+        task: dict[str, Any],
+        payload: dict[str, Any],
+    ) -> bool:
+        files = payload.get("files")
+        expected = task.get("input", {}).get("assets")
+        if (
+            set(payload) != {"files"}
+            or not isinstance(files, list)
+            or not isinstance(expected, list)
+            or len(files) != len(expected)
+        ):
+            return False
+        for result, source in zip(files, expected):
+            if (
+                not isinstance(result, dict)
+                or set(result) != {
+                    "asset_id", "relative_path", "sha256", "size_bytes",
+                    "usage", "slot", "order",
+                }
+                or any(result.get(key) != source.get(key) for key in (
+                    "asset_id", "usage", "slot", "order",
+                ))
+                or not isinstance(result.get("relative_path"), str)
+                or result["relative_path"].startswith(("/", "\\"))
+                or ".." in result["relative_path"].replace("\\", "/").split("/")
+                or (
+                    source.get("destination") == "res"
+                    and not result["relative_path"].startswith("res/")
+                )
+                or (
+                    source.get("destination") == "task_root"
+                    and "/" in result["relative_path"]
+                )
+                or not isinstance(result.get("sha256"), str)
+                or re.fullmatch(r"[0-9a-f]{64}", result["sha256"]) is None
+                or not isinstance(result.get("size_bytes"), int)
+                or isinstance(result["size_bytes"], bool)
+                or result["size_bytes"] < 0
+            ):
+                return False
+        return True
+
     async def handle_device_message(
         self,
         device_id: str,
@@ -1301,8 +1422,15 @@ class LocalExecutionService:
                 if package
                 else None
             )
-            if schema is None or list(
-                Draft202012Validator(schema).iter_errors(payload),
+            built_in_localize_result = (
+                task["capability_id"] == "aigc.task.assets.localize/1"
+                and event_type == "completed"
+                and self._valid_aigc_localize_result(task, payload)
+            )
+            if not built_in_localize_result and (
+                schema is None or list(
+                    Draft202012Validator(schema).iter_errors(payload),
+                )
             ):
                 self.store.update_task(
                     task_id,

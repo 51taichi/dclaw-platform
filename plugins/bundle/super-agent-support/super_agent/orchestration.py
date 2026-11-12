@@ -2246,6 +2246,68 @@ async def handle_workspace_turn(
                     installation_id=authorization.installation_id,
                     conversation_id=str(request.session_id),
                 )
+            if capability == "aigc.task.assets.list/1":
+                if set(payload) != {"material_task_id"} or not isinstance(
+                    payload.get("material_task_id"), str,
+                ):
+                    raise WorkspaceOrchestrationError("orchestration_error")
+                from .aigc_assets import list_owned_aigc_assets
+
+                task = platform_service.get_task(payload["material_task_id"])
+                if task is None:
+                    return {"contract": capability, "status": "not_found"}
+                return list_owned_aigc_assets(
+                    task=task,
+                    adapter=platform_service.aigc,
+                    user_id=str(request.user_id),
+                    installation_id=authorization.installation_id,
+                    conversation_id=str(request.session_id),
+                )
+            if capability == "aigc.task.assets.localize/1":
+                if set(payload) != {
+                    "material_task_id", "assets", "idempotency_key",
+                }:
+                    raise WorkspaceOrchestrationError("orchestration_error")
+                material_task_id = payload.get("material_task_id")
+                idempotency_key = payload.get("idempotency_key")
+                if (
+                    not isinstance(material_task_id, str)
+                    or not isinstance(idempotency_key, str)
+                ):
+                    raise WorkspaceOrchestrationError("orchestration_error")
+                from .aigc_assets import prepare_owned_aigc_localization
+                from .local_host import dispatch_aigc_asset_localization
+                from qwenpaw.app.aigc.resource_store import AigcResourceError
+
+                task = platform_service.get_task(material_task_id)
+                if task is None:
+                    return {"contract": capability, "status": "not_found"}
+                try:
+                    localized_assets = prepare_owned_aigc_localization(
+                        task=task,
+                        adapter=platform_service.aigc,
+                        user_id=str(request.user_id),
+                        installation_id=authorization.installation_id,
+                        conversation_id=str(request.session_id),
+                        requested_assets=payload.get("assets"),
+                    )
+                except (AigcResourceError, ValueError, OSError, RuntimeError):
+                    raise WorkspaceOrchestrationError(
+                        "orchestration_error",
+                    ) from None
+                return await dispatch_aigc_asset_localization(
+                    material_task_id=material_task_id,
+                    assets=localized_assets,
+                    idempotency_key=idempotency_key,
+                    tenant_id=tenant_id,
+                    user_id=str(request.user_id),
+                    session_id=str(request.session_id),
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                    installation_id=authorization.installation_id,
+                    release_id=authorization.release_id,
+                    invocation_id=invocation_id,
+                )
             if capability in {
                 "local.task.start/1", "local.task.read/1", "local.task.cancel/1",
             }:

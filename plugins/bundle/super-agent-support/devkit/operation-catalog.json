@@ -104,6 +104,15 @@
       "request_schema": "schemas/aigc-task-snapshot-v1/request.schema.json",
       "response_schema": "schemas/aigc-task-snapshot-v1/response.schema.json"
     },
+    "assets": {
+      "minimum_plugin_version": "1.18.29",
+      "list_capability_id": "aigc.task.assets.list/1",
+      "list_request_schema": "schemas/aigc-task-assets-v1/list-request.schema.json",
+      "list_response_schema": "schemas/aigc-task-assets-v1/list-response.schema.json",
+      "localize_capability_id": "aigc.task.assets.localize/1",
+      "localize_request_schema": "schemas/aigc-task-assets-v1/localize-request.schema.json",
+      "localize_response_schema": "schemas/local-task-host-v1/receipt.schema.json"
+    },
     "api_demo": "aigc_workflow_api_demo.py",
     "example": "examples/aigc-workflow-v1/README.md",
     "snapshot_example": "examples/aigc-workflow-v1/submitted-snapshot.sample.json"

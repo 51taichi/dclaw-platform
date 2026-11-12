@@ -1,5 +1,12 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.14 adds `aigc.task.assets.list/1` and
+`aigc.task.assets.localize/1`. A Super Agent can list successful assets bound
+to its current AIGC material task, assign each asset a structured usage, slot,
+order and destination, then request delivery to the connected DClaw Local
+Helper. Signed source URLs remain inside the trusted Host-to-device channel;
+they are not returned to the Agent or persisted in its local-task input.
+
 Version 1.9.13 adds closed schemas for
 `developer.runtime.diagnostics.by-reference/3` and
 `developer.runtime.diagnostics.search/1`, plus

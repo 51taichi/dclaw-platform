@@ -1595,6 +1595,11 @@ async def _save_generated_asset(
             content=content,
             mime_type=mime_type,
         )
+        encoded_content = (
+            content if isinstance(content, bytes) else content.encode("utf-8")
+        )
+        storage_meta["size_bytes"] = len(encoded_content)
+        storage_meta["sha256"] = hashlib.sha256(encoded_content).hexdigest()
         asset_path = (
             f"oss://{storage_meta['bucket']}/{storage_meta['object_key']}"
         )

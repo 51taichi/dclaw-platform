@@ -19,7 +19,7 @@ internal sealed record HelperConfig(
 
 internal static class HelperMetadata
 {
-    internal const string Version = "1.4.4";
+    internal const string Version = "1.4.5";
     internal const string ProtocolVersion = "2";
 }
 
@@ -255,6 +255,9 @@ internal sealed class HelperRuntime
                 break;
             case "task.start":
                 _ = ExecuteTaskAsync(message, false, cancellationToken);
+                break;
+            case "aigc.assets.localize":
+                _ = LocalizeAigcAssetsAsync(message, cancellationToken);
                 break;
             case "task.continue":
                 _ = ExecuteTaskAsync(message, true, cancellationToken);
@@ -967,6 +970,144 @@ internal sealed class HelperRuntime
                 ["message"] = exception.GetType().Name,
             };
             await SendEventAsync(taskId, "failed", error, cancellationToken);
+        }
+    }
+
+    private async Task LocalizeAigcAssetsAsync(
+        JsonElement message,
+        CancellationToken cancellationToken)
+    {
+        var task = message.GetProperty("task");
+        var taskId = task.GetProperty("task_id").GetString()!;
+        var agentName = task.GetProperty("task_root_name").GetString()!;
+        var taskRoot = FindOrCreateTaskRoot(agentName, taskId);
+        try
+        {
+            await TaskHistory.TryWriteAsync(
+                taskRoot, taskId, agentName, "aigc.task.assets.localize/1",
+                "running", null, cancellationToken);
+            await SendEventAsync(taskId, "started", new JsonObject(), cancellationToken);
+            var files = new JsonArray();
+            var manifestAssets = new JsonArray();
+            var outputPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var asset in task.GetProperty("assets").EnumerateArray()
+                .OrderBy(item => item.GetProperty("order").GetInt32()))
+            {
+                var assetId = asset.GetProperty("asset_id").GetString()!;
+                var slot = asset.GetProperty("slot").GetString()!;
+                var destinationKind = asset.GetProperty("destination").GetString()!;
+                var sourceName = asset.GetProperty("name").GetString() ?? slot;
+                var extension = Path.GetExtension(sourceName);
+                if (extension.Length > 16 || extension.Any(character =>
+                    !char.IsLetterOrDigit(character) && character != '.'))
+                    extension = "";
+                var fileName = SafeName(slot) + extension.ToLowerInvariant();
+                var destinationRoot = destinationKind == "task_root"
+                    ? taskRoot
+                    : Path.Combine(taskRoot, "res");
+                Directory.CreateDirectory(destinationRoot);
+                var finalPath = PathInside(destinationRoot, fileName);
+                if (!outputPaths.Add(finalPath))
+                    throw new InvalidDataException("AIGC asset output path collision");
+                var temporaryPath = finalPath + ".download";
+                if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
+                var expectedSize = asset.GetProperty("size_bytes").GetInt64();
+                var expectedHash = asset.GetProperty("sha256").GetString() ?? "";
+                await DownloadAigcAssetAsync(
+                    asset.GetProperty("download_url").GetString()!,
+                    temporaryPath,
+                    expectedSize,
+                    expectedHash,
+                    cancellationToken);
+                File.Move(temporaryPath, finalPath, true);
+                await using var content = File.OpenRead(finalPath);
+                var actualHash = Convert.ToHexString(
+                    await SHA256.HashDataAsync(content, cancellationToken))
+                    .ToLowerInvariant();
+                var relativePath = Path.GetRelativePath(taskRoot, finalPath)
+                    .Replace(Path.DirectorySeparatorChar, '/');
+                files.Add(new JsonObject
+                {
+                    ["asset_id"] = assetId,
+                    ["relative_path"] = relativePath,
+                    ["sha256"] = actualHash,
+                    ["size_bytes"] = new FileInfo(finalPath).Length,
+                    ["usage"] = asset.GetProperty("usage").GetString(),
+                    ["slot"] = slot,
+                    ["order"] = asset.GetProperty("order").GetInt32(),
+                });
+                manifestAssets.Add(new JsonObject
+                {
+                    ["asset_id"] = assetId,
+                    ["relative_path"] = relativePath,
+                    ["sha256"] = actualHash,
+                    ["usage"] = asset.GetProperty("usage").GetString(),
+                    ["slot"] = slot,
+                    ["order"] = asset.GetProperty("order").GetInt32(),
+                });
+            }
+            await File.WriteAllTextAsync(
+                Path.Combine(taskRoot, "assets.json"),
+                new JsonObject
+                {
+                    ["material_task_id"] = task.GetProperty("material_task_id").GetString(),
+                    ["assets"] = manifestAssets,
+                }.ToJsonString(JsonOptions.Default),
+                cancellationToken);
+            await TaskHistory.TryWriteAsync(
+                taskRoot, taskId, agentName, "aigc.task.assets.localize/1",
+                "succeeded", null, cancellationToken);
+            await SendEventAsync(
+                taskId, "completed", new JsonObject { ["files"] = files },
+                cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            await TaskHistory.TryWriteAsync(
+                taskRoot, taskId, agentName, "aigc.task.assets.localize/1",
+                "failed", exception.Message, cancellationToken);
+            await SendEventAsync(
+                taskId, "failed", new JsonObject
+                {
+                    ["code"] = "AIGC_ASSET_DOWNLOAD_FAILED",
+                    ["message"] = "AIGC 素材下载失败。",
+                },
+                cancellationToken);
+        }
+    }
+
+    private async Task DownloadAigcAssetAsync(
+        string url,
+        string destination,
+        long expectedSize,
+        string expectedHash,
+        CancellationToken cancellationToken)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var assetUri)
+            || assetUri.Scheme != Uri.UriSchemeHttps)
+            throw new InvalidDataException("AIGC asset URL must use HTTPS");
+        using var response = await _uploadHttp.GetAsync(
+            assetUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        if (expectedSize > 0
+            && response.Content.Headers.ContentLength is long contentLength
+            && contentLength != expectedSize)
+            throw new InvalidDataException("AIGC asset size mismatch");
+        await using (var output = File.Create(destination))
+        await using (var input = await response.Content.ReadAsStreamAsync(cancellationToken))
+            await input.CopyToAsync(output, cancellationToken);
+        var actualSize = new FileInfo(destination).Length;
+        if (expectedSize > 0 && actualSize != expectedSize)
+            throw new InvalidDataException("AIGC asset size mismatch");
+        if (!string.IsNullOrWhiteSpace(expectedHash))
+        {
+            await using var stream = File.OpenRead(destination);
+            var actualHash = Convert.ToHexString(
+                await SHA256.HashDataAsync(stream, cancellationToken)).ToLowerInvariant();
+            if (!CryptographicOperations.FixedTimeEquals(
+                Encoding.ASCII.GetBytes(actualHash),
+                Encoding.ASCII.GetBytes(expectedHash.ToLowerInvariant())))
+                throw new InvalidDataException("AIGC asset digest mismatch");
         }
     }
 

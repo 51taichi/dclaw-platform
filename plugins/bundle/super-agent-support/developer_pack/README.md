@@ -1,5 +1,10 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.23 bundles development standard 2.45 and DevKit 1.9.14. It adds
+the owner-scoped AIGC asset manifest and Local Helper delivery contracts.
+Intermediate assets are placed under `res/`; declared final outputs are placed
+in the task root. Existing signed Agents and local-task contracts are unchanged.
+
 Version 1.10.22 bundles development standard 2.45 and DevKit 1.9.13. It
 accepts cataloged `local.task.*` Host capabilities alongside the required
 local helper declarations. Unknown local capabilities remain invalid.

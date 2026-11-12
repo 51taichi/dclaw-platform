@@ -703,7 +703,7 @@ def test_developer_kit_is_downloadable_without_server_source(
 
     assert metadata.status_code == 200
     assert metadata.json()["name"] == "dclaw-super-agent-devkit"
-    assert metadata.json()["version"] == "1.9.9"
+    assert metadata.json()["version"] == "1.9.14"
     assert metadata.json()["download_path"] == (
         "/api/super-agent-support/developer-kit/v1.zip"
     )
@@ -722,7 +722,7 @@ def test_developer_kit_is_downloadable_without_server_source(
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-devkit-1.9.9"
+    prefix = "dclaw-super-agent-devkit-1.9.14"
     assert f"{prefix}/dclaw_agent_devkit.py" in names
     assert f"{prefix}/bootstrap.ps1" in names
     assert f"{prefix}/bootstrap.sh" in names
@@ -880,23 +880,23 @@ def test_developer_pack_is_downloadable_and_self_describing(
         downloaded = client.get("/developer-pack/download")
 
     assert health.status_code == 200
-    assert health.json()["version"] == "1.18.24"
+    assert health.json()["version"] == "1.18.29"
     assert metadata.status_code == 200
     payload = metadata.json()
-    assert payload["version"] == "1.10.17"
-    assert payload["standard"]["version"] == "2.41"
-    assert payload["devkit_version"] == "1.9.9"
+    assert payload["version"] == "1.10.23"
+    assert payload["standard"]["version"] == "2.45"
+    assert payload["devkit_version"] == "1.9.14"
     assert payload["server_source_required"] is False
     assert payload["download_path"].endswith("/developer-pack/download")
     assert payload["sha256"] == hashlib.sha256(downloaded.content).hexdigest()
     assert payload["content_sha256"] == payload["sha256"]
     assert downloaded.status_code == 200
-    assert "dclaw-super-agent-developer-pack-1.10.17.zip" in (
+    assert "dclaw-super-agent-developer-pack-1.10.23.zip" in (
         downloaded.headers["content-disposition"]
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-developer-pack-1.10.17"
+    prefix = "dclaw-super-agent-developer-pack-1.10.23"
     assert f"{prefix}/PACKAGE-MANIFEST.json" in names
     assert f"{prefix}/SHA256SUMS" in names
     assert f"{prefix}/dclaw_developer.py" in names
@@ -1382,6 +1382,79 @@ class _FakeWebSocket:
 
     async def close(self, **_kwargs):
         return None
+
+
+@pytest.mark.asyncio
+async def test_aigc_asset_localization_is_device_only_and_idempotent(
+    plugin_module,
+    tmp_path,
+):
+    store, _signer, _broker, service = _runtime(plugin_module, tmp_path)
+    identity = {
+        "t": "tenant-1", "u": "user-1", "s": "conversation-1",
+        "a": "agent-1", "n": "大字报超级专家", "g": "installation-1",
+        "r": "release-1", "i": "invocation-1",
+    }
+    assets = [{
+        "asset_id": "asset-1", "node_id": "node-1", "job_id": "job-1",
+        "kind": "video", "name": "result.mp4", "mime_type": "video/mp4",
+        "size_bytes": 42, "sha256": "a" * 64,
+        "usage": "final_output", "slot": "final_video", "order": 0,
+        "destination": "task_root",
+        "download_url": "https://oss.example/result.mp4?signed=secret",
+    }]
+    arguments = {
+        "material_task_id": "material-1",
+        "idempotency_key": "scope:download-1",
+        "assets": assets,
+    }
+
+    with pytest.raises(Exception) as exc_info:
+        await service._aigc_assets_localize(arguments, identity, "trace-1")
+    assert getattr(exc_info.value, "code", None) == "LOCAL_GATEWAY.DEVICE_NOT_READY"
+
+    store.upsert_device(
+        device_id="device-1", user_id="user-1", display_name="Windows",
+        runner_version="1.1.0", protocol_version="2", capabilities=[],
+    )
+    websocket = _FakeWebSocket()
+    await service.attach("device-1", websocket)
+
+    started = await service._aigc_assets_localize(arguments, identity, "trace-1")
+    stored = store.get_task(started["task_id"], "user-1")
+    assert stored["agent_name"] == "大字报超级专家"
+    assert "download_url" not in json.dumps(stored["input"])
+    completed = {"files": [{
+        "asset_id": "asset-1", "relative_path": "final_video.mp4",
+        "sha256": "b" * 64, "size_bytes": 42,
+        "usage": "final_output", "slot": "final_video", "order": 0,
+    }]}
+    assert service._valid_aigc_localize_result(stored, completed)
+    assert not service._valid_aigc_localize_result(
+        stored,
+        {"files": [{**completed["files"][0], "relative_path": "../escape.mp4"}]},
+    )
+    assert websocket.messages == [{
+        "type": "aigc.assets.localize",
+        "protocol_version": "2",
+        "trace_id": "trace-1",
+        "task": {
+            "task_id": started["task_id"],
+            "material_task_id": "material-1",
+            "task_root_name": "大字报超级专家",
+            "assets": assets,
+        },
+    }]
+
+    replay = await service._aigc_assets_localize(arguments, identity, "trace-2")
+    assert replay["task_id"] == started["task_id"]
+    assert replay["idempotent_replay"] is True
+    assert len(websocket.messages) == 1
+
+    changed = {**arguments, "assets": [{**assets[0], "slot": "other"}]}
+    with pytest.raises(Exception) as conflict:
+        await service._aigc_assets_localize(changed, identity, "trace-3")
+    assert getattr(conflict.value, "code", None) == "LOCAL_GATEWAY.IDEMPOTENCY_CONFLICT"
 
 
 @pytest.mark.asyncio

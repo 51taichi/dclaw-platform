@@ -117,3 +117,22 @@ The exact missing inputs are the developer's final artifact/descriptor/key,
 the platform resource-binding implementation and helper support, a live
 user-scoped device report, and a user-authorized test task. No business turn
 is authorized by this audit.
+
+## Source implementation update (2026-11-12)
+
+Support plugin 1.18.29 and Local Helper 1.4.5 close the generic
+AIGC-to-local resource gap with two separately granted Host capabilities:
+`aigc.task.assets.list/1` lists successful assets bound to the current user,
+installation, conversation, workflow and canvas; `aigc.task.assets.localize/1`
+accepts a structured usage plan and delivers the selected assets over the
+authenticated device channel. Signed ten-minute OSS URLs are neither returned
+to the Agent/model nor persisted in local-task input. The helper verifies
+available size/digest metadata, computes the resulting digest, writes
+intermediate assets under `res/`, declared final outputs in the task root, and
+records `assets.json` for downstream tools.
+
+This source implementation does not register a composition capability and
+does not itself run FFmpeg. A Super Agent still needs a separately granted,
+registered local composition capability for that next step. At the time of
+this update no image, plugin archive, Helper installer, service restart or
+production deployment has been performed.

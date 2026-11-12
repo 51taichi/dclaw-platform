@@ -124,3 +124,42 @@ async def dispatch_local_task(
     if not _owned(stored, identity):
         return {"contract": "local.task.receipt/1", "status": "not_found"}
     return _receipt(stored, identity)
+
+
+async def dispatch_aigc_asset_localization(
+    *, material_task_id: str, assets: list[dict[str, Any]],
+    idempotency_key: str, tenant_id: str, user_id: str, session_id: str,
+    agent_id: str, agent_name: str, installation_id: str, release_id: str,
+    invocation_id: str,
+) -> dict[str, Any]:
+    service = _service
+    if service is None:
+        return {"contract": "local.task.receipt/1", "status": "unavailable"}
+    identity = {
+        "t": tenant_id, "u": user_id, "s": session_id, "a": agent_id,
+        "g": installation_id, "r": release_id, "i": invocation_id,
+        "n": agent_name, "c": ("aigc.task.assets.localize/1",),
+    }
+    if not isinstance(idempotency_key, str) or not 1 <= len(idempotency_key) <= 160:
+        raise ValueError("invalid AIGC localization idempotency key")
+    scoped_key = _scope_key(identity) + ":" + idempotency_key
+    try:
+        task = await service._aigc_assets_localize(
+            {
+                "material_task_id": material_task_id,
+                "assets": assets,
+                "idempotency_key": scoped_key,
+            },
+            identity,
+            invocation_id,
+        )
+    except PublicError as exc:
+        return {
+            "contract": "local.task.receipt/1",
+            "status": "rejected",
+            "error_code": exc.code,
+        }
+    stored = service.store.get_task(task["task_id"], user_id)
+    if not _owned(stored, identity):
+        return {"contract": "local.task.receipt/1", "status": "not_found"}
+    return _receipt(stored, identity)
