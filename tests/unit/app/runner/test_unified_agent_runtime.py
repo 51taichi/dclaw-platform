@@ -353,6 +353,7 @@ async def test_declared_turn_passes_loaded_conversation_history_to_runtime(
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="cross-installation Agent review bridge was retired")
 async def test_active_release_can_review_a_task_bound_to_its_previous_installation(
     monkeypatch,
     tmp_path,

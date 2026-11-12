@@ -48,6 +48,12 @@ def test_v1_text_to_video_contract_has_stable_unique_human_controls():
     assert all(step.recovery for step in operation.human_guide)
     assert all(step.success_signal for step in operation.human_guide)
     assert operation.expected_result["asset_kind"] == "video"
+    assert operation.expected_result["success_status"] == "ACCEPTED"
+    final_step = operation.human_guide[-1]
+    assert "完成并返回会话" in final_step.instruction
+    assert "已完成" in final_step.success_signal
+    assert "审核" not in final_step.instruction
+    assert "审核" not in final_step.success_signal
 
 
 def test_duplicate_steps_or_controls_fail_contract_validation():

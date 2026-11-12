@@ -577,7 +577,7 @@ def build_aigc_tools(
         Args:
             task_key: Stable logical name of this content task, retained across turns.
             content_revision: Positive version of the production plan.
-            workflow: Complete blueprint matching aigc_workflow_catalog, with real dependencies and review_node_ids.
+            workflow: Complete blueprint matching aigc_workflow_catalog, with real dependencies. The legacy review_node_ids field only identifies output ownership and does not request Agent review.
         """
         request_issues = []
         if task_key is None:
@@ -805,8 +805,8 @@ def build_aigc_tools(
             tools["aigc_task_status"] = aigc_task_status
         if authorized(RESUME) and authorized("aigc.task.create"):
             tools["aigc_task_resume"] = aigc_task_resume
-        if authorized(REVIEW) and authorized("aigc.task.create"):
-            tools["aigc_task_review"] = aigc_task_review
+        # REVIEW remains cataloged so installed legacy manifests stay valid,
+        # but the retired write tool is never exposed to an Agent runtime.
     return tools
 
 

@@ -30,6 +30,7 @@ class SuperExpertEventEnvelope(BaseModel):
             r"^(card\.created|card\.updated|aigc\.task\.created|"
             r"aigc\.task\.resumed|aigc\.task\.cancelled|"
             r"aigc\.guide\.updated|aigc\.asset\.submitted|"
+            r"aigc\.asset\.completed|"
             r"aigc\.review\.completed)$"
         ),
     )

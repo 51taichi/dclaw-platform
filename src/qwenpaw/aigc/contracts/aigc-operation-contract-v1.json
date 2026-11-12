@@ -25,7 +25,7 @@
       "expected_result": {
         "asset_kind": "video",
         "required_binding": ["material_task_id", "canvas_id", "node_id", "asset_id"],
-        "success_status": "SUBMITTED"
+        "success_status": "ACCEPTED"
       },
       "human_guide": [
         {
@@ -103,10 +103,10 @@
         {
           "step_id": "verify-result",
           "title": "确认生成结果",
-          "instruction": "等待节点显示生成完成，点击播放按钮完整观看一次；确认画面可以正常播放后，点击操作助手中的“提交给陆羽审核”。",
+          "instruction": "等待节点显示生成完成，点击播放按钮完整观看一次；确认画面可以正常播放后，点击操作助手中的“完成并返回会话”。",
           "control_id": "aigc.video.result-preview",
           "action": "verify",
-          "success_signal": "视频资产已绑定到当前素材任务，任务状态变为“已提交审核”。",
+          "success_signal": "视频资产已绑定到当前素材任务，任务状态变为“已完成”。",
           "recovery": "生成失败时点击节点上的“查看原因”，按操作助手给出的恢复动作重试；离开页面不会丢失当前任务进度。"
         }
       ],

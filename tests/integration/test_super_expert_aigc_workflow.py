@@ -221,6 +221,68 @@ async def test_customer_can_start_bound_workflow_without_agent_resume_grant(tmp_
 
 
 @pytest.mark.asyncio
+async def test_customer_completes_bound_workflow_without_submit_grant(
+    tmp_path,
+    monkeypatch,
+):
+    from qwenpaw.app.routers import aigc_studio
+
+    monkeypatch.setattr(aigc_studio, "STUDIO_ROOT", tmp_path / "studio")
+    aigc_studio._resource_store.cache_clear()
+    monkeypatch.setattr(platform_router, "_load_workflow_capability_catalog", _catalog)
+    capabilities = tuple(
+        item for item in CAPABILITIES if item[0] != "aigc.asset.submit"
+    )
+    service, grant = _service(tmp_path, capabilities)
+    created = await service.execute(
+        tenant_id="tenant-a",
+        user_id="user-a",
+        installation_id=grant.installation_id,
+        capability="aigc.workflow.create/1",
+        contract_version="1",
+        arguments=_fixture("one-node.json", grant.installation_id),
+        idempotency_key="one-node",
+    )
+    binding = created["task"]["binding"]
+    await service.execute(
+        tenant_id="tenant-a",
+        user_id="user-a",
+        installation_id=grant.installation_id,
+        capability="aigc.task.resume",
+        contract_version="1",
+        arguments={"binding": binding, "event_id": "customer-start"},
+        idempotency_key="customer-start",
+        frontend_workflow_resume=True,
+    )
+    validated = []
+
+    async def validate_asset(candidate_binding, asset_id, _task):
+        validated.append((candidate_binding, asset_id))
+
+    completed = await service.execute(
+        tenant_id="tenant-a",
+        user_id="user-a",
+        installation_id=grant.installation_id,
+        capability="aigc.asset.submit",
+        contract_version="1",
+        arguments={
+            "binding": binding,
+            "event_id": "customer-complete",
+            "asset_id": "asset-1",
+        },
+        idempotency_key="customer-complete",
+        asset_validator=validate_asset,
+        frontend_asset_submit=True,
+    )
+
+    assert completed["task"]["status"] == "ACCEPTED"
+    assert completed["event"]["event_type"] == "aigc.asset.completed"
+    assert completed["event"]["payload"]["task_status"] == "ACCEPTED"
+    assert validated[0][0].model_dump(mode="json") == binding
+    assert validated[0][1] == "asset-1"
+
+
+@pytest.mark.asyncio
 async def test_three_node_customer_triggered_closed_loop(tmp_path, monkeypatch):
     from qwenpaw.app.routers import aigc_studio
 
@@ -260,9 +322,24 @@ async def test_three_node_customer_triggered_closed_loop(tmp_path, monkeypatch):
         assert guide.current_step_id == next_step
 
     await _command(service, grant, "aigc.task.resume", "workflow-start", binding)
-    submitted = await _command(
-        service, grant, "aigc.asset.submit", "workflow-submit", binding,
-        asset_id="asset-3",
+    async def validate_asset(*_args):
+        return None
+
+    completed = await service.execute(
+        tenant_id="tenant-a",
+        user_id="user-a",
+        installation_id=grant.installation_id,
+        capability="aigc.asset.submit",
+        contract_version="1",
+        arguments={
+            "binding": binding,
+            "event_id": "workflow-complete",
+            "asset_id": "asset-3",
+        },
+        idempotency_key="workflow-complete",
+        asset_validator=validate_asset,
+        frontend_asset_submit=True,
     )
-    assert submitted["task"]["status"] == "SUBMITTED"
-    assert submitted["task"]["binding"]["node_id"] == binding["output_node_id"]
+    assert completed["task"]["status"] == "ACCEPTED"
+    assert completed["event"]["event_type"] == "aigc.asset.completed"
+    assert completed["task"]["binding"]["node_id"] == binding["output_node_id"]

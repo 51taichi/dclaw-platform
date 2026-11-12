@@ -1,5 +1,11 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.25 bundles development standard 2.47 and DevKit 1.9.15. Customer
+completion of an exactly bound AIGC task is a platform action that reaches
+`ACCEPTED` without Agent review or an Agent submit grant. Legacy submit/review
+capability IDs remain recognizable to already published experts, but review
+write execution is retired and historical review data is read-only.
+
 Version 1.10.24 bundles development standard 2.46 and DevKit 1.9.14. It adds
 the public AIGC asset handoff workflow, ownership boundary, minimum Helper and
 plugin versions, historical-digest compatibility rule, and canonical Schema

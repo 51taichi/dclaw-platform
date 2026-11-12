@@ -79,8 +79,9 @@ class WorkflowBlueprint(BaseModel):
     nodes: tuple[WorkflowNode, ...] = Field(min_length=1, max_length=20)
     edges: tuple[WorkflowEdge, ...] = Field(default=(), max_length=40)
     output_node_id: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
-    # Ordered logical producers whose actual outputs form one review submission.
-    # Empty preserves the legacy single-output contract.
+    # Legacy field name: ordered output producers used only for asset ownership
+    # projection. Customer completion validates the final output and never
+    # dispatches these assets to Agent review.
     review_node_ids: tuple[str, ...] = Field(default=(), max_length=20)
     fallback_policy: Literal[
         "MANUAL_BUILD_IF_UNSUPPORTED",
@@ -400,7 +401,7 @@ def validate_workflow_blueprint(
     if blueprint.output_node_id not in seen:
         raise WorkflowContractError("workflow output node is unavailable")
     if len(set(blueprint.review_node_ids)) != len(blueprint.review_node_ids):
-        raise WorkflowContractError("duplicate workflow review node id")
+        raise WorkflowContractError("duplicate workflow completion node id")
     if any(node_id not in seen for node_id in blueprint.review_node_ids):
-        raise WorkflowContractError("workflow review node is unavailable")
+        raise WorkflowContractError("workflow completion node is unavailable")
     return blueprint

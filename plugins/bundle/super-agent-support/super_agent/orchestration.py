@@ -1100,47 +1100,25 @@ async def run_workspace_orchestration_turn(
                     review_input=active_safe_metadata.get("aigcReviewInput"),
                     media_delivery=media_delivery,
                 )
-                review_only = bool(
-                    active_safe_metadata.get("aigcReviewInput"),
-                )
-                interaction_tools = (
-                    {}
-                    if review_only
-                    else _interaction_tools.build_interaction_tools(
-                        grants=authorization.granted_capabilities,
+                interaction_tools = _interaction_tools.build_interaction_tools(
+                    grants=authorization.granted_capabilities,
+                    installation_id=authorization.installation_id,
+                    conversation_id=turn_request.session_id,
+                    business_call=effective_business_call,
+                    read_card=read_interaction_card,
+                    diagnostic_event=lambda event_type, payload: _append_runtime_trace(
+                        state_storage_root,
                         installation_id=authorization.installation_id,
-                        conversation_id=turn_request.session_id,
-                        business_call=effective_business_call,
-                        read_card=read_interaction_card,
-                        diagnostic_event=lambda event_type, payload: _append_runtime_trace(
-                            state_storage_root,
-                            installation_id=authorization.installation_id,
-                            session_id=turn_request.session_id,
-                            invocation_id=invocation_id,
-                            event_type=event_type,
-                            payload=payload,
-                        ),
-                    )
+                        session_id=turn_request.session_id,
+                        invocation_id=invocation_id,
+                        event_type=event_type,
+                        payload=payload,
+                    ),
                 )
-                if review_only or aigc_tools or interaction_tools:
-                    if review_only:
-                        removed = _drop_prior_platform_review_attempts(
-                            getattr(agent, "memory", None),
-                        )
-                        if removed:
-                            logger.info(
-                                "Removed %d stale platform review messages",
-                                removed,
-                            )
+                if aigc_tools or interaction_tools:
                     with _aigc_tools.bind_aigc_tools(
                         agent,
                         aigc_tools,
-                        base_tool_names=(
-                            {"read_agent_skill"} if review_only else None
-                        ),
-                        added_tool_names=(
-                            {"aigc_task_review"} if review_only else None
-                        ),
                     ), _interaction_tools.bind_interaction_tools(
                         agent,
                         interaction_tools,
@@ -2341,27 +2319,10 @@ async def handle_workspace_turn(
                     arguments=payload,
                     idempotency_key=idempotency_key,
                 )
-            target_installation_id = authorization.installation_id
-            if (
-                capability == "aigc.review.complete"
-                and review_input is not None
-            ):
-                trusted_binding = review_input.get("binding")
-                if payload.get("binding") != trusted_binding:
-                    raise WorkspaceOrchestrationError(
-                        "unauthorized_capability",
-                    )
-                target_installation_id = str(
-                    (trusted_binding or {}).get("installation_id") or "",
-                )
-                if not target_installation_id:
-                    raise WorkspaceOrchestrationError(
-                        "unauthorized_capability",
-                    )
             return await platform_service.execute(
                 tenant_id=tenant_id,
                 user_id=str(getattr(request, "user_id", "") or ""),
-                installation_id=target_installation_id,
+                installation_id=authorization.installation_id,
                 capability=capability,
                 contract_version=contract_version,
                 arguments=payload,

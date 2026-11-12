@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.10.25 - 2026-11-12
+
+- Bundles development standard 2.47 and DevKit 1.9.15.
+- Documents direct customer completion of owned AIGC tasks without Agent
+  review or an Agent-declared submit grant. Legacy capability IDs and history
+  remain readable, while new Agent/Host submit and review writes are retired.
+
 ## 1.10.24 - 2026-11-12
 
 - Bundles development standard 2.46 and DevKit 1.9.14.

@@ -511,7 +511,7 @@ async def _resolve_review_bundle(request, task, entries, *, service):
     ):
         raise HTTPException(
             status_code=400,
-            detail="Review submission is invalid.",
+            detail="Completion asset selection is invalid.",
         )
     groups = []
     for entry in entries:
@@ -520,7 +520,7 @@ async def _resolve_review_bundle(request, task, entries, *, service):
     if not expected or groups != physical:
         raise HTTPException(
             status_code=400,
-            detail="Review submission does not match declared nodes.",
+            detail="Completion assets do not match declared output nodes.",
         )
     blocks = []
     by_id = {node.node_id: node for node in task.workflow.blueprint.nodes}
@@ -1054,28 +1054,6 @@ async def _execute_super_expert_command(
                 asset_id: str,
                 current_task: Any,
             ) -> None:
-                if (
-                    current_task.workflow
-                    and current_task.workflow.blueprint.review_node_ids
-                ):
-                    entries = command.arguments.get("review_assets") or []
-                    if (
-                        not isinstance(entries, list)
-                        or not entries
-                        or not isinstance(entries[0], dict)
-                        or entries[0].get("asset_id") != asset_id
-                    ):
-                        raise HTTPException(
-                            status_code=400,
-                            detail="Review submission is missing.",
-                        )
-                    await _resolve_review_bundle(
-                        request,
-                        current_task,
-                        entries,
-                        service=service,
-                    )
-                    return
                 node_ids, asset_kinds = _workflow_review_binding(current_task)
                 await resolve_owned_asset_for_agent_review(
                     request,

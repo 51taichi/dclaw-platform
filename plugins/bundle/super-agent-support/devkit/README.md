@@ -1,5 +1,11 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.15 documents direct customer completion of exactly bound AIGC
+tasks. The platform reaches `ACCEPTED` without invoking Agent review or
+requiring the Agent package to declare `aigc.asset.submit`; legacy submitted
+and reviewing snapshots remain readable, while `aigc_task_review` is no longer
+registered and new `aigc.review.complete` writes are rejected as retired.
+
 Version 1.9.14 adds `aigc.task.assets.list/1` and
 `aigc.task.assets.localize/1`. A Super Agent can list successful assets bound
 to its current AIGC material task, assign each asset a structured usage, slot,

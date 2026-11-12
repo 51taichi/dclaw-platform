@@ -523,10 +523,10 @@ async def test_status_rejects_cross_session_task_without_disclosing_it():
 
 
 @pytest.mark.asyncio
-async def test_review_requires_host_media_context_and_never_accepts_model_identity():
+async def test_retired_review_grant_does_not_register_write_tool():
     tools, calls = harness({'aigc.task.create': '1', 'aigc.review.complete': '1'})
-    response = result(await tools['aigc_task_review']('fake', 'ACCEPTED', 'looks good'))
-    assert 'error' in response
+    assert 'aigc_task_review' not in tools
+    assert 'aigc_task_status' in tools
     assert calls == []
 
 
@@ -702,17 +702,10 @@ def create_runtime(): return Runtime()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ('review_granted', 'expected_tools'),
-    [
-        (True, {'read_agent_skill', 'aigc_task_review'}),
-        (False, {'read_agent_skill'}),
-    ],
-)
-async def test_review_agent_loop_exposes_only_review_safe_tools(
+@pytest.mark.parametrize('review_granted', [True, False])
+async def test_review_metadata_does_not_create_a_review_only_agent_loop(
     tmp_path,
     review_granted,
-    expected_tools,
 ):
     from agentscope.message import Msg
     from qwenpaw.app.workspace.orchestration import (
@@ -747,7 +740,8 @@ def create_runtime(): return Runtime()
             self.toolkit.register_tool_function(execute_shell_command)
 
         async def __call__(self, _messages):
-            assert set(self.toolkit.tools) == expected_tools
+            assert 'aigc_task_review' not in self.toolkit.tools
+            assert 'read_agent_skill' in self.toolkit.tools
             return Msg('assistant', 'reviewed', 'assistant')
 
     binding = {
@@ -838,6 +832,7 @@ def create_runtime(): return Runtime()
         ),
     ],
 )
+@pytest.mark.skip(reason="Agent review continuation was retired in platform 2.47")
 async def test_accepted_review_failure_continues_with_full_aigc_tools(
     tmp_path,
     monkeypatch,
@@ -1063,6 +1058,7 @@ async def test_uncertain_creation_returns_identity_for_status_recovery():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="aigc_task_review is no longer registered")
 @pytest.mark.parametrize('delivery_kind,expected', [('image', None), ('video', 'MEDIA_NOT_DELIVERED')])
 async def test_review_accepts_only_current_native_media(delivery_kind, expected):
     task = {'binding': {'installation_id': 'i', 'conversation_id': 's', 'material_task_id': 't'},
@@ -1085,6 +1081,7 @@ async def test_review_accepts_only_current_native_media(delivery_kind, expected)
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="aigc_task_review is no longer registered")
 async def test_review_tool_accepts_a_trusted_task_from_the_previous_installation():
     binding = {
         'installation_id': 'historical-installation',
@@ -1252,15 +1249,16 @@ async def test_real_agent_loop_can_call_scoped_tool_then_answer():
     assert agent.toolkit is original
 
 
-def test_all_granted_aigc_tools_register_with_valid_review_schema():
+def test_all_granted_aigc_tools_omit_retired_review_schema():
     tools, _ = harness({CATALOG: '1', CREATE: '1', 'aigc.task.create': '1',
                         'aigc.task.resume': '1', 'aigc.review.complete': '1'})
     agent = SimpleNamespace(toolkit=Toolkit())
     with bind_aigc_tools(agent, tools):
         schemas = agent.toolkit.get_json_schemas()
-        review = next(item['function'] for item in schemas if item['function']['name'] == 'aigc_task_review')
-        assert review['parameters']['properties']['decision']['enum'] == ['ACCEPTED', 'REVISION_REQUIRED']
-        assert len(schemas) == 5
+        names = {item['function']['name'] for item in schemas}
+        assert 'aigc_task_review' not in names
+        assert 'aigc_task_status' in names
+        assert len(schemas) == 4
 
 
 def test_review_binding_can_hide_unrelated_base_and_aigc_tools():

@@ -78,6 +78,7 @@ _TRANSITIONS = {
     (AigcTaskStatus.IN_PROGRESS, "submit"): AigcTaskStatus.SUBMITTED,
     (AigcTaskStatus.IN_PROGRESS, "complete"): AigcTaskStatus.ACCEPTED,
     (AigcTaskStatus.SUBMITTED, "complete"): AigcTaskStatus.ACCEPTED,
+    (AigcTaskStatus.REVIEWING, "complete"): AigcTaskStatus.ACCEPTED,
     (AigcTaskStatus.SUBMITTED, "review"): AigcTaskStatus.REVIEWING,
     (
         AigcTaskStatus.REVIEWING,

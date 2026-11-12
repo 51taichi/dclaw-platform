@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.46`
+当前版本：`2.47`
 
 发布日期：`2026-11-12`
 
@@ -126,7 +126,7 @@ DClaw 平台 -> 密封超级专家
 - `capability-packages` 模块：实现能力描述符、Schema、签名验证、注册、安装、版本、授权和回滚；
 - `public-components` 模块：独立拥有只供 Super Agent 本地重任务复用的 Python Runtime、Node.js、FFmpeg、Whisper 等公共 Component，包括公共性评审、分平台制品构建、许可证和 SBOM、签名、HTTPS 制品上传、完整注册表、版本兼容、本地助手按需下载、验签、缓存、原子安装和回滚；管理面只提供版本化无界面 API/CLI，供迁移 Skill 和平台维护自动化调用；
 - `interaction-components` 模块：拥有超级 Agent 使用的选择、问答、文件选择等卡片合同、状态机、工具和路由；
-- `aigc-adapter` 模块：拥有超级 Agent 对公共 AIGC 工作流的任务绑定、事件投影、审核续跑、工具适配和业务侧状态；
+- `aigc-adapter` 模块：拥有超级 Agent 对公共 AIGC 工作流的任务绑定、事件投影、客户完成、工具适配和业务侧状态；历史审核状态仅作兼容读取；
 - `workspace-runtime` 模块：拥有超级 Agent 的确定性回合编排、流程运行时、公开流式投影和媒体交付适配；
 - `sealed-super-agent-lifecycle` 模块：拥有 `super_expert` 包类型的 manifest 校验、签名者用途授权、安装授权、运行特性和信任策略；
 - Super Agent 专属 MCP 服务、工具目录和协议适配；新增 MCP 或其他能力时继续按同一归属规则放入插件；
@@ -561,7 +561,7 @@ stateDiagram-v2
 
 代码不得根据能力名称猜参数；使用前读取对应版本协议或实时目录。
 
-使用公共 AIGC 时，超级专家必须通过 `agent.execute(execution_mode="agent_loop")` 调用按授权动态注册的 `aigc_workflow_catalog`、`aigc_workflow_create`、`aigc_task_status`、`aigc_task_resume` 和 `aigc_task_review`。先读取实时目录及 `WorkflowBlueprint` Schema，再创建或恢复任务；创建任务不等于生成完成，最终仍按真实任务状态和产物验收。未授权的工具不会注册，Agent 不得自行构造内部接口。
+使用公共 AIGC 时，超级专家通过 `agent.execute(execution_mode="agent_loop")` 调用按授权动态注册的 `aigc_workflow_catalog`、`aigc_workflow_create`、`aigc_task_status` 和按需的 `aigc_task_resume`。先读取实时目录及 `WorkflowBlueprint` Schema，再创建或恢复任务；创建任务不等于生成完成，最终只以平台持久化的 `ACCEPTED` 状态和绑定产物验收。客户点击“完成并返回会话”后由平台直接完成，不调用 Agent/模型审核。`aigc.asset.submit` 与 `aigc.review.complete` 能力 ID 只为已安装旧包和历史记录解析保留；非前端 submit 与所有 review 新写入分别返回 `AIGC_ASSET_SUBMIT_RETIRED`、`AIGC_REVIEW_RETIRED`，运行时不再注册 `aigc_task_review`。历史 `SUBMITTED/REVIEWING` 状态及审核回执只读，并由客户完成按钮迁移为 `ACCEPTED`。未授权的工具不会注册，Agent 不得自行构造内部接口。
 
 DevKit `aigc_workflow_api_demo.py` 与 `examples/aigc-workflow-v1/README.md` 给出目录、建任务、客户操作后快照及资产校验的参考实现。AIGC 任务卡由工作流创建操作投影，不使用问答卡的 `interaction.card.create/1`；模型工具通过 `agent_loop` 动态注册，`aigc.task.snapshot/1` 是独立的只读 Host 调用。`agent_loop` 不得叠加 `response_format="json_object"`。本地助手的 `local_task_api_demo.py` 和 `examples/local-task-host-v1/README.md` 给出启动、按真实任务 ID 回读和终态产物校验的参考实现。两个示例都只说明已发布合同，不授权新能力，也不能替代目标实例实时目录与客户端验收。
 
@@ -2380,7 +2380,7 @@ AIGC 任务卡与问答交互卡是不同合同，不能用一者的创建回执
 2. 从返回资产中选择实际需要的项，为每项填写唯一 `asset_id`、`usage`、`slot`、唯一非负 `order` 与 `destination`；请求数组顺序没有语义。`final_output` 只能写入任务根目录，其余素材只能写入 `res/`。
 3. 以稳定幂等键调用 `aigc.task.assets.localize/1`。Host 验证完整计划后才签发短期 URL，并只通过认证设备通道发送给本地助手。Helper 1.4.5 或更高版本下载、校验、原子落盘并生成 `assets.json`；Agent 通过既有本地任务回执读取终态。
 
-最低版本为 Support Plugin `1.18.31`、DClaw Windows Local Helper `1.4.5`、DevKit `1.9.14` 和 Developer Pack `1.10.24`。设备过旧、离线或派发断线必须失败关闭，不得留下长期 `queued`；断线终态为 `LOCAL_GATEWAY.DEVICE_NOT_READY`，连接恢复后使用新的幂等键重试。
+最低版本为 Support Plugin `1.18.32`、DClaw Windows Local Helper `1.4.5`、DevKit `1.9.15` 和 Developer Pack `1.10.25`。设备过旧、离线或派发断线必须失败关闭，不得留下长期 `queued`；断线终态为 `LOCAL_GATEWAY.DEVICE_NOT_READY`，连接恢复后使用新的幂等键重试。
 
 新资产的非零大小和非空 SHA-256 必须与 Helper 下载结果一致。历史资产若没有服务端 SHA-256，Helper 仍必须计算并回报下载后摘要，但该值只是本次下载证据，不能声称已与服务端权威摘要比对；若历史资产已有非零大小，大小仍须一致。
 
@@ -2391,6 +2391,12 @@ Skill 和专家发布前须对每条实际使用的路径同时验证：正确�
 以上是通用 Skill 的平台合同输入。Skill 维护方应在其 `references/capability-verification.md` 补 `/v2/` 的首错和终止根因区分，在 `scripts/runtime_diagnostics_with_login.py` 增加按官方 DevKit v2 Schema 查询和摘要，在相关脚本测试加入已恢复错误、最终阻断、`no_record`、越权及旧版回退案例。平台不直接覆盖 Skill 发布仓库，也不把单个专家的业务字段写成公共规则。
 
 ## 34. 版本记录
+
+### 2.47 - 2026-11-12
+
+- 客户在 AIGC 任务页点击“完成并返回会话”后，平台在精确校验租户、安装实例、任务 binding、画布、节点和素材归属后直接将任务置为 `ACCEPTED`，不再调用 Agent/模型审核。
+- 客户完成动作不依赖专家包声明 `aigc.asset.submit`；该能力与 `SUBMITTED → REVIEWING` 状态链继续保留给旧专家和历史任务兼容，不删除既有能力。
+- 最低版本提升为 Support Plugin `1.18.32`、DevKit `1.9.15` 和 Developer Pack `1.10.25`；正式桌面客户端须使用包含 `ACCEPTED` 回执门禁的新版本，禁止把 `SUBMITTED` 或 `REVISION_REQUIRED` 误报为完成。
 
 ### 2.46 - 2026-11-12
 
@@ -2436,7 +2442,7 @@ Skill 和专家发布前须对每条实际使用的路径同时验证：正确�
 ### 2.38 - 2026-11-08
 
 - `developer.runtime.diagnostics.by-reference/1`：已登录开发者只能按自己拥有的 `agent_id` 和客户可见 invocation 关联 ID，查询最近 30 天内该专家的脱敏失败。路径为 `/api/user/super-expert-publishing/runtime-diagnostics/v1/references/{invocation_id}?agent_id=...`；不存在、越权与跨专家不得泄露其他客户内容。原按任务 ID 接口仍可用。
-- 客户点击 `aigc.workflow.create/1` 生成的绑定工作流卡时，前端受认证的 `aigc.task.resume` 操作可继承该任务的工作流创建授权；Agent 自身调用 `aigc.task.resume` 仍须独立声明和授权。`aigc.task.snapshot/1` 是新的可选 Host 只读调用，请求仅含 `material_task_id`；结果只包含绑定身份、任务状态、版本以及同画布同节点、同用户验证过的资产 ID 与类型。未提交图片不等于已审核作品，非绑定画布输出不进入回执。
+- 客户点击 `aigc.workflow.create/1` 生成的绑定工作流卡时，前端受认证的 `aigc.task.resume` 操作可继承该任务的工作流创建授权；Agent 自身调用 `aigc.task.resume` 仍须独立声明和授权。`aigc.task.snapshot/1` 是新的可选 Host 只读调用，请求仅含 `material_task_id`；结果只包含绑定身份、任务状态、版本以及同画布同节点、同用户验证过的资产 ID 与类型。历史 `SUBMITTED/REVIEWING` 只作兼容读取，非绑定画布输出不进入回执。
 - `local.task.start/1`、`local.task.read/1`、`local.task.cancel/1` 为新的可选 Host 调用。Host 使用可信租户、用户、任务、专家及安装作用域，给幂等键加作用域，回执固定为 `local.task.receipt/1`，只返回任务 ID、能力 ID、原幂等键、状态、稳定错误、结果 SHA-256 和格式合格的不透明本地产物 ID；不返回本机路径或文件字节。跨作用域读取统一 `not_found`。原 `local_*` MCP 合同不变。
 - 能力包是独立信任域。开发者生成并保管 Ed25519 私钥，只向平台管理员交付公钥和 `signer_id`；管理员经插件 `POST /api/super-agent-support/capability-packages/signers` 登记不可覆盖的公钥信任，再由管理员用插件原有 `/capability-packages/register` 接收签名描述符。未经信任、摘要或签名不符均失败关闭。当前不开放普通开发者自行登记能力包 signer；这不影响超级专家密封包的普通账号自助发布。
 - 插件 `1.18.21`、Developer Pack `1.10.14`、DevKit `1.9.7` 发布上述新增接口；既有签名包、旧接口和旧安装授权无需改变。

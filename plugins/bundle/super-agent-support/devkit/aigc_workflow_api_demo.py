@@ -1,7 +1,8 @@
 """Reference AIGC workflow calls for a signed Super Agent.
 
 The catalog/create callables are the granted runtime model tools. The Host
-snapshot is a separate read after the customer has run/submitted the task.
+snapshot is a separate read after the customer has completed the task. Legacy
+review states remain readable for experts created against earlier contracts.
 """
 
 from __future__ import annotations
@@ -105,7 +106,7 @@ async def read_submitted_asset(
     host: Any, *, material_task_id: str, canvas_id: str,
     node_id: str, asset_kind: str,
 ) -> str:
-    """Return an owned submitted asset ID, never a guessed URL or file path."""
+    """Return an owned completed/legacy asset ID, never a guessed URL or path."""
     snapshot = await host.call("aigc.task.snapshot/1", {"material_task_id": material_task_id})
     Draft202012Validator(_SNAPSHOT_SCHEMA).validate(snapshot)
     if snapshot["status"] != "found":

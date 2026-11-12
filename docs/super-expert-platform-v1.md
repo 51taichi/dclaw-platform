@@ -63,11 +63,13 @@ Assets are additionally bound by `asset_id`. A tenant, conversation, task, revis
 
 ## Task lifecycle
 
-`WAITING_TO_START → IN_PROGRESS → SUBMITTED → REVIEWING → ACCEPTED`
+新客户完成路径：`WAITING_TO_START → IN_PROGRESS → ACCEPTED`。
 
-Review can instead produce `REVISION_REQUIRED`, followed by `IN_PROGRESS → SUBMITTED → REVIEWING`. Resuming a revision opens a new asset slot while immutable events retain the previously reviewed asset. `CANCELLED` and `INVALIDATED` are terminal. Refreshing or navigating away does not cancel the durable task; the guide resumes from the stored task, operation, canvas, node, and local step state.
+旧专家兼容路径仍可读取和处理 `SUBMITTED → REVIEWING → ACCEPTED/REVISION_REQUIRED`，既有能力和历史事件不删除；新的客户提交不进入该审核链路。`CANCELLED` and `INVALIDATED` are terminal. Refreshing or navigating away does not cancel the durable task; the guide resumes from the stored task, operation, canvas, node, and local step state.
 
-Commands emit one idempotent standard event: `card.created`, `card.updated`, `aigc.task.created`, `aigc.task.resumed`, `aigc.task.cancelled`, `aigc.guide.updated`, `aigc.asset.submitted`, or `aigc.review.completed`. Duplicate identical commands replay their original result without duplicate runtime events. Reusing an event ID or idempotency key for different content fails.
+New customer completion emits the idempotent `aigc.asset.completed` event with task status `ACCEPTED`. Historical `aigc.asset.submitted` and `aigc.review.completed` events remain readable, but no new review-completed event may be written. Other commands emit `card.created`, `card.updated`, `aigc.task.created`, `aigc.task.resumed`, `aigc.task.cancelled`, or `aigc.guide.updated`. Duplicate identical commands replay their original result without duplicate runtime events. Reusing an event ID or idempotency key for different content fails.
+
+The legacy schema names `review_node_ids` and `review_assets` remain readable for stored workflows. New completion validates only the bound final output asset; these fields neither trigger model review nor require assets from non-output nodes, and new completion events persist no review bundle.
 
 ## Card and guide behavior
 

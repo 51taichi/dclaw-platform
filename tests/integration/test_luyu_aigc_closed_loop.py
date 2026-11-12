@@ -42,7 +42,7 @@ async def command(service, grant, capability, event_id, binding, **arguments):
     )
 
 
-async def test_bound_material_can_resume_revise_resubmit_and_accept(tmp_path):
+async def test_bound_material_customer_completion_bypasses_legacy_review(tmp_path):
     grants = SuperExpertGrantRepository(tmp_path / "grants")
     grant = grants.grant_installation(
         grants.preview("luyu-aigc-fixture", release(), tenant_id="tenant-a"),
@@ -69,15 +69,27 @@ async def test_bound_material_can_resume_revise_resubmit_and_accept(tmp_path):
     # and is recovered from the same bound repository without a cancel command.
     recovered = service.get_task("material-1")
     assert recovered is not None and recovered.status.value == "IN_PROGRESS"
-    await command(service, grant, "aigc.asset.submit", "e-submit-1", binding, asset_id="asset-1")
-    revised = await command(service, grant, "aigc.review.complete", "e-revise", binding, asset_id="asset-1", decision="REVISION_REQUIRED")
-    assert revised["task"]["status"] == "REVISION_REQUIRED"
-    await command(service, grant, "aigc.task.resume", "e-resume-2", binding)
-    await command(service, grant, "aigc.asset.submit", "e-submit-2", binding, asset_id="asset-2")
-    accepted = await command(service, grant, "aigc.review.complete", "e-accept", binding, asset_id="asset-2", decision="ACCEPTED")
+    async def validate_asset(*_args):
+        return None
+
+    accepted = await service.execute(
+        tenant_id="tenant-a",
+        installation_id=grant.installation_id,
+        capability="aigc.asset.submit",
+        contract_version="1",
+        arguments={
+            "binding": binding,
+            "event_id": "e-complete",
+            "asset_id": "asset-1",
+        },
+        idempotency_key="e-complete",
+        asset_validator=validate_asset,
+        frontend_asset_submit=True,
+    )
 
     assert accepted["task"]["status"] == "ACCEPTED"
-    assert [event.type for event in bus.events] == ["super_expert_event"] * 8
+    assert accepted["event"]["event_type"] == "aigc.asset.completed"
+    assert [event.type for event in bus.events] == ["super_expert_event"] * 4
     assert all(event.payload["envelope"]["conversation_id"] == "conversation-1" for event in bus.events)
 
 
@@ -89,7 +101,26 @@ async def test_duplicate_submit_event_is_replayed_without_duplicate_publish(tmp_
     binding = {"installation_id": grant.installation_id, "conversation_id": "c", "agent_task_id": "t", "content_revision": 1, "material_task_id": "m", "canvas_id": "cv", "node_id": "n"}
     await command(service, grant, "aigc.task.create", "create", binding)
     await command(service, grant, "aigc.task.resume", "start", binding)
-    first = await command(service, grant, "aigc.asset.submit", "submit", binding, asset_id="asset")
-    replay = await command(service, grant, "aigc.asset.submit", "submit", binding, asset_id="asset")
+    async def validate_asset(*_args):
+        return None
+
+    async def complete():
+        return await service.execute(
+            tenant_id="tenant-a",
+            installation_id=grant.installation_id,
+            capability="aigc.asset.submit",
+            contract_version="1",
+            arguments={
+                "binding": binding,
+                "event_id": "complete",
+                "asset_id": "asset",
+            },
+            idempotency_key="complete",
+            asset_validator=validate_asset,
+            frontend_asset_submit=True,
+        )
+
+    first = await complete()
+    replay = await complete()
     assert first == replay
     assert len(bus.events) == 3

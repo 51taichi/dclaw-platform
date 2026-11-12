@@ -387,6 +387,10 @@ class SuperExpertPlatformService:
         frontend_workflow_resume: bool = False,
         frontend_asset_submit: bool = False,
     ) -> dict[str, Any]:
+        if capability == "aigc.review.complete":
+            raise SuperExpertPlatformError("AIGC_REVIEW_RETIRED")
+        if capability == "aigc.asset.submit" and not frontend_asset_submit:
+            raise SuperExpertPlatformError("AIGC_ASSET_SUBMIT_RETIRED")
         decision = self.grant_repository.authorize_capability(
             installation_id,
             capability,
@@ -419,12 +423,7 @@ class SuperExpertPlatformService:
             and frontend_asset_submit
             and capability == "aigc.asset.submit"
         ):
-            workflow_decision = self.grant_repository.authorize_capability(
-                installation_id,
-                "aigc.workflow.create/1",
-                "1",
-                tenant_id=tenant_id,
-            )
+            grant = self.grant_repository.get(installation_id)
             task_binding = arguments.get("binding")
             task = (
                 self.task_repository.get(
@@ -434,13 +433,19 @@ class SuperExpertPlatformService:
                 else None
             )
             if (
-                workflow_decision.allowed
+                grant is not None
+                and grant.tenant_id == tenant_id
                 and task is not None
-                and task.workflow is not None
                 and task.binding.model_dump(mode="json") == task_binding
                 and task.binding.installation_id == installation_id
             ):
-                decision = workflow_decision
+                # Completing a customer-owned material task is a platform UI
+                # action, not an Agent capability. The exact persisted task
+                # binding and tenant installation remain mandatory, and the
+                # router still validates canvas/node/asset ownership.
+                decision = decision.model_copy(
+                    update={"allowed": True, "reason": "frontend_task_owner"},
+                )
         if not decision.allowed:
             raise SuperExpertPlatformError("capability is not authorized")
         if capability not in _EVENT_TYPES:
@@ -520,7 +525,11 @@ class SuperExpertPlatformService:
             canvas_id=binding.canvas_id,
             node_id=binding.node_id,
             asset_id=asset_id,
-            event_type=_EVENT_TYPES[capability],
+            event_type=(
+                "aigc.asset.completed"
+                if capability == "aigc.asset.submit" and frontend_asset_submit
+                else _EVENT_TYPES[capability]
+            ),
             payload=event_payload,
         )
         runtime_session_id = self.event_session_resolver(
@@ -944,10 +953,18 @@ class SuperExpertPlatformService:
                 supplied_asset = str(arguments.get("asset_id") or "")
                 if current.binding != binding:
                     raise SuperExpertPlatformError("task binding mismatch")
+                completed_by_same_event = any(
+                    transition.action == "complete"
+                    and transition.event_id == event_id
+                    for transition in current.events
+                )
                 if current.status in {
                     AigcTaskStatus.SUBMITTED,
-                    AigcTaskStatus.ACCEPTED,
-                }:
+                    AigcTaskStatus.REVIEWING,
+                } or (
+                    current.status == AigcTaskStatus.ACCEPTED
+                    and not completed_by_same_event
+                ):
                     # Older clients used the unsuffixed keys for the review
                     # submission. Preserve that envelope and write/replay the
                     # direct-completion event under its own stable identity.
@@ -1025,9 +1042,13 @@ class SuperExpertPlatformService:
                 action=action,
                 event_id=event_id,
                 binding=binding,
-                review_assets=arguments.get("review_assets", ())
-                if capability == "aigc.asset.submit"
-                else (),
+                review_assets=(
+                    ()
+                    if complete_asset_submit
+                    else arguments.get("review_assets", ())
+                    if capability == "aigc.asset.submit"
+                    else ()
+                ),
                 asset_id=(
                     arguments.get("asset_id")
                     if capability == "aigc.asset.submit"

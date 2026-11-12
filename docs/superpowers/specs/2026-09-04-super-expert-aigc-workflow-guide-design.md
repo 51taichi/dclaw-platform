@@ -222,7 +222,7 @@ v2 清单属于具体任务实例，不再只来自静态操作手册。每一�
 3. 等待生成完成；
 4. 检查结果，必要时重试；
 5. 自动定位并解锁下一个节点；
-6. 最终节点完成后提交给陆羽审核。
+6. 最终节点完成后由客户点击“完成并返回会话”，平台校验素材归属后直接完成任务。
 
 不得再展示“新建项目、添加节点、粘贴提示词、选择模型”等已由平台完成的步骤。
 
@@ -282,9 +282,11 @@ DClaw 在兜底模式创建绑定任务和空白画布，不创建任何业务�
 
 ## 状态、事件与恢复
 
-任务主生命周期保持：
+新客户完成路径：
 
-`WAITING_TO_START → IN_PROGRESS → SUBMITTED → REVIEWING → ACCEPTED`
+`WAITING_TO_START → IN_PROGRESS → ACCEPTED`
+
+旧专家的 `SUBMITTED → REVIEWING → ACCEPTED/REVISION_REQUIRED` 状态和能力继续兼容读取与处理，但新任务页不再触发模型审核。
 
 工作流实例另行维护节点和步骤状态。第一个生成步骤准备好后任务进入 `IN_PROGRESS`。Job 的 queued、running、succeeded、failed 和 cancelled 事件更新对应步骤；只有所有必需上游步骤完成后，下游 `GENERATE` 才变为 `READY`。
 

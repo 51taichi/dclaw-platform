@@ -605,7 +605,7 @@ async def test_shipped_card_resume_uses_verified_workflow_binding(
     assert service.get_task(binding["material_task_id"]).asset_id is None
 
 
-def _release():
+def _release(capabilities=CAPABILITIES):
     return SealedReleaseRecord(
         release_id="release-1",
         version="1.0.0",
@@ -613,7 +613,7 @@ def _release():
         signer_id="official",
         package_type="super_expert",
         capability_digest=f"sha256:{'b' * 64}",
-        declared_capabilities=CAPABILITIES,
+        declared_capabilities=capabilities,
         orchestration_capability_id="workspace.turn.orchestrate/1",
         orchestration_contract_version="1",
     )
@@ -664,14 +664,18 @@ class Bus:
         return event
 
 
-def _service(tmp_path):
+def _service(tmp_path, capabilities=CAPABILITIES):
     from qwenpaw.app.aigc.asset_service import AigcAssetService
     from qwenpaw.app.aigc.canvas_service import AigcCanvasService
     from qwenpaw.app.aigc.resource_store import AigcResourceStore
     from qwenpaw.app.super_experts.aigc_adapter import AigcServiceAdapter
 
     grants = SuperExpertGrantRepository(tmp_path / "grants")
-    preview = grants.preview("agent-1", _release(), tenant_id="tenant-a")
+    preview = grants.preview(
+        "agent-1",
+        _release(capabilities),
+        tenant_id="tenant-a",
+    )
     grant = grants.grant_installation(preview, administrator_id="admin-1")
     bus = Bus()
     service = SuperExpertPlatformService(
@@ -1027,11 +1031,111 @@ async def test_asset_validation_happens_before_submit_state_transition(
             },
             idempotency_key="submit",
             asset_validator=reject_asset,
+            frontend_asset_submit=True,
         )
 
     task = service.get_task("material-1")
     assert task is not None
     assert task.status == router_module.AigcTaskStatus.IN_PROGRESS
+
+
+@pytest.mark.asyncio
+async def test_customer_completes_legacy_task_without_submit_grant(tmp_path):
+    capabilities = tuple(
+        item for item in CAPABILITIES if item[0] != "aigc.asset.submit"
+    )
+    service, grant, _bus = _service(tmp_path, capabilities)
+    binding = {**_binding(), "installation_id": grant.installation_id}
+    created = None
+    for capability, event_id in (
+        ("aigc.task.create", "create"),
+        ("aigc.task.resume", "resume"),
+    ):
+        created = await service.execute(
+            tenant_id="tenant-a",
+            installation_id=grant.installation_id,
+            capability=capability,
+            contract_version="1",
+            arguments={"binding": binding, "event_id": event_id},
+            idempotency_key=event_id,
+        )
+    assert created is not None
+    binding = created["task"]["binding"]
+    validated = []
+
+    async def validate_asset(candidate_binding, asset_id, _task):
+        validated.append((candidate_binding, asset_id))
+
+    result = await service.execute(
+        tenant_id="tenant-a",
+        installation_id=grant.installation_id,
+        capability="aigc.asset.submit",
+        contract_version="1",
+        arguments={
+            "binding": binding,
+            "event_id": "complete",
+            "asset_id": "asset-1",
+        },
+        idempotency_key="complete",
+        asset_validator=validate_asset,
+        frontend_asset_submit=True,
+    )
+
+    assert result["task"]["status"] == "ACCEPTED"
+    assert result["event"]["event_type"] == "aigc.asset.completed"
+    assert result["event"]["payload"]["task_status"] == "ACCEPTED"
+    assert validated[0][0].model_dump(mode="json") == binding
+    assert validated[0][1] == "asset-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["tenant", "binding", "installation"])
+async def test_frontend_completion_rejects_unowned_legacy_task(
+    tmp_path,
+    failure,
+):
+    capabilities = tuple(
+        item for item in CAPABILITIES if item[0] != "aigc.asset.submit"
+    )
+    service, grant, _bus = _service(tmp_path, capabilities)
+    binding = {**_binding(), "installation_id": grant.installation_id}
+    created = await service.execute(
+        tenant_id="tenant-a",
+        installation_id=grant.installation_id,
+        capability="aigc.task.create",
+        contract_version="1",
+        arguments={"binding": binding, "event_id": "create"},
+        idempotency_key="create",
+    )
+    binding = created["task"]["binding"]
+    submitted_binding = dict(binding)
+    tenant_id = "tenant-a"
+    installation_id = grant.installation_id
+    if failure == "tenant":
+        tenant_id = "tenant-b"
+    elif failure == "binding":
+        submitted_binding["node_id"] = "foreign-node"
+    else:
+        installation_id = "foreign-installation"
+        submitted_binding["installation_id"] = installation_id
+
+    with pytest.raises(
+        SuperExpertPlatformError,
+        match="capability is not authorized",
+    ):
+        await service.execute(
+            tenant_id=tenant_id,
+            installation_id=installation_id,
+            capability="aigc.asset.submit",
+            contract_version="1",
+            arguments={
+                "binding": submitted_binding,
+                "event_id": f"complete-{failure}",
+                "asset_id": "asset-1",
+            },
+            idempotency_key=f"complete-{failure}",
+            frontend_asset_submit=True,
+        )
 
 
 @pytest.mark.asyncio
@@ -1999,6 +2103,7 @@ async def test_bound_task_and_operation_contract_can_be_resumed_after_refresh(
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="new review writes are retired; history remains read-only")
 async def test_bound_task_read_keeps_latest_revision_feedback_after_resume(
     tmp_path,
     monkeypatch,
@@ -2765,6 +2870,7 @@ async def test_asset_submit_does_not_invoke_nonterminal_review(
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="superseded by direct customer completion replay tests")
 async def test_submit_retry_returns_terminal_task_without_running_agent_again(
     tmp_path,
     monkeypatch,
@@ -2827,6 +2933,147 @@ async def test_submit_retry_returns_terminal_task_without_running_agent_again(
     )
 
     assert result["task"]["status"] == "ACCEPTED"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("historical_status", ["SUBMITTED", "REVIEWING"])
+async def test_frontend_completes_historical_submitted_task_without_review(
+    tmp_path,
+    monkeypatch,
+    historical_status,
+):
+    service, grant, _bus = _service(tmp_path)
+    binding = {**_binding(), "installation_id": grant.installation_id}
+    for capability, event_id, extra in (
+        ("aigc.task.create", "create", {}),
+        ("aigc.task.resume", "resume", {}),
+    ):
+        result = await service.execute(
+            tenant_id="tenant-a",
+            installation_id=grant.installation_id,
+            capability=capability,
+            contract_version="1",
+            arguments={"binding": binding, "event_id": event_id, **extra},
+            idempotency_key=event_id,
+        )
+        binding = result["task"]["binding"]
+    task = service.task_repository.apply(
+        router_module.AigcTaskCommand(
+            action="submit",
+            event_id="legacy-submit",
+            binding=router_module.AigcTaskBinding.model_validate(binding),
+            asset_id="asset-1",
+        ),
+        idempotency_key="legacy-submit",
+    )
+    assert task.status == router_module.AigcTaskStatus.SUBMITTED
+    if historical_status == "REVIEWING":
+        task = service.task_repository.apply(
+            router_module.AigcTaskCommand(
+                action="review",
+                event_id="legacy-review-start",
+                binding=router_module.AigcTaskBinding.model_validate(binding),
+            ),
+            idempotency_key="legacy-review-start",
+        )
+        assert task.status == router_module.AigcTaskStatus.REVIEWING
+
+    monkeypatch.setattr(
+        router_module,
+        "get_super_expert_platform_service",
+        lambda: service,
+    )
+    monkeypatch.setattr(
+        router_module,
+        "ensure_chat_access",
+        lambda *_args, **_kwargs: None,
+    )
+
+    async def must_not_dispatch(*_args, **_kwargs):
+        pytest.fail("customer completion must never dispatch Agent review")
+
+    monkeypatch.setattr(
+        router_module,
+        "_dispatch_agent_asset_review",
+        must_not_dispatch,
+    )
+    completed = await router_module.execute_super_expert_command(
+        "aigc.asset.submit",
+        PlatformCommandRequest(
+            installation_id=grant.installation_id,
+            contract_version="1",
+            idempotency_key="customer-complete",
+            arguments={
+                "binding": binding,
+                "event_id": "customer-complete",
+                "asset_id": "asset-1",
+            },
+        ),
+        SimpleNamespace(state=SimpleNamespace(tenant_id="tenant-a")),
+    )
+
+    assert completed["task"]["status"] == "ACCEPTED"
+    assert completed["event"]["event_type"] == "aigc.asset.completed"
+    assert completed["event"]["payload"]["task_status"] == "ACCEPTED"
+
+
+@pytest.mark.asyncio
+async def test_retired_review_capability_cannot_write_new_state(tmp_path):
+    service, grant, _bus = _service(tmp_path)
+
+    with pytest.raises(
+        SuperExpertPlatformError,
+        match="AIGC_REVIEW_RETIRED",
+    ):
+        await service.execute(
+            tenant_id="tenant-a",
+            installation_id=grant.installation_id,
+            capability="aigc.review.complete",
+            contract_version="1",
+            arguments={"binding": _binding(), "event_id": "review"},
+            idempotency_key="review",
+        )
+
+    assert service.get_task("material-1") is None
+
+
+@pytest.mark.asyncio
+async def test_nonfrontend_asset_submit_cannot_create_submitted_state(tmp_path):
+    service, grant, _bus = _service(tmp_path)
+    binding = {**_binding(), "installation_id": grant.installation_id}
+    for capability, event_id in (
+        ("aigc.task.create", "create"),
+        ("aigc.task.resume", "resume"),
+    ):
+        await service.execute(
+            tenant_id="tenant-a",
+            installation_id=grant.installation_id,
+            capability=capability,
+            contract_version="1",
+            arguments={"binding": binding, "event_id": event_id},
+            idempotency_key=event_id,
+        )
+
+    with pytest.raises(
+        SuperExpertPlatformError,
+        match="AIGC_ASSET_SUBMIT_RETIRED",
+    ):
+        await service.execute(
+            tenant_id="tenant-a",
+            installation_id=grant.installation_id,
+            capability="aigc.asset.submit",
+            contract_version="1",
+            arguments={
+                "binding": binding,
+                "event_id": "legacy-submit",
+                "asset_id": "asset-1",
+            },
+            idempotency_key="legacy-submit",
+        )
+
+    task = service.get_task("material-1")
+    assert task is not None
+    assert task.status == router_module.AigcTaskStatus.IN_PROGRESS
 
 
 @pytest.mark.asyncio
