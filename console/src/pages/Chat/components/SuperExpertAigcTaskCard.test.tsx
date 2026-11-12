@@ -95,6 +95,10 @@ describe("SuperExpertAigcTaskCard", () => {
       "/aigc-studio?task=task-1",
     );
     expect(screen.getByRole("status")).toHaveTextContent("待完成");
+    expect(
+      screen.getByText("素材任务待完成，请进入任务页完成并返回会话。"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/审核/)).not.toBeInTheDocument();
   });
   for (const [status, label] of Object.entries(labels)) {
     it(`renders ${status}`, () => {

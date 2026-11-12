@@ -130,7 +130,7 @@ export function SuperExpertAigcTaskCard({
       : projection.status === "SUBMITTED"
       ? "素材已提交，等待完成任务。"
       : projection.status === "REVIEWING"
-      ? "历史审核任务待完成，请进入任务页完成并返回会话。"
+      ? "素材任务待完成，请进入任务页完成并返回会话。"
       : projection.instruction;
 
   const act = async () => {
