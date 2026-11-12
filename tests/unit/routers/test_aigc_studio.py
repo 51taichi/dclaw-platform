@@ -18,6 +18,7 @@ from httpx import ASGITransport, AsyncClient
 from qwenpaw.providers.provider import ModelInfo, ProviderInfo
 from qwenpaw.app.routers import aigc_studio
 from qwenpaw.app.routers.aigc_studio import public_router, router
+from qwenpaw.app.aigc.models import AigcCapabilityInfo, AigcJobCreate
 from qwenpaw.app.runtime.event_bus import MemoryRuntimeEventBus
 from qwenpaw.app.billing.model_publication import ModelPublicationService
 from qwenpaw.app.storage.engine import create_engine_from_settings
@@ -26,6 +27,72 @@ from qwenpaw.app.storage.repos.aigc_model_policy_repo import (
 )
 from qwenpaw.app.storage.schema import create_all
 from qwenpaw.app.storage.settings import get_storage_settings
+
+
+def test_video_duration_validation_uses_model_capability_enum():
+    capability = AigcCapabilityInfo(
+        provider_id="mxapi",
+        provider_name="MXAPI",
+        model_id="veo-3.1-fast",
+        model_name="Veo 3.1 Fast",
+        capability="text_to_video",
+        source="model_registry",
+        parameter_schema={
+            "properties": {
+                "duration": {"type": "number", "enum": [8], "default": 8},
+            },
+        },
+    )
+    body = AigcJobCreate(
+        canvas_id="canvas-1",
+        node_id="video-1",
+        capability="text_to_video",
+        provider_id="mxapi",
+        model_id="veo-3.1-fast",
+        parameters={"videoDuration": 4},
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        aigc_studio._validate_duration_against_capability(body, capability)
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail == {
+        "code": "aigc_video_duration_not_supported",
+        "provider_id": "mxapi",
+        "model_id": "veo-3.1-fast",
+        "requested_duration": 4,
+        "supported_durations": [8],
+    }
+
+
+def test_video_duration_validation_accepts_supported_discrete_duration():
+    capability = AigcCapabilityInfo(
+        provider_id="mxapi",
+        provider_name="MXAPI",
+        model_id="omni-flash",
+        model_name="Omni Flash",
+        capability="text_to_video",
+        source="model_registry",
+        parameter_schema={
+            "properties": {
+                "duration": {
+                    "type": "number",
+                    "enum": [4, 6, 8, 10],
+                    "default": 8,
+                },
+            },
+        },
+    )
+    body = AigcJobCreate(
+        canvas_id="canvas-1",
+        node_id="video-1",
+        capability="text_to_video",
+        provider_id="mxapi",
+        model_id="omni-flash",
+        parameters={"videoDuration": 6},
+    )
+
+    aigc_studio._validate_duration_against_capability(body, capability)
 
 
 @pytest.fixture(autouse=True)

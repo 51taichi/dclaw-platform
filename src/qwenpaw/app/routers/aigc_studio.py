@@ -1152,6 +1152,62 @@ async def _validate_job_submission(
                 f"'{body.provider_id}' model '{body.model_id}'."
             ),
         )
+    _validate_duration_against_capability(body, capability)
+
+
+def _validate_duration_against_capability(
+    body: AigcJobCreate,
+    capability: AigcCapabilityInfo,
+) -> None:
+    if body.capability not in {
+        "text_to_video",
+        "image_to_video",
+        "reference_video",
+    }:
+        return
+    parameter_schema = getattr(capability, "parameter_schema", None)
+    if not isinstance(parameter_schema, dict):
+        return
+    properties = parameter_schema.get("properties")
+    if not isinstance(properties, dict):
+        return
+    duration_schema = properties.get("duration")
+    if not isinstance(duration_schema, dict):
+        return
+    raw_allowed = duration_schema.get("enum")
+    if not isinstance(raw_allowed, list) or not raw_allowed:
+        return
+    raw_duration = next(
+        (
+            body.parameters[key]
+            for key in (
+                "videoDuration",
+                "duration_seconds",
+                "duration",
+                "video_length",
+            )
+            if body.parameters.get(key) is not None
+        ),
+        duration_schema.get("default"),
+    )
+    try:
+        duration = int(float(str(raw_duration)))
+        allowed = {int(float(str(value))) for value in raw_allowed}
+    except (TypeError, ValueError):
+        duration = -1
+        allowed = set()
+    if duration in allowed:
+        return
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "code": "aigc_video_duration_not_supported",
+            "provider_id": body.provider_id,
+            "model_id": body.model_id,
+            "requested_duration": raw_duration,
+            "supported_durations": sorted(allowed),
+        },
+    )
 
 
 def _resolve_job_prompt_binding(request: Request, body: AigcJobCreate) -> None:
