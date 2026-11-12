@@ -97,6 +97,27 @@ def test_continuous_two_upgrades_are_atomic_and_idempotent(tmp_path):
     assert target["identity"]["installation_id"] == "installation-2"
 
 
+def test_retired_source_does_not_block_activation_or_create_empty_state(tmp_path):
+    sealed, storage, record, repository, grants, source_file = setup_chain(tmp_path)
+    original = source_file.read_bytes()
+    record.releases = record.releases[1:]
+    record.active_release_id = "release-2"
+    (sealed / "releases" / "comic" / "release-0" / "agent" / "workflow.py").unlink()
+
+    preview = continuity.preview_activation_continuity(
+        storage_root=storage, sealed_root=sealed, grants=repository,
+        record=record, target_grant=grants[2],
+    )
+
+    assert preview["status"] == "ready"
+    assert preview["checked_tasks"] == 0
+    with pytest.raises(continuity.StateContinuityError) as error:
+        resume(sealed, storage, record, repository, grants[2])
+    assert error.value.category == "state_source_release_retired"
+    assert source_file.read_bytes() == original
+    assert not continuity._state_dir(storage, "installation-2", "task").exists()
+
+
 def test_activation_preflight_checks_existing_task_before_release_switch(tmp_path):
     sealed, storage, record, repository, grants, source_file = setup_chain(tmp_path)
     record.active_release_id = grants[0].release_id

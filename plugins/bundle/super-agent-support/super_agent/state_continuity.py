@@ -313,6 +313,13 @@ def ensure_state_continuity(
         raise StateContinuityError("state_release_identity_mismatch")
     source_grant = _source_grant(root, grants, target_grant, session_id)
     if (
+        source_grant is not None
+        and source_grant.release_id not in {
+            item.release_id for item in record.releases
+        }
+    ):
+        raise StateContinuityError("state_source_release_retired")
+    if (
         expected_source_installation_id is not None
         and (source_grant is None or source_grant.installation_id != expected_source_installation_id)
     ):
@@ -561,7 +568,13 @@ def preview_activation_continuity(
             _binding_matches(
                 root, grant.installation_id, session_id, state_file.name,
             )
+    retained_release_ids = {item.release_id for item in record.releases}
+    retired_tasks = 0
     for session_id, user_id in sessions.items():
+        source = _source_grant(root, grants, target_grant, session_id)
+        if source is not None and source.release_id not in retained_release_ids:
+            retired_tasks += 1
+            continue
         ensure_state_continuity(
             storage_root=root, sealed_root=sealed_root, grants=grants,
             record=target_record, target_grant=target_grant,
@@ -570,7 +583,7 @@ def preview_activation_continuity(
     return {
         "contract": CONTRACT,
         "status": "ready",
-        "checked_tasks": len(sessions),
+        "checked_tasks": len(sessions) - retired_tasks,
     }
 
 

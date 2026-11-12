@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -65,6 +66,41 @@ def test_install_creates_ready_immutable_release_without_activating(tmp_path):
     assert release.runtime_adapter is None
     assert release.runtime_contract_version is None
     assert release.runtime_failure_policy is None
+
+
+def test_package_type_receives_committed_release_notification(tmp_path):
+    private = Ed25519PrivateKey.generate()
+    service = _service(tmp_path, private.public_key())
+    calls = []
+    service._package_type_handlers["sealed_agent"] = SimpleNamespace(
+        validate_manifest=lambda _manifest: None,
+        on_release_committed=lambda _service, agent_id, release_id: (
+            calls.append((agent_id, release_id))
+        ),
+    )
+
+    release = service.install(_package(private))
+
+    assert calls == [("luyu", release.release_id)]
+
+
+def test_failed_package_callback_rolls_back_new_release(tmp_path):
+    private = Ed25519PrivateKey.generate()
+    service = _service(tmp_path, private.public_key())
+
+    def fail(_service, _agent_id, _release_id):
+        raise ValueError("retention preflight failed")
+
+    service._package_type_handlers["sealed_agent"] = SimpleNamespace(
+        validate_manifest=lambda _manifest: None,
+        on_release_committed=fail,
+    )
+
+    with pytest.raises(SealedAgentReleaseError, match="installation failed"):
+        service.install(_package(private))
+
+    assert service.get_agent("luyu") is None
+    assert list((tmp_path / "releases/luyu").iterdir()) == []
 
 
 def test_install_persists_signed_runtime_contract(tmp_path):

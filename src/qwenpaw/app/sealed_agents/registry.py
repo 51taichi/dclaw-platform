@@ -129,6 +129,14 @@ class SealedAgentRegistry:
             self._write(_RegistryDocument(agents=updated))
         return record
 
+    def remove_agent(self, agent_id: str) -> None:
+        with self._lock:
+            agents = [
+                agent for agent in self._read().agents
+                if agent.agent_id != agent_id
+            ]
+            self._write(_RegistryDocument(agents=agents))
+
     def _read(self) -> _RegistryDocument:
         if not self.path.exists():
             return _RegistryDocument()

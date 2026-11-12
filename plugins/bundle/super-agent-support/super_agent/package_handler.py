@@ -9,6 +9,7 @@ from typing import Any
 from .capabilities import validate_super_expert_manifest
 from .grants import SuperExpertGrantRepository
 from .trust import SuperExpertTrustStore
+from .release_retention import retain_releases
 
 
 class SuperAgentPackageHandler:
@@ -54,6 +55,11 @@ class SuperAgentPackageHandler:
 
     def supports_runtime_feature(self, feature: str) -> bool:
         return feature in self.runtime_features
+
+    def on_release_committed(
+        self, service: Any, agent_id: str, release_id: str,
+    ) -> None:
+        retain_releases(service, agent_id, release_id)
 
     def preview_grant(self, agent_id, release, *, tenant_id: str):
         return self.grant_repository.preview(

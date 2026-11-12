@@ -48,6 +48,7 @@ from .super_agent.grants import SuperExpertGrantRepository
 from .super_agent.publication import PublisherPublication
 from .super_agent.publishers import PublisherRepository
 from .super_agent.orchestration import handle_workspace_turn
+from .super_agent.release_retention import reconcile_release_retention
 from .super_agent.router import frontend_read_routes, user_routes
 from qwenpaw.app.guards import require_user
 from qwenpaw.app.object_storage import get_object_storage_client
@@ -121,6 +122,12 @@ def _trusted_component_signers(
             raise ValueError("stored Component signer trust is invalid")
         stored = value
     return {**stored, **dict(configured or {})}
+
+
+def _reconcile_release_retention() -> None:
+    from qwenpaw.app.routers.sealed_agents import get_sealed_agent_service
+
+    reconcile_release_retention(get_sealed_agent_service())
 
 
 class SuperAgentSupportPlugin:
@@ -331,6 +338,11 @@ class SuperAgentSupportPlugin:
             "mcp-session-manager",
             self.mcp.start,
             priority=20,
+        )
+        api.register_startup_hook(
+            "super-expert-release-retention",
+            _reconcile_release_retention,
+            priority=30,
         )
         api.register_shutdown_hook(
             "mcp-session-manager",

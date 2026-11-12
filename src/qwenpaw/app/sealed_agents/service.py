@@ -122,6 +122,20 @@ class SealedAgentService:
     ) -> Path:
         return ensure_runtime_workspace(self.root, agent_id, release_id)
 
+    def notify_release_committed(self, agent_id: str, release_id: str) -> None:
+        """Let the owning package type handle its post-commit lifecycle."""
+        record = self._required_agent(agent_id)
+        release = next(
+            (item for item in record.releases if item.release_id == release_id),
+            None,
+        )
+        if release is None:
+            raise SealedAgentReleaseError("sealed agent release not found")
+        handler = self._package_type_handler(release.package_type)
+        callback = getattr(handler, "on_release_committed", None)
+        if callable(callback):
+            callback(self, agent_id, release_id)
+
     def install(self, data: bytes) -> SealedReleaseRecord:
         try:
             validated = validate_sealed_package(
@@ -225,7 +239,12 @@ class SealedAgentService:
                 releases=[*(current.releases if current else []), release],
             )
             self.registry.upsert_agent(record)
+            self.notify_release_committed(manifest.agent_id, release.release_id)
         except Exception as exc:
+            if current is None:
+                self.registry.remove_agent(manifest.agent_id)
+            else:
+                self.registry.upsert_agent(current)
             shutil.rmtree(destination, ignore_errors=True)
             raise SealedAgentReleaseError(
                 "sealed agent installation failed",

@@ -464,7 +464,8 @@ async def _activate_sealed_agent_release_locked(
             raise SealedAgentReleaseError(
                 "sealed agent runtime validation failed",
             )
-        return _operational_dto(activated_record)
+        service.notify_release_committed(agent_id, release_id)
+        return _operational_dto(service.get_agent(agent_id))
     except Exception as exc:
         if activated_record is not None and previous_record is not None:
             try:

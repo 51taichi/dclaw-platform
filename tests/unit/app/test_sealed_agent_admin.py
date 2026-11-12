@@ -411,6 +411,7 @@ async def test_activation_registers_private_runtime_only_after_preload_succeeds(
     (release_root / "agent/agent.json").write_text(
         '{"id":"luyu","name":"陆羽"}',
     )
+    notified = []
 
     class Service:
         async def validate_release_runtime(self, agent_id, release_id):
@@ -432,6 +433,9 @@ async def test_activation_registers_private_runtime_only_after_preload_succeeds(
         def activate(self, agent_id, release_id, *, tenant_id="local"):
             assert tenant_id == "local"
             return record
+
+        def notify_release_committed(self, agent_id, release_id):
+            notified.append((agent_id, release_id))
 
     class Manager:
         async def preload_agent(self, agent_id):
@@ -470,6 +474,7 @@ async def test_activation_registers_private_runtime_only_after_preload_succeeds(
         release_root / "agent",
     )
     assert saved
+    assert notified == [("luyu", "rel-1")]
 
 
 @pytest.mark.asyncio

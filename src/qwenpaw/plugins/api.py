@@ -327,7 +327,12 @@ class PluginApi:
         package_type: str,
         handler: Any,
     ) -> None:
-        """Register validation, grants and activation for a package type."""
+        """Register a package type and its optional release-commit callback.
+
+        ``on_release_committed(service, agent_id, release_id)`` runs after an
+        installation is recorded and after a successful runtime activation.
+        The callback must be idempotent and own any package-specific policy.
+        """
         if self._registry:
             self._registry.register_sealed_package_type(
                 self.plugin_id,

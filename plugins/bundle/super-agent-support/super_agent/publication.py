@@ -195,6 +195,7 @@ class PublisherPublication:
             )
             if not loaded:
                 raise SealedAgentReleaseError("expert runtime validation failed")
+            service.notify_release_committed(agent_id, release_id)
         except Exception as exc:
             if activated and previous_record is not None:
                 service.restore_agent_record(previous_record)
