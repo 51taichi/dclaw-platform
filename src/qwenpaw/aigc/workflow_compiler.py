@@ -467,8 +467,8 @@ def plan_manual_workflow(
         WorkflowGuideStepDefinition(
             step_id="workflow.submit",
             kind="SUBMIT",
-            title="提交最终素材",
-            instruction="最终节点生成完成后，提交给陆羽审核。",
+            title="完成素材任务",
+            instruction="最终节点生成完成后，提交素材并返回任务会话。",
             logical_node_id=blueprint.output_node_id,
             node_id=output_id,
             control_id="aigc.workflow.submit",
@@ -603,8 +603,8 @@ def compile_workflow(
         WorkflowGuideStepDefinition(
             step_id="workflow.submit",
             kind="SUBMIT",
-            title="提交最终素材",
-            instruction="最终节点生成完成后，提交给陆羽审核。",
+            title="完成素材任务",
+            instruction="最终节点生成完成后，提交素材并返回任务会话。",
             logical_node_id=blueprint.output_node_id,
             node_id=output_physical_id,
             control_id="aigc.workflow.submit",

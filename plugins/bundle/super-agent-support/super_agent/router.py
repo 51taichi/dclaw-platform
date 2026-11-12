@@ -1097,55 +1097,8 @@ async def _execute_super_expert_command(
             idempotency_key=command.idempotency_key,
             asset_validator=asset_validator,
             frontend_workflow_resume=frontend_workflow_resume,
+            frontend_asset_submit=capability == "aigc.asset.submit",
         )
-        if capability == "aigc.asset.submit":
-            submit_event_id = str(command.arguments.get("event_id") or "")
-            async with service.review_lock(submit_event_id):
-                review = service.get_review_receipt(submit_event_id)
-                if review is None:
-                    current_task = service.get_task(
-                        AigcTaskBinding.model_validate(
-                            binding,
-                        ).material_task_id,
-                    )
-                    if current_task is not None and current_task.status in {
-                        AigcTaskStatus.ACCEPTED,
-                        AigcTaskStatus.REVISION_REQUIRED,
-                    }:
-                        review = {
-                            "status": "completed",
-                            "reply": (
-                                "审核已完成，素材已通过，可以返回会话继续。"
-                                if current_task.status
-                                == AigcTaskStatus.ACCEPTED
-                                else "审核已完成，素材需要修改，请按当前任务继续调整。"
-                            ),
-                        }
-                    else:
-                        review = await _dispatch_agent_asset_review(
-                            request,
-                            service=service,
-                            installation_id=command.installation_id,
-                            binding=AigcTaskBinding.model_validate(binding),
-                            asset_id=str(
-                                command.arguments.get("asset_id") or "",
-                            ),
-                            request_key=(
-                                f"{command.idempotency_key}:agent-review:"
-                                f"{uuid.uuid4().hex}"
-                            ),
-                        )
-                    if review.get("status") == "completed":
-                        review = service.save_review_receipt(
-                            submit_event_id,
-                            review,
-                        )
-                result["agent_review"] = review
-            reviewed_task = service.get_task(
-                AigcTaskBinding.model_validate(binding).material_task_id,
-            )
-            if reviewed_task is not None:
-                result["task"] = reviewed_task
         return result
     except InsufficientUsageCreditsError as exc:
         raise HTTPException(

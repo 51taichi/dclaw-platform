@@ -35,6 +35,7 @@ class AigcTaskCommand(BaseModel):
         "pause",
         "resume",
         "submit",
+        "complete",
         "review",
         "request_revision",
         "accept",
@@ -75,6 +76,8 @@ _TRANSITIONS = {
     (AigcTaskStatus.IN_PROGRESS, "pause"): AigcTaskStatus.PAUSED,
     (AigcTaskStatus.PAUSED, "resume"): AigcTaskStatus.IN_PROGRESS,
     (AigcTaskStatus.IN_PROGRESS, "submit"): AigcTaskStatus.SUBMITTED,
+    (AigcTaskStatus.IN_PROGRESS, "complete"): AigcTaskStatus.ACCEPTED,
+    (AigcTaskStatus.SUBMITTED, "complete"): AigcTaskStatus.ACCEPTED,
     (AigcTaskStatus.SUBMITTED, "review"): AigcTaskStatus.REVIEWING,
     (
         AigcTaskStatus.REVIEWING,
@@ -282,7 +285,7 @@ class AigcTaskRepository:
             # immutable event history retains the previously reviewed asset.
             asset_id = None
             review_assets = ()
-        elif command.action == "submit":
+        elif command.action in {"submit", "complete"}:
             if not command.asset_id:
                 raise AigcTaskError("submitted task requires an asset")
             if (

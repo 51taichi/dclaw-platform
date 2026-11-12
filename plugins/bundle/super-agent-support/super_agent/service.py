@@ -385,6 +385,7 @@ class SuperExpertPlatformService:
         asset_validator: Callable[[AigcTaskBinding, str, Any], Awaitable[None]]
         | None = None,
         frontend_workflow_resume: bool = False,
+        frontend_asset_submit: bool = False,
     ) -> dict[str, Any]:
         decision = self.grant_repository.authorize_capability(
             installation_id,
@@ -402,6 +403,33 @@ class SuperExpertPlatformService:
             task_binding = arguments.get("binding")
             task = (
                 self.task_repository.get(str(task_binding.get("material_task_id") or ""))
+                if isinstance(task_binding, dict)
+                else None
+            )
+            if (
+                workflow_decision.allowed
+                and task is not None
+                and task.workflow is not None
+                and task.binding.model_dump(mode="json") == task_binding
+                and task.binding.installation_id == installation_id
+            ):
+                decision = workflow_decision
+        if (
+            not decision.allowed
+            and frontend_asset_submit
+            and capability == "aigc.asset.submit"
+        ):
+            workflow_decision = self.grant_repository.authorize_capability(
+                installation_id,
+                "aigc.workflow.create/1",
+                "1",
+                tenant_id=tenant_id,
+            )
+            task_binding = arguments.get("binding")
+            task = (
+                self.task_repository.get(
+                    str(task_binding.get("material_task_id") or ""),
+                )
                 if isinstance(task_binding, dict)
                 else None
             )
@@ -469,9 +497,11 @@ class SuperExpertPlatformService:
                     event_id=event_id,
                     arguments=arguments,
                     idempotency_key=idempotency_key,
+                    complete_asset_submit=frontend_asset_submit,
                 )
         except (AigcTaskError, ValueError) as exc:
             raise SuperExpertPlatformError(str(exc)) from exc
+        event_id = str(result.pop("_event_id", event_id))
         task = result.get("task")
         asset_id = (
             task.asset_id if task is not None else arguments.get("asset_id")
@@ -846,6 +876,7 @@ class SuperExpertPlatformService:
         event_id: str,
         arguments: dict[str, Any],
         idempotency_key: str,
+        complete_asset_submit: bool = False,
     ) -> dict[str, Any]:
         if capability in {"card.create", "card.update"}:
             current = self.task_repository.get(binding.material_task_id)
@@ -908,7 +939,31 @@ class SuperExpertPlatformService:
         elif capability == "aigc.task.cancel":
             action = "cancel"
         elif capability == "aigc.asset.submit":
-            action = "submit"
+            action = "complete" if complete_asset_submit else "submit"
+            if complete_asset_submit and current is not None:
+                supplied_asset = str(arguments.get("asset_id") or "")
+                if current.binding != binding:
+                    raise SuperExpertPlatformError("task binding mismatch")
+                if current.status in {
+                    AigcTaskStatus.SUBMITTED,
+                    AigcTaskStatus.ACCEPTED,
+                }:
+                    # Older clients used the unsuffixed keys for the review
+                    # submission. Preserve that envelope and write/replay the
+                    # direct-completion event under its own stable identity.
+                    event_id = f"{event_id}:complete"
+                    idempotency_key = f"{idempotency_key}:complete"
+                if current.status == AigcTaskStatus.ACCEPTED:
+                    if supplied_asset != current.asset_id:
+                        raise SuperExpertPlatformError("asset binding mismatch")
+                    return {
+                        "task": current,
+                        "payload": {},
+                        "_event_id": event_id,
+                    }
+                if current.status == AigcTaskStatus.SUBMITTED:
+                    if supplied_asset != current.asset_id:
+                        raise SuperExpertPlatformError("asset binding mismatch")
         elif capability == "aigc.guide.update":
             if current is None or current.binding != binding:
                 raise SuperExpertPlatformError("task binding mismatch")
@@ -986,7 +1041,7 @@ class SuperExpertPlatformService:
             payload["review_assets"] = [
                 item.model_dump(mode="json") for item in task.review_assets
             ]
-        return {"task": task, "payload": payload}
+        return {"task": task, "payload": payload, "_event_id": event_id}
 
 
 def _operation_catalog_path() -> Path:

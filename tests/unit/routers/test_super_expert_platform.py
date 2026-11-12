@@ -2161,7 +2161,7 @@ async def test_create_v2_route_uses_scope_for_access_and_passes_trusted_user(
 
 
 @pytest.mark.asyncio
-async def test_asset_submit_dispatches_bound_agent_review_in_the_same_page(
+async def test_asset_submit_completes_without_dispatching_agent_review(
     monkeypatch,
 ):
     captured = {}
@@ -2171,7 +2171,8 @@ async def test_asset_submit_dispatches_bound_agent_review_in_the_same_page(
             self.receipts = {}
 
         async def execute(self, **kwargs):
-            return {"task": {"status": "SUBMITTED"}, "event": {}}
+            captured.update(kwargs)
+            return {"task": {"status": "ACCEPTED"}, "event": {}}
 
         def review_lock(self, _event_id):
             return __import__("asyncio").Lock()
@@ -2201,9 +2202,8 @@ async def test_asset_submit_dispatches_bound_agent_review_in_the_same_page(
         lambda *_args, **_kwargs: None,
     )
 
-    async def dispatch(_request, **kwargs):
-        captured.update(kwargs)
-        return {"status": "completed", "reply": "需要调整第一个镜头。"}
+    async def dispatch(*_args, **_kwargs):
+        pytest.fail("frontend completion must not dispatch Agent review")
 
     monkeypatch.setattr(
         router_module,
@@ -2232,9 +2232,9 @@ async def test_asset_submit_dispatches_bound_agent_review_in_the_same_page(
         request,
     )
 
-    assert result["agent_review"]["reply"] == "需要调整第一个镜头。"
-    assert captured["asset_id"] == "asset-1"
-    assert captured["binding"].material_task_id == "material-1"
+    assert result["task"]["status"] == "ACCEPTED"
+    assert captured["frontend_asset_submit"] is True
+    assert captured["arguments"]["asset_id"] == "asset-1"
 
 
 @pytest.mark.asyncio
@@ -2589,7 +2589,7 @@ async def test_asset_review_does_not_report_success_until_platform_state_is_term
 
 
 @pytest.mark.asyncio
-async def test_duplicate_asset_submit_replays_the_durable_agent_review(
+async def test_duplicate_asset_submit_replays_direct_completion(
     tmp_path,
     monkeypatch,
 ):
@@ -2674,12 +2674,13 @@ async def test_duplicate_asset_submit_replays_the_durable_agent_review(
         request,
     )
 
-    assert dispatches == 1
-    assert replay["agent_review"] == first["agent_review"]
+    assert dispatches == 0
+    assert first["task"]["status"] == "ACCEPTED"
+    assert replay["task"]["status"] == "ACCEPTED"
 
 
 @pytest.mark.asyncio
-async def test_nonterminal_review_is_not_cached_and_can_be_retried(
+async def test_asset_submit_does_not_invoke_nonterminal_review(
     monkeypatch,
 ):
     dispatches = 0
@@ -2756,17 +2757,15 @@ async def test_nonterminal_review_is_not_cached_and_can_be_retried(
         request,
     )
 
-    assert first["agent_review"]["status"] == "model_required"
-    assert second["agent_review"]["status"] == "model_required"
-    assert dispatches == 2
+    assert first["task"]["status"] == "SUBMITTED"
+    assert second["task"]["status"] == "SUBMITTED"
+    assert dispatches == 0
     assert saved == []
-    assert request_keys[0].startswith("submit:agent-review:")
-    assert request_keys[1].startswith("submit:agent-review:")
-    assert request_keys[0] != request_keys[1]
+    assert request_keys == []
 
 
 @pytest.mark.asyncio
-async def test_submit_retry_recovers_terminal_review_without_running_agent_again(
+async def test_submit_retry_returns_terminal_task_without_running_agent_again(
     tmp_path,
     monkeypatch,
 ):
@@ -2827,8 +2826,7 @@ async def test_submit_retry_recovers_terminal_review_without_running_agent_again
         SimpleNamespace(state=SimpleNamespace(tenant_id="tenant-a")),
     )
 
-    assert result["task"].status.value == "ACCEPTED"
-    assert "审核已完成" in result["agent_review"]["reply"]
+    assert result["task"]["status"] == "ACCEPTED"
 
 
 @pytest.mark.asyncio
@@ -2926,7 +2924,7 @@ async def test_asset_review_dispatch_runs_inside_user_billing(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_asset_submit_returns_safe_payment_required_error(monkeypatch):
+async def test_asset_submit_does_not_start_review_billing(monkeypatch):
     class Service:
         async def execute(self, **_kwargs):
             return {"task": {"status": "SUBMITTED"}, "event": {}}
@@ -2973,15 +2971,13 @@ async def test_asset_submit_returns_safe_payment_required_error(monkeypatch):
         },
     )
 
-    with pytest.raises(HTTPException) as exc_info:
-        await router_module.execute_super_expert_command(
-            "aigc.asset.submit",
-            command,
-            SimpleNamespace(state=SimpleNamespace(tenant_id="tenant-a")),
-        )
+    result = await router_module.execute_super_expert_command(
+        "aigc.asset.submit",
+        command,
+        SimpleNamespace(state=SimpleNamespace(tenant_id="tenant-a")),
+    )
 
-    assert exc_info.value.status_code == 402
-    assert exc_info.value.detail == "insufficient usage credits"
+    assert result["task"]["status"] == "SUBMITTED"
 
 
 def test_platform_command_router_is_not_mounted_by_core_router():
