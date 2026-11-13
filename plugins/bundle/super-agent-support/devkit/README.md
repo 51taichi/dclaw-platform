@@ -1,5 +1,12 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.20 adds `developer.runtime.diagnostics.by-reference/5` for the
+signed-in expert owner. `blocker` reports a recorded Host stage, safe error
+code, field constraint, responsibility and recovery action. Historical generic
+exceptions without retained detail remain explicitly unknown. Use
+`runtime_diagnostics_api_demo.py --include-blocker --invocation-id ID`.
+Schemas are in `schemas/runtime-diagnostics-v5/`; v4 stays unchanged.
+
 Version 1.9.19 adds `developer.runtime.diagnostics.by-reference/4` for both
 failed and completed turns. The owner-scoped read returns a redacted Host
 operation timeline, exact-scope local task acceptance and its current stored

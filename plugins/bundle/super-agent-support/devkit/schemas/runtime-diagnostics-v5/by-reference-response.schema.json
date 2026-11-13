@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "developer.runtime.diagnostics.by-reference/5 response",
+  "$defs": {
+    "first_failure": {
+      "type": "object", "required": ["phase", "category", "attempt"],
+      "properties": {
+        "phase": {"type": ["string", "null"]},
+        "category": {"type": ["string", "null"]},
+        "attempt": {"type": ["integer", "null"], "minimum": 0}
+      }, "additionalProperties": false
+    },
+    "host_operation": {
+      "type": "object", "required": ["event", "at", "capability"],
+      "properties": {
+        "event": {"enum": ["host.operation.started", "host.operation.completed", "host.operation.failed"]},
+        "at": {"type": "string", "format": "date-time"},
+        "capability": {"type": "string"},
+        "category": {"type": ["string", "null"]},
+        "error_code": {"type": ["string", "null"]},
+        "status": {"type": ["string", "null"]},
+        "task_accepted": {"type": ["boolean", "null"]},
+        "duration_ms": {"type": ["integer", "null"], "minimum": 0}
+      }, "additionalProperties": false
+    },
+    "task": {
+      "type": "object", "required": ["task_id_sha256", "capability", "status", "error_code", "result_sha256"],
+      "properties": {
+        "task_id_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "capability": {"type": "string"}, "status": {"type": "string"},
+        "error_code": {"type": ["string", "null"]},
+        "result_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}
+      }, "additionalProperties": false
+    },
+    "stage": {
+      "type": "object", "required": ["event", "source", "at", "duration_ms"],
+      "properties": {
+        "event": {"type": "string"}, "source": {"enum": ["agent", "host"]},
+        "at": {"type": "string", "format": "date-time"},
+        "duration_ms": {"type": ["integer", "null"], "minimum": 0},
+        "call_number": {"type": "integer"}, "has_text": {"type": "boolean"},
+        "text_length": {"type": "integer"}, "complete_json_object": {"type": "boolean"},
+        "execution_mode": {"type": "string"}, "response_format": {"type": "string"},
+        "capability": {"type": "string"}, "category": {"type": "string"},
+        "field_path": {"type": "string"}, "constraint": {"type": "string"}
+      }, "additionalProperties": false
+    },
+    "blocker": {
+      "type": "object",
+      "required": ["phase", "error_code", "field_path", "constraint", "responsibility", "recovery_action", "evidence"],
+      "properties": {
+        "phase": {"type": "string"},
+        "error_code": {"type": ["string", "null"], "pattern": "^[A-Z][A-Z0-9_.]{0,63}$"},
+        "field_path": {"type": "string"},
+        "constraint": {"type": "string"},
+        "responsibility": {"enum": ["developer", "environment", "platform", "undetermined"]},
+        "recovery_action": {"type": "string"},
+        "evidence": {"enum": ["recorded", "historical_detail_not_recorded"]}
+      }, "additionalProperties": false
+    }
+  },
+  "oneOf": [
+    {
+      "type": "object", "required": ["contract", "status", "retention_days"],
+      "properties": {
+        "contract": {"const": "developer.runtime.diagnostics.by-reference/5"},
+        "status": {"const": "no_record"},
+        "retention_days": {"const": 30}
+      }, "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["contract", "status", "retention_days", "task_id", "invocation_id", "installation_id", "release_id", "started_at", "ended_at", "runtime_outcome", "transaction_status", "first_failure", "first_failure_source", "task_acceptance", "task_evidence", "tasks", "host_operations", "stages", "blocker"],
+      "properties": {
+        "contract": {"const": "developer.runtime.diagnostics.by-reference/5"},
+        "status": {"const": "found"}, "retention_days": {"const": 30},
+        "task_id": {"type": "string"}, "invocation_id": {"type": "string"},
+        "installation_id": {"type": "string"}, "release_id": {"type": "string"},
+        "started_at": {"type": ["string", "null"], "format": "date-time"},
+        "ended_at": {"type": "string", "format": "date-time"},
+        "runtime_outcome": {"enum": ["completed", "failed"]},
+        "transaction_status": {"enum": ["committed", "discarded", "partially_committed", "not_recorded"]},
+        "first_failure": {"$ref": "#/$defs/first_failure"},
+        "first_failure_source": {"enum": ["agent_trace", "host_stage", "platform_preflight", "not_recorded"]},
+        "task_acceptance": {"enum": ["accepted", "not_accepted", "not_recorded"]},
+        "task_evidence": {"enum": ["available", "not_recorded"]},
+        "tasks": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/task"}},
+        "host_operations": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/host_operation"}},
+        "stages": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/stage"}},
+        "blocker": {"$ref": "#/$defs/blocker"}
+      }, "additionalProperties": false
+    }
+  ]
+}

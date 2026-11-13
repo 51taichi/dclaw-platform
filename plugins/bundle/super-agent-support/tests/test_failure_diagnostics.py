@@ -23,6 +23,7 @@ from super_agent.failure_diagnostics import (
     read_developer_failure_by_reference_v2,
     read_developer_failure_by_reference_v3,
     read_developer_invocation_by_reference_v4,
+    read_developer_invocation_by_reference_v5,
     search_developer_failures,
     classify_interaction_failure,
 )
@@ -120,7 +121,7 @@ def test_v4_reads_committed_business_block_without_exposing_payload(tmp_path):
         {"timestamp": (when + timedelta(seconds=3)).isoformat(),
          "invocation_id": invocation, "event_type": "host.operation.completed",
          "payload": {"capability": "aigc.task.assets.localize/1",
-                     "status": "rejected", "error_code": "DEVICE_UNAVAILABLE",
+                     "status": "rejected", "error_code": "LOCAL_GATEWAY.DEVICE_NOT_READY",
                      "task_accepted": False, "duration_ms": 15,
                      "secret": "private"}},
         {"timestamp": (when + timedelta(seconds=4)).isoformat(),
@@ -149,9 +150,17 @@ def test_v4_reads_committed_business_block_without_exposing_payload(tmp_path):
     assert result["task_acceptance"] == "not_accepted"
     assert result["task_evidence"] == "not_recorded"
     assert result["first_failure"] == {"phase": "aigc_asset_localize", "category": "host_or_input", "attempt": 0}
-    assert result["host_operations"][1]["error_code"] == "DEVICE_UNAVAILABLE"
+    assert result["host_operations"][1]["error_code"] == "LOCAL_GATEWAY.DEVICE_NOT_READY"
     assert "private" not in json.dumps(result)
     validate(result, json.loads((SCHEMAS.parent / "runtime-diagnostics-v4" / "by-reference-response.schema.json").read_text()))
+    blocker = read_developer_invocation_by_reference_v5(
+        storage_root=tmp_path, grants=_grants(), agent_id="comic",
+        tenant_id="local", invocation_id=invocation,
+        owner_resolver=lambda _: {"user_id": "customer", "agent_id": "comic", "tenant_id": "local"},
+        now=NOW,
+    )["blocker"]
+    assert blocker["responsibility"] == "environment"
+    assert blocker["recovery_action"] == "reconnect_helper"
 
 
 def test_v4_history_without_host_trace_reports_unknown_acceptance(tmp_path):
@@ -174,6 +183,82 @@ def test_v4_history_without_host_trace_reports_unknown_acceptance(tmp_path):
     assert result["task_acceptance"] == "not_recorded"
     assert result["transaction_status"] == "not_recorded"
     assert result["task_evidence"] == "not_recorded"
+
+
+def test_v5_exposes_only_recorded_host_blocker(tmp_path):
+    invocation = "b" * 32
+    when = NOW - timedelta(minutes=1)
+    _trace(tmp_path, "old", "customer-task", [
+        {"timestamp": when.isoformat(), "invocation_id": invocation,
+         "event_type": "orchestration.started", "payload": {}},
+        {"timestamp": (when + timedelta(seconds=1)).isoformat(),
+         "invocation_id": invocation, "event_type": "host.operation.failed",
+         "payload": {"capability": "aigc.task.assets.localize/1",
+                     "category": "host_rejected", "host_stage": "asset_validation",
+                     "error_code": "INVALID_ASSET_SELECTION", "field_path": "assets",
+                     "constraint": "SELECTION_INVALID", "responsibility": "developer",
+                     "recovery_action": "correct_request", "secret": "private asset"}},
+        {"timestamp": (when + timedelta(seconds=2)).isoformat(),
+         "invocation_id": invocation, "event_type": "orchestration.completed",
+         "payload": {}},
+    ])
+    kwargs = dict(storage_root=tmp_path, grants=_grants(), agent_id="comic",
+                  tenant_id="local", invocation_id=invocation,
+                  owner_resolver=lambda _: {"user_id": "customer", "agent_id": "comic",
+                                            "tenant_id": "local"},
+                  task_lookup=lambda **_: [], now=NOW)
+    result = read_developer_invocation_by_reference_v5(**kwargs)
+    assert result["blocker"] == {
+        "phase": "asset_validation", "error_code": "INVALID_ASSET_SELECTION",
+        "field_path": "assets", "constraint": "SELECTION_INVALID",
+        "responsibility": "developer", "recovery_action": "correct_request",
+        "evidence": "recorded",
+    }
+    assert result["first_failure_source"] == "host_stage"
+    assert result["task_acceptance"] == "not_accepted"
+    assert "private asset" not in json.dumps(result)
+    validate(result, json.loads((SCHEMAS.parent / "runtime-diagnostics-v5"
+                                 / "by-reference-response.schema.json").read_text()))
+    with pytest.raises(FailureDiagnosticsUnauthorized):
+        read_developer_invocation_by_reference_v5(
+            **{**kwargs, "owner_resolver": lambda _: {"user_id": "customer",
+                "agent_id": "comic", "tenant_id": "elsewhere"}})
+
+
+def test_v5_historical_host_exception_keeps_root_unknown(tmp_path):
+    invocation = "c" * 32
+    when = NOW - timedelta(minutes=1)
+    _trace(tmp_path, "old", "customer-task", [
+        {"timestamp": when.isoformat(), "invocation_id": invocation,
+         "event_type": "host.operation.failed", "payload": {
+             "capability": "aigc.task.assets.localize/1",
+             "category": "host_exception", "error_code": None}},
+        {"timestamp": (when + timedelta(seconds=1)).isoformat(),
+         "invocation_id": invocation, "event_type": "orchestration.completed", "payload": {}},
+    ])
+    result = read_developer_invocation_by_reference_v5(
+        storage_root=tmp_path, grants=_grants(), agent_id="comic",
+        tenant_id="local", invocation_id=invocation,
+        owner_resolver=lambda _: {"user_id": "customer", "agent_id": "comic",
+                                  "tenant_id": "local"},
+        task_lookup=lambda **_: [], now=NOW,
+    )
+    assert result["blocker"]["evidence"] == "historical_detail_not_recorded"
+    assert result["blocker"]["error_code"] is None
+    assert result["blocker"]["responsibility"] == "undetermined"
+    validate(result, json.loads((SCHEMAS.parent / "runtime-diagnostics-v5"
+                                 / "by-reference-response.schema.json").read_text()))
+    no_record = read_developer_invocation_by_reference_v5(
+        storage_root=tmp_path, grants=_grants(), agent_id="comic",
+        tenant_id="local", invocation_id="d" * 32,
+        owner_resolver=lambda _: {"user_id": "customer", "agent_id": "comic",
+                                  "tenant_id": "local"},
+        task_lookup=lambda **_: [], now=NOW,
+    )
+    assert no_record == {"contract": "developer.runtime.diagnostics.by-reference/5",
+                         "status": "no_record", "retention_days": 30}
+    validate(no_record, json.loads((SCHEMAS.parent / "runtime-diagnostics-v5"
+                                    / "by-reference-response.schema.json").read_text()))
 
 
 def test_v4_reads_scoped_live_task_terminal_state(tmp_path):
@@ -639,6 +724,11 @@ def test_developer_diagnostic_routes_enforce_expert_owner(tmp_path, monkeypatch)
     assert turn.status_code == 200
     assert turn.json()["runtime_outcome"] == "failed"
     assert turn.json()["task_acceptance"] == "not_recorded"
+    blocker_reference = f"/runtime-diagnostics/v5/references/{invocation}"
+    assert client.get(blocker_reference, params={"agent_id": "foreign"}).status_code == 404
+    blocker = client.get(blocker_reference, params={"agent_id": "comic"})
+    assert blocker.status_code == 200
+    assert blocker.json()["blocker"]["evidence"] == "historical_detail_not_recorded"
     searched = client.get("/runtime-diagnostics/v1/search", params={
         "agent_id": "comic", "start": (when - timedelta(minutes=1)).isoformat(),
         "end": (when + timedelta(minutes=1)).isoformat(),
@@ -736,6 +826,24 @@ def test_developer_diagnostic_demo_reads_completed_turn_v4(monkeypatch):
     )
     assert result["status"] == "no_record"
     assert "/runtime-diagnostics/v4/references/" in requested[0]
+
+
+def test_developer_diagnostic_demo_reads_blocker_v5(monkeypatch):
+    requested = []
+
+    def response(request, timeout):
+        requested.append(request.full_url)
+        return io.BytesIO(json.dumps({
+            "contract": "developer.runtime.diagnostics.by-reference/5",
+            "status": "no_record", "retention_days": 30,
+        }).encode())
+
+    monkeypatch.setattr(runtime_diagnostics_api_demo, "urlopen", response)
+    result = runtime_diagnostics_api_demo.lookup_turn_blocker(
+        "https://dclaw.example", "comic", "a" * 32, "local-token",
+    )
+    assert result["status"] == "no_record"
+    assert "/runtime-diagnostics/v5/references/" in requested[0]
 
 
 def test_reference_v2_rate_limit_is_actor_scoped():

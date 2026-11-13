@@ -20,7 +20,7 @@ READ_WINDOW = timedelta(days=30)
 _TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}\Z")
 _FIELD_PATH = re.compile(r"[A-Za-z][A-Za-z0-9_.\[\]-]{0,127}\Z")
 _CAPABILITY_ID = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}/[0-9]{1,3}\Z")
-_ERROR_CODE = re.compile(r"[A-Z][A-Z0-9_]{0,63}\Z")
+_ERROR_CODE = re.compile(r"[A-Z][A-Z0-9_.]{0,63}\Z")
 _INTERACTION_FIELDS = frozenset({
     "request", "task_key", "interaction_revision", "component_type", "card",
     "input_policy", "replaces_interaction_id", "expires_at", "title",
@@ -246,6 +246,29 @@ def _trace_failure(
                         duration = payload.get("duration_ms")
                         operation["duration_ms"] = duration if type(duration) is int and 0 <= duration <= 900_000 else None
                     invocation.setdefault("host_operations", []).append(operation)
+                    if event == "host.operation.failed":
+                        detail = {
+                            "host_stage": _token(payload.get("host_stage")),
+                            "error_code": _token(payload.get("error_code")),
+                            "field_path": _safe_interaction_field(payload.get("field_path"))
+                            if isinstance(payload.get("capability"), str)
+                            and payload["capability"].startswith("interaction.")
+                            else payload.get("field_path") if payload.get("field_path") in {
+                                "request", "assets", "idempotency_key",
+                            } else "not_recorded",
+                            "constraint": _token(payload.get("constraint")),
+                            "responsibility": payload.get("responsibility")
+                            if payload.get("responsibility") in {"developer", "platform", "environment"}
+                            else None,
+                            "recovery_action": _token(payload.get("recovery_action")),
+                        }
+                        invocation.setdefault("host_failure_details", []).append(detail)
+                        if "first_failure" not in invocation:
+                            invocation["first_failure"] = {
+                                "phase": detail["host_stage"] or "host_operation",
+                                "category": operation.get("category"), "attempt": None,
+                            }
+                            invocation["first_failure_source"] = "host_stage"
                 elif event == "runtime.trace":
                     trace = payload
                     if trace.get("event") == "agent.turn.failure":
@@ -809,6 +832,69 @@ def read_developer_invocation_by_reference_v4(
         "host_operations": operations,
         "stages": stages[:100],
     }
+
+
+def read_developer_invocation_by_reference_v5(**kwargs: Any) -> dict[str, Any]:
+    """Add a safe, actionable Host blocker without changing the closed v4 result."""
+    prior = read_developer_invocation_by_reference_v4(**kwargs)
+    result = {**prior, "contract": "developer.runtime.diagnostics.by-reference/5"}
+    if prior["status"] == "no_record":
+        return result
+    path = (Path(kwargs["storage_root"]) / "traces"
+            / _scope(prior["installation_id"])
+            / f"{_scope(prior['task_id'])}.ndjson")
+    record = next((item for item in _trace_failure(
+        path, prior["installation_id"], prior["task_id"],
+        include_completed=True,
+    ) if item["invocation_id"] == prior["invocation_id"]), None)
+    if record is None:
+        raise FailureDiagnosticsUnavailable("diagnostic trace changed during read")
+    details = record.get("host_failure_details", [])
+    detail = details[0] if details else None
+    if detail is not None and detail.get("error_code"):
+        blocker = {
+            "phase": detail.get("host_stage") or "host_operation",
+            "error_code": detail["error_code"],
+            "field_path": detail.get("field_path") or "not_recorded",
+            "constraint": detail.get("constraint") or "not_recorded",
+            "responsibility": detail.get("responsibility") or "undetermined",
+            "recovery_action": detail.get("recovery_action")
+            or "contact_platform_with_invocation_id",
+            "evidence": "recorded",
+        }
+    else:
+        rejected = next((operation for operation in prior["host_operations"]
+                         if operation["event"] == "host.operation.completed"
+                         and operation["capability"] == "aigc.task.assets.localize/1"
+                         and operation.get("status") in {
+                             "rejected", "not_found", "unavailable",
+                         }), None)
+        status = rejected.get("status") if rejected else None
+        code = rejected.get("error_code") if rejected else None
+        if code == "LOCAL_GATEWAY.DEVICE_NOT_READY":
+            responsibility, action = "environment", "reconnect_helper"
+        elif code == "LOCAL_GATEWAY.IDEMPOTENCY_CONFLICT":
+            responsibility, action = "developer", "correct_request"
+        elif status == "not_found":
+            code = "AIGC_TASK_NOT_FOUND_OR_UNAUTHORIZED"
+            responsibility, action = "developer", "verify_task_binding"
+        elif status == "unavailable":
+            code = "AIGC_BINDING_UNAVAILABLE"
+            responsibility, action = "platform", "contact_platform_with_invocation_id"
+        else:
+            responsibility, action = "undetermined", "contact_platform_with_invocation_id"
+        blocker = {
+            "phase": ("task_binding" if status in {"not_found", "unavailable"}
+                      else "task_dispatch") if rejected else
+            (prior["first_failure"].get("phase") or "not_recorded"),
+            "error_code": code,
+            "field_path": "not_recorded", "constraint": "not_recorded",
+            "responsibility": responsibility,
+            "recovery_action": action,
+            "evidence": "recorded" if code else "historical_detail_not_recorded",
+        }
+    result["blocker"] = blocker
+    return result
 
 
 def search_developer_failures(

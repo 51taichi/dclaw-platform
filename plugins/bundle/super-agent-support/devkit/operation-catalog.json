@@ -67,6 +67,19 @@
     "retention_days": 30,
     "limit_per_minute": 30
   },
+  "developer_reference_diagnostics_v5": {
+    "contract": "developer.runtime.diagnostics.by-reference/5",
+    "minimum_plugin_version": "1.18.38",
+    "method": "GET",
+    "path_template": "/api/user/super-expert-publishing/runtime-diagnostics/v5/references/{invocation_id}?agent_id={agent_id}",
+    "authentication": "signed-in owner of the expert",
+    "request_schema": "schemas/runtime-diagnostics-v5/by-reference-request.schema.json",
+    "response_schema": "schemas/runtime-diagnostics-v5/by-reference-response.schema.json",
+    "error_schema": "schemas/runtime-diagnostics-v5/error.schema.json",
+    "api_demo": "runtime_diagnostics_api_demo.py",
+    "retention_days": 30,
+    "limit_per_minute": 30
+  },
   "developer_diagnostic_search": {
     "contract": "developer.runtime.diagnostics.search/1",
     "minimum_plugin_version": "1.18.28",

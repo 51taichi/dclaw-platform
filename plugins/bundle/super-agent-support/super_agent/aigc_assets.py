@@ -19,6 +19,10 @@ _USAGES = {
 _DESTINATIONS = {"res", "task_root"}
 
 
+class AigcAssetSelectionError(ValueError):
+    pass
+
+
 def _bound_context(
     *, task: Any, adapter: Any, user_id: str,
     installation_id: str, conversation_id: str,
@@ -109,7 +113,7 @@ def prepare_owned_aigc_localization(
     requested_assets: Any,
 ) -> list[dict[str, Any]]:
     if not isinstance(requested_assets, list) or not 1 <= len(requested_assets) <= 100:
-        raise ValueError("invalid asset selection")
+        raise AigcAssetSelectionError("invalid asset selection")
     context = _bound_context(
         task=task, adapter=adapter, user_id=user_id,
         installation_id=installation_id,
@@ -127,7 +131,7 @@ def prepare_owned_aigc_localization(
         if not isinstance(selection, dict) or set(selection) != {
             "asset_id", "usage", "slot", "order", "destination",
         }:
-            raise ValueError("invalid asset selection")
+            raise AigcAssetSelectionError("invalid asset selection")
         asset_id = selection.get("asset_id")
         usage = selection.get("usage")
         slot = selection.get("slot")
@@ -144,7 +148,7 @@ def prepare_owned_aigc_localization(
             or (usage == "final_output" and destination != "task_root")
             or (usage != "final_output" and destination != "res")
         ):
-            raise ValueError("invalid asset selection")
+            raise AigcAssetSelectionError("invalid asset selection")
         source = by_id.get(asset_id)
         if source is None:
             raise AigcResourceError("ASSET_NOT_FOUND")

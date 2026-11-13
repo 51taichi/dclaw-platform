@@ -1,5 +1,9 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.30 bundles standard 2.52 and DevKit 1.9.20. The owner-scoped
+diagnostics v5 read gives a safe Host blocker and recovery action for new
+AIGC localization failures while marking missing historical detail unknown.
+
 Version 1.10.29 bundles standard 2.51 and DevKit 1.9.19. A signed-in expert
 owner can read redacted Host operations for committed business-blocked turns
 through diagnostics v4. Historical missing operation fields remain unknown.

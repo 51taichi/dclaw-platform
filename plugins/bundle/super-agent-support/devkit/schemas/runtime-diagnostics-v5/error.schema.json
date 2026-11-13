@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "developer.runtime.diagnostics.by-reference/5 HTTP error",
+  "type": "object",
+  "required": ["detail"],
+  "properties": {"detail": {"enum": ["diagnostic not found", "diagnostics unavailable"]}},
+  "additionalProperties": false
+}

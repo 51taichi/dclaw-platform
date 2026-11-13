@@ -237,6 +237,37 @@ class PublisherPublication:
         }
 
     def _register_routes(self) -> None:
+        @self.router.get("/runtime-diagnostics/v5/references/{invocation_id}")
+        async def read_diagnostic_reference_v5(
+            invocation_id: str, agent_id: str, request: Request,
+        ) -> dict[str, Any]:
+            tenant_id, user_id = _actor(request)
+            if self.repository.agent_owner(agent_id) != (tenant_id, user_id):
+                raise HTTPException(status_code=404, detail="diagnostic not found")
+            self._limit_diagnostic_reads(tenant_id, user_id)
+            from .composition import resolve_event_scope
+            from .local_host import read_invocation_task_summaries
+
+            try:
+                result = failure_diagnostics.read_developer_invocation_by_reference_v5(
+                    storage_root=Path(WORKING_DIR) / "workspace_runtime_state",
+                    grants=self.handler.grant_repository,
+                    agent_id=agent_id, tenant_id=tenant_id,
+                    invocation_id=invocation_id,
+                    owner_resolver=resolve_event_scope,
+                    task_lookup=read_invocation_task_summaries,
+                )
+            except failure_diagnostics.FailureDiagnosticsUnauthorized as exc:
+                raise HTTPException(status_code=404, detail="diagnostic not found") from exc
+            except failure_diagnostics.FailureDiagnosticsUnavailable as exc:
+                raise HTTPException(status_code=503, detail="diagnostics unavailable") from exc
+            _diagnostic_audit.info(
+                "developer reference v5 read actor=%s agent=%s reference=%s status=%s",
+                failure_diagnostics._scope(user_id)[:12], agent_id,
+                failure_diagnostics._scope(invocation_id)[:12], result["status"],
+            )
+            return result
+
         @self.router.get("/runtime-diagnostics/v4/references/{invocation_id}")
         async def read_diagnostic_reference_v4(
             invocation_id: str, agent_id: str, request: Request,

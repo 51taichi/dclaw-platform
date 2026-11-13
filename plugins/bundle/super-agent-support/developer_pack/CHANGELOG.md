@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.10.30 - 2026-11-14
+
+- Bundles standard 2.52 and DevKit 1.9.20 with owner-scoped, redacted
+  AIGC localization Host blocker diagnostics and a versioned API example.
+
 ## 1.10.29 - 2026-11-13
 
 - Bundles standard 2.51 and DevKit 1.9.19 with owner-scoped diagnostics for

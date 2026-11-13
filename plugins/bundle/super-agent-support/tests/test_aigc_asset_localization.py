@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import asyncio
 import json
 from pathlib import Path
 
@@ -9,9 +10,28 @@ from super_agent.aigc_assets import (
     list_owned_aigc_assets,
     prepare_owned_aigc_localization,
 )
+from super_agent import local_host
+from contracts import ERRORS
 
 
 ROOT = Path(__file__).parents[1]
+
+
+def test_localization_device_rejection_returns_scoped_receipt(monkeypatch):
+    class OfflineService:
+        async def _aigc_assets_localize(self, *_):
+            raise ERRORS["DEVICE_NOT_READY"]
+
+    monkeypatch.setattr(local_host, "_service", OfflineService())
+    result = asyncio.run(local_host.dispatch_aigc_asset_localization(
+        material_task_id="material-1", assets=[{"asset_id": "asset-1"}],
+        idempotency_key="localize-1", tenant_id="local", user_id="user-1",
+        session_id="session-1", agent_id="comic", agent_name="comic",
+        installation_id="install-1", release_id="release-1",
+        invocation_id="a" * 32,
+    ))
+    assert result == {"contract": "local.task.receipt/1", "status": "rejected",
+                      "error_code": "LOCAL_GATEWAY.DEVICE_NOT_READY"}
 
 
 class _Assets:

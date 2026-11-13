@@ -151,6 +151,35 @@ class WorkspaceOrchestrationError(RuntimeError):
         self.diagnostic_ref = diagnostic_ref
 
 
+class AigcLocalizationHostError(WorkspaceOrchestrationError):
+    def __init__(self, *, stage: str, code: str, responsibility: str,
+                 recovery_action: str, field_path: str = "not_recorded",
+                 constraint: str = "not_recorded") -> None:
+        super().__init__("orchestration_error")
+        self.stage = stage
+        self.diagnostic_code = code
+        self.responsibility = responsibility
+        self.recovery_action = recovery_action
+        self.field_path = field_path
+        self.constraint = constraint
+
+
+def _log_aigc_localization_internal_error(
+    exc: Exception, *, stage: str, invocation_id: str,
+) -> None:
+    frame = exc.__traceback__
+    while frame is not None and frame.tb_next is not None:
+        frame = frame.tb_next
+    source = (
+        f"{Path(frame.tb_frame.f_code.co_filename).name}:{frame.tb_lineno}"
+        if frame is not None else "not_recorded"
+    )
+    logger.error(
+        "AIGC localization Host error invocation=%s stage=%s type=%s source=%s",
+        invocation_id, stage, type(exc).__name__, source,
+    )
+
+
 class WorkspaceTurnResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -931,6 +960,7 @@ async def run_workspace_orchestration_turn(
                 )
             else:
                 code = getattr(exc, "error_code", None)
+                aigc_failure = exc if isinstance(exc, AigcLocalizationHostError) else None
                 _append_runtime_trace(
                     state_storage_root,
                     installation_id=authorization.installation_id,
@@ -939,8 +969,22 @@ async def run_workspace_orchestration_turn(
                     event_type="host.operation.failed",
                     payload={
                         "capability": capability,
-                        "category": "host_rejected" if isinstance(exc, WorkspaceOrchestrationError) else "host_exception",
-                        "error_code": code if isinstance(code, str) and _failure_diagnostics._ERROR_CODE.fullmatch(code) else None,
+                        "category": (
+                            "host_internal" if aigc_failure and aigc_failure.responsibility == "platform"
+                            else "host_rejected" if isinstance(exc, WorkspaceOrchestrationError)
+                            else "host_exception"
+                        ),
+                        "error_code": (
+                            aigc_failure.diagnostic_code if aigc_failure else
+                            code if isinstance(code, str) and _failure_diagnostics._ERROR_CODE.fullmatch(code) else None
+                        ),
+                        **({
+                            "host_stage": aigc_failure.stage,
+                            "field_path": aigc_failure.field_path,
+                            "constraint": aigc_failure.constraint,
+                            "responsibility": aigc_failure.responsibility,
+                            "recovery_action": aigc_failure.recovery_action,
+                        } if aigc_failure else {}),
                         "duration_ms": max(0, round((time.perf_counter() - started_at) * 1000)),
                     },
                 )
@@ -2296,15 +2340,31 @@ async def handle_workspace_turn(
                 if set(payload) != {
                     "material_task_id", "assets", "idempotency_key",
                 }:
-                    raise WorkspaceOrchestrationError("orchestration_error")
+                    raise AigcLocalizationHostError(
+                        stage="request_validation", code="INVALID_LOCALIZE_REQUEST",
+                        responsibility="developer", recovery_action="correct_request",
+                        field_path="request", constraint="FIELD_SET_MISMATCH",
+                    )
                 material_task_id = payload.get("material_task_id")
                 idempotency_key = payload.get("idempotency_key")
                 if (
                     not isinstance(material_task_id, str)
                     or not isinstance(idempotency_key, str)
                 ):
-                    raise WorkspaceOrchestrationError("orchestration_error")
-                from .aigc_assets import prepare_owned_aigc_localization
+                    raise AigcLocalizationHostError(
+                        stage="request_validation", code="INVALID_LOCALIZE_REQUEST",
+                        responsibility="developer", recovery_action="correct_request",
+                        field_path="request", constraint="STRING_REQUIRED",
+                    )
+                if not 1 <= len(idempotency_key) <= 160:
+                    raise AigcLocalizationHostError(
+                        stage="request_validation", code="INVALID_IDEMPOTENCY_KEY",
+                        responsibility="developer", recovery_action="correct_request",
+                        field_path="idempotency_key", constraint="LENGTH_INVALID",
+                    )
+                from .aigc_assets import (
+                    AigcAssetSelectionError, prepare_owned_aigc_localization,
+                )
                 from .local_host import dispatch_aigc_asset_localization
                 from qwenpaw.app.aigc.resource_store import AigcResourceError
 
@@ -2320,23 +2380,62 @@ async def handle_workspace_turn(
                         conversation_id=str(request.session_id),
                         requested_assets=payload.get("assets"),
                     )
-                except (AigcResourceError, ValueError, OSError, RuntimeError):
-                    raise WorkspaceOrchestrationError(
-                        "orchestration_error",
+                except AigcResourceError as exc:
+                    request_issue = exc.code in {
+                        "ASSET_NOT_FOUND", "ASSET_BINDING_MISMATCH",
+                    }
+                    raise AigcLocalizationHostError(
+                        stage="asset_validation", code=(
+                            exc.code if exc.code in {
+                                "ASSET_NOT_FOUND", "ASSET_BINDING_MISMATCH",
+                                "ASSET_FILE_NOT_FOUND",
+                            } else "HOST_INTERNAL_ERROR"
+                        ), responsibility="developer" if request_issue else "platform",
+                        recovery_action=(
+                            "refresh_asset_list_and_correct_request" if request_issue
+                            else "contact_platform_with_invocation_id"
+                        ),
+                        field_path="assets" if request_issue else "not_recorded",
+                        constraint="OWNED_ASSET_REQUIRED" if request_issue else "not_recorded",
                     ) from None
-                return await dispatch_aigc_asset_localization(
-                    material_task_id=material_task_id,
-                    assets=localized_assets,
-                    idempotency_key=idempotency_key,
-                    tenant_id=tenant_id,
-                    user_id=str(request.user_id),
-                    session_id=str(request.session_id),
-                    agent_id=agent_id,
-                    agent_name=agent_name,
-                    installation_id=authorization.installation_id,
-                    release_id=authorization.release_id,
-                    invocation_id=invocation_id,
-                )
+                except AigcAssetSelectionError:
+                    raise AigcLocalizationHostError(
+                        stage="asset_validation", code="INVALID_ASSET_SELECTION",
+                        responsibility="developer", recovery_action="correct_request",
+                        field_path="assets", constraint="SELECTION_INVALID",
+                    ) from None
+                except Exception as exc:
+                    _log_aigc_localization_internal_error(
+                        exc, stage="asset_preparation", invocation_id=invocation_id,
+                    )
+                    raise AigcLocalizationHostError(
+                        stage="asset_preparation", code="HOST_INTERNAL_ERROR",
+                        responsibility="platform",
+                        recovery_action="contact_platform_with_invocation_id",
+                    ) from None
+                try:
+                    return await dispatch_aigc_asset_localization(
+                        material_task_id=material_task_id,
+                        assets=localized_assets,
+                        idempotency_key=idempotency_key,
+                        tenant_id=tenant_id,
+                        user_id=str(request.user_id),
+                        session_id=str(request.session_id),
+                        agent_id=agent_id,
+                        agent_name=agent_name,
+                        installation_id=authorization.installation_id,
+                        release_id=authorization.release_id,
+                        invocation_id=invocation_id,
+                    )
+                except Exception as exc:
+                    _log_aigc_localization_internal_error(
+                        exc, stage="task_dispatch", invocation_id=invocation_id,
+                    )
+                    raise AigcLocalizationHostError(
+                        stage="task_dispatch", code="HOST_INTERNAL_ERROR",
+                        responsibility="platform",
+                        recovery_action="contact_platform_with_invocation_id",
+                    ) from None
             if capability in {
                 "local.task.start/1", "local.task.read/1", "local.task.cancel/1",
             }:
