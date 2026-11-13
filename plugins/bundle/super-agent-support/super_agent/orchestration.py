@@ -882,6 +882,11 @@ async def run_workspace_orchestration_turn(
     )
     agent_execute_call_number = 0
     created_interaction_ids: list[str] = []
+    safe_receipt_statuses = frozenset({
+        "queued", "running", "succeeded", "failed", "cancelled",
+        "rejected", "not_found", "unavailable", "pending", "completed",
+        "accepted", "PENDING", "SUBMITTED", "ACCEPTED", "FAILED",
+    })
 
     async def tracked_business_call(
         capability: str,
@@ -889,6 +894,7 @@ async def run_workspace_orchestration_turn(
     ) -> Any:
         if business_call is None:
             raise WorkspaceOrchestrationError("unauthorized_capability")
+        started_at = time.perf_counter()
         if capability.startswith("interaction.card."):
             _append_runtime_trace(
                 state_storage_root,
@@ -896,6 +902,15 @@ async def run_workspace_orchestration_turn(
                 session_id=turn_request.session_id,
                 invocation_id=invocation_id,
                 event_type="interaction.operation.started",
+                payload={"capability": capability},
+            )
+        else:
+            _append_runtime_trace(
+                state_storage_root,
+                installation_id=authorization.installation_id,
+                session_id=turn_request.session_id,
+                invocation_id=invocation_id,
+                event_type="host.operation.started",
                 payload={"capability": capability},
             )
         try:
@@ -914,6 +929,21 @@ async def run_workspace_orchestration_turn(
                         **_failure_diagnostics.classify_interaction_failure(exc, capability),
                     },
                 )
+            else:
+                code = getattr(exc, "error_code", None)
+                _append_runtime_trace(
+                    state_storage_root,
+                    installation_id=authorization.installation_id,
+                    session_id=turn_request.session_id,
+                    invocation_id=invocation_id,
+                    event_type="host.operation.failed",
+                    payload={
+                        "capability": capability,
+                        "category": "host_rejected" if isinstance(exc, WorkspaceOrchestrationError) else "host_exception",
+                        "error_code": code if isinstance(code, str) and _failure_diagnostics._ERROR_CODE.fullmatch(code) else None,
+                        "duration_ms": max(0, round((time.perf_counter() - started_at) * 1000)),
+                    },
+                )
             raise
         if capability.startswith("interaction.card."):
             _append_runtime_trace(
@@ -923,6 +953,25 @@ async def run_workspace_orchestration_turn(
                 invocation_id=invocation_id,
                 event_type="interaction.operation.completed",
                 payload={"capability": capability},
+            )
+        else:
+            receipt = value if isinstance(value, dict) else {}
+            raw_status = receipt.get("status")
+            receipt_status = raw_status if isinstance(raw_status, str) and raw_status in safe_receipt_statuses else None
+            receipt_error = receipt.get("error_code")
+            _append_runtime_trace(
+                state_storage_root,
+                installation_id=authorization.installation_id,
+                session_id=turn_request.session_id,
+                invocation_id=invocation_id,
+                event_type="host.operation.completed",
+                payload={
+                    "capability": capability,
+                    "status": receipt_status,
+                    "error_code": receipt_error if isinstance(receipt_error, str) and _failure_diagnostics._ERROR_CODE.fullmatch(receipt_error) else None,
+                    "task_accepted": bool(receipt.get("contract") == "local.task.receipt/1" and isinstance(receipt.get("task_id"), str)),
+                    "duration_ms": max(0, round((time.perf_counter() - started_at) * 1000)),
+                },
             )
         if capability == "interaction.card.create/1" and isinstance(
             value,

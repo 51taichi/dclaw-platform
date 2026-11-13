@@ -22,6 +22,7 @@ from super_agent.failure_diagnostics import (
     read_developer_failure_by_reference,
     read_developer_failure_by_reference_v2,
     read_developer_failure_by_reference_v3,
+    read_developer_invocation_by_reference_v4,
     search_developer_failures,
     classify_interaction_failure,
 )
@@ -101,6 +102,93 @@ def _args(root: Path, grants=None, owner=None):
         }),
         "now": NOW,
     }
+
+
+def test_v4_reads_committed_business_block_without_exposing_payload(tmp_path):
+    invocation = "e" * 32
+    when = NOW - timedelta(minutes=1)
+    _trace(tmp_path, "old", "customer-task", [
+        {"timestamp": when.isoformat(), "invocation_id": invocation,
+         "event_type": "orchestration.started", "payload": {}},
+        {"timestamp": (when + timedelta(seconds=1)).isoformat(),
+         "invocation_id": invocation, "event_type": "interaction.operation.completed",
+         "payload": {"capability": "interaction.card.read/1"}},
+        {"timestamp": (when + timedelta(seconds=2)).isoformat(),
+         "invocation_id": invocation, "event_type": "host.operation.started",
+         "payload": {"capability": "aigc.task.assets.localize/1", "secret": "private"}},
+        {"timestamp": (when + timedelta(seconds=3)).isoformat(),
+         "invocation_id": invocation, "event_type": "host.operation.completed",
+         "payload": {"capability": "aigc.task.assets.localize/1",
+                     "status": "rejected", "error_code": "DEVICE_UNAVAILABLE",
+                     "task_accepted": False, "duration_ms": 15,
+                     "secret": "private"}},
+        {"timestamp": (when + timedelta(seconds=4)).isoformat(),
+         "invocation_id": invocation, "event_type": "runtime.trace",
+         "payload": {"origin": "agent", "payload": {
+             "event": "agent.turn.failure", "phase": "aigc_asset_localize",
+             "category": "host_or_input", "attempt": 0,
+             "secret": "private"}}},
+        {"timestamp": (when + timedelta(seconds=5)).isoformat(),
+         "invocation_id": invocation, "event_type": "runtime.trace",
+         "payload": {"origin": "host", "payload": {"event": "runtime.complete.accepted"}}},
+        {"timestamp": (when + timedelta(seconds=6)).isoformat(),
+         "invocation_id": invocation, "event_type": "runtime.trace",
+         "payload": {"origin": "host", "payload": {"event": "transaction.committed"}}},
+        {"timestamp": (when + timedelta(seconds=7)).isoformat(),
+         "invocation_id": invocation, "event_type": "orchestration.completed", "payload": {}},
+    ])
+    result = read_developer_invocation_by_reference_v4(
+        storage_root=tmp_path, grants=_grants(), agent_id="comic",
+        tenant_id="local", invocation_id=invocation,
+        owner_resolver=lambda _: {"user_id": "customer", "agent_id": "comic", "tenant_id": "local"},
+        now=NOW,
+    )
+    assert result["runtime_outcome"] == "completed"
+    assert result["transaction_status"] == "committed"
+    assert result["task_acceptance"] == "not_accepted"
+    assert result["first_failure"] == {"phase": "aigc_asset_localize", "category": "host_or_input", "attempt": 0}
+    assert result["host_operations"][1]["error_code"] == "DEVICE_UNAVAILABLE"
+    assert "private" not in json.dumps(result)
+    validate(result, json.loads((SCHEMAS.parent / "runtime-diagnostics-v4" / "by-reference-response.schema.json").read_text()))
+
+
+def test_v4_history_without_host_trace_reports_unknown_acceptance(tmp_path):
+    invocation = "f" * 32
+    _trace(tmp_path, "old", "customer-task", [
+        {"timestamp": (NOW - timedelta(minutes=1, seconds=1)).isoformat(), "invocation_id": invocation,
+         "event_type": "runtime.trace", "payload": {"origin": "agent", "payload": {
+             "event": "transaction.committed",
+         }}},
+        {"timestamp": (NOW - timedelta(minutes=1)).isoformat(), "invocation_id": invocation,
+         "event_type": "orchestration.completed", "payload": {}},
+    ])
+    result = read_developer_invocation_by_reference_v4(
+        storage_root=tmp_path, grants=_grants(), agent_id="comic",
+        tenant_id="local", invocation_id=invocation,
+        owner_resolver=lambda _: {"user_id": "customer", "agent_id": "comic", "tenant_id": "local"},
+        now=NOW,
+    )
+    assert result["status"] == "found"
+    assert result["task_acceptance"] == "not_recorded"
+    assert result["transaction_status"] == "not_recorded"
+
+
+def test_v4_rejects_foreign_task_and_tenant(tmp_path):
+    invocation = "a" * 32
+    _trace(tmp_path, "old", "customer-task", [
+        {"timestamp": (NOW - timedelta(minutes=1)).isoformat(), "invocation_id": invocation,
+         "event_type": "orchestration.completed", "payload": {}},
+    ])
+    params = dict(storage_root=tmp_path, grants=_grants(), agent_id="comic",
+                  tenant_id="local", invocation_id=invocation, now=NOW)
+    with pytest.raises(FailureDiagnosticsUnauthorized):
+        read_developer_invocation_by_reference_v4(
+            **params, owner_resolver=lambda _: {"agent_id": "comic", "tenant_id": "elsewhere"},
+        )
+    assert read_developer_invocation_by_reference_v4(
+        **{**params, "tenant_id": "elsewhere"},
+        owner_resolver=lambda _: {"agent_id": "comic", "tenant_id": "local"},
+    )["status"] == "no_record"
 
 
 def test_reads_latest_cross_installation_failure_without_raw_payload(tmp_path):
@@ -490,6 +578,12 @@ def test_developer_diagnostic_routes_enforce_expert_owner(tmp_path, monkeypatch)
     found = client.get(reference, params={"agent_id": "comic"})
     assert found.status_code == 200
     assert found.json()["host_failure_detail"]["status"] == "not_applicable"
+    turn_reference = f"/runtime-diagnostics/v4/references/{invocation}"
+    assert client.get(turn_reference, params={"agent_id": "foreign"}).status_code == 404
+    turn = client.get(turn_reference, params={"agent_id": "comic"})
+    assert turn.status_code == 200
+    assert turn.json()["runtime_outcome"] == "failed"
+    assert turn.json()["task_acceptance"] == "not_recorded"
     searched = client.get("/runtime-diagnostics/v1/search", params={
         "agent_id": "comic", "start": (when - timedelta(minutes=1)).isoformat(),
         "end": (when + timedelta(minutes=1)).isoformat(),
@@ -569,6 +663,24 @@ def test_developer_diagnostic_demo_uses_https_and_closed_schema(monkeypatch):
         runtime_diagnostics_api_demo.lookup(
             "http://dclaw.example", "comic", "a" * 32, "local-token",
         )
+
+
+def test_developer_diagnostic_demo_reads_completed_turn_v4(monkeypatch):
+    requested = []
+
+    def response(request, timeout):
+        requested.append(request.full_url)
+        return io.BytesIO(json.dumps({
+            "contract": "developer.runtime.diagnostics.by-reference/4",
+            "status": "no_record", "retention_days": 30,
+        }).encode())
+
+    monkeypatch.setattr(runtime_diagnostics_api_demo, "urlopen", response)
+    result = runtime_diagnostics_api_demo.lookup_turn(
+        "https://dclaw.example", "comic", "a" * 32, "local-token",
+    )
+    assert result["status"] == "no_record"
+    assert "/runtime-diagnostics/v4/references/" in requested[0]
 
 
 def test_reference_v2_rate_limit_is_actor_scoped():

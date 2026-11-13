@@ -123,7 +123,10 @@ def _timestamp(value: Any) -> datetime:
     raise FailureDiagnosticsUnavailable("invalid failure trace timestamp")
 
 
-def _trace_failure(path: Path, installation_id: str, session_id: str) -> list[dict[str, Any]]:
+def _trace_failure(
+    path: Path, installation_id: str, session_id: str, *,
+    include_completed: bool = False,
+) -> list[dict[str, Any]]:
     if path.is_symlink() or path.parent.is_symlink() or path.parent.parent.is_symlink():
         raise FailureDiagnosticsUnavailable("unsafe failure trace")
     if not path.exists():
@@ -145,6 +148,8 @@ def _trace_failure(path: Path, installation_id: str, session_id: str) -> list[di
                 event = record.get("event_type")
                 if event not in {
                     "orchestration.started", "runtime.trace", "orchestration.failed",
+                    "orchestration.completed", "host.operation.started",
+                    "host.operation.completed", "host.operation.failed",
                     "orchestration.preflight_failed", "orchestration.message_staged",
                     "agent.execute.safe_started", "agent.execute.safe_completed",
                     "agent.execute.safe_failed",
@@ -225,6 +230,22 @@ def _trace_failure(path: Path, installation_id: str, session_id: str) -> list[di
                 elif event == "orchestration.failed":
                     invocation["failed_at"] = when
                     invocation["error_code"] = _token(payload.get("error_code"))
+                elif event == "orchestration.completed":
+                    invocation["completed_at"] = when
+                elif event in {"host.operation.started", "host.operation.completed", "host.operation.failed"}:
+                    operation = {
+                        "event": event,
+                        "at": when.isoformat(),
+                        "capability": payload.get("capability") if isinstance(payload.get("capability"), str) and _CAPABILITY_ID.fullmatch(payload["capability"]) else "not_recorded",
+                    }
+                    if event != "host.operation.started":
+                        operation["category"] = _token(payload.get("category"))
+                        operation["error_code"] = _token(payload.get("error_code"))
+                        operation["status"] = _token(payload.get("status"))
+                        operation["task_accepted"] = payload.get("task_accepted") if type(payload.get("task_accepted")) is bool else None
+                        duration = payload.get("duration_ms")
+                        operation["duration_ms"] = duration if type(duration) is int and 0 <= duration <= 900_000 else None
+                    invocation.setdefault("host_operations", []).append(operation)
                 elif event == "runtime.trace":
                     trace = payload
                     if trace.get("event") == "agent.turn.failure":
@@ -232,7 +253,7 @@ def _trace_failure(path: Path, installation_id: str, session_id: str) -> list[di
                         invocation.setdefault("failure_events", []).append({
                             "phase": _token(trace.get("phase")) or "not_recorded",
                             "category": _token(trace.get("category")) or "not_recorded",
-                            "attempt": attempt if type(attempt) is int and 1 <= attempt <= 100 else None,
+                            "attempt": attempt if type(attempt) is int and 0 <= attempt <= 100 else None,
                             "source": "agent",
                             "at": when.isoformat(),
                             "status_code": None,
@@ -244,7 +265,7 @@ def _trace_failure(path: Path, installation_id: str, session_id: str) -> list[di
                         invocation["first_failure"] = {
                             "phase": _token(trace.get("phase")),
                             "category": _token(trace.get("category")),
-                            "attempt": attempt if type(attempt) is int and 1 <= attempt <= 100 else None,
+                            "attempt": attempt if type(attempt) is int and 0 <= attempt <= 100 else None,
                         }
                 elif event == "agent.execute.safe_failed":
                     attempt = payload.get("call_number")
@@ -299,9 +320,9 @@ def _trace_failure(path: Path, installation_id: str, session_id: str) -> list[di
     except (OSError, UnicodeError, json.JSONDecodeError, AttributeError) as exc:
         raise FailureDiagnosticsUnavailable("failure trace cannot be read") from exc
     return [
-        {"invocation_id": invocation_id, **value}
+        {"invocation_id": invocation_id, "session_id": session_id, **value}
         for invocation_id, value in invocations.items()
-        if "failed_at" in value
+        if "failed_at" in value or (include_completed and "completed_at" in value)
     ]
 
 
@@ -650,6 +671,108 @@ def read_developer_failure_by_reference_v3(**kwargs: Any) -> dict[str, Any]:
         )},
     }
     return result
+
+
+def read_developer_invocation_by_reference_v4(
+    *, storage_root: Path, grants: Any, agent_id: str, tenant_id: str,
+    invocation_id: str,
+    owner_resolver: Callable[[str], dict[str, Any] | None],
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Read a redacted Host timeline, including business-blocked committed turns."""
+    if re.fullmatch(r"(?:[0-9a-f]{32}|preflight-[0-9a-f]{32})", invocation_id) is None:
+        raise FailureDiagnosticsUnauthorized("invalid diagnostic reference")
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    cutoff = current - READ_WINDOW
+    matches = []
+    inspected = 0
+    for grant in grants.list_grants():
+        if grant.tenant_id != tenant_id or grant.agent_id != agent_id:
+            continue
+        directory = Path(storage_root) / "traces" / _scope(grant.installation_id)
+        if directory.is_symlink():
+            raise FailureDiagnosticsUnavailable("unsafe diagnostic directory")
+        if not directory.exists():
+            continue
+        for path in directory.glob("*.ndjson"):
+            inspected += 1
+            if inspected > 5000:
+                raise FailureDiagnosticsUnavailable("diagnostic search limit exceeded")
+            if path.is_symlink() or not path.is_file():
+                raise FailureDiagnosticsUnavailable("unsafe diagnostic trace")
+            try:
+                if datetime.fromtimestamp(path.stat().st_mtime, timezone.utc) < cutoff:
+                    continue
+                session_id = None
+                with path.open(encoding="utf-8") as stream:
+                    for line in stream:
+                        if invocation_id not in line:
+                            continue
+                        row = json.loads(line)
+                        if isinstance(row, dict) and row.get("invocation_id") == invocation_id:
+                            session_id = row.get("session_id")
+                            if (not isinstance(session_id, str)
+                                    or row.get("installation_id") != grant.installation_id
+                                    or path.name != f"{_scope(session_id)}.ndjson"):
+                                raise FailureDiagnosticsUnavailable("diagnostic trace scope mismatch")
+                            break
+                if session_id is None:
+                    continue
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise FailureDiagnosticsUnavailable("diagnostic trace cannot be read") from exc
+            records = _trace_failure(
+                path, grant.installation_id, session_id,
+                include_completed=True,
+            )
+            for record in records:
+                if record["invocation_id"] != invocation_id:
+                    continue
+                session_id = record["session_id"]
+                owner = owner_resolver(session_id)
+                if owner is None or owner.get("tenant_id") != tenant_id or owner.get("agent_id") != agent_id:
+                    raise FailureDiagnosticsUnauthorized("diagnostic scope denied")
+                ended_at = record.get("failed_at") or record.get("completed_at")
+                if cutoff <= ended_at <= current:
+                    matches.append((grant, session_id, record))
+    if not matches:
+        return {"contract": "developer.runtime.diagnostics.by-reference/4",
+                "status": "no_record", "retention_days": READ_WINDOW.days}
+    if len(matches) != 1:
+        raise FailureDiagnosticsUnavailable("diagnostic reference is ambiguous")
+    grant, session_id, record = matches[0]
+    stages = record.get("stages_v2", [])
+    transaction_events = {
+        stage["event"] for stage in stages
+        if stage["source"] == "host" and stage["event"] in {"transaction.committed", "transaction.discarded"}
+    }
+    transaction_status = (
+        "partially_committed" if len(transaction_events) == 2
+        else "committed" if "transaction.committed" in transaction_events
+        else "discarded" if "transaction.discarded" in transaction_events
+        else "not_recorded"
+    )
+    operations = record.get("host_operations", [])[:100]
+    localization = [operation for operation in operations if operation["capability"] == "aigc.task.assets.localize/1" and operation["event"] == "host.operation.completed"]
+    task_acceptance = (
+        "accepted" if any(operation.get("task_accepted") is True for operation in localization)
+        else "not_accepted" if localization else "not_recorded"
+    )
+    first = record.get("first_failure")
+    return {
+        "contract": "developer.runtime.diagnostics.by-reference/4",
+        "status": "found", "retention_days": READ_WINDOW.days,
+        "task_id": session_id, "invocation_id": invocation_id,
+        "installation_id": grant.installation_id, "release_id": grant.release_id,
+        "started_at": record.get("started_at").isoformat() if record.get("started_at") else None,
+        "ended_at": (record.get("failed_at") or record["completed_at"]).isoformat(),
+        "runtime_outcome": "failed" if "failed_at" in record else "completed",
+        "transaction_status": transaction_status,
+        "first_failure": first or {"phase": None, "category": None, "attempt": None},
+        "first_failure_source": record.get("first_failure_source") or ("agent_trace" if first else "not_recorded"),
+        "task_acceptance": task_acceptance,
+        "host_operations": operations,
+        "stages": stages[:100],
+    }
 
 
 def search_developer_failures(

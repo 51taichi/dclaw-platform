@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.10.29 - 2026-11-13
+
+- Bundles standard 2.51 and DevKit 1.9.19 with owner-scoped diagnostics for
+  completed business-blocked turns and redacted Host operation receipts.
+
 ## 1.10.28 - 2026-11-13
 
 - Bundles standard 2.50 and DevKit 1.9.18 with the optional, owner-scoped

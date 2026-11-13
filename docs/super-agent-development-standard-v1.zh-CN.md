@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.50`
+当前版本：`2.51`
 
 发布日期：`2026-11-12`
 
@@ -2343,6 +2343,8 @@ curl --fail-with-body -H "Authorization: Bearer ${DCLAW_ACCESS_TOKEN}" \
 
 插件 `1.18.28` 起，普通开发者可用相同的专家归属身份读取 `GET /api/user/super-expert-publishing/runtime-diagnostics/v3/references/{invocation_id}?agent_id={agent_id}`。`/v3/` 只增加独立的 Host 终止拒绝详情：稳定 `error_code`、安全 `field_path`、`constraint`、`contract` 和 `recovery_action`，不返回异常消息、请求体、模型输出或客户内容。未知内部异常统一给 `HOST_INTERNAL_ERROR` 与关联 ID；历史 trace 缺字段时返回 `not_recorded`，不能推断具体拒绝码。`/v1/`、`/v2/` 原响应保持不变。Agent 运行时的 `runtime.failure.read/1` 也保持不变。
 
+插件 `1.18.37` 起，普通开发者可在同一身份边界查询 `GET /api/user/super-expert-publishing/runtime-diagnostics/v4/references/{invocation_id}?agent_id={agent_id}`。`/v4/` 同时覆盖失败事务和 `runtime.complete` 后已提交、但业务受阻的回合。Host 对公开业务能力记录脱敏开始、完成和异常事件；仅返回能力 ID、安全状态/错误码、任务是否有受理回执及耗时，不记录请求参数、客户素材、模型正文或异常消息。响应区分 `runtime_outcome`、`transaction_status` 和 `task_acceptance`；历史版本未留存 Host 事件时为 `not_recorded`，不得据此断言任务未创建。任务终态仅以当次已记录的 `local.task.read/1` 回执为准；需要实时状态时使用原任务绑定的正式只读任务接口，不可凭历史诊断推断。正式关闭 Schema、认证示例在 DevKit `1.9.19`。旧 `/v1/` 至 `/v3/` 及 Agent 的 `runtime.failure.read/1` 不变。
+
 若客户端没有给 invocation ID，开发者可查 `GET /api/user/super-expert-publishing/runtime-diagnostics/v1/search?agent_id={agent_id}&start={UTC}&end={UTC}&limit=50`。时间窗至多 24 小时、只查最近 30 天、每页最多返回 50 条失败的任务 ID、invocation ID、Release ID 和时间；没有正文。`has_more=true` 时以 `next_cursor` 原样传入同一时间窗的下一次查询。按同租户及专家绑定的真实任务过滤，不能据此查询其他专家或租户。两种新查询共享每账号每分钟 30 次限流和脱敏审计，`404` 隐藏不存在与越权差别，`429` 限流，`503` 表示诊断不可读。正式 Schema、路径和可运行示例在 DevKit `1.9.13`。
 
 开发者先查看 `failure_events` 的时间顺序及 `outcome`，再以 `final_blocker` 判断本轮最终阻断。`first_failure` 仅为兼容字段，可能是已恢复的早期错误，不能单独当作整轮原因。`status=not_recorded`、`unrecorded_fields` 或 `provider_code/param=null` 表示当时没有留存，不得用模型解释补造。新回合的卡片参数校验失败返回 `field_path`、稳定 `constraint` 及 `contract`；提供方拒绝只记录 HTTP 状态、稳定 code 与 param，不记录错误正文、模型原文、提示词或客户数据。`stages` 中 `interaction.tool.invoked` 才证明模型进入了插件工具；`interaction.operation.started/completed/failed` 分别证明已发起、已完成或已失败的平台卡片操作。没有这些记录的旧回合不能据此推断工具未执行。
@@ -2395,6 +2397,11 @@ Skill 和专家发布前须对每条实际使用的路径同时验证：正确�
 以上是通用 Skill 的平台合同输入。Skill 维护方应在其 `references/capability-verification.md` 补 `/v2/` 的首错和终止根因区分，在 `scripts/runtime_diagnostics_with_login.py` 增加按官方 DevKit v2 Schema 查询和摘要，在相关脚本测试加入已恢复错误、最终阻断、`no_record`、越权及旧版回退案例。平台不直接覆盖 Skill 发布仓库，也不把单个专家的业务字段写成公共规则。
 
 ## 34. 版本记录
+
+### 2.51 - 2026-11-13
+
+- 增加已提交但业务受阻回合的开发者只读诊断合同，定义脱敏 Host 调用、受理状态、事务终态及历史未留存语义。
+- 保持原失败诊断接口和 Agent 运行时诊断合同兼容。
 
 ### 2.50 - 2026-11-13
 

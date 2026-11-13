@@ -199,14 +199,16 @@ async def test_local_demo_requires_stable_key_and_terminal_verified_artifact():
 
 def test_pack_exposes_aigc_and_local_api_references():
     payload, metadata = build_archive(PLUGIN_ROOT)
-    assert metadata["standard"]["version"] == "2.50"
-    assert metadata["devkit_version"] == "1.9.18"
+    assert metadata["standard"]["version"] == "2.51"
+    assert metadata["devkit_version"] == "1.9.19"
     prefix = f"dclaw-super-agent-developer-pack-{metadata['version']}/"
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         names = set(archive.namelist())
         for path in (
             "devkit/aigc_workflow_api_demo.py",
             "devkit/aigc_binding_api_demo.py",
+            "devkit/runtime_diagnostics_api_demo.py",
+            "devkit/schemas/runtime-diagnostics-v4/by-reference-response.schema.json",
             "devkit/local_task_api_demo.py",
             "devkit/examples/aigc-workflow-v1/README.md",
             "devkit/examples/aigc-workflow-v1/submitted-snapshot.sample.json",

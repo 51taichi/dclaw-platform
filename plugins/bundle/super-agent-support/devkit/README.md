@@ -1,5 +1,13 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.19 adds `developer.runtime.diagnostics.by-reference/4` for both
+failed and completed turns. The owner-scoped read returns a redacted Host
+operation timeline, recorded task acceptance, runtime outcome and transaction
+status. A prior release without Host operation traces reports `not_recorded`;
+it does not imply that no task was created. Use
+`runtime_diagnostics_api_demo.py --include-completed --invocation-id ID`.
+The response and error schemas are in `schemas/runtime-diagnostics-v4/`.
+
 Version 1.9.18 adds the closed `aigc.task.binding.resolve/1` schemas and
 `recover_existing_task` demo. The Host resolves one existing task through a
 committed compatible installation chain under the same user and conversation.

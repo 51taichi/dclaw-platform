@@ -1,5 +1,9 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.29 bundles standard 2.51 and DevKit 1.9.19. A signed-in expert
+owner can read redacted Host operations for committed business-blocked turns
+through diagnostics v4. Historical missing operation fields remain unknown.
+
 Version 1.10.28 bundles development standard 2.50 and DevKit 1.9.18. The
 optional `aigc.task.binding.resolve/1` contract finds one owned, existing
 task across committed compatible installations; snapshot, asset listing and
