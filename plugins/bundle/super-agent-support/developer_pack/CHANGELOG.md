@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.10.28 - 2026-11-13
+
+- Bundles standard 2.50 and DevKit 1.9.18 with the optional, owner-scoped
+  AIGC task binding recovery Host contract and closed schemas.
+
 ## 1.10.27 - 2026-11-12
 
 - Bundles development standard 2.49 and DevKit 1.9.17.

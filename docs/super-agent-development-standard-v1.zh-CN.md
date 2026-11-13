@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.49`
+当前版本：`2.50`
 
 发布日期：`2026-11-12`
 
@@ -2356,7 +2356,7 @@ curl --fail-with-body -H "Authorization: Bearer ${DCLAW_ACCESS_TOKEN}" \
 | 开发输入与盘点 | 使用目标实例的 Pack、DevKit、实时目录和当前 Agent 的真实需求；来源、版本和能力授权不明时停止相关节点。 |
 | 业务编排与状态 | 专家负责流程、第三方 API 和版本状态；Host 回执、事务结果和同任务续接分别验证，不以模型正文代替。 |
 | 交互卡 | 先读实时目录和详细 Schema，再建卡并核对 `PENDING`；客户提交后用 `interaction.card.read/1` 按真实 `interaction_id` 读取 `SUBMITTED`、规范化答案和提交回执，对 `event_id` 去重。`not_found`、未提交和回执缺失不推进业务状态。重复点击、刷新、旧卡和失败事务分别留证。 |
-| AIGC | 先读实时工作流目录；`aigc.workflow.create/1` 返回任务并不代表生成完成。仅用 `aigc.task.snapshot/1` 的绑定 `material_task_id` 核对终态和同画布、同节点、同用户的资产 ID；向后续图生视频工作流传资产前还须满足该工作流实时输入 Schema 和访问权限，不能从模型正文猜 ID。 |
+| AIGC | 先读实时工作流目录；`aigc.workflow.create/1` 返回任务并不代表生成完成。仅用 `aigc.task.snapshot/1` 的绑定 `material_task_id` 核对终态和同画布、同节点、同用户的资产 ID；若旧回合已创建画布却未保存 ID，使用可选 `aigc.task.binding.resolve/1` 从可信会话及兼容安装链找回唯一旧任务，不能从模型正文或卡片标题猜 ID。向后续图生视频工作流传资产前还须满足该工作流实时输入 Schema 和访问权限。 |
 | 本地助手 | 只在真实需要时声明能力。能力包由独立 signer 签名，公钥由平台管理员通过插件登记，注册表及安装授权先核对；用 `local.task.start/1` 的同一幂等键取得受理回执，按 `task_id` 用 `local.task.read/1` 回读终态和不透明产物 ID。设备离线、回执丢失或状态不明时原键查询并停止下游，不换键重复启动。 |
 | 密封、发布与诊断 | 用正式 Pack 验证、测试、密封和独立验签；普通账号自助发布后核对实际 Release/installation。失败时凭关联 ID 查询 `/v2/` 的最终阻断，旧 `/v1/`、已签包与现役专家合同并行；没有真实客户端及产物回执不得称端到端验收通过。 |
 
@@ -2386,11 +2386,21 @@ AIGC 任务卡与问答交互卡是不同合同，不能用一者的创建回执
 
 正式机器合同位于 DevKit `schemas/aigc-task-assets-v1/`：`list-request.schema.json`、`list-response.schema.json` 和 `localize-request.schema.json`；本地化响应复用 `schemas/local-task-host-v1/receipt.schema.json`。完整调用示例位于 `examples/aigc-workflow-v1/README.md`，能力与操作入口分别以 `capability-catalog.json` 和 `operation-catalog.json` 为准。开发方不得从本文复制字段替代目标实例 DevKit Schema。
 
+插件 `1.18.36` 起，更新后的专家可选择声明 `aigc.task.binding.resolve/1`。请求只含原 `task_key` 和可选 `content_revision`，也可传空对象，但空对象只在当前可信会话内唯一任务时返回 `found`。Host 沿已提交的 `workspace.state.continuity/1` 回执验证同租户、同用户、同专家、同会话和兼容安装链，再核对画布所有者；结果只返回原任务 ID、来源安装、修订与状态。`not_found`、`ambiguous`、`unavailable` 和 `invalid_request` 均不得触发新建画布。旧任务通过同样的可信校验后可用于现有快照、资产清单和本地化；原任务与作品状态保持不变。完整关闭 Schema 和示例在 DevKit `1.9.18`，随 Developer Pack `1.10.28` 分发。旧签名专家没有声明该可选能力时仍按原合同运行。
+
+专家所有者也可用普通开发账号调用 `GET /api/user/super-expert-publishing/aigc-tasks/v1/sessions/{session_id}/binding?agent_id={agent_id}`，可选传原 `task_key` 和 `content_revision`。该只读接口复用每账号每分钟 30 次限流，记录脱敏审计；按实际客户会话核对专家、租户、用户、兼容安装及画布所有者，不接受客户端指定物理安装或用户。`found` 的 `created_event_persisted` 表示 Host 是否留有同任务的持久创建事件；`current_workspace_references_task=false` 只表示当前工作状态中没有精确的原任务 ID 引用，可帮助定位“创建已成功但绑定未保存”。两项均不推断专家代码为何未写入。`not_found`、`ambiguous`、`unavailable` 不返回其他用户任务。请求/响应 Schema 和 `aigc_binding_api_demo.py` 随 DevKit 发布；开发者在本机登录并把短期访问令牌保存在受控环境变量中，不通过聊天传递凭证。
+
 Skill 和专家发布前须对每条实际使用的路径同时验证：正确目录与 Schema、真实授权、可确认的回执、错误/超时/重放/跨作用域反例，以及一次客户端“触发 → 展示 → 客户操作 → 同任务续接”。参考脚本通过单元测试只证明入参、回执和失败关闭规则，不能证明生产模型、客户端 AIGC 控件或客户设备已经可用。使用 `jsonschema` 等第三方校验器的签名运行时须自带适配版本及依赖，不能从开发包安装状态推断生产沙箱可用。
 
 以上是通用 Skill 的平台合同输入。Skill 维护方应在其 `references/capability-verification.md` 补 `/v2/` 的首错和终止根因区分，在 `scripts/runtime_diagnostics_with_login.py` 增加按官方 DevKit v2 Schema 查询和摘要，在相关脚本测试加入已恢复错误、最终阻断、`no_record`、越权及旧版回退案例。平台不直接覆盖 Skill 发布仓库，也不把单个专家的业务字段写成公共规则。
 
 ## 34. 版本记录
+
+### 2.50 - 2026-11-13
+
+- 插件 `1.18.36` 新增可选 `aigc.task.binding.resolve/1`，按可信身份和已提交的兼容安装链只读找回同会话已创建的唯一任务；快照、资产清单和本地化可使用核验后的旧任务 ID。零匹配、多匹配、越权和损坏回执均失败关闭，不重建画布或改写作品状态。
+- 普通开发账号获得同一专家下的客户会话绑定只读查询及当前工作状态是否精确引用该任务的脱敏标志；查询复用限流和审计，不返回作品内容、素材 URL 或模型正文。
+- DevKit `1.9.18` 和 Developer Pack `1.10.28` 增加关闭 Schema、操作目录和恢复示例。既有已签名专家不变；要主动调用新能力的专家需在下一版声明并获授权。
 
 ### 2.49 - 2026-11-12
 

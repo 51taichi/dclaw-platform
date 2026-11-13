@@ -237,6 +237,48 @@ class PublisherPublication:
         }
 
     def _register_routes(self) -> None:
+        @self.router.get("/aigc-tasks/v1/sessions/{session_id}/binding")
+        async def read_aigc_binding(
+            session_id: str, agent_id: str, request: Request,
+            task_key: str | None = None, content_revision: int | None = None,
+        ) -> dict[str, Any]:
+            tenant_id, user_id = _actor(request)
+            if self.repository.agent_owner(agent_id) != (tenant_id, user_id):
+                raise HTTPException(status_code=404, detail="binding not found")
+            self._limit_diagnostic_reads(tenant_id, user_id)
+            from .aigc_binding import read_developer_binding
+            from .composition import get_super_expert_platform_service, resolve_event_scope
+
+            record = get_sealed_agent_service().get_agent(agent_id)
+            release = record.active_release if record is not None else None
+            grant = (
+                self.handler.grant_repository.find_release_grant(
+                    agent_id, release, tenant_id=tenant_id,
+                ) if release is not None else None
+            )
+            if grant is None:
+                return {"contract": "developer.aigc.binding.lookup/1", "status": "unavailable"}
+            platform = get_super_expert_platform_service()
+            result = read_developer_binding(
+                storage_root=Path(WORKING_DIR) / "workspace_runtime_state",
+                grants=self.handler.grant_repository,
+                task_repository=platform.task_repository,
+                event_repository=platform.event_repository,
+                adapter=platform.aigc,
+                owner_resolver=resolve_event_scope,
+                agent_id=agent_id, tenant_id=tenant_id,
+                installation_id=grant.installation_id,
+                release_id=release.release_id,
+                session_id=session_id, task_key=task_key,
+                content_revision=content_revision,
+            )
+            _diagnostic_audit.info(
+                "developer AIGC binding read actor=%s agent=%s session=%s status=%s",
+                failure_diagnostics._scope(user_id)[:12], agent_id,
+                failure_diagnostics._scope(session_id)[:12], result["status"],
+            )
+            return result
+
         @self.router.get("/runtime-diagnostics/v3/references/{invocation_id}")
         async def read_diagnostic_reference_v3(
             invocation_id: str, agent_id: str, request: Request,

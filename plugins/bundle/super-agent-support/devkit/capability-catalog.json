@@ -17,6 +17,7 @@
     {"capability_id":"interaction.card.read/1","contract_version":"1","group":"interaction","dependencies":[]},
     {"capability_id":"interaction.file.select/1","contract_version":"1","group":"interaction","dependencies":["interaction.card.create/1"]},
     {"capability_id":"aigc.workflow.capabilities.list/1","contract_version":"1","group":"aigc","dependencies":[]},
+    {"capability_id":"aigc.task.binding.resolve/1","contract_version":"1","group":"aigc","dependencies":[]},
     {"capability_id":"aigc.task.snapshot/1","contract_version":"1","group":"aigc","dependencies":[]},
     {"capability_id":"aigc.task.assets.list/1","contract_version":"1","group":"aigc","dependencies":[]},
     {"capability_id":"aigc.task.assets.localize/1","contract_version":"1","group":"aigc","dependencies":[]},

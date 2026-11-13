@@ -16,6 +16,22 @@ Do not set `response_format="json_object"` on that call.
 | 5 | `await host.call("aigc.task.assets.list/1", {"material_task_id": material_task_id})` | Same bound task ID | Owner-scoped asset facts only; no source URL |
 | 6 | `await host.call("aigc.task.assets.localize/1", usage_plan)` | Asset IDs from step 5 plus usage, slot, order, destination and a stable idempotency key | A scoped local-task receipt; the connected Helper downloads the selected files |
 
+If a prior release created the canvas but failed to save the task ID, call
+`aigc.task.binding.resolve/1` with the original `task_key` and optional
+`content_revision`. An empty request succeeds only when exactly one owned AIGC
+task exists in this conversation across committed compatible installations.
+`found` returns the original `material_task_id`; use it with steps 4-6. The
+Host checks the trusted tenant, user, expert, conversation, canvas owner and
+committed continuity chain. `not_found`, `ambiguous` and `unavailable` stop
+the workflow; never guess an ID from visible card text or create a duplicate.
+New releases must declare and receive this optional capability before calling
+it. The closed schemas are in `schemas/aigc-task-binding-v1/`.
+The expert owner can run `aigc_binding_api_demo.py` against the authenticated
+developer endpoint using the same session and key. A `found` response with
+`current_workspace_references_task=false` confirms the Host task exists while
+the current workspace state has no exact ID reference; it does not identify
+which Agent branch omitted the write.
+
 `devkit/aigc_workflow_api_demo.py` is a runnable contract reference for steps
 1, 2 and 4. Its `catalog_tool` and `create_tool` arguments represent the
 Host-registered model tools in a test harness. A sealed runtime does not

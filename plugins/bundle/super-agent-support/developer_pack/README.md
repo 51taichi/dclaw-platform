@@ -1,5 +1,10 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.28 bundles development standard 2.50 and DevKit 1.9.18. The
+optional `aigc.task.binding.resolve/1` contract finds one owned, existing
+task across committed compatible installations; snapshot, asset listing and
+localization accept that verified original task ID without recreating media.
+
 Version 1.10.27 bundles development standard 2.49 and DevKit 1.9.17. The
 legacy read-only AIGC compatibility receipt exposes customer completion as
 `ACCEPTED` while explicitly stating that no Agent review or write occurred.

@@ -2112,6 +2112,33 @@ async def handle_workspace_turn(
         if callable(get_memory):
             conversation_history = list(await get_memory(prepend_summary=True))
 
+        from .aigc_binding import (
+            compatible_installations, owned_task, resolve_existing_binding,
+        )
+
+        def authorized_aigc_task(material_task_id: str):
+            task = platform_service.get_task(material_task_id)
+            try:
+                installations = compatible_installations(
+                    storage_root=Path(WORKING_DIR) / "workspace_runtime_state",
+                    grants=SuperExpertGrantRepository(sealed_root),
+                    agent_id=agent_id, tenant_id=tenant_id,
+                    installation_id=authorization.installation_id,
+                    release_id=authorization.release_id,
+                    session_id=str(request.session_id),
+                    user_id=str(request.user_id),
+                )
+            except StateContinuityError:
+                return None, "unavailable", frozenset()
+            if not owned_task(
+                task=task, adapter=platform_service.aigc,
+                user_id=str(request.user_id),
+                conversation_id=str(request.session_id),
+                allowed_installations=installations,
+            ):
+                return None, "not_found", installations
+            return task, "found", installations
+
         async def business_call(
             capability: str,
             arguments: dict[str, Any],
@@ -2155,6 +2182,29 @@ async def handle_workspace_turn(
                     contract_version=contract_version,
                     arguments=payload,
                 )
+            if capability == "aigc.task.binding.resolve/1":
+                if set(payload) - {"task_key", "content_revision"}:
+                    raise WorkspaceOrchestrationError("orchestration_error")
+                if (
+                    ("task_key" in payload and payload["task_key"] is None)
+                    or ("content_revision" in payload
+                        and payload["content_revision"] is None)
+                ):
+                    return {"contract": capability, "status": "invalid_request"}
+                _, scope_status, installations = authorized_aigc_task("")
+                if scope_status == "unavailable":
+                    return {"contract": capability, "status": "unavailable"}
+                return resolve_existing_binding(
+                    tasks=platform_service.task_repository.list_for_conversations(
+                        {str(request.session_id)},
+                    ),
+                    adapter=platform_service.aigc,
+                    user_id=str(request.user_id),
+                    conversation_id=str(request.session_id),
+                    allowed_installations=installations,
+                    task_key=payload.get("task_key"),
+                    content_revision=payload.get("content_revision"),
+                )
             if capability == "aigc.task.snapshot/1":
                 if set(payload) != {"material_task_id"} or not isinstance(
                     payload.get("material_task_id"), str,
@@ -2162,14 +2212,16 @@ async def handle_workspace_turn(
                     raise WorkspaceOrchestrationError("orchestration_error")
                 from .aigc_snapshot import project_owned_aigc_snapshot
 
-                task = platform_service.get_task(payload["material_task_id"])
+                task, task_status, _ = authorized_aigc_task(
+                    payload["material_task_id"],
+                )
                 if task is None:
-                    return {"contract": capability, "status": "not_found"}
+                    return {"contract": capability, "status": task_status}
                 return project_owned_aigc_snapshot(
                     task=task,
                     adapter=platform_service.aigc,
                     user_id=str(request.user_id),
-                    installation_id=authorization.installation_id,
+                    installation_id=task.binding.installation_id,
                     conversation_id=str(request.session_id),
                 )
             if capability == "aigc.task.assets.list/1":
@@ -2179,14 +2231,16 @@ async def handle_workspace_turn(
                     raise WorkspaceOrchestrationError("orchestration_error")
                 from .aigc_assets import list_owned_aigc_assets
 
-                task = platform_service.get_task(payload["material_task_id"])
+                task, task_status, _ = authorized_aigc_task(
+                    payload["material_task_id"],
+                )
                 if task is None:
-                    return {"contract": capability, "status": "not_found"}
+                    return {"contract": capability, "status": task_status}
                 return list_owned_aigc_assets(
                     task=task,
                     adapter=platform_service.aigc,
                     user_id=str(request.user_id),
-                    installation_id=authorization.installation_id,
+                    installation_id=task.binding.installation_id,
                     conversation_id=str(request.session_id),
                 )
             if capability == "aigc.task.assets.localize/1":
@@ -2205,15 +2259,15 @@ async def handle_workspace_turn(
                 from .local_host import dispatch_aigc_asset_localization
                 from qwenpaw.app.aigc.resource_store import AigcResourceError
 
-                task = platform_service.get_task(material_task_id)
+                task, task_status, _ = authorized_aigc_task(material_task_id)
                 if task is None:
-                    return {"contract": capability, "status": "not_found"}
+                    return {"contract": capability, "status": task_status}
                 try:
                     localized_assets = prepare_owned_aigc_localization(
                         task=task,
                         adapter=platform_service.aigc,
                         user_id=str(request.user_id),
-                        installation_id=authorization.installation_id,
+                        installation_id=task.binding.installation_id,
                         conversation_id=str(request.session_id),
                         requested_assets=payload.get("assets"),
                     )

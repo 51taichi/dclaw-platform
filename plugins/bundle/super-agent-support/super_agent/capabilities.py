@@ -83,6 +83,7 @@ PLATFORM_CAPABILITY_CATALOG_V1 = {
             dependencies=("interaction.card.create/1",),
         ),
         _definition("aigc.workflow.capabilities.list/1", "aigc"),
+        _definition("aigc.task.binding.resolve/1", "aigc"),
         _definition("aigc.task.snapshot/1", "aigc"),
         _definition("aigc.task.assets.list/1", "aigc"),
         _definition("aigc.task.assets.localize/1", "aigc"),

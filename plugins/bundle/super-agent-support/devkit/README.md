@@ -1,5 +1,13 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.18 adds the closed `aigc.task.binding.resolve/1` schemas and
+`recover_existing_task` demo. The Host resolves one existing task through a
+committed compatible installation chain under the same user and conversation.
+An ambiguous, missing or unauthorized match does not create a canvas.
+The signed-in expert owner can use `aigc_binding_api_demo.py` to read the same
+binding, whether the Host persisted its creation event, and whether current
+workspace state contains the exact task ID. The API returns no media or text.
+
 Version 1.9.17 specifies the unambiguous legacy read-only receipt: a
 customer-completed task returns top-level `status=ACCEPTED`,
 `completion_source=customer`, `review_performed=false`, and

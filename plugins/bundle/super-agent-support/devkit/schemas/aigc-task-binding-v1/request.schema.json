@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "aigc.task.binding.resolve/1 request",
+  "type": "object",
+  "properties": {
+    "task_key": {"type": "string", "minLength": 1, "maxLength": 160},
+    "content_revision": {"type": "integer", "minimum": 1}
+  },
+  "dependentRequired": {"content_revision": ["task_key"]},
+  "additionalProperties": false
+}

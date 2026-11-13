@@ -69,6 +69,17 @@
     "retention_days": 30,
     "limit_per_minute": 30
   },
+  "developer_aigc_binding_lookup": {
+    "contract": "developer.aigc.binding.lookup/1",
+    "minimum_plugin_version": "1.18.36",
+    "method": "GET",
+    "path_template": "/api/user/super-expert-publishing/aigc-tasks/v1/sessions/{session_id}/binding?agent_id={agent_id}",
+    "authentication": "signed-in owner of the expert",
+    "request_schema": "schemas/developer-aigc-binding-v1/request.schema.json",
+    "response_schema": "schemas/developer-aigc-binding-v1/response.schema.json",
+    "api_demo": "aigc_binding_api_demo.py",
+    "limit_per_minute": 30
+  },
   "interaction_host": {
     "owner": "dclaw.super-agent-support",
     "transport": "sealed-agent-host.call",
@@ -103,6 +114,13 @@
       "capability_id": "aigc.task.snapshot/1",
       "request_schema": "schemas/aigc-task-snapshot-v1/request.schema.json",
       "response_schema": "schemas/aigc-task-snapshot-v1/response.schema.json"
+    },
+    "binding_resolve": {
+      "minimum_plugin_version": "1.18.36",
+      "transport": "sealed-agent-host.call",
+      "capability_id": "aigc.task.binding.resolve/1",
+      "request_schema": "schemas/aigc-task-binding-v1/request.schema.json",
+      "response_schema": "schemas/aigc-task-binding-v1/response.schema.json"
     },
     "assets": {
       "minimum_plugin_version": "1.18.31",

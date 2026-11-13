@@ -501,6 +501,53 @@ def test_developer_diagnostic_routes_enforce_expert_owner(tmp_path, monkeypatch)
     }).status_code == 404
 
 
+def test_developer_aigc_binding_route_reuses_owner_and_rate_limit(tmp_path, monkeypatch):
+    from super_agent import publication as publication_module
+    from super_agent import aigc_binding
+
+    monkeypatch.setattr(publication_module, "WORKING_DIR", tmp_path)
+    monkeypatch.setattr(publication_module, "get_sealed_agent_service", lambda: SimpleNamespace(
+        get_agent=lambda _: SimpleNamespace(active_release=SimpleNamespace(release_id="release")),
+    ))
+    monkeypatch.setattr(
+        "super_agent.composition.get_super_expert_platform_service",
+        lambda: SimpleNamespace(
+            task_repository=object(), event_repository=object(), aigc=object(),
+        ),
+    )
+    monkeypatch.setattr(
+        "super_agent.composition.resolve_event_scope", lambda _: None,
+    )
+    monkeypatch.setattr(aigc_binding, "read_developer_binding", lambda **_: {
+        "contract": "developer.aigc.binding.lookup/1", "status": "not_found",
+    })
+    publication = object.__new__(PublisherPublication)
+    publication.repository = SimpleNamespace(
+        agent_owner=lambda agent: ("local", "developer") if agent == "comic" else None,
+    )
+    publication.handler = SimpleNamespace(grant_repository=SimpleNamespace(
+        find_release_grant=lambda *_, **__: SimpleNamespace(installation_id="install"),
+    ))
+    publication._diagnostic_read_times = {}
+    publication.router = APIRouter()
+    publication._register_routes()
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def actor(request, call_next):
+        request.state.tenant_id = "local"
+        request.state.user_id = "developer"
+        return await call_next(request)
+
+    app.include_router(publication.router)
+    client = TestClient(app)
+    path = "/aigc-tasks/v1/sessions/customer-task/binding"
+    assert client.get(path, params={"agent_id": "foreign"}).status_code == 404
+    assert client.get(path, params={"agent_id": "comic"}).json() == {
+        "contract": "developer.aigc.binding.lookup/1", "status": "not_found",
+    }
+
+
 def test_developer_diagnostic_demo_uses_https_and_closed_schema(monkeypatch):
     requested = []
 

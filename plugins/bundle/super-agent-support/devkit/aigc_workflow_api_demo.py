@@ -21,6 +21,26 @@ class AigcContractError(ValueError):
 _SNAPSHOT_SCHEMA = json.loads((
     Path(__file__).parent / "schemas/aigc-task-snapshot-v1/response.schema.json"
 ).read_text(encoding="utf-8"))
+_BINDING_SCHEMA = json.loads((
+    Path(__file__).parent / "schemas/aigc-task-binding-v1/response.schema.json"
+).read_text(encoding="utf-8"))
+
+
+async def recover_existing_task(
+    host: Any, *, task_key: str | None = None,
+    content_revision: int | None = None,
+) -> dict[str, Any]:
+    """Read a unique owned task after a compatible installation upgrade."""
+    request: dict[str, Any] = {}
+    if task_key is not None:
+        request["task_key"] = task_key
+    if content_revision is not None:
+        request["content_revision"] = content_revision
+    reply = await host.call("aigc.task.binding.resolve/1", request)
+    Draft202012Validator(_BINDING_SCHEMA).validate(reply)
+    if reply["status"] != "found":
+        raise AigcContractError(f"AIGC binding {reply['status']}")
+    return reply
 
 
 def _tool_payload(reply: Any) -> dict[str, Any]:

@@ -11,6 +11,10 @@ import pytest
 
 from qwenpaw.app.sealed_agents.package import inspect_extracted_payload
 from super_agent import state_continuity as continuity
+from super_agent.aigc_binding import (
+    compatible_installations, read_developer_binding, resolve_existing_binding,
+)
+from super_agent.aigc_tools import _identity
 
 
 CONTRACT = continuity.StateContract(
@@ -95,6 +99,93 @@ def test_continuous_two_upgrades_are_atomic_and_idempotent(tmp_path):
     target = json.loads(target_file.read_text(encoding="utf-8"))
     assert target["revisions"] == REVISIONS
     assert target["identity"]["installation_id"] == "installation-2"
+
+
+def test_aigc_binding_resolves_only_one_owned_task_through_committed_chain(tmp_path):
+    sealed, storage, record, repository, grants, _ = setup_chain(tmp_path)
+    resume(sealed, storage, record, repository, grants[1])
+    record.active_release_id = "release-2"
+    resume(sealed, storage, record, repository, grants[2])
+    scope = dict(
+        storage_root=storage, grants=repository, agent_id="comic",
+        tenant_id="tenant", installation_id="installation-2",
+        release_id="release-2", session_id="task", user_id="user",
+    )
+    lineage = compatible_installations(**scope)
+    assert lineage == frozenset({
+        "installation-0", "installation-1", "installation-2",
+    })
+    material_id = "material-1"
+    binding = SimpleNamespace(
+        installation_id="installation-0", conversation_id="task",
+        agent_task_id="content-" + _identity(
+            "installation-0", "task", "production",
+        ),
+        content_revision=1, material_task_id=material_id, canvas_id="canvas-1",
+    )
+    task = SimpleNamespace(binding=binding, status=SimpleNamespace(value="ACCEPTED"))
+    canvas = SimpleNamespace(id="canvas-1", meta={
+        "owner_user_id": "user", "super_expert_material_task_id": material_id,
+    })
+    adapter = SimpleNamespace(workflow_context=lambda **_: (canvas, []))
+    request = dict(
+        tasks=(task,), adapter=adapter, user_id="user",
+        conversation_id="task", allowed_installations=lineage,
+    )
+    found = resolve_existing_binding(**request, task_key="production", content_revision=1)
+    assert found["status"] == "found"
+    assert found["material_task_id"] == material_id
+    assert resolve_existing_binding(**request) == found
+    assert resolve_existing_binding(**request, task_key="other")["status"] == "not_found"
+    assert resolve_existing_binding(**{**request, "user_id": "other"})["status"] == "not_found"
+    assert resolve_existing_binding(**{**request, "tasks": (task, task)})["status"] == "ambiguous"
+    with pytest.raises(continuity.StateContinuityError):
+        compatible_installations(**{**scope, "tenant_id": "other"})
+    with pytest.raises(continuity.StateContinuityError):
+        compatible_installations(**{**scope, "user_id": "other"})
+    developer_args = dict(
+        storage_root=storage, grants=repository,
+        task_repository=SimpleNamespace(
+            list_for_conversations=lambda _: (task,),
+        ),
+        event_repository=SimpleNamespace(
+            list_for_session=lambda **_: (
+                SimpleNamespace(event_type="aigc.task.created", material_task_id=material_id),
+            ),
+        ),
+        adapter=adapter,
+        owner_resolver=lambda _: {
+            "agent_id": "comic", "tenant_id": "tenant",
+            "session_id": "task", "user_id": "user",
+        },
+        agent_id="comic", tenant_id="tenant",
+        installation_id="installation-2", release_id="release-2",
+        session_id="task",
+    )
+    developer_result = read_developer_binding(**developer_args)
+    assert developer_result["contract"] == "developer.aigc.binding.lookup/1"
+    assert developer_result["material_task_id"] == material_id
+    assert developer_result["created_event_persisted"] is True
+    assert developer_result["current_workspace_references_task"] is False
+    assert read_developer_binding(
+        **{**developer_args, "owner_resolver": lambda _: None},
+    )["status"] == "not_found"
+    target_file = continuity._only_state_file(
+        continuity._state_dir(storage, "installation-2", "task"),
+    )
+    target_state = json.loads(target_file.read_text())
+    target_state["recovered_material_task_id"] = material_id
+    target_file.write_text(json.dumps(target_state))
+    assert compatible_installations(**scope) == lineage
+    assert read_developer_binding(**developer_args)[
+        "current_workspace_references_task"
+    ] is True
+    receipt_path = continuity._receipt_path(storage, "installation-2", "task")
+    receipt = json.loads(receipt_path.read_text())
+    receipt["status"] = "prepared"
+    receipt_path.write_text(json.dumps(receipt))
+    with pytest.raises(continuity.StateContinuityError):
+        compatible_installations(**scope)
 
 
 def test_retired_source_does_not_block_activation_or_create_empty_state(tmp_path):

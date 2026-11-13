@@ -10,6 +10,7 @@ import pytest
 
 from devkit.aigc_workflow_api_demo import (
     AigcContractError, create_workflow, read_submitted_asset,
+    recover_existing_task,
 )
 from devkit.local_task_api_demo import (
     LocalTaskContractError, read_local_result, start_local_task,
@@ -73,6 +74,25 @@ LOCAL_RECEIPT = {
     "status": "succeeded", "error_code": None,
     "artifact_ids": ["artifact_" + "a" * 32], "result_sha256": "b" * 64,
 }
+
+
+@pytest.mark.asyncio
+async def test_recover_existing_task_uses_closed_host_contract():
+    class Host:
+        async def call(self, capability, arguments):
+            assert capability == "aigc.task.binding.resolve/1"
+            assert arguments == {"task_key": "production", "content_revision": 1}
+            return {
+                "contract": capability, "status": "found",
+                "material_task_id": "material-1",
+                "source_installation_id": "installation-1",
+                "content_revision": 1, "task_status": "ACCEPTED",
+            }
+
+    result = await recover_existing_task(
+        Host(), task_key="production", content_revision=1,
+    )
+    assert result["material_task_id"] == "material-1"
 
 
 @pytest.mark.asyncio
@@ -179,19 +199,24 @@ async def test_local_demo_requires_stable_key_and_terminal_verified_artifact():
 
 def test_pack_exposes_aigc_and_local_api_references():
     payload, metadata = build_archive(PLUGIN_ROOT)
-    assert metadata["standard"]["version"] == "2.49"
-    assert metadata["devkit_version"] == "1.9.17"
+    assert metadata["standard"]["version"] == "2.50"
+    assert metadata["devkit_version"] == "1.9.18"
     prefix = f"dclaw-super-agent-developer-pack-{metadata['version']}/"
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         names = set(archive.namelist())
         for path in (
             "devkit/aigc_workflow_api_demo.py",
+            "devkit/aigc_binding_api_demo.py",
             "devkit/local_task_api_demo.py",
             "devkit/examples/aigc-workflow-v1/README.md",
             "devkit/examples/aigc-workflow-v1/submitted-snapshot.sample.json",
             "devkit/examples/local-task-host-v1/README.md",
             "devkit/examples/local-task-host-v1/task-success.sample.json",
             "devkit/schemas/aigc-task-snapshot-v1/response.schema.json",
+            "devkit/schemas/aigc-task-binding-v1/request.schema.json",
+            "devkit/schemas/aigc-task-binding-v1/response.schema.json",
+            "devkit/schemas/developer-aigc-binding-v1/request.schema.json",
+            "devkit/schemas/developer-aigc-binding-v1/response.schema.json",
             "devkit/schemas/aigc-task-assets-v1/list-request.schema.json",
             "devkit/schemas/aigc-task-assets-v1/list-response.schema.json",
             "devkit/schemas/aigc-task-assets-v1/localize-request.schema.json",
