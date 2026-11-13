@@ -246,6 +246,7 @@ class PublisherPublication:
                 raise HTTPException(status_code=404, detail="diagnostic not found")
             self._limit_diagnostic_reads(tenant_id, user_id)
             from .composition import resolve_event_scope
+            from .local_host import read_invocation_task_summaries
 
             try:
                 result = failure_diagnostics.read_developer_invocation_by_reference_v4(
@@ -254,6 +255,7 @@ class PublisherPublication:
                     agent_id=agent_id, tenant_id=tenant_id,
                     invocation_id=invocation_id,
                     owner_resolver=resolve_event_scope,
+                    task_lookup=read_invocation_task_summaries,
                 )
             except failure_diagnostics.FailureDiagnosticsUnauthorized as exc:
                 raise HTTPException(status_code=404, detail="diagnostic not found") from exc

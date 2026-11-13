@@ -35,6 +35,7 @@ from super_agent.publication import PublisherPublication
 from super_agent.router import _memory_message_ids
 from super_agent.trust import SuperExpertTrustStore
 from devkit import runtime_diagnostics_api_demo
+from store import StateStore
 
 
 NOW = datetime(2026, 11, 5, 10, 0, tzinfo=timezone.utc)
@@ -146,6 +147,7 @@ def test_v4_reads_committed_business_block_without_exposing_payload(tmp_path):
     assert result["runtime_outcome"] == "completed"
     assert result["transaction_status"] == "committed"
     assert result["task_acceptance"] == "not_accepted"
+    assert result["task_evidence"] == "not_recorded"
     assert result["first_failure"] == {"phase": "aigc_asset_localize", "category": "host_or_input", "attempt": 0}
     assert result["host_operations"][1]["error_code"] == "DEVICE_UNAVAILABLE"
     assert "private" not in json.dumps(result)
@@ -171,6 +173,58 @@ def test_v4_history_without_host_trace_reports_unknown_acceptance(tmp_path):
     assert result["status"] == "found"
     assert result["task_acceptance"] == "not_recorded"
     assert result["transaction_status"] == "not_recorded"
+    assert result["task_evidence"] == "not_recorded"
+
+
+def test_v4_reads_scoped_live_task_terminal_state(tmp_path):
+    invocation = "e" * 32
+    _trace(tmp_path, "old", "customer-task", [
+        {"timestamp": (NOW - timedelta(minutes=1)).isoformat(), "invocation_id": invocation,
+         "event_type": "orchestration.completed", "payload": {}},
+    ])
+    seen = []
+
+    def lookup(**scope):
+        seen.append(scope)
+        return [{"task_id_sha256": "a" * 64,
+                 "capability": "aigc.task.assets.localize/1", "status": "failed",
+                 "error_code": "DEVICE_NOT_READY", "result_sha256": None,
+                 "secret": "private"}]
+
+    result = read_developer_invocation_by_reference_v4(
+        storage_root=tmp_path, grants=_grants(), agent_id="comic",
+        tenant_id="local", invocation_id=invocation,
+        owner_resolver=lambda _: {"user_id": "customer", "agent_id": "comic", "tenant_id": "local"},
+        task_lookup=lookup, now=NOW,
+    )
+    assert seen == [{"tenant_id": "local", "user_id": "customer", "agent_id": "comic",
+                     "session_id": "customer-task", "installation_id": "old",
+                     "invocation_id": invocation}]
+    assert result["task_acceptance"] == "accepted"
+    assert result["tasks"][0]["status"] == "failed"
+    assert "private" not in json.dumps(result)
+    validate(result, json.loads((SCHEMAS.parent / "runtime-diagnostics-v4" / "by-reference-response.schema.json").read_text()))
+
+
+def test_invocation_task_evidence_is_scoped_and_redacted(tmp_path):
+    store = StateStore(tmp_path / "tasks.sqlite3")
+    task, _ = store.create_task(
+        user_id="customer", agent_id="comic", agent_name="comic",
+        invocation_id="e" * 32, capability_id="aigc.task.assets.localize/1",
+        task_input={"secret": "private input"}, idempotency_key="key",
+        device_id="device", max_concurrency=4, tenant_id="local",
+        session_id="customer-task", installation_id="old", release_id="release",
+    )
+    store.update_task(task["task_id"], status="failed",
+                      error={"code": "DEVICE_NOT_READY", "message": "private error"})
+    scope = dict(tenant_id="local", user_id="customer", agent_id="comic",
+                 session_id="customer-task", installation_id="old", invocation_id="e" * 32)
+    found = store.invocation_task_summaries(**scope)
+    assert len(found) == 1
+    assert found[0]["error_code"] == "DEVICE_NOT_READY"
+    assert "private" not in json.dumps(found)
+    for field in ("tenant_id", "user_id", "agent_id", "session_id", "installation_id", "invocation_id"):
+        assert store.invocation_task_summaries(**{**scope, field: "foreign"}) == []
 
 
 def test_v4_rejects_foreign_task_and_tenant(tmp_path):
@@ -551,9 +605,10 @@ def test_developer_diagnostic_routes_enforce_expert_owner(tmp_path, monkeypatch)
     _trace(tmp_path / "workspace_runtime_state", "old", "customer-task",
            _failure(invocation, when))
     monkeypatch.setattr("super_agent.publication.WORKING_DIR", tmp_path)
+    monkeypatch.setattr("super_agent.local_host.read_invocation_task_summaries", lambda **_: None)
     monkeypatch.setattr(
         "super_agent.composition.resolve_event_scope",
-        lambda _: {"tenant_id": "local", "agent_id": "comic"},
+        lambda _: {"tenant_id": "local", "agent_id": "comic", "user_id": "customer"},
     )
     publication = object.__new__(PublisherPublication)
     publication.repository = SimpleNamespace(

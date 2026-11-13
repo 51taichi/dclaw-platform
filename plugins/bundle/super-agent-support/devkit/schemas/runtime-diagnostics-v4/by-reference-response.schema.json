@@ -23,6 +23,15 @@
         "duration_ms": {"type": ["integer", "null"], "minimum": 0}
       }, "additionalProperties": false
     },
+    "task": {
+      "type": "object", "required": ["task_id_sha256", "capability", "status", "error_code", "result_sha256"],
+      "properties": {
+        "task_id_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "capability": {"type": "string"}, "status": {"type": "string"},
+        "error_code": {"type": ["string", "null"]},
+        "result_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}
+      }, "additionalProperties": false
+    },
     "stage": {
       "type": "object", "required": ["event", "source", "at", "duration_ms"],
       "properties": {
@@ -47,7 +56,7 @@
     },
     {
       "type": "object",
-      "required": ["contract", "status", "retention_days", "task_id", "invocation_id", "installation_id", "release_id", "started_at", "ended_at", "runtime_outcome", "transaction_status", "first_failure", "first_failure_source", "task_acceptance", "host_operations", "stages"],
+      "required": ["contract", "status", "retention_days", "task_id", "invocation_id", "installation_id", "release_id", "started_at", "ended_at", "runtime_outcome", "transaction_status", "first_failure", "first_failure_source", "task_acceptance", "task_evidence", "tasks", "host_operations", "stages"],
       "properties": {
         "contract": {"const": "developer.runtime.diagnostics.by-reference/4"},
         "status": {"const": "found"}, "retention_days": {"const": 30},
@@ -60,6 +69,8 @@
         "first_failure": {"$ref": "#/$defs/first_failure"},
         "first_failure_source": {"enum": ["agent_trace", "host_stage", "platform_preflight", "not_recorded"]},
         "task_acceptance": {"enum": ["accepted", "not_accepted", "not_recorded"]},
+        "task_evidence": {"enum": ["available", "not_recorded"]},
+        "tasks": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/task"}},
         "host_operations": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/host_operation"}},
         "stages": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/stage"}}
       }, "additionalProperties": false

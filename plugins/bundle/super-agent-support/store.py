@@ -841,6 +841,37 @@ class StateStore:
             ).fetchone()
         return self._task(row) if row is not None else None
 
+    def invocation_task_summaries(
+        self, *, tenant_id: str, user_id: str, agent_id: str,
+        session_id: str, installation_id: str, invocation_id: str,
+    ) -> list[dict[str, Any]]:
+        """Read task outcomes only inside the exact trusted invocation scope."""
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT task_id, capability_id, status, error_json, result_json "
+                "FROM tasks WHERE tenant_id=? AND user_id=? AND agent_id=? "
+                "AND session_id=? AND installation_id=? AND invocation_id=? "
+                "ORDER BY created_at, task_id LIMIT 100",
+                (tenant_id, user_id, agent_id, session_id, installation_id, invocation_id),
+            ).fetchall()
+        summaries = []
+        for row in rows:
+            error = json.loads(row["error_json"]) if row["error_json"] else None
+            code = error.get("code") if isinstance(error, dict) else None
+            summaries.append({
+                "task_id_sha256": hashlib.sha256(row["task_id"].encode()).hexdigest(),
+                "capability": row["capability_id"],
+                "status": row["status"],
+                "error_code": code,
+                "result_sha256": (
+                    hashlib.sha256(json.dumps(
+                        json.loads(row["result_json"]), sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()).hexdigest() if row["result_json"] else None
+                ),
+            })
+        return summaries
+
     def get_task_by_idempotency(
         self,
         user_id: str,

@@ -677,6 +677,7 @@ def read_developer_invocation_by_reference_v4(
     *, storage_root: Path, grants: Any, agent_id: str, tenant_id: str,
     invocation_id: str,
     owner_resolver: Callable[[str], dict[str, Any] | None],
+    task_lookup: Callable[..., list[dict[str, Any]] | None] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Read a redacted Host timeline, including business-blocked committed turns."""
@@ -740,6 +741,37 @@ def read_developer_invocation_by_reference_v4(
     if len(matches) != 1:
         raise FailureDiagnosticsUnavailable("diagnostic reference is ambiguous")
     grant, session_id, record = matches[0]
+    owner = owner_resolver(session_id)
+    if owner is None or owner.get("tenant_id") != tenant_id or owner.get("agent_id") != agent_id:
+        raise FailureDiagnosticsUnauthorized("diagnostic scope denied")
+    tasks = None
+    if task_lookup is not None:
+        try:
+            tasks = task_lookup(
+                tenant_id=tenant_id, user_id=str(owner["user_id"]),
+                agent_id=agent_id, session_id=session_id,
+                installation_id=grant.installation_id, invocation_id=invocation_id,
+            )
+        except Exception as exc:
+            raise FailureDiagnosticsUnavailable("task evidence cannot be read") from exc
+    safe_tasks = []
+    if tasks is not None:
+        if not isinstance(tasks, list):
+            raise FailureDiagnosticsUnavailable("invalid task evidence")
+        for task in tasks[:100]:
+            if not isinstance(task, dict):
+                raise FailureDiagnosticsUnavailable("invalid task evidence")
+            digest = task.get("task_id_sha256")
+            result_digest = task.get("result_sha256")
+            if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+                raise FailureDiagnosticsUnavailable("invalid task evidence")
+            safe_tasks.append({
+                "task_id_sha256": digest,
+                "capability": task["capability"] if isinstance(task.get("capability"), str) and _CAPABILITY_ID.fullmatch(task["capability"]) else "not_recorded",
+                "status": _token(task.get("status")) or "not_recorded",
+                "error_code": task.get("error_code") if isinstance(task.get("error_code"), str) and _ERROR_CODE.fullmatch(task["error_code"]) else None,
+                "result_sha256": result_digest if isinstance(result_digest, str) and re.fullmatch(r"[0-9a-f]{64}", result_digest) else None,
+            })
     stages = record.get("stages_v2", [])
     transaction_events = {
         stage["event"] for stage in stages
@@ -754,7 +786,9 @@ def read_developer_invocation_by_reference_v4(
     operations = record.get("host_operations", [])[:100]
     localization = [operation for operation in operations if operation["capability"] == "aigc.task.assets.localize/1" and operation["event"] == "host.operation.completed"]
     task_acceptance = (
-        "accepted" if any(operation.get("task_accepted") is True for operation in localization)
+        "accepted" if any(task["capability"] == "aigc.task.assets.localize/1" for task in safe_tasks)
+        or any(operation.get("task_accepted") is True for operation in localization)
+        else "not_accepted" if tasks is not None
         else "not_accepted" if localization else "not_recorded"
     )
     first = record.get("first_failure")
@@ -770,6 +804,8 @@ def read_developer_invocation_by_reference_v4(
         "first_failure": first or {"phase": None, "category": None, "attempt": None},
         "first_failure_source": record.get("first_failure_source") or ("agent_trace" if first else "not_recorded"),
         "task_acceptance": task_acceptance,
+        "task_evidence": "available" if tasks is not None else "not_recorded",
+        "tasks": safe_tasks,
         "host_operations": operations,
         "stages": stages[:100],
     }

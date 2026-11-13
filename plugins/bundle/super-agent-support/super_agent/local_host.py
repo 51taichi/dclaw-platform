@@ -22,6 +22,12 @@ def bind_local_service(service: Any) -> None:
     _service = service
 
 
+def read_invocation_task_summaries(**scope: str) -> list[dict[str, Any]] | None:
+    if _service is None:
+        return None
+    return _service.store.invocation_task_summaries(**scope)
+
+
 def _scope_key(identity: dict[str, Any]) -> str:
     scope = {key: identity[key] for key in (
         "t", "u", "s", "a", "g",
