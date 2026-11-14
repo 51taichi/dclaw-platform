@@ -81,6 +81,84 @@ async def test_preflight_failure_remains_in_chat_history(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_local_host_dispatch_uses_the_turn_invocation_id(monkeypatch, tmp_path):
+    from super_agent import aigc_assets, aigc_binding, local_host
+
+    _allow_state_preflight(monkeypatch)
+    authorization = SimpleNamespace(
+        installation_id="installation", release_id="release",
+        granted_capabilities={
+            "aigc.task.assets.localize/1": "1",
+            "local.task.start/1": "1",
+        },
+    )
+    monkeypatch.setattr(
+        orchestration, "resolve_active_workspace_authorization",
+        lambda **_: authorization,
+    )
+    task = SimpleNamespace(binding=SimpleNamespace(installation_id="installation"))
+    service = SimpleNamespace(
+        list_session_events=lambda **_: [], interactions=None,
+        get_task=lambda _: task, aigc=object(),
+    )
+    monkeypatch.setattr(
+        orchestration._composition, "get_super_expert_platform_service",
+        lambda: service,
+    )
+    monkeypatch.setattr(
+        orchestration._media_review_context, "current_review_input",
+        lambda **_: None,
+    )
+    monkeypatch.setattr(aigc_binding, "compatible_installations", lambda **_: {"installation"})
+    monkeypatch.setattr(aigc_binding, "owned_task", lambda **_: True)
+    monkeypatch.setattr(
+        aigc_assets, "prepare_owned_aigc_localization",
+        lambda **_: [{"asset_id": "asset-1"}],
+    )
+
+    async def verified(_):
+        return None
+
+    monkeypatch.setattr(aigc_assets, "verify_public_aigc_localization", verified)
+    dispatches = []
+
+    async def localize(**kwargs):
+        dispatches.append(("aigc", kwargs["invocation_id"]))
+        return {"contract": "local.task.receipt/1", "status": "accepted"}
+
+    async def local_task(**kwargs):
+        dispatches.append(("local", kwargs["invocation_id"]))
+        return {"contract": "local.task.receipt/1", "status": "accepted"}
+
+    monkeypatch.setattr(local_host, "dispatch_aigc_asset_localization", localize)
+    monkeypatch.setattr(local_host, "dispatch_local_task", local_task)
+
+    async def stream(**kwargs):
+        await kwargs["business_call"]("aigc.task.assets.localize/1", {
+            "material_task_id": "material-1", "assets": [{"asset_id": "asset-1"}],
+            "idempotency_key": "localize-1",
+        })
+        await kwargs["business_call"]("local.task.start/1", {})
+        yield True, orchestration.WorkspaceTurnResult(
+            message={"reply": "accepted"}, invocation_id=kwargs["invocation_id"],
+        )
+
+    monkeypatch.setattr(orchestration._public_stream, "stream_workspace_turn", stream)
+    result = [item async for item in orchestration.handle_workspace_turn(
+        agent=SimpleNamespace(memory=InMemoryMemory()),
+        messages=[Msg(name="user", role="user", content="download")],
+        request=SimpleNamespace(session_id="task", user_id="user", tenant_id="local"),
+        query="download", mission_info=None, agent_id="comic",
+        agent_name="Comic", workspace_root=tmp_path,
+        orchestration=SimpleNamespace(), standard_stream=None,
+    )]
+    assert result[-1][0].get_text_content() == "accepted"
+    assert len(dispatches) == 2
+    assert dispatches[0][1] == dispatches[1][1]
+    assert len(dispatches[0][1]) == 32
+
+
+@pytest.mark.asyncio
 async def test_incompatible_state_blocks_runtime_and_records_category(monkeypatch, tmp_path):
     from super_agent import state_continuity
 

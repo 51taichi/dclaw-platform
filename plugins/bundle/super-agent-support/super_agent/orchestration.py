@@ -853,8 +853,9 @@ async def run_workspace_orchestration_turn(
     on_public_message: Callable | None = None,
     safe_metadata: dict[str, Any] | None = None,
     timeout_seconds: float | None = None,
+    invocation_id: str | None = None,
 ) -> WorkspaceTurnResult:
-    invocation_id = uuid.uuid4().hex
+    invocation_id = invocation_id or uuid.uuid4().hex
     transaction = WorkspaceStateTransaction.begin(
         state_storage_root,
         installation_id=authorization.installation_id,
@@ -2223,6 +2224,7 @@ async def handle_workspace_turn(
         from .aigc_binding import (
             compatible_installations, owned_task, resolve_existing_binding,
         )
+        invocation_id = uuid.uuid4().hex
 
         def authorized_aigc_task(material_task_id: str):
             task = platform_service.get_task(material_task_id)
@@ -2586,6 +2588,7 @@ async def handle_workspace_turn(
             read_aigc_task=read_aigc_task,
             read_interaction_card=read_interaction_card,
             interaction_receipts=interaction_receipts,
+            invocation_id=invocation_id,
             safe_metadata={
                 "platformEvents": [
                     event.model_dump(mode="json") for event in platform_events
