@@ -294,6 +294,7 @@ class StateStore:
                 ("installation_id", "TEXT NOT NULL DEFAULT ''"),
                 ("release_id", "TEXT NOT NULL DEFAULT ''"),
                 ("local_file_bindings_json", "TEXT NOT NULL DEFAULT '{}'"),
+                ("dispatched_at", "INTEGER"),
             ):
                 if name not in task_columns:
                     db.execute(
@@ -840,6 +841,39 @@ class StateStore:
                 (task_id, user_id),
             ).fetchone()
         return self._task(row) if row is not None else None
+
+    def diagnostic_tasks(
+        self, *, tenant_id: str, agent_id: str, reference: str,
+        reference_type: str, cutoff: int,
+    ) -> list[dict[str, Any]]:
+        column = "task_id" if reference_type == "task" else "invocation_id"
+        with self._connect() as db:
+            rows = db.execute(
+                f"SELECT task_id,user_id,agent_id,tenant_id,session_id,installation_id,"
+                f"release_id,invocation_id,capability_id,device_id,status,error_json,"
+                f"created_at,updated_at,dispatched_at FROM tasks WHERE tenant_id=? AND agent_id=? "
+                f"AND {column}=? AND created_at>=? ORDER BY created_at,task_id LIMIT 100",
+                (tenant_id, agent_id, reference, cutoff),
+            ).fetchall()
+            results = []
+            for row in rows:
+                events = db.execute(
+                    "SELECT event_type,payload_json,created_at FROM task_events "
+                    "WHERE task_id=? ORDER BY sequence LIMIT 100",
+                    (row["task_id"],),
+                ).fetchall()
+                results.append({
+                    **dict(row),
+                    "events": [dict(event) for event in events],
+                })
+        return results
+
+    def mark_task_dispatched(self, task_id: str) -> None:
+        with self._lock, self._connect() as db:
+            db.execute(
+                "UPDATE tasks SET dispatched_at=? WHERE task_id=? AND dispatched_at IS NULL",
+                (int(time.time()), task_id),
+            )
 
     def invocation_task_summaries(
         self, *, tenant_id: str, user_id: str, agent_id: str,

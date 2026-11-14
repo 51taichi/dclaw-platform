@@ -4,9 +4,9 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.54`
+当前版本：`2.55`
 
-发布日期：`2026-11-14`
+发布日期：`2026-11-15`
 
 ## 1. 文档目的
 
@@ -2390,6 +2390,10 @@ AIGC 任务卡与问答交互卡是不同合同，不能用一者的创建回执
 
 最低版本为 Support Plugin `1.18.32`、DClaw Windows Local Helper `1.4.5`、DevKit `1.9.15` 和 Developer Pack `1.10.25`。设备过旧、离线或派发断线必须失败关闭，不得留下长期 `queued`；断线终态为 `LOCAL_GATEWAY.DEVICE_NOT_READY`，连接恢复后使用新的幂等键重试。
 
+自插件 `1.18.43` 起，AIGC 素材本地化要求 Helper `1.4.6` 或更高版本。Helper 在独立异步任务开始前复制消息数据，使接收循环释放 JSON 文档后下载任务仍可读取；旧 Helper 不再接收此能力的新派发。Helper 的失败事件只上报固定阶段、稳定错误码、异常类别和版本，不传下载地址、素材名、本机路径或栈。插件在持久化前再次按白名单过滤。
+
+普通开发账号可查询本专家的本地化任务：`GET /api/user/super-expert-publishing/local-task-diagnostics/v1/tasks/{task_id}?agent_id={agent_id}`，也可将路径中的 `tasks/{task_id}` 换为 `invocations/{invocation_id}`。正式合同为 `developer.local-task.diagnostics.read/1`，DevKit `1.9.22` 提供关闭的请求/响应 Schema 与 `local_task_diagnostics_api_demo.py`。接口按登录开发者的专家归属、原客户会话的租户/用户/专家身份、来源安装的 Release 授权逐项验证；同专家旧安装可只读定位，越权、无记录和超出 30 天留存统一返回 `no_record`，每账号每分钟限 30 次并记脱敏审计。返回 Host 受理/派发、Helper 接收、执行时留存的 Helper 版本、当前设备在线状态、任务终态和首错的安全分类。当前在线状态不代表执行时在线。历史未上报的首错细节明确为 `historical_detail_not_recorded`，不得从通用失败码推测具体异常；该接口供通用 Skill 的开发侧使用，不交给运行中的专家包。
+
 新资产的非零大小和非空 SHA-256 必须与 Helper 下载结果一致。历史资产若没有服务端 SHA-256，Helper 仍必须计算并回报下载后摘要，但该值只是本次下载证据，不能声称已与服务端权威摘要比对；若历史资产已有非零大小，大小仍须一致。
 
 正式机器合同位于 DevKit `schemas/aigc-task-assets-v1/`：`list-request.schema.json`、`list-response.schema.json` 和 `localize-request.schema.json`；本地化响应复用 `schemas/local-task-host-v1/receipt.schema.json`。完整调用示例位于 `examples/aigc-workflow-v1/README.md`，能力与操作入口分别以 `capability-catalog.json` 和 `operation-catalog.json` 为准。开发方不得从本文复制字段替代目标实例 DevKit Schema。
@@ -2403,6 +2407,11 @@ Skill 和专家发布前须对每条实际使用的路径同时验证：正确�
 以上是通用 Skill 的平台合同输入。Skill 维护方应在其 `references/capability-verification.md` 补 `/v2/` 的首错和终止根因区分，在 `scripts/runtime_diagnostics_with_login.py` 增加按官方 DevKit v2 Schema 查询和摘要，在相关脚本测试加入已恢复错误、最终阻断、`no_record`、越权及旧版回退案例。平台不直接覆盖 Skill 发布仓库，也不把单个专家的业务字段写成公共规则。
 
 ## 34. 版本记录
+
+### 2.55 - 2026-11-15
+
+- Support Plugin `1.18.43` 与 Windows Helper `1.4.6` 修复 AIGC 本地化异步读取已释放 JSON 文档的问题，并仅对本地化能力提高最低 Helper 版本。
+- DevKit `1.9.22`、Developer Pack `1.10.33` 增加普通开发者按本地任务 ID 或 invocation ID 查询脱敏本地任务首错的版本化合同；历史未记录细节不追补，既有专家请求与本地任务回执不变。
 
 ### 2.54 - 2026-11-14
 

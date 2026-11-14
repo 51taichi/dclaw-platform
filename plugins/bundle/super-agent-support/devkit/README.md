@@ -1,5 +1,13 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.22 adds `developer.local-task.diagnostics.read/1` for the signed-in
+expert owner. Use `local_task_diagnostics_api_demo.py --task-id ID` or
+`--invocation-id ID` to inspect redacted AIGC localization tasks across the
+same expert's installations. New Helper 1.4.6 records a safe failure stage,
+category and version; older tasks mark missing detail as historical. AIGC
+localization now requires Helper 1.4.6. Existing Agent request and receipt
+schemas are unchanged.
+
 Version 1.9.21 keeps the AIGC localization request and receipt schemas unchanged.
 The Host verifies that each selected OSS object is publicly readable, then sends
 its stable HTTPS URL without an expiration query to the Local Helper. A private

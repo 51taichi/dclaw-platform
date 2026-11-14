@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "developer.local-task.diagnostics.read/1 path and query",
+  "type": "object",
+  "required": ["agent_id", "reference"],
+  "properties": {
+    "agent_id": {"type": "string", "minLength": 1},
+    "reference": {"type": "string", "pattern": "^[0-9a-f]{32}$"}
+  },
+  "additionalProperties": false
+}

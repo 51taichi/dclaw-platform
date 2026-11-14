@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import shutil
 import time
@@ -267,6 +268,49 @@ class PublisherPublication:
                 failure_diagnostics._scope(invocation_id)[:12], result["status"],
             )
             return result
+
+        async def local_task_diagnostic(
+            reference: str, reference_type: str, agent_id: str, request: Request,
+        ) -> dict[str, Any]:
+            from .composition import resolve_event_scope
+            from .local_host import read_diagnostic_device, read_diagnostic_tasks
+            from .local_task_diagnostics import read_local_task_diagnostics
+
+            tenant_id, user_id = _actor(request)
+            if self.repository.agent_owner(agent_id) != (tenant_id, user_id):
+                raise HTTPException(status_code=404, detail="diagnostic not found")
+            self._limit_diagnostic_reads(tenant_id, user_id)
+            try:
+                result = read_local_task_diagnostics(
+                    agent_id=agent_id, tenant_id=tenant_id,
+                    reference=reference, reference_type=reference_type,
+                    grants=self.handler.grant_repository,
+                    owner_resolver=resolve_event_scope,
+                    task_lookup=read_diagnostic_tasks,
+                    device_lookup=read_diagnostic_device,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail="invalid diagnostic reference") from exc
+            except (RuntimeError, OSError, TypeError, KeyError, json.JSONDecodeError) as exc:
+                raise HTTPException(status_code=503, detail="diagnostics unavailable") from exc
+            _diagnostic_audit.info(
+                "developer local task read actor=%s agent=%s reference=%s status=%s",
+                failure_diagnostics._scope(user_id)[:12], agent_id,
+                failure_diagnostics._scope(reference)[:12], result["status"],
+            )
+            return result
+
+        @self.router.get("/local-task-diagnostics/v1/tasks/{task_id}")
+        async def read_local_task_by_id(
+            task_id: str, agent_id: str, request: Request,
+        ) -> dict[str, Any]:
+            return await local_task_diagnostic(task_id, "task", agent_id, request)
+
+        @self.router.get("/local-task-diagnostics/v1/invocations/{invocation_id}")
+        async def read_local_task_by_invocation(
+            invocation_id: str, agent_id: str, request: Request,
+        ) -> dict[str, Any]:
+            return await local_task_diagnostic(invocation_id, "invocation", agent_id, request)
 
         @self.router.get("/runtime-diagnostics/v4/references/{invocation_id}")
         async def read_diagnostic_reference_v4(

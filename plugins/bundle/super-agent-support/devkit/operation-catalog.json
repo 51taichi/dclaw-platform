@@ -95,6 +95,21 @@
     "retention_days": 30,
     "limit_per_minute": 30
   },
+  "developer_local_task_diagnostics": {
+    "contract": "developer.local-task.diagnostics.read/1",
+    "minimum_plugin_version": "1.18.43",
+    "method": "GET",
+    "task_path_template": "/api/user/super-expert-publishing/local-task-diagnostics/v1/tasks/{task_id}?agent_id={agent_id}",
+    "invocation_path_template": "/api/user/super-expert-publishing/local-task-diagnostics/v1/invocations/{invocation_id}?agent_id={agent_id}",
+    "authentication": "signed-in owner of the expert; original customer session and installation grant verified",
+    "request_schema": "schemas/local-task-diagnostics-v1/request.schema.json",
+    "response_schema": "schemas/local-task-diagnostics-v1/response.schema.json",
+    "error_schema": "schemas/local-task-diagnostics-v1/error.schema.json",
+    "api_demo": "local_task_diagnostics_api_demo.py",
+    "example": "examples/local-task-diagnostics-v1/README.md",
+    "retention_days": 30,
+    "limit_per_minute": 30
+  },
   "developer_aigc_binding_lookup": {
     "contract": "developer.aigc.binding.lookup/1",
     "minimum_plugin_version": "1.18.36",

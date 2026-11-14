@@ -26,7 +26,7 @@ ACTIVE_STATES = {"queued", "running", "awaiting_input", "cancelling"}
 PROTOCOL_VERSION = "2"
 CATALOG_VERSION = "1"
 MIN_RUNNER_VERSION = "1.1.0"
-AIGC_TRANSFER_MIN_RUNNER_VERSION = "1.4.5"
+AIGC_TRANSFER_MIN_RUNNER_VERSION = "1.4.6"
 LEGACY_RUNNER_VERSION = "1.0.0"
 LOCAL_FILE_REF_PATTERN = re.compile(r"^lfr_[A-Za-z0-9_-]{32,156}$")
 ARTIFACT_ID_PATTERN = re.compile(r"^artifact_[A-Za-z0-9_-]{32,156}$")
@@ -685,6 +685,13 @@ class LocalExecutionService:
                         },
                     },
                 )
+                try:
+                    self.store.mark_task_dispatched(task["task_id"])
+                except Exception:
+                    logger.warning(
+                        "AIGC local task dispatch marker unavailable task=%s",
+                        task["task_id"],
+                    )
             except PublicError as exc:
                 self.store.update_task(
                     task["task_id"],
@@ -1455,6 +1462,9 @@ class LocalExecutionService:
         }
         if event_type not in allowed_events.get(task["status"], set()):
             return
+        if task["capability_id"] == "aigc.task.assets.localize/1":
+            from .super_agent.local_task_diagnostics import sanitize_localize_event
+            payload = sanitize_localize_event(event_type, payload)
         if not self.store.append_event(task_id, sequence, event_type, payload):
             return
         schema_name = {

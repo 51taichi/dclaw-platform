@@ -98,4 +98,4 @@ device disconnects after task creation but before dispatch, the Host terminates
 that task as `failed` with `LOCAL_GATEWAY.DEVICE_NOT_READY`; reconnect the
 Helper and retry with a new idempotency key. The Host validates ownership,
 task binding and public URL readability before it sends stable OSS source URLs
-directly to Helper 1.4.5 or newer.
+directly to Helper 1.4.6 or newer.

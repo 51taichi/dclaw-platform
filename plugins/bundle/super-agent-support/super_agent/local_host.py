@@ -28,6 +28,24 @@ def read_invocation_task_summaries(**scope: str) -> list[dict[str, Any]] | None:
     return _service.store.invocation_task_summaries(**scope)
 
 
+def read_diagnostic_tasks(**scope: Any) -> list[dict[str, Any]] | None:
+    if _service is None:
+        return None
+    return _service.store.diagnostic_tasks(**scope)
+
+
+def read_diagnostic_device(user_id: str, device_id: str) -> dict[str, Any] | None:
+    if _service is None:
+        return None
+    device = _service.store.get_device_for_user(device_id, user_id)
+    if device is None:
+        return None
+    return {
+        "online": device_id in _service._connections and device["status"] == "online",
+        "runner_version": device["runner_version"],
+    }
+
+
 def _scope_key(identity: dict[str, Any]) -> str:
     scope = {key: identity[key] for key in (
         "t", "u", "s", "a", "g",

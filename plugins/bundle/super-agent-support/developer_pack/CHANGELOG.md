@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.10.33 - 2026-11-15
+
+- Bundles standard 2.55 and DevKit 1.9.22 with owner-scoped, redacted local
+  task diagnostics and the Helper 1.4.6 AIGC localization requirement.
+
 ## 1.10.32 - 2026-11-14
 
 - Bundles standard 2.54 and DevKit 1.9.21. The shared AIGC localization Host

@@ -19,7 +19,7 @@ internal sealed record HelperConfig(
 
 internal static class HelperMetadata
 {
-    internal const string Version = "1.4.5";
+    internal const string Version = "1.4.6";
     internal const string ProtocolVersion = "2";
 }
 
@@ -68,7 +68,7 @@ internal sealed class HelperRuntime
     private HelperConfig _config;
     private readonly string _root;
     private readonly HttpClient _http = new(new HttpClientHandler { AllowAutoRedirect = true });
-    private readonly HttpClient _uploadHttp = new(new HttpClientHandler { AllowAutoRedirect = false });
+    private readonly HttpClient _uploadHttp;
     private readonly ConcurrentDictionary<string, Process> _processes = new();
     private readonly ConcurrentDictionary<string, byte> _cancelled = new();
     private readonly SemaphoreSlim _sendLock = new(1, 1);
@@ -78,11 +78,14 @@ internal sealed class HelperRuntime
 
     internal bool Connected => _connected;
 
-    public HelperRuntime(string configPath, HelperConfig config)
+    public HelperRuntime(
+        string configPath, HelperConfig config,
+        string? storageRoot = null, HttpClient? downloadClient = null)
     {
         _configPath = configPath;
         _config = config;
-        _root = HelperStorage.Root;
+        _root = storageRoot ?? HelperStorage.Root;
+        _uploadHttp = downloadClient ?? new(new HttpClientHandler { AllowAutoRedirect = false });
         Directory.CreateDirectory(_root);
         Directory.CreateDirectory(Path.Combine(_root, "Capabilities"));
         Directory.CreateDirectory(Path.Combine(_root, "Components"));
@@ -257,7 +260,7 @@ internal sealed class HelperRuntime
                 _ = ExecuteTaskAsync(message, false, cancellationToken);
                 break;
             case "aigc.assets.localize":
-                _ = LocalizeAigcAssetsAsync(message, cancellationToken);
+                _ = LocalizeAigcAssetsAsync(message.Clone(), cancellationToken);
                 break;
             case "task.continue":
                 _ = ExecuteTaskAsync(message, true, cancellationToken);
@@ -977,20 +980,31 @@ internal sealed class HelperRuntime
         JsonElement message,
         CancellationToken cancellationToken)
     {
-        var task = message.GetProperty("task");
-        var taskId = task.GetProperty("task_id").GetString()!;
-        var agentName = task.GetProperty("task_root_name").GetString()!;
-        var taskRoot = FindOrCreateTaskRoot(agentName, taskId);
+        var taskId = "";
+        var agentName = "";
+        string? taskRoot = null;
+        var phase = "helper_receive";
         try
         {
+            var task = message.GetProperty("task");
+            taskId = task.GetProperty("task_id").GetString()!;
+            agentName = task.GetProperty("task_root_name").GetString()!;
+            taskRoot = FindOrCreateTaskRoot(agentName, taskId);
             await TaskHistory.TryWriteAsync(
                 taskRoot, taskId, agentName, "aigc.task.assets.localize/1",
                 "running", null, cancellationToken);
-            await SendEventAsync(taskId, "started", new JsonObject(), cancellationToken);
+            await SendEventAsync(taskId, "started", new JsonObject
+            {
+                ["helper_version"] = HelperMetadata.Version,
+            }, cancellationToken);
+            phase = "download_prepare";
             var files = new JsonArray();
             var manifestAssets = new JsonArray();
             var outputPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var asset in task.GetProperty("assets").EnumerateArray()
+            var assets = task.GetProperty("assets");
+            if (assets.ValueKind != JsonValueKind.Array || assets.GetArrayLength() == 0)
+                throw new JsonException("AIGC asset list must not be empty");
+            foreach (var asset in assets.EnumerateArray()
                 .OrderBy(item => item.GetProperty("order").GetInt32()))
             {
                 var assetId = asset.GetProperty("asset_id").GetString()!;
@@ -1013,12 +1027,14 @@ internal sealed class HelperRuntime
                 if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
                 var expectedSize = asset.GetProperty("size_bytes").GetInt64();
                 var expectedHash = asset.GetProperty("sha256").GetString() ?? "";
+                phase = "download_transfer";
                 await DownloadAigcAssetAsync(
                     asset.GetProperty("download_url").GetString()!,
                     temporaryPath,
                     expectedSize,
                     expectedHash,
                     cancellationToken);
+                phase = "download_prepare";
                 File.Move(temporaryPath, finalPath, true);
                 await using var content = File.OpenRead(finalPath);
                 var actualHash = Convert.ToHexString(
@@ -1046,6 +1062,7 @@ internal sealed class HelperRuntime
                     ["order"] = asset.GetProperty("order").GetInt32(),
                 });
             }
+            phase = "manifest_write";
             await File.WriteAllTextAsync(
                 Path.Combine(taskRoot, "assets.json"),
                 new JsonObject
@@ -1057,20 +1074,39 @@ internal sealed class HelperRuntime
             await TaskHistory.TryWriteAsync(
                 taskRoot, taskId, agentName, "aigc.task.assets.localize/1",
                 "succeeded", null, cancellationToken);
+            phase = "completion_event";
             await SendEventAsync(
                 taskId, "completed", new JsonObject { ["files"] = files },
                 cancellationToken);
         }
         catch (Exception exception)
         {
-            await TaskHistory.TryWriteAsync(
-                taskRoot, taskId, agentName, "aigc.task.assets.localize/1",
-                "failed", exception.Message, cancellationToken);
-            await SendEventAsync(
-                taskId, "failed", new JsonObject
+            var category = exception switch
+            {
+                ObjectDisposedException => "json_lifetime",
+                JsonException or KeyNotFoundException or InvalidOperationException => "invalid_input",
+                HttpRequestException => "network_failure",
+                InvalidDataException => "asset_validation",
+                IOException => "file_io",
+                _ => "helper_internal",
+            };
+            var code = category switch
+            {
+                "json_lifetime" => "HELPER_JSON_LIFETIME_ERROR",
+                "invalid_input" => "AIGC_LOCALIZE_INVALID_INPUT",
+                _ => "AIGC_ASSET_DOWNLOAD_FAILED",
+            };
+            if (taskRoot is not null)
+                await TaskHistory.TryWriteAsync(
+                    taskRoot, taskId, agentName, "aigc.task.assets.localize/1",
+                    "failed", code, cancellationToken);
+            if (taskId.Length > 0)
+                await SendEventAsync(taskId, "failed", new JsonObject
                 {
-                    ["code"] = "AIGC_ASSET_DOWNLOAD_FAILED",
-                    ["message"] = "AIGC 素材下载失败。",
+                    ["code"] = code,
+                    ["phase"] = phase,
+                    ["category"] = category,
+                    ["helper_version"] = HelperMetadata.Version,
                 },
                 cancellationToken);
         }
