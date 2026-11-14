@@ -1,5 +1,10 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.31 bundles standard 2.53 and DevKit 1.9.20. Localization
+handoff checks report interaction, AIGC, Agent, Host, and Local Helper nodes
+separately. Unknown Host exceptions are attributed to the platform without
+exposing internal details.
+
 Version 1.10.30 bundles standard 2.52 and DevKit 1.9.20. The owner-scoped
 diagnostics v5 read gives a safe Host blocker and recovery action for new
 AIGC localization failures while marking missing historical detail unknown.

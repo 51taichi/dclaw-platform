@@ -940,7 +940,11 @@ async def run_workspace_orchestration_turn(
                 session_id=turn_request.session_id,
                 invocation_id=invocation_id,
                 event_type="host.operation.started",
-                payload={"capability": capability},
+                payload={
+                    "capability": capability,
+                    **({"implementation_revision": "localize-diagnostics-v2"}
+                       if capability == "aigc.task.assets.localize/1" else {}),
+                },
             )
         try:
             value = await _maybe_await(business_call(capability, arguments))
@@ -961,6 +965,15 @@ async def run_workspace_orchestration_turn(
             else:
                 code = getattr(exc, "error_code", None)
                 aigc_failure = exc if isinstance(exc, AigcLocalizationHostError) else None
+                if capability == "aigc.task.assets.localize/1" and aigc_failure is None:
+                    _log_aigc_localization_internal_error(
+                        exc, stage="host_operation", invocation_id=invocation_id,
+                    )
+                    aigc_failure = AigcLocalizationHostError(
+                        stage="host_operation", code="HOST_INTERNAL_ERROR",
+                        responsibility="platform",
+                        recovery_action="contact_platform_with_invocation_id",
+                    )
                 _append_runtime_trace(
                     state_storage_root,
                     installation_id=authorization.installation_id,
@@ -2362,13 +2375,33 @@ async def handle_workspace_turn(
                         responsibility="developer", recovery_action="correct_request",
                         field_path="idempotency_key", constraint="LENGTH_INVALID",
                     )
-                from .aigc_assets import (
-                    AigcAssetSelectionError, prepare_owned_aigc_localization,
-                )
-                from .local_host import dispatch_aigc_asset_localization
-                from qwenpaw.app.aigc.resource_store import AigcResourceError
+                try:
+                    from .aigc_assets import (
+                        AigcAssetSelectionError, prepare_owned_aigc_localization,
+                    )
+                    from .local_host import dispatch_aigc_asset_localization
+                    from qwenpaw.app.aigc.resource_store import AigcResourceError
+                except Exception as exc:
+                    _log_aigc_localization_internal_error(
+                        exc, stage="host_setup", invocation_id=invocation_id,
+                    )
+                    raise AigcLocalizationHostError(
+                        stage="host_setup", code="HOST_INTERNAL_ERROR",
+                        responsibility="platform",
+                        recovery_action="contact_platform_with_invocation_id",
+                    ) from None
 
-                task, task_status, _ = authorized_aigc_task(material_task_id)
+                try:
+                    task, task_status, _ = authorized_aigc_task(material_task_id)
+                except Exception as exc:
+                    _log_aigc_localization_internal_error(
+                        exc, stage="task_binding", invocation_id=invocation_id,
+                    )
+                    raise AigcLocalizationHostError(
+                        stage="task_binding", code="HOST_INTERNAL_ERROR",
+                        responsibility="platform",
+                        recovery_action="contact_platform_with_invocation_id",
+                    ) from None
                 if task is None:
                     return {"contract": capability, "status": task_status}
                 try:

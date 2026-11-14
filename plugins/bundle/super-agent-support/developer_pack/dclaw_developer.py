@@ -22,9 +22,9 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 
-PACK_VERSION = "1.10.30"
+PACK_VERSION = "1.10.31"
 STANDARD_ID = "dclaw.super-agent-development"
-STANDARD_VERSION = "2.52"
+STANDARD_VERSION = "2.53"
 DEVKIT_VERSION = "1.9.20"
 PROJECT_SCHEMA_VERSION = 1
 LOCAL_SESSION = "local.execution.session/1"

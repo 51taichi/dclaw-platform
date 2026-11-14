@@ -3,7 +3,7 @@
 | Component | Supported version |
 |---|---|
 | Developer pack | 1.0.x through 1.10.x |
-| Development standard | 2.1 through 2.52 |
+| Development standard | 2.1 through 2.53 |
 | Super Agent DevKit | 1.2.x through 1.9.x |
 | Super Expert manifest | 3 |
 | Runtime / runtime host | 1 |
@@ -40,6 +40,7 @@
 | Support plugin for developer pack >= 1.10.28 download and AIGC task binding recovery | >= 1.18.36 |
 | Support plugin for developer pack >= 1.10.29 download and committed-turn diagnostics | >= 1.18.37 |
 | Support plugin for developer pack >= 1.10.30 download and Host blocker diagnostics | >= 1.18.38 |
+| Support plugin for developer pack >= 1.10.31 download and Host diagnostic fallback | >= 1.18.39 |
 | Support plugin for `runtime.failure.read/1` | >= 1.18.12 |
 | Support plugin for startup failure diagnostics and durable failed turns | >= 1.18.13 |
 | Support plugin for preserving prior memory on failed turns | >= 1.18.14 |

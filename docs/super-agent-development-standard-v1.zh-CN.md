@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.52`
+当前版本：`2.53`
 
 发布日期：`2026-11-14`
 
@@ -2347,6 +2347,8 @@ curl --fail-with-body -H "Authorization: Bearer ${DCLAW_ACCESS_TOKEN}" \
 
 插件 `1.18.38` 起，普通开发者可用同一授权身份查询 `/runtime-diagnostics/v5/references/{invocation_id}`，取得 `blocker` 的安全阶段、稳定错误码、字段约束、责任线、恢复动作和证据状态。`aigc.task.assets.localize/1` 在请求校验、资产预检和本地任务派发阶段分别分类；未预期的 Host 异常只标为平台内部错误，不把异常文本或输入回传。历史记录缺少具体错误码时，`evidence=historical_detail_not_recorded`、`responsibility=undetermined`，不得据泛化的 `host_exception` 推断开发方、设备或平台的具体首错。`task_acceptance` 与 `tasks` 仍由精确作用域的任务表独立核对。`/v4/` 的关闭响应不新增字段，旧调用方继续使用；正式 v5 Schema 和认证示例位于 DevKit `1.9.20`。开发方应先核验任务是否受理；同一输入重试沿用幂等键，修改输入须使用新幂等键。设备类错误先恢复本地助手连接；平台类错误将关联 ID 交平台方处理，不盲目重发业务回合。
 
+故障验收按职能节点分别给出 `passed`、`failed` 或 `unverified`，每项附关联 ID 和可复核证据。交互卡节点核对可信提交与读取回执；AIGC 节点核对任务快照、素材清单、每个所选素材的签名地址可读性及允许目标来源的 CORS 响应；Agent 节点核对实际发给 Host 的请求、Schema 和能力授权；Host 节点核对本地化预检、幂等、设备选择、任务入表与派发回执；本地助手节点核对实时连接、任务接收、下载校验和原子落盘回执。前一节点通过只证明该节点职责完成，不能推断后一节点通过。设备持久表的 `online` 也不能代替实时连接或任务接收证据。Host 任务表无受理记录时，不把下载失败归因于本地助手。没有留存首错的历史回合保持 `unverified`，先修诊断再以受控故障验证，不能凭泛化 `host_exception` 要求客户重试。
+
 若客户端没有给 invocation ID，开发者可查 `GET /api/user/super-expert-publishing/runtime-diagnostics/v1/search?agent_id={agent_id}&start={UTC}&end={UTC}&limit=50`。时间窗至多 24 小时、只查最近 30 天、每页最多返回 50 条失败的任务 ID、invocation ID、Release ID 和时间；没有正文。`has_more=true` 时以 `next_cursor` 原样传入同一时间窗的下一次查询。按同租户及专家绑定的真实任务过滤，不能据此查询其他专家或租户。两种新查询共享每账号每分钟 30 次限流和脱敏审计，`404` 隐藏不存在与越权差别，`429` 限流，`503` 表示诊断不可读。正式 Schema、路径和可运行示例在 DevKit `1.9.13`。
 
 开发者先查看 `failure_events` 的时间顺序及 `outcome`，再以 `final_blocker` 判断本轮最终阻断。`first_failure` 仅为兼容字段，可能是已恢复的早期错误，不能单独当作整轮原因。`status=not_recorded`、`unrecorded_fields` 或 `provider_code/param=null` 表示当时没有留存，不得用模型解释补造。新回合的卡片参数校验失败返回 `field_path`、稳定 `constraint` 及 `contract`；提供方拒绝只记录 HTTP 状态、稳定 code 与 param，不记录错误正文、模型原文、提示词或客户数据。`stages` 中 `interaction.tool.invoked` 才证明模型进入了插件工具；`interaction.operation.started/completed/failed` 分别证明已发起、已完成或已失败的平台卡片操作。没有这些记录的旧回合不能据此推断工具未执行。
@@ -2399,6 +2401,11 @@ Skill 和专家发布前须对每条实际使用的路径同时验证：正确�
 以上是通用 Skill 的平台合同输入。Skill 维护方应在其 `references/capability-verification.md` 补 `/v2/` 的首错和终止根因区分，在 `scripts/runtime_diagnostics_with_login.py` 增加按官方 DevKit v2 Schema 查询和摘要，在相关脚本测试加入已恢复错误、最终阻断、`no_record`、越权及旧版回退案例。平台不直接覆盖 Skill 发布仓库，也不把单个专家的业务字段写成公共规则。
 
 ## 34. 版本记录
+
+### 2.53 - 2026-11-14
+
+- 按交互卡、AIGC、Agent、Host 和本地助手的职能边界逐节点回传证据与状态；素材可下载不代表本地任务已派发。
+- 插件 `1.18.39` 为未分类本地化 Host 异常记录脱敏平台阻断和运行实现标记；DevKit `1.9.20` 的 v5 机器合同保持不变，Developer Pack `1.10.31` 同步本标准。
 
 ### 2.52 - 2026-11-14
 

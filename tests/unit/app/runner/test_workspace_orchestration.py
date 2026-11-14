@@ -713,6 +713,61 @@ async def test_successful_created_interaction_is_attached_to_native_completion(
 
 
 @pytest.mark.asyncio
+async def test_aigc_localization_unknown_host_error_records_safe_blocker(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _write_runtime(
+        workspace,
+        """
+        class Runtime:
+            async def handle(self, request, host):
+                await host.call("aigc.task.assets.localize/1", {
+                    "material_task_id": "material-1",
+                    "assets": [{"asset_id": "asset-1"}],
+                    "idempotency_key": "localize-1",
+                })
+        def create_runtime(): return Runtime()
+        """,
+    )
+
+    async def business_call(_capability, _arguments):
+        raise RuntimeError("private host detail")
+
+    authorization = AuthorizedWorkspaceRelease(
+        installation_id="installation-1",
+        release_id="release-1",
+        release_digest=f"sha256:{'a' * 64}",
+        granted_capabilities={
+            **{capability: "1" for capability in HOST_CAPABILITIES_V1},
+            "aigc.task.assets.localize/1": "1",
+        },
+        signed_workspace_files=frozenset({"runtime.py"}),
+    )
+    storage = tmp_path / "runtime-state"
+    await run_workspace_orchestration_turn(
+        agent=object(),
+        original_messages=[Msg(name="user", role="user", content="continue")],
+        request=SimpleNamespace(
+            session_id="session-1", user_id="user-1", channel="console",
+            channel_meta={},
+        ),
+        agent_id="generic-agent", workspace_root=workspace,
+        state_storage_root=storage,
+        config=OrchestrationConfig.model_validate(_orchestration()),
+        authorization=authorization, business_call=business_call,
+    )
+    trace = [json.loads(line) for line in runtime_trace_path(
+        storage, installation_id="installation-1", session_id="session-1",
+    ).read_text().splitlines()]
+    started = next(item for item in trace if item["event_type"] == "host.operation.started")
+    failed = next(item for item in trace if item["event_type"] == "host.operation.failed")
+    assert started["payload"]["implementation_revision"] == "localize-diagnostics-v2"
+    assert failed["payload"]["error_code"] == "HOST_INTERNAL_ERROR"
+    assert failed["payload"]["responsibility"] == "platform"
+    assert "private host detail" not in json.dumps(trace)
+
+
+@pytest.mark.asyncio
 async def test_only_pending_created_interactions_are_attached_and_all_are_preserved(
     tmp_path,
 ):

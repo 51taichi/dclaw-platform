@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.10.31 - 2026-11-14
+
+- Bundles standard 2.53 and DevKit 1.9.20 with node-by-node localization
+  acceptance criteria and the Host diagnostic fallback.
+
 ## 1.10.30 - 2026-11-14
 
 - Bundles standard 2.52 and DevKit 1.9.20 with owner-scoped, redacted
