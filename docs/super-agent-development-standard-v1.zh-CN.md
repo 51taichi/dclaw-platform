@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.53`
+当前版本：`2.54`
 
 发布日期：`2026-11-14`
 
@@ -2347,7 +2347,7 @@ curl --fail-with-body -H "Authorization: Bearer ${DCLAW_ACCESS_TOKEN}" \
 
 插件 `1.18.38` 起，普通开发者可用同一授权身份查询 `/runtime-diagnostics/v5/references/{invocation_id}`，取得 `blocker` 的安全阶段、稳定错误码、字段约束、责任线、恢复动作和证据状态。`aigc.task.assets.localize/1` 在请求校验、资产预检和本地任务派发阶段分别分类；未预期的 Host 异常只标为平台内部错误，不把异常文本或输入回传。历史记录缺少具体错误码时，`evidence=historical_detail_not_recorded`、`responsibility=undetermined`，不得据泛化的 `host_exception` 推断开发方、设备或平台的具体首错。`task_acceptance` 与 `tasks` 仍由精确作用域的任务表独立核对。`/v4/` 的关闭响应不新增字段，旧调用方继续使用；正式 v5 Schema 和认证示例位于 DevKit `1.9.20`。开发方应先核验任务是否受理；同一输入重试沿用幂等键，修改输入须使用新幂等键。设备类错误先恢复本地助手连接；平台类错误将关联 ID 交平台方处理，不盲目重发业务回合。
 
-故障验收按职能节点分别给出 `passed`、`failed` 或 `unverified`，每项附关联 ID 和可复核证据。交互卡节点核对可信提交与读取回执；AIGC 节点核对任务快照、素材清单、每个所选素材的签名地址可读性及允许目标来源的 CORS 响应；Agent 节点核对实际发给 Host 的请求、Schema 和能力授权；Host 节点核对本地化预检、幂等、设备选择、任务入表与派发回执；本地助手节点核对实时连接、任务接收、下载校验和原子落盘回执。前一节点通过只证明该节点职责完成，不能推断后一节点通过。设备持久表的 `online` 也不能代替实时连接或任务接收证据。Host 任务表无受理记录时，不把下载失败归因于本地助手。没有留存首错的历史回合保持 `unverified`，先修诊断再以受控故障验证，不能凭泛化 `host_exception` 要求客户重试。
+故障验收按职能节点分别给出 `passed`、`failed` 或 `unverified`，每项附关联 ID 和可复核证据。交互卡节点核对可信提交与读取回执；AIGC 节点核对任务快照、素材清单、每个所选素材的公开 OSS 地址可读性及允许目标来源的 CORS 响应；Agent 节点核对实际发给 Host 的请求、Schema 和能力授权；Host 节点核对本地化预检、幂等、设备选择、任务入表与派发回执；本地助手节点核对实时连接、任务接收、下载校验和原子落盘回执。前一节点通过只证明该节点职责完成，不能推断后一节点通过。设备持久表的 `online` 也不能代替实时连接或任务接收证据。Host 任务表无受理记录时，不把下载失败归因于本地助手。没有留存首错的历史回合保持 `unverified`，先修诊断再以受控故障验证，不能凭泛化 `host_exception` 要求客户重试。
 
 若客户端没有给 invocation ID，开发者可查 `GET /api/user/super-expert-publishing/runtime-diagnostics/v1/search?agent_id={agent_id}&start={UTC}&end={UTC}&limit=50`。时间窗至多 24 小时、只查最近 30 天、每页最多返回 50 条失败的任务 ID、invocation ID、Release ID 和时间；没有正文。`has_more=true` 时以 `next_cursor` 原样传入同一时间窗的下一次查询。按同租户及专家绑定的真实任务过滤，不能据此查询其他专家或租户。两种新查询共享每账号每分钟 30 次限流和脱敏审计，`404` 隐藏不存在与越权差别，`429` 限流，`503` 表示诊断不可读。正式 Schema、路径和可运行示例在 DevKit `1.9.13`。
 
@@ -2378,13 +2378,15 @@ AIGC 任务卡与问答交互卡是不同合同，不能用一者的创建回执
 
 ### 33.4 AIGC 资产交接与本地化
 
-超级专家负责从业务目标决定素材用途、槽位、顺序和最终产物；AIGC 模块负责生成资产及其任务绑定；DClaw Host 负责所有权和作用域校验、短期下载授权与任务回执；通用本地助手只负责把已授权素材安全下载到客户电脑，不承担业务筛选、剪辑决策或内容判断。Agent 和模型禁止接收、持久化或转述签名下载 URL。
+超级专家负责从业务目标决定素材用途、槽位、顺序和最终产物；AIGC 模块负责生成资产及其任务绑定，并将生成素材写入公开可读的 OSS 存储范围；DClaw Host 负责所有权和作用域校验、公开地址可读性预检与任务回执；通用本地助手只负责把已授权素材安全下载到客户电脑，不承担业务筛选、剪辑决策或内容判断。Agent 和模型不接收、持久化或转述下载 URL。
 
 标准流程固定为：
 
 1. 以 AIGC 创建回执中的真实 `material_task_id` 调用 `aigc.task.assets.list/1`，只读取当前用户、会话、安装、工作流、画布、节点和成功 job 绑定的资产事实。
 2. 从返回资产中选择实际需要的项，为每项填写唯一 `asset_id`、`usage`、`slot`、唯一非负 `order` 与 `destination`；请求数组顺序没有语义。`final_output` 只能写入任务根目录，其余素材只能写入 `res/`。
-3. 以稳定幂等键调用 `aigc.task.assets.localize/1`。Host 验证完整计划后才签发短期 URL，并只通过认证设备通道发送给本地助手。Helper 1.4.5 或更高版本下载、校验、原子落盘并生成 `assets.json`；Agent 通过既有本地任务回执读取终态。
+3. 以稳定幂等键调用 `aigc.task.assets.localize/1`。Host 验证完整计划和每个未签名 HTTPS OSS 地址的公开可读性后，才通过认证设备通道发送稳定地址给本地助手；地址不带到期签名，只要 OSS 对象存在且保持公开可读即可访问。Helper 1.4.5 或更高版本下载、校验、原子落盘并生成 `assets.json`；Agent 通过既有本地任务回执读取终态。地址不可公开读取时，Host 在受理前返回 `ASSET_PUBLIC_DOWNLOAD_UNAVAILABLE`，不得派发不可用地址或静默退回短时签名模式。
+
+所有超级专家共用上述 Host 本地化合同，不按专家名称分叉。AIGC 生成素材上传须继承 OSS 的公开读取策略；平台维护方在改变 Bucket 或上传策略时须验证未来新对象的未签名 URL，而不能只核对已有对象。公开读取不改变 Agent 对资产清单的所有权与任务绑定校验。
 
 最低版本为 Support Plugin `1.18.32`、DClaw Windows Local Helper `1.4.5`、DevKit `1.9.15` 和 Developer Pack `1.10.25`。设备过旧、离线或派发断线必须失败关闭，不得留下长期 `queued`；断线终态为 `LOCAL_GATEWAY.DEVICE_NOT_READY`，连接恢复后使用新的幂等键重试。
 
@@ -2401,6 +2403,11 @@ Skill 和专家发布前须对每条实际使用的路径同时验证：正确�
 以上是通用 Skill 的平台合同输入。Skill 维护方应在其 `references/capability-verification.md` 补 `/v2/` 的首错和终止根因区分，在 `scripts/runtime_diagnostics_with_login.py` 增加按官方 DevKit v2 Schema 查询和摘要，在相关脚本测试加入已恢复错误、最终阻断、`no_record`、越权及旧版回退案例。平台不直接覆盖 Skill 发布仓库，也不把单个专家的业务字段写成公共规则。
 
 ## 34. 版本记录
+
+### 2.54 - 2026-11-14
+
+- AIGC 生成素材统一使用公开可读的 OSS 存储范围；Support Plugin `1.18.40` 在 `aigc.task.assets.localize/1` 所有权校验后向本地助手发送无到期参数的稳定 HTTPS 地址，并在受理前验证公开可读性。Agent 仍只接收资产事实和任务回执，不接收下载 URL。
+- Developer Pack `1.10.32` 与 DevKit `1.9.21` 同步此通用合同；既有请求和响应 Schema、Agent 签名包及 Helper 下载协议不变。
 
 ### 2.53 - 2026-11-14
 

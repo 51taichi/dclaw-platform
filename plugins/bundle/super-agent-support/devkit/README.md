@@ -1,5 +1,11 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.21 keeps the AIGC localization request and receipt schemas unchanged.
+The Host verifies that each selected OSS object is publicly readable, then sends
+its stable HTTPS URL without an expiration query to the Local Helper. A private
+or unavailable object fails before task acceptance with
+`ASSET_PUBLIC_DOWNLOAD_UNAVAILABLE`; the Agent still receives no URL.
+
 Version 1.9.20 adds `developer.runtime.diagnostics.by-reference/5` for the
 signed-in expert owner. `blocker` reports a recorded Host stage, safe error
 code, field constraint, responsibility and recovery action. Historical generic
@@ -47,8 +53,8 @@ Version 1.9.14 adds `aigc.task.assets.list/1` and
 `aigc.task.assets.localize/1`. A Super Agent can list successful assets bound
 to its current AIGC material task, assign each asset a structured usage, slot,
 order and destination, then request delivery to the connected DClaw Local
-Helper. Signed source URLs remain inside the trusted Host-to-device channel;
-they are not returned to the Agent or persisted in its local-task input.
+Helper. Stable public source URLs remain inside the trusted Host-to-device
+channel; they are not returned to the Agent or persisted in its local-task input.
 Localization requires Helper 1.4.5 or newer. Asset `order` values are unique
 within a request, and a dispatch disconnect produces a terminal failed receipt
 instead of leaving a queued task.

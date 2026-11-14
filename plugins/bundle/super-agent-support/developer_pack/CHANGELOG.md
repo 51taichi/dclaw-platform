@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.32 - 2026-11-14
+
+- Bundles standard 2.54 and DevKit 1.9.21. The shared AIGC localization Host
+  uses stable public OSS URLs after an owner-scoped selection and unauthenticated
+  readability check; Agent request and receipt schemas remain unchanged.
+
 ## 1.10.31 - 2026-11-14
 
 - Bundles standard 2.53 and DevKit 1.9.20 with node-by-node localization

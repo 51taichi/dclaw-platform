@@ -3,12 +3,14 @@ import asyncio
 import json
 from pathlib import Path
 
+import httpx
 import pytest
 from jsonschema import validate
 
 from super_agent.aigc_assets import (
     list_owned_aigc_assets,
     prepare_owned_aigc_localization,
+    verify_public_aigc_localization,
 )
 from super_agent import local_host
 from contracts import ERRORS
@@ -51,12 +53,6 @@ class _Assets:
     @staticmethod
     def cloud_storage_meta(asset):
         return asset.meta["storage"]
-
-    @staticmethod
-    def signed_source(asset, *, storage_client, ttl_seconds):
-        assert storage_client == "storage"
-        assert ttl_seconds == 600
-        return f"https://oss.example/{asset.id}?signed=1"
 
 
 def _fixture():
@@ -159,11 +155,14 @@ def test_list_is_isolated_by_installation_and_conversation():
         }
 
 
-def test_prepares_signed_localization_without_exposing_it_in_list(monkeypatch):
+def test_prepares_stable_public_localization_without_exposing_it_in_list(monkeypatch):
     task, adapter = _fixture()
+    storage = SimpleNamespace(
+        object_url=lambda key: f"https://oss.example/{key}",
+    )
     monkeypatch.setattr(
         "super_agent.aigc_assets.get_object_storage_client",
-        lambda **_: "storage",
+        lambda **_: storage,
     )
 
     result = prepare_owned_aigc_localization(
@@ -181,8 +180,36 @@ def test_prepares_signed_localization_without_exposing_it_in_list(monkeypatch):
         }],
     )
 
-    assert result[0]["download_url"].startswith("https://oss.example/")
+    assert result[0]["download_url"] == (
+        "https://oss.example/aigc/shot-01.mp4"
+    )
     assert result[0]["slot"] == "clip_01"
+
+
+def test_public_localization_probe_accepts_only_readable_exact_asset():
+    asset = {
+        "download_url": "https://oss.example/aigc/shot-01.mp4",
+        "size_bytes": 42,
+    }
+
+    def transport(status_code, size):
+        return httpx.MockTransport(lambda _: httpx.Response(
+            status_code, headers={"content-length": str(size)},
+        ))
+
+    asyncio.run(verify_public_aigc_localization(
+        [asset], transport=transport(200, 42),
+    ))
+    for status_code, size in ((403, 42), (200, 41)):
+        with pytest.raises(ValueError, match="ASSET_PUBLIC_DOWNLOAD_UNAVAILABLE"):
+            asyncio.run(verify_public_aigc_localization(
+                [asset], transport=transport(status_code, size),
+            ))
+    with pytest.raises(ValueError, match="ASSET_PUBLIC_DOWNLOAD_UNAVAILABLE"):
+        asyncio.run(verify_public_aigc_localization(
+            [{**asset, "download_url": asset["download_url"] + "?Expires=1"}],
+            transport=transport(200, 42),
+        ))
 
 
 def test_rejects_final_output_outside_task_root(monkeypatch):

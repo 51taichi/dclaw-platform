@@ -16,6 +16,11 @@ Do not set `response_format="json_object"` on that call.
 | 5 | `await host.call("aigc.task.assets.list/1", {"material_task_id": material_task_id})` | Same bound task ID | Owner-scoped asset facts only; no source URL |
 | 6 | `await host.call("aigc.task.assets.localize/1", usage_plan)` | Asset IDs from step 5 plus usage, slot, order, destination and a stable idempotency key | A scoped local-task receipt; the connected Helper downloads the selected files |
 
+The Host checks each selected public OSS URL before accepting the task. The
+Helper receives a stable HTTPS object URL without a signature or expiry query;
+the Agent receives only the task receipt. The asset must remain public and
+present in OSS for later downloads.
+
 If a prior release created the canvas but failed to save the task ID, call
 `aigc.task.binding.resolve/1` with the original `task_key` and optional
 `content_revision`. An empty request succeeds only when exactly one owned AIGC
@@ -91,6 +96,6 @@ requires a new key. `order` is a non-negative integer and must be unique within
 one localization request; request-array order has no semantic meaning. If the
 device disconnects after task creation but before dispatch, the Host terminates
 that task as `failed` with `LOCAL_GATEWAY.DEVICE_NOT_READY`; reconnect the
-Helper and retry with a new idempotency key. The Host validates ownership and
-task binding before it sends short-lived source URLs directly to Helper 1.4.5
-or newer.
+Helper and retry with a new idempotency key. The Host validates ownership,
+task binding and public URL readability before it sends stable OSS source URLs
+directly to Helper 1.4.5 or newer.

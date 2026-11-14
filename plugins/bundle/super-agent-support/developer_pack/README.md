@@ -1,5 +1,9 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.32 bundles standard 2.54 and DevKit 1.9.21. AIGC material
+localization sends publicly readable, stable OSS object URLs to the Local
+Helper after owner-scoped selection and a public-read preflight.
+
 Version 1.10.31 bundles standard 2.53 and DevKit 1.9.20. Localization
 handoff checks report interaction, AIGC, Agent, Host, and Local Helper nodes
 separately. Unknown Host exceptions are attributed to the platform without

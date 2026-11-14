@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Any
+from urllib.parse import urlsplit
+
+import httpx
 
 from qwenpaw.app.aigc.resource_store import AigcResourceError
 from qwenpaw.app.object_storage import get_object_storage_client
@@ -158,16 +162,53 @@ def prepare_owned_aigc_localization(
         validated.append((selection, source))
 
     storage_client = get_object_storage_client(require_enabled=True)
+    if storage_client is None:
+        raise AigcResourceError("ASSET_PUBLIC_DOWNLOAD_UNAVAILABLE")
     normalized: list[dict[str, Any]] = []
     for selection, source in validated:
-        download_url = adapter.assets.signed_source(
-            source["_asset"], storage_client=storage_client, ttl_seconds=600,
-        )
-        if not isinstance(download_url, str) or not download_url:
+        storage = adapter.assets.cloud_storage_meta(source["_asset"])
+        if not storage:
             raise AigcResourceError("ASSET_FILE_NOT_FOUND")
+        download_url = storage_client.object_url(str(storage["object_key"]))
         normalized.append({
             **{key: value for key, value in source.items() if not key.startswith("_")},
             **selection,
             "download_url": download_url,
         })
     return normalized
+
+
+async def verify_public_aigc_localization(
+    assets: list[dict[str, Any]],
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> None:
+    """Check the same unauthenticated URLs that the Local Helper will download."""
+    semaphore = asyncio.Semaphore(8)
+    async with httpx.AsyncClient(
+        timeout=10.0, follow_redirects=False, transport=transport,
+    ) as client:
+        async def check(asset: dict[str, Any]) -> None:
+            url = asset["download_url"]
+            parsed = urlsplit(url)
+            if (
+                parsed.scheme != "https" or not parsed.netloc
+                or parsed.username or parsed.password or parsed.query
+            ):
+                raise AigcResourceError("ASSET_PUBLIC_DOWNLOAD_UNAVAILABLE")
+            try:
+                async with semaphore:
+                    response = await client.head(url)
+            except httpx.HTTPError:
+                raise AigcResourceError("ASSET_PUBLIC_DOWNLOAD_UNAVAILABLE") from None
+            if response.status_code != 200:
+                raise AigcResourceError("ASSET_PUBLIC_DOWNLOAD_UNAVAILABLE")
+            expected_size = asset.get("size_bytes")
+            actual_size = response.headers.get("content-length", "")
+            if (
+                isinstance(expected_size, int) and expected_size > 0
+                and actual_size.isdigit() and int(actual_size) != expected_size
+            ):
+                raise AigcResourceError("ASSET_PUBLIC_DOWNLOAD_UNAVAILABLE")
+
+        await asyncio.gather(*(check(asset) for asset in assets))

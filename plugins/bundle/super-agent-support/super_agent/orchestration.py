@@ -2378,6 +2378,7 @@ async def handle_workspace_turn(
                 try:
                     from .aigc_assets import (
                         AigcAssetSelectionError, prepare_owned_aigc_localization,
+                        verify_public_aigc_localization,
                     )
                     from .local_host import dispatch_aigc_asset_localization
                     from qwenpaw.app.aigc.resource_store import AigcResourceError
@@ -2413,6 +2414,7 @@ async def handle_workspace_turn(
                         conversation_id=str(request.session_id),
                         requested_assets=payload.get("assets"),
                     )
+                    await verify_public_aigc_localization(localized_assets)
                 except AigcResourceError as exc:
                     request_issue = exc.code in {
                         "ASSET_NOT_FOUND", "ASSET_BINDING_MISMATCH",
@@ -2422,6 +2424,7 @@ async def handle_workspace_turn(
                             exc.code if exc.code in {
                                 "ASSET_NOT_FOUND", "ASSET_BINDING_MISMATCH",
                                 "ASSET_FILE_NOT_FOUND",
+                                "ASSET_PUBLIC_DOWNLOAD_UNAVAILABLE",
                             } else "HOST_INTERNAL_ERROR"
                         ), responsibility="developer" if request_issue else "platform",
                         recovery_action=(
