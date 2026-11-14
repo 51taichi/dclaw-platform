@@ -205,7 +205,11 @@ async def invoke_public_runtime(
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
-            env={"PATH": "/usr/bin:/bin", "PYTHONIOENCODING": "utf-8"},
+            env={
+                "PATH": "/usr/bin:/bin",
+                "PYTHONIOENCODING": "utf-8",
+                "PYTHONDONTWRITEBYTECODE": "1",
+            },
             limit=MAX_LINE_BYTES + 1,
             start_new_session=True,
         )

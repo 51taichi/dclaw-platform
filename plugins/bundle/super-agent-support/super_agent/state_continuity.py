@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from qwenpaw.app.sealed_agents.package import inspect_extracted_payload
+from .release_integrity import inspect_signed_release
 
 from .orchestration import _exclusive_state_lock, _scope_key, _state_binding_path
 from .state_migration import _bind_state_file
@@ -175,7 +175,7 @@ def _verified_release(
         raise StateContinuityError("state_release_identity_mismatch")
     root = sealed_root / "releases" / record.agent_id / release.release_id
     try:
-        digest, files = inspect_extracted_payload(root)
+        digest, files = inspect_signed_release(root, release.content_digest)
     except Exception as exc:
         raise StateContinuityError("state_release_integrity_failed") from exc
     if digest != release.content_digest:
@@ -612,7 +612,9 @@ def register_legacy_pair(
     for release in (source, target):
         release_root = sealed / "releases" / record.agent_id / release.release_id
         try:
-            digest, files = inspect_extracted_payload(release_root)
+            digest, files = inspect_signed_release(
+                release_root, release.content_digest,
+            )
         except Exception as exc:
             raise StateContinuityError("state_release_integrity_failed") from exc
         if (

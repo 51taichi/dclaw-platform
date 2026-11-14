@@ -29,8 +29,8 @@ from qwenpaw.app.sealed_agents.models import SealedAgentRecord
 from qwenpaw.app.sealed_agents.registry import get_sealed_agent_registry
 from qwenpaw.app.sealed_agents.package import (
     SealedPackageError,
-    inspect_extracted_payload,
 )
+from .release_integrity import inspect_signed_release
 from .grants import SuperExpertGrantRepository
 from qwenpaw.constant import WORKING_DIR
 from agentscope.message import Msg
@@ -235,7 +235,9 @@ def authorize_workspace_release(
     if Path(workspace_root).resolve(strict=True) != expected_workspace:
         raise WorkspaceOrchestrationError("unauthorized_capability")
     try:
-        actual_digest, signed_files = inspect_extracted_payload(release_root)
+        actual_digest, signed_files = inspect_signed_release(
+            release_root, release.content_digest,
+        )
     except (OSError, SealedPackageError) as exc:
         raise WorkspaceOrchestrationError("orchestration_error") from exc
     if actual_digest != release.content_digest:
