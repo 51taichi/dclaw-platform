@@ -2287,7 +2287,10 @@
     "localHelperIncompatible": "Local helper incompatible",
     "localHelperPluginUnavailable": "Local helper support is not enabled on this server. Contact the administrator.",
     "localHelperWindowsOnly": "Check the local helper in the Windows DClaw client.",
-    "localHelperConnectFailed": "The local helper started but has not connected to DClaw. Try again shortly.",
+    "localHelperStopped": "The local helper is not running. Retrying automatically.",
+    "localHelperPairing": "The local helper has not paired yet. Retrying automatically.",
+    "localHelperDeviceNotReady": "The local helper is connected, but the device is not ready. Retrying automatically.",
+    "localHelperConnectFailed": "The local helper lost its DClaw connection. Retrying automatically.",
     "localHelperUpdateRequired": "The local helper is outdated. Run the check again to download Runner v{{version}}.",
     "localHelperProtocolIncompatible": "The local helper protocol is incompatible. Contact the administrator."
   },

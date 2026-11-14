@@ -202,7 +202,17 @@ pub(crate) fn get_local_helper_status(
     if let Some(child) = process.as_mut() {
         match child.try_wait() {
             Ok(None) => status.running = true,
-            Ok(Some(_)) | Err(_) => *process = None,
+            Ok(Some(_)) | Err(_) => {
+                let status_path = local_helper_runtime_status_path(&app)?;
+                let recorded_pid = fresh_runtime_status(&status_path)
+                    .and_then(|value| value.get("pid").and_then(Value::as_u64));
+                if recorded_pid == Some(child.id() as u64) {
+                    let _ = fs::remove_file(status_path);
+                }
+                status.running = false;
+                status.connected = false;
+                *process = None;
+            }
         }
     }
     Ok(status)

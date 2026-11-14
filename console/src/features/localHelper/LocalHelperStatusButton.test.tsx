@@ -1,5 +1,5 @@
 import { App } from "antd";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAgentStore } from "@/stores/agentStore";
@@ -9,11 +9,13 @@ const {
   getLocalHelperStatus,
   getLocalEnvironmentStatus,
   waitForLocalHelperConnection,
+  messageError,
 } = vi.hoisted(() => ({
   ensureLocalHelper: vi.fn(),
   getLocalHelperStatus: vi.fn(),
   getLocalEnvironmentStatus: vi.fn(),
   waitForLocalHelperConnection: vi.fn(),
+  messageError: vi.fn(),
 }));
 
 vi.mock("@/desktop/localHelper", () => ({
@@ -21,6 +23,12 @@ vi.mock("@/desktop/localHelper", () => ({
   getLocalHelperStatus,
   getLocalEnvironmentStatus,
   waitForLocalHelperConnection,
+}));
+
+vi.mock("@/hooks/useAppMessage", () => ({
+  useAppMessage: () => ({
+    message: { error: messageError, success: vi.fn() },
+  }),
 }));
 
 vi.mock("react-i18next", () => ({
@@ -175,6 +183,27 @@ describe("LocalHelperStatusButton", () => {
     ).toBeEnabled();
   });
 
+  it("distinguishes a connected but unready device from a dropped connection", async () => {
+    const user = userEvent.setup();
+    getLocalEnvironmentStatus.mockResolvedValue({
+      state: "device_not_ready",
+      reason: "device_pending",
+      protocol_version: "2",
+      compatible: true,
+      minimum_runner_version: "1.0.0",
+      user_action: "wait",
+    });
+    renderButton();
+
+    await user.click(screen.getByRole("button", { name: "检测本地助手" }));
+
+    expect(
+      await screen.findByRole("button", {
+        name: "本地助手已连接，但设备尚未就绪，正在自动重试。",
+      }),
+    ).toBeEnabled();
+  });
+
   it("downloads an uninstalled helper when explicitly checked", async () => {
     const user = userEvent.setup();
     getLocalHelperStatus.mockResolvedValue({
@@ -193,5 +222,80 @@ describe("LocalHelperStatusButton", () => {
       }),
     ).toBeEnabled();
     expect(ensureLocalHelper).toHaveBeenCalledOnce();
+  });
+
+  it("silently retries a required helper and recovers without reopening DClaw", async () => {
+    const monitorCallbacks: Array<() => void> = [];
+    const originalSetInterval = window.setInterval.bind(window);
+    const intervalSpy = vi
+      .spyOn(window, "setInterval")
+      .mockImplementation((handler, timeout, ...args) => {
+        if (timeout === 15_000 && typeof handler === "function") {
+          monitorCallbacks.push(handler);
+        }
+        return originalSetInterval(
+          handler,
+          timeout,
+          ...args,
+        ) as unknown as ReturnType<typeof setInterval>;
+      });
+    try {
+      useAgentStore.setState({
+        selectedAgent: "video-agent",
+        agents: [
+          {
+            id: "video-agent",
+            name: "Video Agent",
+            description: "",
+            enabled: true,
+            declared_capabilities: [
+              "local.execution.session/1",
+              "local.environment.preflight/1",
+            ],
+          },
+        ],
+      });
+      ensureLocalHelper
+        .mockResolvedValueOnce({
+          available: true,
+          status: { ...connected, connected: false },
+        })
+        .mockResolvedValueOnce({ available: true, status: connected });
+      waitForLocalHelperConnection.mockResolvedValueOnce({
+        ...connected,
+        connected: false,
+      });
+
+      const view = renderButton();
+      expect(
+        await screen.findByRole("button", {
+          name: "本地助手连接已中断，正在自动重试。",
+        }),
+      ).toBeEnabled();
+      expect(messageError).not.toHaveBeenCalled();
+
+      await act(async () => {
+        monitorCallbacks[monitorCallbacks.length - 1]?.();
+      });
+      expect(
+        await screen.findByRole("button", {
+          name: "本地助手已连接 · v1.0.0",
+        }),
+      ).toBeEnabled();
+      expect(ensureLocalHelper).toHaveBeenCalledTimes(2);
+      expect(messageError).not.toHaveBeenCalled();
+
+      getLocalHelperStatus
+        .mockResolvedValueOnce({ ...connected, connected: false })
+        .mockResolvedValue(connected);
+      await act(async () => {
+        monitorCallbacks[monitorCallbacks.length - 1]?.();
+      });
+      await waitFor(() => expect(ensureLocalHelper).toHaveBeenCalledTimes(3));
+      expect(messageError).not.toHaveBeenCalled();
+      view.unmount();
+    } finally {
+      intervalSpy.mockRestore();
+    }
   });
 });

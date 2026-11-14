@@ -237,6 +237,23 @@ describe("local helper desktop bridge", () => {
     expect(invokeMock).toHaveBeenCalledTimes(2);
   });
 
+  it("stops waiting as soon as the helper process exits", async () => {
+    invokeMock.mockResolvedValue({
+      supported: true,
+      installed: true,
+      running: false,
+      connected: false,
+      paired: true,
+      deviceId: "device-1",
+      runnerVersion: "1.0.0",
+    });
+
+    const status = await waitForLocalHelperConnection(40, 500);
+
+    expect(status?.running).toBe(false);
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+  });
+
   it("reads the authenticated server-side Runner compatibility status", async () => {
     vi.stubGlobal(
       "fetch",

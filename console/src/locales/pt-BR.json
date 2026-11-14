@@ -1727,7 +1727,10 @@
     "localHelperIncompatible": "Assistente local incompatível",
     "localHelperPluginUnavailable": "O suporte ao assistente local não está ativado neste servidor. Contate o administrador.",
     "localHelperWindowsOnly": "Verifique o assistente local no cliente DClaw para Windows.",
-    "localHelperConnectFailed": "O assistente local foi iniciado, mas ainda não se conectou ao DClaw. Tente novamente em instantes.",
+    "localHelperStopped": "O assistente local não está em execução. Tentando novamente automaticamente.",
+    "localHelperPairing": "O assistente local ainda não foi pareado. Tentando novamente automaticamente.",
+    "localHelperDeviceNotReady": "O assistente local está conectado, mas o dispositivo não está pronto. Tentando novamente automaticamente.",
+    "localHelperConnectFailed": "A conexão do assistente local com o DClaw caiu. Tentando novamente automaticamente.",
     "localHelperUpdateRequired": "O assistente local está desatualizado. Verifique novamente para baixar o Runner v{{version}}.",
     "localHelperProtocolIncompatible": "O protocolo do assistente local é incompatível. Contate o administrador."
   },

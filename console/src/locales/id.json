@@ -98,7 +98,10 @@
     "localHelperIncompatible": "Bantuan lokal tidak kompatibel",
     "localHelperPluginUnavailable": "Dukungan bantuan lokal belum diaktifkan di server ini. Hubungi administrator.",
     "localHelperWindowsOnly": "Periksa bantuan lokal di klien DClaw Windows.",
-    "localHelperConnectFailed": "Bantuan lokal telah dimulai tetapi belum terhubung ke DClaw. Coba lagi sebentar lagi.",
+    "localHelperStopped": "Bantuan lokal tidak berjalan. Mencoba lagi secara otomatis.",
+    "localHelperPairing": "Bantuan lokal belum dipasangkan. Mencoba lagi secara otomatis.",
+    "localHelperDeviceNotReady": "Bantuan lokal terhubung, tetapi perangkat belum siap. Mencoba lagi secara otomatis.",
+    "localHelperConnectFailed": "Koneksi bantuan lokal ke DClaw terputus. Mencoba lagi secara otomatis.",
     "localHelperUpdateRequired": "Versi bantuan lokal terlalu lama. Periksa kembali untuk mengunduh Runner v{{version}}.",
     "localHelperProtocolIncompatible": "Protokol bantuan lokal tidak kompatibel. Hubungi administrator."
   },

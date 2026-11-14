@@ -63,13 +63,13 @@ export async function getLocalEnvironmentStatus(): Promise<LocalEnvironmentStatu
 }
 
 export async function waitForLocalHelperConnection(
-  maxAttempts = 20,
-  intervalMs = 250,
+  maxAttempts = 40,
+  intervalMs = 500,
 ): Promise<LocalHelperStatus | null> {
   let status: LocalHelperStatus | null = null;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     status = await getLocalHelperStatus();
-    if (!status || status.connected) return status;
+    if (!status || status.connected || !status.running) return status;
     if (attempt < maxAttempts - 1) {
       await new Promise((resolve) => setTimeout(resolve, intervalMs));
     }

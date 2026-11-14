@@ -2136,7 +2136,10 @@
     "localHelperIncompatible": "本地助手不兼容",
     "localHelperPluginUnavailable": "平台尚未启用本地助手支持，请联系管理员。",
     "localHelperWindowsOnly": "请在 Windows DClaw 客户端中检测本地助手。",
-    "localHelperConnectFailed": "本地助手已启动，但尚未连接到 DClaw，请稍后重试。",
+    "localHelperStopped": "本地助手未运行，正在自动重试。",
+    "localHelperPairing": "本地助手尚未完成配对，正在自动重试。",
+    "localHelperDeviceNotReady": "本地助手已连接，但设备尚未就绪，正在自动重试。",
+    "localHelperConnectFailed": "本地助手连接已中断，正在自动重试。",
     "localHelperUpdateRequired": "本地助手版本过低，请重新检测并下载 Runner v{{version}}。",
     "localHelperProtocolIncompatible": "本地助手协议不兼容，请联系管理员。"
   },

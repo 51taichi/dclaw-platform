@@ -39,6 +39,7 @@ interface LocalHelperStatusValue {
 const LocalHelperStatusContext = createContext<LocalHelperStatusValue | null>(
   null,
 );
+const MONITOR_INTERVAL_MS = 15_000;
 
 export function LocalHelperStatusProvider({
   children,
@@ -54,6 +55,8 @@ export function LocalHelperStatusProvider({
   const mode = useMemo(() => localAssistantMode(agent), [agent]);
   const [state, setState] = useState<LocalHelperCheckState>("idle");
   const [runnerVersion, setRunnerVersion] = useState("");
+  const [errorDetail, setErrorDetail] = useState("");
+  const [monitoring, setMonitoring] = useState(false);
   const checkingRef = useRef(false);
   const autoCheckedRef = useRef(new Set<string>());
 
@@ -66,6 +69,7 @@ export function LocalHelperStatusProvider({
       try {
         const detected = await getLocalHelperStatus();
         if (!detected) {
+          setMonitoring(false);
           failureState = "unavailable";
           throw new Error(
             t(
@@ -74,6 +78,7 @@ export function LocalHelperStatusProvider({
             ),
           );
         }
+        setMonitoring(true);
         const started = await ensureLocalHelper();
         if (!started.available) {
           failureState = "unavailable";
@@ -93,10 +98,23 @@ export function LocalHelperStatusProvider({
           ? started.status
           : await waitForLocalHelperConnection();
         if (!status?.connected) {
+          if (!status?.running) {
+            throw new Error(
+              t("header.localHelperStopped", "本地助手未运行，正在自动重试。"),
+            );
+          }
+          if (!status.paired) {
+            throw new Error(
+              t(
+                "header.localHelperPairing",
+                "本地助手尚未完成配对，正在自动重试。",
+              ),
+            );
+          }
           throw new Error(
             t(
               "header.localHelperConnectFailed",
-              "本地助手已启动，但尚未连接到 DClaw，请稍后重试。",
+              "本地助手连接已中断，正在自动重试。",
             ),
           );
         }
@@ -120,6 +138,14 @@ export function LocalHelperStatusProvider({
             ),
           );
         }
+        if (environment.state === "device_not_ready") {
+          throw new Error(
+            t(
+              "header.localHelperDeviceNotReady",
+              "本地助手已连接，但设备尚未就绪，正在自动重试。",
+            ),
+          );
+        }
         if (environment.state !== "ready") {
           throw new Error(
             t(
@@ -129,6 +155,7 @@ export function LocalHelperStatusProvider({
           );
         }
         setRunnerVersion(status.runnerVersion);
+        setErrorDetail("");
         setState("ready");
         if (notify) {
           void message.success(t("header.localHelperReady", "本地助手已连接"));
@@ -136,8 +163,9 @@ export function LocalHelperStatusProvider({
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         setRunnerVersion("");
+        setErrorDetail(detail);
         setState(failureState);
-        void message.error(detail);
+        if (notify) void message.error(detail);
       } finally {
         checkingRef.current = false;
       }
@@ -152,6 +180,30 @@ export function LocalHelperStatusProvider({
     autoCheckedRef.current.add(selectedAgent);
     void check(false);
   }, [check, mode, selectedAgent]);
+
+  useEffect(() => {
+    if (!monitoring) return;
+    const timer = window.setInterval(() => {
+      if (checkingRef.current) return;
+      if (state !== "ready") {
+        void check(false);
+        return;
+      }
+      void (async () => {
+        try {
+          const status = await getLocalHelperStatus();
+          if (status?.connected) {
+            const environment = await getLocalEnvironmentStatus();
+            if (environment.state === "ready") return;
+          }
+        } catch {
+          // The full check reports the actionable status on the next pass.
+        }
+        void check(false);
+      })();
+    }, MONITOR_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [check, monitoring, state]);
 
   const label =
     state === "checking"
@@ -170,7 +222,7 @@ export function LocalHelperStatusProvider({
       : state === "protocol-incompatible"
       ? t("header.localHelperIncompatible", "本地助手不兼容")
       : state === "error"
-      ? t("header.localHelperRetry", "本地助手异常，点击重试")
+      ? errorDetail || t("header.localHelperRetry", "本地助手异常，点击重试")
       : t("header.localHelperCheck", "检测本地助手");
 
   return (

@@ -1524,7 +1524,10 @@
     "localHelperIncompatible": "ローカルヘルパーに互換性がありません",
     "localHelperPluginUnavailable": "このサーバーではローカルヘルパーが有効になっていません。管理者に連絡してください。",
     "localHelperWindowsOnly": "Windows版DClawクライアントでローカルヘルパーを確認してください。",
-    "localHelperConnectFailed": "ローカルヘルパーは起動しましたが、DClawに接続されていません。しばらくしてから再試行してください。",
+    "localHelperStopped": "ローカルヘルパーが起動していません。自動的に再試行します。",
+    "localHelperPairing": "ローカルヘルパーのペアリングが完了していません。自動的に再試行します。",
+    "localHelperDeviceNotReady": "ローカルヘルパーは接続されていますが、デバイスの準備ができていません。自動的に再試行します。",
+    "localHelperConnectFailed": "ローカルヘルパーのDClaw接続が切れました。自動的に再試行します。",
     "localHelperUpdateRequired": "ローカルヘルパーのバージョンが古いため、再確認してRunner v{{version}}をダウンロードしてください。",
     "localHelperProtocolIncompatible": "ローカルヘルパーのプロトコルに互換性がありません。管理者に連絡してください。"
   },
