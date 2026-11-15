@@ -19,7 +19,7 @@ internal sealed record HelperConfig(
 
 internal static class HelperMetadata
 {
-    internal const string Version = "1.4.7";
+    internal const string Version = "1.4.8";
     internal const string ProtocolVersion = "2";
 }
 
@@ -35,6 +35,15 @@ internal sealed class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Length == 3 && args[0] == "--ffmpeg-command")
+        {
+            try { return PlatformFfmpegCommand.Execute(args[1], args[2]); }
+            catch (Exception exception)
+            {
+                Console.Error.WriteLine(exception.GetType().Name);
+                return 1;
+            }
+        }
         if (args.Length != 1 || !File.Exists(args[0])) return 2;
         using var singleInstance = new Mutex(
             true,
@@ -250,10 +259,21 @@ internal sealed class HelperRuntime
                     foreach (var component in components.EnumerateArray())
                         await PreparePublicComponentAsync(component, cancellationToken);
                 }
-                await PrepareRuntimeAsync(
-                    message.GetProperty("capability_package"),
-                    components,
-                    cancellationToken);
+                if (message.TryGetProperty("built_in_capability", out var builtIn))
+                {
+                    if (builtIn.GetProperty("capability_id").GetString()
+                            != PlatformFfmpegCommand.CapabilityId
+                        || builtIn.GetProperty("package_version").GetString()
+                            != PlatformFfmpegCommand.PackageVersion)
+                        throw new InvalidDataException("unknown built-in capability");
+                }
+                else
+                {
+                    await PrepareRuntimeAsync(
+                        message.GetProperty("capability_package"),
+                        components,
+                        cancellationToken);
+                }
                 await ReportCapabilitiesAsync(cancellationToken);
                 break;
             case "task.start":
@@ -788,9 +808,11 @@ internal sealed class HelperRuntime
             capabilityId = continuation
                 ? ReadTaskCapability(taskId)
                 : task.GetProperty("capability_id").GetString()!;
-            var descriptorPath = FindDescriptor(capabilityId);
-            using var descriptorDocument = JsonDocument.Parse(await File.ReadAllTextAsync(descriptorPath, cancellationToken));
-            var descriptor = descriptorDocument.RootElement;
+            var builtInFfmpeg = capabilityId == PlatformFfmpegCommand.CapabilityId;
+            var descriptorPath = builtInFfmpeg ? null : FindDescriptor(capabilityId);
+            using var descriptorDocument = descriptorPath is null ? null
+                : JsonDocument.Parse(await File.ReadAllTextAsync(descriptorPath, cancellationToken));
+            var descriptor = descriptorDocument?.RootElement;
             if (!continuation)
             {
                 var taskInput = JsonNode.Parse(task.GetProperty("input").GetRawText())
@@ -844,18 +866,23 @@ internal sealed class HelperRuntime
                 null,
                 cancellationToken);
             await SendEventAsync(taskId, "started", new JsonObject(), cancellationToken);
-            var packageRoot = Path.GetDirectoryName(descriptorPath)!;
-            var entrypoint = descriptor.GetProperty("entrypoint");
-            var limits = descriptor.GetProperty("limits");
-            var maxRuntime = TimeSpan.FromSeconds(
-                limits.GetProperty("max_runtime_seconds").GetInt32());
-            var maxMemoryBytes = checked(
-                limits.GetProperty("max_memory_mib").GetInt64() * 1024 * 1024);
-            var maxDiskBytes = checked(
-                limits.GetProperty("max_disk_mib").GetInt64() * 1024 * 1024);
-            var maxOutputBytes = limits.GetProperty("max_output_bytes").GetInt64();
-            var components = await LoadPublicComponentsAsync(packageRoot, cancellationToken);
-            var executable = ResolveEntrypoint(packageRoot, entrypoint, components);
+            var packageRoot = descriptorPath is null ? null : Path.GetDirectoryName(descriptorPath)!;
+            var limits = descriptor?.GetProperty("limits");
+            var maxRuntime = TimeSpan.FromSeconds(builtInFfmpeg ? 3600
+                : limits!.Value.GetProperty("max_runtime_seconds").GetInt32());
+            var maxMemoryBytes = builtInFfmpeg ? 4096L * 1024 * 1024
+                : checked(limits!.Value.GetProperty("max_memory_mib").GetInt64() * 1024 * 1024);
+            var maxDiskBytes = builtInFfmpeg ? 16384L * 1024 * 1024
+                : checked(limits!.Value.GetProperty("max_disk_mib").GetInt64() * 1024 * 1024);
+            var maxOutputBytes = builtInFfmpeg ? 8589934592L
+                : limits!.Value.GetProperty("max_output_bytes").GetInt64();
+            if (builtInFfmpeg && continuation)
+                throw new InvalidDataException("FFmpeg command tasks cannot continue");
+            var components = packageRoot is null ? null
+                : await LoadPublicComponentsAsync(packageRoot, cancellationToken);
+            var entrypoint = descriptor?.GetProperty("entrypoint");
+            var executable = builtInFfmpeg ? Environment.ProcessPath!
+                : ResolveEntrypoint(packageRoot!, entrypoint!.Value, components!);
             var start = new ProcessStartInfo(executable)
             {
                 WorkingDirectory = taskRoot,
@@ -863,13 +890,22 @@ internal sealed class HelperRuntime
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
             };
-            ApplyComponentEnvironment(start, descriptor, components);
-            foreach (var argument in entrypoint.GetProperty("arguments").EnumerateArray())
-                start.ArgumentList.Add(
-                    ExpandArgument(argument.GetString()!, packageRoot, taskRoot));
-            start.ArgumentList.Add("--task-root");
-            start.ArgumentList.Add(taskRoot);
-            if (continuation) start.ArgumentList.Add("--continue");
+            if (builtInFfmpeg)
+            {
+                start.ArgumentList.Add("--ffmpeg-command");
+                start.ArgumentList.Add(_root);
+                start.ArgumentList.Add(taskRoot);
+            }
+            else
+            {
+                ApplyComponentEnvironment(start, descriptor!.Value, components!);
+                foreach (var argument in entrypoint!.Value.GetProperty("arguments").EnumerateArray())
+                    start.ArgumentList.Add(
+                        ExpandArgument(argument.GetString()!, packageRoot!, taskRoot));
+                start.ArgumentList.Add("--task-root");
+                start.ArgumentList.Add(taskRoot);
+                if (continuation) start.ArgumentList.Add("--continue");
+            }
             using var process = Process.Start(start) ?? throw new InvalidOperationException("capability did not start");
             _processes[taskId] = process;
             if (_cancelled.ContainsKey(taskId) && !process.HasExited)
@@ -1604,6 +1640,14 @@ internal sealed class HelperRuntime
                 ["package_version"] = item.GetProperty("package_version").GetString(),
             });
         }
+        if (PlatformFfmpegCommand.IsComponentReady(_root))
+            capabilities.Add(new JsonObject
+            {
+                ["capability_id"] = PlatformFfmpegCommand.CapabilityId,
+                ["version"] = "1",
+                ["package_id"] = PlatformFfmpegCommand.CapabilityId,
+                ["package_version"] = PlatformFfmpegCommand.PackageVersion,
+            });
         await SendAsync(new JsonObject
         {
             ["type"] = "capabilities.report",

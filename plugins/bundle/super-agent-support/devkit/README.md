@@ -1,9 +1,9 @@
 # DClaw Super Agent DevKit
 
-Version 1.9.25 documents the platform-owned `dclaw.ffmpeg.command` local
-task package, with a closed input/result Schema and a direct Host API demo.
-It reuses `local.runtime.prepare/1` and `local.task.start/1`; Helper 1.4.7
-and their existing request/receipt contracts are unchanged.
+Version 1.9.25 documents the Helper-built-in `dclaw.ffmpeg.command` local
+task executor, with a closed input/result Schema and a direct Host API demo.
+It reuses `local.runtime.prepare/1` and `local.task.start/1`; Helper 1.4.8
+is required and the Host request/receipt contracts are unchanged.
 
 Version 1.9.24 adds the sealed Host `local.runtime.prepare/1` bridge for
 exact-version Local Helper package preparation. Declare it with

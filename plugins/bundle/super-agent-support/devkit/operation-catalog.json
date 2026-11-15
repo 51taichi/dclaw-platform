@@ -190,7 +190,7 @@
     },
     "platform_ffmpeg_command": {
       "minimum_plugin_version": "1.18.47",
-      "minimum_helper_version": "1.4.7",
+      "minimum_helper_version": "1.4.8",
       "capability_id": "dclaw.ffmpeg.command",
       "package_version": "0.1.0",
       "input_schema": "schemas/local-ffmpeg-command-v1/input.schema.json",

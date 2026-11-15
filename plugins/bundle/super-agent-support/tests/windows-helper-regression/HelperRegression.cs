@@ -1,4 +1,5 @@
 using System.Net;
+using System.Diagnostics;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -80,6 +81,114 @@ internal static class HelperRegression
         if (!condition) throw new Exception(reason);
     }
 
+    private static void CheckPlatformFfmpegCommand(string root)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var componentRoot = Path.Combine(root, "Components", "ffmpeg",
+            PlatformFfmpegCommand.ComponentVersion);
+        var executable = Path.Combine(componentRoot, "bin", "ffmpeg");
+        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
+        File.WriteAllText(executable,
+            "#!/bin/sh\nfor last; do :; done\nprintf finished > \"$last\"\n");
+        File.SetUnixFileMode(executable, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        File.WriteAllText(Path.Combine(componentRoot, "descriptor.json"),
+            JsonSerializer.Serialize(new
+            {
+                component_id = "ffmpeg",
+                component_version = PlatformFfmpegCommand.ComponentVersion,
+                exports = new { ffmpeg = "bin/ffmpeg" },
+            }));
+        Check(PlatformFfmpegCommand.IsComponentReady(root),
+            "built-in FFmpeg capability did not find its Component");
+        var task = Path.Combine(root, "Tasks", "ffmpeg-test");
+        var input = Path.Combine(task, "res", "bindings", "clip_01", "source.mp4");
+        Directory.CreateDirectory(Path.GetDirectoryName(input)!);
+        File.WriteAllText(input, "source");
+        var request = new JsonObject
+        {
+            ["arguments"] = new JsonArray("-i", "{input:clip_01}", "{output:final.mp4}"),
+            ["output_files"] = new JsonArray("final.mp4"),
+            ["clip_01"] = "res/bindings/clip_01/source.mp4",
+        };
+        File.WriteAllText(Path.Combine(task, "input.json"), request.ToJsonString());
+        Check(PlatformFfmpegCommand.Execute(root, task) == 0,
+            "built-in FFmpeg command failed");
+        var result = JsonNode.Parse(File.ReadAllText(Path.Combine(task, "result.json")))!;
+        var output = result["outputs"]![0]!;
+        Check(output["size_bytes"]!.GetValue<long>() == 8,
+            "built-in FFmpeg output size is wrong");
+        Check(output["sha256"]!.GetValue<string>() == Convert.ToHexString(
+                SHA256.HashData(File.ReadAllBytes(Path.Combine(task, "final.mp4"))))
+            .ToLowerInvariant(), "built-in FFmpeg output hash is wrong");
+        request["arguments"] = new JsonArray("-i", "https://invalid.test/source.mp4",
+            "{output:final.mp4}");
+        File.WriteAllText(Path.Combine(task, "input.json"), request.ToJsonString());
+        try
+        {
+            PlatformFfmpegCommand.Execute(root, task);
+            throw new Exception("raw FFmpeg URL was accepted");
+        }
+        catch (InvalidDataException) { }
+        request["arguments"] = new JsonArray("-i", "{input:clip_01}",
+            "{output:result.json}");
+        request["output_files"] = new JsonArray("result.json");
+        File.WriteAllText(Path.Combine(task, "input.json"), request.ToJsonString());
+        try
+        {
+            PlatformFfmpegCommand.Execute(root, task);
+            throw new Exception("task control file was accepted as output");
+        }
+        catch (InvalidDataException) { }
+        request["arguments"] = new JsonArray("-i", "{input:clip_01}",
+            "{output:final.mp4}");
+        request["output_files"] = new JsonArray("final.mp4");
+        request["clip_01"] = "../private.mp4";
+        File.WriteAllText(Path.Combine(task, "input.json"), request.ToJsonString());
+        try
+        {
+            PlatformFfmpegCommand.Execute(root, task);
+            throw new Exception("untrusted binding path was accepted");
+        }
+        catch (InvalidDataException) { }
+        request["clip_01"] = "res/bindings/clip_01/source.mp4";
+
+        var actualFfmpeg = (Environment.GetEnvironmentVariable("PATH") ?? "")
+            .Split(Path.PathSeparator)
+            .Select(directory => Path.Combine(directory, "ffmpeg"))
+            .FirstOrDefault(File.Exists);
+        if (actualFfmpeg is null) return;
+        File.Delete(executable);
+        File.Copy(actualFfmpeg, executable);
+        for (var index = 1; index <= 2; index++)
+        {
+            var clip = Path.Combine(task, "res", "bindings",
+                $"clip_{index:00}", "source.mp4");
+            Directory.CreateDirectory(Path.GetDirectoryName(clip)!);
+            var generate = Process.Start(new ProcessStartInfo(executable)
+            {
+                UseShellExecute = false,
+                ArgumentList = {
+                    "-hide_banner", "-loglevel", "error", "-y",
+                    "-f", "lavfi", "-i", index == 1
+                        ? "color=c=red:s=64x64:r=5"
+                        : "color=c=blue:s=64x64:r=5",
+                    "-t", "1", "-c:v", "mpeg4", clip,
+                },
+            })!;
+            generate.WaitForExit();
+            Check(generate.ExitCode == 0, "FFmpeg test input generation failed");
+        }
+        request["arguments"] = new JsonArray(
+            "-i", "{input:clip_01}", "-i", "{input:clip_02}",
+            "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]",
+            "-map", "[v]", "-c:v", "mpeg4", "{output:final.mp4}");
+        request["clip_02"] = "res/bindings/clip_02/source.mp4";
+        File.WriteAllText(Path.Combine(task, "input.json"), request.ToJsonString());
+        Check(PlatformFfmpegCommand.Execute(root, task) == 0
+            && new FileInfo(Path.Combine(task, "final.mp4")).Length > 0,
+            "two bound MP4 files did not produce a video");
+    }
+
     public static async Task Main()
     {
         var root = Path.Combine(Path.GetTempPath(), "dclaw-helper-regression-" + Guid.NewGuid());
@@ -89,6 +198,7 @@ internal static class HelperRegression
             var runtime = new HelperRuntime("unused", new HelperConfig(
                 "wss://unused", "device", null, null, "test"),
                 root, new HttpClient(handler));
+            CheckPlatformFfmpegCommand(root);
             var taskId = Guid.NewGuid().ToString("N");
             var taskRoot = HelperPathSafety.TaskRoot(root, "test", taskId);
             Directory.CreateDirectory(Path.Combine(taskRoot, "res"));

@@ -383,34 +383,18 @@ def _runtime(plugin_module, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_platform_ffmpeg_package_registers_and_prepares_exact_version(
+async def test_platform_ffmpeg_builtin_prepares_exact_component_version(
     plugin_module, tmp_path,
 ):
     store, _signer, _broker, service = _runtime(plugin_module, tmp_path)
-    source = PLUGIN_ROOT / "platform_capabilities/ffmpeg-command/0.1.0"
-    registration = json.loads((source / "registration.json").read_text())
-    signer_request = json.loads((source / "signer-registration-request.json").read_text())
-    package_cls = sys.modules[
-        "test_dclaw_super_agent_support.packages"
-    ].CapabilityPackageRegistry
-    packages = package_cls(
-        store, PLUGIN_ROOT / "schemas/capability-descriptor.schema.json",
-        {signer_request["signer_id"]: signer_request["public_key"]},
-    )
-    packages.register(
-        registration["descriptor"], signer_id=registration["signer_id"],
-        signature=registration["signature"],
-    )
-    assert store.get_package_for_capability("dclaw.ffmpeg.command") == {
-        "descriptor": registration["descriptor"],
-        "signer_id": registration["signer_id"],
-        "signature": registration["signature"],
-    }
+    assert store.get_package_for_capability("dclaw.ffmpeg.command") is None
+    package = service._package_for_capability("dclaw.ffmpeg.command")
+    assert package["descriptor"]["package_version"] == "0.1.0"
 
     class Components:
         def resolve(self, requirements, *, platform):
             assert platform == "windows-x64"
-            assert requirements == registration["descriptor"]["public_components"]
+            assert requirements == package["descriptor"]["public_components"]
             return [{"descriptor": {"component_id": item["component_id"]}}
                     for item in requirements]
 
@@ -426,6 +410,11 @@ async def test_platform_ffmpeg_package_registers_and_prepares_exact_version(
         sent.append((device_id, message))
 
     service._send = send
+    outdated = await service._local_runtime_prepare(
+        {"capability": "dclaw.ffmpeg.command"}, {"u": "user-1"}, "trace-0",
+    )
+    assert outdated["state"] == "runner_update_required"
+    device["runner_version"] = "1.4.8"
     result = await service._local_runtime_prepare(
         {"capability": "dclaw.ffmpeg.command"}, {"u": "user-1"}, "trace-1",
     )
@@ -433,7 +422,20 @@ async def test_platform_ffmpeg_package_registers_and_prepares_exact_version(
     assert result["package_version"] == "0.1.0"
     assert sent[0][0] == "device-1"
     assert sent[0][1]["type"] == "runtime.prepare"
-    assert len(sent[0][1]["public_components"]) == 2
+    assert len(sent[0][1]["public_components"]) == 1
+    assert sent[0][1]["built_in_capability"] == {
+        "capability_id": "dclaw.ffmpeg.command",
+        "package_version": "0.1.0",
+    }
+    assert "capability_package" not in sent[0][1]
+    command_schema = json.loads((
+        PLUGIN_ROOT / "schemas/device-command.schema.json"
+    ).read_text())
+    Draft202012Validator(command_schema).validate({
+        "type": "runtime.prepare", "protocol_version": "2",
+        "public_components": [],
+        "built_in_capability": sent[0][1]["built_in_capability"],
+    })
     device["capabilities"] = [{
         "capability_id": "dclaw.ffmpeg.command",
         "package_id": "dclaw.ffmpeg.command",
@@ -444,6 +446,22 @@ async def test_platform_ffmpeg_package_registers_and_prepares_exact_version(
     )
     assert result["state"] == "ready"
     assert len(sent) == 1
+    identity = {
+        "t": "tenant-1", "u": "user-1", "s": "session-1",
+        "a": "expert-1", "n": "Expert", "g": "installation-1",
+        "r": "release-1", "i": "invocation-1",
+    }
+    accepted = await service._local_task_start({
+        "capability_id": "dclaw.ffmpeg.command",
+        "idempotency_key": "ffmpeg-test-1",
+        "input": {
+            "arguments": ["-i", "{input:clip_01}", "{output:final.mp4}"],
+            "output_files": ["final.mp4"],
+        },
+    }, identity, "trace-task-1")
+    assert accepted["capability_id"] == "dclaw.ffmpeg.command"
+    assert sent[-1][1]["type"] == "task.start"
+    assert sent[-1][1]["task"]["capability_id"] == "dclaw.ffmpeg.command"
 
 
 def test_session_capability_snapshot_preserves_legacy_tokens(plugin_module):

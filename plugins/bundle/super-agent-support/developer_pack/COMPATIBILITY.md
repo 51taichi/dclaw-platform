@@ -44,6 +44,7 @@
 | Support plugin for developer pack >= 1.10.32 download and public AIGC material URLs | >= 1.18.40 |
 | Support plugin for local task diagnostics and Helper 1.4.6 localization | >= 1.18.43 |
 | Support plugin for prior localized file bindings and Helper 1.4.7 | >= 1.18.44 |
+| Support plugin for built-in FFmpeg command tasks and Helper 1.4.8 | >= 1.18.47 |
 | Support plugin for sealed Host local runtime preparation | >= 1.18.45 |
 | Support plugin for `runtime.failure.read/1` | >= 1.18.12 |
 | Support plugin for startup failure diagnostics and durable failed turns | >= 1.18.13 |
@@ -60,7 +61,7 @@
 | Unambiguous read-only adapter for legacy Agent submit/review tools | >= 1.18.35 |
 | DClaw Windows client for required preflight | >= 2.6.12 |
 | DClaw Windows client for local file workflows | >= 2.6.13 |
-| Runner | >= 1.0.0; >= 1.1.0 for device protocol 2 file workflows; >= 1.2.0 for public Components; >= 1.3.0 for explicit non-entry Component export bindings; >= 1.4.6 for AIGC asset delivery; >= 1.4.7 for prior localized file binding |
+| Runner | >= 1.0.0; >= 1.1.0 for device protocol 2 file workflows; >= 1.2.0 for public Components; >= 1.3.0 for explicit non-entry Component export bindings; >= 1.4.6 for AIGC asset delivery; >= 1.4.7 for prior localized file binding; >= 1.4.8 for built-in FFmpeg command tasks |
 
 The pack keeps the DevKit 1.2/1.3/1.4 sealing format unchanged. Existing Agent
 packages built under standard 1.x or 2.0 remain accepted by their declared

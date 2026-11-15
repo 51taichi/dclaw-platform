@@ -1065,11 +1065,11 @@ queued | running | awaiting_input | cancelling | succeeded | failed | cancelled
 
 ### 15.8 平台通用 FFmpeg 命令任务
 
-Support Plugin `1.18.47` 起正式注册平台拥有的 `dclaw.ffmpeg.command` 本地任务能力包 `0.1.0`，目标为 Windows x64、Helper `1.4.7` 及以上；它按准确版本复用公共 `python-runtime` 和 `ffmpeg` Component。它不是新的 Host 路由，也不要求每个专家为常规 FFmpeg 命令再制作一个私有能力包。专家按真实需求在新签名 Release 中声明并获授 `local.execution.session/1`、`local.runtime.prepare/1`、`local.task.start/1` 和 `local.task.read/1`；复用前序本地任务文件时还需 `local.task.outputs.bind/1`。现有 Release 的 grant 不自动扩大。私有能力包仍适用于专有剪辑算法、特殊依赖或超出通用合同的操作。
+Support Plugin `1.18.47` 与 Windows Helper `1.4.8` 起提供平台内置的 `dclaw.ffmpeg.command` 本地任务能力 `0.1.0`，按准确版本复用已注册的公共 `ffmpeg` Component。它不是新增的 FFmpeg 二进制或需要 HTTPS 托管的 Agent 能力 ZIP，不要求每个专家为常规 FFmpeg 命令再制作私有能力包。专家按真实需求在新签名 Release 中声明并获授 `local.execution.session/1`、`local.runtime.prepare/1`、`local.task.start/1` 和 `local.task.read/1`；复用前序本地任务文件时还需 `local.task.outputs.bind/1`。现有 Release 的 grant 不自动扩大。私有能力包仍适用于专有剪辑算法、特殊依赖或超出通用合同的操作。
 
-专家先以 `capability_id="dclaw.ffmpeg.command"` 调用 `local.runtime.prepare/1`，仅在 `status="ready"` 且 `package_version="0.1.0"` 后调用 `local.task.start/1`。启动请求沿用原合同：`capability_id`、`idempotency_key`、`input` 和可选 `local_file_bindings`。`input.arguments` 是按顺序传给 FFmpeg 的参数数组，不是 shell 命令字符串；输入文件参数必须是单独的 `{input:slot}`，其中 `slot` 是同次请求的受信文件绑定名；输出文件参数必须是单独的 `{output:filename}`，并逐项列入 `input.output_files`。Host 先按签名输入 Schema 校验，Helper 在任务设备上复核文件引用并暂存只读副本，能力包只解析任务目录内的占位符后以无 shell 方式调用公共 FFmpeg。原始本机路径、外部 URL、未绑定输入及未声明输出不得作为参数提交。输出文件位于任务目录，成功结果只给名称、大小和 SHA-256，由原任务回读与受管产物机制返回；受理不等于完成。幂等、取消、失败、任务隔离、设备匹配和文件引用过期仍沿用 `local.task.*` 正式合同。
+专家先以 `capability_id="dclaw.ffmpeg.command"` 调用 `local.runtime.prepare/1`，仅在 `status="ready"` 且 `package_version="0.1.0"` 后调用 `local.task.start/1`。启动请求沿用原合同：`capability_id`、`idempotency_key`、`input` 和可选 `local_file_bindings`。`input.arguments` 是按顺序传给 FFmpeg 的参数数组，不是 shell 命令字符串；输入文件参数必须是单独的 `{input:slot}`，其中 `slot` 是同次请求的受信文件绑定名；输出文件参数必须是单独的 `{output:filename}`，并逐项列入 `input.output_files`。Host 先按内置输入 Schema 校验，Helper 在任务设备上复核文件引用并暂存只读副本，内置执行器只解析任务目录内的占位符后以无 shell 方式调用公共 FFmpeg。原始本机路径、外部 URL、未绑定输入及未声明输出不得作为参数提交。输出文件位于任务目录，成功结果只给名称、大小和 SHA-256，由原任务回读与受管产物机制返回；受理不等于完成。幂等、取消、失败、任务隔离、设备匹配和文件引用过期仍沿用 `local.task.*` 正式合同。
 
-输入/结果 Schema、两段 MP4 的请求示例及可调用 API demo 位于 DevKit `schemas/local-ffmpeg-command-v1/`、`examples/local-ffmpeg-command-v1/` 和 `local_ffmpeg_command_api_demo.py`。FFmpeg 退出非零返回 `CAPABILITY.PROCESS_FAILED`，结果不合 Schema 返回 `CAPABILITY.INVALID_PAYLOAD`；Agent 应按原任务 ID 读取终态，不凭建任务回执宣称成片。平台包描述符签名、制品哈希、公共 Component 精确版本及下载入口由插件维护，所有专家共用同一版本，不从单个专家业务包复制。
+输入/结果 Schema、两段 MP4 的请求示例及可调用 API demo 位于 DevKit `schemas/local-ffmpeg-command-v1/`、`examples/local-ffmpeg-command-v1/` 和 `local_ffmpeg_command_api_demo.py`。FFmpeg 退出非零返回 `CAPABILITY.PROCESS_FAILED`，结果不合 Schema 返回 `CAPABILITY.INVALID_PAYLOAD`；Agent 应按原任务 ID 读取终态，不凭建任务回执宣称成片。公共 Component 的精确版本和下载入口仍由插件维护，所有专家共用同一内置任务合同。
 
 ## 16. 本地能力包标准
 
@@ -2424,7 +2424,7 @@ Skill 和专家发布前须对每条实际使用的路径同时验证：正确�
 
 ### 2.58 - 2026-11-16
 
-- Support Plugin `1.18.47` 注册平台通用 FFmpeg 命令能力包 `dclaw.ffmpeg.command` `0.1.0`。专家通过现有本地准备和任务 Host 合同提交参数数组、受信文件绑定及声明输出；Helper、主服务接口和既有私有能力包合同不变。
+- Support Plugin `1.18.47` 与 Windows Helper `1.4.8` 提供平台内置的通用 FFmpeg 命令任务 `dclaw.ffmpeg.command` `0.1.0`。专家通过现有本地准备和任务 Host 合同提交参数数组、受信文件绑定及声明输出；主服务接口和既有私有能力包合同不变，无需新增能力 ZIP 托管。
 - DevKit `1.9.25`、Developer Pack `1.10.37` 同步关闭 Schema、调用示例和版本化能力目录。
 
 ### 2.57 - 2026-11-15

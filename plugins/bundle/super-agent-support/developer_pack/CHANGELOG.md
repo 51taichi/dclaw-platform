@@ -3,8 +3,8 @@
 ## 1.10.37 - 2026-11-16
 
 - Bundle standard 2.58 and DevKit 1.9.25 with the platform-owned
-  `dclaw.ffmpeg.command` task package input/result Schemas and API demo.
-  Existing Host task contracts and Helper 1.4.7 remain compatible.
+  `dclaw.ffmpeg.command` built-in task input/result Schemas and API demo.
+  Existing Host task contracts remain compatible; Helper 1.4.8 is required.
 
 ## 1.10.36 - 2026-11-15
 
