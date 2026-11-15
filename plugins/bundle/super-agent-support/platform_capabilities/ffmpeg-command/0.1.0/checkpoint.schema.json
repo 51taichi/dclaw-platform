@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "dclaw.ffmpeg.command checkpoint 0.1.0",
+  "type": "object",
+  "additionalProperties": false
+}

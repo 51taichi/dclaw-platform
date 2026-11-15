@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "dclaw.ffmpeg.command input 0.1.0",
+  "type": "object",
+  "required": ["arguments", "output_files"],
+  "properties": {
+    "arguments": {
+      "type": "array", "minItems": 1, "maxItems": 128,
+      "items": {"type": "string", "minLength": 1, "maxLength": 2048}
+    },
+    "output_files": {
+      "type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true,
+      "items": {
+        "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+        "not": {"enum": [
+          "input.json", "continuation.json", "result.json", "checkpoint.json",
+          "task-state.json", "capability.id", "agent.name", "stdout.log", "stderr.log"
+        ]}
+      }
+    }
+  },
+  "additionalProperties": false
+}
