@@ -1,5 +1,10 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.37 bundles standard 2.58 and DevKit 1.9.25 with the platform
+`dclaw.ffmpeg.command` task package contract, Schemas and Host API demo.
+Agents can submit FFmpeg argv with trusted file bindings through the existing
+local task API after exact-version runtime preparation.
+
 Version 1.10.36 accepts every published `local_execution` capability in
 `required` local Helper projects, including `local.runtime.prepare/1`.
 Unlisted local capabilities still fail validation. The standard and DevKit

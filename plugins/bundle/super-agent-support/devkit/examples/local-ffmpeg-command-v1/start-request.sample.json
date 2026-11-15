@@ -1,0 +1,19 @@
+{
+  "capability_id": "dclaw.ffmpeg.command",
+  "idempotency_key": "compose-revision-1",
+  "input": {
+    "arguments": [
+      "-i", "{input:clip_01}",
+      "-i", "{input:clip_02}",
+      "-filter_complex", "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[v][a]",
+      "-map", "[v]", "-map", "[a]",
+      "-c:v", "libx264", "-c:a", "aac",
+      "{output:final.mp4}"
+    ],
+    "output_files": ["final.mp4"]
+  },
+  "local_file_bindings": {
+    "clip_01": {"local_file_ref": "lfr_example_clip_01", "access": "read"},
+    "clip_02": {"local_file_ref": "lfr_example_clip_02", "access": "read"}
+  }
+}

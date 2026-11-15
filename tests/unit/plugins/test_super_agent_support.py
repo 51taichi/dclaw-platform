@@ -382,6 +382,70 @@ def _runtime(plugin_module, tmp_path):
     return store, signer, broker, service_cls(store, signer, broker)
 
 
+@pytest.mark.asyncio
+async def test_platform_ffmpeg_package_registers_and_prepares_exact_version(
+    plugin_module, tmp_path,
+):
+    store, _signer, _broker, service = _runtime(plugin_module, tmp_path)
+    source = PLUGIN_ROOT / "platform_capabilities/ffmpeg-command/0.1.0"
+    registration = json.loads((source / "registration.json").read_text())
+    signer_request = json.loads((source / "signer-registration-request.json").read_text())
+    package_cls = sys.modules[
+        "test_dclaw_super_agent_support.packages"
+    ].CapabilityPackageRegistry
+    packages = package_cls(
+        store, PLUGIN_ROOT / "schemas/capability-descriptor.schema.json",
+        {signer_request["signer_id"]: signer_request["public_key"]},
+    )
+    packages.register(
+        registration["descriptor"], signer_id=registration["signer_id"],
+        signature=registration["signature"],
+    )
+    assert store.get_package_for_capability("dclaw.ffmpeg.command") == {
+        "descriptor": registration["descriptor"],
+        "signer_id": registration["signer_id"],
+        "signature": registration["signature"],
+    }
+
+    class Components:
+        def resolve(self, requirements, *, platform):
+            assert platform == "windows-x64"
+            assert requirements == registration["descriptor"]["public_components"]
+            return [{"descriptor": {"component_id": item["component_id"]}}
+                    for item in requirements]
+
+    service.public_components = Components()
+    device = {
+        "device_id": "device-1", "runner_version": "1.4.7",
+        "platform": "windows-x64", "protocol_version": "2", "capabilities": [],
+    }
+    service._online_devices = lambda _user: [device]
+    sent = []
+
+    async def send(device_id, message):
+        sent.append((device_id, message))
+
+    service._send = send
+    result = await service._local_runtime_prepare(
+        {"capability": "dclaw.ffmpeg.command"}, {"u": "user-1"}, "trace-1",
+    )
+    assert result["state"] == "preparing"
+    assert result["package_version"] == "0.1.0"
+    assert sent[0][0] == "device-1"
+    assert sent[0][1]["type"] == "runtime.prepare"
+    assert len(sent[0][1]["public_components"]) == 2
+    device["capabilities"] = [{
+        "capability_id": "dclaw.ffmpeg.command",
+        "package_id": "dclaw.ffmpeg.command",
+        "package_version": "0.1.0",
+    }]
+    result = await service._local_runtime_prepare(
+        {"capability": "dclaw.ffmpeg.command"}, {"u": "user-1"}, "trace-2",
+    )
+    assert result["state"] == "ready"
+    assert len(sent) == 1
+
+
 def test_session_capability_snapshot_preserves_legacy_tokens(plugin_module):
     secret = b"s" * 32
     signer = plugin_module.SessionSigner(secret)
@@ -703,7 +767,7 @@ def test_developer_kit_is_downloadable_without_server_source(
 
     assert metadata.status_code == 200
     assert metadata.json()["name"] == "dclaw-super-agent-devkit"
-    assert metadata.json()["version"] == "1.9.24"
+    assert metadata.json()["version"] == "1.9.25"
     assert metadata.json()["download_path"] == (
         "/api/super-agent-support/developer-kit/v1.zip"
     )
@@ -722,7 +786,7 @@ def test_developer_kit_is_downloadable_without_server_source(
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-devkit-1.9.24"
+    prefix = "dclaw-super-agent-devkit-1.9.25"
     assert f"{prefix}/dclaw_agent_devkit.py" in names
     assert f"{prefix}/bootstrap.ps1" in names
     assert f"{prefix}/bootstrap.sh" in names
@@ -736,6 +800,10 @@ def test_developer_kit_is_downloadable_without_server_source(
     assert f"{prefix}/schemas/local-runtime-prepare-v1/request.schema.json" in names
     assert f"{prefix}/schemas/local-runtime-prepare-v1/response.schema.json" in names
     assert f"{prefix}/local_runtime_prepare_api_demo.py" in names
+    assert f"{prefix}/local_ffmpeg_command_api_demo.py" in names
+    assert f"{prefix}/schemas/local-ffmpeg-command-v1/input.schema.json" in names
+    assert f"{prefix}/schemas/local-ffmpeg-command-v1/result.schema.json" in names
+    assert f"{prefix}/examples/local-ffmpeg-command-v1/start-request.sample.json" in names
     assert len([name for name in names if "/wheelhouse/" in name]) == 26
     assert all("qwenpaw" not in name for name in names)
     assert not any(
@@ -883,23 +951,23 @@ def test_developer_pack_is_downloadable_and_self_describing(
         downloaded = client.get("/developer-pack/download")
 
     assert health.status_code == 200
-    assert health.json()["version"] == "1.18.46"
+    assert health.json()["version"] == "1.18.47"
     assert metadata.status_code == 200
     payload = metadata.json()
-    assert payload["version"] == "1.10.36"
-    assert payload["standard"]["version"] == "2.57"
-    assert payload["devkit_version"] == "1.9.24"
+    assert payload["version"] == "1.10.37"
+    assert payload["standard"]["version"] == "2.58"
+    assert payload["devkit_version"] == "1.9.25"
     assert payload["server_source_required"] is False
     assert payload["download_path"].endswith("/developer-pack/download")
     assert payload["sha256"] == hashlib.sha256(downloaded.content).hexdigest()
     assert payload["content_sha256"] == payload["sha256"]
     assert downloaded.status_code == 200
-    assert "dclaw-super-agent-developer-pack-1.10.36.zip" in (
+    assert "dclaw-super-agent-developer-pack-1.10.37.zip" in (
         downloaded.headers["content-disposition"]
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-developer-pack-1.10.36"
+    prefix = "dclaw-super-agent-developer-pack-1.10.37"
     assert f"{prefix}/PACKAGE-MANIFEST.json" in names
     assert f"{prefix}/SHA256SUMS" in names
     assert f"{prefix}/dclaw_developer.py" in names

@@ -4,9 +4,9 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.57`
+当前版本：`2.58`
 
-发布日期：`2026-11-15`
+发布日期：`2026-11-16`
 
 ## 1. 文档目的
 
@@ -1037,7 +1037,7 @@ DClaw 客户端负责按需下载、校验、启动、绑定、重连和原子�
 
 准备响应固定包含 `state`、`capability_id`、`package_id`、`package_version`、`min_runner_version`、`device_id`、`runner_version` 和 `user_action`。平台不使用旧 Relay 的 `runtime_update_required`：能力包准备无需客户另行确认，版本不一致时返回 `preparing` 并由 Runner 自动更新。
 
-密封 `super_expert_public` 使用 Support Plugin `1.18.45` 起的直接 Host 能力 `local.runtime.prepare/1` 完成相同的设备准备。专家在新的签名 Release 中同时声明 `local.execution.session/1` 与 `local.runtime.prepare/1`，平台按该 Release 的正式 grant 校验后才派发；只声明 `local.task.start/1` 不会自动授予准备能力。已激活 Release 的 grant 不因平台增加能力而扩大。Agent 调用 `await host.call("local.runtime.prepare/1", {"capability_id": "已注册的私有能力 ID"})`，可选 `device_id` 只能用于指定当前用户的在线设备，例如由已授权的前序绑定回执取得；不存在或离线时返回 `device_not_ready`，不得改选另一设备冒充就绪。请求不得包含下载地址或 `dclaw_session_token`。Host 从可信回合注入租户、用户、会话、专家、installation、Release 和 invocation 身份，并复用上述本地助手准备实现；旧 MCP `local_runtime_prepare` 保持原合同。
+密封 `super_expert_public` 使用 Support Plugin `1.18.45` 起的直接 Host 能力 `local.runtime.prepare/1` 完成相同的设备准备。专家在新的签名 Release 中同时声明 `local.execution.session/1` 与 `local.runtime.prepare/1`，平台按该 Release 的正式 grant 校验后才派发；只声明 `local.task.start/1` 不会自动授予准备能力。已激活 Release 的 grant 不因平台增加能力而扩大。Agent 调用 `await host.call("local.runtime.prepare/1", {"capability_id": "已注册的平台通用或专家私有能力 ID"})`，可选 `device_id` 只能用于指定当前用户的在线设备，例如由已授权的前序绑定回执取得；不存在或离线时返回 `device_not_ready`，不得改选另一设备冒充就绪。请求不得包含下载地址或 `dclaw_session_token`。Host 从可信回合注入租户、用户、会话、专家、installation、Release 和 invocation 身份，并复用上述本地助手准备实现；旧 MCP `local_runtime_prepare` 保持原合同。
 
 Host 回执合同为 `local.runtime.prepare/1`，`status` 取 `ready`、`preparing`、`device_not_ready`、`runner_update_required`、`invalid_request`、`rejected` 或 `unavailable`。有效准备状态同时返回 `capability_id`、`package_id`、`package_version`、`min_runner_version`、`device_id`、`runner_version` 和 `user_action`；`rejected` 返回稳定 `error_code`。只有 `ready` 证明当前用户的在线 Helper 已上报目标 `capability_id + package_id + package_version` 的精确组合；`preparing` 仅表示已向设备派发安装，不能据此启动本地任务。完整关闭 Schema 与调用示例位于正式 DevKit `schemas/local-runtime-prepare-v1/` 和 `local_runtime_prepare_api_demo.py`。该桥接不修改既有 `local.task.start/1`、文件绑定或 MCP 请求格式，不要求 Helper 升级。
 
@@ -1062,6 +1062,14 @@ queued | running | awaiting_input | cancelling | succeeded | failed | cancelled
 需要上传时，超级 Agent 先通过 Agent 侧第三方调用取得短时 HTTPS 预签名 URL、允许域、方法、允许请求头和最大大小；`local_file_upload` 只把该上传指令送到原设备，由 Runner 直接读取文件并上传。DClaw 服务端不得接收、缓存或中转文件字节；Runner 禁止重定向、非 HTTPS、带用户信息 URL、域名越界、未允许请求头和超限文件。
 
 成功任务的客户成品由 Runner 复制到持久托管产物目录。`managed_artifacts_list` 只返回安全元数据；`managed_artifact_action` 只允许预览、在资源管理器中定位、重新选择为新的不透明引用或删除该托管产物。删除必须限制在 Runner 管理根目录，禁止接受任意路径。上述文件能力要求设备协议 `2`、Runner `1.1.0` 和 Windows 客户端 `2.6.13`；协议 `1` / Runner `1.0.0` 继续支持不含文件绑定的历史任务。
+
+### 15.8 平台通用 FFmpeg 命令任务
+
+Support Plugin `1.18.47` 起正式注册平台拥有的 `dclaw.ffmpeg.command` 本地任务能力包 `0.1.0`，目标为 Windows x64、Helper `1.4.7` 及以上；它按准确版本复用公共 `python-runtime` 和 `ffmpeg` Component。它不是新的 Host 路由，也不要求每个专家为常规 FFmpeg 命令再制作一个私有能力包。专家按真实需求在新签名 Release 中声明并获授 `local.execution.session/1`、`local.runtime.prepare/1`、`local.task.start/1` 和 `local.task.read/1`；复用前序本地任务文件时还需 `local.task.outputs.bind/1`。现有 Release 的 grant 不自动扩大。私有能力包仍适用于专有剪辑算法、特殊依赖或超出通用合同的操作。
+
+专家先以 `capability_id="dclaw.ffmpeg.command"` 调用 `local.runtime.prepare/1`，仅在 `status="ready"` 且 `package_version="0.1.0"` 后调用 `local.task.start/1`。启动请求沿用原合同：`capability_id`、`idempotency_key`、`input` 和可选 `local_file_bindings`。`input.arguments` 是按顺序传给 FFmpeg 的参数数组，不是 shell 命令字符串；输入文件参数必须是单独的 `{input:slot}`，其中 `slot` 是同次请求的受信文件绑定名；输出文件参数必须是单独的 `{output:filename}`，并逐项列入 `input.output_files`。Host 先按签名输入 Schema 校验，Helper 在任务设备上复核文件引用并暂存只读副本，能力包只解析任务目录内的占位符后以无 shell 方式调用公共 FFmpeg。原始本机路径、外部 URL、未绑定输入及未声明输出不得作为参数提交。输出文件位于任务目录，成功结果只给名称、大小和 SHA-256，由原任务回读与受管产物机制返回；受理不等于完成。幂等、取消、失败、任务隔离、设备匹配和文件引用过期仍沿用 `local.task.*` 正式合同。
+
+输入/结果 Schema、两段 MP4 的请求示例及可调用 API demo 位于 DevKit `schemas/local-ffmpeg-command-v1/`、`examples/local-ffmpeg-command-v1/` 和 `local_ffmpeg_command_api_demo.py`。FFmpeg 退出非零返回 `CAPABILITY.PROCESS_FAILED`，结果不合 Schema 返回 `CAPABILITY.INVALID_PAYLOAD`；Agent 应按原任务 ID 读取终态，不凭建任务回执宣称成片。平台包描述符签名、制品哈希、公共 Component 精确版本及下载入口由插件维护，所有专家共用同一版本，不从单个专家业务包复制。
 
 ## 16. 本地能力包标准
 
@@ -2413,6 +2421,11 @@ Skill 和专家发布前须对每条实际使用的路径同时验证：正确�
 以上是通用 Skill 的平台合同输入。Skill 维护方应在其 `references/capability-verification.md` 补 `/v2/` 的首错和终止根因区分，在 `scripts/runtime_diagnostics_with_login.py` 增加按官方 DevKit v2 Schema 查询和摘要，在相关脚本测试加入已恢复错误、最终阻断、`no_record`、越权及旧版回退案例。平台不直接覆盖 Skill 发布仓库，也不把单个专家的业务字段写成公共规则。
 
 ## 34. 版本记录
+
+### 2.58 - 2026-11-16
+
+- Support Plugin `1.18.47` 注册平台通用 FFmpeg 命令能力包 `dclaw.ffmpeg.command` `0.1.0`。专家通过现有本地准备和任务 Host 合同提交参数数组、受信文件绑定及声明输出；Helper、主服务接口和既有私有能力包合同不变。
+- DevKit `1.9.25`、Developer Pack `1.10.37` 同步关闭 Schema、调用示例和版本化能力目录。
 
 ### 2.57 - 2026-11-15
 
