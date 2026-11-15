@@ -1,0 +1,19 @@
+{
+  "capability_id": "dclaw.ffmpeg.task.plan",
+  "idempotency_key": "compose-revision-1",
+  "input": {
+    "plan_version": "1",
+    "clips": [
+      {"slot": "clip_01", "trim_start_ms": 0, "trim_end_ms": 800},
+      {"slot": "clip_02", "trim_start_ms": 100, "trim_end_ms": 900}
+    ],
+    "output": {
+      "filename": "final.mp4", "width": 1280, "height": 720,
+      "fps": 25, "audio_policy": "mute"
+    }
+  },
+  "local_file_bindings": {
+    "clip_01": {"local_file_ref": "lfr_example_clip_01", "access": "read"},
+    "clip_02": {"local_file_ref": "lfr_example_clip_02", "access": "read"}
+  }
+}

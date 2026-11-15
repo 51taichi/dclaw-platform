@@ -188,15 +188,15 @@
       "api_demo": "local_runtime_prepare_api_demo.py",
       "example": "examples/local-runtime-prepare-v1/README.md"
     },
-    "platform_ffmpeg_command": {
-      "minimum_plugin_version": "1.18.47",
-      "minimum_helper_version": "1.4.8",
-      "capability_id": "dclaw.ffmpeg.command",
+    "platform_ffmpeg_task_plan": {
+      "minimum_plugin_version": "1.18.48",
+      "minimum_helper_version": "1.4.9",
+      "capability_id": "dclaw.ffmpeg.task.plan",
       "package_version": "0.1.0",
-      "input_schema": "schemas/local-ffmpeg-command-v1/input.schema.json",
-      "result_schema": "schemas/local-ffmpeg-command-v1/result.schema.json",
-      "api_demo": "local_ffmpeg_command_api_demo.py",
-      "example": "examples/local-ffmpeg-command-v1/README.md"
+      "input_schema": "schemas/local-ffmpeg-task-plan-v1/input.schema.json",
+      "result_schema": "schemas/local-ffmpeg-task-plan-v1/result.schema.json",
+      "api_demo": "local_ffmpeg_task_plan_api_demo.py",
+      "example": "examples/local-ffmpeg-task-plan-v1/README.md"
     },
     "start_capability_id": "local.task.start/1",
     "prior_outputs_bind": {

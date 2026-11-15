@@ -30,9 +30,9 @@ CATALOG_VERSION = "1"
 MIN_RUNNER_VERSION = "1.1.0"
 AIGC_TRANSFER_MIN_RUNNER_VERSION = "1.4.6"
 PRIOR_OUTPUT_BIND_MIN_RUNNER_VERSION = "1.4.7"
-FFMPEG_COMMAND_ID = "dclaw.ffmpeg.command"
-FFMPEG_COMMAND_VERSION = "0.1.0"
-FFMPEG_COMMAND_MIN_HELPER = "1.4.8"
+FFMPEG_TASK_PLAN_ID = "dclaw.ffmpeg.task.plan"
+FFMPEG_TASK_PLAN_VERSION = "0.1.0"
+FFMPEG_TASK_PLAN_MIN_HELPER = "1.4.9"
 FFMPEG_COMPONENT_VERSION = "N-128100-gceb466cbcd"
 LEGACY_RUNNER_VERSION = "1.0.0"
 LOCAL_FILE_REF_PATTERN = re.compile(r"^lfr_[A-Za-z0-9_-]{32,156}$")
@@ -46,17 +46,17 @@ DEVICE_REQUEST_TIMEOUT_SECONDS = 180
 FILE_CAPABILITY_ID = "interaction.file.select/1"
 
 
-def _builtin_ffmpeg_package() -> dict[str, Any]:
-    root = Path(__file__).parent / "platform_capabilities/ffmpeg-command/0.1.0"
+def _builtin_ffmpeg_task_plan_package() -> dict[str, Any]:
+    root = Path(__file__).parent / "platform_capabilities/ffmpeg-task-plan/0.1.0"
     schemas = {
         name: {"document": json.loads((root / f"{name}.schema.json").read_text())}
         for name in ("input", "result", "checkpoint")
     }
     return {"descriptor": {
-        "capability_id": FFMPEG_COMMAND_ID,
-        "package_id": FFMPEG_COMMAND_ID,
-        "package_version": FFMPEG_COMMAND_VERSION,
-        "min_runner_version": FFMPEG_COMMAND_MIN_HELPER,
+        "capability_id": FFMPEG_TASK_PLAN_ID,
+        "package_id": FFMPEG_TASK_PLAN_ID,
+        "package_version": FFMPEG_TASK_PLAN_VERSION,
+        "min_runner_version": FFMPEG_TASK_PLAN_MIN_HELPER,
         "operating_systems": ["windows-x64"],
         "public_components": [{
             "component_id": "ffmpeg", "version": FFMPEG_COMPONENT_VERSION,
@@ -223,8 +223,8 @@ class LocalExecutionService:
         ]
 
     def _package_for_capability(self, capability_id: str) -> dict[str, Any] | None:
-        if capability_id == FFMPEG_COMMAND_ID:
-            return _builtin_ffmpeg_package()
+        if capability_id == FFMPEG_TASK_PLAN_ID:
+            return _builtin_ffmpeg_task_plan_package()
         return self.store.get_package_for_capability(capability_id)
 
     def _select_device(
@@ -519,10 +519,10 @@ class LocalExecutionService:
             "protocol_version": str(device.get("protocol_version") or "1"),
             "public_components": component_packages,
         }
-        if capability_id == FFMPEG_COMMAND_ID:
+        if capability_id == FFMPEG_TASK_PLAN_ID:
             preparation["built_in_capability"] = {
-                "capability_id": FFMPEG_COMMAND_ID,
-                "package_version": FFMPEG_COMMAND_VERSION,
+                "capability_id": FFMPEG_TASK_PLAN_ID,
+                "package_version": FFMPEG_TASK_PLAN_VERSION,
             }
         else:
             preparation["capability_package"] = package
@@ -589,6 +589,13 @@ class LocalExecutionService:
         input_schema = package["descriptor"]["schemas"]["input"]["document"]
         if list(Draft202012Validator(input_schema).iter_errors(task_input)):
             raise ERRORS["INVALID_CAPABILITY_PAYLOAD"]
+        if capability_id == FFMPEG_TASK_PLAN_ID:
+            clips = task_input["clips"]
+            if (
+                any(clip["trim_end_ms"] <= clip["trim_start_ms"] for clip in clips)
+                or {clip["slot"] for clip in clips} != set(local_file_bindings)
+            ):
+                raise ERRORS["INVALID_CAPABILITY_PAYLOAD"]
         replay = self.store.get_task_by_idempotency(
             identity["u"],
             identity["a"],

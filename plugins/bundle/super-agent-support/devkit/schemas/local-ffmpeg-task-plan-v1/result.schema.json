@@ -1,21 +1,20 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "dclaw.ffmpeg.command result 0.1.0",
-  "type": "object",
+  "title": "dclaw.ffmpeg.task.plan result 0.1.0",
+  "type": "object", "additionalProperties": false,
   "required": ["outputs"],
   "properties": {
     "outputs": {
-      "type": "array", "minItems": 1, "maxItems": 8,
+      "type": "array", "minItems": 1, "maxItems": 1,
       "items": {
         "type": "object", "additionalProperties": false,
         "required": ["name", "size_bytes", "sha256"],
         "properties": {
-          "name": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+          "name": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.mp4$"},
           "size_bytes": {"type": "integer", "minimum": 1},
           "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
         }
       }
     }
-  },
-  "additionalProperties": false
+  }
 }

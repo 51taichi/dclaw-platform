@@ -15,7 +15,7 @@ from devkit.aigc_workflow_api_demo import (
 from devkit.local_task_api_demo import (
     LocalTaskContractError, read_local_result, start_local_task,
 )
-from devkit.local_ffmpeg_command_api_demo import start_ffmpeg_command
+from devkit.local_ffmpeg_task_plan_api_demo import start_ffmpeg_task_plan
 from qwenpaw.aigc.workflow_contract import WorkflowBlueprint
 from developer_pack.archive import build_archive
 from jsonschema import Draft202012Validator
@@ -199,17 +199,28 @@ async def test_local_demo_requires_stable_key_and_terminal_verified_artifact():
 
 
 @pytest.mark.asyncio
-async def test_platform_ffmpeg_demo_prepares_then_starts_with_bound_files():
+async def test_platform_video_render_demo_prepares_then_starts_with_bound_files():
     example = json.loads((
-        PLUGIN_ROOT / "devkit/examples/local-ffmpeg-command-v1/start-request.sample.json"
+        PLUGIN_ROOT / "devkit/examples/local-ffmpeg-task-plan-v1/start-request.sample.json"
     ).read_text())
     schemas = PLUGIN_ROOT / "devkit/schemas"
     for name, value in (
         ("local-task-host-v1/start-request.schema.json", example),
-        ("local-ffmpeg-command-v1/input.schema.json", example["input"]),
+        ("local-ffmpeg-task-plan-v1/input.schema.json", example["input"]),
     ):
         schema = json.loads((schemas / name).read_text())
         assert not list(Draft202012Validator(schema).iter_errors(value))
+    plan_schema = json.loads((
+        schemas / "local-ffmpeg-task-plan-v1/input.schema.json"
+    ).read_text())
+    platform_schema = json.loads((
+        PLUGIN_ROOT / "platform_capabilities/ffmpeg-task-plan/0.1.0/input.schema.json"
+    ).read_text())
+    assert plan_schema == platform_schema
+    for bad_field in ("arguments", "filter_complex", "source_url"):
+        bad = {**example["input"], bad_field: []}
+        assert list(Draft202012Validator(plan_schema).iter_errors(bad))
+    assert example["capability_id"] == "dclaw.ffmpeg.task.plan"
 
     class Host:
         def __init__(self):
@@ -222,12 +233,12 @@ async def test_platform_ffmpeg_demo_prepares_then_starts_with_bound_files():
                 return {
                     "contract": name,
                     "status": "ready" if self.ready else "preparing",
-                    "capability_id": "dclaw.ffmpeg.command",
+                    "capability_id": "dclaw.ffmpeg.task.plan",
                     "package_version": "0.1.0",
                 }
             return {
                 **LOCAL_RECEIPT,
-                "capability_id": "dclaw.ffmpeg.command",
+                "capability_id": "dclaw.ffmpeg.task.plan",
                 "idempotency_key": example["idempotency_key"],
                 "status": "queued",
                 "artifact_ids": [],
@@ -235,23 +246,21 @@ async def test_platform_ffmpeg_demo_prepares_then_starts_with_bound_files():
             }
 
     host = Host()
-    task_id = await start_ffmpeg_command(
-        host, arguments=example["input"]["arguments"],
-        output_files=example["input"]["output_files"],
+    task_id = await start_ffmpeg_task_plan(
+        host, timeline=example["input"],
         local_file_bindings=example["local_file_bindings"],
         idempotency_key=example["idempotency_key"],
     )
     assert task_id == "task-1"
     assert host.calls == [
-        ("local.runtime.prepare/1", {"capability_id": "dclaw.ffmpeg.command"}),
+        ("local.runtime.prepare/1", {"capability_id": "dclaw.ffmpeg.task.plan"}),
         ("local.task.start/1", example),
     ]
     host.ready = False
     host.calls.clear()
     with pytest.raises(ValueError, match="not ready"):
-        await start_ffmpeg_command(
-            host, arguments=example["input"]["arguments"],
-            output_files=example["input"]["output_files"],
+        await start_ffmpeg_task_plan(
+            host, timeline=example["input"],
             local_file_bindings=example["local_file_bindings"],
             idempotency_key=example["idempotency_key"],
         )
@@ -260,8 +269,8 @@ async def test_platform_ffmpeg_demo_prepares_then_starts_with_bound_files():
 
 def test_pack_exposes_aigc_and_local_api_references():
     payload, metadata = build_archive(PLUGIN_ROOT)
-    assert metadata["standard"]["version"] == "2.58"
-    assert metadata["devkit_version"] == "1.9.25"
+    assert metadata["standard"]["version"] == "2.59"
+    assert metadata["devkit_version"] == "1.9.26"
     prefix = f"dclaw-super-agent-developer-pack-{metadata['version']}/"
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         names = set(archive.namelist())
@@ -271,11 +280,11 @@ def test_pack_exposes_aigc_and_local_api_references():
             "devkit/runtime_diagnostics_api_demo.py",
             "devkit/schemas/runtime-diagnostics-v4/by-reference-response.schema.json",
             "devkit/local_task_api_demo.py",
-            "devkit/local_ffmpeg_command_api_demo.py",
-            "devkit/schemas/local-ffmpeg-command-v1/input.schema.json",
-            "devkit/schemas/local-ffmpeg-command-v1/result.schema.json",
-            "devkit/examples/local-ffmpeg-command-v1/README.md",
-            "devkit/examples/local-ffmpeg-command-v1/start-request.sample.json",
+            "devkit/local_ffmpeg_task_plan_api_demo.py",
+            "devkit/schemas/local-ffmpeg-task-plan-v1/input.schema.json",
+            "devkit/schemas/local-ffmpeg-task-plan-v1/result.schema.json",
+            "devkit/examples/local-ffmpeg-task-plan-v1/README.md",
+            "devkit/examples/local-ffmpeg-task-plan-v1/start-request.sample.json",
             "devkit/local_task_outputs_bind_api_demo.py",
             "devkit/local_runtime_prepare_api_demo.py",
             "devkit/examples/local-runtime-prepare-v1/README.md",

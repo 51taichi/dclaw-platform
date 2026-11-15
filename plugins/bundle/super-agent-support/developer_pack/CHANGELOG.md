@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.10.38 - 2026-11-16
+
+- Bundle standard 2.59 and DevKit 1.9.26 with the shared structured video
+  timeline render task. Helper 1.4.9 generates FFmpeg arguments locally.
+- Replace the unshipped `dclaw.ffmpeg.command` raw argument demo; new Agents
+  must use `dclaw.ffmpeg.task.plan` and trusted file bindings.
+
 ## 1.10.37 - 2026-11-16
 
 - Bundle standard 2.58 and DevKit 1.9.25 with the platform-owned

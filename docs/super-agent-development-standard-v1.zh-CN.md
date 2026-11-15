@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.58`
+当前版本：`2.59`
 
 发布日期：`2026-11-16`
 
@@ -1063,13 +1063,15 @@ queued | running | awaiting_input | cancelling | succeeded | failed | cancelled
 
 成功任务的客户成品由 Runner 复制到持久托管产物目录。`managed_artifacts_list` 只返回安全元数据；`managed_artifact_action` 只允许预览、在资源管理器中定位、重新选择为新的不透明引用或删除该托管产物。删除必须限制在 Runner 管理根目录，禁止接受任意路径。上述文件能力要求设备协议 `2`、Runner `1.1.0` 和 Windows 客户端 `2.6.13`；协议 `1` / Runner `1.0.0` 继续支持不含文件绑定的历史任务。
 
-### 15.8 平台通用 FFmpeg 命令任务
+### 15.8 平台通用视频时间线渲染任务
 
-Support Plugin `1.18.47` 与 Windows Helper `1.4.8` 起提供平台内置的 `dclaw.ffmpeg.command` 本地任务能力 `0.1.0`，按准确版本复用已注册的公共 `ffmpeg` Component。它不是新增的 FFmpeg 二进制或需要 HTTPS 托管的 Agent 能力 ZIP，不要求每个专家为常规 FFmpeg 命令再制作私有能力包。专家按真实需求在新签名 Release 中声明并获授 `local.execution.session/1`、`local.runtime.prepare/1`、`local.task.start/1` 和 `local.task.read/1`；复用前序本地任务文件时还需 `local.task.outputs.bind/1`。现有 Release 的 grant 不自动扩大。私有能力包仍适用于专有剪辑算法、特殊依赖或超出通用合同的操作。
+Support Plugin `1.18.48` 与 Windows Helper `1.4.9` 起提供公共能力 `dclaw.ffmpeg.task.plan` `0.1.0`。它使用插件已注册的准确版本 `ffmpeg` 公共 Component；Component 是二进制依赖，渲染能力是版本化任务接口，二者不可混称。此接口对所有获授权超级专家相同，不包含漫剧或其他专家的业务规则，也不要求开发方另建普通拼接用的私有能力 ZIP。未部署的 `dclaw.ffmpeg.command` 原始参数入口作废，不得写入新 Release。
 
-专家先以 `capability_id="dclaw.ffmpeg.command"` 调用 `local.runtime.prepare/1`，仅在 `status="ready"` 且 `package_version="0.1.0"` 后调用 `local.task.start/1`。启动请求沿用原合同：`capability_id`、`idempotency_key`、`input` 和可选 `local_file_bindings`。`input.arguments` 是按顺序传给 FFmpeg 的参数数组，不是 shell 命令字符串；输入文件参数必须是单独的 `{input:slot}`，其中 `slot` 是同次请求的受信文件绑定名；输出文件参数必须是单独的 `{output:filename}`，并逐项列入 `input.output_files`。Host 先按内置输入 Schema 校验，Helper 在任务设备上复核文件引用并暂存只读副本，内置执行器只解析任务目录内的占位符后以无 shell 方式调用公共 FFmpeg。原始本机路径、外部 URL、未绑定输入及未声明输出不得作为参数提交。输出文件位于任务目录，成功结果只给名称、大小和 SHA-256，由原任务回读与受管产物机制返回；受理不等于完成。幂等、取消、失败、任务隔离、设备匹配和文件引用过期仍沿用 `local.task.*` 正式合同。
+专家决定素材、顺序、技术裁剪和输出目标，提交关闭 Schema 的 `plan_version="1"`、有序 `clips` 和 `output`。每个 clip 只引用一次请求中已授权的 `slot`，可重复使用同一 slot；`trim_start_ms` 与 `trim_end_ms` 是毫秒，后者必须大于前者；可选 `crop` 使用非负坐标和正尺寸。输出指定安全的 MP4 文件名、偶数宽高、帧率和 `audio_policy`：`mute` 丢弃声音，`preserve` 要求每个输入都有音轨。Helper 复核每个受信绑定，在任务目录内生成全部 FFmpeg 参数、按提交顺序裁剪并拼接、标准化画面尺寸和帧率、执行并校验输出。专家不得提交 FFmpeg argv、命令字符串、滤镜表达式、原始路径或 URL；Helper 不解释开放式自然语言，也不改写专家已确定的剪辑顺序。V1 不含转场、字幕、混音、自动剪辑或复杂多轨；需要新语义时发布新合同版本，不能静默改变 V1。
 
-输入/结果 Schema、两段 MP4 的请求示例及可调用 API demo 位于 DevKit `schemas/local-ffmpeg-command-v1/`、`examples/local-ffmpeg-command-v1/` 和 `local_ffmpeg_command_api_demo.py`。FFmpeg 退出非零返回 `CAPABILITY.PROCESS_FAILED`，结果不合 Schema 返回 `CAPABILITY.INVALID_PAYLOAD`；Agent 应按原任务 ID 读取终态，不凭建任务回执宣称成片。公共 Component 的精确版本和下载入口仍由插件维护，所有专家共用同一内置任务合同。
+新签名 Release 按需声明并获授 `local.execution.session/1`、`local.runtime.prepare/1`、`local.task.start/1`、`local.task.read/1`；复用前序本地任务产物还需 `local.task.outputs.bind/1`。专家先用 `capability_id="dclaw.ffmpeg.task.plan"` 准备设备，只有准确版本 `ready` 才用同一能力 ID、稳定幂等键、结构化 input 和逐槽 `local_file_bindings` 启动；按真实 `task_id` 回读终态，成功结果只返回文件名、大小与 SHA-256。来源任务的受信引用只在同一 invocation 内使用。Host 保持既有租户、用户、任务、专家、安装、设备与幂等隔离；旧 Release 的 grant 不自动扩大。Helper 启动和 FFmpeg 失败沿用 `local.task.*` 稳定错误与任务终态，受理回执不能当作成片证据。
+
+关闭输入/结果 Schema、两段 MP4 示例和可调用 API demo 位于 DevKit `schemas/local-ffmpeg-task-plan-v1/`、`examples/local-ffmpeg-task-plan-v1/` 和 `local_ffmpeg_task_plan_api_demo.py`。开发 Skill 应使用这些认证材料进行声明、授权、设备准备、受信绑定、提交、终态回读及正反例测试；不得沿用作废的原始参数示例。专有剪辑算法或合同以外的多轨任务仍可走独立私有能力包，但不能修改本公共合同服务单一专家。
 
 ## 16. 本地能力包标准
 
@@ -2421,6 +2423,11 @@ Skill 和专家发布前须对每条实际使用的路径同时验证：正确�
 以上是通用 Skill 的平台合同输入。Skill 维护方应在其 `references/capability-verification.md` 补 `/v2/` 的首错和终止根因区分，在 `scripts/runtime_diagnostics_with_login.py` 增加按官方 DevKit v2 Schema 查询和摘要，在相关脚本测试加入已恢复错误、最终阻断、`no_record`、越权及旧版回退案例。平台不直接覆盖 Skill 发布仓库，也不把单个专家的业务字段写成公共规则。
 
 ## 34. 版本记录
+
+### 2.59 - 2026-11-16
+
+- 将未部署的原始 FFmpeg 参数任务替换为平台公共 `dclaw.ffmpeg.task.plan` `0.1.0`；专家提交结构化时间线，Helper 编译具体命令，所有获授权专家共用同一合同。
+- Support Plugin `1.18.48`、Helper `1.4.9`、DevKit `1.9.26` 和 Developer Pack `1.10.38` 同步关闭 Schema、示例和 Skill 交接指南。旧 `dclaw.ffmpeg.command` 不进入正式部署。
 
 ### 2.58 - 2026-11-16
 

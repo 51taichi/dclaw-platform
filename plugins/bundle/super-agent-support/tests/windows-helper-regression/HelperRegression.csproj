@@ -8,7 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../windows-helper/Program.cs" Link="Program.cs" />
-    <Compile Include="../../windows-helper/PlatformFfmpegCommand.cs" Link="PlatformFfmpegCommand.cs" />
+    <Compile Include="../../windows-helper/PlatformFfmpegTaskPlan.cs" Link="PlatformFfmpegTaskPlan.cs" />
     <Compile Include="../../windows-helper/HelperPathSafety.cs" Link="HelperPathSafety.cs" />
     <Compile Include="../../windows-helper/TaskHistory.cs" Link="TaskHistory.cs" />
     <Compile Include="../../windows-helper/LocalAssistantUi.cs" Link="LocalAssistantUi.cs" />

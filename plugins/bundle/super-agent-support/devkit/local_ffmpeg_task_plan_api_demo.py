@@ -1,4 +1,4 @@
-"""Submit FFmpeg argv through the registered platform local capability."""
+"""Submit a structured timeline to the shared local video renderer."""
 
 from __future__ import annotations
 
@@ -8,16 +8,16 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-CAPABILITY_ID = "dclaw.ffmpeg.command"
+CAPABILITY_ID = "dclaw.ffmpeg.task.plan"
 PACKAGE_VERSION = "0.1.0"
 ROOT = Path(__file__).parent
-SCHEMA = json.loads((ROOT / "schemas/local-ffmpeg-command-v1/input.schema.json").read_text(encoding="utf-8"))
+SCHEMA = json.loads((ROOT / "schemas/local-ffmpeg-task-plan-v1/input.schema.json").read_text(encoding="utf-8"))
 START_SCHEMA = json.loads((ROOT / "schemas/local-task-host-v1/start-request.schema.json").read_text(encoding="utf-8"))
 RECEIPT_SCHEMA = json.loads((ROOT / "schemas/local-task-host-v1/receipt.schema.json").read_text(encoding="utf-8"))
 
 
-async def start_ffmpeg_command(
-    host: Any, *, arguments: list[str], output_files: list[str],
+async def start_ffmpeg_task_plan(
+    host: Any, *, timeline: dict[str, Any],
     local_file_bindings: dict[str, Any], idempotency_key: str,
 ) -> str:
     preparation = await host.call(
@@ -28,12 +28,19 @@ async def start_ffmpeg_command(
         or preparation.get("capability_id") != CAPABILITY_ID
         or preparation.get("package_version") != PACKAGE_VERSION
     ):
-        raise ValueError("platform FFmpeg command package is not ready")
-    task_input = {"arguments": arguments, "output_files": output_files}
-    Draft202012Validator(SCHEMA).validate(task_input)
+        raise ValueError("platform video renderer is not ready")
+    Draft202012Validator(SCHEMA).validate(timeline)
+    if any(
+        clip["trim_end_ms"] <= clip["trim_start_ms"]
+        for clip in timeline["clips"]
+    ):
+        raise ValueError("clip trim end must follow start")
+    slots = {clip["slot"] for clip in timeline["clips"]}
+    if slots != set(local_file_bindings):
+        raise ValueError("timeline slots and file bindings differ")
     request = {
         "capability_id": CAPABILITY_ID,
-        "input": task_input,
+        "input": timeline,
         "local_file_bindings": local_file_bindings,
         "idempotency_key": idempotency_key,
     }
@@ -46,5 +53,5 @@ async def start_ffmpeg_command(
         or receipt.get("idempotency_key") != idempotency_key
         or not receipt.get("task_id")
     ):
-        raise ValueError("platform FFmpeg command task was not accepted")
+        raise ValueError("platform video render task was not accepted")
     return receipt["task_id"]

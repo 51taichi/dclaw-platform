@@ -19,7 +19,7 @@ internal sealed record HelperConfig(
 
 internal static class HelperMetadata
 {
-    internal const string Version = "1.4.8";
+    internal const string Version = "1.4.9";
     internal const string ProtocolVersion = "2";
 }
 
@@ -35,9 +35,9 @@ internal sealed class Program
     [STAThread]
     private static int Main(string[] args)
     {
-        if (args.Length == 3 && args[0] == "--ffmpeg-command")
+        if (args.Length == 3 && args[0] == "--ffmpeg-task-plan")
         {
-            try { return PlatformFfmpegCommand.Execute(args[1], args[2]); }
+            try { return PlatformFfmpegTaskPlan.Execute(args[1], args[2]); }
             catch (Exception exception)
             {
                 Console.Error.WriteLine(exception.GetType().Name);
@@ -262,9 +262,9 @@ internal sealed class HelperRuntime
                 if (message.TryGetProperty("built_in_capability", out var builtIn))
                 {
                     if (builtIn.GetProperty("capability_id").GetString()
-                            != PlatformFfmpegCommand.CapabilityId
+                            != PlatformFfmpegTaskPlan.CapabilityId
                         || builtIn.GetProperty("package_version").GetString()
-                            != PlatformFfmpegCommand.PackageVersion)
+                            != PlatformFfmpegTaskPlan.PackageVersion)
                         throw new InvalidDataException("unknown built-in capability");
                 }
                 else
@@ -808,7 +808,7 @@ internal sealed class HelperRuntime
             capabilityId = continuation
                 ? ReadTaskCapability(taskId)
                 : task.GetProperty("capability_id").GetString()!;
-            var builtInFfmpeg = capabilityId == PlatformFfmpegCommand.CapabilityId;
+            var builtInFfmpeg = capabilityId == PlatformFfmpegTaskPlan.CapabilityId;
             var descriptorPath = builtInFfmpeg ? null : FindDescriptor(capabilityId);
             using var descriptorDocument = descriptorPath is null ? null
                 : JsonDocument.Parse(await File.ReadAllTextAsync(descriptorPath, cancellationToken));
@@ -877,7 +877,7 @@ internal sealed class HelperRuntime
             var maxOutputBytes = builtInFfmpeg ? 8589934592L
                 : limits!.Value.GetProperty("max_output_bytes").GetInt64();
             if (builtInFfmpeg && continuation)
-                throw new InvalidDataException("FFmpeg command tasks cannot continue");
+                throw new InvalidDataException("video timeline tasks cannot continue");
             var components = packageRoot is null ? null
                 : await LoadPublicComponentsAsync(packageRoot, cancellationToken);
             var entrypoint = descriptor?.GetProperty("entrypoint");
@@ -892,7 +892,7 @@ internal sealed class HelperRuntime
             };
             if (builtInFfmpeg)
             {
-                start.ArgumentList.Add("--ffmpeg-command");
+                start.ArgumentList.Add("--ffmpeg-task-plan");
                 start.ArgumentList.Add(_root);
                 start.ArgumentList.Add(taskRoot);
             }
@@ -1640,13 +1640,13 @@ internal sealed class HelperRuntime
                 ["package_version"] = item.GetProperty("package_version").GetString(),
             });
         }
-        if (PlatformFfmpegCommand.IsComponentReady(_root))
+        if (PlatformFfmpegTaskPlan.IsComponentReady(_root))
             capabilities.Add(new JsonObject
             {
-                ["capability_id"] = PlatformFfmpegCommand.CapabilityId,
+                ["capability_id"] = PlatformFfmpegTaskPlan.CapabilityId,
                 ["version"] = "1",
-                ["package_id"] = PlatformFfmpegCommand.CapabilityId,
-                ["package_version"] = PlatformFfmpegCommand.PackageVersion,
+                ["package_id"] = PlatformFfmpegTaskPlan.CapabilityId,
+                ["package_version"] = PlatformFfmpegTaskPlan.PackageVersion,
             });
         await SendAsync(new JsonObject
         {

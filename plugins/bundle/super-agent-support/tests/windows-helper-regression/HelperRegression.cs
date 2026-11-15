@@ -81,11 +81,11 @@ internal static class HelperRegression
         if (!condition) throw new Exception(reason);
     }
 
-    private static void CheckPlatformFfmpegCommand(string root)
+    private static void CheckPlatformFfmpegTaskPlan(string root)
     {
         if (OperatingSystem.IsWindows()) return;
         var componentRoot = Path.Combine(root, "Components", "ffmpeg",
-            PlatformFfmpegCommand.ComponentVersion);
+            PlatformFfmpegTaskPlan.ComponentVersion);
         var executable = Path.Combine(componentRoot, "bin", "ffmpeg");
         Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
         File.WriteAllText(executable,
@@ -95,10 +95,10 @@ internal static class HelperRegression
             JsonSerializer.Serialize(new
             {
                 component_id = "ffmpeg",
-                component_version = PlatformFfmpegCommand.ComponentVersion,
+                component_version = PlatformFfmpegTaskPlan.ComponentVersion,
                 exports = new { ffmpeg = "bin/ffmpeg" },
             }));
-        Check(PlatformFfmpegCommand.IsComponentReady(root),
+        Check(PlatformFfmpegTaskPlan.IsComponentReady(root),
             "built-in FFmpeg capability did not find its Component");
         var task = Path.Combine(root, "Tasks", "ffmpeg-test");
         var input = Path.Combine(task, "res", "bindings", "clip_01", "source.mp4");
@@ -106,13 +106,21 @@ internal static class HelperRegression
         File.WriteAllText(input, "source");
         var request = new JsonObject
         {
-            ["arguments"] = new JsonArray("-i", "{input:clip_01}", "{output:final.mp4}"),
-            ["output_files"] = new JsonArray("final.mp4"),
+            ["plan_version"] = "1",
+            ["clips"] = new JsonArray(new JsonObject
+            {
+                ["slot"] = "clip_01", ["trim_start_ms"] = 0, ["trim_end_ms"] = 800,
+            }),
+            ["output"] = new JsonObject
+            {
+                ["filename"] = "final.mp4", ["width"] = 64, ["height"] = 64,
+                ["fps"] = 5, ["audio_policy"] = "mute",
+            },
             ["clip_01"] = "res/bindings/clip_01/source.mp4",
         };
         File.WriteAllText(Path.Combine(task, "input.json"), request.ToJsonString());
-        Check(PlatformFfmpegCommand.Execute(root, task) == 0,
-            "built-in FFmpeg command failed");
+        Check(PlatformFfmpegTaskPlan.Execute(root, task) == 0,
+            "built-in video render failed");
         var result = JsonNode.Parse(File.ReadAllText(Path.Combine(task, "result.json")))!;
         var output = result["outputs"]![0]!;
         Check(output["size_bytes"]!.GetValue<long>() == 8,
@@ -120,33 +128,38 @@ internal static class HelperRegression
         Check(output["sha256"]!.GetValue<string>() == Convert.ToHexString(
                 SHA256.HashData(File.ReadAllBytes(Path.Combine(task, "final.mp4"))))
             .ToLowerInvariant(), "built-in FFmpeg output hash is wrong");
-        request["arguments"] = new JsonArray("-i", "https://invalid.test/source.mp4",
-            "{output:final.mp4}");
+        request["arguments"] = new JsonArray("-i", "https://invalid.test/source.mp4");
         File.WriteAllText(Path.Combine(task, "input.json"), request.ToJsonString());
         try
         {
-            PlatformFfmpegCommand.Execute(root, task);
-            throw new Exception("raw FFmpeg URL was accepted");
+            PlatformFfmpegTaskPlan.Execute(root, task);
+            throw new Exception("raw FFmpeg arguments were accepted");
         }
         catch (InvalidDataException) { }
-        request["arguments"] = new JsonArray("-i", "{input:clip_01}",
-            "{output:result.json}");
-        request["output_files"] = new JsonArray("result.json");
+        request.Remove("arguments");
+        request["output"]!["filename"] = "result.json";
         File.WriteAllText(Path.Combine(task, "input.json"), request.ToJsonString());
         try
         {
-            PlatformFfmpegCommand.Execute(root, task);
+            PlatformFfmpegTaskPlan.Execute(root, task);
             throw new Exception("task control file was accepted as output");
         }
         catch (InvalidDataException) { }
-        request["arguments"] = new JsonArray("-i", "{input:clip_01}",
-            "{output:final.mp4}");
-        request["output_files"] = new JsonArray("final.mp4");
+        request["output"]!["filename"] = "final.mp4";
+        request["clips"]![0]!["trim_end_ms"] = 0;
+        File.WriteAllText(Path.Combine(task, "input.json"), request.ToJsonString());
+        try
+        {
+            PlatformFfmpegTaskPlan.Execute(root, task);
+            throw new Exception("invalid trim range was accepted");
+        }
+        catch (InvalidDataException) { }
+        request["clips"]![0]!["trim_end_ms"] = 800;
         request["clip_01"] = "../private.mp4";
         File.WriteAllText(Path.Combine(task, "input.json"), request.ToJsonString());
         try
         {
-            PlatformFfmpegCommand.Execute(root, task);
+            PlatformFfmpegTaskPlan.Execute(root, task);
             throw new Exception("untrusted binding path was accepted");
         }
         catch (InvalidDataException) { }
@@ -178,15 +191,47 @@ internal static class HelperRegression
             generate.WaitForExit();
             Check(generate.ExitCode == 0, "FFmpeg test input generation failed");
         }
-        request["arguments"] = new JsonArray(
-            "-i", "{input:clip_01}", "-i", "{input:clip_02}",
-            "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]",
-            "-map", "[v]", "-c:v", "mpeg4", "{output:final.mp4}");
+        (request["clips"] as JsonArray)!.Add(new JsonObject
+        {
+            ["slot"] = "clip_02", ["trim_start_ms"] = 100, ["trim_end_ms"] = 900,
+        });
         request["clip_02"] = "res/bindings/clip_02/source.mp4";
         File.WriteAllText(Path.Combine(task, "input.json"), request.ToJsonString());
-        Check(PlatformFfmpegCommand.Execute(root, task) == 0
+        Check(PlatformFfmpegTaskPlan.Execute(root, task) == 0
             && new FileInfo(Path.Combine(task, "final.mp4")).Length > 0,
             "two bound MP4 files did not produce a video");
+
+        for (var index = 1; index <= 2; index++)
+        {
+            var clip = Path.Combine(task, "res", "bindings",
+                $"clip_{index:00}", "source.mp4");
+            var withAudio = Process.Start(new ProcessStartInfo(executable)
+            {
+                UseShellExecute = false,
+                ArgumentList = {
+                    "-hide_banner", "-loglevel", "error", "-y",
+                    "-f", "lavfi", "-i", "color=c=red:s=64x64:r=5",
+                    "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
+                    "-t", "1", "-c:v", "mpeg4", "-c:a", "aac", clip,
+                },
+            })!;
+            withAudio.WaitForExit();
+            Check(withAudio.ExitCode == 0, "FFmpeg audio input generation failed");
+        }
+        request["output"]!["audio_policy"] = "preserve";
+        File.WriteAllText(Path.Combine(task, "input.json"), request.ToJsonString());
+        Check(PlatformFfmpegTaskPlan.Execute(root, task) == 0,
+            "two audio MP4 files did not produce a video");
+        var audioProbe = Process.Start(new ProcessStartInfo(executable)
+        {
+            UseShellExecute = false,
+            ArgumentList = {
+                "-hide_banner", "-loglevel", "error", "-i",
+                Path.Combine(task, "final.mp4"), "-map", "0:a:0", "-f", "null", "-",
+            },
+        })!;
+        audioProbe.WaitForExit();
+        Check(audioProbe.ExitCode == 0, "preserved audio stream is missing");
     }
 
     public static async Task Main()
@@ -198,7 +243,7 @@ internal static class HelperRegression
             var runtime = new HelperRuntime("unused", new HelperConfig(
                 "wss://unused", "device", null, null, "test"),
                 root, new HttpClient(handler));
-            CheckPlatformFfmpegCommand(root);
+            CheckPlatformFfmpegTaskPlan(root);
             var taskId = Guid.NewGuid().ToString("N");
             var taskRoot = HelperPathSafety.TaskRoot(root, "test", taskId);
             Directory.CreateDirectory(Path.Combine(taskRoot, "res"));
