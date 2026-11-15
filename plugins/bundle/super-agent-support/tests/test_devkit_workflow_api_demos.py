@@ -199,8 +199,8 @@ async def test_local_demo_requires_stable_key_and_terminal_verified_artifact():
 
 def test_pack_exposes_aigc_and_local_api_references():
     payload, metadata = build_archive(PLUGIN_ROOT)
-    assert metadata["standard"]["version"] == "2.56"
-    assert metadata["devkit_version"] == "1.9.23"
+    assert metadata["standard"]["version"] == "2.57"
+    assert metadata["devkit_version"] == "1.9.24"
     prefix = f"dclaw-super-agent-developer-pack-{metadata['version']}/"
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         names = set(archive.namelist())
@@ -211,6 +211,13 @@ def test_pack_exposes_aigc_and_local_api_references():
             "devkit/schemas/runtime-diagnostics-v4/by-reference-response.schema.json",
             "devkit/local_task_api_demo.py",
             "devkit/local_task_outputs_bind_api_demo.py",
+            "devkit/local_runtime_prepare_api_demo.py",
+            "devkit/examples/local-runtime-prepare-v1/README.md",
+            "devkit/examples/local-runtime-prepare-v1/request.sample.json",
+            "devkit/examples/local-runtime-prepare-v1/preparing.sample.json",
+            "devkit/examples/local-runtime-prepare-v1/ready.sample.json",
+            "devkit/schemas/local-runtime-prepare-v1/request.schema.json",
+            "devkit/schemas/local-runtime-prepare-v1/response.schema.json",
             "devkit/examples/local-task-outputs-bind-v1/README.md",
             "devkit/schemas/local-task-outputs-bind-v1/request.schema.json",
             "devkit/schemas/local-task-outputs-bind-v1/response.schema.json",

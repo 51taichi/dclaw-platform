@@ -404,6 +404,12 @@ class LocalExecutionService:
         capability_id = arguments.get("capability")
         if not isinstance(capability_id, str) or not capability_id:
             raise ERRORS["INVALID_ARGUMENTS"]
+        requested_device_id = arguments.get("device_id")
+        if requested_device_id is not None and (
+            not isinstance(requested_device_id, str)
+            or not 1 <= len(requested_device_id) <= 128
+        ):
+            raise ERRORS["INVALID_ARGUMENTS"]
         package = self.store.get_package_for_capability(capability_id)
         if package is None:
             raise ERRORS["CAPABILITY_NOT_FOUND"]
@@ -415,6 +421,11 @@ class LocalExecutionService:
             "min_runner_version": descriptor["min_runner_version"],
         }
         online = self._online_devices(identity["u"])
+        if requested_device_id is not None:
+            online = [
+                device for device in online
+                if device["device_id"] == requested_device_id
+            ]
         if not online:
             return common | {
                 "state": "device_not_ready",

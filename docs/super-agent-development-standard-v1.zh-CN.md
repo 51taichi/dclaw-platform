@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.56`
+当前版本：`2.57`
 
 发布日期：`2026-11-15`
 
@@ -1036,6 +1036,10 @@ DClaw 客户端负责按需下载、校验、启动、绑定、重连和原子�
 | `runner_update_required` | `update_local_helper` | Runner 低于能力包声明的 `min_runner_version` |
 
 准备响应固定包含 `state`、`capability_id`、`package_id`、`package_version`、`min_runner_version`、`device_id`、`runner_version` 和 `user_action`。平台不使用旧 Relay 的 `runtime_update_required`：能力包准备无需客户另行确认，版本不一致时返回 `preparing` 并由 Runner 自动更新。
+
+密封 `super_expert_public` 使用 Support Plugin `1.18.45` 起的直接 Host 能力 `local.runtime.prepare/1` 完成相同的设备准备。专家在新的签名 Release 中同时声明 `local.execution.session/1` 与 `local.runtime.prepare/1`，平台按该 Release 的正式 grant 校验后才派发；只声明 `local.task.start/1` 不会自动授予准备能力。已激活 Release 的 grant 不因平台增加能力而扩大。Agent 调用 `await host.call("local.runtime.prepare/1", {"capability_id": "已注册的私有能力 ID"})`，可选 `device_id` 只能用于指定当前用户的在线设备，例如由已授权的前序绑定回执取得；不存在或离线时返回 `device_not_ready`，不得改选另一设备冒充就绪。请求不得包含下载地址或 `dclaw_session_token`。Host 从可信回合注入租户、用户、会话、专家、installation、Release 和 invocation 身份，并复用上述本地助手准备实现；旧 MCP `local_runtime_prepare` 保持原合同。
+
+Host 回执合同为 `local.runtime.prepare/1`，`status` 取 `ready`、`preparing`、`device_not_ready`、`runner_update_required`、`invalid_request`、`rejected` 或 `unavailable`。有效准备状态同时返回 `capability_id`、`package_id`、`package_version`、`min_runner_version`、`device_id`、`runner_version` 和 `user_action`；`rejected` 返回稳定 `error_code`。只有 `ready` 证明当前用户的在线 Helper 已上报目标 `capability_id + package_id + package_version` 的精确组合；`preparing` 仅表示已向设备派发安装，不能据此启动本地任务。完整关闭 Schema 与调用示例位于正式 DevKit `schemas/local-runtime-prepare-v1/` 和 `local_runtime_prepare_api_demo.py`。该桥接不修改既有 `local.task.start/1`、文件绑定或 MCP 请求格式，不要求 Helper 升级。
 
 ### 15.6 V1.1 任务状态
 
@@ -2409,6 +2413,11 @@ Skill 和专家发布前须对每条实际使用的路径同时验证：正确�
 以上是通用 Skill 的平台合同输入。Skill 维护方应在其 `references/capability-verification.md` 补 `/v2/` 的首错和终止根因区分，在 `scripts/runtime_diagnostics_with_login.py` 增加按官方 DevKit v2 Schema 查询和摘要，在相关脚本测试加入已恢复错误、最终阻断、`no_record`、越权及旧版回退案例。平台不直接覆盖 Skill 发布仓库，也不把单个专家的业务字段写成公共规则。
 
 ## 34. 版本记录
+
+### 2.57 - 2026-11-15
+
+- Support Plugin `1.18.45` 增加通用、受签名 Release grant 约束的 `local.runtime.prepare/1` Host 桥接，将已有 `local_runtime_prepare` 的精确设备准备结果返回给密封专家；旧 MCP 工具、已签名 Release 和本地任务合同不变。
+- DevKit `1.9.24`、Developer Pack `1.10.35` 同步请求/响应 Schema、操作目录和调用示例。现有 0.3.60 不含新能力授权，开发方须在后续签名 Release 中声明并授权后使用。
 
 ### 2.56 - 2026-11-15
 

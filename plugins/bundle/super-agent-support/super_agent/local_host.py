@@ -15,6 +15,7 @@ else:
 _service: Any | None = None
 _TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}\Z")
 _ARTIFACT = re.compile(r"artifact_[A-Za-z0-9_-]{32,156}\Z")
+_CAPABILITY = re.compile(r"[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+\Z")
 
 
 def bind_local_service(service: Any) -> None:
@@ -90,6 +91,74 @@ def _receipt(task: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]:
             hashlib.sha256(json.dumps(result, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
             if result is not None else None
         ),
+    }
+
+
+async def prepare_local_runtime(
+    *, arguments: dict[str, Any], tenant_id: str, user_id: str,
+    session_id: str, agent_id: str, installation_id: str,
+    release_id: str, invocation_id: str,
+    granted_capabilities: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    contract = "local.runtime.prepare/1"
+    capability_id = (
+        arguments.get("capability_id")
+        if isinstance(arguments, dict) else None
+    )
+    if (
+        not isinstance(arguments, dict)
+        or set(arguments) not in ({"capability_id"}, {"capability_id", "device_id"})
+        or not isinstance(capability_id, str) or len(capability_id) > 128
+        or not _CAPABILITY.fullmatch(capability_id)
+        or ("device_id" in arguments and (
+            not isinstance(arguments["device_id"], str)
+            or not 1 <= len(arguments["device_id"]) <= 128
+        ))
+    ):
+        return {
+            "contract": contract, "status": "invalid_request",
+            "user_action": "correct_request",
+        }
+    if contract not in granted_capabilities:
+        return {
+            "contract": contract, "status": "rejected",
+            "capability_id": capability_id,
+            "error_code": "LOCAL_GATEWAY.CAPABILITY_NOT_AUTHORIZED",
+            "user_action": "contact_administrator",
+        }
+    service = _service
+    if service is None:
+        return {
+            "contract": contract, "status": "unavailable",
+            "user_action": "contact_administrator",
+        }
+    identity = {
+        "t": tenant_id, "u": user_id, "s": session_id, "a": agent_id,
+        "g": installation_id, "r": release_id, "i": invocation_id,
+        "n": agent_id, "c": granted_capabilities,
+    }
+    try:
+        request = {"capability": capability_id}
+        if "device_id" in arguments:
+            request["device_id"] = arguments["device_id"]
+        result = await service._local_runtime_prepare(
+            request, identity, invocation_id,
+        )
+    except PublicError as exc:
+        return {
+            "contract": contract, "status": "rejected",
+            "capability_id": capability_id, "error_code": exc.code,
+            "user_action": exc.user_action,
+        }
+    return {
+        "contract": contract, "status": result["state"],
+        "capability_id": result["capability_id"],
+        "package_id": result["package_id"],
+        "package_version": result["package_version"],
+        "min_runner_version": result["min_runner_version"],
+        "device_id": result["device_id"],
+        "runner_version": result["runner_version"],
+        "user_action": result["user_action"],
     }
 
 

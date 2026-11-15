@@ -1,5 +1,13 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.24 adds the sealed Host `local.runtime.prepare/1` bridge for
+exact-version Local Helper package preparation. Declare it with
+`local.execution.session/1`; call `host.call` with a registered `capability_id`
+and wait for `ready` before `local.task.start/1`. No session token belongs in
+the Agent request. See `schemas/local-runtime-prepare-v1/`,
+`local_runtime_prepare_api_demo.py` and `examples/local-runtime-prepare-v1/`.
+It requires Support plugin 1.18.45 and a newly authorized Agent release.
+
 Version 1.9.23 adds `local.task.outputs.bind/1` for sealed Agents to reuse
 verified files from a succeeded localization task in the next local task. See
 `schemas/local-task-outputs-bind-v1/`, `local_task_outputs_bind_api_demo.py`

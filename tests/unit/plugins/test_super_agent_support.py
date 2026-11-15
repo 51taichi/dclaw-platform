@@ -703,7 +703,7 @@ def test_developer_kit_is_downloadable_without_server_source(
 
     assert metadata.status_code == 200
     assert metadata.json()["name"] == "dclaw-super-agent-devkit"
-    assert metadata.json()["version"] == "1.9.18"
+    assert metadata.json()["version"] == "1.9.24"
     assert metadata.json()["download_path"] == (
         "/api/super-agent-support/developer-kit/v1.zip"
     )
@@ -722,7 +722,7 @@ def test_developer_kit_is_downloadable_without_server_source(
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-devkit-1.9.18"
+    prefix = "dclaw-super-agent-devkit-1.9.24"
     assert f"{prefix}/dclaw_agent_devkit.py" in names
     assert f"{prefix}/bootstrap.ps1" in names
     assert f"{prefix}/bootstrap.sh" in names
@@ -733,6 +733,9 @@ def test_developer_kit_is_downloadable_without_server_source(
     assert f"{prefix}/schemas/interaction-card-create-v1/request.schema.json" in names
     assert f"{prefix}/schemas/interaction-card-create-v1/response.schema.json" in names
     assert f"{prefix}/examples/interaction-host-v1/single-select-success.json" in names
+    assert f"{prefix}/schemas/local-runtime-prepare-v1/request.schema.json" in names
+    assert f"{prefix}/schemas/local-runtime-prepare-v1/response.schema.json" in names
+    assert f"{prefix}/local_runtime_prepare_api_demo.py" in names
     assert len([name for name in names if "/wheelhouse/" in name]) == 26
     assert all("qwenpaw" not in name for name in names)
     assert not any(
@@ -880,23 +883,23 @@ def test_developer_pack_is_downloadable_and_self_describing(
         downloaded = client.get("/developer-pack/download")
 
     assert health.status_code == 200
-    assert health.json()["version"] == "1.18.36"
+    assert health.json()["version"] == "1.18.45"
     assert metadata.status_code == 200
     payload = metadata.json()
-    assert payload["version"] == "1.10.28"
-    assert payload["standard"]["version"] == "2.50"
-    assert payload["devkit_version"] == "1.9.18"
+    assert payload["version"] == "1.10.35"
+    assert payload["standard"]["version"] == "2.57"
+    assert payload["devkit_version"] == "1.9.24"
     assert payload["server_source_required"] is False
     assert payload["download_path"].endswith("/developer-pack/download")
     assert payload["sha256"] == hashlib.sha256(downloaded.content).hexdigest()
     assert payload["content_sha256"] == payload["sha256"]
     assert downloaded.status_code == 200
-    assert "dclaw-super-agent-developer-pack-1.10.28.zip" in (
+    assert "dclaw-super-agent-developer-pack-1.10.35.zip" in (
         downloaded.headers["content-disposition"]
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-developer-pack-1.10.28"
+    prefix = "dclaw-super-agent-developer-pack-1.10.35"
     assert f"{prefix}/PACKAGE-MANIFEST.json" in names
     assert f"{prefix}/SHA256SUMS" in names
     assert f"{prefix}/dclaw_developer.py" in names
@@ -2564,6 +2567,40 @@ async def test_environment_catalog_and_runtime_prepare_contract(
     )
     assert runtime_ready["data"]["state"] == "ready"
     assert runtime_ready["data"]["user_action"] == "none"
+
+
+@pytest.mark.asyncio
+async def test_runtime_prepare_pins_current_users_online_device(
+    plugin_module, tmp_path,
+):
+    store, _signer, _broker, service = _runtime(plugin_module, tmp_path)
+    for device_id, user_id in (
+        ("device-1", "user-1"), ("device-2", "user-1"),
+        ("device-other", "user-2"),
+    ):
+        store.upsert_device(
+            device_id=device_id, user_id=user_id, display_name="Windows",
+            runner_version="1.4.7", protocol_version="2", capabilities=[],
+        )
+        await service.attach(device_id, _FakeWebSocket())
+    store.register_package({
+        "capability_id": "example.video.compose",
+        "package_id": "example.video.package",
+        "package_version": "1.2.0",
+        "min_runner_version": "1.3.0",
+    }, signer_id="test", signature="test")
+    identity = {"u": "user-1"}
+    missing = await service._local_runtime_prepare(
+        {"capability": "example.video.compose", "device_id": "device-other"},
+        identity, "trace",
+    )
+    assert missing["state"] == "device_not_ready"
+    targeted = await service._local_runtime_prepare(
+        {"capability": "example.video.compose", "device_id": "device-2"},
+        identity, "trace",
+    )
+    assert targeted["state"] == "preparing"
+    assert targeted["device_id"] == "device-2"
 
 
 @pytest.mark.asyncio

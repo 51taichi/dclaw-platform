@@ -179,6 +179,15 @@
   "local_task_host": {
     "owner": "dclaw.super-agent-support",
     "transport": "sealed-agent-host.call",
+    "runtime_prepare": {
+      "minimum_plugin_version": "1.18.45",
+      "capability_id": "local.runtime.prepare/1",
+      "requires_capability_id": "local.execution.session/1",
+      "request_schema": "schemas/local-runtime-prepare-v1/request.schema.json",
+      "response_schema": "schemas/local-runtime-prepare-v1/response.schema.json",
+      "api_demo": "local_runtime_prepare_api_demo.py",
+      "example": "examples/local-runtime-prepare-v1/README.md"
+    },
     "start_capability_id": "local.task.start/1",
     "prior_outputs_bind": {
       "minimum_plugin_version": "1.18.44",

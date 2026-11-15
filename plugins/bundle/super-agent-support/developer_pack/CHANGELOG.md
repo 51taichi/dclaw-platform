@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.10.35 - 2026-11-15
+
+- Bundles standard 2.57 and DevKit 1.9.24 with the sealed Host
+  `local.runtime.prepare/1` request/response schemas and API demo.
+
 ## 1.10.34 - 2026-11-15
 
 - Bundles standard 2.56 and DevKit 1.9.23 with a sealed Host API demo and

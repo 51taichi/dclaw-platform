@@ -2476,6 +2476,20 @@ async def handle_workspace_turn(
                         responsibility="platform",
                         recovery_action="contact_platform_with_invocation_id",
                     ) from None
+            if capability == "local.runtime.prepare/1":
+                from .local_host import prepare_local_runtime
+
+                return await prepare_local_runtime(
+                    arguments=payload,
+                    tenant_id=tenant_id,
+                    user_id=str(request.user_id),
+                    session_id=str(request.session_id),
+                    agent_id=agent_id,
+                    installation_id=authorization.installation_id,
+                    release_id=authorization.release_id,
+                    invocation_id=invocation_id,
+                    granted_capabilities=tuple(authorization.granted_capabilities),
+                )
             if capability in {
                 "local.task.start/1", "local.task.read/1", "local.task.cancel/1",
             }:

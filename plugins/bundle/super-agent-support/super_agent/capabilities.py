@@ -87,6 +87,11 @@ PLATFORM_CAPABILITY_CATALOG_V1 = {
         _definition("aigc.task.snapshot/1", "aigc"),
         _definition("aigc.task.assets.list/1", "aigc"),
         _definition("aigc.task.assets.localize/1", "aigc"),
+        _definition(
+            "local.runtime.prepare/1",
+            "local_execution",
+            dependencies=("local.execution.session/1",),
+        ),
         _definition("local.task.start/1", "local_execution"),
         _definition("local.task.outputs.bind/1", "local_execution"),
         _definition("local.task.read/1", "local_execution"),

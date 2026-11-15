@@ -30,6 +30,7 @@
     {"capability_id":"aigc.asset.submit","contract_version":"1","group":"aigc","dependencies":["aigc.task.create"]},
     {"capability_id":"aigc.review.complete","contract_version":"1","group":"aigc","dependencies":["aigc.task.create"]},
     {"capability_id":"local.execution.session/1","contract_version":"1","group":"local_execution","dependencies":[]},
+    {"capability_id":"local.runtime.prepare/1","contract_version":"1","group":"local_execution","dependencies":["local.execution.session/1"]},
     {"capability_id":"local.task.start/1","contract_version":"1","group":"local_execution","dependencies":[]},
     {"capability_id":"local.task.outputs.bind/1","contract_version":"1","group":"local_execution","dependencies":[]},
     {"capability_id":"local.task.read/1","contract_version":"1","group":"local_execution","dependencies":[]},

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "local.runtime.prepare/1 response",
+  "type": "object",
+  "required": ["contract", "status"],
+  "properties": {
+    "contract": {"const": "local.runtime.prepare/1"},
+    "status": {
+      "enum": ["ready", "preparing", "device_not_ready", "runner_update_required", "invalid_request", "rejected", "unavailable"]
+    },
+    "capability_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "package_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "package_version": {"type": "string", "minLength": 1},
+    "min_runner_version": {"type": "string", "minLength": 1},
+    "device_id": {"type": ["string", "null"]},
+    "runner_version": {"type": ["string", "null"]},
+    "user_action": {"enum": ["none", "wait", "open_dclaw", "update_local_helper", "reconnect_runner", "correct_request", "contact_administrator"]},
+    "error_code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_.]{0,63}$"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"enum": ["ready", "preparing", "device_not_ready", "runner_update_required"]}}},
+      "then": {"required": ["capability_id", "package_id", "package_version", "min_runner_version", "device_id", "runner_version", "user_action"]}
+    },
+    {
+      "if": {"properties": {"status": {"const": "ready"}}},
+      "then": {"properties": {"device_id": {"type": "string", "minLength": 1}, "runner_version": {"type": "string", "minLength": 1}, "user_action": {"const": "none"}}}
+    },
+    {
+      "if": {"properties": {"status": {"const": "rejected"}}},
+      "then": {"required": ["capability_id", "error_code"]}
+    }
+  ],
+  "additionalProperties": false
+}

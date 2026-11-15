@@ -1,5 +1,10 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.35 bundles standard 2.57 and DevKit 1.9.24. Newly authorized
+sealed Agents can call `local.runtime.prepare/1` through the trusted Host,
+then wait for the Helper's exact-version `ready` report before starting a
+local task. Existing signed releases keep their original grants.
+
 Version 1.10.34 bundles standard 2.56 and DevKit 1.9.23. Sealed Agents can
 bind verified files from a succeeded AIGC localization task directly into the
 next local task on the same device with `local.task.outputs.bind/1`.
