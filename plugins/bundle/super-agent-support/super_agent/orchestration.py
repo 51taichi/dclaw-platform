@@ -2493,6 +2493,34 @@ async def handle_workspace_turn(
                     invocation_id=invocation_id,
                     granted_capabilities=tuple(authorization.granted_capabilities),
                 )
+            if capability == "local.task.outputs.bind/1":
+                from .local_host import bind_localized_task_outputs
+
+                try:
+                    compatible = compatible_installations(
+                        storage_root=Path(WORKING_DIR) / "workspace_runtime_state",
+                        grants=SuperExpertGrantRepository(sealed_root),
+                        agent_id=agent_id, tenant_id=tenant_id,
+                        installation_id=authorization.installation_id,
+                        release_id=authorization.release_id,
+                        session_id=str(request.session_id),
+                        user_id=str(request.user_id),
+                    )
+                except StateContinuityError:
+                    return {"contract": capability, "status": "unavailable"}
+                grant_repository = SuperExpertGrantRepository(sealed_root)
+                return await bind_localized_task_outputs(
+                    arguments=payload,
+                    tenant_id=tenant_id, user_id=str(request.user_id),
+                    session_id=str(request.session_id), agent_id=agent_id,
+                    installation_id=authorization.installation_id,
+                    release_id=authorization.release_id,
+                    invocation_id=invocation_id,
+                    compatible_installation_releases={
+                        item: grant_repository.get(item).release_id
+                        for item in compatible
+                    },
+                )
             idempotency_key = str(payload.pop("idempotency_key", ""))
             if not idempotency_key:
                 raise WorkspaceOrchestrationError("orchestration_error")

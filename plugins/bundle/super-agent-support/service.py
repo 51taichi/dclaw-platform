@@ -27,6 +27,7 @@ PROTOCOL_VERSION = "2"
 CATALOG_VERSION = "1"
 MIN_RUNNER_VERSION = "1.1.0"
 AIGC_TRANSFER_MIN_RUNNER_VERSION = "1.4.6"
+PRIOR_OUTPUT_BIND_MIN_RUNNER_VERSION = "1.4.7"
 LEGACY_RUNNER_VERSION = "1.0.0"
 LOCAL_FILE_REF_PATTERN = re.compile(r"^lfr_[A-Za-z0-9_-]{32,156}$")
 ARTIFACT_ID_PATTERN = re.compile(r"^artifact_[A-Za-z0-9_-]{32,156}$")
@@ -708,6 +709,57 @@ class LocalExecutionService:
                 ).set()
                 raise
         return self._public_task(task) | {"idempotent_replay": not created}
+
+    async def bind_localized_outputs(
+        self,
+        *,
+        identity: dict[str, Any],
+        source_task: dict[str, Any],
+        files: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        device = self._require_file_device(identity["u"], source_task["device_id"])
+        if not _runner_supports(device, PRIOR_OUTPUT_BIND_MIN_RUNNER_VERSION):
+            raise ERRORS["DEVICE_NOT_READY"]
+        response = await self._request_device(
+            device["device_id"],
+            {
+                "type": "aigc.assets.bind",
+                "protocol_version": PROTOCOL_VERSION,
+                "source_task_id": source_task["task_id"],
+                "source_agent_name": source_task["agent_name"],
+                "files": files,
+                "scope": self._scope(identity),
+            },
+        )
+        if response.get("status") == "rejected":
+            code = response.get("error_code")
+            allowed = {
+                "LOCAL_SOURCE.FILE_MISSING", "LOCAL_SOURCE.FILE_CHANGED",
+                "LOCAL_SOURCE.MANIFEST_INVALID", "LOCAL_SOURCE.UNAVAILABLE",
+            }
+            return {"status": "rejected", "error_code": code if code in allowed else "LOCAL_SOURCE.UNAVAILABLE"}
+        returned = response.get("files")
+        if response.get("status") != "bound" or not isinstance(returned, list) or len(returned) != len(files):
+            return {"status": "unavailable"}
+        for expected, item in zip(files, returned):
+            if (
+                not isinstance(item, dict)
+                or set(item) != {"slot", "order", "file"}
+                or item["slot"] != expected["slot"]
+                or item["order"] != expected["order"]
+                or not self._safe_file_metadata(item["file"], device["device_id"])
+            ):
+                return {"status": "unavailable"}
+        if len({item["file"]["local_file_ref"] for item in returned}) != len(returned):
+            return {"status": "unavailable"}
+        expires_at = int(time.time()) + 3600
+        if not self.store.save_local_file_refs(
+            returned, scope=self._scope(identity),
+            source_task_id=source_task["task_id"],
+            device_id=device["device_id"], expires_at=expires_at,
+        ):
+            return {"status": "unavailable"}
+        return {"status": "bound", "expires_at": expires_at, "files": returned}
 
     def _validate_local_file_bindings(
         self,
@@ -1413,6 +1465,7 @@ class LocalExecutionService:
             "file.upload.result",
             "managed_artifacts.result",
             "managed_artifact.result",
+            "aigc.assets.bind.result",
         }:
             request_id = message.get("request_id")
             pending = self._device_requests.get(str(request_id))

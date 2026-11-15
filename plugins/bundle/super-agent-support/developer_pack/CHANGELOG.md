@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.10.34 - 2026-11-15
+
+- Bundles standard 2.56 and DevKit 1.9.23 with a sealed Host API demo and
+  closed schemas for verified prior localization files used in a later task.
+
 ## 1.10.33 - 2026-11-15
 
 - Bundles standard 2.55 and DevKit 1.9.22 with owner-scoped, redacted local

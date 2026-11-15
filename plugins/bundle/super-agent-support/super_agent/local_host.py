@@ -150,6 +150,96 @@ async def dispatch_local_task(
     return _receipt(stored, identity)
 
 
+async def bind_localized_task_outputs(
+    *, arguments: dict[str, Any], tenant_id: str, user_id: str,
+    session_id: str, agent_id: str, installation_id: str,
+    release_id: str, invocation_id: str,
+    compatible_installation_releases: dict[str, str],
+) -> dict[str, Any]:
+    contract = "local.task.outputs.bind/1"
+    service = _service
+    if service is None:
+        return {"contract": contract, "status": "unavailable"}
+    if set(arguments) != {"source_task_id", "slots"}:
+        return {"contract": contract, "status": "invalid_request"}
+    source_task_id, slots = arguments["source_task_id"], arguments["slots"]
+    if (
+        not isinstance(source_task_id, str) or not 1 <= len(source_task_id) <= 160
+        or not isinstance(slots, list) or not 1 <= len(slots) <= 20
+        or any(not isinstance(slot, str) or not _TOKEN.fullmatch(slot) for slot in slots)
+        or len(set(slots)) != len(slots)
+    ):
+        return {"contract": contract, "status": "invalid_request"}
+    identity = {
+        "t": tenant_id, "u": user_id, "s": session_id, "a": agent_id,
+        "g": installation_id, "r": release_id, "i": invocation_id,
+    }
+    source = service.store.get_task(source_task_id, user_id)
+    if not source or any((
+        str(source.get("tenant_id") or "local") != tenant_id,
+        source.get("user_id") != user_id,
+        source.get("session_id") != session_id,
+        source.get("agent_id") != agent_id,
+        source.get("installation_id") not in compatible_installation_releases,
+        source.get("release_id") != compatible_installation_releases.get(
+            source.get("installation_id")),
+    )):
+        return {"contract": contract, "status": "not_found"}
+    if source.get("capability_id") != "aigc.task.assets.localize/1" or source.get("status") != "succeeded":
+        return {"contract": contract, "status": "source_not_ready"}
+    result = source.get("result")
+    original = source.get("input")
+    if not isinstance(result, dict) or not isinstance(result.get("files"), list) or not isinstance(original, dict):
+        return {"contract": contract, "status": "unavailable"}
+    expected_assets = original.get("assets")
+    files = result["files"]
+    if (
+        not isinstance(expected_assets, list) or len(files) != len(expected_assets)
+        or any(not isinstance(item, dict) or not isinstance(item.get("slot"), str)
+               for item in expected_assets)
+    ):
+        return {"contract": contract, "status": "unavailable"}
+    by_slot: dict[str, dict[str, Any]] = {}
+    for file in files:
+        if (
+            not isinstance(file, dict) or not isinstance(file.get("slot"), str)
+            or file["slot"] in by_slot or type(file.get("order")) is not int
+            or not isinstance(file.get("sha256"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", file["sha256"])
+            or type(file.get("size_bytes")) is not int or file["size_bytes"] < 0
+            or not isinstance(file.get("relative_path"), str)
+            or len(file["relative_path"]) > 512
+        ):
+            return {"contract": contract, "status": "unavailable"}
+        by_slot[file["slot"]] = file
+    if {item.get("slot") for item in expected_assets} != set(by_slot):
+        return {"contract": contract, "status": "unavailable"}
+    for asset in expected_assets:
+        file = by_slot[asset["slot"]]
+        if any(file.get(field) != asset.get(field) for field in (
+            "asset_id", "slot", "order", "usage",
+        )):
+            return {"contract": contract, "status": "unavailable"}
+        relative = file["relative_path"]
+        expected_root = "res/" if asset.get("destination") == "res" else ""
+        if (
+            asset.get("destination") not in {"res", "task_root"}
+            or not relative.startswith(expected_root)
+            or len(relative[len(expected_root):].split("/")) != 1
+            or relative[len(expected_root):] in {"", ".", ".."}
+            or "\\" in relative
+        ):
+            return {"contract": contract, "status": "unavailable"}
+    if any(slot not in by_slot for slot in slots):
+        return {"contract": contract, "status": "invalid_request"}
+    selected = sorted((by_slot[slot] for slot in slots), key=lambda item: item["order"])
+    try:
+        bound = await service.bind_localized_outputs(identity=identity, source_task=source, files=selected)
+    except PublicError as exc:
+        return {"contract": contract, "status": "rejected", "error_code": exc.code}
+    return {"contract": contract, **bound}
+
+
 async def dispatch_aigc_asset_localization(
     *, material_task_id: str, assets: list[dict[str, Any]],
     idempotency_key: str, tenant_id: str, user_id: str, session_id: str,

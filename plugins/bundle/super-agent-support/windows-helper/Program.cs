@@ -19,7 +19,7 @@ internal sealed record HelperConfig(
 
 internal static class HelperMetadata
 {
-    internal const string Version = "1.4.6";
+    internal const string Version = "1.4.7";
     internal const string ProtocolVersion = "2";
 }
 
@@ -261,6 +261,9 @@ internal sealed class HelperRuntime
                 break;
             case "aigc.assets.localize":
                 _ = LocalizeAigcAssetsAsync(message.Clone(), cancellationToken);
+                break;
+            case "aigc.assets.bind":
+                _ = BindAigcAssetsAsync(message.Clone(), cancellationToken);
                 break;
             case "task.continue":
                 _ = ExecuteTaskAsync(message, true, cancellationToken);
@@ -1110,6 +1113,124 @@ internal sealed class HelperRuntime
                 },
                 cancellationToken);
         }
+    }
+
+    private async Task BindAigcAssetsAsync(
+        JsonElement message,
+        CancellationToken cancellationToken)
+    {
+        var requestId = message.GetProperty("request_id").GetString()!;
+        var response = new JsonObject
+        {
+            ["type"] = "aigc.assets.bind.result",
+            ["request_id"] = requestId,
+            ["status"] = "rejected",
+            ["error_code"] = "LOCAL_SOURCE.UNAVAILABLE",
+        };
+        try
+        {
+            var taskId = message.GetProperty("source_task_id").GetString()!;
+            var agentName = message.GetProperty("source_agent_name").GetString()!;
+            var taskRoot = HelperPathSafety.TaskRoot(_root, agentName, taskId);
+            if (!Directory.Exists(taskRoot))
+            {
+                response["error_code"] = "LOCAL_SOURCE.FILE_MISSING";
+            }
+            else
+            {
+                var state = JsonNode.Parse(await File.ReadAllTextAsync(
+                    Path.Combine(taskRoot, TaskHistory.StateFileName), cancellationToken)) as JsonObject;
+                var manifest = JsonNode.Parse(await File.ReadAllTextAsync(
+                    Path.Combine(taskRoot, "assets.json"), cancellationToken)) as JsonObject;
+                if (state?["task_id"]?.GetValue<string>() != taskId
+                    || state["agent_name"]?.GetValue<string>() != agentName
+                    || state["capability_id"]?.GetValue<string>() != "aigc.task.assets.localize/1"
+                    || state["status"]?.GetValue<string>() != "succeeded"
+                    || manifest?["assets"] is not JsonArray assets)
+                {
+                    response["error_code"] = "LOCAL_SOURCE.MANIFEST_INVALID";
+                }
+                else
+                {
+                    var requested = message.GetProperty("files").EnumerateArray().ToArray();
+                    var checkedFiles = new List<(string Slot, int Order, string Path)>();
+                    foreach (var file in requested)
+                    {
+                        var slot = file.GetProperty("slot").GetString()!;
+                        var order = file.GetProperty("order").GetInt32();
+                        var relative = file.GetProperty("relative_path").GetString()!;
+                        var expectedHash = file.GetProperty("sha256").GetString()!;
+                        var expectedSize = file.GetProperty("size_bytes").GetInt64();
+                        var filename = relative.StartsWith("res/", StringComparison.Ordinal)
+                            ? relative[4..] : relative;
+                        if (string.IsNullOrWhiteSpace(filename)
+                            || filename is "." or ".."
+                            || filename.Contains('/') || filename.Contains('\\'))
+                            throw new LocalFileException("LOCAL_SOURCE.MANIFEST_INVALID");
+                        var entry = assets.OfType<JsonObject>().SingleOrDefault(item =>
+                            item["slot"]?.GetValue<string>() == slot
+                            && item["order"]?.GetValue<int>() == order);
+                        if (entry is null
+                            || entry["asset_id"]?.GetValue<string>() != file.GetProperty("asset_id").GetString()
+                            || entry["relative_path"]?.GetValue<string>() != relative
+                            || entry["sha256"]?.GetValue<string>() != expectedHash
+                            || entry["usage"]?.GetValue<string>() != file.GetProperty("usage").GetString())
+                            throw new LocalFileException("LOCAL_SOURCE.MANIFEST_INVALID");
+                        var path = PathInside(taskRoot, relative);
+                        var root = new DirectoryInfo(taskRoot);
+                        var agentRoot = new DirectoryInfo(Path.GetDirectoryName(taskRoot)!);
+                        var parent = new DirectoryInfo(Path.GetDirectoryName(path)!);
+                        if (agentRoot.Attributes.HasFlag(FileAttributes.ReparsePoint)
+                            || root.Attributes.HasFlag(FileAttributes.ReparsePoint)
+                            || parent.Attributes.HasFlag(FileAttributes.ReparsePoint))
+                            throw new LocalFileException("LOCAL_SOURCE.MANIFEST_INVALID");
+                        if (!File.Exists(path))
+                            throw new LocalFileException("LOCAL_SOURCE.FILE_MISSING");
+                        var info = new FileInfo(path);
+                        if (info.Attributes.HasFlag(FileAttributes.ReparsePoint)
+                            || info.Length != expectedSize)
+                            throw new LocalFileException("LOCAL_SOURCE.FILE_CHANGED");
+                        await using var input = File.OpenRead(path);
+                        var digest = Convert.ToHexString(
+                            await SHA256.HashDataAsync(input, cancellationToken)).ToLowerInvariant();
+                        if (!CryptographicOperations.FixedTimeEquals(
+                            Encoding.ASCII.GetBytes(digest), Encoding.ASCII.GetBytes(expectedHash)))
+                            throw new LocalFileException("LOCAL_SOURCE.FILE_CHANGED");
+                        checkedFiles.Add((slot, order, path));
+                    }
+                    var files = new JsonArray();
+                    foreach (var file in checkedFiles.OrderBy(item => item.Order))
+                    {
+                        files.Add(new JsonObject
+                        {
+                            ["slot"] = file.Slot,
+                            ["order"] = file.Order,
+                            ["file"] = await RegisterLocalFileAsync(
+                                file.Path, message.GetProperty("scope"),
+                                "prior-task:" + taskId + ":" + file.Slot,
+                                cancellationToken),
+                        });
+                    }
+                    response["status"] = "bound";
+                    response.Remove("error_code");
+                    response["files"] = files;
+                }
+            }
+        }
+        catch (LocalFileException exception)
+        {
+            response["error_code"] = exception.Code;
+        }
+        catch (FileNotFoundException)
+        {
+            response["error_code"] = "LOCAL_SOURCE.FILE_MISSING";
+        }
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException
+            or IOException or ArgumentException or InvalidDataException)
+        {
+            response["error_code"] = "LOCAL_SOURCE.MANIFEST_INVALID";
+        }
+        await SendDurableResponseAsync(response, requestId, cancellationToken);
     }
 
     private async Task DownloadAigcAssetAsync(

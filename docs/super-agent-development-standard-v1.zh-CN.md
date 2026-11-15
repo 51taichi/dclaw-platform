@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.55`
+当前版本：`2.56`
 
 发布日期：`2026-11-15`
 
@@ -2392,6 +2392,8 @@ AIGC 任务卡与问答交互卡是不同合同，不能用一者的创建回执
 
 自插件 `1.18.43` 起，AIGC 素材本地化要求 Helper `1.4.6` 或更高版本。Helper 在独立异步任务开始前复制消息数据，使接收循环释放 JSON 文档后下载任务仍可读取；旧 Helper 不再接收此能力的新派发。Helper 的失败事件只上报固定阶段、稳定错误码、异常类别和版本，不传下载地址、素材名、本机路径或栈。插件在持久化前再次按白名单过滤。
 
+插件 `1.18.44`、Helper `1.4.7` 起，专家可选择声明 `local.task.outputs.bind/1` 与既有 `local.task.start/1`，自动续用已成功本地化的设备文件。入参只有 `source_task_id` 和要用的唯一 `slots`；Host 仅接受同租户、用户、会话、专家以及已提交兼容安装链中的原成功任务，核对来源 Release、槽位与任务结果，再要求同一在线设备按原 `assets.json`、大小和 SHA-256 重新核验文件。成功回执按原 `order` 返回 `files[].slot/order/file.local_file_ref` 与过期时间；Agent 在**同一 invocation** 将引用放入下一 `local.task.start/1.local_file_bindings[slot]={"local_file_ref":...,"access":"read"}`。旧 Helper、失败任务、文件缺失或变化、跨设备、越权与不兼容安装均不可绑定。绑定重放可能颁发新的短时引用，但不会重新下载或启动任务；下游启动仍使用原幂等键。客户用 `file_selector` 手选设备文件属于另一条路径。正式关闭 Schema 位于 DevKit `schemas/local-task-outputs-bind-v1/`，调用示例位于 `local_task_outputs_bind_api_demo.py` 与 `examples/local-task-outputs-bind-v1/`。本操作不注册私有 FFmpeg 能力，也不代表下游视频任务完成。
+
 普通开发账号可查询本专家的本地化任务：`GET /api/user/super-expert-publishing/local-task-diagnostics/v1/tasks/{task_id}?agent_id={agent_id}`，也可将路径中的 `tasks/{task_id}` 换为 `invocations/{invocation_id}`。正式合同为 `developer.local-task.diagnostics.read/1`，DevKit `1.9.22` 提供关闭的请求/响应 Schema 与 `local_task_diagnostics_api_demo.py`。接口按登录开发者的专家归属、原客户会话的租户/用户/专家身份、来源安装的 Release 授权逐项验证；同专家旧安装可只读定位，越权、无记录和超出 30 天留存统一返回 `no_record`，每账号每分钟限 30 次并记脱敏审计。返回 Host 受理/派发、Helper 接收、执行时留存的 Helper 版本、当前设备在线状态、任务终态和首错的安全分类。当前在线状态不代表执行时在线。历史未上报的首错细节明确为 `historical_detail_not_recorded`，不得从通用失败码推测具体异常；该接口供通用 Skill 的开发侧使用，不交给运行中的专家包。
 
 新资产的非零大小和非空 SHA-256 必须与 Helper 下载结果一致。历史资产若没有服务端 SHA-256，Helper 仍必须计算并回报下载后摘要，但该值只是本次下载证据，不能声称已与服务端权威摘要比对；若历史资产已有非零大小，大小仍须一致。
@@ -2407,6 +2409,10 @@ Skill 和专家发布前须对每条实际使用的路径同时验证：正确�
 以上是通用 Skill 的平台合同输入。Skill 维护方应在其 `references/capability-verification.md` 补 `/v2/` 的首错和终止根因区分，在 `scripts/runtime_diagnostics_with_login.py` 增加按官方 DevKit v2 Schema 查询和摘要，在相关脚本测试加入已恢复错误、最终阻断、`no_record`、越权及旧版回退案例。平台不直接覆盖 Skill 发布仓库，也不把单个专家的业务字段写成公共规则。
 
 ## 34. 版本记录
+
+### 2.56 - 2026-11-15
+
+- Support Plugin `1.18.44`、Helper `1.4.7`、DevKit `1.9.23` 和 Developer Pack `1.10.34` 增加通用 `local.task.outputs.bind/1`：在原成功本地化任务和设备文件摘要复核后，为同一 invocation 的下一本地任务提供受信文件引用；原 `local.task.start/1` 合同不变。
 
 ### 2.55 - 2026-11-15
 

@@ -180,6 +180,15 @@
     "owner": "dclaw.super-agent-support",
     "transport": "sealed-agent-host.call",
     "start_capability_id": "local.task.start/1",
+    "prior_outputs_bind": {
+      "minimum_plugin_version": "1.18.44",
+      "minimum_helper_version": "1.4.7",
+      "capability_id": "local.task.outputs.bind/1",
+      "request_schema": "schemas/local-task-outputs-bind-v1/request.schema.json",
+      "response_schema": "schemas/local-task-outputs-bind-v1/response.schema.json",
+      "api_demo": "local_task_outputs_bind_api_demo.py",
+      "example": "examples/local-task-outputs-bind-v1/README.md"
+    },
     "read_capability_id": "local.task.read/1",
     "cancel_capability_id": "local.task.cancel/1",
     "start_request_schema": "schemas/local-task-host-v1/start-request.schema.json",

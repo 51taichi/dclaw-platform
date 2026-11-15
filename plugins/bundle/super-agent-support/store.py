@@ -1045,6 +1045,45 @@ class StateStore:
             )
         return inserted.rowcount == 1
 
+    def save_local_file_refs(
+        self,
+        files: list[dict[str, Any]],
+        *,
+        scope: dict[str, str],
+        source_task_id: str,
+        device_id: str,
+        expires_at: int,
+    ) -> bool:
+        """Register a complete set of prior-task bindings in one transaction."""
+        try:
+            with self._lock, self._connect() as db:
+                for item in files:
+                    metadata = item["file"]
+                    db.execute(
+                        """
+                        INSERT INTO local_file_refs(
+                            local_file_ref,tenant_id,user_id,session_id,agent_id,
+                            installation_id,release_id,invocation_id,interaction_id,
+                            device_id,display_name,mime_type,size_bytes,
+                            last_modified_ms,expires_at,revoked_at)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)
+                        """,
+                        (
+                            metadata["local_file_ref"],
+                            scope["tenant_id"], scope["user_id"],
+                            scope["session_id"], scope["agent_id"],
+                            scope["installation_id"], scope["release_id"],
+                            scope["invocation_id"],
+                            f"prior-task:{source_task_id}:{item['slot']}",
+                            device_id, metadata["display_name"],
+                            metadata["mime_type"], metadata["size_bytes"],
+                            metadata["last_modified_ms"], expires_at,
+                        ),
+                    )
+        except sqlite3.IntegrityError:
+            return False
+        return True
+
     def get_local_file_ref(self, local_file_ref: str) -> dict[str, Any] | None:
         with self._connect() as db:
             row = db.execute(

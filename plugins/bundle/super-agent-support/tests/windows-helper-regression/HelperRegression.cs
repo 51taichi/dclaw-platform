@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace DClaw.LocalHelper;
 
@@ -115,6 +116,80 @@ internal static class HelperRegression
                     "second asset digest incorrect");
             }
 
+            var scope = new {
+                tenant_id = "tenant", user_id = "user", session_id = "session",
+                agent_id = "agent", installation_id = "install",
+                release_id = "release", invocation_id = "invocation",
+            };
+            var bindInput = JsonSerializer.Serialize(new {
+                type = "aigc.assets.bind", request_id = "bind-two", source_task_id = taskId,
+                source_agent_name = "test", scope,
+                files = result.GetProperty("payload").GetProperty("files"),
+            });
+            var bindMethod = typeof(HelperRuntime).GetMethod(
+                "BindAigcAssetsAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            var handleBind = typeof(HelperRuntime).GetMethod(
+                "HandleMessageAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            using (var document = JsonDocument.Parse(bindInput))
+                await (Task)handleBind.Invoke(runtime, new object[] {
+                    document.RootElement, CancellationToken.None,
+                })!;
+            for (var attempt = 0; attempt < 200 && !File.Exists(Path.Combine(
+                root, "Outbox", "response-bind-two.json")); attempt++)
+                await Task.Delay(25);
+            var bindResponse = JsonNode.Parse(File.ReadAllText(Path.Combine(
+                root, "Outbox", "response-bind-two.json")))!.AsObject();
+            Check(bindResponse["status"]!.GetValue<string>() == "bound",
+                "two localized files could not be bound");
+            var bound = bindResponse["files"]!.AsArray();
+            Check(bound.Count == 2
+                && bound[0]!["slot"]!.GetValue<string>() == "clip_01"
+                && bound[1]!["slot"]!.GetValue<string>() == "clip_02",
+                "binding order was not preserved");
+            var nextRoot = HelperPathSafety.TaskRoot(root, "test", "next-task");
+            Directory.CreateDirectory(nextRoot);
+            var bindings = new JsonObject();
+            foreach (var item in bound)
+                bindings[item!["slot"]!.GetValue<string>()] = new JsonObject {
+                    ["local_file_ref"] = item["file"]!["local_file_ref"]!.DeepClone(),
+                    ["access"] = "read",
+                };
+            var stageMethod = typeof(HelperRuntime).GetMethod(
+                "StageLocalFileBindingsAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            using (var bindingDocument = JsonDocument.Parse(bindings.ToJsonString()))
+            using (var scopeDocument = JsonDocument.Parse(JsonSerializer.Serialize(scope)))
+            {
+                var nextInput = new JsonObject();
+                await (Task)stageMethod.Invoke(runtime, new object[] {
+                    nextRoot, nextInput, bindingDocument.RootElement,
+                    scopeDocument.RootElement, CancellationToken.None,
+                })!;
+                Check(nextInput.Count == 2 && nextInput.ContainsKey("clip_01")
+                    && nextInput.ContainsKey("clip_02"),
+                    "next task did not accept both file bindings");
+            }
+            File.AppendAllText(Path.Combine(taskRoot, "res", "clip_01.mp4"), "changed");
+            var changedInput = bindInput.Replace("bind-two", "bind-changed");
+            using (var document = JsonDocument.Parse(changedInput))
+                await (Task)bindMethod.Invoke(runtime, new object[] {
+                    document.RootElement, CancellationToken.None,
+                })!;
+            var changedResponse = JsonNode.Parse(File.ReadAllText(Path.Combine(
+                root, "Outbox", "response-bind-changed.json")))!.AsObject();
+            Check(changedResponse["error_code"]!.GetValue<string>() == "LOCAL_SOURCE.FILE_CHANGED",
+                "changed file was accepted");
+            File.WriteAllText(Path.Combine(taskRoot, "res", "clip_01.mp4"), "first");
+            File.Delete(Path.Combine(taskRoot, "res", "clip_02.mp4"));
+            var missingInput = bindInput.Replace("bind-two", "bind-missing");
+            using (var document = JsonDocument.Parse(missingInput))
+                await (Task)bindMethod.Invoke(runtime, new object[] {
+                    document.RootElement, CancellationToken.None,
+                })!;
+            var missingResponse = JsonNode.Parse(File.ReadAllText(Path.Combine(
+                root, "Outbox", "response-bind-missing.json")))!.AsObject();
+            Check(missingResponse["error_code"]!.GetValue<string>() == "LOCAL_SOURCE.FILE_MISSING",
+                "missing file was accepted");
+
             handler.Fail = true;
             var failed = await Run(runtime, root, Guid.NewGuid().ToString("N"),
                 Asset("one", "clip_01", "first", 0));
@@ -134,7 +209,7 @@ internal static class HelperRegression
                 Asset("two", "clip_01", "second", 1));
             Check(collision.GetProperty("event_type").GetString() == "failed",
                 "duplicate output path was not rejected");
-            Console.WriteLine("Helper regression passed: multi-asset, disposed JSON, interrupted download recovery, download error, empty input and output collision");
+            Console.WriteLine("Helper regression passed: localization, prior-output binding, next-task input, changed file, download error and invalid input");
         }
         finally
         {

@@ -1,5 +1,11 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.23 adds `local.task.outputs.bind/1` for sealed Agents to reuse
+verified files from a succeeded localization task in the next local task. See
+`schemas/local-task-outputs-bind-v1/`, `local_task_outputs_bind_api_demo.py`
+and `examples/local-task-outputs-bind-v1/`. It requires plugin 1.18.44 and
+Helper 1.4.7; bind and start must occur in one invocation.
+
 Version 1.9.22 adds `developer.local-task.diagnostics.read/1` for the signed-in
 expert owner. Use `local_task_diagnostics_api_demo.py --task-id ID` or
 `--invocation-id ID` to inspect redacted AIGC localization tasks across the

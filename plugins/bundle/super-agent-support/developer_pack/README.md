@@ -1,5 +1,9 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.34 bundles standard 2.56 and DevKit 1.9.23. Sealed Agents can
+bind verified files from a succeeded AIGC localization task directly into the
+next local task on the same device with `local.task.outputs.bind/1`.
+
 Version 1.10.33 bundles standard 2.55 and DevKit 1.9.22. Localization requires
 Helper 1.4.6; the new owner-scoped local task diagnostic API reports recorded
 Helper failure stages without exposing assets or local paths.
