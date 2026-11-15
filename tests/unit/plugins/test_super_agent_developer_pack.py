@@ -36,16 +36,16 @@ def test_developer_pack_archive_is_complete_and_reproducible():
     second, repeated = archive.build_archive(PLUGIN_ROOT)
     assert first == second
     assert metadata == repeated
-    assert metadata["version"] == "1.10.28"
+    assert metadata["version"] == "1.10.36"
     assert metadata["standard"] == {
         "id": "dclaw.super-agent-development",
-        "version": "2.50",
+        "version": "2.57",
     }
-    assert metadata["devkit_version"] == "1.9.18"
+    assert metadata["devkit_version"] == "1.9.24"
     assert metadata["server_source_required"] is False
     assert metadata["sha256"] == hashlib.sha256(first).hexdigest()
 
-    prefix = "dclaw-super-agent-developer-pack-1.10.28/"
+    prefix = "dclaw-super-agent-developer-pack-1.10.36/"
     with zipfile.ZipFile(io.BytesIO(first)) as package:
         names = set(package.namelist())
         manifest = json.loads(package.read(prefix + "PACKAGE-MANIFEST.json"))
@@ -72,7 +72,7 @@ def test_developer_pack_archive_is_complete_and_reproducible():
         "examples/minimal-local/example.json",
     }
     assert {prefix + name for name in expected} <= names
-    assert manifest["version"] == "1.10.28"
+    assert manifest["version"] == "1.10.36"
     assert "devkit/wheelhouse/cryptography-46.0.3" in checksums
     assert not any(
         "src/qwenpaw" in name
@@ -148,11 +148,11 @@ def test_upgrade_updates_devkit_version_and_immediately_validates(tmp_path):
     result = cli.upgrade_project(project, accept_standard=False)
 
     upgraded = json.loads(metadata_path.read_text(encoding="utf-8"))
-    assert upgraded["developer_pack_version"] == "1.10.28"
-    assert upgraded["standard"]["version"] == "2.50"
-    assert upgraded["devkit_version"] == "1.9.18"
+    assert upgraded["developer_pack_version"] == "1.10.36"
+    assert upgraded["standard"]["version"] == "2.57"
+    assert upgraded["devkit_version"] == "1.9.24"
     assert result["previous"]["devkit_version"] == "1.4.0"
-    assert result["current"]["devkit_version"] == "1.9.18"
+    assert result["current"]["devkit_version"] == "1.9.24"
     assert cli.release_gate(project)["status"] == "valid"
 
 
@@ -458,7 +458,9 @@ def test_required_local_task_declarations_pass_all_pack_commands(tmp_path):
     metadata_path = project / "project.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    for capability_id in ("local.task.start/1", "local.task.read/1"):
+    for capability_id in (
+        "local.runtime.prepare/1", "local.task.start/1", "local.task.read/1",
+    ):
         manifest["capabilities"].append({
             "capability_id": capability_id, "contract_version": "1",
         })
@@ -495,9 +497,9 @@ def test_required_local_task_declarations_pass_all_pack_commands(tmp_path):
         assert result.returncode == 0, (command, result.stdout, result.stderr)
 
     manifest["capabilities"].append({
-        "capability_id": "local.task.unknown/1", "contract_version": "1",
+        "capability_id": "local.runtime.unknown/1", "contract_version": "1",
     })
-    metadata["declared_platform_capabilities"].append("local.task.unknown/1")
+    metadata["declared_platform_capabilities"].append("local.runtime.unknown/1")
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
     with pytest.raises(cli.DeveloperPackError, match="local helper declaration"):
@@ -505,7 +507,12 @@ def test_required_local_task_declarations_pass_all_pack_commands(tmp_path):
 
 
 @pytest.mark.parametrize("mode", ["none", "optional"])
-def test_other_local_helper_modes_keep_their_declaration_boundary(tmp_path, mode):
+@pytest.mark.parametrize(
+    "capability_id", ["local.task.start/1", "local.runtime.prepare/1"],
+)
+def test_other_local_helper_modes_keep_their_declaration_boundary(
+    tmp_path, mode, capability_id,
+):
     cli = _module(f"developer_pack_{mode}_local_boundary_test", PACK_CLI)
     project = tmp_path / "agent"
     cli.initialize_project(project, "test-agent", "Test Agent", mode)
@@ -515,9 +522,9 @@ def test_other_local_helper_modes_keep_their_declaration_boundary(tmp_path, mode
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     manifest["capabilities"].append({
-        "capability_id": "local.task.start/1", "contract_version": "1",
+        "capability_id": capability_id, "contract_version": "1",
     })
-    metadata["declared_platform_capabilities"].append("local.task.start/1")
+    metadata["declared_platform_capabilities"].append(capability_id)
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
 

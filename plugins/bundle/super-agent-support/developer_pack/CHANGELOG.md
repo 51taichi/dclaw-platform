@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.36 - 2026-11-15
+
+- Fix `required` local Helper validation to accept published `local_execution`
+  capabilities such as `local.runtime.prepare/1`. Unknown capabilities remain
+  rejected. Standard 2.57, DevKit 1.9.24, and Helper 1.4.7 are unchanged.
+
 ## 1.10.35 - 2026-11-15
 
 - Bundles standard 2.57 and DevKit 1.9.24 with the sealed Host

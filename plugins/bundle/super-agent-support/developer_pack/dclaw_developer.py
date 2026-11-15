@@ -22,7 +22,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 
-PACK_VERSION = "1.10.35"
+PACK_VERSION = "1.10.36"
 STANDARD_ID = "dclaw.super-agent-development"
 STANDARD_VERSION = "2.57"
 DEVKIT_VERSION = "1.9.24"
@@ -1028,7 +1028,7 @@ def release_gate(project_path: Path) -> dict:
         catalog = _read_json(_devkit_root() / "capability-catalog.json")
         allowed_local.update(
             item["capability_id"] for item in catalog["capabilities"]
-            if item["capability_id"].startswith("local.task.")
+            if item["capability_id"].startswith("local.")
             and item["group"] == "local_execution"
         )
     if not required_local.issubset(local) or not local.issubset(allowed_local):

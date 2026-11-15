@@ -1,5 +1,10 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.36 accepts every published `local_execution` capability in
+`required` local Helper projects, including `local.runtime.prepare/1`.
+Unlisted local capabilities still fail validation. The standard and DevKit
+versions remain 2.57 and 1.9.24.
+
 Version 1.10.35 bundles standard 2.57 and DevKit 1.9.24. Newly authorized
 sealed Agents can call `local.runtime.prepare/1` through the trusted Host,
 then wait for the Helper's exact-version `ready` report before starting a
