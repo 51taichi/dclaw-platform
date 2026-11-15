@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.59`
+当前版本：`2.60`
 
 发布日期：`2026-11-16`
 
@@ -2423,6 +2423,11 @@ Skill 和专家发布前须对每条实际使用的路径同时验证：正确�
 以上是通用 Skill 的平台合同输入。Skill 维护方应在其 `references/capability-verification.md` 补 `/v2/` 的首错和终止根因区分，在 `scripts/runtime_diagnostics_with_login.py` 增加按官方 DevKit v2 Schema 查询和摘要，在相关脚本测试加入已恢复错误、最终阻断、`no_record`、越权及旧版回退案例。平台不直接覆盖 Skill 发布仓库，也不把单个专家的业务字段写成公共规则。
 
 ## 34. 版本记录
+
+### 2.60 - 2026-11-16
+
+- Support Plugin `1.18.49` 将 Helper 的 `aigc.assets.bind.result` 正式纳入设备入站关闭 Schema，修复 `local.task.outputs.bind/1` 成功或拒绝回包被网关丢弃导致的等待超时。既有任务、素材与专家请求合同不变。
+- 绑定设备等待上限为 150 秒，超时返回 `rejected / LOCAL_SOURCE.UNAVAILABLE`；人工文件选择器仍保持原 180 秒。DevKit `1.9.27` 和 Developer Pack `1.10.39` 同步设备消息 Schema 与回归用例，Helper `1.4.9` 无需更新。
 
 ### 2.59 - 2026-11-16
 

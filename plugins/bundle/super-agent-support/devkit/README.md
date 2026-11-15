@@ -1,5 +1,12 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.27 adds the closed `aigc.assets.bind.result` Helper reply to
+`schemas/super-agent-support-v1/device-message.schema.json`. A bound reply
+contains ordered slot/file metadata; a rejected reply carries one stable
+`LOCAL_SOURCE.*` code. Support plugin 1.18.49 accepts either result and bounds
+the device wait to 150 seconds. Helper 1.4.9 and the Agent bind request are
+unchanged.
+
 Version 1.9.26 documents the shared `dclaw.ffmpeg.task.plan` structured
 task. The Agent submits bound clips, trim/crop plan and output properties; the
 Helper builds FFmpeg arguments. It reuses the existing Host task contracts,

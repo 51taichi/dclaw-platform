@@ -1,19 +1,25 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
 import importlib.util
+import json
 from pathlib import Path
 import sys
 from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from super_agent.local_host import bind_local_service, bind_localized_task_outputs
 from store import StateStore
 from devkit.local_task_outputs_bind_api_demo import start_from_localized_outputs
 
 ROOT = Path(__file__).parents[1]
+DEVICE_MESSAGE_SCHEMA = json.loads(
+    (ROOT / "schemas/device-message.schema.json").read_text(encoding="utf-8"),
+)
 
 
 SOURCE = {
@@ -118,6 +124,86 @@ async def test_bind_device_response_is_atomic_and_version_gated(monkeypatch):
         await service.bind_localized_outputs(
             identity=identity, source_task=SOURCE,
             files=[SOURCE["result"]["files"][0]])
+
+
+@pytest.mark.asyncio
+async def test_bind_helper_reply_passes_gateway_schema_and_completes_request():
+    spec = importlib.util.spec_from_file_location(
+        "support_bind_reply", ROOT / "__init__.py",
+        submodule_search_locations=[str(ROOT)],
+    )
+    package = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = package
+    spec.loader.exec_module(package)
+    service_class = importlib.import_module("support_bind_reply.service").LocalExecutionService
+    service = object.__new__(service_class)
+
+    class DeviceSocket:
+        async def send_json(self, message):
+            sent.append(message)
+
+    sent = []
+    service._lock = asyncio.Lock()
+    service._connections = {"device": DeviceSocket()}
+    service._device_requests = {}
+    pending = asyncio.create_task(service._request_device("device", {"type": "aigc.assets.bind"}))
+    await asyncio.sleep(0)
+    reply = {
+        "type": "aigc.assets.bind.result", "request_id": sent[0]["request_id"],
+        "status": "bound", "files": [{"slot": "clip_01", "order": 0, "file": {
+            "local_file_ref": "lfr_" + "a" * 32,
+            "display_name": "clip_01.mp4", "mime_type": "video/mp4",
+            "size_bytes": 5, "device_id": "device", "last_modified_ms": 123,
+        }}],
+    }
+    validator = Draft202012Validator(DEVICE_MESSAGE_SCHEMA)
+    assert DEVICE_MESSAGE_SCHEMA == json.loads(
+        (ROOT / "devkit/schemas/super-agent-support-v1/device-message.schema.json")
+        .read_text(encoding="utf-8"),
+    )
+    validator.validate(reply)
+    await service.handle_device_message("device", "user", reply)
+    assert await asyncio.wait_for(pending, timeout=1) == reply
+    assert service._device_requests == {}
+
+    rejected = {"type": "aigc.assets.bind.result", "request_id": reply["request_id"],
+                "status": "rejected", "error_code": "LOCAL_SOURCE.FILE_CHANGED"}
+    validator.validate(rejected)
+    for invalid in (
+        reply | {"unexpected": True},
+        reply | {"status": "rejected"},
+        rejected | {"error_code": "INTERNAL_EXCEPTION"},
+        rejected | {"files": []},
+    ):
+        assert not validator.is_valid(invalid)
+
+
+@pytest.mark.asyncio
+async def test_bind_device_timeout_returns_stable_rejection(monkeypatch):
+    spec = importlib.util.spec_from_file_location(
+        "support_bind_timeout", ROOT / "__init__.py",
+        submodule_search_locations=[str(ROOT)],
+    )
+    package = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = package
+    spec.loader.exec_module(package)
+    module = importlib.import_module("support_bind_timeout.service")
+    service = object.__new__(module.LocalExecutionService)
+    monkeypatch.setattr(module, "PRIOR_OUTPUT_BIND_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(service, "_require_file_device", lambda user, device_id: {
+        "device_id": "device", "runner_version": "1.4.9",
+    })
+
+    async def no_reply(device_id, message):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(service, "_request_device", no_reply)
+    result = await service.bind_localized_outputs(
+        identity={"t": "tenant", "u": "user", "s": "session", "a": "agent",
+                  "g": "install", "r": "release", "i": "invocation"},
+        source_task=SOURCE, files=[SOURCE["result"]["files"][0]],
+    )
+    assert result == {"status": "rejected", "error_code": "LOCAL_SOURCE.UNAVAILABLE"}
 
 
 def test_prior_reference_batch_rolls_back_on_conflict(tmp_path):

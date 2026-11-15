@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.39 - 2026-11-16
+
+- Bundle standard 2.60 and DevKit 1.9.27 with the closed Helper bind-result
+  message schema. Support plugin 1.18.49 consumes the result and bounds the
+  device wait; no Agent request or Helper binary update is required.
+
 ## 1.10.38 - 2026-11-16
 
 - Bundle standard 2.59 and DevKit 1.9.26 with the shared structured video

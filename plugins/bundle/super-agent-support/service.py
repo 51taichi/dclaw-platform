@@ -43,6 +43,7 @@ MIME_TYPE_PATTERN = re.compile(
     r"^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+*-]+$",
 )
 DEVICE_REQUEST_TIMEOUT_SECONDS = 180
+PRIOR_OUTPUT_BIND_TIMEOUT_SECONDS = 150
 FILE_CAPABILITY_ID = "interaction.file.select/1"
 
 
@@ -782,17 +783,23 @@ class LocalExecutionService:
         device = self._require_file_device(identity["u"], source_task["device_id"])
         if not _runner_supports(device, PRIOR_OUTPUT_BIND_MIN_RUNNER_VERSION):
             raise ERRORS["DEVICE_NOT_READY"]
-        response = await self._request_device(
-            device["device_id"],
-            {
-                "type": "aigc.assets.bind",
-                "protocol_version": PROTOCOL_VERSION,
-                "source_task_id": source_task["task_id"],
-                "source_agent_name": source_task["agent_name"],
-                "files": files,
-                "scope": self._scope(identity),
-            },
-        )
+        try:
+            response = await asyncio.wait_for(
+                self._request_device(
+                    device["device_id"],
+                    {
+                        "type": "aigc.assets.bind",
+                        "protocol_version": PROTOCOL_VERSION,
+                        "source_task_id": source_task["task_id"],
+                        "source_agent_name": source_task["agent_name"],
+                        "files": files,
+                        "scope": self._scope(identity),
+                    },
+                ),
+                timeout=PRIOR_OUTPUT_BIND_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            return {"status": "rejected", "error_code": "LOCAL_SOURCE.UNAVAILABLE"}
         if response.get("status") == "rejected":
             code = response.get("error_code")
             allowed = {

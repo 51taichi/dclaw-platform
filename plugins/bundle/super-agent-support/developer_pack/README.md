@@ -1,5 +1,10 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.39 bundles standard 2.60 and DevKit 1.9.27. Support plugin
+1.18.49 accepts the Helper's closed `aigc.assets.bind.result` reply for
+`local.task.outputs.bind/1` and returns a stable failure on device timeout.
+The Agent request and Helper binary are unchanged.
+
 Version 1.10.38 bundles standard 2.59 and DevKit 1.9.26 with the public
 `dclaw.ffmpeg.task.plan` task contract, Schemas and Host API demo.
 Agents submit a structured timeline with trusted file bindings; Helper builds

@@ -3,7 +3,7 @@
 | Component | Supported version |
 |---|---|
 | Developer pack | 1.0.x through 1.10.x |
-| Development standard | 2.1 through 2.59 |
+| Development standard | 2.1 through 2.60 |
 | Super Agent DevKit | 1.2.x through 1.9.x |
 | Super Expert manifest | 3 |
 | Runtime / runtime host | 1 |
@@ -44,6 +44,7 @@
 | Support plugin for developer pack >= 1.10.32 download and public AIGC material URLs | >= 1.18.40 |
 | Support plugin for local task diagnostics and Helper 1.4.6 localization | >= 1.18.43 |
 | Support plugin for prior localized file bindings and Helper 1.4.7 | >= 1.18.44 |
+| Support plugin for prior localized file binding reply handling | >= 1.18.49 |
 | Support plugin for public video timeline render and Helper 1.4.9 | >= 1.18.48 |
 | Support plugin for sealed Host local runtime preparation | >= 1.18.45 |
 | Support plugin for `runtime.failure.read/1` | >= 1.18.12 |
