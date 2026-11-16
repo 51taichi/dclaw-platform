@@ -672,3 +672,42 @@ def test_list_is_scoped_and_preserves_creation_order(service):
         first.interaction_id,
         second.interaction_id,
     ]
+
+
+def test_list_for_conversations_reads_across_installations_once(service, monkeypatch):
+    first = _create(
+        service,
+        _request("first", input_policy="concurrent"),
+        "one",
+    )
+    foreign_installation = service.create(
+        installation_id="install-2",
+        conversation_id="chat-1",
+        request=_request("foreign", input_policy="concurrent"),
+        idempotency_key="foreign",
+    )
+    service.create(
+        installation_id="install-3",
+        conversation_id="other-chat",
+        request=_request("other", input_policy="concurrent"),
+        idempotency_key="other",
+    )
+    read_count = 0
+    original_read = service.repository._read
+
+    def counted_read():
+        nonlocal read_count
+        read_count += 1
+        return original_read()
+
+    monkeypatch.setattr(service.repository, "_read", counted_read)
+
+    cards = service.list_for_conversations(
+        conversation_ids={"chat-1", "session-alias"},
+    )
+
+    assert [item.interaction_id for item in cards] == [
+        first.interaction_id,
+        foreign_installation.interaction_id,
+    ]
+    assert read_count == 1

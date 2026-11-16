@@ -541,6 +541,26 @@ class InteractionCardRepository:
                 self._write(document)
             return result
 
+    def list_for_conversations(
+        self,
+        *,
+        conversation_ids: set[str],
+        now: datetime,
+    ) -> tuple[InteractionCardRecord, ...]:
+        """Read matching cards once; authorization remains the caller's job."""
+        now = _utc(now)
+        with self._lock, self._file_lock.hold(self.path):
+            document = self._read()
+            dirty = self._expire(document, now)
+            result = tuple(
+                card
+                for card in document.cards.values()
+                if card.binding.conversation_id in conversation_ids
+            )
+            if dirty:
+                self._write(document)
+            return result
+
     def resolve_for_authorization(
         self,
         interaction_id: str,
@@ -990,6 +1010,16 @@ class InteractionService:
     ) -> tuple[InteractionCardRecord, ...]:
         return self.repository.list_owned(
             installation_id=installation_id,
+            conversation_ids=set(conversation_ids),
+            now=self.clock(),
+        )
+
+    def list_for_conversations(
+        self,
+        *,
+        conversation_ids: Iterable[str],
+    ) -> tuple[InteractionCardRecord, ...]:
+        return self.repository.list_for_conversations(
             conversation_ids=set(conversation_ids),
             now=self.clock(),
         )

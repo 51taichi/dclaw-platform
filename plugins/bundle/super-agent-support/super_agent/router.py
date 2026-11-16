@@ -632,16 +632,21 @@ def list_super_expert_interactions(
     if service.interactions is None:
         return {"interactions": []}
     tenant_id = str(getattr(request.state, "tenant_id", "local") or "local")
-    by_id = {}
-    for grant in service.grant_repository.list_grants():
-        if grant.tenant_id != tenant_id:
-            continue
-        for card in service.interactions.list_owned(
-            installation_id=grant.installation_id,
-            conversation_ids=aliases,
-        ):
-            by_id[card.interaction_id] = card
-    cards = sorted(by_id.values(), key=lambda item: item.created_at)
+    authorized_installations = {
+        grant.installation_id
+        for grant in service.grant_repository.list_grants()
+        if grant.tenant_id == tenant_id
+    }
+    cards = sorted(
+        (
+            card
+            for card in service.interactions.list_for_conversations(
+                conversation_ids=aliases,
+            )
+            if card.binding.installation_id in authorized_installations
+        ),
+        key=lambda item: item.created_at,
+    )
     return {
         "interactions": [item.model_dump(mode="json") for item in cards],
     }

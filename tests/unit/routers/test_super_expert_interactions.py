@@ -385,6 +385,12 @@ async def test_restore_and_submit_routes_are_scoped_and_idempotent(
         request=_request(),
         idempotency_key="create-1",
     )
+    service.interactions.create(
+        installation_id="foreign-installation",
+        conversation_id="conversation-1",
+        request=_question_request("foreign-card"),
+        idempotency_key="create-foreign",
+    )
     monkeypatch.setattr(
         router_module,
         "get_super_expert_platform_service",
