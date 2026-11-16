@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.10.41 - 2026-11-16
+
+- Bundle standard 2.62 and DevKit 1.9.29 with owner-scoped local task
+  diagnostics v2 for all local capabilities. Historical exception types are
+  mapped only when safely recorded; missing stages remain explicit.
+- Support plugin 1.18.52 publishes Helper 1.4.12, which records safe failure
+  stages for task start and continuation. The v1 localization API is unchanged.
+
 ## 1.10.40 - 2026-11-16
 
 - Bundle standard 2.61 and DevKit 1.9.28 with `plan_version=2` complete-file

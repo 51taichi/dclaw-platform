@@ -1,5 +1,10 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.41 bundles standard 2.62 and DevKit 1.9.29. Developer local task
+diagnostics v2 covers every authorized local capability, including public
+FFmpeg tasks, while preserving the AIGC-only v1 endpoint. Helper 1.4.12
+records safe stages for new task failures; older missing fields stay unknown.
+
 Version 1.10.40 bundles standard 2.61 and DevKit 1.9.28. Public video plan
 version 2 uses full bound clips when trim fields are omitted and accepts
 open-ended or bounded explicit trims. Support plugin 1.18.50 and Helper 1.4.10 are needed for v2.

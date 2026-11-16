@@ -19,7 +19,7 @@ internal sealed record HelperConfig(
 
 internal static class HelperMetadata
 {
-    internal const string Version = "1.4.11";
+    internal const string Version = "1.4.12";
     internal const string ProtocolVersion = "2";
 }
 
@@ -797,6 +797,7 @@ internal sealed class HelperRuntime
         await Task.Yield();
         var task = continuation ? message : message.GetProperty("task");
         var taskId = task.GetProperty("task_id").GetString()!;
+        var phase = "helper_receive";
         string? taskRoot = null;
         string? agentName = null;
         string? capabilityId = null;
@@ -822,6 +823,7 @@ internal sealed class HelperRuntime
                     && bindings.ValueKind == JsonValueKind.Object
                     && bindings.EnumerateObject().Any())
                 {
+                    phase = "file_binding";
                     await StageLocalFileBindingsAsync(
                         taskRoot,
                         taskInput,
@@ -829,6 +831,7 @@ internal sealed class HelperRuntime
                         task.GetProperty("scope"),
                         cancellationToken);
                 }
+                phase = "input_write";
                 await File.WriteAllTextAsync(
                     Path.Combine(taskRoot, "input.json"),
                     taskInput.ToJsonString(JsonOptions.Default),
@@ -846,6 +849,7 @@ internal sealed class HelperRuntime
                     && bindings.ValueKind == JsonValueKind.Object
                     && bindings.EnumerateObject().Any())
                 {
+                    phase = "file_binding";
                     await StageLocalFileBindingsAsync(
                         taskRoot,
                         continuationInput,
@@ -853,11 +857,13 @@ internal sealed class HelperRuntime
                         message.GetProperty("scope"),
                         cancellationToken);
                 }
+                phase = "input_write";
                 await File.WriteAllTextAsync(
                     Path.Combine(taskRoot, "continuation.json"),
                     continuationInput.ToJsonString(JsonOptions.Default),
                     cancellationToken);
             }
+            phase = "capability_prepare";
             await TaskHistory.TryWriteAsync(
                 taskRoot,
                 taskId,
@@ -866,7 +872,10 @@ internal sealed class HelperRuntime
                 "running",
                 null,
                 cancellationToken);
-            await SendEventAsync(taskId, "started", new JsonObject(), cancellationToken);
+            await SendEventAsync(taskId, "started", new JsonObject
+            {
+                ["helper_version"] = HelperMetadata.Version,
+            }, cancellationToken);
             var packageRoot = descriptorPath is null ? null : Path.GetDirectoryName(descriptorPath)!;
             var limits = descriptor?.GetProperty("limits");
             var maxRuntime = TimeSpan.FromSeconds(builtInFfmpeg ? 3600
@@ -907,6 +916,7 @@ internal sealed class HelperRuntime
                 start.ArgumentList.Add(taskRoot);
                 if (continuation) start.ArgumentList.Add("--continue");
             }
+            phase = "capability_execute";
             using var process = Process.Start(start) ?? throw new InvalidOperationException("capability did not start");
             _processes[taskId] = process;
             if (_cancelled.ContainsKey(taskId) && !process.HasExited)
@@ -944,26 +954,35 @@ internal sealed class HelperRuntime
             }
             else if (resourceMonitor.Result is string resourceError)
             {
+                phase = "resource_limit";
                 await TaskHistory.TryWriteAsync(
                     taskRoot, taskId, agentName, capabilityId,
                     "failed", resourceError, cancellationToken);
                 await SendEventAsync(taskId, "failed", new JsonObject
                 {
                     ["code"] = resourceError,
+                    ["phase"] = phase,
+                    ["category"] = "resource_limit",
+                    ["helper_version"] = HelperMetadata.Version,
                 }, cancellationToken);
             }
             else if (OutputSize(taskRoot) > maxOutputBytes)
             {
+                phase = "resource_limit";
                 await TaskHistory.TryWriteAsync(
                     taskRoot, taskId, agentName, capabilityId,
                     "failed", "RUNNER.OUTPUT_LIMIT_EXCEEDED", cancellationToken);
                 await SendEventAsync(taskId, "failed", new JsonObject
                 {
                     ["code"] = "RUNNER.OUTPUT_LIMIT_EXCEEDED",
+                    ["phase"] = phase,
+                    ["category"] = "resource_limit",
+                    ["helper_version"] = HelperMetadata.Version,
                 }, cancellationToken);
             }
             else if (process.ExitCode == 0)
             {
+                phase = "result_registration";
                 await RegisterManagedArtifactsAsync(taskId, taskRoot, cancellationToken);
                 await TaskHistory.TryWriteAsync(
                     taskRoot, taskId, agentName, capabilityId,
@@ -986,6 +1005,9 @@ internal sealed class HelperRuntime
                 {
                     ["code"] = "CAPABILITY.PROCESS_FAILED",
                     ["exit_code"] = process.ExitCode,
+                    ["phase"] = phase,
+                    ["category"] = "capability_execution",
+                    ["helper_version"] = HelperMetadata.Version,
                 };
                 await SendEventAsync(taskId, "failed", error, cancellationToken);
             }
@@ -999,6 +1021,9 @@ internal sealed class HelperRuntime
             await SendEventAsync(taskId, "failed", new JsonObject
             {
                 ["code"] = exception.Code,
+                ["phase"] = phase,
+                ["category"] = "file_binding",
+                ["helper_version"] = HelperMetadata.Version,
             }, cancellationToken);
         }
         catch (Exception exception)
@@ -1011,6 +1036,15 @@ internal sealed class HelperRuntime
             {
                 ["code"] = "RUNNER.EXECUTION_FAILED",
                 ["message"] = exception.GetType().Name,
+                ["phase"] = phase,
+                ["category"] = exception switch
+                {
+                    ObjectDisposedException => "json_lifetime",
+                    JsonException or KeyNotFoundException or InvalidDataException => "invalid_input",
+                    IOException => "file_io",
+                    _ => "helper_internal",
+                },
+                ["helper_version"] = HelperMetadata.Version,
             };
             await SendEventAsync(taskId, "failed", error, cancellationToken);
         }

@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.61`
+当前版本：`2.62`
 
 发布日期：`2026-11-16`
 
@@ -2414,6 +2414,8 @@ AIGC 任务卡与问答交互卡是不同合同，不能用一者的创建回执
 
 普通开发账号可查询本专家的本地化任务：`GET /api/user/super-expert-publishing/local-task-diagnostics/v1/tasks/{task_id}?agent_id={agent_id}`，也可将路径中的 `tasks/{task_id}` 换为 `invocations/{invocation_id}`。正式合同为 `developer.local-task.diagnostics.read/1`，DevKit `1.9.22` 提供关闭的请求/响应 Schema 与 `local_task_diagnostics_api_demo.py`。接口按登录开发者的专家归属、原客户会话的租户/用户/专家身份、来源安装的 Release 授权逐项验证；同专家旧安装可只读定位，越权、无记录和超出 30 天留存统一返回 `no_record`，每账号每分钟限 30 次并记脱敏审计。返回 Host 受理/派发、Helper 接收、执行时留存的 Helper 版本、当前设备在线状态、任务终态和首错的安全分类。当前在线状态不代表执行时在线。历史未上报的首错细节明确为 `historical_detail_not_recorded`，不得从通用失败码推测具体异常；该接口供通用 Skill 的开发侧使用，不交给运行中的专家包。
 
+自插件 `1.18.52` 起，普通开发账号可使用 `developer.local-task.diagnostics.read/2` 查询本专家**所有**本地任务，包括平台公共 FFmpeg 和获授权的私有能力包。路径为 `/api/user/super-expert-publishing/local-task-diagnostics/v2/tasks/{task_id}?agent_id={agent_id}` 或 `/v2/invocations/{invocation_id}`；v1 的本地化专用响应保持不变。v2 复用上述专家归属、原会话租户/用户/专家、来源安装 Release 授权、跨安装只读、30 天留存、每分钟 30 次限流及脱敏审计。只返回能力 ID、受理/派发/Helper 接收、任务终态、稳定错误码、阶段和安全类别，以及每个阶段/类别是否真实留存；不返回请求参数、文件引用、素材、下载地址、本机路径、异常原文、栈或令牌。旧任务若只留存允许识别的异常类型，可给出类别并标记 `category_evidence=recorded`，但没有阶段时必须给 `first_failure_phase=null` 和 `phase_evidence=historical_detail_not_recorded`。Helper `1.4.12` 为新 `task.start`/`task.continue` 故障记录固定阶段、类别和执行版本。正式关闭 Schema、调用示例在 DevKit `1.9.29` 的 `schemas/local-task-diagnostics-v2/`、`local_task_diagnostics_api_demo.py --api-version 2`，随 Developer Pack `1.10.41` 分发；此诊断接口不授予运行中的专家包。
+
 新资产的非零大小和非空 SHA-256 必须与 Helper 下载结果一致。历史资产若没有服务端 SHA-256，Helper 仍必须计算并回报下载后摘要，但该值只是本次下载证据，不能声称已与服务端权威摘要比对；若历史资产已有非零大小，大小仍须一致。
 
 正式机器合同位于 DevKit `schemas/aigc-task-assets-v1/`：`list-request.schema.json`、`list-response.schema.json` 和 `localize-request.schema.json`；本地化响应复用 `schemas/local-task-host-v1/receipt.schema.json`。完整调用示例位于 `examples/aigc-workflow-v1/README.md`，能力与操作入口分别以 `capability-catalog.json` 和 `operation-catalog.json` 为准。开发方不得从本文复制字段替代目标实例 DevKit Schema。
@@ -2427,6 +2429,11 @@ Skill 和专家发布前须对每条实际使用的路径同时验证：正确�
 以上是通用 Skill 的平台合同输入。Skill 维护方应在其 `references/capability-verification.md` 补 `/v2/` 的首错和终止根因区分，在 `scripts/runtime_diagnostics_with_login.py` 增加按官方 DevKit v2 Schema 查询和摘要，在相关脚本测试加入已恢复错误、最终阻断、`no_record`、越权及旧版回退案例。平台不直接覆盖 Skill 发布仓库，也不把单个专家的业务字段写成公共规则。
 
 ## 34. 版本记录
+
+### 2.62 - 2026-11-16
+
+- Support Plugin `1.18.52` 将本地任务开发者诊断扩展为独立 v2 合同，覆盖所有获授权本地能力；原 v1 本地化专用合同不变。历史已记录的安全异常类别可回读，未记录的首错阶段不得推断。
+- Helper `1.4.12` 为新任务启动/继续失败记录固定阶段、类别和执行版本。DevKit `1.9.29`、Developer Pack `1.10.41` 同步关闭 Schema、示例、权限和留存规则；专家业务调用合同不变。
 
 ### 2.61 - 2026-11-16
 

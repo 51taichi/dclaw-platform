@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import importlib.util
+import io
 import json
 import sys
 from pathlib import Path
@@ -14,20 +15,24 @@ from jsonschema import FormatChecker, validate
 import pytest
 
 from store import StateStore
+from devkit.local_task_diagnostics_api_demo import read as read_demo
 from super_agent.publication import PublisherPublication
 from super_agent.local_task_diagnostics import (
-    read_local_task_diagnostics, sanitize_localize_event,
+    read_local_task_diagnostics, read_local_task_diagnostics_v2,
+    sanitize_localize_event,
 )
 
 
 ROOT = Path(__file__).parents[1]
 SCHEMA = json.loads((ROOT / "devkit/schemas/local-task-diagnostics-v1/response.schema.json").read_text())
+SCHEMA_V2 = json.loads((ROOT / "devkit/schemas/local-task-diagnostics-v2/response.schema.json").read_text())
 
 
-def _task(store, *, agent="comic", tenant="local", installation="old", invocation="a" * 32):
+def _task(store, *, agent="comic", tenant="local", installation="old",
+          invocation="a" * 32, capability="aigc.task.assets.localize/1"):
     return store.create_task(
         user_id="customer", agent_id=agent, agent_name=agent,
-        invocation_id=invocation, capability_id="aigc.task.assets.localize/1",
+        invocation_id=invocation, capability_id=capability,
         task_input={"material_task_id": "private", "download_url": "https://private.example/secret"},
         idempotency_key=installation + invocation, device_id="device",
         max_concurrency=4, tenant_id=tenant, session_id="session",
@@ -35,8 +40,11 @@ def _task(store, *, agent="comic", tenant="local", installation="old", invocatio
     )[0]
 
 
-def _read(store, reference, *, reference_type="task", owner=None, grants=None, now=None):
-    return read_local_task_diagnostics(
+def _read(store, reference, *, reference_type="task", owner=None, grants=None,
+          now=None, version=1):
+    reader = (read_local_task_diagnostics_v2 if version == 2
+              else read_local_task_diagnostics)
+    return reader(
         agent_id="comic", tenant_id="local", reference=reference,
         reference_type=reference_type, grants=grants or SimpleNamespace(
             list_grants=lambda: [SimpleNamespace(
@@ -118,6 +126,87 @@ def test_local_task_diagnostics_legacy_and_scope_denial(tmp_path):
     assert _read(store, task["task_id"], now=task["created_at"] + 31 * 86400)["status"] == "no_record"
 
 
+def test_v2_reports_generic_helper_failure_without_inventing_phase(tmp_path):
+    store = StateStore(tmp_path / "tasks.db")
+    task = _task(store, capability="dclaw.ffmpeg.task.plan")
+    store.append_event(task["task_id"], 1, "failed", {
+        "code": "RUNNER.EXECUTION_FAILED", "message": "ObjectDisposedException",
+        "path": "C:\\private\\source.mp4", "url": "https://private.example/secret",
+    })
+    store.update_task(task["task_id"], status="failed", error={
+        "code": "RUNNER.EXECUTION_FAILED", "message": "ObjectDisposedException",
+    })
+    assert _read(store, task["task_id"])["status"] == "no_record"
+    result = _read(store, task["task_id"], version=2)
+    validate(result, SCHEMA_V2, format_checker=FormatChecker())
+    item = result["tasks"][0]
+    assert item["capability"] == "dclaw.ffmpeg.task.plan"
+    assert item["error_code"] == "RUNNER.EXECUTION_FAILED"
+    assert item["exception_category"] == "json_lifetime"
+    assert item["category_evidence"] == "recorded"
+    assert item["phase_evidence"] == "historical_detail_not_recorded"
+    assert item["first_failure_phase"] is None
+    assert item["responsibility"] == "platform"
+    assert item["recovery_action"] == "upgrade_helper"
+    assert "private.example" not in json.dumps(result)
+    assert "source.mp4" not in json.dumps(result)
+    assert "ObjectDisposedException" not in json.dumps(result)
+    assert _read(store, task["task_id"], version=2, owner=lambda _: {
+        "tenant_id": "local", "agent_id": "comic", "user_id": "other",
+    })["status"] == "no_record"
+    assert _read(store, task["task_id"], version=2, grants=SimpleNamespace(
+        list_grants=lambda: [],
+    ))["status"] == "no_record"
+    assert _read(store, task["task_id"], version=2,
+                 now=task["created_at"] + 31 * 86400)["status"] == "no_record"
+    foreign = _task(store, agent="another", installation="new",
+                    capability="dclaw.ffmpeg.task.plan")
+    assert _read(store, foreign["task_id"], version=2)["status"] == "no_record"
+
+
+def test_v2_reports_new_helper_stage_and_version(tmp_path):
+    store = StateStore(tmp_path / "tasks.db")
+    task = _task(store, capability="dclaw.ffmpeg.task.plan")
+    payload = {
+        "code": "LOCAL_FILE_REF.FILE_MISSING", "phase": "file_binding",
+        "category": "file_binding", "helper_version": "1.4.12",
+    }
+    validate({
+        "type": "task.event", "task_id": task["task_id"], "sequence": 1,
+        "event_type": "failed", "payload": payload,
+    }, json.loads((ROOT / "schemas/device-message.schema.json").read_text()))
+    store.append_event(task["task_id"], 1, "failed", payload)
+    store.update_task(task["task_id"], status="failed", error={
+        "code": "LOCAL_FILE_REF.FILE_MISSING",
+    })
+    result = _read(store, "a" * 32, reference_type="invocation", version=2)
+    validate(result, SCHEMA_V2, format_checker=FormatChecker())
+    item = result["tasks"][0]
+    assert item["first_failure_phase"] == "file_binding"
+    assert item["exception_category"] == "file_binding"
+    assert item["responsibility"] == "environment"
+    assert item["recovery_action"] == "rebind_files"
+    assert item["phase_evidence"] == item["category_evidence"] == "recorded"
+    assert item["helper_version"] == "1.4.12"
+
+
+def test_v2_devkit_demo_uses_formal_route_and_schema(tmp_path, monkeypatch):
+    store = StateStore(tmp_path / "tasks.db")
+    task = _task(store, capability="dclaw.ffmpeg.task.plan")
+    result = _read(store, task["task_id"], version=2)
+
+    def respond(request, timeout):
+        assert request.full_url.endswith(
+            f"/local-task-diagnostics/v2/tasks/{task['task_id']}?agent_id=comic"
+        )
+        assert timeout == 20
+        return io.BytesIO(json.dumps(result).encode())
+
+    monkeypatch.setattr("devkit.local_task_diagnostics_api_demo.urlopen", respond)
+    assert read_demo("https://dclaw.example", "comic", task["task_id"],
+                     "tasks", "test-token", 2) == result
+
+
 def test_local_task_diagnostic_route_requires_owned_expert(tmp_path, monkeypatch):
     store = StateStore(tmp_path / "tasks.db")
     task = _task(store)
@@ -152,6 +241,9 @@ def test_local_task_diagnostic_route_requires_owned_expert(tmp_path, monkeypatch
     path = f"/local-task-diagnostics/v1/tasks/{task['task_id']}"
     assert client.get(path, params={"agent_id": "foreign"}).status_code == 404
     assert client.get(path, params={"agent_id": "comic"}).json()["tasks"][0]["task_id"] == task["task_id"]
+    v2_path = f"/local-task-diagnostics/v2/tasks/{task['task_id']}"
+    assert client.get(v2_path, params={"agent_id": "foreign"}).status_code == 404
+    assert client.get(v2_path, params={"agent_id": "comic"}).json()["contract"] == "developer.local-task.diagnostics.read/2"
     assert client.get("/local-task-diagnostics/v1/tasks/invalid", params={"agent_id": "comic"}).status_code == 422
 
 

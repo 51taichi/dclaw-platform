@@ -271,17 +271,22 @@ class PublisherPublication:
 
         async def local_task_diagnostic(
             reference: str, reference_type: str, agent_id: str, request: Request,
+            version: int = 1,
         ) -> dict[str, Any]:
             from .composition import resolve_event_scope
             from .local_host import read_diagnostic_device, read_diagnostic_tasks
-            from .local_task_diagnostics import read_local_task_diagnostics
+            from .local_task_diagnostics import (
+                read_local_task_diagnostics, read_local_task_diagnostics_v2,
+            )
 
             tenant_id, user_id = _actor(request)
             if self.repository.agent_owner(agent_id) != (tenant_id, user_id):
                 raise HTTPException(status_code=404, detail="diagnostic not found")
             self._limit_diagnostic_reads(tenant_id, user_id)
             try:
-                result = read_local_task_diagnostics(
+                reader = (read_local_task_diagnostics_v2 if version == 2
+                          else read_local_task_diagnostics)
+                result = reader(
                     agent_id=agent_id, tenant_id=tenant_id,
                     reference=reference, reference_type=reference_type,
                     grants=self.handler.grant_repository,
@@ -311,6 +316,18 @@ class PublisherPublication:
             invocation_id: str, agent_id: str, request: Request,
         ) -> dict[str, Any]:
             return await local_task_diagnostic(invocation_id, "invocation", agent_id, request)
+
+        @self.router.get("/local-task-diagnostics/v2/tasks/{task_id}")
+        async def read_any_local_task_by_id(
+            task_id: str, agent_id: str, request: Request,
+        ) -> dict[str, Any]:
+            return await local_task_diagnostic(task_id, "task", agent_id, request, 2)
+
+        @self.router.get("/local-task-diagnostics/v2/invocations/{invocation_id}")
+        async def read_any_local_task_by_invocation(
+            invocation_id: str, agent_id: str, request: Request,
+        ) -> dict[str, Any]:
+            return await local_task_diagnostic(invocation_id, "invocation", agent_id, request, 2)
 
         @self.router.get("/runtime-diagnostics/v4/references/{invocation_id}")
         async def read_diagnostic_reference_v4(

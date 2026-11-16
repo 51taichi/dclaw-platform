@@ -12,20 +12,21 @@ from urllib.request import Request, urlopen
 from jsonschema import Draft202012Validator, FormatChecker
 
 
-SCHEMA = Path(__file__).parent / "schemas/local-task-diagnostics-v1/response.schema.json"
-
-
-def read(base_url: str, agent_id: str, reference: str, kind: str, token: str) -> dict:
-    if not base_url.startswith("https://") or kind not in {"tasks", "invocations"}:
+def read(base_url: str, agent_id: str, reference: str, kind: str, token: str,
+         api_version: int = 1) -> dict:
+    if (not base_url.startswith("https://") or kind not in {"tasks", "invocations"}
+            or api_version not in {1, 2}):
         raise ValueError("HTTPS endpoint and task or invocation kind required")
-    path = (f"/api/user/super-expert-publishing/local-task-diagnostics/v1/"
+    path = (f"/api/user/super-expert-publishing/local-task-diagnostics/v{api_version}/"
             f"{kind}/{quote(reference, safe='')}?{urlencode({'agent_id': agent_id})}")
     request = Request(base_url.rstrip("/") + path, headers={
         "Authorization": f"Bearer {token}", "Accept": "application/json",
     })
     with urlopen(request, timeout=20) as response:
         value = json.load(response)
-    schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+    schema_path = (Path(__file__).parent
+                   / f"schemas/local-task-diagnostics-v{api_version}/response.schema.json")
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
     Draft202012Validator(schema, format_checker=FormatChecker()).validate(value)
     return value
 
@@ -34,6 +35,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Read redacted local task diagnostics")
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--agent-id", required=True)
+    parser.add_argument("--api-version", type=int, choices=(1, 2), default=1)
     choice = parser.add_mutually_exclusive_group(required=True)
     choice.add_argument("--task-id")
     choice.add_argument("--invocation-id")
@@ -45,6 +47,7 @@ def main() -> None:
         args.base_url, args.agent_id,
         args.task_id or args.invocation_id,
         "tasks" if args.task_id else "invocations", token,
+        args.api_version,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

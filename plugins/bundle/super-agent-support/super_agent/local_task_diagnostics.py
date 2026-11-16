@@ -12,8 +12,16 @@ from typing import Any, Callable
 RETENTION_DAYS = 30
 _REFERENCE = re.compile(r"[0-9a-f]{32}\Z")
 _CODE = re.compile(r"[A-Z][A-Z0-9_.]{0,63}\Z")
-_PHASES = {"helper_receive", "download_prepare", "download_transfer", "manifest_write", "completion_event"}
-_CATEGORIES = {"json_lifetime", "invalid_input", "network_failure", "asset_validation", "file_io", "helper_internal"}
+_PHASES = {
+    "helper_receive", "download_prepare", "download_transfer", "manifest_write",
+    "completion_event", "file_binding", "input_write", "capability_prepare",
+    "capability_execute", "resource_limit", "result_registration", "host_dispatch",
+}
+_CATEGORIES = {
+    "json_lifetime", "invalid_input", "network_failure", "asset_validation",
+    "file_io", "helper_internal", "file_binding", "capability_execution",
+    "resource_limit",
+}
 _VERSION = re.compile(r"[0-9]+(?:\.[0-9]+){1,3}\Z")
 
 
@@ -56,7 +64,12 @@ def _failure(error: Any) -> tuple[str | None, str | None, str | None]:
     )
 
 
-def _responsibility(category: str | None) -> tuple[str, str]:
+def _responsibility(category: str | None, code: str | None = None) -> tuple[str, str]:
+    if category == "file_binding" and code in {
+        "LOCAL_FILE_REF.FILE_MISSING", "LOCAL_FILE_REF.FILE_CHANGED",
+        "LOCAL_FILE_REF.EXPIRED", "LOCAL_FILE_REF.REVOKED",
+    }:
+        return "environment", "rebind_files"
     return {
         "json_lifetime": ("platform", "upgrade_helper"),
         "invalid_input": ("platform", "contact_platform_with_task_id"),
@@ -73,13 +86,15 @@ def read_local_task_diagnostics(
     task_lookup: Callable[..., list[dict[str, Any]] | None],
     device_lookup: Callable[[str, str], dict[str, Any] | None],
     now: int | None = None,
+    include_all_capabilities: bool = False,
 ) -> dict[str, Any]:
     """Return only task and Helper evidence from the authorized expert's sessions."""
     if reference_type not in {"task", "invocation"} or not _REFERENCE.fullmatch(reference):
         raise ValueError("invalid local diagnostic reference")
     current = int(time.time()) if now is None else now
     response = {
-        "contract": "developer.local-task.diagnostics.read/1",
+        "contract": ("developer.local-task.diagnostics.read/2"
+                     if include_all_capabilities else "developer.local-task.diagnostics.read/1"),
         "status": "no_record",
         "retention_days": RETENTION_DAYS,
         "tasks": [],
@@ -97,7 +112,8 @@ def read_local_task_diagnostics(
     }
     for record in records:
         if (
-            record["capability_id"] != "aigc.task.assets.localize/1"
+            (not include_all_capabilities
+             and record["capability_id"] != "aigc.task.assets.localize/1")
             or (record["installation_id"], record["release_id"]) not in allowed
         ):
             continue
@@ -113,8 +129,15 @@ def read_local_task_diagnostics(
         failed = next((item for item in events if item["event_type"] == "failed"), None)
         payload = json.loads(failed["payload_json"]) if failed else None
         code, phase, category = _failure(payload)
+        if (include_all_capabilities and category is None
+                and code == "RUNNER.EXECUTION_FAILED"
+                and payload.get("message") == "ObjectDisposedException"):
+            category = "json_lifetime"
         if code is None and record["error_json"]:
-            code, _, _ = _failure(json.loads(record["error_json"]))
+            code, error_phase, error_category = _failure(json.loads(record["error_json"]))
+            if include_all_capabilities:
+                phase = phase or error_phase
+                category = category or error_category
         version = None
         for event in (started, failed):
             if event is None:
@@ -124,14 +147,14 @@ def read_local_task_diagnostics(
                 version = value
                 break
         device = device_lookup(record["user_id"], record["device_id"])
-        responsibility, recovery = _responsibility(category)
+        responsibility, recovery = _responsibility(category, code)
         evidence = "recorded" if phase and category else "historical_detail_not_recorded"
         if code == "LOCAL_GATEWAY.DEVICE_NOT_READY" and not failed:
             phase, responsibility, recovery = "host_dispatch", "environment", "reconnect_helper"
             evidence = "recorded"
         elif record["status"] != "failed" and code is None:
             recovery, evidence = "none", "not_applicable"
-        response["tasks"].append({
+        item = {
             "task_id": record["task_id"],
             "invocation_id": record["invocation_id"],
             "release_id": record["release_id"],
@@ -153,7 +176,21 @@ def read_local_task_diagnostics(
             "accepted_at": _at(record["created_at"]),
             "helper_started_at": _at(started["created_at"]) if started else None,
             "updated_at": _at(record["updated_at"]),
-        })
+        }
+        if include_all_capabilities:
+            item["phase_evidence"] = (
+                "recorded" if phase else "historical_detail_not_recorded"
+                if record["status"] == "failed" else "not_applicable"
+            )
+            item["category_evidence"] = (
+                "recorded" if category else "historical_detail_not_recorded"
+                if record["status"] == "failed" else "not_applicable"
+            )
+        response["tasks"].append(item)
     if response["tasks"]:
         response["status"] = "found"
     return response
+
+
+def read_local_task_diagnostics_v2(**kwargs: Any) -> dict[str, Any]:
+    return read_local_task_diagnostics(**kwargs, include_all_capabilities=True)

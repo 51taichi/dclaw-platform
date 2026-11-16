@@ -296,8 +296,8 @@ async def test_platform_video_render_demo_prepares_then_starts_with_bound_files(
 
 def test_pack_exposes_aigc_and_local_api_references():
     payload, metadata = build_archive(PLUGIN_ROOT)
-    assert metadata["standard"]["version"] == "2.61"
-    assert metadata["devkit_version"] == "1.9.28"
+    assert metadata["standard"]["version"] == "2.62"
+    assert metadata["devkit_version"] == "1.9.29"
     prefix = f"dclaw-super-agent-developer-pack-{metadata['version']}/"
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         names = set(archive.namelist())
@@ -317,6 +317,11 @@ def test_pack_exposes_aigc_and_local_api_references():
             "devkit/examples/local-ffmpeg-task-plan-v2/README.md",
             "devkit/examples/local-ffmpeg-task-plan-v2/start-request.sample.json",
             "devkit/local_task_outputs_bind_api_demo.py",
+            "devkit/local_task_diagnostics_api_demo.py",
+            "devkit/schemas/local-task-diagnostics-v2/request.schema.json",
+            "devkit/schemas/local-task-diagnostics-v2/response.schema.json",
+            "devkit/schemas/local-task-diagnostics-v2/error.schema.json",
+            "devkit/examples/local-task-diagnostics-v2/README.md",
             "devkit/local_runtime_prepare_api_demo.py",
             "devkit/examples/local-runtime-prepare-v1/README.md",
             "devkit/examples/local-runtime-prepare-v1/request.sample.json",

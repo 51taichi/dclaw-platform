@@ -419,6 +419,13 @@ internal static class HelperRegression
             Check(startEvent.GetProperty("payload").GetProperty("code").GetString()
                 == "LOCAL_FILE_REF.RESOLVE_FAILED",
                 "task.start used a disposed input document");
+            Check(startEvent.GetProperty("payload").GetProperty("phase").GetString()
+                == "file_binding"
+                && startEvent.GetProperty("payload").GetProperty("category").GetString()
+                == "file_binding"
+                && startEvent.GetProperty("payload").GetProperty("helper_version").GetString()
+                == HelperMetadata.Version,
+                "task.start did not report a safe first failure stage");
 
             var continueTaskId = Guid.NewGuid().ToString("N");
             var continueRoot = HelperPathSafety.TaskRoot(root, "test", continueTaskId);
@@ -439,6 +446,11 @@ internal static class HelperRegression
             Check(continueEvent.GetProperty("payload").GetProperty("code").GetString()
                 == "LOCAL_FILE_REF.RESOLVE_FAILED",
                 "task.continue used a disposed input document");
+            Check(continueEvent.GetProperty("payload").GetProperty("phase").GetString()
+                == "file_binding"
+                && continueEvent.GetProperty("payload").GetProperty("helper_version").GetString()
+                == HelperMetadata.Version,
+                "task.continue did not report a safe first failure stage");
             var nextRoot = HelperPathSafety.TaskRoot(root, "test", "next-task");
             Directory.CreateDirectory(nextRoot);
             var bindings = new JsonObject();

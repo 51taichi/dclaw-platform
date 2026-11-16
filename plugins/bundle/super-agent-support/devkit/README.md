@@ -1,5 +1,11 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.29 adds `developer.local-task.diagnostics.read/2` for every
+authorized local capability. Use `local_task_diagnostics_api_demo.py
+--api-version 2` to read one task or invocation. Phase and category have
+separate evidence fields; Helper 1.4.12 records safe stages for new failures.
+The AIGC-only v1 endpoint remains unchanged.
+
 Version 1.9.28 adds `schemas/local-ffmpeg-task-plan-v2/` and a complete-file
 two-clip example. `plan_version=2` omits both trim fields for a complete clip;
 one-sided boundaries use the actual file start or end, and two boundaries
