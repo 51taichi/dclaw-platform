@@ -5,14 +5,22 @@ import logging
 import os
 from dataclasses import dataclass
 from math import isfinite
+from pathlib import Path
+from typing import Mapping
+from uuid import uuid4
 
 import httpx
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
+from qwenpaw.constant import WORKING_DIR
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_API_URL = "https://api.aijiau.com/v1/systemone"
+PLUGIN_ID = "jev-private-routing"
+CHANNEL_CONFIG_PATH = (
+    Path(WORKING_DIR) / "plugin-data" / PLUGIN_ID / "channels.json"
+)
 NO_MATCH = "no_match"
 MAX_CANDIDATES = 2_000
 MAX_HISTORY = 2_000
@@ -276,34 +284,130 @@ def _legacy_routing_context(task):
 
 
 def _load_channels() -> list[_JevChannel]:
-    primary_key = os.environ.get("TYPESAFE_API_KEY", "").strip()
-    if not primary_key:
+    document = _read_channel_config()
+    if document is None:
         return []
-    channels = [
-        _make_channel(
-            "primary",
-            os.environ.get("TYPESAFE_API_URL", DEFAULT_API_URL),
-            primary_key,
-            os.environ.get("TYPESAFE_RELAY_TOKEN", ""),
-        )
-    ]
-    fallback_values = {
-        "api_url": os.environ.get("TYPESAFE_FALLBACK_API_URL", "").strip(),
-        "api_key": os.environ.get("TYPESAFE_FALLBACK_API_KEY", "").strip(),
-        "relay_token": os.environ.get("TYPESAFE_FALLBACK_RELAY_TOKEN", "").strip(),
+    return _parse_channel_config(document)
+
+
+def save_channel_config(document: Mapping) -> dict:
+    """Validate and atomically persist plugin-owned Jev channel settings."""
+    channels = _parse_channel_config(document)
+    canonical = {
+        "schemaVersion": 1,
+        "primary": _channel_document(channels[0]),
     }
-    if any(fallback_values.values()):
-        if not fallback_values["api_url"] or not fallback_values["api_key"]:
-            raise ValueError("fallback channel requires both API URL and API key")
-        channels.append(
-            _make_channel(
-                "fallback",
-                fallback_values["api_url"],
-                fallback_values["api_key"],
-                fallback_values["relay_token"],
-            )
-        )
+    if len(channels) > 1:
+        canonical["fallback"] = _channel_document(channels[1])
+
+    target = CHANNEL_CONFIG_PATH
+    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        target.parent.chmod(0o700)
+    except OSError:
+        pass
+    temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+    descriptor = os.open(
+        temporary,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+        0o600,
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(canonical, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, target)
+        try:
+            target.chmod(0o600)
+        except OSError:
+            pass
+    finally:
+        temporary.unlink(missing_ok=True)
+    return channel_config_status()
+
+
+def channel_config_status() -> dict:
+    """Return channel metadata without exposing credentials."""
+    channels = _load_channels()
+    if not channels:
+        return {"schemaVersion": 1, "configured": False}
+    result = {
+        "schemaVersion": 1,
+        "configured": True,
+        "primary": _channel_status(channels[0]),
+        "fallback": None,
+    }
+    if len(channels) > 1:
+        result["fallback"] = _channel_status(channels[1])
+    return result
+
+
+def _read_channel_config() -> dict | None:
+    try:
+        raw = CHANNEL_CONFIG_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise ValueError("cannot read plugin channel configuration") from exc
+    try:
+        document = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("plugin channel configuration is not valid JSON") from exc
+    if not isinstance(document, dict):
+        raise ValueError("plugin channel configuration must be an object")
+    return document
+
+
+def _parse_channel_config(document: Mapping) -> list[_JevChannel]:
+    if not isinstance(document, Mapping):
+        raise ValueError("plugin channel configuration must be an object")
+    if document.get("schemaVersion") != 1:
+        raise ValueError("unsupported plugin channel configuration schema")
+    if set(document) - {"schemaVersion", "primary", "fallback"}:
+        raise ValueError("plugin channel configuration contains unknown fields")
+    primary = _parse_channel("primary", document.get("primary"), DEFAULT_API_URL)
+    channels = [primary]
+    fallback = document.get("fallback")
+    if fallback is not None:
+        channels.append(_parse_channel("fallback", fallback, None))
     return channels
+
+
+def _parse_channel(name, value, default_url):
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{name} channel configuration must be an object")
+    if set(value) - {"apiUrl", "apiKey", "relayToken"}:
+        raise ValueError(f"{name} channel configuration contains unknown fields")
+    api_url = value.get("apiUrl", default_url)
+    api_key = value.get("apiKey")
+    relay_token = value.get("relayToken", "")
+    if not isinstance(api_url, str) or not api_url.strip() or len(api_url) > 2048:
+        raise ValueError(f"{name} channel API URL is invalid")
+    if not isinstance(api_key, str) or not api_key.strip() or len(api_key) > 8192:
+        raise ValueError(f"{name} channel API key is invalid")
+    if not isinstance(relay_token, str) or len(relay_token) > 8192:
+        raise ValueError(f"{name} channel relay token is invalid")
+    return _make_channel(name, api_url, api_key, relay_token)
+
+
+def _channel_document(channel):
+    document = {
+        "apiUrl": channel.api_url,
+        "apiKey": channel.api_key,
+    }
+    if channel.relay_token:
+        document["relayToken"] = channel.relay_token
+    return document
+
+
+def _channel_status(channel):
+    return {
+        "apiUrl": channel.api_url,
+        "apiKeyConfigured": True,
+        "relayTokenConfigured": bool(channel.relay_token),
+    }
 
 
 def _make_channel(name, api_url, api_key, relay_token):

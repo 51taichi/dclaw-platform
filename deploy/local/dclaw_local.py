@@ -28,7 +28,6 @@ SECRET_NAMES = frozenset(
         "DCLAW_POSTGRES_PASSWORD",
         "VOLCANO_API_KEY",
         "MXAPI_API_KEY",
-        "TYPESAFE_API_KEY",
         "DCLAW_LUYU_SIGNING_PRIVATE_KEY",
         "DCLAW_STT_INTERNAL_TOKEN",
     }
@@ -149,7 +148,6 @@ def initial_environment(
         "QWENPAW_LLM_MAX_CONCURRENT": "999",
         "VOLCANO_API_KEY": "",
         "MXAPI_API_KEY": "",
-        "TYPESAFE_API_KEY": "",
         "DCLAW_REALTIME_STT_ENABLED": "true",
         "DCLAW_STT_IMAGE": config.stt_image,
         "DCLAW_STT_INTERNAL_TOKEN": random_password(),

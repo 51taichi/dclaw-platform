@@ -34,10 +34,10 @@
         "version_text": "1.0.0",
         "source": "local",
         "protected": false,
-        "requirements": {"require_bins": [], "require_envs": ["TYPESAFE_API_KEY"]},
+        "requirements": {"require_bins": [], "require_envs": []},
         "updated_at": "2026-10-04T00:00:00Z"
       },
-      "requirements": {"require_bins": [], "require_envs": ["TYPESAFE_API_KEY"]},
+      "requirements": {"require_bins": [], "require_envs": []},
       "updated_at": "2026-10-04T00:00:00Z"
     },
     "typesafe-ai": {

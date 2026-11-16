@@ -3,12 +3,17 @@
 import json
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
+from qwenpaw.app.guards import require_admin
 from qwenpaw.app.storage.repos.open_api_repo import get_open_api_repository
 
-from .routing import route_private_message_jev
+from .routing import (
+    channel_config_status,
+    route_private_message_jev,
+    save_channel_config,
+)
 
 
 class RouteRequest(BaseModel):
@@ -23,6 +28,61 @@ class RouteRequest(BaseModel):
 
 
 router = APIRouter()
+admin_router = APIRouter(dependencies=[Depends(require_admin)])
+
+
+class JevChannelSettings(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    api_url: str | None = Field(default=None, alias="apiUrl", max_length=2048)
+    api_key: SecretStr = Field(alias="apiKey")
+    relay_token: SecretStr | None = Field(default=None, alias="relayToken")
+
+    def document(self) -> dict:
+        result = {"apiKey": self.api_key.get_secret_value()}
+        if self.api_url is not None:
+            result["apiUrl"] = self.api_url
+        if self.relay_token is not None:
+            result["relayToken"] = self.relay_token.get_secret_value()
+        return result
+
+
+class JevChannelConfigRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    schema_version: Literal[1] = Field(default=1, alias="schemaVersion")
+    primary: JevChannelSettings
+    fallback: JevChannelSettings | None = None
+
+
+@admin_router.get("/channels")
+async def get_channel_config():
+    try:
+        return channel_config_status()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Stored Jev channel configuration is invalid",
+        ) from exc
+
+
+@admin_router.put("/channels")
+async def put_channel_config(payload: JevChannelConfigRequest):
+    document = {
+        "schemaVersion": payload.schema_version,
+        "primary": payload.primary.document(),
+    }
+    if payload.fallback is not None:
+        document["fallback"] = payload.fallback.document()
+    try:
+        return save_channel_config(document)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Could not persist Jev channel configuration",
+        ) from exc
 
 
 @router.post("/targets/{public_id}")
@@ -62,6 +122,11 @@ class JevPrivateRoutingPlugin:
             router,
             prefix="/open/v1/jev-private-routing",
             tags=["open-api-jev-routing"],
+        )
+        api.register_http_router(
+            admin_router,
+            prefix="/jev-private-routing",
+            tags=["admin-jev-routing"],
         )
 
 

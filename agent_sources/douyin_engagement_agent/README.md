@@ -35,7 +35,7 @@ The package contains no model key, OpenAPI key, Bot credential, or customer data
 
 After the local gates pass, the operator performs the live steps with credentials they control:
 
-1. Install `plugins/tool/jev-private-routing` on DClaw and set `TYPESAFE_API_KEY` in the DClaw server environment. Restart DClaw so the plugin tool is registered.
+1. Install or hot-update `plugins/tool/jev-private-routing` on DClaw, then configure its plugin-owned primary and fallback channels. Do not add Jev to the DClaw model catalog or DClaw process environment.
 2. In the server DClaw Agent page, import the ZIP as a normal Agent and select an available model. Confirm only `read_agent_skill` and `route_private_message_jev` are enabled.
 3. Test `HEALTH_CHECK` in a fresh conversation and confirm the response is exactly `{"ok":true,"capabilityVersion":"2"}`.
 4. In **Open API**, publish the Agent as a target. Enable it, grant `messages:create`, bind a dedicated application/API key, and copy the stable Public ID.

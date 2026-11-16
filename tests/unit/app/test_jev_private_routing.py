@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import stat
 from types import SimpleNamespace
 
 import httpx
@@ -36,20 +37,22 @@ def test_plugin_registers_the_routing_tool():
 
     class Api:
         registered = None
-        router = None
+        routers = []
 
         def register_tool(self, **kwargs):
             self.registered = kwargs
 
         def register_http_router(self, router, **kwargs):
-            self.router = (router, kwargs)
+            self.routers.append((router, kwargs))
 
     api = Api()
     plugin_module.plugin.register(api)
     assert api.registered["tool_name"] == "route_private_message_jev"
     assert callable(api.registered["tool_func"])
-    assert api.router is not None
-    assert api.router[1]["prefix"] == "/open/v1/jev-private-routing"
+    assert [item[1]["prefix"] for item in api.routers] == [
+        "/open/v1/jev-private-routing",
+        "/jev-private-routing",
+    ]
 
 
 @pytest.mark.asyncio
@@ -105,6 +108,31 @@ def result_body(result):
     return json.loads(result.content[0]["text"])
 
 
+@pytest.fixture(autouse=True)
+def isolated_channel_config(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        routing,
+        "CHANNEL_CONFIG_PATH",
+        tmp_path / "plugin-data" / "jev-private-routing" / "channels.json",
+    )
+    routing.save_channel_config(
+        {
+            "schemaVersion": 1,
+            "primary": {"apiKey": "test-only"},
+        }
+    )
+
+
+def configure_channels(*, primary=None, fallback=None):
+    document = {
+        "schemaVersion": 1,
+        "primary": primary or {"apiKey": "test-only"},
+    }
+    if fallback is not None:
+        document["fallback"] = fallback
+    routing.save_channel_config(document)
+
+
 def mock_api(monkeypatch, choices):
     original_client = httpx.AsyncClient
     requests = []
@@ -142,7 +170,6 @@ def mock_api(monkeypatch, choices):
             transport=httpx.MockTransport(handler), **kwargs
         ),
     )
-    monkeypatch.setenv("TYPESAFE_API_KEY", "test-only")
     return requests
 
 
@@ -267,7 +294,6 @@ async def test_task_specific_minimum_margin_is_enforced(monkeypatch):
         "AsyncClient",
         lambda **kwargs: original_client(transport=httpx.MockTransport(handler), **kwargs),
     )
-    monkeypatch.setenv("TYPESAFE_API_KEY", "test-only")
     result = await routing.route_private_message_jev(
         "装修",
         [
@@ -297,7 +323,7 @@ async def test_shared_video_prevents_greeting_shortcut(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_missing_key_fails_closed(monkeypatch):
-    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    routing.CHANNEL_CONFIG_PATH.unlink()
     result = await routing.route_private_message_jev(
         "装修",
         [{"taskId": "task-a", "name": "装修", "routingDescription": "家装"}],
@@ -306,13 +332,88 @@ async def test_missing_key_fails_closed(monkeypatch):
 
 
 def test_domestic_relay_is_the_plugin_default_channel(monkeypatch):
-    monkeypatch.setenv("TYPESAFE_API_KEY", "test-only")
-    monkeypatch.delenv("TYPESAFE_API_URL", raising=False)
+    configure_channels(primary={"apiKey": "test-only"})
 
     channels = routing._load_channels()
 
     assert len(channels) == 1
     assert channels[0].api_url == "https://api.aijiau.com/v1/systemone"
+
+
+def test_channel_config_is_private_atomic_and_redacted():
+    configure_channels(
+        primary={"apiKey": "primary-secret"},
+        fallback={
+            "apiUrl": "https://fallback.example/v1/systemone",
+            "apiKey": "fallback-secret",
+            "relayToken": "relay-secret",
+        },
+    )
+
+    status = routing.channel_config_status()
+    persisted = json.loads(routing.CHANNEL_CONFIG_PATH.read_text())
+
+    assert stat.S_IMODE(routing.CHANNEL_CONFIG_PATH.stat().st_mode) == 0o600
+    assert stat.S_IMODE(routing.CHANNEL_CONFIG_PATH.parent.stat().st_mode) == 0o700
+    assert persisted["primary"]["apiKey"] == "primary-secret"
+    assert persisted["fallback"]["apiKey"] == "fallback-secret"
+    assert status == {
+        "schemaVersion": 1,
+        "configured": True,
+        "primary": {
+            "apiUrl": "https://api.aijiau.com/v1/systemone",
+            "apiKeyConfigured": True,
+            "relayTokenConfigured": False,
+        },
+        "fallback": {
+            "apiUrl": "https://fallback.example/v1/systemone",
+            "apiKeyConfigured": True,
+            "relayTokenConfigured": True,
+        },
+    }
+    assert "primary-secret" not in json.dumps(status)
+    assert "fallback-secret" not in json.dumps(status)
+    assert "relay-secret" not in json.dumps(status)
+
+
+@pytest.mark.asyncio
+async def test_admin_channel_update_does_not_return_secrets(monkeypatch):
+    plugin_module = load_plugin_module()
+    captured = {}
+
+    def save(document):
+        captured.update(document)
+        return {
+            "schemaVersion": 1,
+            "configured": True,
+            "primary": {
+                "apiUrl": "https://api.aijiau.com/v1/systemone",
+                "apiKeyConfigured": True,
+                "relayTokenConfigured": False,
+            },
+            "fallback": None,
+        }
+
+    monkeypatch.setattr(plugin_module, "save_channel_config", save)
+    payload = plugin_module.JevChannelConfigRequest.model_validate(
+        {
+            "schemaVersion": 1,
+            "primary": {
+                "apiKey": "primary-secret",
+            },
+        }
+    )
+
+    result = await plugin_module.put_channel_config(payload)
+
+    assert captured["primary"]["apiKey"] == "primary-secret"
+    assert "primary-secret" not in json.dumps(result)
+
+
+def test_plugin_does_not_read_jev_process_environment():
+    source = ROUTING_PATH.read_text(encoding="utf-8")
+    assert "os.environ" not in source
+    assert "TYPESAFE_API_KEY" not in source
 
 
 @pytest.mark.asyncio
@@ -349,11 +450,13 @@ async def test_configured_api_url_is_used(monkeypatch):
             transport=httpx.MockTransport(handler), **kwargs
         ),
     )
-    monkeypatch.setenv("TYPESAFE_API_KEY", "test-only")
-    monkeypatch.setenv(
-        "TYPESAFE_API_URL", "https://typesafe-relay.example/v1/systemone"
+    configure_channels(
+        primary={
+            "apiUrl": "https://typesafe-relay.example/v1/systemone",
+            "apiKey": "test-only",
+            "relayToken": "relay-test-token",
+        }
     )
-    monkeypatch.setenv("TYPESAFE_RELAY_TOKEN", "relay-test-token")
 
     result = await routing.route_private_message_jev(
         "装修",
@@ -382,7 +485,6 @@ async def test_provider_http_error_is_logged(monkeypatch, caplog):
             transport=httpx.MockTransport(handler), **kwargs
         ),
     )
-    monkeypatch.setenv("TYPESAFE_API_KEY", "test-only")
     caplog.set_level("WARNING")
 
     result = await routing.route_private_message_jev(
@@ -434,13 +536,17 @@ async def test_auth_failure_switches_to_independent_fallback_channel(monkeypatch
             transport=httpx.MockTransport(handler), **kwargs
         ),
     )
-    monkeypatch.setenv("TYPESAFE_API_URL", "https://primary.example/v1/systemone")
-    monkeypatch.setenv("TYPESAFE_API_KEY", "primary-key")
-    monkeypatch.setenv(
-        "TYPESAFE_FALLBACK_API_URL", "https://fallback.example/v1/systemone"
+    configure_channels(
+        primary={
+            "apiUrl": "https://primary.example/v1/systemone",
+            "apiKey": "primary-key",
+        },
+        fallback={
+            "apiUrl": "https://fallback.example/v1/systemone",
+            "apiKey": "fallback-key",
+            "relayToken": "fallback-token",
+        },
     )
-    monkeypatch.setenv("TYPESAFE_FALLBACK_API_KEY", "fallback-key")
-    monkeypatch.setenv("TYPESAFE_FALLBACK_RELAY_TOKEN", "fallback-token")
 
     result = await routing.route_private_message_jev(
         "装修",
@@ -470,12 +576,16 @@ async def test_request_contract_error_does_not_use_fallback(monkeypatch):
             transport=httpx.MockTransport(handler), **kwargs
         ),
     )
-    monkeypatch.setenv("TYPESAFE_API_URL", "https://primary.example/v1/systemone")
-    monkeypatch.setenv("TYPESAFE_API_KEY", "primary-key")
-    monkeypatch.setenv(
-        "TYPESAFE_FALLBACK_API_URL", "https://fallback.example/v1/systemone"
+    configure_channels(
+        primary={
+            "apiUrl": "https://primary.example/v1/systemone",
+            "apiKey": "primary-key",
+        },
+        fallback={
+            "apiUrl": "https://fallback.example/v1/systemone",
+            "apiKey": "fallback-key",
+        },
     )
-    monkeypatch.setenv("TYPESAFE_FALLBACK_API_KEY", "fallback-key")
 
     result = await routing.route_private_message_jev(
         "装修",
@@ -487,16 +597,12 @@ async def test_request_contract_error_does_not_use_fallback(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_incomplete_fallback_channel_fails_closed(monkeypatch):
-    monkeypatch.setenv("TYPESAFE_API_KEY", "primary-key")
-    monkeypatch.setenv(
-        "TYPESAFE_FALLBACK_API_URL", "https://fallback.example/v1/systemone"
-    )
-    monkeypatch.delenv("TYPESAFE_FALLBACK_API_KEY", raising=False)
-
-    result = await routing.route_private_message_jev(
-        "装修",
-        [{"taskId": "task-a", "name": "装修", "routingDescription": "家装"}],
-    )
-
-    assert result_body(result)["status"] == "ERROR"
+async def test_incomplete_fallback_channel_fails_closed():
+    with pytest.raises(ValueError, match="fallback channel API key is invalid"):
+        configure_channels(
+            primary={"apiKey": "primary-key"},
+            fallback={
+                "apiUrl": "https://fallback.example/v1/systemone",
+                "apiKey": "",
+            },
+        )
