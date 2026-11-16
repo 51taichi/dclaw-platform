@@ -76,6 +76,29 @@ internal static class HelperRegression
         throw new Exception("Helper did not finish task");
     }
 
+    private static async Task<JsonElement> RunTaskMessage(
+        HelperRuntime runtime, string root, string taskId, string input)
+    {
+        var handle = typeof(HelperRuntime).GetMethod(
+            "HandleMessageAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        using (var document = JsonDocument.Parse(input))
+            await (Task)handle.Invoke(runtime, new object[] {
+                document.RootElement, CancellationToken.None,
+            })!;
+        for (var attempt = 0; attempt < 200; attempt++)
+        {
+            foreach (var path in Directory.GetFiles(Path.Combine(root, "Outbox"), taskId + "-*.json"))
+            {
+                using var eventDocument = JsonDocument.Parse(File.ReadAllText(path));
+                if (eventDocument.RootElement.GetProperty("event_type").GetString()
+                    is "completed" or "failed")
+                    return eventDocument.RootElement.Clone();
+            }
+            await Task.Delay(25);
+        }
+        throw new Exception("task did not emit a terminal event after input document disposal");
+    }
+
     private static void Check(bool condition, string reason)
     {
         if (!condition) throw new Exception(reason);
@@ -364,6 +387,58 @@ internal static class HelperRegression
                 && bound[0]!["slot"]!.GetValue<string>() == "clip_01"
                 && bound[1]!["slot"]!.GetValue<string>() == "clip_02",
                 "binding order was not preserved");
+            var lifetimeBindings = new JsonObject
+            {
+                ["clip_01"] = new JsonObject
+                {
+                    ["local_file_ref"] = bound[0]!["file"]!["local_file_ref"]!.DeepClone(),
+                    ["access"] = "read",
+                },
+                ["clip_02"] = new JsonObject
+                {
+                    ["local_file_ref"] = "lfr_missing",
+                    ["access"] = "read",
+                },
+            };
+            var startTaskId = Guid.NewGuid().ToString("N");
+            var startMessage = new JsonObject
+            {
+                ["type"] = "task.start",
+                ["task"] = new JsonObject
+                {
+                    ["task_id"] = startTaskId,
+                    ["task_root_name"] = "test",
+                    ["capability_id"] = PlatformFfmpegTaskPlan.CapabilityId,
+                    ["input"] = new JsonObject(),
+                    ["local_file_bindings"] = lifetimeBindings.DeepClone(),
+                    ["scope"] = JsonSerializer.SerializeToNode(scope),
+                },
+            };
+            var startEvent = await RunTaskMessage(
+                runtime, root, startTaskId, startMessage.ToJsonString());
+            Check(startEvent.GetProperty("payload").GetProperty("code").GetString()
+                == "LOCAL_FILE_REF.RESOLVE_FAILED",
+                "task.start used a disposed input document");
+
+            var continueTaskId = Guid.NewGuid().ToString("N");
+            var continueRoot = HelperPathSafety.TaskRoot(root, "test", continueTaskId);
+            Directory.CreateDirectory(continueRoot);
+            File.WriteAllText(Path.Combine(continueRoot, "agent.name"), "test");
+            File.WriteAllText(Path.Combine(continueRoot, "capability.id"),
+                PlatformFfmpegTaskPlan.CapabilityId);
+            var continueMessage = new JsonObject
+            {
+                ["type"] = "task.continue",
+                ["task_id"] = continueTaskId,
+                ["input"] = new JsonObject(),
+                ["local_file_bindings"] = lifetimeBindings.DeepClone(),
+                ["scope"] = JsonSerializer.SerializeToNode(scope),
+            };
+            var continueEvent = await RunTaskMessage(
+                runtime, root, continueTaskId, continueMessage.ToJsonString());
+            Check(continueEvent.GetProperty("payload").GetProperty("code").GetString()
+                == "LOCAL_FILE_REF.RESOLVE_FAILED",
+                "task.continue used a disposed input document");
             var nextRoot = HelperPathSafety.TaskRoot(root, "test", "next-task");
             Directory.CreateDirectory(nextRoot);
             var bindings = new JsonObject();
@@ -427,7 +502,7 @@ internal static class HelperRegression
                 Asset("two", "clip_01", "second", 1));
             Check(collision.GetProperty("event_type").GetString() == "failed",
                 "duplicate output path was not rejected");
-            Console.WriteLine("Helper regression passed: localization, prior-output binding, next-task input, changed file, download error and invalid input");
+            Console.WriteLine("Helper regression passed: localization, prior-output binding, disposed task dispatch, next-task input, changed file, download error and invalid input");
         }
         finally
         {

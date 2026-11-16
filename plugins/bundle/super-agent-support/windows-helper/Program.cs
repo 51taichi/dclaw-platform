@@ -19,7 +19,7 @@ internal sealed record HelperConfig(
 
 internal static class HelperMetadata
 {
-    internal const string Version = "1.4.10";
+    internal const string Version = "1.4.11";
     internal const string ProtocolVersion = "2";
 }
 
@@ -277,7 +277,7 @@ internal sealed class HelperRuntime
                 await ReportCapabilitiesAsync(cancellationToken);
                 break;
             case "task.start":
-                _ = ExecuteTaskAsync(message, false, cancellationToken);
+                _ = ExecuteTaskAsync(message.Clone(), false, cancellationToken);
                 break;
             case "aigc.assets.localize":
                 _ = LocalizeAigcAssetsAsync(message.Clone(), cancellationToken);
@@ -286,7 +286,7 @@ internal sealed class HelperRuntime
                 _ = BindAigcAssetsAsync(message.Clone(), cancellationToken);
                 break;
             case "task.continue":
-                _ = ExecuteTaskAsync(message, true, cancellationToken);
+                _ = ExecuteTaskAsync(message.Clone(), true, cancellationToken);
                 break;
             case "task.cancel":
                 CancelTask(message.GetProperty("task_id").GetString()!);
@@ -794,6 +794,7 @@ internal sealed class HelperRuntime
         bool continuation,
         CancellationToken cancellationToken)
     {
+        await Task.Yield();
         var task = continuation ? message : message.GetProperty("task");
         var taskId = task.GetProperty("task_id").GetString()!;
         string? taskRoot = null;
