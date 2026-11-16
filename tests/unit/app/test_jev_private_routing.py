@@ -305,6 +305,16 @@ async def test_missing_key_fails_closed(monkeypatch):
     assert result_body(result)["status"] == "ERROR"
 
 
+def test_domestic_relay_is_the_plugin_default_channel(monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-only")
+    monkeypatch.delenv("TYPESAFE_API_URL", raising=False)
+
+    channels = routing._load_channels()
+
+    assert len(channels) == 1
+    assert channels[0].api_url == "https://api.aijiau.com/v1/systemone"
+
+
 @pytest.mark.asyncio
 async def test_configured_api_url_is_used(monkeypatch):
     original_client = httpx.AsyncClient
@@ -382,3 +392,111 @@ async def test_provider_http_error_is_logged(monkeypatch, caplog):
 
     assert result_body(result)["status"] == "ERROR"
     assert "451" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_auth_failure_switches_to_independent_fallback_channel(monkeypatch):
+    original_client = httpx.AsyncClient
+    requests = []
+
+    def handler(request):
+        requests.append(
+            (
+                request.url.host,
+                request.headers.get("Authorization"),
+                request.headers.get("X-DClaw-Relay-Token"),
+            )
+        )
+        if request.url.host == "primary.example":
+            return httpx.Response(403, json={"detail": "organization deactivated"})
+        criteria = json.loads(request.content)["questions"]["task"]["criteria"]
+        return httpx.Response(
+            200,
+            json={
+                "answers": {
+                    "task": {
+                        "type": "choice",
+                        "choice": "task-a",
+                        "probabilities": {
+                            key: 0.93 if key == "task-a" else 0.07
+                            for key in criteria
+                        },
+                        "confidence": 0.9,
+                    }
+                }
+            },
+        )
+
+    monkeypatch.setattr(
+        routing.httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(
+            transport=httpx.MockTransport(handler), **kwargs
+        ),
+    )
+    monkeypatch.setenv("TYPESAFE_API_URL", "https://primary.example/v1/systemone")
+    monkeypatch.setenv("TYPESAFE_API_KEY", "primary-key")
+    monkeypatch.setenv(
+        "TYPESAFE_FALLBACK_API_URL", "https://fallback.example/v1/systemone"
+    )
+    monkeypatch.setenv("TYPESAFE_FALLBACK_API_KEY", "fallback-key")
+    monkeypatch.setenv("TYPESAFE_FALLBACK_RELAY_TOKEN", "fallback-token")
+
+    result = await routing.route_private_message_jev(
+        "装修",
+        [{"taskId": "task-a", "name": "装修", "routingDescription": "家装"}],
+    )
+
+    assert result_body(result)["status"] == "MATCHED"
+    assert requests == [
+        ("primary.example", "Bearer primary-key", None),
+        ("fallback.example", "Bearer fallback-key", "fallback-token"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_request_contract_error_does_not_use_fallback(monkeypatch):
+    original_client = httpx.AsyncClient
+    hosts = []
+
+    def handler(request):
+        hosts.append(request.url.host)
+        return httpx.Response(422, json={"detail": "invalid request"})
+
+    monkeypatch.setattr(
+        routing.httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(
+            transport=httpx.MockTransport(handler), **kwargs
+        ),
+    )
+    monkeypatch.setenv("TYPESAFE_API_URL", "https://primary.example/v1/systemone")
+    monkeypatch.setenv("TYPESAFE_API_KEY", "primary-key")
+    monkeypatch.setenv(
+        "TYPESAFE_FALLBACK_API_URL", "https://fallback.example/v1/systemone"
+    )
+    monkeypatch.setenv("TYPESAFE_FALLBACK_API_KEY", "fallback-key")
+
+    result = await routing.route_private_message_jev(
+        "装修",
+        [{"taskId": "task-a", "name": "装修", "routingDescription": "家装"}],
+    )
+
+    assert result_body(result)["status"] == "ERROR"
+    assert hosts == ["primary.example"]
+
+
+@pytest.mark.asyncio
+async def test_incomplete_fallback_channel_fails_closed(monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "primary-key")
+    monkeypatch.setenv(
+        "TYPESAFE_FALLBACK_API_URL", "https://fallback.example/v1/systemone"
+    )
+    monkeypatch.delenv("TYPESAFE_FALLBACK_API_KEY", raising=False)
+
+    result = await routing.route_private_message_jev(
+        "装修",
+        [{"taskId": "task-a", "name": "装修", "routingDescription": "家装"}],
+    )
+
+    assert result_body(result)["status"] == "ERROR"

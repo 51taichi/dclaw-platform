@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+from dataclasses import dataclass
 from math import isfinite
 
 import httpx
@@ -11,12 +12,21 @@ from agentscope.tool import ToolResponse
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_API_URL = "https://api.typesafe.ai/v1/systemone"
+DEFAULT_API_URL = "https://api.aijiau.com/v1/systemone"
 NO_MATCH = "no_match"
 MAX_CANDIDATES = 2_000
 MAX_HISTORY = 2_000
 BATCH_SIZE = 200  # Choice permits 255 options including no_match.
 MIN_MARGIN = 0.15
+NON_FAILOVER_HTTP_STATUSES = {400, 404, 405, 413, 422}
+
+
+@dataclass(frozen=True)
+class _JevChannel:
+    name: str
+    api_url: str
+    api_key: str
+    relay_token: str
 
 
 def _result(status, task_id=None, probability=None, confidence=None):
@@ -146,17 +156,12 @@ async def route_private_message_jev(
             normalized["observedAt"] = observed_at
         history.append(normalized)
 
-    api_key = os.environ.get("TYPESAFE_API_KEY")
-    if not api_key:
-        return _result("ERROR")
-    relay_token = os.environ.get("TYPESAFE_RELAY_TOKEN", "").strip()
-    api_url = os.environ.get("TYPESAFE_API_URL", DEFAULT_API_URL).strip()
     try:
-        parsed_api_url = httpx.URL(api_url)
-        if parsed_api_url.scheme not in ("http", "https") or not parsed_api_url.host:
-            raise ValueError("invalid TypeSafe API URL")
-    except (TypeError, ValueError):
-        logger.error("TYPESAFE_API_URL is invalid")
+        channels = _load_channels()
+    except ValueError as exc:
+        logger.error("TypeSafe Jev channel configuration is invalid: %s", exc)
+        return _result("ERROR")
+    if not channels:
         return _result("ERROR")
     winners = []
     unresolved_confidence = None
@@ -189,7 +194,7 @@ async def route_private_message_jev(
                     },
                 }
                 choice, probabilities, confidence = await _choose(
-                    client, payload, criteria, api_key, api_url, relay_token
+                    client, payload, criteria, channels
                 )
                 if choice == NO_MATCH:
                     unresolved_confidence = confidence
@@ -229,9 +234,7 @@ async def route_private_message_jev(
                     client,
                     final_payload,
                     final_criteria,
-                    api_key,
-                    api_url,
-                    relay_token,
+                    channels,
                 )
                 if choice == NO_MATCH:
                     return _result("UNRESOLVED", confidence=confidence)
@@ -272,15 +275,87 @@ def _legacy_routing_context(task):
     return "\n".join(parts)
 
 
-async def _choose(client, payload, criteria, api_key, api_url, relay_token):
-    headers = {"Authorization": f"Bearer {api_key}"}
-    if relay_token:
-        headers["X-DClaw-Relay-Token"] = relay_token
-    response = await client.post(
-        api_url,
-        headers=headers,
-        json=payload,
+def _load_channels() -> list[_JevChannel]:
+    primary_key = os.environ.get("TYPESAFE_API_KEY", "").strip()
+    if not primary_key:
+        return []
+    channels = [
+        _make_channel(
+            "primary",
+            os.environ.get("TYPESAFE_API_URL", DEFAULT_API_URL),
+            primary_key,
+            os.environ.get("TYPESAFE_RELAY_TOKEN", ""),
+        )
+    ]
+    fallback_values = {
+        "api_url": os.environ.get("TYPESAFE_FALLBACK_API_URL", "").strip(),
+        "api_key": os.environ.get("TYPESAFE_FALLBACK_API_KEY", "").strip(),
+        "relay_token": os.environ.get("TYPESAFE_FALLBACK_RELAY_TOKEN", "").strip(),
+    }
+    if any(fallback_values.values()):
+        if not fallback_values["api_url"] or not fallback_values["api_key"]:
+            raise ValueError("fallback channel requires both API URL and API key")
+        channels.append(
+            _make_channel(
+                "fallback",
+                fallback_values["api_url"],
+                fallback_values["api_key"],
+                fallback_values["relay_token"],
+            )
+        )
+    return channels
+
+
+def _make_channel(name, api_url, api_key, relay_token):
+    api_url = api_url.strip()
+    try:
+        parsed_api_url = httpx.URL(api_url)
+        if parsed_api_url.scheme not in ("http", "https") or not parsed_api_url.host:
+            raise ValueError
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} channel API URL is invalid") from None
+    return _JevChannel(
+        name=name,
+        api_url=api_url,
+        api_key=api_key.strip(),
+        relay_token=relay_token.strip(),
     )
+
+
+async def _choose(client, payload, criteria, channels):
+    for index, channel in enumerate(channels):
+        try:
+            result = await _choose_from_channel(
+                client, payload, criteria, channel
+            )
+            if index > 0:
+                logger.info("TypeSafe Jev routing used fallback channel")
+            return result
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if index == len(channels) - 1 or status in NON_FAILOVER_HTTP_STATUSES:
+                raise
+            logger.warning(
+                "TypeSafe Jev channel failed; trying fallback: channel=%s status=%s",
+                channel.name,
+                status,
+            )
+        except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            if index == len(channels) - 1:
+                raise
+            logger.warning(
+                "TypeSafe Jev channel failed; trying fallback: channel=%s error=%s",
+                channel.name,
+                type(exc).__name__,
+            )
+    raise ValueError("no TypeSafe Jev channel available")
+
+
+async def _choose_from_channel(client, payload, criteria, channel):
+    headers = {"Authorization": f"Bearer {channel.api_key}"}
+    if channel.relay_token:
+        headers["X-DClaw-Relay-Token"] = channel.relay_token
+    response = await client.post(channel.api_url, headers=headers, json=payload)
     response.raise_for_status()
     answer = response.json()["answers"]["task"]
     if not isinstance(answer, dict):
