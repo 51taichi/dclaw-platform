@@ -267,11 +267,14 @@ async def test_platform_video_render_demo_prepares_then_starts_with_bound_files(
     platform_validator = Draft202012Validator(platform_schema)
     platform_validator.validate(complete["input"])
     for invalid in (
-        {**complete["input"], "clips": [{"slot": "clip_01", "trim_start_ms": 0}]},
-        {**complete["input"], "clips": [{"slot": "clip_01", "trim_end_ms": 800}]},
+        {**complete["input"], "clips": [{"slot": "clip_01", "trim_end_ms": 0}]},
         {**complete["input"], "arguments": ["-i", "foreign.mp4"]},
     ):
         assert not validator.is_valid(invalid)
+    assert validator.is_valid({**complete["input"], "clips": [
+        {"slot": "clip_01", "trim_start_ms": 100},
+        {"slot": "clip_02", "trim_end_ms": 800},
+    ]})
     assert not Draft202012Validator(plan_schema).is_valid(complete["input"])
     task_id = await start_ffmpeg_task_plan(
         host, timeline=complete["input"],

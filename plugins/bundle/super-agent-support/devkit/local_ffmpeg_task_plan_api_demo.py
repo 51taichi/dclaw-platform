@@ -37,7 +37,7 @@ async def start_ffmpeg_task_plan(
         raise ValueError("unsupported video plan version")
     Draft202012Validator(schema).validate(timeline)
     if any(
-        "trim_start_ms" in clip
+        "trim_start_ms" in clip and "trim_end_ms" in clip
         and clip["trim_end_ms"] <= clip["trim_start_ms"]
         for clip in timeline["clips"]
     ):

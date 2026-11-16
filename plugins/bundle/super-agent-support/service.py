@@ -595,7 +595,7 @@ class LocalExecutionService:
             clips = task_input["clips"]
             if (
                 any(
-                    "trim_start_ms" in clip
+                    "trim_start_ms" in clip and "trim_end_ms" in clip
                     and clip["trim_end_ms"] <= clip["trim_start_ms"]
                     for clip in clips
                 )

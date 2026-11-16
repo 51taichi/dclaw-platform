@@ -73,11 +73,12 @@ internal static class PlatformFfmpegTaskPlan
                 throw new InvalidDataException("clip slot is invalid");
             var hasStart = clip.ContainsKey("trim_start_ms");
             var hasEnd = clip.ContainsKey("trim_end_ms");
-            if (hasStart != hasEnd || (planVersion == "1" && !hasStart))
+            if (planVersion == "1" && (!hasStart || !hasEnd))
                 throw new InvalidDataException("clip trim range is incomplete");
             var from = hasStart ? clip["trim_start_ms"]!.GetValue<int>() : 0;
             var to = hasEnd ? clip["trim_end_ms"]!.GetValue<int>() : 0;
-            if (hasStart && (from < 0 || to <= from || to > 86400000))
+            if (from < 0 || (hasEnd && (to <= 0 || to > 86400000))
+                || (hasStart && hasEnd && to <= from))
                 throw new InvalidDataException("clip trim range is invalid");
             var relative = input[slot]?.GetValue<string>()
                 ?? throw new InvalidDataException("clip slot is not bound");
@@ -89,9 +90,11 @@ internal static class PlatformFfmpegTaskPlan
             usedSlots.Add(slot);
             start.ArgumentList.Add("-i");
             start.ArgumentList.Add(path);
-            var video = hasStart
-                ? $"[{index}:v]trim=start={Seconds(from)}:end={Seconds(to)},setpts=PTS-STARTPTS"
-                : $"[{index}:v]setpts=PTS-STARTPTS";
+            var trim = hasStart && hasEnd
+                ? $"trim=start={Seconds(from)}:end={Seconds(to)},"
+                : hasStart ? $"trim=start={Seconds(from)},"
+                : hasEnd ? $"trim=end={Seconds(to)}," : "";
+            var video = $"[{index}:v]{trim}setpts=PTS-STARTPTS";
             if (clip["crop"] is JsonObject crop)
             {
                 var x = crop["x"]?.GetValue<int>() ?? -1;
@@ -106,9 +109,13 @@ internal static class PlatformFfmpegTaskPlan
             video += $",pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,fps={fps},setsar=1,format=yuv420p[v{index}]";
             filter.Add(video);
             if (audio == "preserve")
-                filter.Add(hasStart
-                    ? $"[{index}:a]atrim=start={Seconds(from)}:end={Seconds(to)},asetpts=PTS-STARTPTS,aresample=48000[a{index}]"
-                    : $"[{index}:a]asetpts=PTS-STARTPTS,aresample=48000[a{index}]");
+            {
+                var audioTrim = hasStart && hasEnd
+                    ? $"atrim=start={Seconds(from)}:end={Seconds(to)},"
+                    : hasStart ? $"atrim=start={Seconds(from)},"
+                    : hasEnd ? $"atrim=end={Seconds(to)}," : "";
+                filter.Add($"[{index}:a]{audioTrim}asetpts=PTS-STARTPTS,aresample=48000[a{index}]");
+            }
         }
         var boundSlots = input.Select(item => item.Key)
             .Where(key => key != "plan_version" && key != "clips" && key != "output")

@@ -266,14 +266,35 @@ internal static class HelperRegression
                 && duration >= 1.9 && duration <= 2.2,
                 "complete-file output did not retain both one-second clips");
         }
-        request["clips"]![0]!["trim_start_ms"] = 0;
+        request["clips"]![0]!["trim_start_ms"] = 500;
         File.WriteAllText(Path.Combine(task, "input.json"), request.ToJsonString());
-        try
+        Check(PlatformFfmpegTaskPlan.Execute(root, task) == 0,
+            "open-ended start trim was rejected");
+        if (actualFfprobe is not null)
         {
-            PlatformFfmpegTaskPlan.Execute(root, task);
-            throw new Exception("one-sided trim range was accepted");
+            var probe = Process.Start(new ProcessStartInfo(actualFfprobe)
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                ArgumentList = {
+                    "-v", "error", "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    Path.Combine(task, "final.mp4"),
+                },
+            })!;
+            var durationText = probe.StandardOutput.ReadToEnd();
+            probe.WaitForExit();
+            Check(probe.ExitCode == 0 && double.TryParse(durationText,
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var duration)
+                && duration >= 1.3 && duration <= 1.7,
+                "open-ended start trim did not retain the remainder");
         }
-        catch (InvalidDataException) { }
+        ((JsonObject)request["clips"]![0]!).Remove("trim_start_ms");
+        request["clips"]![0]!["trim_end_ms"] = 500;
+        File.WriteAllText(Path.Combine(task, "input.json"), request.ToJsonString());
+        Check(PlatformFfmpegTaskPlan.Execute(root, task) == 0,
+            "open-ended end trim was rejected");
     }
 
     public static async Task Main()

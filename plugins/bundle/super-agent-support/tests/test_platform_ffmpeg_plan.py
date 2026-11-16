@@ -29,11 +29,14 @@ def test_plan_versions_and_trim_pair_are_closed():
     assert validator.is_valid(v2)
     for invalid in (
         v1 | {"clips": [{"slot": "clip_01"}]},
-        v2 | {"clips": [{"slot": "clip_01", "trim_start_ms": 0}]},
-        v2 | {"clips": [{"slot": "clip_01", "trim_end_ms": 800}]},
+        v2 | {"clips": [{"slot": "clip_01", "trim_end_ms": 0}]},
         v2 | {"arguments": ["-i", "source.mp4"]},
     ):
         assert not validator.is_valid(invalid)
+    assert validator.is_valid(v2 | {"clips": [
+        {"slot": "clip_01", "trim_start_ms": 100},
+        {"slot": "clip_02", "trim_end_ms": 800},
+    ]})
 
 
 @pytest.mark.asyncio

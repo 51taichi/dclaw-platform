@@ -1069,7 +1069,7 @@ Support Plugin `1.18.48` 与 Windows Helper `1.4.9` 起提供公共能力 `dclaw
 
 专家决定素材、顺序、技术裁剪和输出目标，提交关闭 Schema 的 `plan_version="1"`、有序 `clips` 和 `output`。每个 clip 只引用一次请求中已授权的 `slot`，可重复使用同一 slot；`trim_start_ms` 与 `trim_end_ms` 是毫秒，后者必须大于前者；可选 `crop` 使用非负坐标和正尺寸。输出指定安全的 MP4 文件名、偶数宽高、帧率和 `audio_policy`：`mute` 丢弃声音，`preserve` 要求每个输入都有音轨。Helper 复核每个受信绑定，在任务目录内生成全部 FFmpeg 参数、按提交顺序裁剪并拼接、标准化画面尺寸和帧率、执行并校验输出。专家不得提交 FFmpeg argv、命令字符串、滤镜表达式、原始路径或 URL；Helper 不解释开放式自然语言，也不改写专家已确定的剪辑顺序。V1 不含转场、字幕、混音、自动剪辑或复杂多轨；需要新语义时发布新合同版本，不能静默改变 V1。
 
-Support Plugin `1.18.50` 与 Helper `1.4.10` 起另支持 `plan_version="2"`。用户要求完整拼接时，`clips[]` 按播放顺序只提交受信 `slot`，不填裁剪边界；Helper 对本机完整文件重置时间戳后拼接，不要求专家提供或猜测媒体时长。明确要求截取时，同一 clip 同时提交 `trim_start_ms` 与 `trim_end_ms`，须满足 `0 <= start < end <= 86400000`；只给一侧边界、未知字段和非法区间均拒绝。`crop` 仍独立可选，输出会按指定帧率重新编码，容器时长允许一个输出帧的量化误差。`audio_policy="preserve"` 仍要求每段有音轨，缺失音轨导致本地任务失败。旧 `plan_version="1"` 及其必填裁剪边界、`0.1.0` 能力准备回执和已签名授权保持有效；v2 在旧 Helper 上于任务受理前返回 `LOCAL_GATEWAY.DEVICE_NOT_READY`。无效计划返回 `CAPABILITY.INVALID_PAYLOAD`，FFmpeg 失败进入本地任务 `CAPABILITY.PROCESS_FAILED` 终态，不能把受理视为成片。
+Support Plugin `1.18.50` 与 Helper `1.4.10` 起另支持 `plan_version="2"`。`clips[]` 按播放顺序提交受信 `slot`；不填裁剪边界表示完整文件，只填 `trim_start_ms` 表示从该点到实际文件结尾，只填 `trim_end_ms` 表示从开头到该点，两者都填表示有界截取且须满足 `start < end`。平台只校验结构和数值，不以业务文案推断客户是否要求裁剪；专家根据真实需求选用合适形式，不得用预估时长或极大结束时间冒充整段。Helper 对本机文件构造 FFmpeg 滤镜，不要求专家提供媒体时长。`crop` 仍独立可选，输出会按指定帧率重新编码，容器时长允许一个输出帧的量化误差。`audio_policy="preserve"` 仍要求每段有音轨，缺失音轨导致本地任务失败。旧 `plan_version="1"` 及其必填裁剪边界、`0.1.0` 能力准备回执和已签名授权保持有效；v2 在旧 Helper 上于任务受理前返回 `LOCAL_GATEWAY.DEVICE_NOT_READY`。无效计划返回 `CAPABILITY.INVALID_PAYLOAD`，FFmpeg 失败进入本地任务 `CAPABILITY.PROCESS_FAILED` 终态，不能把受理视为成片。
 
 新签名 Release 按需声明并获授 `local.execution.session/1`、`local.runtime.prepare/1`、`local.task.start/1`、`local.task.read/1`；复用前序本地任务产物还需 `local.task.outputs.bind/1`。专家先用 `capability_id="dclaw.ffmpeg.task.plan"` 准备设备，只有准确版本 `ready` 才用同一能力 ID、稳定幂等键、结构化 input 和逐槽 `local_file_bindings` 启动；按真实 `task_id` 回读终态，成功结果只返回文件名、大小与 SHA-256。来源任务的受信引用只在同一 invocation 内使用。Host 保持既有租户、用户、任务、专家、安装、设备与幂等隔离；旧 Release 的 grant 不自动扩大。Helper 启动和 FFmpeg 失败沿用 `local.task.*` 稳定错误与任务终态，受理回执不能当作成片证据。
 
@@ -2430,7 +2430,7 @@ Skill 和专家发布前须对每条实际使用的路径同时验证：正确�
 
 ### 2.61 - 2026-11-16
 
-- 公共 `dclaw.ffmpeg.task.plan` `0.1.0` 增加独立 `plan_version=2`：省略裁剪边界表示完整文件，成对边界表示显式截取；v1 输入和已签名授权继续有效。
+- 公共 `dclaw.ffmpeg.task.plan` `0.1.0` 增加独立 `plan_version=2`：省略裁剪边界表示完整文件，单侧边界表示开放区间，双侧边界表示有界截取；v1 输入和已签名授权继续有效。
 - Support Plugin `1.18.50` 在受理前拦截旧 Helper 的 v2 请求；Helper `1.4.10` 本地处理整段视频，DevKit `1.9.28` 与 Developer Pack `1.10.40` 发布 v2 Schema、示例和兼容说明。
 
 ### 2.60 - 2026-11-16

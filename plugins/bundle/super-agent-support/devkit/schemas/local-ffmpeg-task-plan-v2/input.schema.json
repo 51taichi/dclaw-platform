@@ -10,10 +10,6 @@
       "items": {
         "type": "object", "additionalProperties": false,
         "required": ["slot"],
-        "dependentRequired": {
-          "trim_start_ms": ["trim_end_ms"],
-          "trim_end_ms": ["trim_start_ms"]
-        },
         "properties": {
           "slot": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
           "trim_start_ms": {"type": "integer", "minimum": 0, "maximum": 86399999},

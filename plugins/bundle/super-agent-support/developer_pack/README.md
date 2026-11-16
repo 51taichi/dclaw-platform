@@ -1,8 +1,8 @@
 # DClaw Super Agent Developer Pack
 
 Version 1.10.40 bundles standard 2.61 and DevKit 1.9.28. Public video plan
-version 2 uses full bound clips when trim fields are omitted; explicit trims
-remain paired. Support plugin 1.18.50 and Helper 1.4.10 are needed for v2.
+version 2 uses full bound clips when trim fields are omitted and accepts
+open-ended or bounded explicit trims. Support plugin 1.18.50 and Helper 1.4.10 are needed for v2.
 Version 1 plans and existing grants remain valid.
 
 Version 1.10.39 bundles standard 2.60 and DevKit 1.9.27. Support plugin
