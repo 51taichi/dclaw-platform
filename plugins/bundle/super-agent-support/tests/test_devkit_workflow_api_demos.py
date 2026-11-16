@@ -216,7 +216,7 @@ async def test_platform_video_render_demo_prepares_then_starts_with_bound_files(
     platform_schema = json.loads((
         PLUGIN_ROOT / "platform_capabilities/ffmpeg-task-plan/0.1.0/input.schema.json"
     ).read_text())
-    assert plan_schema == platform_schema
+    assert Draft202012Validator(platform_schema).is_valid(example["input"])
     for bad_field in ("arguments", "filter_complex", "source_url"):
         bad = {**example["input"], bad_field: []}
         assert list(Draft202012Validator(plan_schema).iter_errors(bad))
@@ -239,7 +239,7 @@ async def test_platform_video_render_demo_prepares_then_starts_with_bound_files(
             return {
                 **LOCAL_RECEIPT,
                 "capability_id": "dclaw.ffmpeg.task.plan",
-                "idempotency_key": example["idempotency_key"],
+                "idempotency_key": request["idempotency_key"],
                 "status": "queued",
                 "artifact_ids": [],
                 "result_sha256": None,
@@ -256,6 +256,30 @@ async def test_platform_video_render_demo_prepares_then_starts_with_bound_files(
         ("local.runtime.prepare/1", {"capability_id": "dclaw.ffmpeg.task.plan"}),
         ("local.task.start/1", example),
     ]
+    complete = json.loads((
+        PLUGIN_ROOT / "devkit/examples/local-ffmpeg-task-plan-v2/start-request.sample.json"
+    ).read_text())
+    v2_schema = json.loads((
+        schemas / "local-ffmpeg-task-plan-v2/input.schema.json"
+    ).read_text())
+    validator = Draft202012Validator(v2_schema)
+    validator.validate(complete["input"])
+    platform_validator = Draft202012Validator(platform_schema)
+    platform_validator.validate(complete["input"])
+    for invalid in (
+        {**complete["input"], "clips": [{"slot": "clip_01", "trim_start_ms": 0}]},
+        {**complete["input"], "clips": [{"slot": "clip_01", "trim_end_ms": 800}]},
+        {**complete["input"], "arguments": ["-i", "foreign.mp4"]},
+    ):
+        assert not validator.is_valid(invalid)
+    assert not Draft202012Validator(plan_schema).is_valid(complete["input"])
+    task_id = await start_ffmpeg_task_plan(
+        host, timeline=complete["input"],
+        local_file_bindings=complete["local_file_bindings"],
+        idempotency_key=complete["idempotency_key"],
+    )
+    assert task_id == "task-1"
+    assert host.calls[-1] == ("local.task.start/1", complete)
     host.ready = False
     host.calls.clear()
     with pytest.raises(ValueError, match="not ready"):
@@ -269,8 +293,8 @@ async def test_platform_video_render_demo_prepares_then_starts_with_bound_files(
 
 def test_pack_exposes_aigc_and_local_api_references():
     payload, metadata = build_archive(PLUGIN_ROOT)
-    assert metadata["standard"]["version"] == "2.60"
-    assert metadata["devkit_version"] == "1.9.27"
+    assert metadata["standard"]["version"] == "2.61"
+    assert metadata["devkit_version"] == "1.9.28"
     prefix = f"dclaw-super-agent-developer-pack-{metadata['version']}/"
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         names = set(archive.namelist())
@@ -285,6 +309,10 @@ def test_pack_exposes_aigc_and_local_api_references():
             "devkit/schemas/local-ffmpeg-task-plan-v1/result.schema.json",
             "devkit/examples/local-ffmpeg-task-plan-v1/README.md",
             "devkit/examples/local-ffmpeg-task-plan-v1/start-request.sample.json",
+            "devkit/schemas/local-ffmpeg-task-plan-v2/input.schema.json",
+            "devkit/schemas/local-ffmpeg-task-plan-v2/result.schema.json",
+            "devkit/examples/local-ffmpeg-task-plan-v2/README.md",
+            "devkit/examples/local-ffmpeg-task-plan-v2/start-request.sample.json",
             "devkit/local_task_outputs_bind_api_demo.py",
             "devkit/local_runtime_prepare_api_demo.py",
             "devkit/examples/local-runtime-prepare-v1/README.md",

@@ -1,0 +1,19 @@
+{
+  "capability_id": "dclaw.ffmpeg.task.plan",
+  "idempotency_key": "complete-compose-revision-1",
+  "input": {
+    "plan_version": "2",
+    "clips": [
+      {"slot": "clip_01"},
+      {"slot": "clip_02"}
+    ],
+    "output": {
+      "filename": "complete.mp4", "width": 1280, "height": 720,
+      "fps": 25, "audio_policy": "preserve"
+    }
+  },
+  "local_file_bindings": {
+    "clip_01": {"local_file_ref": "lfr_example_clip_01", "access": "read"},
+    "clip_02": {"local_file_ref": "lfr_example_clip_02", "access": "read"}
+  }
+}

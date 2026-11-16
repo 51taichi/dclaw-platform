@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.40 - 2026-11-16
+
+- Bundle standard 2.61 and DevKit 1.9.28 with `plan_version=2` complete-file
+  video timeline schemas, example and API demo. Version 1 trim inputs remain
+  valid; Support plugin 1.18.50 and Helper 1.4.10 gate version 2.
+
 ## 1.10.39 - 2026-11-16
 
 - Bundle standard 2.60 and DevKit 1.9.27 with the closed Helper bind-result

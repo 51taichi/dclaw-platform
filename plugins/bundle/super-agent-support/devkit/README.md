@@ -1,5 +1,11 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.28 adds `schemas/local-ffmpeg-task-plan-v2/` and a complete-file
+two-clip example. `plan_version=2` omits both trim fields for a complete clip;
+explicit trimming supplies both fields. Existing version 1 schemas and
+requests are unchanged. Support plugin 1.18.50 and Helper 1.4.10 are required
+for version 2; package version `0.1.0` remains compatible.
+
 Version 1.9.27 adds the closed `aigc.assets.bind.result` Helper reply to
 `schemas/super-agent-support-v1/device-message.schema.json`. A bound reply
 contains ordered slot/file metadata; a rejected reply carries one stable

@@ -232,6 +232,48 @@ internal static class HelperRegression
         })!;
         audioProbe.WaitForExit();
         Check(audioProbe.ExitCode == 0, "preserved audio stream is missing");
+
+        request["plan_version"] = "2";
+        foreach (var clip in (JsonArray)request["clips"]!)
+        {
+            ((JsonObject)clip!).Remove("trim_start_ms");
+            ((JsonObject)clip).Remove("trim_end_ms");
+        }
+        File.WriteAllText(Path.Combine(task, "input.json"), request.ToJsonString());
+        Check(PlatformFfmpegTaskPlan.Execute(root, task) == 0,
+            "two complete MP4 files did not produce a video");
+        var actualFfprobe = (Environment.GetEnvironmentVariable("PATH") ?? "")
+            .Split(Path.PathSeparator)
+            .Select(directory => Path.Combine(directory, "ffprobe"))
+            .FirstOrDefault(File.Exists);
+        if (actualFfprobe is not null)
+        {
+            var probe = Process.Start(new ProcessStartInfo(actualFfprobe)
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                ArgumentList = {
+                    "-v", "error", "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    Path.Combine(task, "final.mp4"),
+                },
+            })!;
+            var durationText = probe.StandardOutput.ReadToEnd();
+            probe.WaitForExit();
+            Check(probe.ExitCode == 0 && double.TryParse(durationText,
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var duration)
+                && duration >= 1.9 && duration <= 2.2,
+                "complete-file output did not retain both one-second clips");
+        }
+        request["clips"]![0]!["trim_start_ms"] = 0;
+        File.WriteAllText(Path.Combine(task, "input.json"), request.ToJsonString());
+        try
+        {
+            PlatformFfmpegTaskPlan.Execute(root, task);
+            throw new Exception("one-sided trim range was accepted");
+        }
+        catch (InvalidDataException) { }
     }
 
     public static async Task Main()

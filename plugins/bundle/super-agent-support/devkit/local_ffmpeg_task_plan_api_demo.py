@@ -11,7 +11,10 @@ from jsonschema import Draft202012Validator
 CAPABILITY_ID = "dclaw.ffmpeg.task.plan"
 PACKAGE_VERSION = "0.1.0"
 ROOT = Path(__file__).parent
-SCHEMA = json.loads((ROOT / "schemas/local-ffmpeg-task-plan-v1/input.schema.json").read_text(encoding="utf-8"))
+SCHEMAS = {
+    str(version): json.loads((ROOT / f"schemas/local-ffmpeg-task-plan-v{version}/input.schema.json").read_text(encoding="utf-8"))
+    for version in (1, 2)
+}
 START_SCHEMA = json.loads((ROOT / "schemas/local-task-host-v1/start-request.schema.json").read_text(encoding="utf-8"))
 RECEIPT_SCHEMA = json.loads((ROOT / "schemas/local-task-host-v1/receipt.schema.json").read_text(encoding="utf-8"))
 
@@ -29,9 +32,13 @@ async def start_ffmpeg_task_plan(
         or preparation.get("package_version") != PACKAGE_VERSION
     ):
         raise ValueError("platform video renderer is not ready")
-    Draft202012Validator(SCHEMA).validate(timeline)
+    schema = SCHEMAS.get(timeline.get("plan_version"))
+    if schema is None:
+        raise ValueError("unsupported video plan version")
+    Draft202012Validator(schema).validate(timeline)
     if any(
-        clip["trim_end_ms"] <= clip["trim_start_ms"]
+        "trim_start_ms" in clip
+        and clip["trim_end_ms"] <= clip["trim_start_ms"]
         for clip in timeline["clips"]
     ):
         raise ValueError("clip trim end must follow start")

@@ -198,6 +198,17 @@
       "api_demo": "local_ffmpeg_task_plan_api_demo.py",
       "example": "examples/local-ffmpeg-task-plan-v1/README.md"
     },
+    "platform_ffmpeg_task_plan_v2": {
+      "minimum_plugin_version": "1.18.50",
+      "minimum_helper_version": "1.4.10",
+      "capability_id": "dclaw.ffmpeg.task.plan",
+      "package_version": "0.1.0",
+      "plan_version": "2",
+      "input_schema": "schemas/local-ffmpeg-task-plan-v2/input.schema.json",
+      "result_schema": "schemas/local-ffmpeg-task-plan-v2/result.schema.json",
+      "api_demo": "local_ffmpeg_task_plan_api_demo.py",
+      "example": "examples/local-ffmpeg-task-plan-v2/README.md"
+    },
     "start_capability_id": "local.task.start/1",
     "prior_outputs_bind": {
       "minimum_plugin_version": "1.18.44",

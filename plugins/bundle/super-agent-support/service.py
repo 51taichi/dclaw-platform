@@ -33,6 +33,7 @@ PRIOR_OUTPUT_BIND_MIN_RUNNER_VERSION = "1.4.7"
 FFMPEG_TASK_PLAN_ID = "dclaw.ffmpeg.task.plan"
 FFMPEG_TASK_PLAN_VERSION = "0.1.0"
 FFMPEG_TASK_PLAN_MIN_HELPER = "1.4.9"
+FFMPEG_TASK_PLAN_V2_MIN_HELPER = "1.4.10"
 FFMPEG_COMPONENT_VERSION = "N-128100-gceb466cbcd"
 LEGACY_RUNNER_VERSION = "1.0.0"
 LOCAL_FILE_REF_PATTERN = re.compile(r"^lfr_[A-Za-z0-9_-]{32,156}$")
@@ -593,7 +594,11 @@ class LocalExecutionService:
         if capability_id == FFMPEG_TASK_PLAN_ID:
             clips = task_input["clips"]
             if (
-                any(clip["trim_end_ms"] <= clip["trim_start_ms"] for clip in clips)
+                any(
+                    "trim_start_ms" in clip
+                    and clip["trim_end_ms"] <= clip["trim_start_ms"]
+                    for clip in clips
+                )
                 or {clip["slot"] for clip in clips} != set(local_file_bindings)
             ):
                 raise ERRORS["INVALID_CAPABILITY_PAYLOAD"]
@@ -624,6 +629,12 @@ class LocalExecutionService:
             require_file_support=bool(local_file_bindings),
             required_device_id=binding_device_id,
         )
+        if (
+            capability_id == FFMPEG_TASK_PLAN_ID
+            and task_input["plan_version"] == "2"
+            and not _runner_supports(device, FFMPEG_TASK_PLAN_V2_MIN_HELPER)
+        ):
+            raise ERRORS["DEVICE_NOT_READY"]
         credentials = self._runtime_credentials(
             task_input,
             package["descriptor"],

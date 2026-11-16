@@ -3,7 +3,7 @@
 | Component | Supported version |
 |---|---|
 | Developer pack | 1.0.x through 1.10.x |
-| Development standard | 2.1 through 2.60 |
+| Development standard | 2.1 through 2.61 |
 | Super Agent DevKit | 1.2.x through 1.9.x |
 | Super Expert manifest | 3 |
 | Runtime / runtime host | 1 |
@@ -45,6 +45,7 @@
 | Support plugin for local task diagnostics and Helper 1.4.6 localization | >= 1.18.43 |
 | Support plugin for prior localized file bindings and Helper 1.4.7 | >= 1.18.44 |
 | Support plugin for prior localized file binding reply handling | >= 1.18.49 |
+| Support plugin for complete-file video plan and Helper 1.4.10 | >= 1.18.50 |
 | Support plugin for public video timeline render and Helper 1.4.9 | >= 1.18.48 |
 | Support plugin for sealed Host local runtime preparation | >= 1.18.45 |
 | Support plugin for `runtime.failure.read/1` | >= 1.18.12 |
@@ -62,7 +63,7 @@
 | Unambiguous read-only adapter for legacy Agent submit/review tools | >= 1.18.35 |
 | DClaw Windows client for required preflight | >= 2.6.12 |
 | DClaw Windows client for local file workflows | >= 2.6.13 |
-| Runner | >= 1.0.0; >= 1.1.0 for device protocol 2 file workflows; >= 1.2.0 for public Components; >= 1.3.0 for explicit non-entry Component export bindings; >= 1.4.6 for AIGC asset delivery; >= 1.4.7 for prior localized file binding; >= 1.4.9 for public video timeline render |
+| Runner | >= 1.0.0; >= 1.1.0 for device protocol 2 file workflows; >= 1.2.0 for public Components; >= 1.3.0 for explicit non-entry Component export bindings; >= 1.4.6 for AIGC asset delivery; >= 1.4.7 for prior localized file binding; >= 1.4.9 for video plan v1; >= 1.4.10 for complete-file video plan v2 |
 
 The pack keeps the DevKit 1.2/1.3/1.4 sealing format unchanged. Existing Agent
 packages built under standard 1.x or 2.0 remain accepted by their declared
