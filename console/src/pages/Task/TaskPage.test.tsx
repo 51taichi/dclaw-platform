@@ -307,8 +307,26 @@ vi.mock("../Chat/components/ExpertTeamStatusStrip", () => ({
 }));
 
 vi.mock("../Chat/components/PreparingOverlay", () => ({
-  default: ({ mode }: { mode?: string }) => (
-    <div data-testid="preparing-overlay" data-mode={mode} />
+  default: ({
+    mode,
+    error,
+    onRetry,
+  }: {
+    mode?: string;
+    error?: boolean;
+    onRetry?: () => void;
+  }) => (
+    <div
+      data-testid="preparing-overlay"
+      data-mode={mode}
+      data-error={error || undefined}
+    >
+      {error && onRetry ? (
+        <button type="button" onClick={onRetry}>
+          重试
+        </button>
+      ) : null}
+    </div>
   ),
 }));
 
@@ -852,6 +870,29 @@ describe("TaskPage", () => {
 
     await waitFor(() =>
       expect(screen.queryByTestId("preparing-overlay")).toBeNull(),
+    );
+  });
+
+  it("shows a retry state instead of an empty conversation when history fails", async () => {
+    renderWithProviders(<TaskPage />, {
+      initialEntries: ["/task/broken-task"],
+    });
+    await screen.findByTestId("preparing-overlay");
+
+    await act(async () => {
+      (await import("../Chat/sessionApi")).default.onSessionLoadEnd?.(
+        "broken-task",
+        new Error("history unavailable"),
+      );
+    });
+
+    expect(await screen.findByTestId("preparing-overlay")).toHaveAttribute(
+      "data-error",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByTestId("preparing-overlay")).not.toHaveAttribute(
+      "data-error",
     );
   });
 

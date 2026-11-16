@@ -585,6 +585,9 @@ export default function ChatPage() {
   const [showModelPrompt, setShowModelPrompt] = useState(false);
   const [showArtifactPanel, setShowArtifactPanel] = useState(false);
   const [isPreparing, setIsPreparing] = useState(false);
+  const [sessionRestoreErrorId, setSessionRestoreErrorId] = useState<
+    string | null
+  >(null);
   const [preparingMode, setPreparingMode] = useState<"task" | "conversation">(
     "task",
   );
@@ -1323,6 +1326,7 @@ export default function ChatPage() {
     // Case 2: returning to an existing task. The session API clears this
     // state only after history restoration has actually settled.
     preparingForIntentRef.current = false;
+    setSessionRestoreErrorId(null);
     if (chatId) {
       setPreparingMode("conversation");
       setIsPreparing(true);
@@ -1375,6 +1379,7 @@ export default function ChatPage() {
       );
       if (chatIdRef.current === removedId || currentRealId === removedId) {
         preparingForIntentRef.current = false;
+        setSessionRestoreErrorId(null);
         setIsPreparing(false);
         lastSessionIdRef.current = null;
         navigateRef.current("/task", { replace: true });
@@ -1384,14 +1389,16 @@ export default function ChatPage() {
     sessionApi.onSessionLoadStart = (sessionId) => {
       if (!isChatActiveRef.current || preparingForIntentRef.current) return;
       if (chatIdRef.current === sessionId) {
+        setSessionRestoreErrorId(null);
         setPreparingMode("conversation");
         setIsPreparing(true);
       }
     };
 
-    sessionApi.onSessionLoadEnd = (sessionId) => {
+    sessionApi.onSessionLoadEnd = (sessionId, error) => {
       if (!isChatActiveRef.current || preparingForIntentRef.current) return;
       if (chatIdRef.current === sessionId) {
+        setSessionRestoreErrorId(error ? sessionId : null);
         setIsPreparing(false);
       }
     };
@@ -2147,6 +2154,14 @@ export default function ChatPage() {
     responseIdentity,
   ]);
 
+  const retrySessionRestore = useCallback(() => {
+    if (!chatId) return;
+    setSessionRestoreErrorId(null);
+    setPreparingMode("conversation");
+    setIsPreparing(true);
+    setRuntimeReloadKey((key) => key + 1);
+  }, [chatId]);
+
   return (
     <ExpertIdentityContext.Provider value={responseIdentity}>
       <div
@@ -2169,7 +2184,15 @@ export default function ChatPage() {
             position: "relative",
           }}
         >
-          {isPreparing && <PreparingOverlay mode={preparingMode} />}
+          {sessionRestoreErrorId === chatId ? (
+            <PreparingOverlay
+              mode="conversation"
+              error
+              onRetry={retrySessionRestore}
+            />
+          ) : isPreparing ? (
+            <PreparingOverlay mode={preparingMode} />
+          ) : null}
           <div className={styles.chatMessagesArea}>
             <div className={styles.runtimeViewport}>
               <AgentScopeRuntimeWebUI

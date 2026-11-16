@@ -1,16 +1,45 @@
 import styles from "./index.module.less";
 import { useTranslation } from "react-i18next";
 import FeedbackState from "../../../../components/FeedbackState";
+import { Button } from "antd";
 
 export type PreparingOverlayMode = "task" | "conversation";
 
 export default function PreparingOverlay({
   mode = "task",
+  error = false,
+  onRetry,
 }: {
   mode?: PreparingOverlayMode;
+  error?: boolean;
+  onRetry?: () => void;
 }) {
   const { t } = useTranslation();
   const isConversation = mode === "conversation";
+
+  if (error) {
+    return (
+      <div className={styles.overlay}>
+        <FeedbackState
+          variant="error"
+          compact
+          className={styles.feedback}
+          title={t("taskLoading.restoreFailed", "会话历史加载失败")}
+          description={t(
+            "taskLoading.restoreFailedSubtitle",
+            "历史记录仍然保留在服务器，请重试加载。",
+          )}
+          action={
+            onRetry ? (
+              <Button type="primary" onClick={onRetry}>
+                {t("taskLoading.retry", "重试")}
+              </Button>
+            ) : undefined
+          }
+        />
+      </div>
+    );
+  }
 
   return (
     <div className={styles.overlay}>

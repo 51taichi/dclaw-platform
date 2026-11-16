@@ -1124,15 +1124,15 @@ class SessionApi implements IAgentScopeRuntimeWebUISessionAPI {
     ) as ExtendedSession | undefined;
 
     if (!fromList) {
-      if (this.sessionListRequest) {
-        await this.sessionListRequest;
-      } else {
-        await this.getSessionList();
-      }
-      fromList = this.sessionList.find(
-        (s) =>
-          s.id === sessionId || (s as ExtendedSession).realId === sessionId,
-      ) as ExtendedSession | undefined;
+      // A deep-linked conversation already has an authoritative backend ID.
+      // Do not put its history behind the sidebar-list request: that request
+      // also refreshes task status and can be much slower during workspace
+      // startup. Keep the list refresh in flight for names/metadata while the
+      // detail request starts immediately.
+      const listRequest = this.sessionListRequest ?? this.getSessionList();
+      void listRequest.catch((error) => {
+        console.warn("Failed to refresh the conversation list:", error);
+      });
     }
 
     // The sidebar list may be stale or still scoped to the previous agent.

@@ -85,6 +85,38 @@ describe("Chat sessionApi", () => {
     expect(onEnd).toHaveBeenCalledWith("chat-id", error);
   });
 
+  it("loads a deep-linked conversation without waiting for the session list", async () => {
+    let resolveList!: (value: ChatSpec[]) => void;
+    mockListChats.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveList = resolve;
+      }),
+    );
+    mockGetChat.mockResolvedValueOnce({
+      messages: [
+        {
+          id: "msg-user",
+          role: "user",
+          type: "message",
+          content: [{ type: "text", text: "旧会话消息" }],
+        },
+      ],
+      status: "idle",
+    });
+
+    const session = await sessionApi.getSession("deep-linked-chat");
+
+    expect(mockGetChat).toHaveBeenCalledWith(
+      "deep-linked-chat",
+      undefined,
+      expect.any(AbortSignal),
+    );
+    expect(session.messages).toHaveLength(1);
+
+    resolveList([makeChatSpec("deep-linked-chat")]);
+    await vi.waitFor(() => expect(mockListChats).toHaveBeenCalledTimes(1));
+  });
+
   it("reuses a completed conversation history during quick session switches", async () => {
     mockGetChat.mockResolvedValue({
       status: "idle",
