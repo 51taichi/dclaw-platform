@@ -11,6 +11,7 @@ import {
   SkillListItem,
 } from "./components";
 import { PageHeader } from "@/components/PageHeader";
+import FeedbackState from "@/components/FeedbackState";
 import { useSkillsPage } from "./useSkillsPage";
 import styles from "./index.module.less";
 
@@ -125,9 +126,12 @@ function SkillsPage() {
       )}
 
       {loading ? (
-        <div className={styles.loading}>
-          <span className={styles.loadingText}>{t("common.loading")}</span>
-        </div>
+        <FeedbackState
+          variant="loading"
+          compact
+          fill
+          title={t("common.loading")}
+        />
       ) : skills.length === 0 ? (
         <div className={styles.emptyState}>
           <div className={styles.emptyStateBadge}>

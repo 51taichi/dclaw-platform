@@ -1,7 +1,8 @@
 import { Button } from "@agentscope-ai/design";
-import { Alert, Spin } from "antd";
+import { Alert } from "antd";
 import { useTranslation } from "react-i18next";
 import { PageHeader } from "@/components/PageHeader";
+import FeedbackState from "@/components/FeedbackState";
 import { useVoiceTranscription } from "./useVoiceTranscription";
 import {
   AudioModeCard,
@@ -32,10 +33,13 @@ function VoiceTranscriptionPage() {
 
   if (loading) {
     return (
-      <div className={styles.page}>
-        <div className={styles.centerState}>
-          <Spin />
-        </div>
+      <div className={styles.voiceTranscriptionPage}>
+        <FeedbackState
+          variant="loading"
+          compact
+          fill
+          title={t("common.loading")}
+        />
       </div>
     );
   }

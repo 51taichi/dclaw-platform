@@ -4,7 +4,6 @@ import {
   Tag,
   Tooltip,
   Empty,
-  Spin,
   Typography,
   Space,
   Table,
@@ -12,6 +11,7 @@ import {
 import { Package, Plus, Trash2, CheckCircle, XCircle } from "lucide-react";
 import type { PluginType, PluginInfo } from "@/api/modules/plugin";
 import { PageHeader } from "@/components/PageHeader";
+import FeedbackState from "@/components/FeedbackState";
 import { usePluginManager } from "./hooks/usePluginManager";
 import { useInstallModal } from "./hooks/useInstallModal";
 import { InstallPluginModal } from "./components/InstallPluginModal";
@@ -136,23 +136,29 @@ export default function PluginManagerPage() {
       />
 
       <div className={styles.content}>
-        <Spin spinning={loading}>
-          {!loading && (!plugins || plugins.length === 0) ? (
-            <Empty
-              image={<Package size={48} strokeWidth={1} />}
-              description={t("pluginManager.noPlugins")}
-              style={{ marginTop: 80 }}
-            />
-          ) : (
-            <Table
-              dataSource={plugins}
-              columns={columns}
-              rowKey="id"
-              pagination={false}
-              className={styles.table}
-            />
-          )}
-        </Spin>
+        {loading ? (
+          <FeedbackState
+            variant="loading"
+            compact
+            fill
+            title={t("common.loading")}
+            description={t("nav.pluginManager")}
+          />
+        ) : !plugins || plugins.length === 0 ? (
+          <Empty
+            image={<Package size={48} strokeWidth={1} />}
+            description={t("pluginManager.noPlugins")}
+            style={{ marginTop: 80 }}
+          />
+        ) : (
+          <Table
+            dataSource={plugins}
+            columns={columns}
+            rowKey="id"
+            pagination={false}
+            className={styles.table}
+          />
+        )}
       </div>
 
       <InstallPluginModal {...installModal} />

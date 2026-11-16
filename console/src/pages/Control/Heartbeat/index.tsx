@@ -17,6 +17,7 @@ import { useAgentStore } from "../../../stores/agentStore";
 import type { HeartbeatConfig } from "../../../api/types/heartbeat";
 import { parseEvery, serializeEvery, type EveryUnit } from "./parseEvery";
 import { PageHeader } from "@/components/PageHeader";
+import FeedbackState from "@/components/FeedbackState";
 import styles from "./index.module.less";
 
 dayjs.extend(customParseFormat);
@@ -144,7 +145,12 @@ function HeartbeatPage() {
         <PageHeader
           items={[{ title: t("nav.control") }, { title: t("heartbeat.title") }]}
         />
-        <span className={styles.description}>{t("common.loading")}</span>
+        <FeedbackState
+          variant="loading"
+          compact
+          fill
+          title={t("common.loading")}
+        />
       </div>
     );
   }

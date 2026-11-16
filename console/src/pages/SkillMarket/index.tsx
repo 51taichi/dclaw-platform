@@ -29,6 +29,7 @@ import {
   type SkillMarketItem,
 } from "./skillMarketModel";
 import styles from "../shared/ecoPage.module.less";
+import FeedbackState from "../../components/FeedbackState";
 
 const ICON_MAP: Record<string, React.ReactNode> = {
   web: <Globe size={22} />,
@@ -264,20 +265,13 @@ ${skill.description}
       </div>
 
       {loading ? (
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "center",
-            alignItems: "center",
-            padding: "80px 0",
-            color: "#6366f1",
-          }}
-        >
-          <Loader2 className="custom-spin" size={32} />
-          <span style={{ marginLeft: 12, fontSize: 16, fontWeight: 500 }}>
-            正在同步技能数据...
-          </span>
-        </div>
+        <FeedbackState
+          variant="loading"
+          compact
+          fill
+          title="正在同步技能数据"
+          description="正在加载技能市场，请稍候"
+        />
       ) : (
         <div className={styles.cardGrid}>
           {filteredSkills.map((skill) => {

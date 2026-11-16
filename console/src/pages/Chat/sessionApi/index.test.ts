@@ -85,6 +85,112 @@ describe("Chat sessionApi", () => {
     expect(onEnd).toHaveBeenCalledWith("chat-id", error);
   });
 
+  it("reuses a completed conversation history during quick session switches", async () => {
+    mockGetChat.mockResolvedValue({
+      status: "idle",
+      messages: [
+        {
+          id: "msg-user",
+          role: "user",
+          type: "message",
+          content: [{ type: "text", text: "已完成的消息" }],
+        },
+      ],
+    });
+
+    const first = await sessionApi.getSession("chat-id");
+    const second = await sessionApi.getSession("chat-id");
+
+    expect(first.messages).toHaveLength(1);
+    expect(second.messages).toHaveLength(1);
+    expect(mockGetChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cache a conversation that is still running", async () => {
+    mockGetChat.mockResolvedValue({
+      status: "running",
+      messages: [
+        {
+          id: "msg-user",
+          role: "user",
+          type: "message",
+          content: [{ type: "text", text: "继续执行" }],
+        },
+      ],
+    });
+
+    await sessionApi.getSession("running-chat-id");
+    await sessionApi.getSession("running-chat-id");
+
+    expect(mockGetChat).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates cached history before sending a new user message", async () => {
+    await sessionApi.getSession("chat-id");
+
+    sessionApi.setLastUserMessage("chat-id", "新消息");
+    await sessionApi.getSession("chat-id");
+
+    expect(mockGetChat).toHaveBeenCalledTimes(2);
+  });
+
+  it("aborts a stale history request when another conversation is selected", async () => {
+    mockListChats.mockResolvedValue([
+      makeChatSpec("first-chat-id"),
+      makeChatSpec("second-chat-id"),
+    ]);
+    await sessionApi.getSessionList();
+
+    let firstSignal: AbortSignal | undefined;
+    mockGetChat.mockImplementation(
+      (chatId: string, _agentId?: string, signal?: AbortSignal) => {
+        if (chatId === "first-chat-id") {
+          firstSignal = signal;
+          return new Promise((_resolve, reject) => {
+            signal?.addEventListener("abort", () => {
+              reject(new DOMException("Aborted", "AbortError"));
+            });
+          });
+        }
+        return Promise.resolve({ messages: [], status: "idle" });
+      },
+    );
+
+    const firstRequest = sessionApi.getSession("first-chat-id");
+    const secondRequest = sessionApi.getSession("second-chat-id");
+
+    await expect(firstRequest).resolves.toMatchObject({
+      id: "second-chat-id",
+    });
+    await expect(secondRequest).resolves.toMatchObject({
+      id: "second-chat-id",
+    });
+    expect(firstSignal?.aborted).toBe(true);
+  });
+
+  it("stops waiting when conversation history exceeds the restore timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      mockGetChat.mockImplementation(
+        (_chatId: string, _agentId?: string, signal?: AbortSignal) =>
+          new Promise((_resolve, reject) => {
+            signal?.addEventListener("abort", () => {
+              reject(new DOMException("Aborted", "AbortError"));
+            });
+          }),
+      );
+
+      const request = sessionApi.getSession("chat-id");
+      const rejection = expect(request).rejects.toThrow(
+        "Conversation history request timed out",
+      );
+      await vi.advanceTimersByTimeAsync(15_000);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("records a submitted draft session's real backend chat id", () => {
     (window as any).currentSessionId = "local-draft-session";
 
@@ -181,7 +287,7 @@ describe("Chat sessionApi", () => {
     const session = await sessionApi.getSession("stale-chat-id");
 
     expect(session.id).toBe(DRAFT_SESSION_ID);
-    expect(mockGetChat).toHaveBeenCalledWith("stale-chat-id");
+    expect(mockGetChat.mock.calls[0]?.[0]).toBe("stale-chat-id");
     expect(onSessionRemoved).toHaveBeenCalledWith("stale-chat-id");
     expect(onSessionSelected).not.toHaveBeenCalled();
   });
@@ -194,7 +300,7 @@ describe("Chat sessionApi", () => {
     sessionApi.onSessionRemoved = removed;
     const session = await sessionApi.getSession("existing-material-chat");
     expect(session.id).toBe("existing-material-chat");
-    expect(mockGetChat).toHaveBeenCalledWith("existing-material-chat");
+    expect(mockGetChat.mock.calls[0]?.[0]).toBe("existing-material-chat");
     expect(removed).not.toHaveBeenCalled();
   });
 
@@ -223,7 +329,7 @@ describe("Chat sessionApi", () => {
     const session = await sessionApi.getSession("stale-chat-id");
 
     expect(session.id).toBe(DRAFT_SESSION_ID);
-    expect(mockGetChat).toHaveBeenCalledWith("stale-chat-id");
+    expect(mockGetChat.mock.calls[0]?.[0]).toBe("stale-chat-id");
     expect(onSessionRemoved).toHaveBeenCalledWith("stale-chat-id");
     expect(onSessionSelected).not.toHaveBeenCalled();
   });

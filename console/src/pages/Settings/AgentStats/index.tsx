@@ -9,6 +9,7 @@ import { Column, Pie } from "@ant-design/plots";
 import api from "../../../api";
 import type { AgentStatsSummary } from "../../../api/types/agentStats";
 import { PageHeader } from "@/components/PageHeader";
+import FeedbackState from "@/components/FeedbackState";
 import { useAppMessage } from "../../../hooks/useAppMessage";
 import { formatCompact } from "../../../utils/formatNumber";
 import { useTheme } from "../../../contexts/ThemeContext";
@@ -294,10 +295,13 @@ function AgentStatsPage() {
             </Button>
           </div>
         ) : loading && !data ? (
-          <div className={styles.loading}>
-            <Spin size="large" />
-            <p>{t("common.loading")}</p>
-          </div>
+          <FeedbackState
+            variant="loading"
+            compact
+            fill
+            title={t("common.loading")}
+            description={t("agentStats.title")}
+          />
         ) : (
           <>
             <div className={styles.filters}>

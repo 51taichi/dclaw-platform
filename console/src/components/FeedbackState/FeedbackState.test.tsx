@@ -27,4 +27,10 @@ describe("FeedbackState", () => {
     );
     expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
   });
+
+  it("can fill its parent region for vertical centering", () => {
+    render(<FeedbackState variant="loading" title="正在加载" fill />);
+
+    expect(screen.getByRole("status").className).toContain("fill");
+  });
 });

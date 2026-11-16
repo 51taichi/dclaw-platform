@@ -9,6 +9,7 @@ import {
   ToolExecutionLevelCard,
 } from "./components";
 import { PageHeader } from "@/components/PageHeader";
+import FeedbackState from "@/components/FeedbackState";
 import {
   CONTEXT_MANAGER_BACKEND_MAPPINGS,
   MEMORY_MANAGER_BACKEND_MAPPINGS,
@@ -175,9 +176,12 @@ function AgentConfigPage() {
   if (loading) {
     return (
       <div className={styles.configPage}>
-        <div className={styles.centerState}>
-          <span className={styles.stateText}>{t("common.loading")}</span>
-        </div>
+        <FeedbackState
+          variant="loading"
+          compact
+          fill
+          title={t("common.loading")}
+        />
       </div>
     );
   }

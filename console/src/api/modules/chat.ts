@@ -72,9 +72,10 @@ export const chatApi = {
       body: JSON.stringify(chat),
     }),
 
-  getChat: (chatId: string, agentId?: string) =>
+  getChat: (chatId: string, agentId?: string, signal?: AbortSignal) =>
     request<ChatHistory>(`/chats/${encodeURIComponent(chatId)}`, {
       headers: agentId ? { "X-Agent-Id": agentId } : undefined,
+      signal,
     }),
 
   getChatStatus: (chatId: string, agentId?: string, signal?: AbortSignal) =>

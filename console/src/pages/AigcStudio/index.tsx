@@ -2704,7 +2704,12 @@ export default function AigcStudioPage() {
 
   if (loading) {
     return (
-      <FeedbackState variant="loading" compact title={t("common.loading")} />
+      <FeedbackState
+        variant="loading"
+        compact
+        fill
+        title={t("common.loading")}
+      />
     );
   }
 

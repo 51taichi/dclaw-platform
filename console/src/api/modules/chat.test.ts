@@ -167,6 +167,7 @@ describe("chatApi CRUD", () => {
     await chatApi.getChat("chat/1");
     expect(request).toHaveBeenCalledWith("/chats/chat%2F1", {
       headers: undefined,
+      signal: undefined,
     });
   });
 

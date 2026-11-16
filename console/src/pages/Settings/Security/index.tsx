@@ -10,6 +10,7 @@ import {
   AllowNoAuthHostsTab,
 } from "./components";
 import { PageHeader } from "@/components/PageHeader";
+import FeedbackState from "@/components/FeedbackState";
 import styles from "./index.module.less";
 
 function SecurityPage() {
@@ -56,9 +57,12 @@ function SecurityPage() {
   if (loading) {
     return (
       <div className={styles.securityPage}>
-        <div className={styles.centerState}>
-          <span className={styles.stateText}>{t("common.loading")}</span>
-        </div>
+        <FeedbackState
+          variant="loading"
+          compact
+          fill
+          title={t("common.loading")}
+        />
       </div>
     );
   }

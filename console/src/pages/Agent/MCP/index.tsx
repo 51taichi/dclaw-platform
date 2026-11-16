@@ -7,6 +7,7 @@ import { MCPClientCard } from "./components";
 import { useMCP } from "./useMCP";
 import { useTranslation } from "react-i18next";
 import { PageHeader } from "@/components/PageHeader";
+import FeedbackState from "@/components/FeedbackState";
 import styles from "./index.module.less";
 
 type MCPTransport = "stdio" | "streamable_http" | "sse";
@@ -278,9 +279,12 @@ function MCPPage() {
       />
 
       {loading ? (
-        <div className={styles.loading}>
-          <p>{t("common.loading")}</p>
-        </div>
+        <FeedbackState
+          variant="loading"
+          compact
+          fill
+          title={t("common.loading")}
+        />
       ) : !clients || clients.length === 0 ? (
         <div className={styles.emptyState}>
           <Empty description={t("mcp.emptyState")} />

@@ -1,11 +1,12 @@
 import React, { useState, useCallback, useRef, useEffect } from "react";
-import { Drawer, Input, List, Typography, Empty, Spin } from "antd";
+import { Drawer, Input, List, Typography, Empty } from "antd";
 import type { InputRef } from "antd";
 import { IconButton } from "@agentscope-ai/design";
 import { SparkOperateRightLine, SparkSearchLine } from "@agentscope-ai/icons";
 import { useChatAnywhereSessionsState } from "@agentscope-ai/chat";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
+import FeedbackState from "@/components/FeedbackState";
 import { chatApi } from "../../../../api/modules/chat";
 import sessionApi from "../../sessionApi";
 import styles from "./index.module.less";
@@ -354,11 +355,13 @@ const ChatSearchPanel: React.FC<ChatSearchPanelProps> = ({
         <div className={styles.topGradient} />
         <div className={styles.list}>
           {loading && searchResults.length === 0 ? (
-            <div
-              style={{ display: "flex", justifyContent: "center", padding: 40 }}
-            >
-              <Spin />
-            </div>
+            <FeedbackState
+              variant="loading"
+              compact
+              fill
+              title={t("chat.search.loading")}
+              description={t("chat.search.title")}
+            />
           ) : searchQuery.trim() && !loading && searchResults.length === 0 ? (
             <Empty
               description={t("chat.search.noResults")}

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Card, Col, Row, Spin, Tabs } from "antd";
+import { Alert, Card, Col, Row, Tabs } from "antd";
 import { WalletCards } from "lucide-react";
 import { billingApi } from "../../api/modules/billing";
+import FeedbackState from "../../components/FeedbackState";
 import type {
   BillingLedgerEntry,
   BillingUsageOrder,
@@ -69,7 +70,17 @@ export default function WalletPage() {
   }, [usageSource]);
 
   useEffect(() => void load(), [load]);
-  if (loading) return <Spin />;
+  if (loading)
+    return (
+      <FeedbackState
+        variant="loading"
+        compact
+        fill
+        className={styles.loadingState}
+        title="正在加载积分钱包"
+        description="正在加载余额、充值与消费记录，请稍候"
+      />
+    );
   if (!wallet || !config)
     return <Alert type="error" message={error ?? "积分数据不可用"} />;
 

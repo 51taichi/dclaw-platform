@@ -10,6 +10,7 @@ import { Checkbox, Input, Tag, Table, Spin, Typography } from "antd";
 import type { TableColumnsType } from "antd";
 import { SearchOutlined, RightOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
+import FeedbackState from "@/components/FeedbackState";
 import styles from "./RestoreAgentTable.module.less";
 
 const { Text } = Typography;
@@ -174,12 +175,11 @@ export default function RestoreAgentTable({
       {includeAgents && agentsExpanded && (
         <div className={styles.agentsContent}>
           {detailLoading ? (
-            <div className={styles.agentsLoading}>
-              <Spin />
-              <div className={styles.agentsLoadingText}>
-                {t("backup.loadingAgents")}
-              </div>
-            </div>
+            <FeedbackState
+              variant="loading"
+              compact
+              title={t("backup.loadingAgents")}
+            />
           ) : (
             <>
               <div className={styles.agentSearchToolbar}>

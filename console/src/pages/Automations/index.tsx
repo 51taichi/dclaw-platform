@@ -11,9 +11,9 @@ import {
   message,
   Popconfirm,
   Tooltip,
-  Spin,
   Popover
 } from "antd";
+import FeedbackState from "../../components/FeedbackState";
 import {
   Zap,
   Clock,
@@ -1101,9 +1101,12 @@ export default function AutomationsPage() {
         </div>
 
         {jobsLoading ? (
-          <div style={{ display: "flex", justifyContent: "center", padding: "40px 0" }}>
-            <Spin tip="载入自动化任务列表中..." />
-          </div>
+          <FeedbackState
+            variant="loading"
+            compact
+            title="正在加载自动化任务"
+            description="正在加载活跃自动化任务列表，请稍候"
+          />
         ) : jobs.length === 0 ? (
           <div style={{
             background: "#ffffff",

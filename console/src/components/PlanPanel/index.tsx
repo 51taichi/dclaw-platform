@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Drawer, Progress, Spin } from "antd";
+import { Drawer, Progress } from "antd";
 import { IconButton } from "@agentscope-ai/design";
 import { SparkOperateRightLine } from "@agentscope-ai/icons";
 import { useChatAnywhereSessionsState } from "@agentscope-ai/chat";
 import { useTranslation } from "react-i18next";
+import FeedbackState from "../FeedbackState";
 import {
   planApi,
   subscribePlanUpdates,
@@ -141,9 +142,13 @@ const PlanPanel: React.FC<PlanPanelProps> = ({ open, onClose }) => {
 
       <div className={styles.content}>
         {loading && !plan ? (
-          <div className={styles.emptyState}>
-            <Spin />
-          </div>
+          <FeedbackState
+            variant="loading"
+            compact
+            fill
+            title={t("common.loading", "Loading")}
+            description={t("plan.title", "Plan")}
+          />
         ) : !plan ? (
           <div className={styles.emptyState}>
             <div className={styles.emptyIcon}>📋</div>

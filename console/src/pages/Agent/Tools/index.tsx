@@ -23,6 +23,7 @@ import { useTools } from "./useTools";
 import { useTranslation } from "react-i18next";
 import type { ToolInfo } from "../../../api/modules/tools";
 import { PageHeader } from "@/components/PageHeader";
+import FeedbackState from "@/components/FeedbackState";
 import styles from "./index.module.less";
 
 /** Stable background colours for the initial-letter fallback icon. */
@@ -261,9 +262,12 @@ export default function ToolsPage() {
       />
       <div className={styles.toolsContainer}>
         {loading ? (
-          <div className={styles.loading}>
-            <p>{t("common.loading")}</p>
-          </div>
+          <FeedbackState
+            variant="loading"
+            compact
+            fill
+            title={t("common.loading")}
+          />
         ) : tools.length === 0 ? (
           <Empty description={t("tools.emptyState")} />
         ) : (

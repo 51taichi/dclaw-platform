@@ -92,6 +92,23 @@ describe("WalletPage", () => {
     });
   });
 
+  it("uses the centered unified loading state for the wallet region", () => {
+    vi.mocked(billingApi.getWallet).mockImplementationOnce(
+      () => new Promise(() => undefined),
+    );
+
+    render(
+      <MemoryRouter>
+        <WalletPage />
+      </MemoryRouter>,
+    );
+
+    const loading = screen.getByRole("status");
+    expect(loading).toHaveAttribute("data-feedback-state", "loading");
+    expect(loading).toHaveTextContent("正在加载积分钱包");
+    expect(loading).toHaveTextContent("正在加载余额、充值与消费记录，请稍候");
+  });
+
   it("keeps wallet content available when alert settings fail", async () => {
     vi.mocked(billingApi.getCreditAlerts).mockRejectedValue(new Error("alerts unavailable"));
     render(<MemoryRouter><WalletPage /></MemoryRouter>);

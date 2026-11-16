@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { Table, Button, Modal, Spin } from "antd";
+import { Table, Button, Modal } from "antd";
 import { useTranslation } from "react-i18next";
 import { PageHeader } from "@/components/PageHeader";
+import FeedbackState from "@/components/FeedbackState";
 import { api } from "../../../api";
 import type { AuditChat } from "../../../api/modules/audit";
 
@@ -82,7 +83,7 @@ export default function AuditChatsPage() {
         width={800}
       >
         {loadingMessages ? (
-          <Spin style={{ display: "block", margin: "40px auto" }} />
+          <FeedbackState variant="loading" compact title="正在加载会话消息" />
         ) : (
           <div style={{ maxHeight: "60vh", overflowY: "auto" }}>
             {messages.length === 0 ? (

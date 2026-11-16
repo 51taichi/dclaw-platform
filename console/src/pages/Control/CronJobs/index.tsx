@@ -33,6 +33,7 @@ import {
 } from "./components";
 import { parseCron, serializeCron } from "./components/parseCron";
 import { PageHeader } from "@/components/PageHeader";
+import FeedbackState from "@/components/FeedbackState";
 import styles from "./index.module.less";
 
 type CronJob = CronJobSpecOutput;
@@ -748,7 +749,14 @@ function CronJobsPage() {
       >
         <div className={styles.historyList}>
           {historyLoading ? (
-            <div className={styles.historyEmpty}>{t("common.loading")}</div>
+            <FeedbackState
+              variant="loading"
+              compact
+              title={t("common.loading")}
+              description={t("cronJobs.historyTitle", {
+                name: historyJobName,
+              })}
+            />
           ) : historyRecords.length === 0 ? (
             <div className={styles.historyEmpty}>
               {t("cronJobs.historyEmpty")}

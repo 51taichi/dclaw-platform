@@ -15,6 +15,7 @@ import sessionApi from "../Chat/sessionApi";
 import { resolveExpertSummonTarget } from "./navigation";
 import { clientVisibleAgents } from "./visibility";
 import SuperExpertBadge from "../../components/SuperExpertBadge";
+import FeedbackState from "../../components/FeedbackState";
 import { expertAvatar } from "../../utils/expertIdentity";
 
 type ExpertCardItem = {
@@ -173,8 +174,8 @@ export default function ExpertsPage() {
             {expert.kind === "team"
               ? `${expert.members.length} 位协作成员`
               : expert.isSuperExpert
-              ? "超级专家"
-              : "智能体专家"}
+                ? "超级专家"
+                : "智能体专家"}
           </div>
         </div>
       </div>
@@ -312,7 +313,7 @@ export default function ExpertsPage() {
 
       <div className={styles.expertSections}>
         {loading ? (
-          <div className={styles.inlineEmpty}>加载中...</div>
+          <FeedbackState variant="loading" compact fill title="正在加载专家" />
         ) : !hasAnyResult ? (
           <div className={styles.inlineEmpty}>暂无专家</div>
         ) : (

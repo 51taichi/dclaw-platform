@@ -1,5 +1,5 @@
 import { Suspense, useMemo } from "react";
-import { Layout, Spin } from "antd";
+import { Layout } from "antd";
 import {
   Routes,
   Route,
@@ -12,6 +12,7 @@ import Sidebar from "../Sidebar";
 import Header from "../Header";
 import ConsolePollService from "../../components/ConsolePollService";
 import { ChunkErrorBoundary } from "../../components/ChunkErrorBoundary";
+import FeedbackState from "../../components/FeedbackState";
 import { lazyImportWithRetry } from "../../utils/lazyWithRetry";
 import { usePlugins } from "../../plugins/PluginContext";
 import styles from "../index.module.less";
@@ -177,9 +178,11 @@ export default function AdminLayout() {
             <ChunkErrorBoundary resetKey={currentPath}>
               <Suspense
                 fallback={
-                  <Spin
-                    tip={t("common.loading")}
-                    style={{ display: "block", margin: "20vh auto" }}
+                  <FeedbackState
+                    variant="loading"
+                    compact
+                    fill
+                    title={t("common.loading")}
                   />
                 }
               >

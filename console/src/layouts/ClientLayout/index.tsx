@@ -126,6 +126,7 @@ export default function ClientLayout() {
                     <FeedbackState
                       variant="loading"
                       compact
+                      fill
                       title={t("common.loading")}
                     />
                   }

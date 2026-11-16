@@ -105,6 +105,7 @@ export default function SceneWebviewHost({ scene }: { scene: ClientScene }) {
         <FeedbackState
           variant="error"
           compact
+          fill
           title={t("sceneFeedback.errorTitle")}
           description={t("sceneFeedback.errorSubtitle")}
           action={
@@ -120,6 +121,7 @@ export default function SceneWebviewHost({ scene }: { scene: ClientScene }) {
         <FeedbackState
           variant="loading"
           compact
+          fill
           title={t("sceneFeedback.loadingTitle", { name: scene.title })}
           description={t("sceneFeedback.loadingSubtitle")}
         />

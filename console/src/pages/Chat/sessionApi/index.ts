@@ -23,6 +23,9 @@ const DEFAULT_USER_ID = "default";
 const DEFAULT_CHANNEL = "console";
 const DEFAULT_SESSION_NAME = "New Chat";
 export const DRAFT_SESSION_ID = "draft-session";
+const SESSION_HISTORY_CACHE_TTL_MS = 60_000;
+const SESSION_HISTORY_CACHE_MAX_ENTRIES = 8;
+const SESSION_HISTORY_REQUEST_TIMEOUT_MS = 15_000;
 const ROLE_TOOL = "tool";
 const ROLE_USER = "user";
 const ROLE_ASSISTANT = "assistant";
@@ -78,10 +81,22 @@ interface ExtendedSession extends IAgentScopeRuntimeWebUISession {
   status?: ChatStatus;
   /** ISO 8601 creation timestamp from backend. */
   createdAt?: string | null;
+  /** ISO 8601 update timestamp used to invalidate restored-history cache. */
+  updatedAt?: string | null;
   /** Whether the backend is still generating a response for this session. */
   generating?: boolean;
   /** Whether the chat is pinned to the top. */
   pinned?: boolean;
+}
+
+interface HistoryCacheEntry {
+  history: ChatHistory;
+  cachedAt: number;
+  updatedAt: string | null;
+}
+
+function cloneChatHistory(history: ChatHistory): ChatHistory {
+  return structuredClone(history);
 }
 
 // ---------------------------------------------------------------------------
@@ -316,6 +331,7 @@ const chatSpecToSession = (chat: ChatSpec): ExtendedSession =>
     status: chat.status ?? "idle",
     generating: chat.status === "running",
     createdAt: chat.created_at ?? null,
+    updatedAt: chat.updated_at ?? null,
     pinned: chat.pinned ?? false,
   }) as ExtendedSession;
 
@@ -345,6 +361,12 @@ function messagesBeforeRunningResponse(messages: Message[]): Message[] {
 
 const isChatNotFoundError = (error: unknown): boolean =>
   error instanceof Error && /^Chat not found\b/.test(error.message);
+
+const isAbortError = (error: unknown): boolean =>
+  typeof error === "object" &&
+  error !== null &&
+  "name" in error &&
+  error.name === "AbortError";
 
 /**
  * Resolve and persist the real backend UUID for a local timestamp session.
@@ -419,6 +441,15 @@ function clearPendingUserMessage(sessionId: string): void {
 class SessionApi implements IAgentScopeRuntimeWebUISessionAPI {
   private sessionList: IAgentScopeRuntimeWebUISession[] = [];
 
+  /** Completed histories only; running conversations must always be restored live. */
+  private historyCache: Map<string, HistoryCacheEntry> = new Map();
+
+  /** In-flight detail requests, so switching conversations can cancel stale work. */
+  private sessionLoadControllers: Map<string, AbortController> = new Map();
+
+  /** Latest requested session; stale loaders resolve to this request after cancellation. */
+  private latestRequestedSessionId: string | null = null;
+
   /**
    * Pending resolvers waiting for a specific session's realId.
    * Used to replace setTimeout-based busy-wait with event-driven notification.
@@ -455,10 +486,16 @@ class SessionApi implements IAgentScopeRuntimeWebUISessionAPI {
    * the singleton would otherwise serve stale data from the previous agent.
    */
   reset(): void {
+    for (const controller of this.sessionLoadControllers.values()) {
+      controller.abort();
+    }
     this.sessionList = [];
+    this.historyCache.clear();
+    this.sessionLoadControllers.clear();
     this.realIdResolvers.clear();
     this.sessionListRequest = null;
     this.sessionRequests.clear();
+    this.latestRequestedSessionId = null;
     this.lastSelectedSessionId = null;
     this.preferredChatId = null;
     window.currentSessionId = undefined;
@@ -479,7 +516,70 @@ class SessionApi implements IAgentScopeRuntimeWebUISessionAPI {
    */
   setLastUserMessage(sessionId: string, text: string): void {
     if (!sessionId || !text) return;
+    this.invalidateHistoryCache(sessionId);
     savePendingUserMessage(sessionId, text);
+  }
+
+  private invalidateHistoryCache(sessionId: string): void {
+    this.historyCache.delete(sessionId);
+    const session = this.sessionList.find((item) => {
+      const extended = item as ExtendedSession;
+      return (
+        item.id === sessionId ||
+        extended.realId === sessionId ||
+        extended.sessionId === sessionId
+      );
+    }) as ExtendedSession | undefined;
+    if (!session) return;
+    this.historyCache.delete(session.id);
+    if (session.realId) this.historyCache.delete(session.realId);
+    if (session.sessionId) this.historyCache.delete(session.sessionId);
+  }
+
+  private getCachedHistory(
+    backendId: string,
+    listEntry: ExtendedSession | undefined,
+  ): ChatHistory | null {
+    const cached = this.historyCache.get(backendId);
+    if (!cached) return null;
+
+    const expired = Date.now() - cached.cachedAt > SESSION_HISTORY_CACHE_TTL_MS;
+    const statusChanged =
+      listEntry?.generating || listEntry?.status === "running";
+    const updated =
+      Boolean(listEntry?.updatedAt) &&
+      Boolean(cached.updatedAt) &&
+      listEntry?.updatedAt !== cached.updatedAt;
+    if (expired || statusChanged || updated) {
+      this.historyCache.delete(backendId);
+      return null;
+    }
+    return cloneChatHistory(cached.history);
+  }
+
+  private cacheHistory(
+    backendId: string,
+    history: ChatHistory,
+    listEntry: ExtendedSession | undefined,
+  ): void {
+    this.historyCache.delete(backendId);
+    if (this.historyCache.size >= SESSION_HISTORY_CACHE_MAX_ENTRIES) {
+      const oldestKey = this.historyCache.keys().next().value;
+      if (oldestKey) this.historyCache.delete(oldestKey);
+    }
+    this.historyCache.set(backendId, {
+      history: cloneChatHistory(history),
+      cachedAt: Date.now(),
+      updatedAt: listEntry?.updatedAt ?? null,
+    });
+  }
+
+  private cancelOtherSessionLoads(sessionId: string): void {
+    for (const [activeSessionId, controller] of this.sessionLoadControllers) {
+      if (activeSessionId === sessionId) continue;
+      controller.abort();
+      this.sessionLoadControllers.delete(activeSessionId);
+    }
   }
 
   /**
@@ -646,6 +746,8 @@ class SessionApi implements IAgentScopeRuntimeWebUISessionAPI {
     displayId: string,
     backendId = displayId,
   ): ExtendedSession {
+    this.invalidateHistoryCache(displayId);
+    this.invalidateHistoryCache(backendId);
     this.sessionList = this.sessionList.filter((session) => {
       const extended = session as ExtendedSession;
       return (
@@ -846,6 +948,8 @@ class SessionApi implements IAgentScopeRuntimeWebUISessionAPI {
   private lastSelectedSessionId: string | null = null;
 
   async getSession(sessionId: string) {
+    this.latestRequestedSessionId = sessionId;
+    this.cancelOtherSessionLoads(sessionId);
     const existingRequest = this.sessionRequests.get(sessionId);
     if (existingRequest) return existingRequest;
 
@@ -855,7 +959,23 @@ class SessionApi implements IAgentScopeRuntimeWebUISessionAPI {
 
     let loadError: unknown | null = null;
     try {
-      const session = await requestPromise;
+      let session: IAgentScopeRuntimeWebUISession;
+      try {
+        session = await requestPromise;
+      } catch (error) {
+        const replacementId = this.latestRequestedSessionId;
+        const replacementRequest = replacementId
+          ? this.sessionRequests.get(replacementId)
+          : undefined;
+        if (
+          isAbortError(error) &&
+          replacementId !== sessionId &&
+          replacementRequest
+        ) {
+          return await replacementRequest;
+        }
+        throw error;
+      }
       const fellBackToDraft =
         sessionId !== DRAFT_SESSION_ID && session.id === DRAFT_SESSION_ID;
       if (fellBackToDraft) return session;
@@ -887,13 +1007,38 @@ class SessionApi implements IAgentScopeRuntimeWebUISessionAPI {
     backendId: string,
     listEntry: ExtendedSession | undefined,
   ): Promise<ExtendedSession> {
-    let chatHistory: ChatHistory;
-    try {
-      chatHistory = await api.getChat(backendId);
-    } catch (error) {
-      if (!isChatNotFoundError(error)) throw error;
+    let chatHistory = this.getCachedHistory(backendId, listEntry);
+    if (!chatHistory) {
+      const controller = new AbortController();
+      this.sessionLoadControllers.set(displayId, controller);
+      let timedOut = false;
+      const timeout = window.setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, SESSION_HISTORY_REQUEST_TIMEOUT_MS);
+      try {
+        chatHistory = await api.getChat(
+          backendId,
+          undefined,
+          controller.signal,
+        );
+      } catch (error) {
+        if (timedOut) {
+          throw new Error("Conversation history request timed out");
+        }
+        if (!isChatNotFoundError(error)) throw error;
 
-      return this.removeMissingSession(displayId, backendId);
+        return this.removeMissingSession(displayId, backendId);
+      } finally {
+        window.clearTimeout(timeout);
+        if (this.sessionLoadControllers.get(displayId) === controller) {
+          this.sessionLoadControllers.delete(displayId);
+        }
+      }
+
+      if (!isGenerating(chatHistory)) {
+        this.cacheHistory(backendId, chatHistory, listEntry);
+      }
     }
     const generating = isGenerating(chatHistory);
     this.onGeneratingStatusChange?.(generating);
@@ -1092,6 +1237,7 @@ class SessionApi implements IAgentScopeRuntimeWebUISessionAPI {
     if (!session.id) return [...this.sessionList];
 
     const { id: sessionId } = session;
+    this.invalidateHistoryCache(sessionId);
 
     const existing = this.sessionList.find((s) => s.id === sessionId) as
       | ExtendedSession

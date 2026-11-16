@@ -19,6 +19,7 @@ import {
 } from "@agentscope-ai/chat";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
+import FeedbackState from "@/components/FeedbackState";
 import type { ChatStatus } from "../../../../api/types/chat";
 import { chatApi } from "../../../../api/modules/chat";
 import sessionApi, { isDraftSessionId } from "../../sessionApi";
@@ -527,15 +528,13 @@ const ChatSessionDrawer: React.FC<ChatSessionDrawerProps> = (props) => {
       <div className={styles.listWrapper} ref={listWrapperRef}>
         <div className={styles.topGradient} />
         {listLoading ? (
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "center",
-              padding: 40,
-            }}
-          >
-            <Spin />
-          </div>
+          <FeedbackState
+            variant="loading"
+            compact
+            fill
+            title={t("common.loading")}
+            description={t("chat.allChats")}
+          />
         ) : (
           <>
             {/* Background loading — only show when content overflows the container,

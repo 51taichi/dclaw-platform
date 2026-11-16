@@ -31,6 +31,7 @@ import type { ApiRequestOptions } from "../../../api/request";
 import { getApiUrl } from "../../../api/config";
 import { buildAuthHeaders } from "../../../api/authHeaders";
 import { AgentExperienceLibrary } from "@/components/AgentExperienceLibrary";
+import FeedbackState from "@/components/FeedbackState";
 
 // This page manages the signed-in user's library, not selected Agent assets.
 function request<T = unknown>(path: string, options: ApiRequestOptions = {}) {
@@ -1049,21 +1050,12 @@ export default function TencentDocPage() {
           </div>
 
           {loading ? (
-            <div
-              style={{
-                padding: "60px",
-                textAlign: "center",
-                color: "rgba(0,0,0,0.45)",
-                fontSize: "14px",
-              }}
-            >
-              <RefreshCw
-                size={18}
-                className="animate-spin"
-                style={{ marginRight: "8px", verticalAlign: "middle" }}
-              />
-              正在安全检索 RAG 节点列表...
-            </div>
+            <FeedbackState
+              variant="loading"
+              compact
+              title="正在加载知识库文档"
+              description="正在安全检索 RAG 节点列表，请稍候"
+            />
           ) : filteredDocs.length === 0 ? (
             <div
               style={{

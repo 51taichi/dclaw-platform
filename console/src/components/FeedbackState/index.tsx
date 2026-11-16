@@ -18,6 +18,7 @@ interface FeedbackStateProps {
   description?: ReactNode;
   action?: ReactNode;
   compact?: boolean;
+  fill?: boolean;
   className?: string;
 }
 
@@ -27,12 +28,14 @@ export default function FeedbackState({
   description,
   action,
   compact = false,
+  fill = false,
   className,
 }: FeedbackStateProps) {
   const isLoading = variant === "loading";
   const rootClassName = [
     styles.root,
     compact ? styles.compact : "",
+    fill ? styles.fill : "",
     className ?? "",
   ]
     .filter(Boolean)

@@ -203,6 +203,7 @@ function TokenUsagePage() {
             "加载积分消耗排行失败",
           )}
           error
+          fill
           onRetry={fetchRanking}
         />
       ) : (
@@ -228,11 +229,12 @@ function TokenUsagePage() {
         />
       </div>
       {tokenLoading ? (
-        <LoadingState message={t("common.loading", "Loading...")} />
+        <LoadingState message={t("common.loading", "Loading...")} fill />
       ) : tokenError && records.length === 0 ? (
         <LoadingState
           message={t("tokenUsage.loadFailed")}
           error
+          fill
           onRetry={fetchTokenData}
         />
       ) : (

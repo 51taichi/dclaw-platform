@@ -6,6 +6,7 @@ import api from "../../../api";
 import { useEnvVars } from "./useEnvVars";
 import { EmptyState, AddButton, Toolbar, EnvRow, type Row } from "./components";
 import { PageHeader } from "@/components/PageHeader";
+import FeedbackState from "@/components/FeedbackState";
 import { useAppMessage } from "../../../hooks/useAppMessage";
 import styles from "./index.module.less";
 
@@ -268,9 +269,12 @@ function EnvironmentsPage() {
 
       {/* ---- Content ---- */}
       {loading ? (
-        <div className={styles.centerState}>
-          <span className={styles.stateText}>{t("environments.loading")}</span>
-        </div>
+        <FeedbackState
+          variant="loading"
+          compact
+          fill
+          title={t("environments.loading")}
+        />
       ) : error ? (
         <div className={styles.centerState}>
           <span className={styles.stateTextError}>{error}</span>

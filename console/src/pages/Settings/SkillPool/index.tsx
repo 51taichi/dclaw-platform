@@ -27,6 +27,7 @@ import { getBuiltinNoticeLines } from "./builtinNotice";
 import { useSkillPool } from "./useSkillPool";
 import { useProgressiveRender } from "../../../hooks/useProgressiveRender";
 import { PageHeader } from "@/components/PageHeader";
+import FeedbackState from "@/components/FeedbackState";
 import type { PoolSkillSpec } from "../../../api/types";
 import styles from "./index.module.less";
 
@@ -243,9 +244,12 @@ function SkillPoolPage() {
         )}
 
         {pool.loading ? (
-          <div className={styles.loading}>
-            <span className={styles.loadingText}>{t("common.loading")}</span>
-          </div>
+          <FeedbackState
+            variant="loading"
+            compact
+            fill
+            title={t("common.loading")}
+          />
         ) : pool.sortedSkills.length === 0 && pool.skills.length > 0 ? (
           <div className={styles.noSearchResults}>
             <span className={styles.noSearchResultsIcon}>🔍</span>

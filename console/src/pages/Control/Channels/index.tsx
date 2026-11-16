@@ -10,6 +10,7 @@ import {
   type ChannelKey,
 } from "./components";
 import { PageHeader } from "@/components/PageHeader";
+import FeedbackState from "@/components/FeedbackState";
 import { useAppMessage } from "../../../hooks/useAppMessage";
 import styles from "./index.module.less";
 
@@ -129,9 +130,12 @@ function ChannelsPage() {
       />
       <div className={styles.channelsContainer}>
         {loading ? (
-          <div className={styles.loading}>
-            <span className={styles.loadingText}>{t("channels.loading")}</span>
-          </div>
+          <FeedbackState
+            variant="loading"
+            compact
+            fill
+            title={t("channels.loading")}
+          />
         ) : (
           <div className={styles.channelsGrid}>
             {cards.map(({ key, config }) => (

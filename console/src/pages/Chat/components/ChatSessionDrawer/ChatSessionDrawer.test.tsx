@@ -170,7 +170,13 @@ describe("ChatSessionDrawer", () => {
 
   it("renders title chat.allChats when open=true", () => {
     renderWithProviders(<ChatSessionDrawer {...defaultProps} />);
-    expect(screen.getByText("chat.allChats")).toBeInTheDocument();
+    expect(
+      screen.getByText("chat.allChats", { selector: "span" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveAttribute(
+      "data-feedback-state",
+      "loading",
+    );
   });
 
   it("clicking new chat starts a draft session", async () => {

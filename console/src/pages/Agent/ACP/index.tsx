@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, Form, Modal } from "@agentscope-ai/design";
 import { useTranslation } from "react-i18next";
 import { PageHeader } from "@/components/PageHeader";
+import FeedbackState from "@/components/FeedbackState";
 import api from "../../../api";
 import { useAppMessage } from "../../../hooks/useAppMessage";
 import {
@@ -244,9 +245,12 @@ function ACPPage() {
       />
       <div className={styles.channelsContainer}>
         {loading ? (
-          <div className={styles.loading}>
-            <span className={styles.loadingText}>{t("acp.loading")}</span>
-          </div>
+          <FeedbackState
+            variant="loading"
+            compact
+            fill
+            title={t("acp.loading")}
+          />
         ) : (
           <div className={styles.channelsGrid}>
             {cards.map(({ key, config }) => (

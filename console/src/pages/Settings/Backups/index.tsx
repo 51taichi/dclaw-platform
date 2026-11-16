@@ -6,11 +6,12 @@
  * this file is intentionally kept short (~90 lines).
  */
 import { useCallback, useEffect, useState } from "react";
-import { Button, Spin } from "antd";
+import { Button } from "antd";
 import { PlusOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import api, { agentsApi } from "@/api";
 import { PageHeader } from "@/components/PageHeader";
+import FeedbackState from "@/components/FeedbackState";
 import { useAppMessage } from "@/hooks/useAppMessage";
 import type { BackupMeta } from "@/api/types/backup";
 import type { AgentSummary } from "@/api/types/agents";
@@ -64,9 +65,13 @@ export default function BackupsPage() {
   if (loading) {
     return (
       <div className={styles.page}>
-        <div className={styles.centerState}>
-          <Spin />
-        </div>
+        <FeedbackState
+          variant="loading"
+          compact
+          fill
+          title={t("backup.title")}
+          description={t("common.loading")}
+        />
       </div>
     );
   }

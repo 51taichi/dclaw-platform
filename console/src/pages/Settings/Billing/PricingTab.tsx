@@ -5,11 +5,11 @@ import {
   message,
   Modal,
   Space,
-  Spin,
   Tabs,
   Tag,
   Upload,
 } from "antd";
+import FeedbackState from "@/components/FeedbackState";
 import { billingApi } from "../../../api/modules/billing";
 import { saveDownloadedBlob } from "../../../utils/download";
 import type {
@@ -142,7 +142,15 @@ export default function PricingTab() {
         action={<Button onClick={() => void load()}>重试</Button>}
       />
     );
-  if (!overview) return <Spin />;
+  if (!overview)
+    return (
+      <FeedbackState
+        variant="loading"
+        compact
+        title="正在加载定价配置"
+        description="正在加载价格目录、模型与规则，请稍候"
+      />
+    );
   return (
     <Space direction="vertical" style={{ width: "100%" }}>
       {!overview.catalogs.some((item) => item.status === "published") && (
