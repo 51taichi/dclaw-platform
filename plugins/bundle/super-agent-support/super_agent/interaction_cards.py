@@ -69,7 +69,9 @@ class InteractionBinding(_StrictFrozenModel):
 
 class InteractionTransition(_StrictFrozenModel):
     event_id: str = Field(min_length=1)
-    action: Literal["create", "replace", "cancel", "expire", "submit"]
+    action: Literal[
+        "create", "replace", "restore", "cancel", "expire", "submit",
+    ]
     from_status: InteractionStatus | None
     to_status: InteractionStatus
     occurred_at: datetime
@@ -121,8 +123,10 @@ class _OperationRecord(BaseModel):
 
     operation_digest: str
     interaction_id: str
+    operation_kind: Literal[
+        "create", "replay", "rollback_create", "cancel", "submit",
+    ] | None = None
     invocation_id: str | None = None
-    operation_kind: str | None = None
     replaced_interaction_id: str | None = None
 
 
@@ -190,6 +194,7 @@ class InteractionCardRepository:
         request: InteractionCreateRequest,
         idempotency_key: str,
         now: datetime,
+        invocation_id: str | None = None,
     ) -> InteractionCardRecord:
         now = _utc(now)
         if not idempotency_key:
@@ -235,6 +240,8 @@ class InteractionCardRepository:
                 document.operations[idempotency_key] = _OperationRecord(
                     operation_digest=digest,
                     interaction_id=interaction_id,
+                    operation_kind="replay",
+                    invocation_id=invocation_id,
                 )
                 self._write(document)
                 return existing
@@ -315,9 +322,110 @@ class InteractionCardRepository:
             document.operations[idempotency_key] = _OperationRecord(
                 operation_digest=digest,
                 interaction_id=interaction_id,
+                operation_kind="create",
+                invocation_id=invocation_id,
+                replaced_interaction_id=replacement,
             )
             self._write(document)
             return card
+
+    def rollback_create(
+        self,
+        *,
+        interaction_id: str,
+        installation_id: str,
+        conversation_id: str,
+        invocation_id: str,
+        operation_key: str,
+        now: datetime,
+    ) -> tuple[InteractionCardRecord, InteractionCardRecord | None, bool]:
+        """Undo only a PENDING card first created by the same invocation."""
+        now = _utc(now)
+        payload = {
+            "interaction_id": interaction_id,
+            "installation_id": installation_id,
+            "conversation_id": conversation_id,
+            "invocation_id": invocation_id,
+        }
+        digest = _operation_digest("rollback_create", payload)
+        with self._lock, self._file_lock.hold(self.path):
+            document = self._read()
+            dirty = self._expire(document, now)
+            existing_rollback = document.operations.get(operation_key)
+            if existing_rollback is not None:
+                if existing_rollback.operation_digest != digest:
+                    raise InteractionError(
+                        "IDEMPOTENCY_CONFLICT", retryable=False,
+                    )
+                current = self._owned(
+                    document, interaction_id, installation_id, conversation_id,
+                )
+                if dirty:
+                    self._write(document)
+                return current, None, True
+
+            create_operations = [
+                item
+                for item in document.operations.values()
+                if item.interaction_id == interaction_id
+                and item.operation_kind == "create"
+                and item.invocation_id == invocation_id
+            ]
+            if len(create_operations) != 1:
+                raise InteractionError(
+                    "INTERACTION_ROLLBACK_NOT_OWNED", retryable=False,
+                )
+            create_operation = create_operations[0]
+            current = self._owned(
+                document, interaction_id, installation_id, conversation_id,
+            )
+            if current.status is not InteractionStatus.PENDING:
+                raise InteractionError(
+                    "INTERACTION_ROLLBACK_NOT_PENDING", retryable=False,
+                )
+            cancelled = self._transition(
+                current,
+                action="cancel",
+                target=InteractionStatus.CANCELLED,
+                event_id="cancel-" + _identity(operation_key, interaction_id),
+                now=now,
+            )
+            document.cards[interaction_id] = cancelled
+
+            restored = None
+            replaced_id = create_operation.replaced_interaction_id
+            if replaced_id is not None:
+                replaced = self._owned(
+                    document, replaced_id, installation_id, conversation_id,
+                )
+                if (
+                    replaced.status is not InteractionStatus.REPLACED
+                    or not replaced.transitions
+                    or replaced.transitions[-1].action != "replace"
+                ):
+                    raise InteractionError(
+                        "INTERACTION_ROLLBACK_REPLACEMENT_CONFLICT",
+                        retryable=False,
+                    )
+                restored = self._transition(
+                    replaced,
+                    action="restore",
+                    target=InteractionStatus.PENDING,
+                    event_id="restore-"
+                    + _identity(operation_key, replaced_id),
+                    now=now,
+                )
+                document.cards[replaced_id] = restored
+
+            document.operations[operation_key] = _OperationRecord(
+                operation_digest=digest,
+                interaction_id=interaction_id,
+                operation_kind="rollback_create",
+                invocation_id=invocation_id,
+                replaced_interaction_id=replaced_id,
+            )
+            self._write(document)
+            return cancelled, restored, False
 
     def cancel(
         self,
@@ -362,6 +470,7 @@ class InteractionCardRepository:
             document.operations[operation_key] = _OperationRecord(
                 operation_digest=digest,
                 interaction_id=interaction_id,
+                operation_kind="cancel",
             )
             self._write(document)
             return result
@@ -497,6 +606,7 @@ class InteractionCardRepository:
             document.operations[idempotency_key] = _OperationRecord(
                 operation_digest=digest,
                 interaction_id=interaction_id,
+                operation_kind="submit",
             )
             self._write(document)
             return result
@@ -990,6 +1100,11 @@ class InteractionService:
 
     def cancel(self, **kwargs: Any) -> InteractionCardRecord:
         return self.repository.cancel(now=self.clock(), **kwargs)
+
+    def rollback_create(
+        self, **kwargs: Any,
+    ) -> tuple[InteractionCardRecord, InteractionCardRecord | None, bool]:
+        return self.repository.rollback_create(now=self.clock(), **kwargs)
 
     def submit(self, **kwargs: Any) -> InteractionCardRecord:
         return self.repository.submit(now=self.clock(), **kwargs)

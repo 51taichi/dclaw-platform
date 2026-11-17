@@ -170,6 +170,24 @@
       "success_example": "examples/interaction-host-v1/single-select-success.json"
     }
   },
+  "workspace_runtime_host": {
+    "owner": "dclaw.super-agent-support",
+    "minimum_plugin_version": "1.18.55",
+    "transport": "sealed-agent-host.call",
+    "agent_execute": {
+      "capability_id": "agent.execute",
+      "request_schema": "schemas/agent-execute-v1/request.schema.json",
+      "response_schema": "schemas/agent-execute-v1/response.schema.json"
+    },
+    "runtime_fail": {
+      "capability_id": "runtime.fail",
+      "request_schema": "schemas/runtime-fail-v1/request.schema.json",
+      "response_schema": "schemas/runtime-fail-v1/response.schema.json"
+    },
+    "api_demo": "agent_execute_api_demo.py",
+    "example": "examples/agent-execute-v1/README.md",
+    "failed_turn_card_compensation": "same-invocation-created-pending-only"
+  },
   "aigc_workflow_host": {
     "owner": "dclaw.super-agent-support",
     "model_tool_transport": "agent.execute(agent_loop)",

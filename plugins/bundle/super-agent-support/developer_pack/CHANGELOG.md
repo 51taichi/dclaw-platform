@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.10.44 - 2026-11-17
+
+- Bundle standard 2.65 and DevKit 1.9.31 with closed `agent.execute` and
+  `runtime.fail` schemas, strict API demos, and failed-turn card compensation.
+- Preserve valid legacy calls and activated releases; new releases can validate
+  candidate, JSON and tool-loop modes without permissive fake Host behavior.
+
 ## 1.10.43 - 2026-11-17
 
 - Bundle standard 2.64 and DevKit 1.9.30 with owner-scoped runtime diagnostics

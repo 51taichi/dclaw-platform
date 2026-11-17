@@ -883,6 +883,7 @@ async def run_workspace_orchestration_turn(
     config: OrchestrationConfig,
     authorization: AuthorizedWorkspaceRelease,
     business_call: Callable[[str, dict[str, Any]], Any] | None = None,
+    rollback_interaction_create: Callable[[str, str], Any] | None = None,
     read_aigc_task: Callable[[str], dict[str, Any] | None] | None = None,
     read_interaction_card: Callable[[str], dict[str, Any] | None]
     | None = None,
@@ -1113,6 +1114,66 @@ async def run_workspace_orchestration_turn(
     effective_business_call = (
         tracked_business_call if business_call is not None else None
     )
+
+    async def compensate_created_interactions(
+        active_invocation_id: str,
+    ) -> None:
+        if rollback_interaction_create is None or not created_interaction_ids:
+            return
+        _append_runtime_trace(
+            state_storage_root,
+            installation_id=authorization.installation_id,
+            session_id=turn_request.session_id,
+            invocation_id=active_invocation_id,
+            event_type="interaction.compensation.started",
+            payload={"count": len(created_interaction_ids)},
+        )
+        failures = 0
+        for interaction_id in tuple(created_interaction_ids):
+            try:
+                await _maybe_await(
+                    rollback_interaction_create(
+                        interaction_id,
+                        active_invocation_id,
+                    ),
+                )
+            except Exception as exc:
+                failures += 1
+                _append_runtime_trace(
+                    state_storage_root,
+                    installation_id=authorization.installation_id,
+                    session_id=turn_request.session_id,
+                    invocation_id=active_invocation_id,
+                    event_type="interaction.compensation.item_failed",
+                    payload={
+                        "interaction_id": interaction_id,
+                        "error_code": getattr(
+                            exc,
+                            "error_code",
+                            "INTERACTION_COMPENSATION_REJECTED",
+                        ),
+                    },
+                )
+            else:
+                _append_runtime_trace(
+                    state_storage_root,
+                    installation_id=authorization.installation_id,
+                    session_id=turn_request.session_id,
+                    invocation_id=active_invocation_id,
+                    event_type="interaction.compensation.item_completed",
+                    payload={"interaction_id": interaction_id},
+                )
+        _append_runtime_trace(
+            state_storage_root,
+            installation_id=authorization.installation_id,
+            session_id=turn_request.session_id,
+            invocation_id=active_invocation_id,
+            event_type="interaction.compensation.completed",
+            payload={
+                "attempted": len(created_interaction_ids),
+                "failed": failures,
+            },
+        )
 
     def attach_created_interactions(
         turn_result: WorkspaceTurnResult,
@@ -1470,6 +1531,7 @@ async def run_workspace_orchestration_turn(
             await orchestrator.invoke(turn_request, transaction),
         )
     except asyncio.CancelledError:
+        await compensate_created_interactions(invocation_id)
         _append_runtime_trace(
             state_storage_root,
             installation_id=authorization.installation_id,
@@ -1479,6 +1541,8 @@ async def run_workspace_orchestration_turn(
             payload={"error_code": "cancelled"},
         )
         raise
+    if result.error_code is not None:
+        await compensate_created_interactions(invocation_id)
     _append_runtime_trace(
         state_storage_root,
         installation_id=authorization.installation_id,
@@ -1799,12 +1863,18 @@ class WorkspaceRuntimeHost:
         self.completion: WorkspaceTurnCompletion | None = None
         self.failure: WorkspaceTurnFailure | None = None
 
-    async def _trace_stage(self, event: str, duration_ms: int | None = None) -> None:
+    async def _trace_stage(
+        self,
+        event: str,
+        duration_ms: int | None = None,
+        **safe_fields: Any,
+    ) -> None:
         if self._trace_sink is None:
             return
         payload: dict[str, Any] = {"event": event}
         if duration_ms is not None:
             payload["duration_ms"] = duration_ms
+        payload.update(safe_fields)
         try:
             await _maybe_await(self._trace_sink({
                 "invocation_id": self.request.invocation_id,
@@ -1889,7 +1959,10 @@ class WorkspaceRuntimeHost:
             if failure.invocation_id != self.request.invocation_id:
                 raise WorkspaceOrchestrationError("invalid_completion")
             self.failure = failure
-            await self._trace_stage("runtime.fail.accepted")
+            await self._trace_stage(
+                "runtime.fail.accepted",
+                error_code=failure.error_code,
+            )
             return {"accepted": True}
         if self._business_call is None:
             raise WorkspaceOrchestrationError("unauthorized_capability")
@@ -2611,6 +2684,7 @@ async def handle_workspace_turn(
                     contract_version=contract_version,
                     arguments=payload,
                     idempotency_key=idempotency_key,
+                    invocation_id=invocation_id,
                 )
             return await platform_service.execute(
                 tenant_id=tenant_id,
@@ -2620,6 +2694,20 @@ async def handle_workspace_turn(
                 contract_version=contract_version,
                 arguments=payload,
                 idempotency_key=idempotency_key,
+            )
+
+        async def rollback_created_interaction(
+            interaction_id: str,
+            active_invocation_id: str,
+        ) -> dict[str, Any]:
+            return await platform_service.rollback_interaction_create(
+                installation_id=authorization.installation_id,
+                conversation_id=str(request.session_id),
+                invocation_id=active_invocation_id,
+                interaction_id=interaction_id,
+                operation_key=(
+                    f"rollback:{active_invocation_id}:{interaction_id}"
+                ),
             )
 
         def read_aigc_task(material_task_id: str) -> dict[str, Any] | None:
@@ -2688,6 +2776,7 @@ async def handle_workspace_turn(
             config=orchestration,
             authorization=authorization,
             business_call=business_call,
+            rollback_interaction_create=rollback_created_interaction,
             read_aigc_task=read_aigc_task,
             read_interaction_card=read_interaction_card,
             interaction_receipts=interaction_receipts,

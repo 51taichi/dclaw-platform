@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.64`
+当前版本：`2.65`
 
 发布日期：`2026-11-16`
 
@@ -2431,6 +2431,12 @@ Skill 和专家发布前须对每条实际使用的路径同时验证：正确�
 以上是通用 Skill 的平台合同输入。Skill 维护方应在其 `references/capability-verification.md` 补 `/v2/` 的首错和终止根因区分，在 `scripts/runtime_diagnostics_with_login.py` 增加按官方 DevKit v2 Schema 查询和摘要，在相关脚本测试加入已恢复错误、最终阻断、`no_record`、越权及旧版回退案例。平台不直接覆盖 Skill 发布仓库，也不把单个专家的业务字段写成公共规则。
 
 ## 34. 版本记录
+
+### 2.65 - 2026-11-17
+
+- Support Plugin `1.18.55` 为所有 Super Agent 发布统一 `agent.execute` 三模式与 `runtime.fail` v1 机器合同；保留既有错误码，并接受最长 64 字符的安全大写点分错误码。
+- 同一 invocation 创建卡片后若回合失败、超时或取消，平台只补偿仍为 PENDING 的本轮新卡；重放、其他 invocation 的卡和已提交卡不受影响，替换失败时恢复原 PENDING 卡。
+- DevKit `1.9.31` 和 Developer Pack `1.10.44` 发布关闭 Schema、严格 API Demo 和正反例。新发布必须通过严格 Host 校验；已激活旧 Release 继续兼容，平台不静默改写其业务实现。
 
 ### 2.64 - 2026-11-17
 

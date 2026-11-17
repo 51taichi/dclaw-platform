@@ -303,6 +303,17 @@ def _trace_failure(
                             invocation["first_failure_source"] = "host_stage"
                 elif event == "runtime.trace":
                     trace = payload
+                    if (
+                        trace.get("event") == "runtime.fail.accepted"
+                        and "first_failure" not in invocation
+                    ):
+                        invocation["first_failure"] = {
+                            "phase": "agent_runtime",
+                            "category": _token(trace.get("error_code"))
+                            or "not_recorded",
+                            "attempt": None,
+                        }
+                        invocation["first_failure_source"] = "agent_runtime"
                     if trace.get("event") == "agent.turn.failure":
                         attempt = trace.get("attempt")
                         invocation.setdefault("failure_events", []).append({

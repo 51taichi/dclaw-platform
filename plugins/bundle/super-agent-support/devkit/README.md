@@ -1,5 +1,9 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.31 adds closed `agent.execute` and `runtime.fail` schemas plus
+`agent_execute_api_demo.py`. Use its three explicit execution modes and do not
+combine candidate-only `response_format` with `agent_loop` instructions.
+
 Version 1.9.30 adds owner-scoped `developer.runtime.diagnostics.by-reference/6`.
 Use `runtime_diagnostics_api_demo.py --root-cause` with one invocation ID to
 join retained runtime and local-task evidence. Generic Host exceptions expose

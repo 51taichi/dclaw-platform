@@ -206,6 +206,7 @@ class SuperExpertPlatformService:
         contract_version: str,
         arguments: dict[str, Any],
         idempotency_key: str,
+        invocation_id: str | None = None,
     ) -> dict[str, Any]:
         """Authorize and execute an Agent-originated interaction operation."""
         decision = self.grant_repository.authorize_capability(
@@ -243,6 +244,7 @@ class SuperExpertPlatformService:
                     conversation_id=conversation_id,
                     request=request,
                     idempotency_key=idempotency_key,
+                    invocation_id=invocation_id,
                 )
                 event_type = "interaction.card.created"
             elif capability == "interaction.card.cancel/1":
@@ -274,6 +276,42 @@ class SuperExpertPlatformService:
         if capability == "interaction.card.create/1":
             result["receipt"] = card_receipt(card, "created")
         return result
+
+    async def rollback_interaction_create(
+        self,
+        *,
+        installation_id: str,
+        conversation_id: str,
+        invocation_id: str,
+        interaction_id: str,
+        operation_key: str,
+    ) -> dict[str, Any]:
+        """Compensate only a card created by this failed Host invocation."""
+        if self.interactions is None:
+            raise SuperExpertPlatformError(
+                "interaction service is unavailable",
+            )
+        cancelled, restored, replayed = self.interactions.rollback_create(
+            interaction_id=interaction_id,
+            installation_id=installation_id,
+            conversation_id=conversation_id,
+            invocation_id=invocation_id,
+            operation_key=operation_key,
+        )
+        if not replayed:
+            await self.publish_interaction_event(
+                cancelled, event_type="interaction.card.cancelled",
+            )
+            if restored is not None:
+                await self.publish_interaction_event(
+                    restored, event_type="interaction.card.created",
+                )
+        return {
+            "status": "replayed" if replayed else "cancelled",
+            "restored_interaction_id": (
+                restored.interaction_id if restored is not None else None
+            ),
+        }
 
     def read_interaction(
         self,

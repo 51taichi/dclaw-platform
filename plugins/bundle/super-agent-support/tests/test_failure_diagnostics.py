@@ -1238,10 +1238,11 @@ async def test_host_stages_are_correlated_without_context_or_message_body():
     )
     assert (await host.call("session.context", {}))["private"] == "customer content"
     await host.call("runtime.fail", {
-        "invocation_id": "one", "error_code": "INVALID_TURN_RESULT",
+        "invocation_id": "one", "error_code": "HOST.AGENT_EXECUTE_FAILED",
     })
     assert [item["payload"]["event"] for item in stages] == [
         "session.context.completed", "runtime.fail.accepted",
     ]
     assert all(item["invocation_id"] == "one" for item in stages)
+    assert stages[-1]["payload"]["error_code"] == "HOST.AGENT_EXECUTE_FAILED"
     assert "customer content" not in json.dumps(stages)

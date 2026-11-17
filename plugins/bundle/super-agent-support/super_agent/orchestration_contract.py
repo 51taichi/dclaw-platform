@@ -75,9 +75,11 @@ class WorkspaceTurnFailure(BaseModel):
 
     invocation_id: str = Field(min_length=1)
     error_code: str = Field(
+        max_length=64,
         pattern=(
-            r"^(orchestration_error|orchestration_timeout|runtime_failed|"
-            r"unauthorized_capability|invalid_completion|INVALID_TURN_RESULT)$"
+            r"^(?:orchestration_error|orchestration_timeout|runtime_failed|"
+            r"unauthorized_capability|invalid_completion|"
+            r"[A-Z][A-Z0-9_]*(?:\.[A-Z][A-Z0-9_]*)*)$"
         ),
     )
     diagnostic_ref: str | None = Field(default=None, max_length=200)

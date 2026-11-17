@@ -224,6 +224,66 @@ def test_api_demo_rejects_missing_created_event_id():
         verify_created(result, request)
 
 
+def test_failed_invocation_rolls_back_only_its_pending_card(tmp_path):
+    repo = InteractionCardRepository(tmp_path)
+    now = datetime(2026, 11, 17, tzinfo=timezone.utc)
+    request = InteractionCreateRequest.model_validate(
+        build_interaction_catalog(["single_select"])["components"][0][
+            "create_example"
+        ],
+    )
+    card = repo.create(
+        installation_id="install", conversation_id="session",
+        request=request, idempotency_key="create-1",
+        invocation_id="invocation-1", now=now,
+    )
+    cancelled, restored, replayed = repo.rollback_create(
+        interaction_id=card.interaction_id,
+        installation_id="install", conversation_id="session",
+        invocation_id="invocation-1", operation_key="rollback-1", now=now,
+    )
+    assert cancelled.status.value == "CANCELLED"
+    assert restored is None
+    assert replayed is False
+    replay, _, replayed = repo.rollback_create(
+        interaction_id=card.interaction_id,
+        installation_id="install", conversation_id="session",
+        invocation_id="invocation-1", operation_key="rollback-1", now=now,
+    )
+    assert replay.status.value == "CANCELLED"
+    assert replayed is True
+
+
+def test_rollback_rejects_replay_owned_by_another_invocation(tmp_path):
+    repo = InteractionCardRepository(tmp_path)
+    now = datetime(2026, 11, 17, tzinfo=timezone.utc)
+    request = InteractionCreateRequest.model_validate(
+        build_interaction_catalog(["single_select"])["components"][0][
+            "create_example"
+        ],
+    )
+    card = repo.create(
+        installation_id="install", conversation_id="session", request=request,
+        idempotency_key="create-owner", invocation_id="owner", now=now,
+    )
+    replay = repo.create(
+        installation_id="install", conversation_id="session", request=request,
+        idempotency_key="create-replay", invocation_id="replayer", now=now,
+    )
+    assert replay.interaction_id == card.interaction_id
+    with pytest.raises(Exception, match="INTERACTION_ROLLBACK_NOT_OWNED"):
+        repo.rollback_create(
+            interaction_id=card.interaction_id,
+            installation_id="install", conversation_id="session",
+            invocation_id="replayer", operation_key="rollback-replayer", now=now,
+        )
+    assert repo.get_owned(
+        card.interaction_id,
+        installation_id="install", conversation_id="session",
+        now=now,
+    ).status.value == "PENDING"
+
+
 @pytest.mark.asyncio
 async def test_api_demo_uses_live_catalog_and_verifies_created_receipt(tmp_path):
     catalog = build_interaction_catalog(["single_select"])

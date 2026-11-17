@@ -296,12 +296,19 @@ async def test_platform_video_render_demo_prepares_then_starts_with_bound_files(
 
 def test_pack_exposes_aigc_and_local_api_references():
     payload, metadata = build_archive(PLUGIN_ROOT)
-    assert metadata["standard"]["version"] == "2.64"
-    assert metadata["devkit_version"] == "1.9.30"
+    assert metadata["standard"]["version"] == "2.65"
+    assert metadata["devkit_version"] == "1.9.31"
     prefix = f"dclaw-super-agent-developer-pack-{metadata['version']}/"
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         names = set(archive.namelist())
+        assert prefix + "SUPER_AGENT_SKILL_HANDOFF.md" in names
         for path in (
+            "devkit/agent_execute_api_demo.py",
+            "devkit/schemas/agent-execute-v1/request.schema.json",
+            "devkit/schemas/agent-execute-v1/response.schema.json",
+            "devkit/schemas/runtime-fail-v1/request.schema.json",
+            "devkit/schemas/runtime-fail-v1/response.schema.json",
+            "devkit/examples/agent-execute-v1/README.md",
             "devkit/aigc_workflow_api_demo.py",
             "devkit/aigc_binding_api_demo.py",
             "devkit/runtime_diagnostics_api_demo.py",
