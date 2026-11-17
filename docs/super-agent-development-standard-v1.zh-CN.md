@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.62`
+当前版本：`2.63`
 
 发布日期：`2026-11-16`
 
@@ -1669,7 +1669,7 @@ python dclaw_agent_devkit.py publish --base-url <目标DClaw HTTPS地址> upload
 
 平台发布 `super_expert_public` 前，必须在实际运行容器内验证 `/usr/bin/bwrap` 存在，且该容器能够成功创建用户、进程和网络命名空间；仅检查二进制文件存在或插件热加载成功不算通过。未通过时，开发方可以继续离线构建和验签，但自助上传不可用，平台维护方负责补齐运行容器的隔离器和容器权限。此项属于运行环境门禁，不能通过把未受信开发者代码改回服务进程内执行来绕过。上传后的激活若失败，错误回执应包含已安装的 `release_id` 及准确的 `uploaded/granted/active` 状态，以便开发者修复环境后重试。
 
-生产可将隔离器放在插件专用的独立容器，主 Server 只通过插件的 Unix socket 合同转发已授权的业务能力调用，不给主 Server 增加命名空间权限。隔离容器不得连接外网或挂载 Server Secret；根文件系统只读，只挂载插件源码、签名发布物、工作区运行状态与 socket 目录。插件代码必须通过稳定的 `plugins` 父目录只读挂载；不得单独绑定插件子目录，否则热更新原子替换子目录后隔离容器会保留失效的旧挂载。插件内的 `tools/Dockerfile.public-runtime` 和 `tools/configure_public_sandbox.py` 分别提供隔离运行镜像的构建配方与现有 Compose 项目的备份式配置步骤。插件热更新涉及隔离器代码时，必须同步重启该隔离容器并重新执行隔离环境探针；主 Server 不因隔离器代码更新而需要重启。隔离容器不可用时，新的自助上传失败关闭，不影响历史 `super_expert` 包。
+生产可将隔离器放在插件专用的独立容器，主 Server 只通过插件的 Unix socket 合同转发已授权的业务能力调用，不给主 Server 增加命名空间权限。隔离容器不得连接外网或挂载 Server Secret；根文件系统只读，只挂载插件源码、签名发布物、工作区运行状态与 socket 目录。插件代码必须通过稳定的 `plugins` 父目录只读挂载；不得单独绑定插件子目录，否则热更新原子替换子目录后隔离容器会保留失效的旧挂载。插件内的 `tools/Dockerfile.public-runtime` 和 `tools/configure_public_sandbox.py` 分别提供隔离运行镜像的构建配方与现有 Compose 项目的备份式配置步骤。插件热更新涉及隔离器代码时，必须同步重启该隔离容器并重新执行隔离环境探针；探针必须同时验证 Bubblewrap 执行、运行时 broker、`public_worker.py`、发布目录和运行状态目录，不能以仍存活的旧进程或 socket 常量响应代替。主 Server 不因隔离器代码更新而需要重启。隔离容器不可用时，新的自助上传失败关闭，不影响历史 `super_expert` 包。
 
 ### 22.2 历史管理员发布链路
 
@@ -2429,6 +2429,11 @@ Skill 和专家发布前须对每条实际使用的路径同时验证：正确�
 以上是通用 Skill 的平台合同输入。Skill 维护方应在其 `references/capability-verification.md` 补 `/v2/` 的首错和终止根因区分，在 `scripts/runtime_diagnostics_with_login.py` 增加按官方 DevKit v2 Schema 查询和摘要，在相关脚本测试加入已恢复错误、最终阻断、`no_record`、越权及旧版回退案例。平台不直接覆盖 Skill 发布仓库，也不把单个专家的业务字段写成公共规则。
 
 ## 34. 版本记录
+
+### 2.63 - 2026-11-17
+
+- Support Plugin `1.18.53` 修复公共专家隔离 sidecar 的假健康：健康回执同时验证实际运行文件、共享目录和 Bubblewrap 探针；插件热更新后须刷新 sidecar，DClaw 主服务无需重启。
+- 已记录的 `runtime_isolation_unavailable` 由现有开发者诊断 v5 安全映射为 `RUNTIME_ISOLATION_UNAVAILABLE`、平台责任和恢复后重试动作；未列入安全映射的内部诊断仍不披露。DevKit `1.9.29` 的 v5 Schema 不变，Developer Pack `1.10.42` 同步本标准和运维约束。
 
 ### 2.62 - 2026-11-16
 

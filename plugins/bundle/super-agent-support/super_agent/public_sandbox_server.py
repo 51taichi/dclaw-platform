@@ -9,12 +9,38 @@ import os
 from pathlib import Path
 from typing import Any
 
-from public_runtime import (
-    MAX_LINE_BYTES,
-    PublicRuntimeError,
-    invoke_public_runtime,
-    isolation_available,
-)
+try:
+    from .public_runtime import (
+        MAX_LINE_BYTES,
+        PublicRuntimeError,
+        invoke_public_runtime,
+        isolation_available,
+    )
+except ImportError:  # Direct script execution inside the sidecar.
+    from public_runtime import (
+        MAX_LINE_BYTES,
+        PublicRuntimeError,
+        invoke_public_runtime,
+        isolation_available,
+    )
+
+
+def _runtime_available(
+    shared_root: Path,
+    *,
+    runtime_dir: Path | None = None,
+) -> bool:
+    runtime_dir = runtime_dir or Path(__file__).parent
+    required = (
+        runtime_dir / "public_runtime.py",
+        runtime_dir / "public_worker.py",
+        shared_root / "sealed_agents",
+        shared_root / "workspace_runtime_state",
+    )
+    return all(path.exists() for path in required) and isolation_available(
+        socket_path="",
+        worker_path=runtime_dir / "public_worker.py",
+    )
 
 
 class RuntimeRequest:
@@ -87,7 +113,11 @@ async def _handle(
         if not isinstance(message, dict):
             raise ValueError("invalid sandbox request")
         if message.get("type") == "health":
-            writer.write(b'{"type":"health","available":true}\n')
+            available = _runtime_available(shared_root)
+            writer.write(json.dumps(
+                {"type": "health", "available": available},
+                separators=(",", ":"),
+            ).encode("utf-8") + b"\n")
         elif message.get("type") == "start":
             fields = message.get("request")
             if not isinstance(fields, dict):
@@ -150,7 +180,7 @@ async def _handle(
 
 async def serve(socket_path: Path, shared_root: Path) -> None:
     shared_root = shared_root.resolve(strict=True)
-    if not isolation_available(socket_path=""):
+    if not _runtime_available(shared_root):
         raise RuntimeError("runtime isolation unavailable")
     socket_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     socket_path.parent.chmod(0o700)

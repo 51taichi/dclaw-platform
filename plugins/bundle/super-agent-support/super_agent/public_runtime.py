@@ -21,6 +21,7 @@ class PublicRuntimeError(RuntimeError):
 def isolation_available(
     *, bwrap_path: Path = Path("/usr/bin/bwrap"),
     socket_path: str | None = None,
+    worker_path: Path | None = None,
 ) -> bool:
     if socket_path is None:
         socket_path = os.environ.get("DCLAW_SUPER_AGENT_SANDBOX_SOCKET")
@@ -37,6 +38,8 @@ def isolation_available(
                 return status == {"type": "health", "available": True}
         except (OSError, ValueError):
             return False
+    if worker_path is not None and not worker_path.is_file():
+        return False
     if not bwrap_path.is_file():
         return False
     command = [

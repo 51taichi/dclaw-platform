@@ -101,12 +101,19 @@ def test_standalone_plugin_release_contains_canonical_standard(
     helper = tmp_path / "DClaw.LocalHelper.exe"
     helper.write_bytes(b"MZ\x00signed-helper-fixture")
     metadata = release.build(output, windows_helper_binary=helper)
-    assert metadata["plugin_version"] == "1.18.52"
-    assert metadata["standard_version"] == "2.62"
-    assert metadata["windows_helper_version"] == "1.4.12"
+    plugin_manifest = json.loads((plugin_root / "plugin.json").read_text())
+    helper_metadata = json.loads(
+        (plugin_root / "windows-helper" / "helper.json").read_text(),
+    )
+    standard_version = (
+        standard_path.read_text().split("当前版本：`", 1)[1].split("`", 1)[0]
+    )
+    assert metadata["plugin_version"] == plugin_manifest["version"]
+    assert metadata["standard_version"] == standard_version
+    assert metadata["windows_helper_version"] == helper_metadata["version"]
     with zipfile.ZipFile(output) as archive:
         standard = archive.read(release.STANDARD_IN_PLUGIN)
-        assert b"2.62" in standard
+        assert f"当前版本：`{standard_version}`".encode() in standard
         assert archive.read(release.HELPER_EXECUTABLE_IN_PLUGIN) == (
             helper.read_bytes()
         )
@@ -119,7 +126,7 @@ def test_standalone_plugin_release_contains_canonical_standard(
             "protocol_version": "2",
             "sha256": hashlib.sha256(helper.read_bytes()).hexdigest(),
             "size_bytes": len(helper.read_bytes()),
-            "version": "1.4.12",
+            "version": helper_metadata["version"],
         }
         archive.extractall(tmp_path / "extracted")
     root = tmp_path / "extracted" / "super-agent-support"
@@ -131,7 +138,7 @@ def test_standalone_plugin_release_contains_canonical_standard(
     spec.loader.exec_module(module)
     payload, pack_metadata = module.build_archive(root)
     assert payload
-    assert pack_metadata["standard"]["version"] == "2.62"
+    assert pack_metadata["standard"]["version"] == standard_version
 
 
 def _zip(files: dict[str, bytes]) -> bytes:
@@ -328,8 +335,12 @@ def test_plugin_archive_embeds_current_standard_and_is_reproducible(tmp_path):
     assert first == second
     assert metadata == repeated
     assert metadata["plugin_id"] == "dclaw.super-agent-support"
-    assert metadata["version"] == "1.18.52"
-    assert metadata["windows_helper_version"] == "1.4.12"
+    plugin_manifest = json.loads((plugin_root / "plugin.json").read_text())
+    helper_metadata_source = json.loads(
+        (plugin_root / "windows-helper" / "helper.json").read_text(),
+    )
+    assert metadata["version"] == plugin_manifest["version"]
+    assert metadata["windows_helper_version"] == helper_metadata_source["version"]
     assert metadata["sha256"] == hashlib.sha256(first).hexdigest()
     with zipfile.ZipFile(io.BytesIO(first)) as archive:
         names = set(archive.namelist())

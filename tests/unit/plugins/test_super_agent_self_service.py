@@ -130,6 +130,26 @@ def test_public_runtime_fails_closed_without_isolator(tmp_path):
         asyncio.run(run())
 
 
+def test_public_runtime_local_probe_requires_live_worker(tmp_path, monkeypatch):
+    bwrap = tmp_path / "bwrap"
+    bwrap.write_bytes(b"executable")
+    worker = tmp_path / "public_worker.py"
+
+    assert public_runtime.isolation_available(
+        bwrap_path=bwrap, socket_path="", worker_path=worker,
+    ) is False
+
+    worker.write_text("# runtime worker\n", encoding="utf-8")
+    monkeypatch.setattr(
+        public_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0),
+    )
+    assert public_runtime.isolation_available(
+        bwrap_path=bwrap, socket_path="", worker_path=worker,
+    ) is True
+
+
 def test_public_runtime_relays_host_calls_over_unix_socket(tmp_path, monkeypatch):
     import asyncio
 

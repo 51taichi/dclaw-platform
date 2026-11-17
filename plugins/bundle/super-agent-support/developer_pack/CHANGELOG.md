@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.10.42 - 2026-11-17
+
+- Bundle standard 2.63 and DevKit 1.9.29. Support plugin 1.18.53 verifies the
+  public runtime worker and isolation probe instead of accepting a live socket
+  as sufficient health evidence.
+- Diagnostics v5 maps only the recorded, allowlisted runtime isolation failure
+  to a stable platform blocker. Unknown internal diagnostic text stays hidden.
+
 ## 1.10.41 - 2026-11-16
 
 - Bundle standard 2.62 and DevKit 1.9.29 with owner-scoped local task

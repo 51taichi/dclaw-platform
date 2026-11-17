@@ -41,6 +41,16 @@ _CONSTRAINTS = {
     "too_short": "TOO_SHORT", "too_long": "TOO_LONG",
     "literal_error": "INVALID_VALUE", "enum": "INVALID_VALUE",
 }
+_SAFE_ORCHESTRATION_FAILURES = {
+    "runtime_isolation_unavailable": {
+        "phase": "runtime_isolation",
+        "category": "platform_runtime_unavailable",
+        "error_code": "RUNTIME_ISOLATION_UNAVAILABLE",
+        "constraint": "SANDBOX_RUNTIME_UNAVAILABLE",
+        "responsibility": "platform",
+        "recovery_action": "retry_after_platform_recovery",
+    },
+}
 
 
 class FailureDiagnosticsUnauthorized(ValueError):
@@ -230,6 +240,28 @@ def _trace_failure(
                 elif event == "orchestration.failed":
                     invocation["failed_at"] = when
                     invocation["error_code"] = _token(payload.get("error_code"))
+                    runtime_detail = _SAFE_ORCHESTRATION_FAILURES.get(
+                        _token(payload.get("diagnostic_ref")) or "",
+                    )
+                    if runtime_detail is not None:
+                        invocation["platform_failure_detail"] = runtime_detail
+                        if "first_failure" not in invocation:
+                            invocation["first_failure"] = {
+                                "phase": runtime_detail["phase"],
+                                "category": runtime_detail["category"],
+                                "attempt": None,
+                            }
+                            invocation["first_failure_source"] = "host_stage"
+                        invocation.setdefault("failure_events", []).append({
+                            "phase": runtime_detail["phase"],
+                            "category": runtime_detail["category"],
+                            "attempt": None,
+                            "source": "host",
+                            "at": when.isoformat(),
+                            "status_code": None,
+                            "provider_code": None,
+                            "provider_param": None,
+                        })
                 elif event == "orchestration.completed":
                     invocation["completed_at"] = when
                 elif event in {"host.operation.started", "host.operation.completed", "host.operation.failed"}:
@@ -851,7 +883,18 @@ def read_developer_invocation_by_reference_v5(**kwargs: Any) -> dict[str, Any]:
         raise FailureDiagnosticsUnavailable("diagnostic trace changed during read")
     details = record.get("host_failure_details", [])
     detail = details[0] if details else None
-    if detail is not None and detail.get("error_code"):
+    platform_detail = record.get("platform_failure_detail")
+    if platform_detail is not None:
+        blocker = {
+            "phase": platform_detail["phase"],
+            "error_code": platform_detail["error_code"],
+            "field_path": "not_recorded",
+            "constraint": platform_detail["constraint"],
+            "responsibility": platform_detail["responsibility"],
+            "recovery_action": platform_detail["recovery_action"],
+            "evidence": "recorded",
+        }
+    elif detail is not None and detail.get("error_code"):
         blocker = {
             "phase": detail.get("host_stage") or "host_operation",
             "error_code": detail["error_code"],

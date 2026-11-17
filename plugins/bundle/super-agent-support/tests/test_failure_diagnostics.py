@@ -261,6 +261,72 @@ def test_v5_historical_host_exception_keeps_root_unknown(tmp_path):
                                     / "by-reference-response.schema.json").read_text()))
 
 
+def test_v5_maps_recorded_runtime_isolation_failure_to_platform(tmp_path):
+    invocation = "9" * 32
+    when = NOW - timedelta(minutes=1)
+    _trace(tmp_path, "old", "customer-task", [
+        {"timestamp": when.isoformat(), "invocation_id": invocation,
+         "event_type": "orchestration.started", "payload": {}},
+        {"timestamp": (when + timedelta(milliseconds=17)).isoformat(),
+         "invocation_id": invocation, "event_type": "runtime.trace",
+         "payload": {"origin": "host", "payload": {
+             "event": "transaction.discarded",
+         }}},
+        {"timestamp": (when + timedelta(milliseconds=18)).isoformat(),
+         "invocation_id": invocation, "event_type": "orchestration.failed",
+         "payload": {
+             "error_code": "orchestration_error",
+             "diagnostic_ref": "runtime_isolation_unavailable",
+         }},
+    ])
+    result = read_developer_invocation_by_reference_v5(
+        storage_root=tmp_path, grants=_grants(), agent_id="comic",
+        tenant_id="local", invocation_id=invocation,
+        owner_resolver=lambda _: {"user_id": "customer", "agent_id": "comic",
+                                  "tenant_id": "local"},
+        task_lookup=lambda **_: [], now=NOW,
+    )
+    assert result["first_failure"] == {
+        "phase": "runtime_isolation",
+        "category": "platform_runtime_unavailable",
+        "attempt": None,
+    }
+    assert result["first_failure_source"] == "host_stage"
+    assert result["blocker"] == {
+        "phase": "runtime_isolation",
+        "error_code": "RUNTIME_ISOLATION_UNAVAILABLE",
+        "field_path": "not_recorded",
+        "constraint": "SANDBOX_RUNTIME_UNAVAILABLE",
+        "responsibility": "platform",
+        "recovery_action": "retry_after_platform_recovery",
+        "evidence": "recorded",
+    }
+    validate(result, json.loads((SCHEMAS.parent / "runtime-diagnostics-v5"
+                                 / "by-reference-response.schema.json").read_text()))
+
+
+def test_v5_does_not_expose_unknown_orchestration_diagnostic(tmp_path):
+    invocation = "8" * 32
+    when = NOW - timedelta(minutes=1)
+    _trace(tmp_path, "old", "customer-task", [{
+        "timestamp": when.isoformat(), "invocation_id": invocation,
+        "event_type": "orchestration.failed", "payload": {
+            "error_code": "orchestration_error",
+            "diagnostic_ref": "private_internal_detail",
+        },
+    }])
+    result = read_developer_invocation_by_reference_v5(
+        storage_root=tmp_path, grants=_grants(), agent_id="comic",
+        tenant_id="local", invocation_id=invocation,
+        owner_resolver=lambda _: {"user_id": "customer", "agent_id": "comic",
+                                  "tenant_id": "local"},
+        task_lookup=lambda **_: [], now=NOW,
+    )
+    assert result["first_failure_source"] == "not_recorded"
+    assert result["blocker"]["evidence"] == "historical_detail_not_recorded"
+    assert "private_internal_detail" not in json.dumps(result)
+
+
 def test_v4_reads_scoped_live_task_terminal_state(tmp_path):
     invocation = "e" * 32
     _trace(tmp_path, "old", "customer-task", [

@@ -1,5 +1,9 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.42 bundles standard 2.63 and DevKit 1.9.29. Public runtime health
+now verifies the live worker, shared roots and Bubblewrap probe, and diagnostics
+v5 safely attributes recorded runtime isolation failures to the platform.
+
 Version 1.10.41 bundles standard 2.62 and DevKit 1.9.29. Developer local task
 diagnostics v2 covers every authorized local capability, including public
 FFmpeg tasks, while preserving the AIGC-only v1 endpoint. Helper 1.4.12

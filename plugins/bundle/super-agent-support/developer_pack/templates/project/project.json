@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "agent_id": "{{AGENT_ID}}",
-  "developer_pack_version": "1.10.41",
-  "standard": {"id": "dclaw.super-agent-development", "version": "2.62"},
+  "developer_pack_version": "1.10.42",
+  "standard": {"id": "dclaw.super-agent-development", "version": "2.63"},
   "devkit_version": "1.9.29",
   "local_helper": "none",
   "tests": {
