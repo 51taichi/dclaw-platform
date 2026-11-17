@@ -55,6 +55,15 @@ def lookup_turn_blocker(base_url: str, agent_id: str, invocation_id: str, token:
                  "runtime-diagnostics-v5/by-reference-response.schema.json")
 
 
+def lookup_root_cause(base_url: str, agent_id: str, invocation_id: str, token: str) -> dict:
+    path = (
+        "/api/user/super-expert-publishing/runtime-diagnostics/v6/references/"
+        + quote(invocation_id, safe="") + "?" + urlencode({"agent_id": agent_id})
+    )
+    return _read(base_url, path, token, SCHEMA_ROOT /
+                 "runtime-diagnostics-v6/by-reference-response.schema.json")
+
+
 def search(
     base_url: str, agent_id: str, start: str, end: str, token: str,
     cursor: str | None = None,
@@ -82,16 +91,21 @@ def main() -> None:
                         help="read Host operations in completed or failed turns using v4")
     parser.add_argument("--include-blocker", action="store_true",
                         help="read safe Host blocker and recovery action using v5")
+    parser.add_argument("--root-cause", action="store_true",
+                        help="combine runtime and local-task evidence using v6")
     args = parser.parse_args()
     if bool(args.start) != bool(args.end):
         parser.error("--start and --end must be supplied together")
     if args.cursor and not args.start:
         parser.error("--cursor requires --start and --end")
+    if args.root_cause and not args.invocation_id:
+        parser.error("--root-cause requires --invocation-id")
     token = os.environ.get("DCLAW_ACCESS_TOKEN")
     if not token:
         parser.error("sign in locally and set DCLAW_ACCESS_TOKEN")
     result = (
-        (lookup_turn_blocker if args.include_blocker else
+        (lookup_root_cause if args.root_cause else
+         lookup_turn_blocker if args.include_blocker else
          lookup_turn if args.include_completed else lookup)(
             args.base_url, args.agent_id, args.invocation_id, token,
         )

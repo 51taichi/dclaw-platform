@@ -1,5 +1,11 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.30 adds owner-scoped `developer.runtime.diagnostics.by-reference/6`.
+Use `runtime_diagnostics_api_demo.py --root-cause` with one invocation ID to
+join retained runtime and local-task evidence. Generic Host exceptions expose
+only a stable observed failure; historical missing details remain unknown.
+The v5 endpoint and sealed Agent contracts are unchanged.
+
 Version 1.9.29 adds `developer.local-task.diagnostics.read/2` for every
 authorized local capability. Use `local_task_diagnostics_api_demo.py
 --api-version 2` to read one task or invocation. Phase and category have

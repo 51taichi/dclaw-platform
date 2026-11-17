@@ -27,6 +27,7 @@ from super_agent.failure_diagnostics import (
     search_developer_failures,
     classify_interaction_failure,
 )
+from super_agent.diagnostic_summary import summarize_invocation
 from super_agent.interaction_cards import InteractionError
 from super_agent.interaction_contract import InteractionCreateRequest, InteractionValidationError
 from pydantic import ValidationError
@@ -757,6 +758,7 @@ def test_developer_diagnostic_routes_enforce_expert_owner(tmp_path, monkeypatch)
            _failure(invocation, when))
     monkeypatch.setattr("super_agent.publication.WORKING_DIR", tmp_path)
     monkeypatch.setattr("super_agent.local_host.read_invocation_task_summaries", lambda **_: None)
+    monkeypatch.setattr("super_agent.local_host.read_diagnostic_tasks", lambda **_: [])
     monkeypatch.setattr(
         "super_agent.composition.resolve_event_scope",
         lambda _: {"tenant_id": "local", "agent_id": "comic", "user_id": "customer"},
@@ -795,6 +797,19 @@ def test_developer_diagnostic_routes_enforce_expert_owner(tmp_path, monkeypatch)
     blocker = client.get(blocker_reference, params={"agent_id": "comic"})
     assert blocker.status_code == 200
     assert blocker.json()["blocker"]["evidence"] == "historical_detail_not_recorded"
+    summary_reference = f"/runtime-diagnostics/v6/references/{invocation}"
+    assert client.get(summary_reference, params={"agent_id": "foreign"}).status_code == 404
+    summary = client.get(summary_reference, params={"agent_id": "comic"})
+    assert summary.status_code == 200
+    assert summary.json()["diagnosis_status"] == "first_observed_only"
+    assert summary.json()["runtime_evidence"] == "found"
+    assert summary.json()["local_tasks"] == []
+    validate(summary.json(), json.loads((SCHEMAS.parent / "runtime-diagnostics-v6"
+                                         / "by-reference-response.schema.json").read_text()))
+    absent = client.get(f"/runtime-diagnostics/v6/references/{'0' * 32}",
+                        params={"agent_id": "comic"})
+    assert absent.status_code == 200
+    assert absent.json()["status"] == "no_record"
     searched = client.get("/runtime-diagnostics/v1/search", params={
         "agent_id": "comic", "start": (when - timedelta(minutes=1)).isoformat(),
         "end": (when + timedelta(minutes=1)).isoformat(),
@@ -804,6 +819,113 @@ def test_developer_diagnostic_routes_enforce_expert_owner(tmp_path, monkeypatch)
     assert client.get("/runtime-diagnostics/v1/search", params={
         "agent_id": "foreign", "start": when.isoformat(), "end": datetime.now(timezone.utc).isoformat(),
     }).status_code == 404
+    def unavailable(**_):
+        raise RuntimeError("private task store detail")
+    monkeypatch.setattr("super_agent.local_host.read_diagnostic_tasks", unavailable)
+    assert client.get(summary_reference, params={"agent_id": "comic"}).json() == {
+        "detail": "diagnostics unavailable",
+    }
+
+
+def test_v6_combines_async_helper_failure_and_preserves_runtime_v5(tmp_path):
+    invocation = "f" * 32
+    when = NOW - timedelta(minutes=1)
+    _trace(tmp_path, "old", "customer-task", [
+        {"timestamp": when.isoformat(), "invocation_id": invocation,
+         "event_type": "orchestration.started", "payload": {}},
+        {"timestamp": (when + timedelta(seconds=1)).isoformat(),
+         "invocation_id": invocation, "event_type": "orchestration.completed",
+         "payload": {}},
+    ])
+    kwargs = dict(storage_root=tmp_path, grants=_grants(), agent_id="comic",
+                  tenant_id="local", invocation_id=invocation,
+                  owner_resolver=lambda _: {"user_id": "customer", "agent_id": "comic",
+                                            "tenant_id": "local"},
+                  task_lookup=lambda **_: [], now=NOW)
+    runtime = read_developer_invocation_by_reference_v5(**kwargs)
+    before = json.dumps(runtime, sort_keys=True)
+    local = {
+        "status": "found", "tasks": [{
+            "task_id": "a" * 32, "capability": "dclaw.ffmpeg.task.plan",
+            "task_status": "failed", "release_id": "0.2.3",
+            "installation_id": "old", "host_dispatched": True,
+            "helper_received": True, "helper_version": "1.4.12",
+            "first_failure_phase": "capability_execute",
+            "phase_evidence": "recorded", "exception_category": "capability_execution",
+            "category_evidence": "recorded", "error_code": "RUNNER.EXECUTION_FAILED",
+            "responsibility": "undetermined",
+            "recovery_action": "contact_platform_with_task_id",
+            "updated_at": (when + timedelta(seconds=3)).isoformat(),
+        }],
+    }
+    result = summarize_invocation(invocation_id=invocation, runtime=runtime,
+                                  local_tasks=local)
+    assert result["runtime_outcome"] == "completed"
+    assert result["diagnosis_status"] == "specific_recorded"
+    assert result["findings"][0]["layer"] == "helper"
+    assert result["local_tasks"][0]["installation_id"] == "old"
+    validate(result, json.loads((SCHEMAS.parent / "runtime-diagnostics-v6"
+                                 / "by-reference-response.schema.json").read_text()))
+    assert json.dumps(read_developer_invocation_by_reference_v5(**kwargs),
+                      sort_keys=True) == before
+
+
+def test_v6_generic_host_failure_is_observation_not_invented_root(tmp_path):
+    invocation = "8" * 32
+    when = NOW - timedelta(minutes=1)
+    _trace(tmp_path, "old", "customer-task", [
+        {"timestamp": when.isoformat(), "invocation_id": invocation,
+         "event_type": "host.operation.failed", "payload": {
+             "capability": "local.task.start/1", "category": "host_internal",
+             "error_code": "HOST_INTERNAL_ERROR", "host_stage": "host_operation",
+             "responsibility": "platform",
+             "recovery_action": "contact_platform_with_invocation_id",
+             "raw_stack": "private stack"}},
+        {"timestamp": (when + timedelta(seconds=1)).isoformat(),
+         "invocation_id": invocation, "event_type": "orchestration.failed",
+         "payload": {}},
+    ])
+    runtime = read_developer_invocation_by_reference_v5(
+        storage_root=tmp_path, grants=_grants(), agent_id="comic",
+        tenant_id="local", invocation_id=invocation,
+        owner_resolver=lambda _: {"user_id": "customer", "agent_id": "comic",
+                                  "tenant_id": "local"},
+        task_lookup=lambda **_: [], now=NOW,
+    )
+    result = summarize_invocation(invocation_id=invocation, runtime=runtime,
+                                  local_tasks={"status": "no_record", "tasks": []})
+    assert result["findings"][0]["error_code"] == "HOST_INTERNAL_ERROR"
+    assert result["findings"][0]["evidence"] == "first_observed_only"
+    assert "private stack" not in json.dumps(result)
+    assert summarize_invocation(invocation_id=invocation,
+                                runtime={"status": "no_record"},
+                                local_tasks={"status": "no_record"})["status"] == "no_record"
+    validate(result, json.loads((SCHEMAS.parent / "runtime-diagnostics-v6"
+                                 / "by-reference-response.schema.json").read_text()))
+
+
+def test_v6_reports_multiple_local_failures_without_merging_causes():
+    invocation = "7" * 32
+    tasks = [{
+        "task_id": digit * 32, "capability": "local.task.start/1",
+        "task_status": "failed", "release_id": "old-release",
+        "installation_id": "old-installation", "host_dispatched": True,
+        "helper_received": True, "helper_version": "1.4.12",
+        "first_failure_phase": "capability_execute",
+        "phase_evidence": "recorded", "exception_category": "capability_execution",
+        "category_evidence": "recorded", "error_code": "RUNNER.EXECUTION_FAILED",
+        "responsibility": "undetermined", "recovery_action": "contact_platform_with_task_id",
+        "updated_at": NOW.isoformat(),
+    } for digit in ("1", "2")]
+    result = summarize_invocation(
+        invocation_id=invocation, runtime={"status": "no_record"},
+        local_tasks={"status": "found", "tasks": tasks},
+    )
+    assert result["diagnosis_status"] == "multiple_failures"
+    assert [item["task_id"] for item in result["findings"]] == ["1" * 32, "2" * 32]
+    assert result["runtime_evidence"] == "no_record"
+    validate(result, json.loads((SCHEMAS.parent / "runtime-diagnostics-v6"
+                                 / "by-reference-response.schema.json").read_text()))
 
 
 def test_developer_aigc_binding_route_reuses_owner_and_rate_limit(tmp_path, monkeypatch):
@@ -910,6 +1032,24 @@ def test_developer_diagnostic_demo_reads_blocker_v5(monkeypatch):
     )
     assert result["status"] == "no_record"
     assert "/runtime-diagnostics/v5/references/" in requested[0]
+
+
+def test_developer_diagnostic_demo_reads_combined_v6(monkeypatch):
+    requested = []
+
+    def response(request, timeout):
+        requested.append(request.full_url)
+        return io.BytesIO(json.dumps({
+            "contract": "developer.runtime.diagnostics.by-reference/6",
+            "status": "no_record", "retention_days": 30,
+        }).encode())
+
+    monkeypatch.setattr(runtime_diagnostics_api_demo, "urlopen", response)
+    result = runtime_diagnostics_api_demo.lookup_root_cause(
+        "https://dclaw.example", "comic", "a" * 32, "local-token",
+    )
+    assert result["status"] == "no_record"
+    assert "/runtime-diagnostics/v6/references/" in requested[0]
 
 
 def test_reference_v2_rate_limit_is_actor_scoped():

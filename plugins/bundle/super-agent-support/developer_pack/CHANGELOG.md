@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.10.43 - 2026-11-17
+
+- Bundle standard 2.64 and DevKit 1.9.30 with owner-scoped runtime diagnostics
+  v6, combining retained Host and Helper task evidence by invocation ID.
+- Generic Host exceptions record only a stable observed failure; v5 and Agent
+  business behavior remain unchanged.
+
 ## 1.10.42 - 2026-11-17
 
 - Bundle standard 2.63 and DevKit 1.9.29. Support plugin 1.18.53 verifies the

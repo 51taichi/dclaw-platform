@@ -3,7 +3,7 @@
 | Component | Supported version |
 |---|---|
 | Developer pack | 1.0.x through 1.10.x |
-| Development standard | 2.1 through 2.63 |
+| Development standard | 2.1 through 2.64 |
 | Super Agent DevKit | 1.2.x through 1.9.x |
 | Super Expert manifest | 3 |
 | Runtime / runtime host | 1 |
@@ -48,6 +48,7 @@
 | Support plugin for complete-file video plan and Helper 1.4.10 | >= 1.18.50 |
 | Support plugin for generic local task diagnostics v2 and Helper 1.4.12 stages | >= 1.18.52 |
 | Support plugin for verified public runtime health and isolation diagnostics | >= 1.18.53 |
+| Support plugin for combined developer runtime and local-task diagnostics v6 | >= 1.18.54 |
 | Support plugin for public video timeline render and Helper 1.4.9 | >= 1.18.48 |
 | Support plugin for sealed Host local runtime preparation | >= 1.18.45 |
 | Support plugin for `runtime.failure.read/1` | >= 1.18.12 |

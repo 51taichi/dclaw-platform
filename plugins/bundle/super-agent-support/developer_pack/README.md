@@ -1,5 +1,9 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.43 bundles standard 2.64 and DevKit 1.9.30. Developer runtime
+diagnostics v6 joins authorized runtime and local-task evidence by invocation
+ID and marks generic or historical failures without inventing a root cause.
+
 Version 1.10.42 bundles standard 2.63 and DevKit 1.9.29. Public runtime health
 now verifies the live worker, shared roots and Bubblewrap probe, and diagnostics
 v5 safely attributes recorded runtime isolation failures to the platform.

@@ -1005,6 +1005,11 @@ async def run_workspace_orchestration_turn(
             else:
                 code = getattr(exc, "error_code", None)
                 aigc_failure = exc if isinstance(exc, AigcLocalizationHostError) else None
+                generic_internal = (
+                    aigc_failure is None
+                    and not isinstance(exc, WorkspaceOrchestrationError)
+                    and not (isinstance(code, str) and _failure_diagnostics._ERROR_CODE.fullmatch(code))
+                )
                 if capability == "aigc.task.assets.localize/1" and aigc_failure is None:
                     _log_aigc_localization_internal_error(
                         exc, stage="host_operation", invocation_id=invocation_id,
@@ -1023,13 +1028,19 @@ async def run_workspace_orchestration_turn(
                     payload={
                         "capability": capability,
                         "category": (
-                            "host_internal" if aigc_failure and aigc_failure.responsibility == "platform"
+                            "host_internal" if (
+                                generic_internal or (
+                                    aigc_failure is not None
+                                    and aigc_failure.responsibility == "platform"
+                                )
+                            )
                             else "host_rejected" if isinstance(exc, WorkspaceOrchestrationError)
                             else "host_exception"
                         ),
                         "error_code": (
                             aigc_failure.diagnostic_code if aigc_failure else
-                            code if isinstance(code, str) and _failure_diagnostics._ERROR_CODE.fullmatch(code) else None
+                            code if isinstance(code, str) and _failure_diagnostics._ERROR_CODE.fullmatch(code)
+                            else "HOST_INTERNAL_ERROR" if generic_internal else None
                         ),
                         **({
                             "host_stage": aigc_failure.stage,
@@ -1038,6 +1049,11 @@ async def run_workspace_orchestration_turn(
                             "responsibility": aigc_failure.responsibility,
                             "recovery_action": aigc_failure.recovery_action,
                         } if aigc_failure else {}),
+                        **({
+                            "host_stage": "host_operation",
+                            "responsibility": "platform",
+                            "recovery_action": "contact_platform_with_invocation_id",
+                        } if generic_internal else {}),
                         "duration_ms": max(0, round((time.perf_counter() - started_at) * 1000)),
                     },
                 )
