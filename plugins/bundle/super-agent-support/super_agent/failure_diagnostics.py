@@ -50,6 +50,43 @@ _SAFE_ORCHESTRATION_FAILURES = {
         "responsibility": "platform",
         "recovery_action": "retry_after_platform_recovery",
     },
+    "signed_model_not_in_catalog": {
+        "phase": "model_selection", "category": "signed_model_not_in_catalog",
+        "error_code": "MODEL_ROUTE_UNAVAILABLE", "constraint": "REGISTERED_CHAT_MODEL_REQUIRED",
+        "responsibility": "developer", "recovery_action": "publish_release_with_available_model",
+    },
+    "selected_model_not_in_catalog": {
+        "phase": "model_selection", "category": "selected_model_not_in_catalog",
+        "error_code": "MODEL_ROUTE_UNAVAILABLE", "constraint": "REGISTERED_CHAT_MODEL_REQUIRED",
+        "responsibility": "environment", "recovery_action": "select_available_model",
+    },
+    "effective_model_mismatch": {
+        "phase": "model_selection", "category": "effective_model_mismatch",
+        "error_code": "MODEL_ROUTE_MISMATCH", "constraint": "DECLARED_MODEL_MUST_MATCH_EXECUTION",
+        "responsibility": "platform", "recovery_action": "contact_platform_with_invocation_id",
+    },
+    "model_declaration_invalid": {
+        "phase": "model_selection", "category": "model_declaration_invalid",
+        "error_code": "MODEL_ROUTE_UNAVAILABLE", "constraint": "VALID_MODEL_DECLARATION_REQUIRED",
+        "responsibility": "developer", "recovery_action": "correct_release_model_declaration",
+    },
+    "selected_model_invalid": {
+        "phase": "model_selection", "category": "selected_model_invalid",
+        "error_code": "MODEL_ROUTE_UNAVAILABLE", "constraint": "VALID_MODEL_SELECTION_REQUIRED",
+        "responsibility": "environment", "recovery_action": "select_available_model",
+    },
+}
+_SAFE_AGENT_EXECUTE_FAILURES = {
+    "model_stage_timeout": {
+        "phase": "model_stream", "category": "model_stage_timeout",
+        "error_code": "MODEL_STAGE_TIMEOUT", "constraint": "MODEL_STAGE_DEADLINE",
+        "responsibility": "undetermined", "recovery_action": "retry_or_select_available_model",
+    },
+    "agent_execution_timeout": {
+        "phase": "agent_execute", "category": "agent_execution_timeout",
+        "error_code": "AGENT_EXECUTION_TIMEOUT", "constraint": "AGENT_EXECUTE_DEADLINE",
+        "responsibility": "undetermined", "recovery_action": "inspect_agent_loop_with_invocation_id",
+    },
 }
 
 
@@ -163,6 +200,9 @@ def _trace_failure(
                     "orchestration.preflight_failed", "orchestration.message_staged",
                     "agent.execute.safe_started", "agent.execute.safe_completed",
                     "agent.execute.safe_failed",
+                    "model.call.started", "model.call.completed",
+                    "model.call.failed", "model.call.timed_out",
+                    "model.stream.first_chunk",
                     "interaction.operation.started", "interaction.operation.completed",
                     "interaction.operation.failed", "interaction.tool.invoked",
                     "interaction.tool.rejected",
@@ -346,9 +386,21 @@ def _trace_failure(
                         "provider_param": _token(payload.get("provider_param")),
                     }
                     invocation.setdefault("failure_events", []).append(failure)
+                    safe_detail = _SAFE_AGENT_EXECUTE_FAILURES.get(failure["category"])
+                    if safe_detail is not None:
+                        detail = dict(safe_detail)
+                        stage = _token(payload.get("stage"))
+                        if failure["category"] == "model_stage_timeout" and stage in {"request", "stream"}:
+                            detail["phase"] = f"model_{stage}"
+                        elif failure["category"] == "agent_execution_timeout" and stage == "agent_lock":
+                            detail["phase"] = "agent_lock"
+                        invocation["platform_failure_detail"] = detail
                     if "first_failure" not in invocation:
                         invocation["first_failure"] = {
-                            "phase": failure["phase"], "category": failure["category"],
+                            "phase": (
+                                invocation.get("platform_failure_detail", {}).get("phase")
+                                or failure["phase"]
+                            ), "category": failure["category"],
                             "attempt": failure["attempt"],
                         }
                         invocation["first_failure_source"] = "host_stage"

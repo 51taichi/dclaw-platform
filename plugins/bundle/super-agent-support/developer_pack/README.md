@@ -1,5 +1,10 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.45 bundles standard 2.66 and DevKit 1.9.31. Fixed model routes
+are checked against the current catalog before runtime entry; model request,
+stream and Agent execution timeouts become visible through existing authorized
+diagnostics without exposing content. The DevKit machine schemas are unchanged.
+
 Version 1.10.44 bundles standard 2.65 and DevKit 1.9.31. It publishes strict
 `agent.execute` and `runtime.fail` contracts and safe failed-turn card
 compensation. Existing valid calls and activated releases remain compatible.

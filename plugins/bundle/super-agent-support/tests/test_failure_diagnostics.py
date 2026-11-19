@@ -226,6 +226,80 @@ def test_v5_exposes_only_recorded_host_blocker(tmp_path):
                 "agent_id": "comic", "tenant_id": "elsewhere"}})
 
 
+@pytest.mark.parametrize("category,stage,expected_phase", [
+    ("model_stage_timeout", "stream", "model_stream"),
+    ("agent_execution_timeout", "agent_loop", "agent_execute"),
+])
+def test_v5_classifies_bounded_model_execution_without_exposing_content(
+    tmp_path, category, stage, expected_phase,
+):
+    invocation = "d" * 32
+    when = NOW - timedelta(minutes=1)
+    code = ("MODEL_STAGE_TIMEOUT" if category == "model_stage_timeout"
+            else "AGENT_EXECUTION_TIMEOUT")
+    _trace(tmp_path, "new", "task", [
+        {"timestamp": when.isoformat(), "invocation_id": invocation,
+         "event_type": "orchestration.started", "payload": {}},
+        {"timestamp": (when + timedelta(seconds=1)).isoformat(),
+         "invocation_id": invocation, "event_type": "agent.execute.safe_failed",
+         "payload": {"call_number": 1, "category": category, "stage": stage,
+                     "provider_id": "provider", "model_id": "current",
+                     "error_code": code, "secret": "private model response"}},
+        {"timestamp": (when + timedelta(seconds=2)).isoformat(),
+         "invocation_id": invocation, "event_type": "runtime.trace",
+         "payload": {"origin": "host", "payload": {"event": "transaction.discarded"}}},
+        {"timestamp": (when + timedelta(seconds=3)).isoformat(),
+         "invocation_id": invocation, "event_type": "orchestration.failed",
+         "payload": {"error_code": "runtime_failed"}},
+    ])
+    result = read_developer_invocation_by_reference_v5(
+        storage_root=tmp_path, grants=_grants(), agent_id="comic",
+        tenant_id="local", invocation_id=invocation,
+        owner_resolver=lambda _: {"user_id": "57", "agent_id": "comic", "tenant_id": "local"},
+        task_lookup=lambda **_: [], now=NOW,
+    )
+    assert result["blocker"]["phase"] == expected_phase
+    assert result["blocker"]["error_code"] == code
+    assert result["blocker"]["evidence"] == "recorded"
+    assert result["transaction_status"] == "discarded"
+    assert "private model response" not in json.dumps(result)
+
+
+def test_v5_exposes_model_stage_events_without_model_content(tmp_path):
+    invocation = "e" * 32
+    when = NOW - timedelta(minutes=1)
+    _trace(tmp_path, "new", "task", [
+        {"timestamp": when.isoformat(), "invocation_id": invocation,
+         "event_type": "orchestration.started", "payload": {}},
+        {"timestamp": (when + timedelta(seconds=1)).isoformat(),
+         "invocation_id": invocation, "event_type": "model.call.started",
+         "payload": {"call_number": 1, "attempt": 1,
+                     "provider_id": "provider", "model_id": "current",
+                     "content": "private model response"}},
+        {"timestamp": (when + timedelta(seconds=2)).isoformat(),
+         "invocation_id": invocation, "event_type": "model.call.timed_out",
+         "payload": {"call_number": 1, "stage": "stream"}},
+        {"timestamp": (when + timedelta(seconds=3)).isoformat(),
+         "invocation_id": invocation, "event_type": "agent.execute.safe_failed",
+         "payload": {"call_number": 1, "category": "model_stage_timeout",
+                     "stage": "stream", "error_code": "MODEL_STAGE_TIMEOUT"}},
+        {"timestamp": (when + timedelta(seconds=4)).isoformat(),
+         "invocation_id": invocation, "event_type": "orchestration.failed",
+         "payload": {"error_code": "MODEL_STAGE_TIMEOUT"}},
+    ])
+    result = read_developer_invocation_by_reference_v5(
+        storage_root=tmp_path, grants=_grants(), agent_id="comic",
+        tenant_id="local", invocation_id=invocation,
+        owner_resolver=lambda _: {"user_id": "57", "agent_id": "comic", "tenant_id": "local"},
+        task_lookup=lambda **_: [], now=NOW,
+    )
+    assert {stage["event"] for stage in result["stages"]} >= {
+        "model.call.started", "model.call.timed_out",
+    }
+    assert result["blocker"]["phase"] == "model_stream"
+    assert "private model response" not in json.dumps(result)
+
+
 def test_v5_historical_host_exception_keeps_root_unknown(tmp_path):
     invocation = "c" * 32
     when = NOW - timedelta(minutes=1)

@@ -2648,3 +2648,211 @@ async def test_official_signed_non_luyu_fixture_uses_the_generic_protocol(
     )
     assert "luyu_traffic_operator" not in fixture_text
     assert "S0-S15" not in fixture_text
+
+
+@pytest.mark.asyncio
+async def test_signed_retired_model_fails_before_runtime_and_discards_state(
+    tmp_path, monkeypatch,
+):
+    from qwenpaw.providers.provider_manager import ProviderManager
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _write_runtime(workspace, "def create_runtime(): raise AssertionError('must not load')")
+    signed_root = tmp_path / "signed"
+    signed_root.mkdir()
+    (signed_root / "agent.json").write_text(json.dumps({
+        "active_model": {"provider_id": "provider", "model": "retired"},
+    }), encoding="utf-8")
+    provider = SimpleNamespace(
+        models=[SimpleNamespace(id="current", model_type="llm")],
+        extra_models=[],
+    )
+    monkeypatch.setattr(
+        ProviderManager, "get_instance",
+        lambda: SimpleNamespace(get_provider=lambda _id: provider),
+    )
+
+    class Agent:
+        model = SimpleNamespace(model_key="provider:current")
+
+        async def __call__(self, _messages):
+            raise AssertionError("retired model must fail before Agent execution")
+
+    root = tmp_path / "state"
+    result = await run_workspace_orchestration_turn(
+        agent=Agent(),
+        original_messages=[Msg(name="user", role="user", content="hello")],
+        request=SimpleNamespace(
+            session_id="session-1", user_id="user-1", channel="console",
+        ),
+        agent_id="generic-agent", workspace_root=workspace,
+        state_storage_root=root,
+        config=OrchestrationConfig.model_validate(_orchestration()),
+        authorization=AuthorizedWorkspaceRelease(
+            installation_id="installation-1", release_id="release-1",
+            release_digest=f"sha256:{'a' * 64}",
+            granted_capabilities={item: "1" for item in HOST_CAPABILITIES_V1},
+            signed_workspace_files=frozenset({"agent.json", "runtime.py"}),
+            signed_workspace_root=signed_root,
+        ),
+    )
+    assert result.error_code == "MODEL_ROUTE_UNAVAILABLE"
+    rows = [json.loads(line) for line in runtime_trace_path(
+        root, installation_id="installation-1", session_id="session-1",
+    ).read_text(encoding="utf-8").splitlines()]
+    assert "orchestration.preflight_failed" in {row["event_type"] for row in rows}
+    assert "runtime.invoke.started" not in {
+        row.get("payload", {}).get("payload", {}).get("event") for row in rows
+    }
+    assert any(
+        row["event_type"] == "runtime.trace"
+        and row["payload"].get("payload", {}).get("event") == "transaction.discarded"
+        for row in rows
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_stream_stall_fails_before_outer_turn_deadline(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _write_runtime(workspace, """
+        class Runtime:
+            async def handle(self, request, host):
+                await host.call("agent.execute", {
+                    "execution_mode": "agent_loop",
+                    "messages": request.normalized_input["messages"],
+                    "instruction": "Use authorized tools when needed",
+                })
+        def create_runtime(): return Runtime()
+    """)
+
+    class SlowModel:
+        model_key = "provider:current"
+        stream = True
+
+        async def __call__(self, *_args, **_kwargs):
+            async def stream():
+                yield SimpleNamespace(content="first")
+                await asyncio.sleep(2)
+            return stream()
+
+    class Agent:
+        def __init__(self):
+            self.model = SlowModel()
+            self._sys_prompt = "system"
+
+        def _build_sys_prompt(self):
+            return "system"
+
+        async def __call__(self, _messages):
+            response = await self.model([])
+            async for _ in response:
+                pass
+            return Msg(name="assistant", role="assistant", content="done")
+
+    agent = Agent()
+    root = tmp_path / "state"
+    result = await run_workspace_orchestration_turn(
+        agent=agent,
+        original_messages=[Msg(name="user", role="user", content="hello")],
+        request=SimpleNamespace(
+            session_id="session-1", user_id="user-1", channel="console",
+        ),
+        agent_id="generic-agent", workspace_root=workspace,
+        state_storage_root=root,
+        config=OrchestrationConfig.model_validate(_orchestration()),
+        authorization=AuthorizedWorkspaceRelease(
+            installation_id="installation-1", release_id="release-1",
+            release_digest=f"sha256:{'a' * 64}",
+            granted_capabilities={item: "1" for item in HOST_CAPABILITIES_V1},
+            signed_workspace_files=frozenset({"runtime.py"}),
+        ),
+        timeout_seconds=0.7,
+    )
+    assert result.error_code == "MODEL_STAGE_TIMEOUT"
+    assert agent.model.__class__ is SlowModel
+    rows = [json.loads(line) for line in runtime_trace_path(
+        root, installation_id="installation-1", session_id="session-1",
+    ).read_text(encoding="utf-8").splitlines()]
+    assert any(
+        row["event_type"] == "model.call.timed_out"
+        and row["payload"]["stage"] == "stream"
+        and row["payload"]["attempt"] == 1
+        and row["payload"]["provider_id"] == "provider"
+        and row["payload"]["model_id"] == "current"
+        for row in rows
+    )
+    assert any(row["event_type"] == "agent.execute.safe_failed"
+               for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_agent_loops_restore_the_shared_model(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _write_runtime(workspace, """
+        class Runtime:
+            async def handle(self, request, host):
+                candidate = await host.call("agent.execute", {
+                    "execution_mode": "agent_loop",
+                    "messages": request.normalized_input["messages"],
+                    "instruction": "Use the selected model",
+                })
+                await host.call("runtime.complete", {
+                    "invocation_id": request.invocation_id,
+                    "message": candidate["message"],
+                })
+        def create_runtime(): return Runtime()
+    """)
+
+    class Model:
+        model_key = "provider:current"
+
+        async def __call__(self, *_args, **_kwargs):
+            await asyncio.sleep(0.01)
+            return "model result"
+
+    class Agent:
+        def __init__(self):
+            self.model = Model()
+            self._sys_prompt = "system"
+            self.inflight = 0
+            self.peak = 0
+
+        async def __call__(self, _messages):
+            self.inflight += 1
+            self.peak = max(self.peak, self.inflight)
+            try:
+                await self.model([])
+                await asyncio.sleep(0.01)
+                return Msg(name="assistant", role="assistant", content="done")
+            finally:
+                self.inflight -= 1
+
+    agent = Agent()
+    original_model = agent.model
+    auth = AuthorizedWorkspaceRelease(
+        installation_id="installation-1", release_id="release-1",
+        release_digest=f"sha256:{'a' * 64}",
+        granted_capabilities={item: "1" for item in HOST_CAPABILITIES_V1},
+        signed_workspace_files=frozenset({"runtime.py"}),
+    )
+
+    async def turn(index):
+        return await run_workspace_orchestration_turn(
+            agent=agent,
+            original_messages=[Msg(name="user", role="user", content="hello")],
+            request=SimpleNamespace(
+                session_id=f"session-{index}", user_id="user-1", channel="console",
+            ),
+            agent_id="generic-agent", workspace_root=workspace,
+            state_storage_root=tmp_path / "state",
+            config=OrchestrationConfig.model_validate(_orchestration()),
+            authorization=auth,
+        )
+
+    results = await asyncio.gather(turn(1), turn(2))
+    assert [result.error_code for result in results] == [None, None]
+    assert agent.peak == 1
+    assert agent.model is original_model

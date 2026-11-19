@@ -51,6 +51,7 @@ from . import interaction_tools as _interaction_tools
 from .interaction_receipts import card_receipt
 from . import media_delivery as _media_delivery
 from . import media_review_context as _media_review_context
+from . import model_runtime as _model_runtime
 from . import public_stream as _public_stream
 from .public_runtime import PublicRuntimeError, invoke_public_runtime
 
@@ -716,6 +717,7 @@ async def _execute_with_runtime_system_instruction(
     invoke: Callable[[], Awaitable[Any]],
     *,
     required: bool = False,
+    lock_held: bool = False,
 ) -> Any:
     """Temporarily add trusted runtime policy without polluting chat history."""
     if instruction is None:
@@ -731,8 +733,7 @@ async def _execute_with_runtime_system_instruction(
         if required:
             raise WorkspaceOrchestrationError("orchestration_error")
         return await invoke()
-    lock = _CANDIDATE_AGENT_LOCKS.setdefault(id(agent), asyncio.Lock())
-    async with lock:
+    async def invoke_with_instruction() -> Any:
         original_prompt = getattr(agent, prompt_attr)
         original_prompt_builder = getattr(agent, "_build_sys_prompt", None)
         runtime_prompt = (
@@ -763,6 +764,12 @@ async def _execute_with_runtime_system_instruction(
                 agent._build_sys_prompt = original_prompt_builder
             if system_message is not None:
                 system_message.content = original_memory_content
+
+    if lock_held:
+        return await invoke_with_instruction()
+    lock = _CANDIDATE_AGENT_LOCKS.setdefault(id(agent), asyncio.Lock())
+    async with lock:
+        return await invoke_with_instruction()
 
 
 @contextmanager
@@ -951,6 +958,7 @@ async def run_workspace_orchestration_turn(
         event_type="orchestration.started",
     )
     agent_execute_call_number = 0
+    model_route: tuple[str, str] | None = None
     created_interaction_ids: list[str] = []
     safe_receipt_statuses = frozenset({
         "queued", "running", "succeeded", "failed", "cancelled",
@@ -1236,6 +1244,17 @@ async def run_workspace_orchestration_turn(
         call_number = agent_execute_call_number
         call_id = uuid.uuid4().hex
         started_at = time.perf_counter()
+        loop = asyncio.get_running_loop()
+        remaining = (
+            (turn_request._runtime_deadline_monotonic or loop.time())
+            - loop.time()
+        )
+        execute_budget = min(150.0, max(0.01, remaining * 0.85))
+        model_deadline = loop.time() + min(145.0, execute_budget * 0.95)
+        execution_stage = "agent_lock"
+        provider_id, model_id = model_route or _model_runtime.model_identity(
+            getattr(agent, "model", None),
+        )
         _append_runtime_trace(
             state_storage_root,
             installation_id=authorization.installation_id,
@@ -1276,39 +1295,59 @@ async def run_workspace_orchestration_turn(
         media_delivery: dict[str, Any] = {}
 
         async def run_agent():
-            async def invoke():
-                if public_stream and on_public_message is not None:
-                    return await _public_stream.execute_public_agent(
-                        agent,
-                        messages,
-                        on_public_message,
-                    )
-                return await _invoke_agent(agent, messages)
-
-            original_model = getattr(agent, "model", None)
-            if not public_stream and original_model is not None:
-                agent.model = _public_stream.public_text_model(original_model)
-            try:
-                with _require_active_interaction_before_text(
-                    agent,
-                    read_interaction_card,
-                    enabled=require_interaction,
-                ):
-                    result = await _execute_with_runtime_system_instruction(
-                        agent,
-                        instruction,
-                        invoke,
-                        required=instruction is not None,
-                    )
-            finally:
+            nonlocal execution_stage
+            lock = _CANDIDATE_AGENT_LOCKS.setdefault(id(agent), asyncio.Lock())
+            async with lock:
+                execution_stage = "agent_execute"
+                original_model = getattr(agent, "model", None)
                 if not public_stream and original_model is not None:
-                    agent.model = original_model
-            if require_interaction and (
-                read_interaction_card is None
-                or read_interaction_card("") is None
-            ):
-                raise WorkspaceOrchestrationError("orchestration_error")
-            return result
+                    agent.model = _public_stream.public_text_model(original_model)
+
+                async def invoke_with_model():
+                    call_model = getattr(agent, "model", None)
+                    if call_model is not None:
+                        agent.model = _model_runtime.TimedModel(
+                            call_model,
+                            deadline=model_deadline,
+                            provider_id=provider_id,
+                            model_id=model_id,
+                            emit=lambda event, payload: _append_runtime_trace(
+                                state_storage_root,
+                                installation_id=authorization.installation_id,
+                                session_id=turn_request.session_id,
+                                invocation_id=invocation_id,
+                                event_type=event,
+                                payload={"call_number": call_number, **payload},
+                            ),
+                        )
+                    try:
+                        if public_stream and on_public_message is not None:
+                            return await _public_stream.execute_public_agent(
+                                agent, messages, on_public_message,
+                            )
+                        return await _invoke_agent(agent, messages)
+                    finally:
+                        if call_model is not None:
+                            agent.model = call_model
+
+                try:
+                    with _require_active_interaction_before_text(
+                        agent, read_interaction_card, enabled=require_interaction,
+                    ):
+                        result = await _execute_with_runtime_system_instruction(
+                            agent, instruction, invoke_with_model,
+                            required=instruction is not None,
+                            lock_held=True,
+                        )
+                finally:
+                    if not public_stream and original_model is not None:
+                        agent.model = original_model
+                if require_interaction and (
+                    read_interaction_card is None
+                    or read_interaction_card("") is None
+                ):
+                    raise WorkspaceOrchestrationError("orchestration_error")
+                return result
 
         try:
             if execution_mode == "agent_loop":
@@ -1348,9 +1387,13 @@ async def run_workspace_orchestration_turn(
                         messages,
                         media_delivery,
                     ):
-                        candidate = await run_agent()
+                        candidate = await asyncio.wait_for(
+                            run_agent(), timeout=execute_budget,
+                        )
                 else:
-                    candidate = await run_agent()
+                    candidate = await asyncio.wait_for(
+                        run_agent(), timeout=execute_budget,
+                    )
             else:
                 candidate = await _execute_internal_candidate(
                     agent,
@@ -1358,6 +1401,52 @@ async def run_workspace_orchestration_turn(
                     media_delivery=media_delivery,
                     response_format=response_format,
                 )
+        except _model_runtime.ModelStageTimeout as exc:
+            error = WorkspaceOrchestrationError(
+                "MODEL_STAGE_TIMEOUT", f"model_{exc.stage}_timeout",
+            )
+            error.stage = exc.stage
+            error.attempt = exc.attempt
+            _append_runtime_trace(
+                state_storage_root,
+                installation_id=authorization.installation_id,
+                session_id=turn_request.session_id,
+                invocation_id=invocation_id,
+                event_type="agent.execute.safe_failed",
+                payload={
+                    "call_number": call_number,
+                    "duration_ms": max(0, round((time.perf_counter() - started_at) * 1000)),
+                    "category": "model_stage_timeout",
+                    "error_code": error.error_code,
+                    "provider_id": provider_id,
+                    "model_id": model_id,
+                    "stage": error.stage,
+                    "attempt": error.attempt,
+                },
+            )
+            raise error from None
+        except asyncio.TimeoutError as exc:
+            error = WorkspaceOrchestrationError(
+                "AGENT_EXECUTION_TIMEOUT", "agent_execute_deadline",
+            )
+            _append_runtime_trace(
+                state_storage_root,
+                installation_id=authorization.installation_id,
+                session_id=turn_request.session_id,
+                invocation_id=invocation_id,
+                event_type="agent.execute.safe_failed",
+                payload={
+                    "call_number": call_number,
+                    "duration_ms": max(0, round((time.perf_counter() - started_at) * 1000)),
+                    "category": "agent_execution_timeout",
+                    "error_code": error.error_code,
+                    "provider_id": provider_id,
+                    "model_id": model_id,
+                    "stage": execution_stage,
+                    "attempt": call_number,
+                },
+            )
+            raise error from exc
         except Exception as exc:
             _append_runtime_trace(
                 state_storage_root,
@@ -1369,6 +1458,10 @@ async def run_workspace_orchestration_turn(
                     "call_number": call_number,
                     "duration_ms": max(0, round((time.perf_counter() - started_at) * 1000)),
                     "category": type(exc).__name__,
+                    "provider_id": provider_id,
+                    "model_id": model_id,
+                    "stage": execution_mode,
+                    "attempt": call_number,
                     **_safe_provider_error(exc),
                 },
             )
@@ -1527,20 +1620,62 @@ async def run_workspace_orchestration_turn(
         turn_request.safe_metadata,
     )
     try:
-        result = attach_created_interactions(
-            await orchestrator.invoke(turn_request, transaction),
+        from qwenpaw.app.agent_context import get_current_chat_model
+        from qwenpaw.providers.provider_manager import ProviderManager
+
+        model_route = _model_runtime.declared_model_route(
+            signed_root=authorization.signed_workspace_root,
+            signed_files=authorization.signed_workspace_files,
+            selected_model=get_current_chat_model(),
+            actual_model=getattr(agent, "model", None),
+            manager=ProviderManager.get_instance(),
         )
-    except asyncio.CancelledError:
-        await compensate_created_interactions(invocation_id)
+    except _model_runtime.ModelRouteError as exc:
+        transaction.discard()
         _append_runtime_trace(
             state_storage_root,
             installation_id=authorization.installation_id,
             session_id=turn_request.session_id,
             invocation_id=invocation_id,
-            event_type="orchestration.cancelled",
-            payload={"error_code": "cancelled"},
+            event_type="runtime.trace",
+            payload={"origin": "host", "payload": {"event": "transaction.discarded"}},
         )
-        raise
+        _append_runtime_trace(
+            state_storage_root,
+            installation_id=authorization.installation_id,
+            session_id=turn_request.session_id,
+            invocation_id=invocation_id,
+            event_type="orchestration.preflight_failed",
+            payload={
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "phase": "model_selection",
+                "category": exc.category,
+                "error_code": exc.code,
+                "provider_id": exc.provider_id,
+                "model_id": exc.model_id,
+                "attempt": 0,
+            },
+        )
+        result = WorkspaceTurnResult(
+            error_code=exc.code,
+            diagnostic_ref=exc.category,
+        )
+    else:
+        try:
+            result = attach_created_interactions(
+                await orchestrator.invoke(turn_request, transaction),
+            )
+        except asyncio.CancelledError:
+            await compensate_created_interactions(invocation_id)
+            _append_runtime_trace(
+                state_storage_root,
+                installation_id=authorization.installation_id,
+                session_id=turn_request.session_id,
+                invocation_id=invocation_id,
+                event_type="orchestration.cancelled",
+                payload={"error_code": "cancelled"},
+            )
+            raise
     if result.error_code is not None:
         await compensate_created_interactions(invocation_id)
     _append_runtime_trace(

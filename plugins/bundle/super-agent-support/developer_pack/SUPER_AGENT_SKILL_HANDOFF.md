@@ -1,10 +1,13 @@
 # Super Agent Skill 统一交接：模型调用、交互卡与失败终止
 
-适用基线：标准 2.65、Support 1.18.55、Developer Pack 1.10.44、
+适用基线：标准 2.66、Support 1.18.56、Developer Pack 1.10.45、
 DevKit 1.9.31。本文适用于所有 Super Agent，不包含任何单一专家业务规则。
 
 ## 平台统一保证
 
+- 显式会话选模优先于签名专家默认模型；固定模型必须仍在目标实例聊天
+  模型目录中且与实际执行路由一致，`auto/routing` 保持自动路由。退役
+  声明会在专家 runtime 前给出脱敏错误，不能依赖静默回退。
 - `agent.execute` 只有三种合法模式：普通文本候选、JSON Object 候选、
   `agent_loop` 工具循环。机器合同在
   `devkit/schemas/agent-execute-v1/`，参考实现在

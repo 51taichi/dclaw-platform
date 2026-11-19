@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.10.45 - 2026-11-19
+
+- Bundle standard 2.66 and DevKit 1.9.31 with model route preflight and
+  content-free model/Agent timeout diagnostics in Support 1.18.56.
+- Preserve explicit chat model selection and automatic routing; retired fixed
+  declarations require a supported model before the expert runtime starts.
+
 ## 1.10.44 - 2026-11-17
 
 - Bundle standard 2.65 and DevKit 1.9.31 with closed `agent.execute` and

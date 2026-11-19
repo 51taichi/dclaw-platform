@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.65`
+当前版本：`2.66`
 
 发布日期：`2026-11-16`
 
@@ -511,6 +511,8 @@ Host 调用合同：
 `runtime.complete` 与 `runtime.fail` 每轮只能二选一调用一次。DevKit 的 `templates/minimal/agent/runtime.py` 是不依赖服务器源码的最小可运行示例。
 
 `agent.execute` 的正式控制边界：默认候选模式可选传 `response_format="json_object"`，Host 会以无工具的模型调用请求 JSON object，但模型是否返回可见文本、是否符合业务 Schema 仍必须由 Agent 校验。`response_format` 不得与 `execution_mode="agent_loop"` 同用。当前合同不支持强制业务 JSON Schema、调用方指定 `max_tokens` 或调用方控制 thinking。`agent_loop` 可使用 `instruction`、`require_interaction`、`public_stream` 及 `recover_empty_reply` 的已实现参数；其中空回复恢复只尝试一次无工具的文本生成，不保证结构化 JSON，不得代替 Agent 自己的候选校验。
+
+模型选择以客户当前会话显式选模优先，其次为签名专家默认模型；`auto/routing` 保留平台自动路由。固定模型必须在目标实例当前聊天模型目录中可用，且 Host 实际执行模型须与选定模型一致。固定模型已退役或运行时静默切到其他模型时，Host 在专家 runtime 前给出稳定的模型路由错误并丢弃事务；开发方应更新签名包默认模型或由客户选择受支持模型，不得依赖全局回退掩盖旧声明。`agent_loop` 的 Host 执行预算先于整轮截止时间，模型请求、模型流与整段执行超时分别记录无正文的阶段、尝试次数和关联 ID；历史未采集阶段不得补造。普通开发账号仍通过既有授权诊断接口按关联 ID 查询，Schema 与调用入口不变。
 
 `runtime.failure.read/1` 是可选能力，不加入既有 V1 基础闭包。新发布包须在 manifest 和授权清单中显式声明后才能调用；旧发布包与旧 grant 保持原状。Host 只接受空对象请求，使用可信会话 ID、用户 ID、agent ID 和安装授权核对任务所有权，并仅在同租户同专家的历史 installation 中查找。返回最近 30 天内最后一次失败的 invocation、实际 release/installation、开始及失败时间、首个脱敏 `phase/category/attempt`、诊断来源、错误码和 `transaction_status=discarded`；无记录返回 `status=no_record`。`first_failure_source=agent_trace` 表示阶段与类别由专家写入的 trace 报告；`host_stage` 表示 Host 记录的候选调用异常；`platform_preflight` 表示插件在专家 runtime 启动前记录的首错，此时 invocation ID 带 `preflight-` 前缀，不代表专家已执行；没有记录时返回 `not_recorded` 和空字段，不得臆造。请求越权或参数不合法失败关闭。该能力在失败事务丢弃后仍可读取，也支持同一专家新安装续接旧安装的失败诊断；不返回模型正文、thinking、对话、客户素材或 Secret。请求与响应 Schema 位于 DevKit `schemas/runtime-failure-v1/`。
 
@@ -2431,6 +2433,11 @@ Skill 和专家发布前须对每条实际使用的路径同时验证：正确�
 以上是通用 Skill 的平台合同输入。Skill 维护方应在其 `references/capability-verification.md` 补 `/v2/` 的首错和终止根因区分，在 `scripts/runtime_diagnostics_with_login.py` 增加按官方 DevKit v2 Schema 查询和摘要，在相关脚本测试加入已恢复错误、最终阻断、`no_record`、越权及旧版回退案例。平台不直接覆盖 Skill 发布仓库，也不把单个专家的业务字段写成公共规则。
 
 ## 34. 版本记录
+
+### 2.66 - 2026-11-19
+
+- Support Plugin `1.18.56` 在专家 runtime 前核对固定模型目录与实际执行路由，退役声明和静默模型切换返回稳定错误；显式会话选模及 `auto/routing` 继续按原优先级工作。
+- `agent_loop` 增加先于外层 180 秒截止时间的执行预算、模型请求/流事件及锁等待分类。既有 v5/v6 开发者诊断按关联 ID 脱敏回读；历史未留存的细节保持未知。Developer Pack `1.10.45` 同步说明，DevKit `1.9.31` 的机器 Schema 不变。
 
 ### 2.65 - 2026-11-17
 
