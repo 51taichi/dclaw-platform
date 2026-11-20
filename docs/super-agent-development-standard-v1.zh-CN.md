@@ -4,9 +4,9 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.66`
+当前版本：`2.67`
 
-发布日期：`2026-11-16`
+发布日期：`2026-11-20`
 
 ## 1. 文档目的
 
@@ -587,7 +587,9 @@ DevKit `aigc_workflow_api_demo.py` 与 `examples/aigc-workflow-v1/README.md` 给
 
 同一个超级专家发布新版时，每个 Release 独立签发 installation ID。旧安装的状态按 installation ID 与 session ID 隔离保存，不会因激活新版而删除。插件 `1.18.15` 起，使用正式合同 `workspace.state.continuity/1` 在新版第一个业务回合进入 Agent runtime 前自动续接同一租户、同一专家、同一任务和用户的完整状态；不再逐字段搬运作品修订。Agent 的 `propose` 等新建修订操作不得冒充历史恢复。
 
-有持久作品状态的新版 Agent 须在签名包内附 `agent/state-contract.json`，按 DevKit `1.9.3` 的 `schemas/workspace-state-continuity-v1/state-contract.schema.json` 声明 `contract`、稳定的 `format_id`、整数 `schema_version` 和含一个 `{identity_sha256_24}` 占位符的 `filename_template`。该占位符按 `installation_id`、`user_id`、`session_id` 依次用 `\x1f` 连接后取 SHA-256 前 24 位。只有来源和目标签名者相同、声明的格式和 Schema 版本相同、状态文件名均符合各自声明、来源签名目录摘要与发布记录一致，插件才将来源整个任务状态复制到新 installation，唯一替换 `identity.installation_id`。状态正文不写入迁移回执；来源文件不变。
+有持久作品状态的新版 Agent 须在签名包内附 `agent/state-contract.json`，按 DevKit `1.9.3` 的 `schemas/workspace-state-continuity-v1/state-contract.schema.json` 声明 `contract`、稳定的 `format_id`、整数 `schema_version` 和含一个 `{identity_sha256_24}` 占位符的 `filename_template`。该占位符按 `installation_id`、`user_id`、`session_id` 依次用 `\x1f` 连接后取 SHA-256 前 24 位。来源 Release 仍在可运行发布表时，只有来源和目标签名者相同、声明的格式和 Schema 版本相同、状态文件名均符合各自声明、来源签名目录摘要与发布记录一致，插件才将来源整个任务状态复制到新 installation，唯一替换 `identity.installation_id`。状态正文不写入迁移回执；来源文件不变。
+
+支持插件 `1.18.57` 起，可回切 Release 仍保持最多五个，但历史会话续接不再以来源 `release_id` 仍位于该列表为必要条件。来源 Release 已退出列表时，插件使用服务端已签发的安装授权限定同租户和同 Agent，再核对状态中完整的 `installation_id`、`user_id`、`session_id` 身份及目标签名合同的 `schema_version`；全部一致才按同一原子回执流续接。`source_release_id` 仍写入回执作审计，不再单独阻断历史会话。旧版安装目录中没有可信 `identity` 且没有状态绑定的辅助 JSON 和目录缓存不是业务工作状态，不参与续接，也不阻断会话进入 Agent runtime；无身份文件若残留状态绑定则属于结构冲突，激活预检和业务回合均以 `state_scope_conflict` 失败关闭。跨租户、跨 Agent、身份不一致、Schema 不一致、多文件和符号链接仍失败关闭。
 
 目标状态已有内容但没有可信的续接回执、来源或目标声明缺失、Schema/签名/身份/文件名不一致，以及来源修订未完整保留时，插件在 runtime 启动前失败关闭，记录可定位的脱敏 `state_*` 类别；不得创建空作品或覆盖已有修订。复制通过安装和任务锁串行化，先写准备回执，再原子提升目标目录并绑定 Agent 实际读取的状态文件名，最后写提交回执。中断后只允许验证目标摘要并恢复未完成的绑定；重复调用读取相同提交回执，目标已经新增修订时须保持来源修订前缀，不再回写旧状态。连续两次兼容升级按同一合同逐次续接。
 
@@ -2433,6 +2435,11 @@ Skill 和专家发布前须对每条实际使用的路径同时验证：正确�
 以上是通用 Skill 的平台合同输入。Skill 维护方应在其 `references/capability-verification.md` 补 `/v2/` 的首错和终止根因区分，在 `scripts/runtime_diagnostics_with_login.py` 增加按官方 DevKit v2 Schema 查询和摘要，在相关脚本测试加入已恢复错误、最终阻断、`no_record`、越权及旧版回退案例。平台不直接覆盖 Skill 发布仓库，也不把单个专家的业务字段写成公共规则。
 
 ## 34. 版本记录
+
+### 2.67 - 2026-11-20
+
+- Support Plugin `1.18.57` 将可回切 Release 的五版保留与历史会话状态续接解耦；来源 Release 已退出列表时，仍可凭服务端安装授权、完整作用域身份与目标 Schema 完成原子续接。
+- 无可信身份的旧版辅助 JSON 不再误当业务状态；发布激活预检同时覆盖已退休来源，不把兼容冲突推迟到客户下一回合。Developer Pack `1.10.46` 同步说明，DevKit `1.9.31` 机器 Schema 不变。
 
 ### 2.66 - 2026-11-19
 

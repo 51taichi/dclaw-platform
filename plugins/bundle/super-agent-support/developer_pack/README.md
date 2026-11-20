@@ -1,5 +1,10 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.46 bundles standard 2.67 and DevKit 1.9.31. Retired Release
+membership no longer blocks an otherwise scoped, schema-compatible workspace
+state continuation. Unbound legacy auxiliary JSON without a trusted identity is
+ignored; a residual state binding remains a fail-closed scope conflict.
+
 Version 1.10.45 bundles standard 2.66 and DevKit 1.9.31. Fixed model routes
 are checked against the current catalog before runtime entry; model request,
 stream and Agent execution timeouts become visible through existing authorized

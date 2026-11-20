@@ -138,6 +138,31 @@ def _only_state_file(directory: Path) -> Path:
     return state_file
 
 
+def _state_identity(path: Path) -> dict[str, str] | None:
+    """Return a bound workspace identity; legacy auxiliary JSON is not state."""
+    if path.is_symlink() or not path.is_file():
+        raise StateContinuityError("state_source_unsafe")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise StateContinuityError("state_source_invalid") from exc
+    if not isinstance(value, dict):
+        raise StateContinuityError("state_source_invalid")
+    identity = value.get("identity")
+    if identity is None:
+        return None
+    if (
+        not isinstance(identity, dict)
+        or set(identity) != {"installation_id", "user_id", "session_id"}
+        or any(
+            not isinstance(identity.get(key), str) or not identity[key]
+            for key in ("installation_id", "user_id", "session_id")
+        )
+    ):
+        raise StateContinuityError("state_identity_mismatch")
+    return identity
+
+
 def _binding_matches(
     root: Path, installation_id: str, session_id: str, filename: str,
 ) -> bool:
@@ -256,6 +281,19 @@ def _source_grant(
             _state_dir(root, grant.installation_id, session_id),
         )
         if state_file is not None:
+            identity = _state_identity(state_file)
+            if identity is None:
+                binding = _state_binding_path(
+                    root, grant.installation_id, session_id,
+                )
+                if binding.exists() or binding.is_symlink():
+                    raise StateContinuityError("state_scope_conflict")
+                continue
+            if (
+                identity["installation_id"] != grant.installation_id
+                or identity["session_id"] != session_id
+            ):
+                raise StateContinuityError("state_identity_mismatch")
             candidates.append(grant)
         else:
             binding = _state_binding_path(root, grant.installation_id, session_id)
@@ -300,7 +338,7 @@ def ensure_state_continuity(
     expected_source_file_sha256: str | None = None,
     expected_target_release_id: str | None = None,
 ) -> dict[str, Any]:
-    """Promote one verified predecessor's entire state before runtime starts."""
+    """Promote one scoped predecessor's entire state before runtime starts."""
     Path(storage_root).mkdir(parents=True, exist_ok=True)
     root = Path(storage_root).resolve(strict=True)
     sealed = Path(sealed_root).resolve(strict=True)
@@ -312,13 +350,6 @@ def ensure_state_continuity(
     ):
         raise StateContinuityError("state_release_identity_mismatch")
     source_grant = _source_grant(root, grants, target_grant, session_id)
-    if (
-        source_grant is not None
-        and source_grant.release_id not in {
-            item.release_id for item in record.releases
-        }
-    ):
-        raise StateContinuityError("state_source_release_retired")
     if (
         expected_source_installation_id is not None
         and (source_grant is None or source_grant.installation_id != expected_source_installation_id)
@@ -345,25 +376,35 @@ def ensure_state_continuity(
         # Re-select under the locks; a newer predecessor must never be skipped.
         if _source_grant(root, grants, target_grant, session_id) != source_grant:
             raise StateContinuityError("state_source_changed")
-        source_release, source_root, source_files = _verified_release(
-            sealed, record, source_grant,
-        )
         target_release, target_root, target_files = _verified_release(
             sealed, record, target_grant,
-        )
-        source_contract = _contract_for_release(
-            root, record, source_release, source_root, source_files,
         )
         target_contract = _contract_for_release(
             root, record, target_release, target_root, target_files,
         )
-        if source_release.signer_id != target_release.signer_id:
-            raise StateContinuityError("state_signer_incompatible")
-        if (
-            source_contract.format_id != target_contract.format_id
-            or source_contract.schema_version != target_contract.schema_version
-        ):
-            raise StateContinuityError("state_schema_incompatible")
+        retained_source = next(
+            (
+                item for item in record.releases
+                if item.release_id == source_grant.release_id
+            ),
+            None,
+        )
+        source_contract = None
+        source_release_id = source_grant.release_id
+        if retained_source is not None:
+            source_release, source_root, source_files = _verified_release(
+                sealed, record, source_grant,
+            )
+            source_contract = _contract_for_release(
+                root, record, source_release, source_root, source_files,
+            )
+            if source_release.signer_id != target_release.signer_id:
+                raise StateContinuityError("state_signer_incompatible")
+            if (
+                source_contract.format_id != target_contract.format_id
+                or source_contract.schema_version != target_contract.schema_version
+            ):
+                raise StateContinuityError("state_schema_incompatible")
         source_identity = {
             "installation_id": source_grant.installation_id,
             "user_id": user_id, "session_id": session_id,
@@ -373,13 +414,16 @@ def ensure_state_continuity(
             "user_id": user_id, "session_id": session_id,
         }
         source_file = _only_state_file(source_dir)
-        if source_file.name != _filename(source_contract, source_identity):
+        if (
+            source_contract is not None
+            and source_file.name != _filename(source_contract, source_identity)
+        ):
             raise StateContinuityError("state_filename_incompatible")
         _binding_matches(
             root, source_grant.installation_id, session_id, source_file.name,
         )
         source_state, source_sha = _read_state(
-            source_file, source_identity, source_contract,
+            source_file, source_identity, source_contract or target_contract,
         )
         if (
             expected_source_file_sha256 is not None
@@ -447,7 +491,7 @@ def ensure_state_continuity(
             "status": "preview" if not apply else "prepared",
             "agent_id": record.agent_id, "session_id": session_id,
             "source_installation_id": source_grant.installation_id,
-            "source_release_id": source_release.release_id,
+            "source_release_id": source_release_id,
             "target_installation_id": target_grant.installation_id,
             "target_release_id": target_release.release_id,
             "format_id": target_contract.format_id,
@@ -549,12 +593,18 @@ def preview_activation_continuity(
                 if binding.exists() or binding.is_symlink():
                     raise StateContinuityError("state_scope_conflict")
                 continue
-            try:
-                identity = json.loads(state_file.read_text(encoding="utf-8"))["identity"]
-                session_id = identity["session_id"]
-                user_id = identity["user_id"]
-            except (OSError, UnicodeError, ValueError, KeyError, TypeError) as exc:
-                raise StateContinuityError("state_source_invalid") from exc
+            identity = _state_identity(state_file)
+            if identity is None:
+                binding = (
+                    root / "migrations" / "bindings"
+                    / _scope_key(grant.installation_id)
+                    / f"{session_dir.name}.json"
+                )
+                if binding.exists() or binding.is_symlink():
+                    raise StateContinuityError("state_scope_conflict")
+                continue
+            session_id = identity["session_id"]
+            user_id = identity["user_id"]
             if (
                 not isinstance(session_id, str)
                 or not isinstance(user_id, str)
@@ -568,13 +618,7 @@ def preview_activation_continuity(
             _binding_matches(
                 root, grant.installation_id, session_id, state_file.name,
             )
-    retained_release_ids = {item.release_id for item in record.releases}
-    retired_tasks = 0
     for session_id, user_id in sessions.items():
-        source = _source_grant(root, grants, target_grant, session_id)
-        if source is not None and source.release_id not in retained_release_ids:
-            retired_tasks += 1
-            continue
         ensure_state_continuity(
             storage_root=root, sealed_root=sealed_root, grants=grants,
             record=target_record, target_grant=target_grant,
@@ -583,7 +627,7 @@ def preview_activation_continuity(
     return {
         "contract": CONTRACT,
         "status": "ready",
-        "checked_tasks": len(sessions) - retired_tasks,
+        "checked_tasks": len(sessions),
     }
 
 

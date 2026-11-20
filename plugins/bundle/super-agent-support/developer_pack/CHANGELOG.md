@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.10.46 - 2026-11-20
+
+- Bundle standard 2.67 and DevKit 1.9.31 with backward-compatible workspace
+  continuation for schema-compatible state from retired Releases.
+- Keep the five-version rollback list while ignoring unbound legacy auxiliary
+  JSON and preflighting retired-source state before activation.
+
 ## 1.10.45 - 2026-11-19
 
 - Bundle standard 2.66 and DevKit 1.9.31 with model route preflight and

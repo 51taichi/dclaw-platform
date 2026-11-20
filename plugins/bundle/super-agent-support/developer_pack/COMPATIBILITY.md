@@ -3,7 +3,7 @@
 | Component | Supported version |
 |---|---|
 | Developer pack | 1.0.x through 1.10.x |
-| Development standard | 2.1 through 2.66 |
+| Development standard | 2.1 through 2.67 |
 | Super Agent DevKit | 1.2.x through 1.9.x |
 | Super Expert manifest | 3 |
 | Runtime / runtime host | 1 |
@@ -51,6 +51,7 @@
 | Support plugin for combined developer runtime and local-task diagnostics v6 | >= 1.18.54 |
 | Support plugin for strict workspace Host contracts and failed-turn card compensation | >= 1.18.55 |
 | Support plugin for fixed model route preflight and bounded Agent diagnostics | >= 1.18.56 |
+| Support plugin for retired-Release workspace state continuity | >= 1.18.57 |
 | Support plugin for public video timeline render and Helper 1.4.9 | >= 1.18.48 |
 | Support plugin for sealed Host local runtime preparation | >= 1.18.45 |
 | Support plugin for `runtime.failure.read/1` | >= 1.18.12 |

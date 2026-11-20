@@ -201,12 +201,105 @@ def test_retired_source_does_not_block_activation_or_create_empty_state(tmp_path
     )
 
     assert preview["status"] == "ready"
-    assert preview["checked_tasks"] == 0
-    with pytest.raises(continuity.StateContinuityError) as error:
-        resume(sealed, storage, record, repository, grants[2])
-    assert error.value.category == "state_source_release_retired"
+    assert preview["checked_tasks"] == 1
+    result = resume(sealed, storage, record, repository, grants[2])
+    assert result["status"] == "committed"
+    assert result["source_release_id"] == "release-0"
     assert source_file.read_bytes() == original
+    target_file = continuity._only_state_file(
+        continuity._state_dir(storage, "installation-2", "task"),
+    )
+    target = json.loads(target_file.read_text(encoding="utf-8"))
+    assert target["revisions"] == REVISIONS
+    assert target["identity"] == {
+        "installation_id": "installation-2",
+        "user_id": "user",
+        "session_id": "task",
+    }
+
+
+def test_retired_source_still_requires_target_schema_compatibility(tmp_path):
+    sealed, storage, record, repository, grants, source_file = setup_chain(tmp_path)
+    state = json.loads(source_file.read_text(encoding="utf-8"))
+    state["schema_version"] = 2
+    source_file.write_text(json.dumps(state), encoding="utf-8")
+    record.releases = record.releases[1:]
+    record.active_release_id = "release-2"
+
+    with pytest.raises(
+        continuity.StateContinuityError,
+        match="state_schema_incompatible",
+    ):
+        resume(sealed, storage, record, repository, grants[2])
     assert not continuity._state_dir(storage, "installation-2", "task").exists()
+
+
+def test_unbound_legacy_auxiliary_json_is_not_workspace_state(tmp_path):
+    sealed, storage, record, repository, grants, source_file = setup_chain(tmp_path)
+    auxiliary = source_file.with_name("interaction-catalog-v1.json")
+    auxiliary.write_text(json.dumps({
+        "catalog_version": "interaction.components/1",
+        "components": [],
+        "answer_schema": {},
+    }), encoding="utf-8")
+    source_file.unlink()
+    record.releases = record.releases[1:]
+    record.active_release_id = "release-2"
+
+    preview = continuity.preview_activation_continuity(
+        storage_root=storage, sealed_root=sealed, grants=repository,
+        record=record, target_grant=grants[2],
+    )
+    result = resume(sealed, storage, record, repository, grants[2])
+
+    assert preview == {
+        "contract": continuity.CONTRACT,
+        "status": "ready",
+        "checked_tasks": 0,
+    }
+    assert result == {
+        "contract": continuity.CONTRACT,
+        "status": "new_or_existing",
+    }
+    assert not continuity._state_dir(storage, "installation-2", "task").exists()
+
+
+def test_bound_legacy_auxiliary_json_fails_activation_preflight(tmp_path):
+    sealed, storage, record, repository, grants, source_file = setup_chain(tmp_path)
+    auxiliary = source_file.with_name("interaction-catalog-v1.json")
+    auxiliary.write_text(json.dumps({
+        "catalog_version": "interaction.components/1",
+        "components": [],
+        "answer_schema": {},
+    }), encoding="utf-8")
+    source_file.unlink()
+    continuity._state_binding_path(
+        storage, "installation-0", "task",
+    ).parent.mkdir(parents=True)
+    continuity._state_binding_path(
+        storage, "installation-0", "task",
+    ).write_text(json.dumps({
+        "contract": "workspace.state.binding/1",
+        "installation_id": "installation-0",
+        "session_id": "task",
+        "filename": auxiliary.name,
+    }), encoding="utf-8")
+    record.releases = record.releases[1:]
+    record.active_release_id = "release-2"
+
+    with pytest.raises(
+        continuity.StateContinuityError,
+        match="state_scope_conflict",
+    ):
+        continuity.preview_activation_continuity(
+            storage_root=storage, sealed_root=sealed, grants=repository,
+            record=record, target_grant=grants[2],
+        )
+    with pytest.raises(
+        continuity.StateContinuityError,
+        match="state_scope_conflict",
+    ):
+        resume(sealed, storage, record, repository, grants[2])
 
 
 def test_activation_preflight_checks_existing_task_before_release_switch(tmp_path):
