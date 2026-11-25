@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 from types import SimpleNamespace
 
@@ -162,41 +163,15 @@ async def test_historical_adapter_is_validated_as_standard_workspace(tmp_path):
     assert result.contract_version == "1"
 
 
-@pytest.mark.asyncio
-async def test_validation_never_constructs_legacy_runtime(tmp_path, monkeypatch):
-    private = Ed25519PrivateKey.generate()
-    service = _service(tmp_path, private.public_key())
-    release = service.install(
-        _package(
-            private,
-            schema_version=2,
-            runtime={
-                "adapter": "sealed_harness",
-                "contract_version": "1",
-                "failure_policy": "fail_closed",
-            },
-        ),
-    )
-    import qwenpaw.app.sealed_agents.service as service_module
-
-    def fail_legacy_runtime(*_args, **_kwargs):
-        pytest.fail("legacy sealed runtime must not run")
-
-    monkeypatch.setattr(
-        service_module,
-        "SealedEntrypointProcess",
-        fail_legacy_runtime,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        service_module,
-        "HarnessProcess",
-        fail_legacy_runtime,
-        raising=False,
-    )
-    result = await service.validate_release_runtime("luyu", release.release_id)
-    assert result.status == "valid"
-    assert result.adapter == "standard"
+def test_legacy_runtime_executors_are_not_shipped():
+    for module in (
+        "qwenpaw.app.sealed_agents.adapters",
+        "qwenpaw.app.sealed_agents.entrypoint_protocol",
+        "qwenpaw.app.sealed_agents.entrypoint_worker",
+        "qwenpaw.app.sealed_agents.harness_protocol",
+        "qwenpaw.app.sealed_agents.harness_worker",
+    ):
+        assert importlib.util.find_spec(module) is None
 
 
 @pytest.mark.asyncio

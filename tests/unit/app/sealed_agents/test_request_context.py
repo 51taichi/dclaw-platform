@@ -1,46 +1,20 @@
 from __future__ import annotations
 
 import pytest
-from agentscope.message import Msg
 
 from qwenpaw.app.sealed_agents.request_context import (
-    SealedAdapterRequest,
     SealedRequestMetadataError,
     normalize_untrusted_metadata,
 )
 
 
 def test_nested_open_api_metadata_is_deep_copied():
-    source = {"luyu_debug": True, "case": {"id": "case-1"}}
+    source = {"case": {"id": "case-1"}}
 
     normalized = normalize_untrusted_metadata(source)
     source["case"]["id"] = "changed"
 
-    assert normalized == {"luyu_debug": True, "case": {"id": "case-1"}}
-
-
-def test_metadata_cannot_override_trusted_identity():
-    request = SealedAdapterRequest(
-        messages=(),
-        trusted_context={"agent_id": "trusted", "release_id": "release-1"},
-        metadata={"agent_id": "attacker", "release_id": "attacker-release"},
-    )
-
-    assert request.trusted_context["agent_id"] == "trusted"
-    assert request.metadata["agent_id"] == "attacker"
-
-
-def test_adapter_request_keeps_trusted_diagnostics_outside_caller_metadata(tmp_path):
-    request = SealedAdapterRequest(
-        messages=(Msg(name="user", role="user", content="hello"),),
-        trusted_context={"agent_id": "sealed"},
-        metadata={"diagnostics_authorized": True},
-        session_root=tmp_path / "session",
-        diagnostics_authorized=False,
-    )
-
-    assert request.metadata["diagnostics_authorized"] is True
-    assert request.diagnostics_authorized is False
+    assert normalized == {"case": {"id": "case-1"}}
 
 
 @pytest.mark.parametrize("value", ["not-an-object", ["not-an-object"]])
