@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from agentscope_runtime.engine.schemas.agent_schemas import ContentType
+from qwenpaw.runtime.contracts import ContentType
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 from pydantic import ValidationError

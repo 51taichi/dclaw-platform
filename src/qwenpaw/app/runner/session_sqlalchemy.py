@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Sequence, Union
 
 from agentscope.session import SessionBase
-from agentscope_runtime.engine.schemas.exception import ConfigurationException
+from qwenpaw.runtime.exceptions import ConfigurationException
 from sqlalchemy import delete, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert

@@ -3,7 +3,7 @@
 
 from typing import Any, Dict, Optional
 
-from agentscope_runtime.engine.schemas.exception import (
+from qwenpaw.runtime.exceptions import (
     AgentRuntimeErrorException,
     ModelExecutionException,
     ModelTimeoutException,
@@ -166,7 +166,7 @@ def convert_model_exception(  # pylint: disable=too-many-return-statements
     exc: Exception,
     model_name: Optional[str] = None,
 ) -> AgentRuntimeErrorException:
-    """Convert exceptions to agentscope_runtime exceptions.
+    """Convert provider exceptions to DClaw runtime exceptions.
 
     Args:
         exc: Original exception

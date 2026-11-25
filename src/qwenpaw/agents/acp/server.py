@@ -57,7 +57,7 @@ from acp.schema import (
     TextContentBlock,
 )
 from agentscope.message import Msg
-from agentscope_runtime.engine.schemas.agent_schemas import (
+from qwenpaw.runtime.contracts import (
     AgentRequest,
     Message,
 )

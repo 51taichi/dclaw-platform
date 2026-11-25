@@ -22,8 +22,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from agentscope_runtime.engine.app import AgentApp
-from agentscope_runtime.engine.schemas.exception import (
+from qwenpaw.runtime.http import AgentHttpApi
+from qwenpaw.runtime.exceptions import (
     AppBaseException,
 )
 
@@ -125,7 +125,7 @@ def _reconcile_sealed_agent_profiles() -> WorkspaceReconciliationResult | None:
 class DynamicMultiAgentRunner:
     """Runner wrapper that dynamically routes to the correct workspace runner.
 
-    This allows AgentApp to work with multiple agents by inspecting
+    This allows the agent HTTP API to route across multiple agents by inspecting
     the X-Agent-Id header on each request.
     """
 
@@ -244,7 +244,7 @@ class DynamicMultiAgentRunner:
             if workspace is not None and run_key is not None:
                 await workspace.task_tracker.unregister_external_task(run_key)
 
-    # Async context manager support for AgentApp lifecycle
+    # Async context manager support for the agent HTTP API lifecycle
     async def __aenter__(self):
         """
         No-op context manager entry (workspaces manage their own runners).
@@ -256,10 +256,10 @@ class DynamicMultiAgentRunner:
         return None
 
 
-# Use dynamic runner for AgentApp
+# Use the dynamic runner for DClaw's agent HTTP API.
 runner = DynamicMultiAgentRunner()
 
-agent_app = AgentApp(
+agent_app = AgentHttpApi(
     app_name="DClaw",
     app_description="A helpful assistant with background task support",
     runner=runner,

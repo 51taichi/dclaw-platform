@@ -329,7 +329,7 @@ async def get_chat(
                         content_patched = True
 
                 if not content_patched:
-                    from agentscope_runtime.engine.schemas.agent_schemas import TextContent
+                    from qwenpaw.runtime.contracts import TextContent
                     text_content = TextContent(
                         delta=False,
                         index=None,

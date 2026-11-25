@@ -7,7 +7,7 @@ from typing import Any, Dict
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
-from agentscope_runtime.engine.schemas.agent_schemas import Message
+from qwenpaw.runtime.contracts import Message
 
 from ..channels.schema import DEFAULT_CHANNEL
 

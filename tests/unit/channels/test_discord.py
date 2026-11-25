@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
-from agentscope_runtime.engine.schemas.agent_schemas import (
+from qwenpaw.runtime.contracts import (
     ContentType,
     TextContent,
     ImageContent,

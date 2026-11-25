@@ -31,7 +31,7 @@ from ..agent_package_import import (
     preview_agent_package,
 )
 
-from agentscope_runtime.engine.schemas.exception import (
+from qwenpaw.runtime.exceptions import (
     AppBaseException,
 )
 

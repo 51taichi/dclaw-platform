@@ -33,7 +33,7 @@ from typing import Any
 
 from agentscope.model import ChatModelBase
 from agentscope.model._model_response import ChatResponse
-from agentscope_runtime.engine.schemas.exception import (
+from qwenpaw.runtime.exceptions import (
     RateLimitExceededException,
 )
 

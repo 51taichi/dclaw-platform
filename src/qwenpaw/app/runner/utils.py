@@ -8,7 +8,7 @@ from urllib.parse import unquote, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from agentscope.message import Msg
-from agentscope_runtime.engine.schemas.agent_schemas import (
+from qwenpaw.runtime.contracts import (
     Message,
     TextContent,
     ImageContent,
@@ -20,7 +20,7 @@ from agentscope_runtime.engine.schemas.agent_schemas import (
     FunctionCallOutput,
     MessageType,
 )
-from agentscope_runtime.engine.schemas.exception import (
+from qwenpaw.runtime.exceptions import (
     AgentRuntimeErrorException,
 )
 

@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
-from agentscope_runtime.engine.schemas.exception import (
+from qwenpaw.runtime.exceptions import (
     ConfigurationException,
 )
 

@@ -25,7 +25,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from agentscope_runtime.engine.schemas.agent_schemas import (
+from qwenpaw.runtime.contracts import (
     AgentRequest,
     FileContent,
     ImageContent,

@@ -436,7 +436,7 @@ class TestConsoleStreaming:
 
     async def test_stream_one_yields_events(self, stream_channel):
         """stream_one should yield SSE-formatted events."""
-        from agentscope_runtime.engine.schemas.agent_schemas import (
+        from qwenpaw.runtime.contracts import (
             RunStatus,
             Event,
             Message,
@@ -487,7 +487,7 @@ class TestConsoleStreaming:
 
     async def test_stream_one_handles_dict_payload(self, stream_channel):
         """stream_one should handle dict payload with debounce."""
-        from agentscope_runtime.engine.schemas.agent_schemas import (
+        from qwenpaw.runtime.contracts import (
             RunStatus,
             Event,
             Message,
@@ -540,7 +540,7 @@ class TestConsoleStreaming:
         stream_channel,
     ):
         """Raw reasoning events should not render as empty assistant shells."""
-        from agentscope_runtime.engine.schemas.agent_schemas import (
+        from qwenpaw.runtime.contracts import (
             RunStatus,
             Message,
             MessageType,
@@ -597,7 +597,7 @@ class TestConsoleStreaming:
         stream_channel,
     ):
         """Reasoning deltas should not be streamed without their message."""
-        from agentscope_runtime.engine.schemas.agent_schemas import (
+        from qwenpaw.runtime.contracts import (
             RunStatus,
             Message,
             MessageType,
@@ -662,7 +662,7 @@ class TestConsoleStreaming:
         stream_channel,
     ):
         """Internal agent state changes should not appear as task artifacts."""
-        from agentscope_runtime.engine.schemas.agent_schemas import (
+        from qwenpaw.runtime.contracts import (
             RunStatus,
             Message,
             MessageType,
@@ -727,7 +727,7 @@ class TestConsoleStreaming:
         stream_channel,
     ):
         """stream_one should fallback instead of crashing on bad surrogate."""
-        from agentscope_runtime.engine.schemas.agent_schemas import (
+        from qwenpaw.runtime.contracts import (
             RunStatus,
             TextContent,
             ContentType,
@@ -784,7 +784,7 @@ class TestConsoleStreaming:
 
     async def test_stream_one_raises_when_process_fails(self, stream_channel):
         """stream_one should propagate runtime failures to callers."""
-        from agentscope_runtime.engine.schemas.agent_schemas import (
+        from qwenpaw.runtime.contracts import (
             ContentType,
             TextContent,
         )
@@ -816,7 +816,7 @@ class TestConsoleStreaming:
     ):
         """stream_one should not hide failed response events."""
         from types import SimpleNamespace
-        from agentscope_runtime.engine.schemas.agent_schemas import (
+        from qwenpaw.runtime.contracts import (
             ContentType,
             RunStatus,
             TextContent,

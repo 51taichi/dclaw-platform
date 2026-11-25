@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 
 from agentscope.session import SessionBase
-from agentscope_runtime.engine.schemas.exception import ConfigurationException
+from qwenpaw.runtime.exceptions import ConfigurationException
 from ...exceptions import AgentStateError
 from ..db import get_db
 

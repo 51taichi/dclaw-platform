@@ -6,8 +6,8 @@ from typing import ClassVar
 
 import pytest
 from agentscope.message import Msg
-from agentscope_runtime.engine.tracing.wrapper import trace
-from agentscope_runtime.engine.schemas.agent_schemas import ContentType, TextContent
+from qwenpaw.runtime.tracing import trace
+from qwenpaw.runtime.contracts import ContentType, TextContent
 
 from qwenpaw.app.channels.console.channel import ConsoleChannel
 from qwenpaw.app.runner import runner as runner_module

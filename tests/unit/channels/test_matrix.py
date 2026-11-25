@@ -6,7 +6,7 @@
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
-from agentscope_runtime.engine.schemas.agent_schemas import (
+from qwenpaw.runtime.contracts import (
     AgentRequest,
     ContentType,
     ImageContent,
@@ -1016,7 +1016,7 @@ class TestMatrixChannelSendMedia:
         tmp_path,
     ):
         """Test sending video media type."""
-        from agentscope_runtime.engine.schemas.agent_schemas import (
+        from qwenpaw.runtime.contracts import (
             VideoContent,
         )
 
@@ -1048,7 +1048,7 @@ class TestMatrixChannelSendMedia:
         tmp_path,
     ):
         """Test sending audio media type."""
-        from agentscope_runtime.engine.schemas.agent_schemas import (
+        from qwenpaw.runtime.contracts import (
             AudioContent,
         )
 
@@ -1105,7 +1105,7 @@ class TestMatrixChannelSendMedia:
         )
         mock_async_client.room_send = AsyncMock(return_value=MagicMock())
 
-        from agentscope_runtime.engine.schemas.agent_schemas import FileContent
+        from qwenpaw.runtime.contracts import FileContent
 
         part = FileContent(
             type=ContentType.FILE,

@@ -18,7 +18,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
-from agentscope_runtime.engine.schemas.exception import AppBaseException
+from qwenpaw.runtime.exceptions import AppBaseException
 
 from .models import ChatUpdate
 

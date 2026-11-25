@@ -13,7 +13,7 @@ from agentscope.model import ChatModelBase
 from agentscope.model._model_response import ChatResponse
 from openai import NOT_GIVEN
 from pydantic import BaseModel
-from agentscope_runtime.engine.schemas.exception import AppBaseException
+from qwenpaw.runtime.exceptions import AppBaseException
 
 from ...providers.openai_chat_model_compat import OpenAIChatModelCompat
 from ...providers.openai_response_diagnostics import (

@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 from starlette.responses import Response, StreamingResponse
 
-from agentscope_runtime.engine.schemas.agent_schemas import AgentRequest
+from qwenpaw.runtime.contracts import AgentRequest
 from ...utils.logging import LOG_FILE_PATH
 from ..agent_context import get_agent_for_request, set_current_chat_model
 from ..billing.context import BillingSource

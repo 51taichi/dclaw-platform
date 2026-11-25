@@ -182,7 +182,7 @@ class TaskTracker:
 
         This is used for tasks managed outside of DClaw's own streaming
         pipeline (e.g. background tasks dispatched through
-        ``agentscope_runtime``'s ``AgentApp``).  The caller **must** call
+        DClaw's HTTP background task route). The caller **must** call
         :meth:`unregister_external_task` when the task completes.
 
         Args:

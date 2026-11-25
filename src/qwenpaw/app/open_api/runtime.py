@@ -12,7 +12,7 @@ import re
 from typing import Any, Literal
 from uuid import uuid4
 
-from agentscope_runtime.engine.schemas.agent_schemas import (
+from qwenpaw.runtime.contracts import (
     ContentType,
     TextContent,
 )

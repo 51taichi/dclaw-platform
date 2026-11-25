@@ -18,7 +18,7 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
-from agentscope_runtime.engine.schemas.exception import (
+from qwenpaw.runtime.exceptions import (
     AgentRuntimeErrorException,
 )
 
