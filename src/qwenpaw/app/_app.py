@@ -21,7 +21,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from qwenpaw.runtime.http import AgentHttpApi
 from qwenpaw.runtime.exceptions import (
     AppBaseException,
@@ -401,9 +401,11 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
     from ..mindspace.jobs import get_knowledge_job_manager
 
     knowledge_job_manager = get_knowledge_job_manager()
+    knowledge_worker_ready = True
     try:
         await knowledge_job_manager.start()
     except Exception:
+        knowledge_worker_ready = False
         logger.error(
             "Knowledge job worker could not start; uploads will return 503 "
             "until the queue backend recovers",
@@ -418,6 +420,15 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
     app.state.knowledge_job_manager = knowledge_job_manager
     app.state.plugin_loader = None
     app.state.plugin_registry = None
+    app.state.startup_phase = "loading"
+    app.state.agent_startup_results = {}
+    app.state.expected_plugin_ids = []
+    app.state.loaded_plugin_ids = []
+    app.state.expected_plugin_versions = {}
+    app.state.loaded_plugin_versions = {}
+    app.state.failed_control_commands = 0
+    app.state.failed_startup_hooks = 0
+    app.state.knowledge_worker_ready = knowledge_worker_ready
 
     if isinstance(runner, DynamicMultiAgentRunner):
         runner.set_multi_agent_manager(multi_agent_manager)
@@ -464,6 +475,11 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
                 plugin_dirs.append(Path(bundled_plugins_dir).expanduser())
 
             plugin_loader = PluginLoader(plugin_dirs)
+            expected_plugin_versions = {}
+            for manifest, _ in plugin_loader.discover_plugins():
+                expected_plugin_versions.setdefault(manifest.id, manifest.version)
+            app.state.expected_plugin_versions = expected_plugin_versions
+            app.state.expected_plugin_ids = sorted(expected_plugin_versions)
 
             plugin_loader.registry.set_plugin_http_app(app)
 
@@ -478,6 +494,11 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
             loaded_plugins = await plugin_loader.load_all_plugins(
                 configs=plugin_configs,
             )
+            app.state.loaded_plugin_ids = sorted(loaded_plugins)
+            app.state.loaded_plugin_versions = {
+                plugin_id: record.manifest.version
+                for plugin_id, record in loaded_plugins.items()
+            }
             logger.debug(f"Loaded {len(loaded_plugins)} plugin(s)")
 
             runtime_helpers = RuntimeHelpers(
@@ -505,10 +526,12 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
 
             # Plugin capabilities and providers must exist before sealed
             # releases are reconciled and Agent configurations are loaded.
-            _reconcile_sealed_agent_profiles()
+            sealed_result = _reconcile_sealed_agent_profiles()
 
             # Start all configured agents (truly parallel now)
-            await multi_agent_manager.start_all_configured_agents()
+            app.state.agent_startup_results = (
+                await multi_agent_manager.start_all_configured_agents()
+            )
 
             provider_manager.start_local_model_resume(local_model_manager)
 
@@ -536,6 +559,7 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
                         f"={cmd_reg.priority_level})",
                     )
                 except Exception as e:
+                    app.state.failed_control_commands += 1
                     logger.error(
                         f"✗ Failed to register control command "
                         f"'{cmd_reg.handler.command_name}' "
@@ -565,6 +589,7 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
                         f"from plugin '{hook.plugin_id}'",
                     )
                 except Exception as e:
+                    app.state.failed_startup_hooks += 1
                     logger.error(
                         f"✗ Failed to execute startup hook "
                         f"'{hook.hook_name}' "
@@ -587,6 +612,25 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
                 logger.warning(f"Approval service setup skipped: {e}")
 
             startup_elapsed = time.time() - startup_start_time
+            expected_plugins = set(app.state.expected_plugin_ids)
+            loaded_plugin_ids = set(app.state.loaded_plugin_ids)
+            plugin_versions_match = all(
+                app.state.loaded_plugin_versions.get(plugin_id) == version
+                for plugin_id, version in app.state.expected_plugin_versions.items()
+            )
+            agents = app.state.agent_startup_results
+            app.state.startup_phase = (
+                "ready"
+                if agents
+                and all(agents.values())
+                and expected_plugins <= loaded_plugin_ids
+                and plugin_versions_match
+                and app.state.failed_control_commands == 0
+                and app.state.failed_startup_hooks == 0
+                and app.state.knowledge_worker_ready
+                and not (sealed_result and sealed_result.unavailable)
+                else "degraded"
+            )
             logger.info(
                 "Background startup completed in "
                 f"{startup_elapsed:.3f} seconds",
@@ -599,6 +643,7 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
             api_info = read_last_api()
             print_ready_banner(api_info, startup_elapsed)
         except Exception:
+            app.state.startup_phase = "failed"
             logger.error(
                 "Background startup encountered an error",
                 exc_info=True,
@@ -793,6 +838,47 @@ def get_version():
     return {
         "version": __version__,
     }
+
+
+@app.get("/api/health/ready")
+def get_readiness():
+    """Report completion of background startup and all enabled Agents."""
+    phase = getattr(app.state, "startup_phase", "loading")
+    agents = getattr(app.state, "agent_startup_results", {})
+    expected_plugins = set(getattr(app.state, "expected_plugin_ids", []))
+    expected_versions = getattr(app.state, "expected_plugin_versions", {})
+    loaded_versions = getattr(app.state, "loaded_plugin_versions", {})
+    control_failures = getattr(app.state, "failed_control_commands", 0)
+    hook_failures = getattr(app.state, "failed_startup_hooks", 0)
+    knowledge_ready = getattr(app.state, "knowledge_worker_ready", False)
+    matching_plugins = sum(
+        loaded_versions.get(plugin_id) == version
+        for plugin_id, version in expected_versions.items()
+    )
+    ready = (
+        phase == "ready"
+        and bool(agents)
+        and all(agents.values())
+        and matching_plugins == len(expected_plugins)
+        and control_failures == 0
+        and hook_failures == 0
+        and knowledge_ready
+    )
+    payload = {
+        "status": "ready" if ready else ("degraded" if phase == "ready" else phase),
+        "agents_expected": len(agents),
+        "agents_ready": sum(bool(ready) for ready in agents.values()),
+        "plugins_expected": len(expected_plugins),
+        "plugins_ready": matching_plugins,
+        "control_commands_failed": control_failures,
+        "startup_hooks_failed": hook_failures,
+        "knowledge_worker_ready": knowledge_ready,
+    }
+    return JSONResponse(
+        status_code=200 if ready else 503,
+        content=payload,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/api/doctor/runtime")

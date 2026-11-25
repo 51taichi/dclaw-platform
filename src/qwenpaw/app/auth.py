@@ -70,6 +70,7 @@ _PUBLIC_PATHS: frozenset[str] = frozenset(
         "/api/auth/register",
         "/api/desktop/update",
         "/api/version",
+        "/api/health/ready",
         "/api/settings/language",
         "/api/plugins",
     },
