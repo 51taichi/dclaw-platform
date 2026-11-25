@@ -17,7 +17,7 @@ from ..message_compat import Msg, ToolUseBlock
 from ..toolkit import DClawToolkit as Toolkit
 
 from .base_memory_manager import BaseMemoryManager, memory_registry
-from .reme_compat import install_reme_agentscope2_compat
+from .reme_v2_adapter import ReMeV2Adapter
 from .prompts import (
     MEMORY_GUIDANCE_ZH,
     MEMORY_GUIDANCE_EN,
@@ -36,8 +36,8 @@ from ...constant import EnvVarLoader
 
 logger = logging.getLogger(__name__)
 
-_REME_STORE_VERSION = "v1"
-_EXPECTED_REME_VERSION = "0.3.1.8"
+_REME_STORE_VERSION = "v2"
+_EXPECTED_REME_VERSION = "0.4.0.6"
 # Maximum number of tokens from query splitting
 MAX_QUERY_TOKENS = 50
 
@@ -80,11 +80,7 @@ See: https://docs.trychroma.com/docs/overview/troubleshooting#sqlite
 
 @memory_registry.register("remelight")
 class ReMeLightMemoryManager(BaseMemoryManager):
-    """Memory manager backed by ReMeLight.
-
-    Delegates lifecycle, search, and compaction to a ``ReMeLight`` instance
-    (``self._reme``).
-    """
+    """Memory manager using ReMe 0.4 with legacy file compatibility."""
 
     def __init__(self, working_dir: str, agent_id: str):
         super().__init__(working_dir=working_dir, agent_id=agent_id)
@@ -95,11 +91,6 @@ class ReMeLightMemoryManager(BaseMemoryManager):
             f"ReMeLightMemoryManager init: "
             f"agent_id={agent_id}, working_dir={working_dir}",
         )
-
-        memory_manager_backend = _detect_memory_manager_backend()
-
-        install_reme_agentscope2_compat()
-        from reme.reme_light import ReMeLight
 
         emb_config = self.get_embedding_config()
         vector_enabled = bool(emb_config["base_url"]) and bool(
@@ -114,34 +105,21 @@ class ReMeLightMemoryManager(BaseMemoryManager):
             f"Embedding config: {log_cfg}, vector_enabled={vector_enabled}",
         )
 
-        fts_enabled = EnvVarLoader.get_bool("FTS_ENABLED", True)
-
         agent_config = load_agent_config(self.agent_id)
         reme_cfg = agent_config.running.reme_light_memory_config
         rebuild_on_start = reme_cfg.rebuild_memory_index_on_start
 
-        store_name = "memory"
         effective_rebuild = self._resolve_rebuild_on_start(
             working_dir=working_dir,
             store_version=_REME_STORE_VERSION,
             rebuild_on_start=rebuild_on_start,
         )
 
-        recursive_file_watcher = reme_cfg.recursive_file_watcher
-
-        self._reme = ReMeLight(
+        self._reme = ReMeV2Adapter(
             working_dir=working_dir,
-            default_embedding_model_config=emb_config,
-            default_file_store_config={
-                "backend": memory_manager_backend,
-                "store_name": store_name,
-                "vector_enabled": vector_enabled,
-                "fts_enabled": fts_enabled,
-            },
-            default_file_watcher_config={
-                "rebuild_index_on_start": effective_rebuild,
-                "recursive": recursive_file_watcher,
-            },
+            model_factory=lambda: create_model_and_formatter(self.agent_id)[0],
+            embedding_config=emb_config,
+            rebuild_index=effective_rebuild,
         )
 
         self.summary_toolkit = Toolkit()
@@ -381,9 +359,8 @@ class ReMeLightMemoryManager(BaseMemoryManager):
 
         try:
             query_final = " ".join(self.tokenize_query(query))
-            logger.info(f"Tokenized query: {query_final}")
         except Exception as e:
-            logger.exception(f"Failed to tokenize query: {e} query={query}")
+            logger.exception("Failed to tokenize memory query: %s", e)
             query_final = query
 
         return await self._reme.memory_search(
@@ -473,9 +450,10 @@ class ReMeLightMemoryManager(BaseMemoryManager):
             content_blocks = result.content
 
             text_content = "\n".join(
-                b.get("text", "")
+                b.text if isinstance(b, TextBlock) else b.get("text", "")
                 for b in content_blocks
-                if isinstance(b, dict) and b.get("text")
+                if (isinstance(b, TextBlock) and b.text)
+                or (isinstance(b, dict) and b.get("text"))
             )
             if not text_content:
                 return None

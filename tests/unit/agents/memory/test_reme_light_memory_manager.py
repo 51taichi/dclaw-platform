@@ -2,27 +2,13 @@
 # pylint: disable=redefined-outer-name,protected-access
 """Tests for ReMeLightMemoryManager."""
 import importlib.metadata
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from agentscope.message import TextBlock
+from agentscope.tool import ToolResponse
 
-# All dependencies (agentscope, agentscope_runtime, reme, chromadb) are
-# installed in the venv. Do NOT mock installed packages — replacing them
-# with MagicMock() breaks submodule resolution for other test modules that
-# run in the same process (global sys.modules pollution).
-#
-# Only mock reme.reme_light so ReMeLight constructor is controllable.
-_MOCK_MODULES = [
-    "reme",
-    "reme.reme_light",
-    "reme.memory",
-    "reme.memory.file_based",
-    "reme.memory.file_based.reme_in_memory_memory",
-]
-for _mod in _MOCK_MODULES:
-    if _mod not in sys.modules:
-        sys.modules[_mod] = MagicMock()
+from qwenpaw.agents.message_compat import Msg
 
 # ---------------------------------------------------------------------------
 # Module-level shortcut for the patch target prefix
@@ -78,7 +64,7 @@ def _make_agent_config(
 def _build_manager(tmp_path, mock_reme, agent_config):
     """Construct a ReMeLightMemoryManager with all deps patched."""
     with (
-        patch("reme.reme_light.ReMeLight", return_value=mock_reme),
+        patch(f"{_MOD}.ReMeV2Adapter", return_value=mock_reme),
         patch(
             f"{_MOD}.load_agent_config",
             return_value=agent_config,
@@ -476,3 +462,26 @@ class TestReMeLightMemoryManagerGetEmbeddingConfig:
         ):
             cfg = manager.get_embedding_config()
         assert cfg["api_key"] == env_key
+
+
+@pytest.mark.asyncio
+async def test_retrieve_injects_agentscope2_text_blocks(manager, agent_config):
+    search_cfg = agent_config.running.reme_light_memory_config.auto_memory_search_config
+    search_cfg.max_results = 5
+    search_cfg.min_score = 0.1
+    manager.memory_search = AsyncMock(
+        return_value=ToolResponse(
+            content=[TextBlock(type="text", text="historic decision")],
+        ),
+    )
+    user_msg = Msg(
+        name="user",
+        role="user",
+        content=[TextBlock(type="text", text="What was decided?")],
+    )
+
+    with patch(f"{_MOD}.load_agent_config", return_value=agent_config):
+        result = await manager.retrieve([user_msg], agent_name="test-agent")
+
+    assert result is not None
+    assert "historic decision" in str(result["msg"][-1])

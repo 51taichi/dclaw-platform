@@ -11,6 +11,7 @@ __pycache__
 *.py[cod]
 *$py.class
 .venv
+.venv-as2
 venv
 .pytest_cache
 .coverage
