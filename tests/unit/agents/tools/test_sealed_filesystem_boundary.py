@@ -28,9 +28,9 @@ from qwenpaw.config.context import (
 
 def _response_text(response) -> str:
     return "\n".join(
-        block.get("text", "")
+        block.text
         for block in response.content
-        if block.get("type") == "text"
+        if block.type == "text"
     )
 
 

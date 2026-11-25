@@ -7,7 +7,6 @@ from typing import Union, Sequence, Dict, Any, Optional
 import uuid
 from datetime import datetime, timezone
 
-from agentscope.session import SessionBase
 from qwenpaw.runtime.exceptions import ConfigurationException
 from ...exceptions import AgentStateError
 from ..db import get_db
@@ -15,7 +14,7 @@ from ..db import get_db
 logger = logging.getLogger(__name__)
 
 
-class SqliteSession(SessionBase):
+class SqliteSession:
     """SessionBase subclass that stores memory in a global SQLite database.
     
     It stores `memory` state directly into the `messages` table.

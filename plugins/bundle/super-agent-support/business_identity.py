@@ -129,7 +129,7 @@ def _validated_path(value: str) -> str:
     return path
 
 
-@dataclass(frozen=True)
+@dataclass
 class BusinessIdentityError(ValueError):
     reason: str
 

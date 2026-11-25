@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from agentscope.memory import InMemoryMemory
+from ...agents.context.memory_state import InMemoryMemory
 
 from .manager import ChatManager
 from .models import (

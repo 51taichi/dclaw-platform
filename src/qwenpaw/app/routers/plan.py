@@ -58,7 +58,7 @@ async def _plan_from_session_state(
         return None
 
     try:
-        from agentscope.plan import Plan
+        from ...plan import Plan
 
         plan = Plan(**plan_data)
         return plan_to_response(plan)

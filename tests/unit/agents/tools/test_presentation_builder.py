@@ -20,17 +20,17 @@ from qwenpaw.config.context import set_current_workspace_dir
 
 def _text_from_response(response) -> str:
     return "\n".join(
-        block.get("text", "")
+        block.text
         for block in response.content
-        if block.get("type") == "text"
+        if block.type == "text"
     )
 
 
 def _file_names_from_response(response) -> list[str]:
     return [
-        block.get("filename", "")
+        block.name or ""
         for block in response.content
-        if block.get("type") == "file"
+        if block.type == "data"
     ]
 
 

@@ -8,11 +8,33 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Coroutine
+from typing import TYPE_CHECKING, Any, AsyncGenerator
 
 import frontmatter as fm
-from agentscope.message import Msg, TextBlock
+from agentscope.event import (
+    TextBlockDeltaEvent,
+    TextBlockEndEvent,
+    ThinkingBlockDeltaEvent,
+    ToolCallDeltaEvent,
+    ToolCallEndEvent,
+    ToolCallStartEvent,
+    ToolResultDataDeltaEvent,
+    ToolResultEndEvent,
+    ToolResultTextDeltaEvent,
+)
+from agentscope.message import (
+    Base64Source,
+    DataBlock,
+    Msg as AgentScopeMsg,
+    TextBlock,
+    ThinkingBlock,
+    ToolCallBlock,
+    ToolResultBlock,
+    ToolResultState,
+    URLSource,
+)
 from qwenpaw.runtime.runner import Runner
+from qwenpaw.agents.message_compat import Msg
 from qwenpaw.runtime.contracts import AgentRequest
 from qwenpaw.runtime.exceptions import (
     AgentException,
@@ -55,7 +77,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-_PRINT_END_SIGNAL = "[END]"
+_STREAM_END = object()
 
 
 def _is_isolated_agent_open_api_request(request: Any) -> bool:
@@ -92,36 +114,228 @@ async def _cancel_streaming_agent_task(task: asyncio.Task) -> None:
 async def _stream_printing_messages_interruptible(
     *,
     agents: list[Any],
-    coroutine_task: Coroutine[Any, Any, Msg],
+    inputs: list[Any],
 ) -> AsyncGenerator[tuple[Msg, bool], None]:
-    """Like agentscope.stream_printing_messages, but cancel the agent task
-    promptly when the outer stream is stopped or closed.
-    """
+    """Project AgentScope 2 events into DClaw's legacy message stream."""
+    if len(agents) != 1:
+        raise ValueError("DClaw streaming requires exactly one agent")
+    agent = agents[0]
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    errors: list[BaseException] = []
+    seen_text_blocks: set[str] = set()
+    streamed_text: dict[str, str] = {}
+    streamed_text_order: list[str] = []
+    seen_tool_result_deltas: set[str] = set()
+    tool_calls: dict[str, dict[str, str]] = {}
 
-    queue: asyncio.Queue = asyncio.Queue()
-    for agent in agents:
-        agent.set_msg_queue_enabled(True, queue)
+    def _reply_block(block_type: str, block_id: str):
+        reply = agent.state.get_reply_message(agent.name)
+        if reply is None:
+            return None
+        for block in reversed(reply.content):
+            if block.type == block_type and block.id == block_id:
+                return block.model_copy(deep=True)
+        return None
 
-    task = asyncio.create_task(coroutine_task)
-    if task.done():
-        await queue.put(_PRINT_END_SIGNAL)
-    else:
-        task.add_done_callback(lambda _: queue.put_nowait(_PRINT_END_SIGNAL))
+    def _event_message(item: Any) -> Msg | None:
+        if isinstance(item, TextBlockDeltaEvent) and item.delta:
+            seen_text_blocks.add(item.block_id)
+            if item.block_id not in streamed_text:
+                streamed_text_order.append(item.block_id)
+                streamed_text[item.block_id] = ""
+            streamed_text[item.block_id] += item.delta
+            return Msg(
+                id=item.reply_id,
+                name=agent.name,
+                role="assistant",
+                content=[TextBlock(id=item.block_id, text=item.delta)],
+                metadata={"stream_delta": True},
+            )
+        if (
+            isinstance(item, TextBlockEndEvent)
+            and item.block_id not in seen_text_blocks
+            and item.text
+        ):
+            return Msg(
+                id=item.reply_id,
+                name=agent.name,
+                role="assistant",
+                content=[TextBlock(id=item.block_id, text=item.text)],
+            )
+        if isinstance(item, ThinkingBlockDeltaEvent) and item.delta:
+            return Msg(
+                id=item.reply_id,
+                name=agent.name,
+                role="assistant",
+                content=[ThinkingBlock(id=item.block_id, thinking=item.delta)],
+                metadata={"stream_delta": True},
+            )
+        if isinstance(item, ToolCallStartEvent):
+            tool_calls[item.tool_call_id] = {
+                "name": item.tool_call_name,
+                "input": "",
+            }
+            return None
+        if isinstance(item, ToolCallDeltaEvent):
+            current = tool_calls.setdefault(
+                item.tool_call_id,
+                {"name": "tool", "input": ""},
+            )
+            current["input"] += item.delta
+            return None
+        if isinstance(item, ToolCallEndEvent):
+            block = _reply_block("tool_call", item.tool_call_id)
+            if block is None:
+                current = tool_calls.get(
+                    item.tool_call_id,
+                    {"name": "tool", "input": "{}"},
+                )
+                block = ToolCallBlock(
+                    id=item.tool_call_id,
+                    name=current["name"],
+                    input=current["input"] or "{}",
+                )
+            return Msg(
+                id=item.reply_id,
+                name=agent.name,
+                role="assistant",
+                content=[block],
+            )
+        if isinstance(item, ToolResultTextDeltaEvent) and item.delta:
+            seen_tool_result_deltas.add(item.tool_call_id)
+            call = _reply_block("tool_call", item.tool_call_id)
+            return Msg(
+                id=item.reply_id,
+                name=agent.name,
+                role="assistant",
+                content=[
+                    ToolResultBlock(
+                        id=item.tool_call_id,
+                        name=getattr(call, "name", "tool"),
+                        output=item.delta,
+                        state=ToolResultState.RUNNING,
+                    ),
+                ],
+                metadata={"stream_delta": True},
+            )
+        if isinstance(item, ToolResultDataDeltaEvent):
+            seen_tool_result_deltas.add(item.tool_call_id)
+            call = _reply_block("tool_call", item.tool_call_id)
+            source = (
+                URLSource(url=item.url, media_type=item.media_type)
+                if item.url
+                else Base64Source(
+                    data=item.data or "",
+                    media_type=item.media_type,
+                )
+            )
+            return Msg(
+                id=item.reply_id,
+                name=agent.name,
+                role="assistant",
+                content=[
+                    ToolResultBlock(
+                        id=item.tool_call_id,
+                        name=getattr(call, "name", "tool"),
+                        output=[DataBlock(id=item.block_id, source=source)],
+                        state=ToolResultState.RUNNING,
+                    ),
+                ],
+                metadata={"stream_delta": True},
+            )
+        if isinstance(item, ToolResultEndEvent):
+            block = _reply_block("tool_result", item.tool_call_id)
+            if item.tool_call_id in seen_tool_result_deltas:
+                call = _reply_block("tool_call", item.tool_call_id)
+                block = ToolResultBlock(
+                    id=item.tool_call_id,
+                    name=getattr(call, "name", "tool"),
+                    output="",
+                    state=item.state,
+                )
+            if block is not None:
+                return Msg(
+                    id=item.reply_id,
+                    name=agent.name,
+                    role="assistant",
+                    content=[block],
+                    metadata={"stream_terminal": True},
+                )
+        return None
 
+    async def _produce() -> None:
+        projected = False
+        final_msg = None
+        agent._stream_message_queue = queue  # pylint: disable=protected-access
+        try:
+            async for item in agent.reply_stream(
+                inputs=inputs,
+                yield_final_msg=True,
+            ):
+                if isinstance(item, AgentScopeMsg):
+                    final_msg = Msg.model_validate(item.model_dump(mode="json"))
+                    continue
+                msg = _event_message(item)
+                if msg is not None:
+                    projected = True
+                    await queue.put((msg, False))
+            if not projected and final_msg is not None:
+                await queue.put((final_msg, False))
+            elif projected and final_msg is not None:
+                emitted_text = "".join(
+                    streamed_text[block_id]
+                    for block_id in streamed_text_order
+                )
+                final_text = final_msg.get_text_content() or ""
+                if final_text.startswith(emitted_text):
+                    remainder = final_text[len(emitted_text) :]
+                    if remainder:
+                        await queue.put(
+                            (
+                                Msg(
+                                    id=final_msg.id,
+                                    name=final_msg.name,
+                                    role=final_msg.role,
+                                    content=remainder,
+                                    metadata={"stream_delta": True},
+                                ),
+                                False,
+                            ),
+                        )
+                elif final_text and final_text != emitted_text:
+                    corrected = final_msg.model_copy(deep=True)
+                    corrected.metadata = {
+                        **(corrected.metadata or {}),
+                        "stream_snapshot": True,
+                    }
+                    await queue.put((corrected, False))
+        except BaseException as exc:  # propagated after queued chunks
+            errors.append(exc)
+        finally:
+            agent._stream_message_queue = None  # pylint: disable=protected-access
+            await queue.put(_STREAM_END)
+
+    task = asyncio.create_task(_produce())
+    pending: Msg | None = None
     try:
         while True:
-            printing_msg = await queue.get()
-            if (
-                isinstance(printing_msg, str)
-                and printing_msg == _PRINT_END_SIGNAL
-            ):
+            item = await queue.get()
+            if item is _STREAM_END:
                 break
-            msg, last, _ = printing_msg
-            yield msg, last
-
-        exception = task.exception()
-        if exception is not None:
-            raise exception from None
+            msg, flush = item
+            if pending is not None:
+                yield pending, False
+                pending = None
+            if flush:
+                yield msg, False
+            else:
+                pending = msg
+        if errors:
+            if pending is not None:
+                yield pending, False
+            raise errors[0]
+        if pending is not None:
+            yield pending, True
     except asyncio.CancelledError:
         await _cancel_streaming_agent_task(task)
         raise
@@ -145,7 +359,7 @@ async def _run_standard_or_orchestrated_turn(
     if not orchestration.enabled:
         async for msg, last in _stream_printing_messages_interruptible(
             agents=[agent],
-            coroutine_task=agent(messages),
+            inputs=messages,
         ):
             yield msg, last, True
         return
@@ -647,7 +861,7 @@ class AgentRunner(Runner):
             )
             if plan_enabled:
                 try:
-                    from agentscope.plan import (
+                    from ...plan import (
                         PlanNotebook,
                         InMemoryPlanStorage,
                     )

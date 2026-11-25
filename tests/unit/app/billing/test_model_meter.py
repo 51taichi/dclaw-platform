@@ -1072,6 +1072,7 @@ async def test_cjk_reservation_and_provider_limit_share_the_same_frozen_cap(
 def _agentscope_response(*, response_id="agentscope-generated-id", usage=True):
     return ChatResponse(
         content=[],
+        is_last=True,
         id=response_id,
         usage=(
             ChatUsage(input_tokens=3, output_tokens=2, time=0)

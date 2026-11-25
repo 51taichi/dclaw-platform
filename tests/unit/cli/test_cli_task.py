@@ -232,7 +232,7 @@ class _FakeActingBase:
 
     async def _acting(self, _tool_call):
         self.acting_called = True
-        return {"output": "executed"}
+        yield {"output": "executed"}
 
 
 def _build_guarded_agent(request_context: dict):
@@ -252,18 +252,33 @@ async def test_tool_guard_bypassed_via_request_context():
     """_acting delegates directly to super when _headless_tool_guard=false."""
     agent = _build_guarded_agent({"_headless_tool_guard": "false"})
 
-    tool_call = {"id": "tc_1", "name": "execute_shell_command", "input": {}}
-    result = await agent._acting(tool_call)  # pylint: disable=protected-access
+    from agentscope.message import ToolCallBlock
+
+    tool_call = ToolCallBlock(
+        id="tc_1",
+        name="execute_shell_command",
+        input="{}",
+    )
+    result = [
+        item
+        async for item in agent._acting(tool_call)  # pylint: disable=protected-access
+    ]
 
     assert agent.acting_called is True
-    assert result == {"output": "executed"}
+    assert result == [{"output": "executed"}]
 
 
 async def test_tool_guard_not_bypassed_without_flag():
     """Without _headless_tool_guard, the mixin runs its guard logic."""
     agent = _build_guarded_agent({"session_id": "s1"})
 
-    tool_call = {"id": "tc_2", "name": "execute_shell_command", "input": {}}
+    from agentscope.message import ToolCallBlock
+
+    tool_call = ToolCallBlock(
+        id="tc_2",
+        name="execute_shell_command",
+        input="{}",
+    )
     with patch(
         "qwenpaw.security.tool_guard.engine.get_guard_engine",
     ) as mock_engine_fn:
@@ -275,12 +290,15 @@ async def test_tool_guard_not_bypassed_without_flag():
         mock_engine_fn.return_value = mock_engine
 
         with patch("qwenpaw.app.approvals.get_approval_service"):
-            result = await agent._acting(  # pylint: disable=protected-access
-                tool_call,
-            )
+            result = [
+                item
+                async for item in agent._acting(  # pylint: disable=protected-access
+                    tool_call,
+                )
+            ]
 
     assert agent.acting_called is True
-    assert result == {"output": "executed"}
+    assert result == [{"output": "executed"}]
 
 
 # ── Full CLI → request_context → component e2e ──────────────────────

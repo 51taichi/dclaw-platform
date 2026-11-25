@@ -14,9 +14,12 @@ import asyncio
 import json as _json
 import logging
 import uuid as _uuid
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
-from agentscope.message import Msg
+from agentscope.message import TextBlock, ToolCallBlock, ToolResultState
+from agentscope.tool import ToolResponse
+
+from .message_compat import Msg
 
 from ..security.tool_guard.models import (
     GuardSeverity,
@@ -135,7 +138,7 @@ class ToolGuardMixin:
     # _acting override
     # ------------------------------------------------------------------
 
-    async def _acting(self, tool_call) -> dict | None:  # noqa: C901
+    async def _acting(self, tool_call: ToolCallBlock):  # noqa: C901
         """Intercept sensitive tool calls before execution.
 
         1. If tool is in *denied_tools*, auto-deny unconditionally.
@@ -155,14 +158,26 @@ class ToolGuardMixin:
         ctx = getattr(self, "_request_context", None) or {}
         # TODO: remove this
         if ctx.get("_headless_tool_guard", "true").lower() == "false":
-            return await super()._acting(tool_call)  # type: ignore[misc]
+            async for chunk in super()._acting(tool_call):
+                yield chunk
+            return
 
         self._ensure_tool_guard()
+
+        try:
+            tool_input = _json.loads(tool_call.input or "{}")
+        except (TypeError, ValueError):
+            tool_input = {}
+        legacy_call = {
+            "id": tool_call.id,
+            "name": tool_call.name,
+            "input": tool_input,
+        }
 
         action: _GuardAction | None = None
         async with self._tool_guard_lock:
             try:
-                action = await self._decide_guard_action(tool_call)
+                action = await self._decide_guard_action(legacy_call)
             except Exception as exc:
                 logger.warning(
                     "Tool guard check error (non-blocking): %s",
@@ -171,9 +186,16 @@ class ToolGuardMixin:
                 )
 
         if action is not None:
-            return await self._execute_guard_action(action, tool_call)
+            result = await self._execute_guard_action(action, legacy_call)
+            if isinstance(result, list):
+                for chunk in result:
+                    yield chunk
+            elif isinstance(result, ToolResponse):
+                yield result
+            return
 
-        return await super()._acting(tool_call)  # type: ignore[misc]
+        async for chunk in super()._acting(tool_call):
+            yield chunk
 
     # pylint: disable=too-many-return-statements
     async def _decide_guard_action(
@@ -340,7 +362,7 @@ class ToolGuardMixin:
         self,
         action: "_GuardAction",
         tool_call: dict[str, Any],
-    ) -> dict | None:
+    ) -> Any:
         """Execute the guard action decided under lock (runs outside lock)."""
         if action.kind == "auto_denied":
             return await self._acting_auto_denied(
@@ -365,7 +387,7 @@ class ToolGuardMixin:
         tool_call: dict[str, Any],
         tool_name: str,
         guard_result=None,
-    ) -> dict | None:
+    ) -> ToolResponse:
         """Auto-deny a tool call without offering approval."""
         from agentscope.message import ToolResultBlock
         from qwenpaw.security.tool_guard.approval import (
@@ -395,31 +417,17 @@ class ToolGuardMixin:
             f"{tg('blocked_footer')}"
         )
 
-        tool_res_msg = Msg(
-            "system",
-            [
-                ToolResultBlock(
-                    type="tool_result",
-                    id=tool_call["id"],
-                    name=tool_name,
-                    output=[
-                        {"type": "text", "text": denied_text},
-                    ],
-                ),
-            ],
-            "system",
+        return ToolResponse(
+            content=[TextBlock(text=denied_text)],
+            state=ToolResultState.DENIED,
         )
-
-        await self.print(tool_res_msg, True)
-        await self.memory.add(tool_res_msg)
-        return None
 
     async def _acting_with_approval(
         self,
         tool_call: dict[str, Any],
         tool_name: str,
         guard_result,
-    ) -> dict | None:
+    ) -> Any:
         """Block and wait for user approval with heartbeat keep-alive.
 
         This method creates a Future, sends an approval request message to
@@ -492,7 +500,15 @@ class ToolGuardMixin:
                 tool_name,
             )
             # Execute the tool
-            return await super()._acting(tool_call)  # type: ignore[misc]
+            chunks = []
+            block = ToolCallBlock(
+                id=str(tool_call.get("id") or ""),
+                name=tool_name,
+                input=_json.dumps(tool_call.get("input") or {}),
+            )
+            async for chunk in super()._acting(block):
+                chunks.append(chunk)
+            return chunks
         elif decision == ApprovalDecision.DENIED:
             logger.info(
                 "Tool '%s' denied by user",
@@ -692,7 +708,7 @@ class ToolGuardMixin:
         tool_call: dict[str, Any],
         tool_name: str,
         guard_result,
-    ) -> dict | None:
+    ) -> ToolResponse:
         """Handle user denial of tool execution."""
         from agentscope.message import ToolResultBlock
         from qwenpaw.security.tool_guard.approval import (
@@ -715,29 +731,17 @@ class ToolGuardMixin:
             f"{findings_text}"
         )
 
-        tool_res_msg = Msg(
-            "system",
-            [
-                ToolResultBlock(
-                    type="tool_result",
-                    id=tool_call["id"],
-                    name=tool_name,
-                    output=[{"type": "text", "text": denied_text}],
-                ),
-            ],
-            "system",
+        return ToolResponse(
+            content=[TextBlock(text=denied_text)],
+            state=ToolResultState.DENIED,
         )
-
-        await self.print(tool_res_msg, True)
-        await self.memory.add(tool_res_msg)
-        return None
 
     async def _acting_timeout(
         self,
         tool_call: dict[str, Any],
         tool_name: str,
         guard_result,
-    ) -> dict | None:
+    ) -> ToolResponse:
         """Handle approval timeout (auto-deny)."""
         from agentscope.message import ToolResultBlock
         from qwenpaw.security.tool_guard.approval import (
@@ -765,39 +769,23 @@ class ToolGuardMixin:
             f"{findings_text}"
         )
 
-        tool_res_msg = Msg(
-            "system",
-            [
-                ToolResultBlock(
-                    type="tool_result",
-                    id=tool_call["id"],
-                    name=tool_name,
-                    output=[{"type": "text", "text": timeout_text}],
-                ),
-            ],
-            "system",
+        return ToolResponse(
+            content=[TextBlock(text=timeout_text)],
+            state=ToolResultState.DENIED,
         )
-
-        await self.print(tool_res_msg, True)
-        await self.memory.add(tool_res_msg)
-        return None
 
     # ------------------------------------------------------------------
     # _reasoning override (guard-aware)
     # ------------------------------------------------------------------
 
-    async def _reasoning(
-        self,
-        tool_choice: Literal["auto", "none", "required"] | None = None,
-    ) -> Msg:
+    async def _reasoning(self, tool_choice=None):
         """Delegate to parent ReActAgent reasoning.
 
         Tool guard approval is now handled synchronously in
         _acting_with_approval, so no special reasoning logic is needed.
         """
-        return await super()._reasoning(  # type: ignore[misc]
-            tool_choice=tool_choice,
-        )
+        async for item in super()._reasoning(tool_choice=tool_choice):
+            yield item
 
     @staticmethod
     def _severity_emoji_and_localized_name(

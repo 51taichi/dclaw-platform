@@ -16,6 +16,32 @@ from urllib.parse import unquote, urlparse
 MEDIA_TYPES = frozenset({"image", "video", "audio"})
 
 
+def _media_block_parts(
+    block: Any,
+) -> tuple[str, dict[str, Any], dict[str, Any]] | None:
+    """Return kind, source and a stable serializable block shape."""
+    if isinstance(block, dict):
+        kind = block.get("type")
+        source = block.get("source")
+        if kind in MEDIA_TYPES and isinstance(source, dict):
+            return kind, source, block
+        return None
+    if getattr(block, "type", None) != "data":
+        return None
+    source_obj = getattr(block, "source", None)
+    media_type = str(getattr(source_obj, "media_type", "") or "")
+    kind = media_type.partition("/")[0]
+    if kind not in MEDIA_TYPES or source_obj is None:
+        return None
+    source = source_obj.model_dump(mode="json")
+    stable = {
+        "type": kind,
+        "source": source,
+        "name": getattr(block, "name", None),
+    }
+    return kind, source, stable
+
+
 def media_input_manifest(messages: list[Any]) -> list[dict[str, Any]]:
     result = []
     for message_index, message in enumerate(messages):
@@ -23,14 +49,13 @@ def media_input_manifest(messages: list[Any]) -> list[dict[str, Any]]:
         if not isinstance(content, list):
             continue
         for block_index, block in enumerate(content):
-            if (
-                not isinstance(block, dict)
-                or block.get("type") not in MEDIA_TYPES
-            ):
+            parts = _media_block_parts(block)
+            if parts is None:
                 continue
+            kind, _source, stable = parts
             digest = hashlib.sha256(
                 json.dumps(
-                    block,
+                    stable,
                     sort_keys=True,
                     ensure_ascii=False,
                     separators=(",", ":"),
@@ -41,7 +66,7 @@ def media_input_manifest(messages: list[Any]) -> list[dict[str, Any]]:
                 {
                     "message_index": message_index,
                     "block_index": block_index,
-                    "kind": block["type"],
+                    "kind": kind,
                     "block_digest": "sha256:" + digest,
                 },
             )
@@ -95,13 +120,17 @@ def media_input_identities(
 
     Never publish source URLs/bytes. Missing/unrecognized inputs stay unbound.
     """
-    return [
-        (block["type"], _source_identity(block.get("source"), local=True))
-        for message in messages
-        if isinstance(getattr(message, "content", None), list)
-        for block in message.content
-        if isinstance(block, dict) and block.get("type") in MEDIA_TYPES
-    ]
+    identities: list[tuple[str, str | None]] = []
+    for message in messages:
+        if not isinstance(getattr(message, "content", None), list):
+            continue
+        for block in message.content:
+            parts = _media_block_parts(block)
+            if parts is None:
+                continue
+            kind, source, _stable = parts
+            identities.append((kind, _source_identity(source, local=True)))
+    return identities
 
 
 def _native_counts(prompt: Any) -> Counter:
@@ -145,6 +174,13 @@ def _native_counts(prompt: Any) -> Counter:
                         identity = _identity(
                             "data:audio/base64;base64," + value["data"],
                         )
+                elif typ == "data":
+                    source = block.get("source")
+                    if isinstance(source, dict):
+                        kind = str(source.get("media_type", "")).partition(
+                            "/",
+                        )[0]
+                        identity = _source_identity(source, local=True)
                 elif typ in MEDIA_TYPES:
                     source = block.get("source")
                     if isinstance(source, dict) and (

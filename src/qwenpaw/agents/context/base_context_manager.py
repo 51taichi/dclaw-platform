@@ -4,7 +4,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any
 
-from agentscope.message import Msg
+from ..message_compat import Msg
 
 from .agent_context import AgentContext
 from ..utils.registry import Registry

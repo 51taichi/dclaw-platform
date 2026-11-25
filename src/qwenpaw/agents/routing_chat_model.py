@@ -9,10 +9,14 @@ from typing import Any, AsyncGenerator, Iterable, Literal, Type
 
 from agentscope.formatter import FormatterBase
 from agentscope.model import ChatModelBase
-from agentscope.model._model_response import ChatResponse
+from agentscope.model import ChatResponse
 from pydantic import BaseModel
 
 from ..config.config import AgentsLLMRoutingConfig
+from ..providers.agentscope2_compat import (
+    LegacyModelNameMixin,
+    initialize_model_wrapper,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +170,7 @@ def _is_model_endpoint_error(exc: Exception) -> bool:
     return any(marker in message for marker in MODEL_ENDPOINT_ERROR_TEXT_MARKERS)
 
 
-class AutoRoutingChatModel(ChatModelBase):
+class AutoRoutingChatModel(LegacyModelNameMixin, ChatModelBase):
     """Route each request to a configured chat model using lightweight hints."""
 
     def __init__(
@@ -175,9 +179,10 @@ class AutoRoutingChatModel(ChatModelBase):
         endpoints: list[RoutingEndpoint],
         fallback_endpoint: RoutingEndpoint,
     ) -> None:
-        super().__init__(
-            model_name="auto/routing",
-            stream=bool(getattr(fallback_endpoint.model, "stream", True)),
+        initialize_model_wrapper(
+            self,
+            fallback_endpoint.model,
+            model="auto/routing",
         )
         self.endpoints = endpoints
         self.fallback_endpoint = fallback_endpoint
@@ -254,7 +259,7 @@ class AutoRoutingChatModel(ChatModelBase):
         raise RuntimeError("Auto routing has no endpoints to call.")
 
 
-class RoutingChatModel(ChatModelBase):
+class RoutingChatModel(LegacyModelNameMixin, ChatModelBase):
     """A ChatModelBase that routes between local and cloud slots."""
 
     def __init__(
@@ -264,10 +269,7 @@ class RoutingChatModel(ChatModelBase):
         cloud_endpoint: RoutingEndpoint,
         routing_cfg: AgentsLLMRoutingConfig,
     ) -> None:
-        super().__init__(
-            model_name="routing",
-            stream=bool(getattr(local_endpoint.model, "stream", True)),
-        )
+        initialize_model_wrapper(self, local_endpoint.model, model="routing")
         self.local_endpoint = local_endpoint
         self.cloud_endpoint = cloud_endpoint
         self.routing_cfg = routing_cfg

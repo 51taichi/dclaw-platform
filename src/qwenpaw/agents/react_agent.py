@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """DClaw Agent - main agent implementation.
 
-This module provides the main DClaw agent class built on ReActAgent,
+This module provides the main DClaw agent class built on AgentScope Agent,
 with integrated tools, skills, and memory management.
 """
 
@@ -15,16 +15,22 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List, Literal, Optional, Type, TYPE_CHECKING
 
-from agentscope.agent import ReActAgent
-from agentscope.agent._react_agent import _MemoryMark
-from agentscope.memory import InMemoryMemory
-from agentscope.message import Msg
-from agentscope.tool import Toolkit
+from agentscope.agent import Agent, ReActConfig
+from agentscope.message import (
+    Msg as AgentScopeMsg,
+    TextBlock,
+    ToolCallBlock,
+    ToolResultState,
+)
+from agentscope.state import AgentState
+from agentscope.tool import ToolChoice, ToolResponse
+from .message_compat import Msg
 from anyio import ClosedResourceError
 from pydantic import BaseModel
 
 from ..app.mcp import HttpStatefulClient, StdIOStatefulClient
 from .command_handler import CommandHandler
+from .context.memory_state import InMemoryMemory, MemoryMark
 from .hooks import BootstrapHook
 from .model_factory import create_model_and_formatter
 from .prompt import (
@@ -39,6 +45,7 @@ from .skill_system import (
     resolve_effective_skills,
 )
 from .tool_guard_mixin import ToolGuardMixin
+from .toolkit import DClawToolkit as Toolkit
 from .tools.agent_skill_reader import build_read_agent_skill_tool
 from .tools import (
     browser_use,
@@ -185,7 +192,7 @@ KNOWLEDGE_RETRIEVAL_POLICY = """## Knowledge-base retrieval policy
 """
 
 
-class QwenPawAgent(ToolGuardMixin, ReActAgent):
+class QwenPawAgent(ToolGuardMixin, Agent):
     """DClaw agent with integrated tools, skills, and memory management.
 
     This agent extends ReActAgent with:
@@ -364,20 +371,61 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
             f"Agent '{agent_config.id}' initialized with model: "
             f"{model_info} (class: {model.__class__.__name__})",
         )
+        # AgentScope 2 owns the live conversation in AgentState. DClaw keeps
+        # its historical memory facade because session persistence and context
+        # compaction still use marks and the compressed-summary helpers.
+        memory: InMemoryMemory
+        if self.context_manager is not None:
+            memory = self.context_manager.get_agent_context(
+                persist_dialog=bool(
+                    self._request_context.get(
+                        "_persist_context_dialog",
+                        True,
+                    ),
+                ),
+            )
+            logger.debug("Context manager configured")
+        else:
+            memory = InMemoryMemory()
+
+        existing_messages = [message for message, _marks in memory.content]
+        state_kwargs: dict[str, Any] = {"context": existing_messages}
+        if session_id:
+            state_kwargs["session_id"] = str(session_id)
+        compressed_summary = getattr(memory, "_compressed_summary", "")
+        if compressed_summary:
+            state_kwargs["summary"] = compressed_summary
+        state = AgentState(**state_kwargs)
+
+        # The formatter belongs to the model in AgentScope 2. Wrapper models
+        # also expose it so Agent can validate incoming media before inference.
+        setattr(model, "formatter", formatter)
         init_kwargs: dict[str, Any] = {
             "name": "DClaw"
             if (not agent_config.name or agent_config.name == "QwenPaw")
             else agent_config.name,
             "model": model,
-            "sys_prompt": sys_prompt,
+            "system_prompt": sys_prompt,
             "toolkit": toolkit,
-            "memory": InMemoryMemory(),
-            "formatter": formatter,
-            "max_iters": running_config.max_iters,
+            "state": state,
+            "react_config": ReActConfig(max_iters=running_config.max_iters),
         }
-        if plan_notebook is not None:
-            init_kwargs["plan_notebook"] = plan_notebook
         super().__init__(**init_kwargs)
+        self.formatter = formatter
+        self.memory = memory
+        self.memory.bind_agent_state(self.state)
+        self.plan_notebook = plan_notebook
+
+        if self.plan_notebook is not None:
+            for tool_fn in self.plan_notebook.list_tools():
+                self.toolkit.register_tool_function(
+                    tool_fn,
+                    namesake_strategy=self._namesake_strategy,
+                )
+            logger.debug(
+                "Registered plan tools: %s",
+                [fn.__name__ for fn in self.plan_notebook.list_tools()],
+            )
 
         # Register memory tools provided by the memory manager
         if self.memory_manager is not None:
@@ -392,20 +440,6 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
                 [fn.__name__ for fn in memory_tools],
             )
 
-        # Configure context manager memory if available
-        if self.context_manager is not None:
-            self.memory: "AgentContext" = (
-                self.context_manager.get_agent_context(
-                    persist_dialog=bool(
-                        self._request_context.get(
-                            "_persist_context_dialog",
-                            True,
-                        ),
-                    ),
-                )
-            )
-            logger.debug("Context manager configured")
-
         # Setup command handler
         self.command_handler = CommandHandler(
             agent_name=self.name,
@@ -416,6 +450,44 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
 
         # Register hooks
         self._register_hooks()
+
+    def state_dict(self) -> dict[str, Any]:
+        """Serialize the AgentScope state and DClaw-owned extensions."""
+        return {
+            "state": self.state.model_dump(mode="json"),
+            "memory": self.memory.state_dict(),
+            "plan_notebook": (
+                self.plan_notebook.state_dict()
+                if self.plan_notebook is not None
+                else None
+            ),
+        }
+
+    def load_state_dict(
+        self,
+        state: dict[str, Any],
+        strict: bool = False,
+    ) -> None:
+        """Restore a session and rebind the memory facade to AgentState."""
+        if not isinstance(state, dict):
+            if strict:
+                raise TypeError("Agent state must be a dictionary")
+            return
+
+        raw_agent_state = state.get("state")
+        if isinstance(raw_agent_state, dict):
+            self.state = AgentState.model_validate(raw_agent_state)
+            self.memory.bind_agent_state(self.state)
+
+        raw_memory = state.get("memory")
+        if isinstance(raw_memory, dict):
+            self.memory.load_state_dict(raw_memory, strict=strict)
+
+        raw_plan = state.get("plan_notebook")
+        if self.plan_notebook is not None and isinstance(raw_plan, dict):
+            self.plan_notebook.load_state_dict(raw_plan, strict=strict)
+
+        self.memory.bind_agent_state(self.state)
 
     def _create_toolkit(
         self,
@@ -726,47 +798,15 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
         )
 
     def _register_hooks(self) -> None:
-        """Register pre-reasoning and pre-acting hooks."""
-        # Bootstrap hook - checks BOOTSTRAP.md on first interaction
-        # Use workspace_dir if available, else fallback to WORKING_DIR
+        """Keep DClaw lifecycle callbacks for AgentScope 2 entrypoints."""
         working_dir = (
             self._workspace_dir if self._workspace_dir else WORKING_DIR
         )
-        bootstrap_hook = BootstrapHook(
+        self._bootstrap_hook = BootstrapHook(
             working_dir=working_dir,
             language=self._language,
         )
-        self.register_instance_hook(
-            hook_type="pre_reasoning",
-            hook_name="bootstrap_hook",
-            hook=bootstrap_hook.__call__,
-        )
-        logger.debug("Registered bootstrap hook")
-
-        # Context manager hooks - delegate compaction / tool-result pruning
-        # to the context manager's lifecycle methods
-        if self.context_manager is not None:
-            self.register_instance_hook(
-                hook_type="pre_reply",
-                hook_name="context_pre_reply",
-                hook=self.context_manager.pre_reply,
-            )
-            self.register_instance_hook(
-                hook_type="pre_reasoning",
-                hook_name="context_pre_reasoning",
-                hook=self.context_manager.pre_reasoning,
-            )
-            self.register_instance_hook(
-                hook_type="post_acting",
-                hook_name="context_post_acting",
-                hook=self.context_manager.post_acting,
-            )
-            self.register_instance_hook(
-                hook_type="post_reply",
-                hook_name="context_post_reply",
-                hook=self.context_manager.post_reply,
-            )
-            logger.debug("Registered context manager hooks")
+        logger.debug("Configured AgentScope 2 lifecycle callbacks")
 
     def rebuild_sys_prompt(self) -> None:
         """Rebuild and replace the system prompt.
@@ -777,7 +817,7 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
         Updates both self._sys_prompt and the first system-role
         message stored in self.memory.content (if one exists).
         """
-        self._sys_prompt = self._build_sys_prompt()
+        self._system_prompt = self._build_sys_prompt()
 
         if self.memory is None:
             logger.warning(
@@ -790,6 +830,16 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
             if msg.role == "system":
                 msg.content = self.sys_prompt
             break
+
+    @property
+    def sys_prompt(self) -> str:
+        """Compatibility name for AgentScope 2's system prompt."""
+        return self._system_prompt
+
+    @property
+    def max_iters(self) -> int:
+        """Compatibility access for callers that inspect the loop limit."""
+        return self.react_config.max_iters
 
     async def register_mcp_clients(
         self,
@@ -1024,14 +1074,32 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
                         except (ValueError, TypeError):
                             pass
 
-    async def _acting(self, tool_call) -> dict | None:
+    async def _acting(self, tool_call: ToolCallBlock):
         """Check plan tool gate before delegating to ToolGuardMixin."""
         from ..plan.hints import check_plan_tool_gate
 
-        tool_name = str(tool_call.get("name", ""))
+        tool_name = str(tool_call.name or "")
+        try:
+            import json as _json
+
+            legacy_call = {
+                "id": tool_call.id,
+                "name": tool_name,
+                "input": _json.loads(tool_call.input or "{}"),
+            }
+        except (TypeError, ValueError):
+            legacy_call = {
+                "id": tool_call.id,
+                "name": tool_name,
+                "input": {},
+            }
 
         if tool_name in self._PLAN_TOOLS_WITH_JSON_ARGS:
-            self._fix_stringified_json_args(tool_call)
+            self._fix_stringified_json_args(legacy_call)
+            tool_call.input = _json.dumps(
+                legacy_call["input"],
+                ensure_ascii=False,
+            )
 
         nb = getattr(self, "plan_notebook", None)
 
@@ -1048,25 +1116,23 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
         if nb is not None:
             err = check_plan_tool_gate(nb, tool_name)
             if err:
-                from agentscope.message import ToolResultBlock
-
-                tool_res_msg = Msg(
-                    "system",
-                    [
-                        ToolResultBlock(
-                            type="tool_result",
-                            id=tool_call["id"],
-                            name=tool_name,
-                            output=[{"type": "text", "text": err}],
-                        ),
-                    ],
-                    "system",
+                yield ToolResponse(
+                    content=[TextBlock(text=err)],
+                    state=ToolResultState.DENIED,
                 )
-                await self.print(tool_res_msg, True)
-                await self.memory.add(tool_res_msg)
-                return None
+                return
 
-        result = await super()._acting(tool_call)
+        final_result = None
+        async for result in super()._acting(tool_call):
+            final_result = result
+            yield result
+
+        if self.context_manager is not None:
+            await self.context_manager.post_acting(
+                self,
+                {"tool_call": tool_call},
+                final_result,
+            )
 
         if nb is not None and tool_name in {
             "create_plan",
@@ -1077,8 +1143,6 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
             # run before the user has confirmed the plan or modified it.
             # pylint: disable=protected-access
             nb._plan_text_only_after_mutation = True
-
-        return result
 
     _AUTO_CONTINUE_MAX_EXTRA = 2
     _AUTO_CONTINUE_TAIL_CHARS = 600
@@ -1145,12 +1209,12 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
         running = self._agent_config.running
         if not running.auto_continue_on_text_only:
             return msg
-        if msg is None or msg.has_content_blocks("tool_use"):
+        if msg is None or msg.has_content_blocks("tool_call"):
             return msg
 
         extra = 0
         while extra < self._AUTO_CONTINUE_MAX_EXTRA:
-            if msg.has_content_blocks("tool_use"):
+            if msg.has_content_blocks("tool_call"):
                 break
             extra += 1
             tail = self._auto_continue_tail_context(
@@ -1172,9 +1236,14 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
                 tool_choice,
             )
             hint_msg = Msg("user", hint_body, "user")
-            await self.memory.add(hint_msg, marks=_MemoryMark.HINT)
+            await self.memory.add(hint_msg, marks=MemoryMark.HINT)
             try:
-                next_msg = await super()._reasoning(tool_choice=tool_choice)
+                next_msg = None
+                async for item in super()._reasoning(
+                    tool_choice=tool_choice,
+                ):
+                    if isinstance(item, AgentScopeMsg):
+                        next_msg = item
             except Exception:
                 logger.warning(
                     "Auto-continue extra _reasoning failed; "
@@ -1182,7 +1251,9 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
                     exc_info=True,
                 )
                 break
-            if next_msg.has_content_blocks("tool_use"):
+            if next_msg is not None and next_msg.has_content_blocks(
+                "tool_call",
+            ):
                 msg = next_msg
                 continue
             logger.info(
@@ -1239,38 +1310,27 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
             return msg
         mut = ("create_plan", "revise_current_plan")
         if any(
-            isinstance(b, dict)
-            and b.get("type") == "tool_use"
-            and b.get("name", "") in mut
+            getattr(b, "type", None) == "tool_call"
+            and getattr(b, "name", "") in mut
             for b in msg.content
         ):
             # pylint: disable-next=protected-access
             nb._plan_awaiting_user_confirm = True
         return msg
 
-    # pylint: disable=too-many-branches
     async def _reasoning(
         self,
-        tool_choice: Literal["auto", "none", "required"] | None = None,
-    ) -> Msg:
-        """Override reasoning with proactive media filtering.
-
-        1. Proactive layer: if the model does not support
-           multimodal **or** the capability cache records a previous
-           ``rejects_media`` finding, strip media blocks *before* calling.
-        2. Passive layer: if the model call still fails with a
-           bad-request / media error, strip remaining blocks and retry,
-           then record the finding in the capability cache.
-        3. If the model IS marked as multimodal but still errors on
-           media, log a warning about possibly inaccurate capability flag.
-        4. Plan gate: `_filter_plan_tools` pre-locks when the assistant
-           schedules plan mutation tools; `_plan_text_only_after_mutation`
-           forces ``tool_choice="none"`` once so the model cannot issue
-           execution tools immediately after ``create_plan`` / revise.
-
-        Calls ``super()._reasoning`` to keep the ToolGuardMixin
-        interception active.
-        """
+        tool_choice: ToolChoice | Literal["auto", "none", "required"] | None = None,
+    ):
+        """Adapt lifecycle hooks, media fallback, and plan gating."""
+        await self._bootstrap_hook(self, {"tool_choice": tool_choice})
+        if self.context_manager is not None:
+            hook_result = await self.context_manager.pre_reasoning(
+                self,
+                {"tool_choice": tool_choice},
+            )
+            if isinstance(hook_result, dict):
+                tool_choice = hook_result.get("tool_choice", tool_choice)
         nb = getattr(self, "plan_notebook", None)
         if nb is not None and getattr(
             nb,
@@ -1279,7 +1339,9 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
         ):
             # pylint: disable=protected-access
             nb._plan_text_only_after_mutation = False
-            tool_choice = "none"
+            tool_choice = ToolChoice(mode="none")
+        elif isinstance(tool_choice, str):
+            tool_choice = ToolChoice(mode=tool_choice)
 
         # --- Proactive filtering layer ---
         should_strip = (
@@ -1302,58 +1364,34 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
                         n,
                     )
 
-        # --- Passive fallback layer (existing logic) ---
+        plan_hint = None
+        if nb is not None:
+            plan_hint = await nb.get_current_hint()
+            if plan_hint is not None:
+                self.state.context.append(plan_hint)
+
+        emitted = False
         try:
-            msg = await super()._reasoning(tool_choice=tool_choice)
+            async for item in super()._reasoning(tool_choice=tool_choice):
+                emitted = True
+                if isinstance(item, AgentScopeMsg):
+                    item = self._filter_plan_tools(item, nb)
+                yield item
         except Exception as e:
-            if not self._is_bad_request_or_media_error(e):
+            if emitted or not self._is_bad_request_or_media_error(e):
                 raise
 
             model_key = self._get_model_key()
-
-            if self._uses_request_time_media_normalization():
-                if get_active_model_supports_multimodal():
-                    logger.warning(
-                        "Model marked multimodal but "
-                        "rejected media. "
-                        "Capability flag may be wrong.",
-                    )
-                self._set_formatter_media_strip(True)
-                try:
-                    logger.warning(
-                        "_reasoning failed (%s). "
-                        "Retrying with request-time media stripping.",
-                        e,
-                    )
-                    msg = await super()._reasoning(tool_choice=tool_choice)
-                    if model_key:
-                        get_capability_cache().learn(
-                            model_key,
-                            "rejects_media",
-                            True,
-                        )
-                    return msg
-                finally:
-                    self._set_formatter_media_strip(False)
-
-            n_stripped = self._strip_media_blocks_from_memory()
-            if n_stripped == 0:
-                raise
-
-            if get_active_model_supports_multimodal():
-                logger.warning(
-                    "Model marked multimodal but "
-                    "rejected media. "
-                    "Capability flag may be wrong.",
-                )
-
+            self._set_formatter_media_strip(True)
             logger.warning(
-                "_reasoning failed (%s). "
-                "Stripped %d media block(s) from memory, retrying.",
+                "_reasoning failed before output (%s); retrying with media "
+                "stripping",
                 e,
-                n_stripped,
             )
-            msg = await super()._reasoning(tool_choice=tool_choice)
+            async for item in super()._reasoning(tool_choice=tool_choice):
+                if isinstance(item, AgentScopeMsg):
+                    item = self._filter_plan_tools(item, nb)
+                yield item
             if model_key:
                 get_capability_cache().learn(
                     model_key,
@@ -1361,12 +1399,12 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
                     True,
                 )
         finally:
+            if plan_hint is not None:
+                self.state.context = [
+                    item for item in self.state.context if item is not plan_hint
+                ]
             if should_strip and self._uses_request_time_media_normalization():
                 self._set_formatter_media_strip(False)
-
-        msg = self._filter_plan_tools(msg, nb)
-
-        return await self._auto_continue_if_text_only(msg, tool_choice)
 
     # pylint: disable=too-many-branches
     async def _summarizing(self) -> Msg:
@@ -1411,7 +1449,8 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
         self._in_summarizing = True
         try:
             try:
-                msg = await super()._summarizing()
+                await self.compress_context()
+                msg = Msg(self.name, self._ROUND_END_NOTICE, "assistant")
             except Exception as e:
                 if not self._is_bad_request_or_media_error(e):
                     raise
@@ -1432,7 +1471,12 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
                             "Retrying with request-time media stripping.",
                             e,
                         )
-                        msg = await super()._summarizing()
+                        await self.compress_context()
+                        msg = Msg(
+                            self.name,
+                            self._ROUND_END_NOTICE,
+                            "assistant",
+                        )
                         if model_key:
                             get_capability_cache().learn(
                                 model_key,
@@ -1459,7 +1503,12 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
                         e,
                         n_stripped,
                     )
-                    msg = await super()._summarizing()
+                    await self.compress_context()
+                    msg = Msg(
+                        self.name,
+                        self._ROUND_END_NOTICE,
+                        "assistant",
+                    )
                     if model_key:
                         get_capability_cache().learn(
                             model_key,
@@ -1479,46 +1528,17 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
         last: bool = True,
         speech: Any = None,
     ) -> None:
-        """Filter tool_use blocks during _summarizing before they hit the
-        message queue, preventing the frontend from briefly rendering
-        phantom tool calls that will never be executed.
+        """Publish an out-of-band UI message during an active reply.
 
-        On the *final* streaming event (``last=True``), append the
-        round-end notice so users see it immediately instead of only
-        after a page refresh.  Intermediate events that become empty
-        after filtering are silently skipped to avoid blank UI flashes.
+        AgentScope 2 no longer exposes the AgentScope 1 print queue.  The
+        runner installs this queue while consuming ``reply_stream`` so tool
+        approval prompts and context notices can still reach the caller while
+        a tool is waiting.
         """
-
-        if not getattr(self, "_in_summarizing", False):
-            return await super().print(msg, last, speech=speech)
-
-        original = msg.content
-        modified = False
-
-        if isinstance(original, list):
-            filtered = [
-                b
-                for b in original
-                if not (isinstance(b, dict) and b.get("type") == "tool_use")
-            ]
-            if not filtered and not last:
-                return
-            if len(filtered) != len(original) or last:
-                msg.content = filtered
-                if last:
-                    msg.content.append(
-                        {"type": "text", "text": self._ROUND_END_NOTICE},
-                    )
-                modified = True
-        elif isinstance(original, str) and last:
-            msg.content = original + self._ROUND_END_NOTICE
-            modified = True
-        if modified:
-            try:
-                return await super().print(msg, last, speech=speech)
-            finally:
-                msg.content = original
-        return await super().print(msg, last, speech=speech)
+        del last, speech
+        queue = getattr(self, "_stream_message_queue", None)
+        if queue is not None:
+            await queue.put((msg, True))
 
     _ROUND_END_NOTICE = (
         "\n\n---\n"
@@ -1702,6 +1722,97 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
         return files
 
     # pylint: disable=protected-access
+    async def reply_stream(
+        self,
+        inputs: Msg | list[Msg] | None = None,
+        structured_schema: Type[BaseModel] | None = None,
+        yield_final_msg: bool = False,
+    ):
+        """Stream AgentScope 2 events with DClaw request preparation."""
+        from ..config.context import (
+            set_current_tool_filesystem_root,
+            set_current_workspace_dir,
+            set_current_recent_max_bytes,
+            set_current_shell_command_timeout,
+            set_current_shell_command_executable,
+        )
+
+        original_inputs = inputs
+        if self.context_manager is not None:
+            hook_result = await self.context_manager.pre_reply(
+                self,
+                {"msg": inputs},
+            )
+            if isinstance(hook_result, dict):
+                inputs = hook_result.get("msg", inputs)
+
+        set_current_workspace_dir(self._workspace_dir)
+        set_current_tool_filesystem_root(
+            self._workspace_dir if self._sealed_runtime else None,
+        )
+        light_ctx = self._agent_config.running.light_context_config
+        pruning_config = light_ctx.tool_result_pruning_config
+        set_current_recent_max_bytes(
+            pruning_config.pruning_recent_msg_max_bytes,
+        )
+        set_current_shell_command_timeout(
+            self._agent_config.running.shell_command_timeout,
+        )
+        set_current_shell_command_executable(
+            self._agent_config.running.shell_command_executable or None,
+        )
+
+        if inputs is not None:
+            await process_file_and_media_blocks_in_message(inputs)
+
+        last_msg = inputs[-1] if isinstance(inputs, list) and inputs else inputs
+        query = (
+            last_msg.get_text_content() if isinstance(last_msg, Msg) else None
+        )
+        if self.command_handler.is_command(query):
+            command_msg = await self.command_handler.handle_command(query)
+            yield command_msg
+            if self.context_manager is not None:
+                await self.context_manager.post_reply(
+                    self,
+                    {"msg": original_inputs},
+                    command_msg,
+                )
+            return
+
+        channel_name = (getattr(self, "_request_context", {}) or {}).get(
+            "channel",
+            "console",
+        )
+        skill_workspace_dirs = getattr(
+            self,
+            "_skill_workspace_dirs",
+            None,
+        ) or [getattr(self, "_skills_workspace_dir", self._workspace_dir)]
+        final_msg = None
+        with ExitStack() as skill_env_stack:
+            for skill_workspace_dir in skill_workspace_dirs:
+                skill_env_stack.enter_context(
+                    apply_skill_config_env_overrides(
+                        Path(skill_workspace_dir),
+                        channel_name,
+                    ),
+                )
+            async for item in super().reply_stream(
+                inputs=inputs,
+                structured_schema=structured_schema,
+                yield_final_msg=yield_final_msg,
+            ):
+                if isinstance(item, AgentScopeMsg):
+                    final_msg = item
+                yield item
+        if self.context_manager is not None and final_msg is not None:
+            await self.context_manager.post_reply(
+                self,
+                {"msg": original_inputs},
+                final_msg,
+            )
+
     async def reply(
         self,
         msg: Msg | list[Msg] | None = None,
@@ -1724,6 +1835,15 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
             set_current_shell_command_timeout,
             set_current_shell_command_executable,
         )
+
+        original_msg = msg
+        if self.context_manager is not None:
+            hook_result = await self.context_manager.pre_reply(
+                self,
+                {"msg": msg},
+            )
+            if isinstance(hook_result, dict):
+                msg = hook_result.get("msg", msg)
 
         set_current_workspace_dir(self._workspace_dir)
         set_current_tool_filesystem_root(
@@ -1754,7 +1874,12 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
         if self.command_handler.is_command(query):
             logger.info(f"Received command: {query}")
             msg = await self.command_handler.handle_command(query)
-            await self.print(msg)
+            if self.context_manager is not None:
+                await self.context_manager.post_reply(
+                    self,
+                    {"msg": original_msg},
+                    msg,
+                )
             return msg
 
         # Normal message processing
@@ -1783,8 +1908,8 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
                     ),
                 )
             response_msg = await super().reply(
-                msg=msg,
-                structured_model=structured_model,
+                inputs=msg,
+                structured_schema=structured_model,
             )
 
         # Scan files after executing reply
@@ -1821,6 +1946,12 @@ class QwenPawAgent(ToolGuardMixin, ReActAgent):
 
         # The trigger appending logic is safely removed since channel.py appends a visible message with trigger html via SSE flow and api.py recovers it successfully for history using the corrected real_session_id.
 
+        if self.context_manager is not None:
+            await self.context_manager.post_reply(
+                self,
+                {"msg": original_msg},
+                response_msg,
+            )
         return response_msg
 
     async def interrupt(self, msg: Msg | list[Msg] | None = None) -> None:

@@ -22,6 +22,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Awaitable, Callable
 
 from pydantic import BaseModel, ConfigDict, Field
+from agentscope.model import ChatModelBase
+from agentscope.tool import ToolChoice
 
 from qwenpaw.config.config import OrchestrationConfig
 from qwenpaw.plugins.registry import PluginRegistry
@@ -33,7 +35,7 @@ from qwenpaw.app.sealed_agents.package import (
 from .release_integrity import inspect_signed_release
 from .grants import SuperExpertGrantRepository
 from qwenpaw.constant import WORKING_DIR
-from agentscope.message import Msg
+from qwenpaw.agents.message_compat import Msg, normalize_legacy_blocks
 
 from .orchestration_contract import (
     WorkspaceTurnCompletion,
@@ -79,6 +81,14 @@ _INTERACTION_DELIVERY_PREFIX = re.compile(
     r")"
     r"了?(?:\s*[，,。.!！；;：:]\s*|\s*$)",
 )
+
+
+async def _invoke_agent(agent: Any, messages: list[Msg]) -> Any:
+    """Call AgentScope 2 agents while preserving lightweight test doubles."""
+    reply = getattr(agent, "reply", None)
+    if callable(reply):
+        return await reply(messages)
+    return await agent(messages)
 
 
 def _drop_prior_platform_review_attempts(memory: Any) -> int:
@@ -414,15 +424,24 @@ def _sanitize_interaction_delivery_content(content: Any) -> Any:
     sanitized = []
     pending_prefix = True
     for block in content:
-        if not isinstance(block, dict):
-            sanitized.append(block)
-            continue
-        rendered = dict(block)
-        if pending_prefix and rendered.get("type") == "text":
+        if isinstance(block, dict):
+            rendered = dict(block)
+            block_type = rendered.get("type")
             text = rendered.get("text")
+        else:
+            rendered = block.model_copy(deep=True) if hasattr(
+                block,
+                "model_copy",
+            ) else block
+            block_type = getattr(rendered, "type", None)
+            text = getattr(rendered, "text", None)
+        if pending_prefix and block_type == "text":
             if isinstance(text, str):
                 cleaned = _sanitize_interaction_delivery_text(text)
-                rendered["text"] = cleaned
+                if isinstance(rendered, dict):
+                    rendered["text"] = cleaned
+                else:
+                    rendered.text = cleaned
                 pending_prefix = not cleaned.strip()
         sanitized.append(rendered)
     return sanitized
@@ -613,12 +632,11 @@ async def _execute_internal_candidate(
     )
     formatter = getattr(agent, "formatter", None)
     model = getattr(agent, "model", None)
-    if (
-        formatter is not None
-        and callable(getattr(formatter, "format", None))
-        and callable(model)
-    ):
-        prompt = await formatter.format(msgs=messages)
+    if callable(model):
+        formatted_prompt = messages
+        if formatter is not None and callable(getattr(formatter, "format", None)):
+            formatted_prompt = await formatter.format(msgs=messages)
+        native_agentscope2_model = isinstance(model, ChatModelBase)
         generation_kwargs: dict[str, Any] = {
             "max_tokens": (
                 _JSON_INTERNAL_CANDIDATE_MAX_TOKENS
@@ -634,9 +652,13 @@ async def _execute_internal_candidate(
                 "thinking": {"type": "disabled"},
             }
         response = await model(
-            prompt,
+            messages if native_agentscope2_model else formatted_prompt,
             tools=None,
-            tool_choice="none",
+            tool_choice=(
+                ToolChoice(mode="none")
+                if native_agentscope2_model
+                else "none"
+            ),
             **generation_kwargs,
         )
         candidate = Msg(
@@ -653,10 +675,10 @@ async def _execute_internal_candidate(
                 )
                 if streamed.get_text_content():
                     candidate.invocation_id = chunk.id
-                    candidate.content = chunk.content
+                    candidate.content = normalize_legacy_blocks(chunk.content)
         else:
             candidate.invocation_id = response.id
-            candidate.content = list(response.content)
+            candidate.content = normalize_legacy_blocks(response.content)
         if (
             media_delivery is not None
             and (candidate.get_text_content() or "").strip()
@@ -664,7 +686,7 @@ async def _execute_internal_candidate(
             media_delivery.update(
                 _media_delivery.build_media_delivery(
                     manifest,
-                    prompt,
+                    formatted_prompt,
                     candidate.invocation_id,
                     input_identities=identities,
                 ),
@@ -682,7 +704,7 @@ async def _execute_internal_candidate(
     return await _execute_with_runtime_system_instruction(
         agent,
         "\n\n".join(instructions) if instructions else None,
-        lambda: agent(projected),
+        lambda: _invoke_agent(agent, projected),
     )
 
 
@@ -696,13 +718,20 @@ async def _execute_with_runtime_system_instruction(
     """Temporarily add trusted runtime policy without polluting chat history."""
     if instruction is None:
         return await invoke()
-    if not hasattr(agent, "_sys_prompt"):
+    prompt_attr = (
+        "_system_prompt"
+        if hasattr(agent, "_system_prompt")
+        else "_sys_prompt"
+        if hasattr(agent, "_sys_prompt")
+        else None
+    )
+    if prompt_attr is None:
         if required:
             raise WorkspaceOrchestrationError("orchestration_error")
         return await invoke()
     lock = _CANDIDATE_AGENT_LOCKS.setdefault(id(agent), asyncio.Lock())
     async with lock:
-        original_prompt = agent._sys_prompt
+        original_prompt = getattr(agent, prompt_attr)
         original_prompt_builder = getattr(agent, "_build_sys_prompt", None)
         runtime_prompt = (
             f"{original_prompt}\n\n"
@@ -719,15 +748,15 @@ async def _execute_with_runtime_system_instruction(
                 system_message = message
                 original_memory_content = message.content
                 break
-        agent._sys_prompt = runtime_prompt
+        setattr(agent, prompt_attr, runtime_prompt)
         if callable(original_prompt_builder):
             agent._build_sys_prompt = lambda: runtime_prompt
         if system_message is not None:
-            system_message.content = runtime_prompt
+            system_message.content = normalize_legacy_blocks(runtime_prompt)
         try:
             return await invoke()
         finally:
-            agent._sys_prompt = original_prompt
+            setattr(agent, prompt_attr, original_prompt)
             if callable(original_prompt_builder):
                 agent._build_sys_prompt = original_prompt_builder
             if system_message is not None:
@@ -1164,7 +1193,7 @@ async def run_workspace_orchestration_turn(
                         messages,
                         on_public_message,
                     )
-                return await agent(messages)
+                return await _invoke_agent(agent, messages)
 
             original_model = getattr(agent, "model", None)
             if not public_stream and original_model is not None:
@@ -2112,7 +2141,7 @@ async def handle_workspace_turn(
     if not is_workspace_business_turn(query, mission_info=mission_info):
         async for msg, last in standard_stream(
             agents=[agent],
-            coroutine_task=agent(messages),
+            inputs=messages,
         ):
             yield msg, last, True
         return
@@ -2179,7 +2208,7 @@ async def handle_workspace_turn(
                 )
                 async for msg, last in standard_stream(
                     agents=[agent],
-                    coroutine_task=agent(messages),
+                    inputs=messages,
                 ):
                     yield msg, last, True
                 return

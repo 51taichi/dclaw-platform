@@ -56,7 +56,7 @@ from acp.schema import (
     SseMcpServer,
     TextContentBlock,
 )
-from agentscope.message import Msg
+from ..message_compat import Msg
 from qwenpaw.runtime.contracts import (
     AgentRequest,
     Message,

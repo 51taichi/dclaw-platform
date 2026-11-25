@@ -1,9 +1,19 @@
 """Opt-in public text streaming for transparent workspace Agent calls."""
 
 import asyncio
-from copy import deepcopy
 
-from agentscope.message import Msg
+from agentscope.event import TextBlockDeltaEvent, TextBlockEndEvent
+from agentscope.message import Msg as AgentScopeMsg, TextBlock
+
+from qwenpaw.agents.message_compat import Msg
+
+
+def _block_type(block):
+    return block.get("type") if isinstance(block, dict) else getattr(
+        block,
+        "type",
+        None,
+    )
 
 
 def public_text_model(model):
@@ -36,11 +46,12 @@ def public_text_model(model):
 
 
 def public_snapshot(message):
-    if not isinstance(message, Msg) or message.role != "assistant":
+    if not isinstance(message, AgentScopeMsg) or message.role != "assistant":
         return None
     blocks = message.content
     if isinstance(blocks, list) and any(
-        b.get("type") in {"tool_use", "tool_result"} for b in blocks
+        _block_type(b) in {"tool_use", "tool_call", "tool_result"}
+        for b in blocks
     ):
         return None
     text = message.get_text_content()
@@ -50,13 +61,75 @@ def public_snapshot(message):
     # Do not flash raw JSON fragments before that decoding happens.
     if text.lstrip().startswith(("{", "[", "```json")):
         return None
-    result = deepcopy(message)
-    result.content = [{"type": "text", "text": text}]
-    result.metadata = None
+    result = message.model_copy(deep=True)
+    result.content = [TextBlock(text=text)]
+    result.metadata = {}
     return result
 
 
+async def _execute_reply_stream(agent, messages, on_public_message):
+    final_message = None
+    block_text: dict[str, str] = {}
+    block_order: list[str] = []
+    reply_id = None
+    last_published_text = ""
+
+    async for event in agent.reply_stream(messages, yield_final_msg=True):
+        if isinstance(event, AgentScopeMsg):
+            final_message = event
+            continue
+        if isinstance(event, TextBlockDeltaEvent):
+            reply_id = event.reply_id
+            if event.block_id not in block_text:
+                block_order.append(event.block_id)
+                block_text[event.block_id] = ""
+            block_text[event.block_id] += event.delta
+        elif isinstance(event, TextBlockEndEvent):
+            reply_id = event.reply_id
+            if event.block_id not in block_text:
+                block_order.append(event.block_id)
+                block_text[event.block_id] = event.text or ""
+        else:
+            continue
+
+        text = "".join(block_text[item] for item in block_order)
+        if text.strip():
+            last_published_text = text
+            await on_public_message(
+                Msg(
+                    name=str(getattr(agent, "name", "assistant")),
+                    role="assistant",
+                    content=text,
+                    id=reply_id,
+                ),
+            )
+
+    if final_message is None:
+        raise RuntimeError("AgentScope reply stream ended without a final message")
+    final_snapshot = public_snapshot(final_message)
+    if (
+        final_snapshot is not None
+        and final_snapshot.get_text_content() != last_published_text
+    ):
+        await on_public_message(final_snapshot)
+    return final_message
+
+
 async def execute_public_agent(agent, messages, on_public_message):
+    if callable(getattr(agent, "reply_stream", None)):
+        previous_model = getattr(agent, "model", None)
+        if previous_model is not None:
+            agent.model = public_text_model(previous_model)
+        try:
+            return await _execute_reply_stream(
+                agent,
+                messages,
+                on_public_message,
+            )
+        finally:
+            if previous_model is not None:
+                agent.model = previous_model
+
     queue = asyncio.Queue()
     previous_queue = getattr(agent, "msg_queue", None)
     previous_enabled = not getattr(agent, "_disable_msg_queue", True)

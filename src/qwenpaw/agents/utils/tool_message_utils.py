@@ -10,6 +10,19 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _block_get(block, key: str, default=None):
+    if isinstance(block, dict):
+        return block.get(key, default)
+    return getattr(block, key, default)
+
+
+def _block_set(block, key: str, value) -> None:
+    if isinstance(block, dict):
+        block[key] = value
+    else:
+        setattr(block, key, value)
+
+
 def extract_tool_ids(msg) -> tuple[set[str], set[str]]:
     """Return (tool_use_ids, tool_result_ids) found in a single message.
 
@@ -23,12 +36,12 @@ def extract_tool_ids(msg) -> tuple[set[str], set[str]]:
     results: set[str] = set()
     if isinstance(msg.content, list):
         for block in msg.content:
-            if isinstance(block, dict) and block.get("id"):
-                btype = block.get("type")
-                if btype == "tool_use":
-                    uses.add(block["id"])
+            if _block_get(block, "id"):
+                btype = _block_get(block, "type")
+                if btype in {"tool_use", "tool_call"}:
+                    uses.add(_block_get(block, "id"))
                 elif btype == "tool_result":
-                    results.add(block["id"])
+                    results.add(_block_get(block, "id"))
     return uses, results
 
 
@@ -64,11 +77,13 @@ def _reorder_tool_results(msgs: list) -> list:
         if isinstance(msg.content, list):
             for block in msg.content:
                 if (
-                    isinstance(block, dict)
-                    and block.get("type") == "tool_result"
-                    and block.get("id")
+                    _block_get(block, "type") == "tool_result"
+                    and _block_get(block, "id")
                 ):
-                    results_by_id.setdefault(block["id"], []).append(msg)
+                    results_by_id.setdefault(
+                        _block_get(block, "id"),
+                        [],
+                    ).append(msg)
                     result_msg_ids.add(id(msg))
 
     consumed: dict[str, int] = {}
@@ -82,12 +97,11 @@ def _reorder_tool_results(msgs: list) -> list:
             continue
         for block in msg.content:
             if not (
-                isinstance(block, dict)
-                and block.get("type") == "tool_use"
-                and block.get("id")
+                _block_get(block, "type") in {"tool_use", "tool_call"}
+                and _block_get(block, "id")
             ):
                 continue
-            bid = block["id"]
+            bid = _block_get(block, "id")
             candidates = results_by_id.get(bid, [])
             ci = consumed.get(bid, 0)
             if ci >= len(candidates):
@@ -160,14 +174,13 @@ def _dedup_tool_blocks(msgs: list) -> list:
         deduped = False
         for block in msg.content:
             if (
-                isinstance(block, dict)
-                and block.get("type") == "tool_use"
-                and block.get("id")
+                _block_get(block, "type") in {"tool_use", "tool_call"}
+                and _block_get(block, "id")
             ):
-                if block["id"] in seen_ids:
+                if _block_get(block, "id") in seen_ids:
                     deduped = True
                     continue
-                seen_ids.add(block["id"])
+                seen_ids.add(_block_get(block, "id"))
             new_blocks.append(block)
         if deduped:
             msg.content = new_blocks
@@ -204,16 +217,12 @@ def _remove_invalid_tool_blocks(msgs: list) -> list:
         removed = False
 
         for block in msg.content:
-            if not isinstance(block, dict):
-                new_blocks.append(block)
-                continue
-
-            block_type = block.get("type")
+            block_type = _block_get(block, "type")
 
             # Validate tool_use and tool_result blocks
-            if block_type in ("tool_use", "tool_result"):
-                block_id = block.get("id")
-                block_name = block.get("name")
+            if block_type in ("tool_use", "tool_call", "tool_result"):
+                block_id = _block_get(block, "id")
+                block_name = _block_get(block, "name")
 
                 # Check if id is valid (not None, not empty string)
                 if not block_id:
@@ -227,7 +236,7 @@ def _remove_invalid_tool_blocks(msgs: list) -> list:
                     continue
 
                 # For tool_use, also check name is non-empty
-                if block_type == "tool_use" and not block_name:
+                if block_type in {"tool_use", "tool_call"} and not block_name:
                     logger.warning(
                         "Removing tool_use with invalid name: id=%r, name=%r",
                         block_id,
@@ -275,36 +284,42 @@ def _repair_empty_tool_inputs(
         repaired = False
 
         for block in msg.content:
-            if not isinstance(block, dict):
-                new_blocks.append(block)
-                continue
-
             # Check if this is a tool_use with empty input but valid raw_input
-            if block.get("type") == "tool_use":
-                input_field = block.get("input", {})
-                raw_input = block.get("raw_input", "")
+            if _block_get(block, "type") in {"tool_use", "tool_call"}:
+                input_field = _block_get(block, "input", "")
+                raw_input = _block_get(block, "raw_input", input_field)
 
                 # If input is empty but raw_input has content, try to parse
-                if not input_field and raw_input and raw_input != "{}":
+                if input_field in ({}, "", "{}") and raw_input not in (
+                    None,
+                    "",
+                    "{}",
+                ):
                     try:
                         parsed = json.loads(raw_input)
                         if isinstance(parsed, dict) and parsed:
                             # Success! Update the input field
-                            block["input"] = parsed
+                            _block_set(
+                                block,
+                                "input",
+                                parsed
+                                if isinstance(block, dict)
+                                else json.dumps(parsed, ensure_ascii=False),
+                            )
                             repaired = True
                             logger.info(
                                 "Repaired tool_use input from raw_input: "
                                 "id=%s, name=%s, keys=%s",
-                                block.get("id"),
-                                block.get("name"),
+                                _block_get(block, "id"),
+                                _block_get(block, "name"),
                                 list(parsed.keys()),
                             )
                     except (json.JSONDecodeError, TypeError) as e:
                         logger.warning(
                             "Failed to repair tool_use input from raw_input: "
                             "id=%s, name=%s, error=%s",
-                            block.get("id"),
-                            block.get("name"),
+                            _block_get(block, "id"),
+                            _block_get(block, "name"),
                             e,
                         )
 

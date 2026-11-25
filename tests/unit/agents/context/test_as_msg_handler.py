@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 # flake8: noqa: E501
 # pylint: disable=line-too-long,unused-argument,unused-variable,redefined-outer-name
-"""Unit tests for AsMsgHandler context_check with tool_use/tool_result alignment."""
+"""Unit tests for AsMsgHandler context_check with tool_call/tool_result alignment."""
 
 import pytest
-from agentscope.message import Msg
+from qwenpaw.agents.message_compat import Msg
 
 from qwenpaw.agents.context.as_msg_handler import AsMsgHandler
 from qwenpaw.agents.utils.estimate_token_counter import EstimatedTokenCounter
@@ -26,11 +26,11 @@ class MockTokenCounter(EstimatedTokenCounter):
 
 
 class TestAsMsgHandlerToolAlignment:
-    """Test tool_use/tool_result alignment in context_check."""
+    """Test tool_call/tool_result alignment in context_check."""
 
     @pytest.mark.asyncio
-    async def test_tool_use_result_pair_aligned_when_both_fit(self):
-        """When both tool_use and tool_result fit within reserve, they should both be kept."""
+    async def test_tool_call_result_pair_aligned_when_both_fit(self):
+        """When both tool_call and tool_result fit within reserve, they should both be kept."""
         token_counter = MockTokenCounter()
         handler = AsMsgHandler(token_counter)
 
@@ -42,7 +42,7 @@ class TestAsMsgHandlerToolAlignment:
                 role="assistant",
                 content=[
                     {
-                        "type": "tool_use",
+                        "type": "tool_call",
                         "id": tool_id,
                         "name": "test_tool",
                         "input": {},
@@ -79,31 +79,31 @@ class TestAsMsgHandlerToolAlignment:
 
         msgs_to_compact, msgs_to_keep, total_tokens, keep_tokens = result
 
-        # Both tool_use and tool_result should be in keep (last 2 messages)
+        # Both tool_call and tool_result should be in keep (last 2 messages)
         assert len(msgs_to_keep) >= 2
 
-        # Verify tool_use and tool_result ids are aligned in kept messages
-        tool_use_ids = set()
+        # Verify tool_call and tool_result ids are aligned in kept messages
+        tool_call_ids = set()
         tool_result_ids = set()
         for msg in msgs_to_keep:
-            for block in msg.get_content_blocks("tool_use"):
-                if tid := block.get("id"):
-                    tool_use_ids.add(tid)
+            for block in msg.get_content_blocks("tool_call"):
+                if tid := block.id:
+                    tool_call_ids.add(tid)
             for block in msg.get_content_blocks("tool_result"):
-                if tid := block.get("id"):
+                if tid := block.id:
                     tool_result_ids.add(tid)
-        assert tool_use_ids == tool_result_ids
+        assert tool_call_ids == tool_result_ids
 
     @pytest.mark.asyncio
-    async def test_tool_use_result_pair_excluded_when_result_too_large(self):
+    async def test_tool_call_result_pair_excluded_when_result_too_large(self):
         """
-        Bug scenario: tool_use in assistant msg, large tool_result in system msg.
+        Bug scenario: tool_call in assistant msg, large tool_result in system msg.
         When tool_result exceeds reserve, both should be excluded (not just result).
 
         This is the exact scenario from the bug report where:
         - message 7 (tool_result) has 12592 tokens
         - reserve is only 2000
-        - message with tool_use was kept but tool_result excluded
+        - message with tool_call was kept but tool_result excluded
         - tools_aligned was False (bug)
         """
         # Simulate the exact token counts from the bug report
@@ -123,7 +123,7 @@ class TestAsMsgHandlerToolAlignment:
         tool_id2 = "toolu_tool-62baeaf121b44f4d97c72aaa2c828ea6"
 
         # Simulate the message structure from the bug report
-        # Last assistant message with tool_use, followed by system messages with tool_result
+        # Last assistant message with tool_call, followed by system messages with tool_result
         messages = [
             Msg(
                 name="user",
@@ -144,13 +144,13 @@ class TestAsMsgHandlerToolAlignment:
                     {"type": "thinking", "thinking": "thinking content"},
                     {"type": "text", "text": "Some text"},
                     {
-                        "type": "tool_use",
+                        "type": "tool_call",
                         "id": tool_id,
                         "name": "grep_search",
                         "input": {"pattern": "卷"},
                     },
                     {
-                        "type": "tool_use",
+                        "type": "tool_call",
                         "id": tool_id2,
                         "name": "read_file",
                         "input": {"file_path": "test"},
@@ -200,27 +200,27 @@ class TestAsMsgHandlerToolAlignment:
             keep_tokens,
         ) = result
 
-        # Verify: if tool_use is in keep, corresponding tool_result must also be in keep
-        tool_use_ids_in_keep = set()
+        # Verify: if tool_call is in keep, corresponding tool_result must also be in keep
+        tool_call_ids_in_keep = set()
         tool_result_ids_in_keep = set()
 
         for msg in msgs_to_keep:
-            for block in msg.get_content_blocks("tool_use"):
-                if tid := block.get("id"):
-                    tool_use_ids_in_keep.add(tid)
+            for block in msg.get_content_blocks("tool_call"):
+                if tid := block.id:
+                    tool_call_ids_in_keep.add(tid)
             for block in msg.get_content_blocks("tool_result"):
-                if tid := block.get("id"):
+                if tid := block.id:
                     tool_result_ids_in_keep.add(tid)
 
-        assert tool_use_ids_in_keep == tool_result_ids_in_keep, (
-            f"tool_use ids in keep: {tool_use_ids_in_keep}, "
+        assert tool_call_ids_in_keep == tool_result_ids_in_keep, (
+            f"tool_call ids in keep: {tool_call_ids_in_keep}, "
             f"tool_result ids in keep: {tool_result_ids_in_keep}"
         )
 
     @pytest.mark.asyncio
-    async def test_partial_tool_result_kept_with_tool_use(self):
+    async def test_partial_tool_result_kept_with_tool_call(self):
         """
-        When tool_result can fit with tool_use within reserve,
+        When tool_result can fit with tool_call within reserve,
         both should be kept and aligned.
         """
         token_counter = MockTokenCounter(
@@ -239,7 +239,7 @@ class TestAsMsgHandlerToolAlignment:
                 role="assistant",
                 content=[
                     {
-                        "type": "tool_use",
+                        "type": "tool_call",
                         "id": tool_id,
                         "name": "search",
                         "input": {},
@@ -265,7 +265,7 @@ class TestAsMsgHandlerToolAlignment:
         result = await handler.context_check(
             messages=messages,
             context_compact_threshold=1000,
-            context_compact_reserve=700,  # Should fit tool_use + tool_result
+            context_compact_reserve=700,  # Should fit tool_call + tool_result
         )
 
         msgs_to_compact, msgs_to_keep, total_tokens, keep_tokens = result
@@ -274,22 +274,22 @@ class TestAsMsgHandlerToolAlignment:
         # The exact count depends on token calculation, but alignment must be True
         assert len(msgs_to_keep) >= 2
 
-        # Verify tool_use and tool_result ids are aligned in kept messages
-        tool_use_ids = set()
+        # Verify tool_call and tool_result ids are aligned in kept messages
+        tool_call_ids = set()
         tool_result_ids = set()
         for msg in msgs_to_keep:
-            for block in msg.get_content_blocks("tool_use"):
-                if tid := block.get("id"):
-                    tool_use_ids.add(tid)
+            for block in msg.get_content_blocks("tool_call"):
+                if tid := block.id:
+                    tool_call_ids.add(tid)
             for block in msg.get_content_blocks("tool_result"):
-                if tid := block.get("id"):
+                if tid := block.id:
                     tool_result_ids.add(tid)
-        assert tool_use_ids == tool_result_ids
+        assert tool_call_ids == tool_result_ids
 
     @pytest.mark.asyncio
     async def test_multiple_tool_pairs_in_same_message(self):
         """
-        When a message contains multiple tool_use calls,
+        When a message contains multiple tool_call calls,
         all corresponding tool_results must be aligned.
         """
         token_counter = MockTokenCounter(
@@ -310,13 +310,13 @@ class TestAsMsgHandlerToolAlignment:
                 role="assistant",
                 content=[
                     {
-                        "type": "tool_use",
+                        "type": "tool_call",
                         "id": tool_id1,
                         "name": "tool1",
                         "input": {},
                     },
                     {
-                        "type": "tool_use",
+                        "type": "tool_call",
                         "id": tool_id2,
                         "name": "tool2",
                         "input": {},
@@ -367,16 +367,16 @@ class TestAsMsgHandlerToolAlignment:
             ), f"Expected 3 messages kept or 0, got {len(msgs_to_keep)}"
 
     @pytest.mark.asyncio
-    async def test_reverse_dependency_tool_use_needs_tool_result(self):
+    async def test_reverse_dependency_tool_call_needs_tool_result(self):
         """
-        Core test: When iterating backwards, if we encounter a message with tool_use,
+        Core test: When iterating backwards, if we encounter a message with tool_call,
         we must also include the corresponding tool_result message.
 
-        Before fix: Only tool_result -> tool_use dependency was checked.
+        Before fix: Only tool_result -> tool_call dependency was checked.
         After fix: Both directions are checked.
 
         This test verifies that when tool_result exceeds reserve,
-        both tool_use and tool_result are excluded together.
+        both tool_call and tool_result are excluded together.
         """
 
         # Use a simpler mock that returns fixed large value for any text
@@ -414,7 +414,7 @@ class TestAsMsgHandlerToolAlignment:
                 role="assistant",
                 content=[
                     {
-                        "type": "tool_use",
+                        "type": "tool_call",
                         "id": tool_id,
                         "name": "test",
                         "input": {},
@@ -452,18 +452,18 @@ class TestAsMsgHandlerToolAlignment:
 
         msgs_to_compact, msgs_to_keep, total_tokens, keep_tokens = result
 
-        # Verify tool_use and tool_result ids match in kept messages
-        tool_use_ids_in_keep = set()
+        # Verify tool_call and tool_result ids match in kept messages
+        tool_call_ids_in_keep = set()
         tool_result_ids_in_keep = set()
 
         for msg in msgs_to_keep:
-            for block in msg.get_content_blocks("tool_use"):
-                if tid := block.get("id"):
-                    tool_use_ids_in_keep.add(tid)
+            for block in msg.get_content_blocks("tool_call"):
+                if tid := block.id:
+                    tool_call_ids_in_keep.add(tid)
             for block in msg.get_content_blocks("tool_result"):
-                if tid := block.get("id"):
+                if tid := block.id:
                     tool_result_ids_in_keep.add(tid)
 
         assert (
-            tool_use_ids_in_keep == tool_result_ids_in_keep
-        ), f"tool_use ids: {tool_use_ids_in_keep}, tool_result ids: {tool_result_ids_in_keep}"
+            tool_call_ids_in_keep == tool_result_ids_in_keep
+        ), f"tool_call ids: {tool_call_ids_in_keep}, tool_result ids: {tool_result_ids_in_keep}"

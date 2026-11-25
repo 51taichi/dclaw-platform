@@ -13,7 +13,9 @@ import logging
 from pathlib import Path
 from typing import Any, Callable
 
-from agentscope.message import Msg, TextBlock
+from agentscope.message import TextBlock
+
+from ...agents.message_compat import Msg
 
 from ...agents.mission.handler import (
     handle_mission_command,

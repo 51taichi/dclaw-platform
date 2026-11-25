@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from typing import ClassVar
 
 import pytest
-from agentscope.message import Msg
+from qwenpaw.agents.message_compat import Msg
 from qwenpaw.runtime.tracing import trace
 from qwenpaw.runtime.contracts import ContentType, TextContent
 
@@ -311,7 +311,7 @@ async def test_persistent_open_api_keeps_session_memory_and_chat_behavior(
     assert chats.calls == ["create", "touch"]
     assert agent_args["memory_manager"] is not None
     assert agent_args["request_context"]["_persist_context_dialog"] is True
-    assert output[0][0].content == "ok"
+    assert output[0][0].get_text_content() == "ok"
 
 
 @pytest.mark.asyncio
@@ -335,7 +335,7 @@ async def test_isolated_agent_open_api_skips_session_memory_and_chat_persistence
     assert chats.calls == []
     assert agent_args["memory_manager"] is None
     assert agent_args["request_context"]["_persist_context_dialog"] is False
-    assert output[0][0].content == "ok"
+    assert output[0][0].get_text_content() == "ok"
 
 
 @pytest.mark.asyncio
@@ -422,7 +422,7 @@ async def test_isolated_open_api_control_text_cannot_bypass_isolation(
     assert session.calls == []
     assert chats.calls == []
     assert agent_args["memory_manager"] is None
-    assert output[0][0].content == "ok"
+    assert output[0][0].get_text_content() == "ok"
 
 
 @pytest.mark.asyncio
@@ -454,4 +454,4 @@ async def test_isolated_open_api_mission_text_cannot_load_shared_mission_state(
     assert session.calls == []
     assert chats.calls == []
     assert agent_args["memory_manager"] is None
-    assert output[0][0].content == "ok"
+    assert output[0][0].get_text_content() == "ok"

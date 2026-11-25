@@ -9,7 +9,7 @@ from contextlib import AsyncExitStack
 from typing import Any, AsyncGenerator
 from uuid import uuid4
 
-from agentscope.message import Msg
+from qwenpaw.agents.message_compat import Msg
 
 from .contracts import (
     AgentRequest,

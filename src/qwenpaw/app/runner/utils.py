@@ -7,7 +7,7 @@ from typing import List, Optional, Union
 from urllib.parse import unquote, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from agentscope.message import Msg
+from ...agents.message_compat import Msg
 from qwenpaw.runtime.contracts import (
     Message,
     TextContent,
@@ -159,12 +159,28 @@ def _build_media_message_from_block(
     output = block.get("output")
     media_message = None
     if isinstance(output, list):
-        media_items = [
-            item
-            for item in output
-            if isinstance(item, dict)
-            and item.get("type") in ("image", "audio", "video", "file")
-        ]
+        media_items = []
+        for raw_item in output:
+            item = (
+                raw_item.model_dump(mode="json")
+                if hasattr(raw_item, "model_dump")
+                else raw_item
+            )
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "data":
+                item = dict(item)
+                media_type = str(
+                    (item.get("source") or {}).get("media_type") or "",
+                )
+                item["type"] = (
+                    media_type.split("/", 1)[0]
+                    if media_type.startswith(("image/", "audio/", "video/"))
+                    else "file"
+                )
+                item["filename"] = item.get("name") or ""
+            if item.get("type") in ("image", "audio", "video", "file"):
+                media_items.append(item)
         if media_items:
             media_message = Message(
                 type=MessageType.MESSAGE,
@@ -341,6 +357,7 @@ def agentscope_msg_to_message(
 
     for msg in msgs:
         role = msg.role or "assistant"
+        is_delta = bool((msg.metadata or {}).get("stream_delta"))
         metadata = {
             "original_id": msg.id,
             "original_name": msg.name,
@@ -363,10 +380,22 @@ def agentscope_msg_to_message(
         current_type = None
 
         for block in msg.content:
-            if isinstance(block, dict):
-                btype = block.get("type", "text")
-            else:
+            if hasattr(block, "model_dump"):
+                block = block.model_dump(mode="json")
+            if not isinstance(block, dict):
                 continue
+            btype = block.get("type", "text")
+            if btype == "data":
+                media_type = str(
+                    (block.get("source") or {}).get("media_type") or "",
+                )
+                btype = (
+                    media_type.split("/", 1)[0]
+                    if media_type.startswith(("image/", "audio/", "video/"))
+                    else "file"
+                )
+                block["type"] = btype
+                block["filename"] = block.get("name") or ""
 
             if btype == "text":
                 if current_type != MessageType.MESSAGE:
@@ -380,7 +409,7 @@ def agentscope_msg_to_message(
                     current_type = MessageType.MESSAGE
 
                 text_content = TextContent(
-                    delta=False,
+                    delta=is_delta,
                     index=None,
                     text=block.get("text", ""),
                 )
@@ -398,13 +427,13 @@ def agentscope_msg_to_message(
                     current_type = MessageType.REASONING
 
                 text_content = TextContent(
-                    delta=False,
+                    delta=is_delta,
                     index=None,
                     text=block.get("thinking", ""),
                 )
                 current_message.add_content(new_content=text_content)
 
-            elif btype == "tool_use":
+            elif btype in {"tool_use", "tool_call"}:
                 if current_message:
                     results.append(current_message.completed())
 

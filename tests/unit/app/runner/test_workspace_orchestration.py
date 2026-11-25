@@ -5,7 +5,7 @@ from pathlib import Path
 import textwrap
 from types import SimpleNamespace
 
-from agentscope.message import Msg
+from qwenpaw.agents.message_compat import Msg
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import json
 
@@ -1975,10 +1975,10 @@ async def test_runner_adapter_executes_internal_candidate_without_streaming(
 
     assert result.message["content"] == "final:draft"
     assert len(agent.calls) == 1
-    assert agent.calls[0][0].content == "internal"
+    assert agent.calls[0][0].get_text_content() == "internal"
     assert agent.calls[0][0].name == "user"
     assert agent.calls[0][1].name == "workspace_runtime"
-    assert "instructions" in agent.calls[0][1].content
+    assert "instructions" in agent.calls[0][1].get_text_content()
     trace_events = [
         json.loads(line)
         for line in runtime_trace_path(

@@ -7,12 +7,15 @@ from the first provider must not leak into the request payload for the
 second provider, while the original in-memory messages must remain untouched.
 """
 
+import json
+
 # pylint: disable=protected-access,redefined-outer-name
 from types import SimpleNamespace
 
 import pytest
 from agentscope.formatter import OpenAIChatFormatter
-from agentscope.message import Msg, ToolResultBlock
+from agentscope.message import ToolResultBlock
+from qwenpaw.agents.message_compat import Msg
 
 try:
     from agentscope.formatter import AnthropicChatFormatter
@@ -95,7 +98,7 @@ def test_gemini_history_to_openai(monkeypatch) -> None:
     )
 
     history = _gemini_session_history()
-    original_ec = history[1].content[0]["extra_content"].copy()
+    original_ec = history[1].content[0].extra_content.copy()
 
     (
         normalized,
@@ -111,12 +114,12 @@ def test_gemini_history_to_openai(monkeypatch) -> None:
     assert is_gemini is False
 
     tool_use_block = normalized[1].content[0]
-    assert "extra_content" not in tool_use_block
-    assert tool_use_block["id"] == "tc_gemini_1"
-    assert tool_use_block["input"] == {"city": "Tokyo"}
+    assert not hasattr(tool_use_block, "extra_content")
+    assert tool_use_block.id == "tc_gemini_1"
+    assert json.loads(tool_use_block.input) == {"city": "Tokyo"}
 
     # Original history must be unchanged.
-    assert history[1].content[0]["extra_content"] == original_ec
+    assert history[1].content[0].extra_content == original_ec
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +151,7 @@ def test_gemini_history_to_anthropic(monkeypatch) -> None:
     )
 
     assert is_anthropic is True
-    assert "extra_content" not in normalized[1].content[0]
+    assert not hasattr(normalized[1].content[0], "extra_content")
 
 
 # ---------------------------------------------------------------------------
@@ -181,8 +184,7 @@ def test_gemini_history_stays_gemini(monkeypatch) -> None:
 
     assert is_gemini is True
     block = normalized[1].content[0]
-    assert "extra_content" in block
-    assert block["extra_content"]["thought_signature"] == "gemini_sig_abc"
+    assert block.extra_content["thought_signature"] == "gemini_sig_abc"
 
 
 # ---------------------------------------------------------------------------
@@ -214,8 +216,8 @@ def test_openai_history_to_gemini(monkeypatch) -> None:
     )
 
     assert is_gemini is True
-    assert normalized[0].content == "Say hello"
-    assert normalized[1].content == "Hello!"
+    assert normalized[0].get_text_content() == "Say hello"
+    assert normalized[1].get_text_content() == "Hello!"
 
 
 # ---------------------------------------------------------------------------
@@ -283,8 +285,8 @@ def test_gemini_multi_toolcall_to_openai(monkeypatch) -> None:
     )
 
     for block in normalized[0].content:
-        if block.get("type") == "tool_use":
-            assert "extra_content" not in block
+        if block.type == "tool_call":
+            assert not hasattr(block, "extra_content")
 
 
 # ---------------------------------------------------------------------------
@@ -328,9 +330,9 @@ def test_thinking_blocks_preserved_for_openai(monkeypatch) -> None:
     )
 
     blocks = normalized[1].content
-    thinking_blocks = [b for b in blocks if b.get("type") == "thinking"]
+    thinking_blocks = [b for b in blocks if b.type == "thinking"]
     assert len(thinking_blocks) == 1
-    assert thinking_blocks[0]["thinking"] == "Let me consider..."
+    assert thinking_blocks[0].thinking == "Let me consider..."
 
 
 def test_thinking_blocks_preserved_for_anthropic(monkeypatch) -> None:
@@ -355,7 +357,7 @@ def test_thinking_blocks_preserved_for_anthropic(monkeypatch) -> None:
     )
 
     blocks = normalized[1].content
-    thinking_blocks = [b for b in blocks if b.get("type") == "thinking"]
+    thinking_blocks = [b for b in blocks if b.type == "thinking"]
     assert len(thinking_blocks) == 1
 
 
@@ -381,7 +383,7 @@ def test_thinking_blocks_preserved_for_gemini(monkeypatch) -> None:
     )
 
     blocks = normalized[1].content
-    thinking_blocks = [b for b in blocks if b.get("type") == "thinking"]
+    thinking_blocks = [b for b in blocks if b.type == "thinking"]
     assert len(thinking_blocks) == 1
 
 
@@ -444,5 +446,5 @@ def test_raw_input_repair_works_before_cross_provider_clean(
     )
 
     block = normalized[0].content[0]
-    assert block["input"] == {"query": "hello"}
-    assert "raw_input" not in block
+    assert json.loads(block.input) == {"query": "hello"}
+    assert not hasattr(block, "raw_input")

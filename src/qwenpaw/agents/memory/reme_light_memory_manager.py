@@ -9,11 +9,15 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from agentscope.agent import ReActAgent
-from agentscope.message import Msg, TextBlock, ToolResultBlock, ToolUseBlock
-from agentscope.tool import Toolkit, ToolResponse
+from agentscope.agent import Agent
+from agentscope.message import TextBlock, ToolResultBlock
+from agentscope.tool import ToolResponse
+
+from ..message_compat import Msg, ToolUseBlock
+from ..toolkit import DClawToolkit as Toolkit
 
 from .base_memory_manager import BaseMemoryManager, memory_registry
+from .reme_compat import install_reme_agentscope2_compat
 from .prompts import (
     MEMORY_GUIDANCE_ZH,
     MEMORY_GUIDANCE_EN,
@@ -94,6 +98,7 @@ class ReMeLightMemoryManager(BaseMemoryManager):
 
         memory_manager_backend = _detect_memory_manager_backend()
 
+        install_reme_agentscope2_compat()
         from reme.reme_light import ReMeLight
 
         emb_config = self.get_embedding_config()
@@ -631,7 +636,7 @@ class ReMeLightMemoryManager(BaseMemoryManager):
         else:
             logger.debug("No existing MEMORY.md file to backup")
 
-        dream_agent = ReActAgent(
+        dream_agent = Agent(
             name="DreamOptimizer",
             model=chat_model,
             sys_prompt="You are a Dream Memory Organizer specialized"

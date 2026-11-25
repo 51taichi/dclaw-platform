@@ -105,7 +105,7 @@ async def test_http_route_checks_publication_and_calls_jev_directly(monkeypatch)
 
 
 def result_body(result):
-    return json.loads(result.content[0]["text"])
+    return json.loads(result.content[0].text)
 
 
 @pytest.fixture(autouse=True)

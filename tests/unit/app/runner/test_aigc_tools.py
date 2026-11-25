@@ -3,7 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from agentscope.tool import Toolkit
+from qwenpaw.agents.toolkit import DClawToolkit as Toolkit
 
 from qwenpaw.app.workspace.aigc_tools import build_aigc_tools, bind_aigc_tools
 
@@ -35,7 +35,7 @@ def harness(grants=None, session='session-a', tasks=None, catalog=None):
 
 
 def result(response):
-    return json.loads(response.content[0]['text'])
+    return json.loads(response.content[0].text)
 
 
 def valid_image_workflow():
@@ -640,7 +640,7 @@ def test_registration_is_temporary_even_on_failure():
 
 @pytest.mark.asyncio
 async def test_media_tracker_records_native_delivery_and_preserves_stream():
-    from agentscope.message import Msg
+    from qwenpaw.agents.message_compat import Msg
     from qwenpaw.app.workspace.aigc_tools import track_media_delivery
     media = {'type': 'image', 'source': {'type': 'url', 'url': 'https://example.test/image.png'}}
     messages = [Msg('user', [media], 'user')]
@@ -663,7 +663,7 @@ async def test_media_tracker_records_native_delivery_and_preserves_stream():
 
 @pytest.mark.asyncio
 async def test_media_tracker_records_agentscope_local_image_delivery(tmp_path):
-    from agentscope.message import Msg
+    from qwenpaw.agents.message_compat import Msg
     from qwenpaw.app.workspace.aigc_tools import track_media_delivery
 
     image = tmp_path / "review.jpg"
@@ -689,7 +689,7 @@ async def test_media_tracker_records_agentscope_local_image_delivery(tmp_path):
 
 @pytest.mark.asyncio
 async def test_media_tracker_keeps_delivery_across_later_agent_model_calls():
-    from agentscope.message import Msg
+    from qwenpaw.agents.message_compat import Msg
     from qwenpaw.app.workspace.aigc_tools import track_media_delivery
 
     url = "https://example.test/review.jpg"
@@ -722,7 +722,7 @@ async def test_media_tracker_keeps_delivery_across_later_agent_model_calls():
 async def test_media_tracker_records_dashscope_image_delivery(tmp_path):
     import base64
 
-    from agentscope.message import Msg
+    from qwenpaw.agents.message_compat import Msg
     from qwenpaw.app.workspace.aigc_tools import track_media_delivery
 
     content = b"dashscope-review-image"
@@ -759,7 +759,7 @@ async def test_media_tracker_records_dashscope_image_delivery(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.parametrize('expert', ['traffic-expert', 'product-expert'])
 async def test_authorized_agent_loop_has_tools_without_expert_specific_configuration(tmp_path, expert):
-    from agentscope.message import Msg
+    from qwenpaw.agents.message_compat import Msg
     from qwenpaw.app.workspace.orchestration import AuthorizedWorkspaceRelease, run_workspace_orchestration_turn
     from qwenpaw.app.workspace.orchestration_contract import HOST_CAPABILITIES_V1, OrchestrationConfig
     root = tmp_path / 'workspace'
@@ -803,7 +803,7 @@ async def test_review_metadata_does_not_create_a_review_only_agent_loop(
     tmp_path,
     review_granted,
 ):
-    from agentscope.message import Msg
+    from qwenpaw.agents.message_compat import Msg
     from qwenpaw.app.workspace.orchestration import (
         AuthorizedWorkspaceRelease,
         run_workspace_orchestration_turn,
@@ -911,7 +911,7 @@ async def test_production_1_1_22_luyu_path_adapts_review_tool_read_only(
     customer_action_required,
 ):
     """Exercise the signed 1.1.22 runtime's agent.execute compatibility path."""
-    from agentscope.message import Msg
+    from qwenpaw.agents.message_compat import Msg
     from qwenpaw.app.workspace.orchestration import (
         AuthorizedWorkspaceRelease,
         run_workspace_orchestration_turn,
@@ -1082,7 +1082,7 @@ async def test_accepted_review_failure_continues_with_full_aigc_tools(
     expected_calls,
 ):
     """Catch accepted reviews getting stranded in the review-only tool scope."""
-    from agentscope.message import Msg
+    from qwenpaw.agents.message_compat import Msg
     from qwenpaw.app.workspace.orchestration import (
         AuthorizedWorkspaceRelease,
         run_workspace_orchestration_turn,
@@ -1255,7 +1255,7 @@ def create_runtime(): return Runtime()
 
 
 def test_prior_platform_review_attempts_are_removed_from_agent_memory():
-    from agentscope.message import Msg
+    from qwenpaw.agents.message_compat import Msg
     from qwenpaw.app.workspace.orchestration import (
         _drop_prior_platform_review_attempts,
     )
@@ -1371,7 +1371,7 @@ async def test_review_tool_accepts_a_trusted_task_from_the_previous_installation
 
 @pytest.mark.asyncio
 async def test_failed_media_request_clears_previous_delivery():
-    from agentscope.message import Msg
+    from qwenpaw.agents.message_compat import Msg
     from qwenpaw.app.workspace.aigc_tools import track_media_delivery
     media = {'type': 'image', 'source': {'type': 'url', 'url': 'https://example.test/a.png'}}
     class Model:
@@ -1458,30 +1458,58 @@ async def test_bridge_creates_real_owned_canvas_idempotently_without_generation(
 
 @pytest.mark.asyncio
 async def test_real_agent_loop_can_call_scoped_tool_then_answer():
-    from agentscope.agent import ReActAgent
+    from agentscope.agent import Agent, ReActConfig
+    from agentscope.credential import CredentialBase
     from agentscope.formatter import OpenAIChatFormatter
-    from agentscope.message import Msg
+    from agentscope.message import TextBlock, ToolCallBlock
     from agentscope.model import ChatModelBase, ChatResponse
+    from pydantic import BaseModel
+    from qwenpaw.agents.message_compat import Msg
+
     class Model(ChatModelBase):
+        class Parameters(BaseModel):
+            pass
+
         def __init__(self):
-            super().__init__(model_name='scripted', stream=False)
+            super().__init__(
+                credential=CredentialBase(),
+                model='scripted',
+                parameters=self.Parameters(),
+                stream=False,
+            )
+            self.formatter = OpenAIChatFormatter()
             self.calls = 0
+
         async def __call__(self, messages, **kwargs):
             self.calls += 1
             if self.calls == 1:
                 assert any(tool['function']['name'] == 'aigc_workflow_catalog' for tool in kwargs['tools'])
-                return ChatResponse(content=[{'type': 'tool_use', 'id': 'call-1',
-                    'name': 'aigc_workflow_catalog', 'input': {}}])
+                return ChatResponse(
+                    content=[ToolCallBlock(
+                        id='call-1',
+                        name='aigc_workflow_catalog',
+                        input='{}',
+                    )],
+                    is_last=True,
+                )
             assert any('workflow_schema' in str(message) for message in messages)
-            return ChatResponse(content=[{'type': 'text', 'text': 'Catalog checked.'}])
+            return ChatResponse(
+                content=[TextBlock(text='Catalog checked.')],
+                is_last=True,
+            )
+
     model = Model()
-    agent = ReActAgent(name='expert', sys_prompt='Use tools.', model=model,
-        formatter=OpenAIChatFormatter(), toolkit=Toolkit(), max_iters=3)
-    agent.set_console_output_enabled(False)
+    agent = Agent(
+        name='expert',
+        system_prompt='Use tools.',
+        model=model,
+        toolkit=Toolkit(),
+        react_config=ReActConfig(max_iters=3),
+    )
     original = agent.toolkit
     tools, calls = harness({CATALOG: '1'})
     with bind_aigc_tools(agent, tools):
-        reply = await agent(Msg('user', 'Check capabilities', 'user'))
+        reply = await agent.reply(Msg('user', 'Check capabilities', 'user'))
     assert reply.get_text_content() == 'Catalog checked.'
     assert model.calls == 2 and len(calls) == 1
     assert agent.toolkit is original

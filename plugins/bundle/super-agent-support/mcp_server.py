@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
 from .agent_outbound import AgentOutboundError, AgentOutboundManager
@@ -36,12 +36,14 @@ class LocalExecutionMcp:
         self.agent_outbound = agent_outbound
         self.temporary_resources = temporary_resources
         self.agent_outbound_stream = agent_outbound_stream
-        self.server = FastMCP(
+        self.server = MCPServer(
             "DClaw Local Execution",
             instructions=(
                 "Generic DClaw local execution tools. Business decisions and "
                 "third-party API selection remain in the Super Agent."
             ),
+        )
+        self.app = self.server.streamable_http_app(
             stateless_http=True,
             json_response=True,
             streamable_http_path="/",
@@ -49,7 +51,6 @@ class LocalExecutionMcp:
                 enable_dns_rebinding_protection=False,
             ),
         )
-        self.app = self.server.streamable_http_app()
         self._runner_task: asyncio.Task[None] | None = None
         self._stop_event: asyncio.Event | None = None
         self._register_tools()

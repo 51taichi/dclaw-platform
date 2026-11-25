@@ -9,7 +9,9 @@ import logging
 from typing import AsyncIterator
 from typing import TYPE_CHECKING
 
-from agentscope.message import Msg, TextBlock
+from agentscope.message import TextBlock
+
+from ...agents.message_compat import Msg
 
 from qwenpaw.runtime.exceptions import (
     AppBaseException,
@@ -289,7 +291,7 @@ async def run_command_path(  # pylint: disable=too-many-statements,too-many-bran
         metadata = getattr(response_msg, "metadata", None)
         if isinstance(metadata, dict) and metadata.get("clear_plan"):
             try:
-                from agentscope.plan import PlanNotebook, InMemoryPlanStorage
+                from ...plan import PlanNotebook, InMemoryPlanStorage
 
                 _empty_nb = PlanNotebook(storage=InMemoryPlanStorage())
                 await runner.session.update_session_state(

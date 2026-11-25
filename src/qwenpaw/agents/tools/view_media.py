@@ -9,8 +9,10 @@ import urllib.parse
 from pathlib import Path
 from typing import Optional
 
-from agentscope.message import ImageBlock, TextBlock, VideoBlock
+from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
+
+from ..message_compat import ImageBlock, VideoBlock
 
 from .file_io import _resolve_file_path
 

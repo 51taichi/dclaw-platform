@@ -5,9 +5,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from agentscope.tool import Toolkit
 
 from qwenpaw.agents.react_agent import QwenPawAgent
+from qwenpaw.agents.toolkit import DClawToolkit
 from qwenpaw.agents.tools.agent_skill_reader import (
     MAX_AGENT_SKILL_FILE_BYTES,
     build_read_agent_skill_tool,
@@ -15,7 +15,7 @@ from qwenpaw.agents.tools.agent_skill_reader import (
 
 
 def _text(response) -> str:
-    return response.content[0]["text"]
+    return response.content[0].text
 
 
 def _reader(tmp_path: Path):
@@ -150,13 +150,13 @@ def test_reader_is_registered_after_explicit_agent_opt_in():
     ]
 
 
-def test_reader_exposes_a_valid_agentscope_tool_schema(tmp_path):
+async def test_reader_exposes_a_valid_agentscope_tool_schema(tmp_path):
     _skill, reader = _reader(tmp_path)
-    toolkit = Toolkit()
+    toolkit = DClawToolkit()
 
     toolkit.register_tool_function(reader)
 
-    schemas = toolkit.get_json_schemas()
+    schemas = await toolkit.get_tool_schemas()
     schema = next(
         item for item in schemas
         if item["function"]["name"] == "read_agent_skill"

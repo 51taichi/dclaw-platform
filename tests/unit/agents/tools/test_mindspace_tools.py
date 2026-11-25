@@ -26,7 +26,7 @@ def _tool_text(response) -> str:
         first = content[0]
         if isinstance(first, dict):
             return str(first.get("text", ""))
-        return str(first)
+        return str(getattr(first, "text", first))
     return str(content)
 
 
@@ -84,7 +84,7 @@ async def test_search_mindspace_returns_source_metadata(monkeypatch, tmp_path):
     monkeypatch.setattr(mindspace_tools, "_global_root", lambda: tmp_path / "global")
 
     response = mindspace_tools.search_mindspace("refund complaints")
-    text = response.content[0].get("text", "")
+    text = response.content[0].text
 
     assert "Support Playbook.md" in text
     assert "customer success" in text
@@ -99,7 +99,7 @@ async def test_read_mindspace_doc_rejects_unknown_doc(monkeypatch, tmp_path):
 
     response = mindspace_tools.read_mindspace_doc("missing-doc")
 
-    assert "not found" in response.content[0].get("text", "").lower()
+    assert "not found" in response.content[0].text.lower()
 
 
 @pytest.mark.asyncio

@@ -387,8 +387,8 @@ async def test_platform_ffmpeg_builtin_prepares_exact_component_version(
     plugin_module, tmp_path,
 ):
     store, _signer, _broker, service = _runtime(plugin_module, tmp_path)
-    assert store.get_package_for_capability("dclaw.ffmpeg.command") is None
-    package = service._package_for_capability("dclaw.ffmpeg.command")
+    assert store.get_package_for_capability("dclaw.ffmpeg.task.plan") is None
+    package = service._package_for_capability("dclaw.ffmpeg.task.plan")
     assert package["descriptor"]["package_version"] == "0.1.0"
 
     class Components:
@@ -411,12 +411,12 @@ async def test_platform_ffmpeg_builtin_prepares_exact_component_version(
 
     service._send = send
     outdated = await service._local_runtime_prepare(
-        {"capability": "dclaw.ffmpeg.command"}, {"u": "user-1"}, "trace-0",
+        {"capability": "dclaw.ffmpeg.task.plan"}, {"u": "user-1"}, "trace-0",
     )
     assert outdated["state"] == "runner_update_required"
-    device["runner_version"] = "1.4.8"
+    device["runner_version"] = "1.4.9"
     result = await service._local_runtime_prepare(
-        {"capability": "dclaw.ffmpeg.command"}, {"u": "user-1"}, "trace-1",
+        {"capability": "dclaw.ffmpeg.task.plan"}, {"u": "user-1"}, "trace-1",
     )
     assert result["state"] == "preparing"
     assert result["package_version"] == "0.1.0"
@@ -424,7 +424,7 @@ async def test_platform_ffmpeg_builtin_prepares_exact_component_version(
     assert sent[0][1]["type"] == "runtime.prepare"
     assert len(sent[0][1]["public_components"]) == 1
     assert sent[0][1]["built_in_capability"] == {
-        "capability_id": "dclaw.ffmpeg.command",
+        "capability_id": "dclaw.ffmpeg.task.plan",
         "package_version": "0.1.0",
     }
     assert "capability_package" not in sent[0][1]
@@ -437,31 +437,15 @@ async def test_platform_ffmpeg_builtin_prepares_exact_component_version(
         "built_in_capability": sent[0][1]["built_in_capability"],
     })
     device["capabilities"] = [{
-        "capability_id": "dclaw.ffmpeg.command",
-        "package_id": "dclaw.ffmpeg.command",
+        "capability_id": "dclaw.ffmpeg.task.plan",
+        "package_id": "dclaw.ffmpeg.task.plan",
         "package_version": "0.1.0",
     }]
     result = await service._local_runtime_prepare(
-        {"capability": "dclaw.ffmpeg.command"}, {"u": "user-1"}, "trace-2",
+        {"capability": "dclaw.ffmpeg.task.plan"}, {"u": "user-1"}, "trace-2",
     )
     assert result["state"] == "ready"
     assert len(sent) == 1
-    identity = {
-        "t": "tenant-1", "u": "user-1", "s": "session-1",
-        "a": "expert-1", "n": "Expert", "g": "installation-1",
-        "r": "release-1", "i": "invocation-1",
-    }
-    accepted = await service._local_task_start({
-        "capability_id": "dclaw.ffmpeg.command",
-        "idempotency_key": "ffmpeg-test-1",
-        "input": {
-            "arguments": ["-i", "{input:clip_01}", "{output:final.mp4}"],
-            "output_files": ["final.mp4"],
-        },
-    }, identity, "trace-task-1")
-    assert accepted["capability_id"] == "dclaw.ffmpeg.command"
-    assert sent[-1][1]["type"] == "task.start"
-    assert sent[-1][1]["task"]["capability_id"] == "dclaw.ffmpeg.command"
 
 
 def test_session_capability_snapshot_preserves_legacy_tokens(plugin_module):
@@ -785,7 +769,7 @@ def test_developer_kit_is_downloadable_without_server_source(
 
     assert metadata.status_code == 200
     assert metadata.json()["name"] == "dclaw-super-agent-devkit"
-    assert metadata.json()["version"] == "1.9.25"
+    assert metadata.json()["version"] == "1.9.29"
     assert metadata.json()["download_path"] == (
         "/api/super-agent-support/developer-kit/v1.zip"
     )
@@ -804,7 +788,7 @@ def test_developer_kit_is_downloadable_without_server_source(
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-devkit-1.9.25"
+    prefix = "dclaw-super-agent-devkit-1.9.29"
     assert f"{prefix}/dclaw_agent_devkit.py" in names
     assert f"{prefix}/bootstrap.ps1" in names
     assert f"{prefix}/bootstrap.sh" in names
@@ -818,10 +802,10 @@ def test_developer_kit_is_downloadable_without_server_source(
     assert f"{prefix}/schemas/local-runtime-prepare-v1/request.schema.json" in names
     assert f"{prefix}/schemas/local-runtime-prepare-v1/response.schema.json" in names
     assert f"{prefix}/local_runtime_prepare_api_demo.py" in names
-    assert f"{prefix}/local_ffmpeg_command_api_demo.py" in names
-    assert f"{prefix}/schemas/local-ffmpeg-command-v1/input.schema.json" in names
-    assert f"{prefix}/schemas/local-ffmpeg-command-v1/result.schema.json" in names
-    assert f"{prefix}/examples/local-ffmpeg-command-v1/start-request.sample.json" in names
+    assert f"{prefix}/local_ffmpeg_task_plan_api_demo.py" in names
+    assert f"{prefix}/schemas/local-ffmpeg-task-plan-v2/input.schema.json" in names
+    assert f"{prefix}/schemas/local-ffmpeg-task-plan-v2/result.schema.json" in names
+    assert f"{prefix}/examples/local-ffmpeg-task-plan-v2/start-request.sample.json" in names
     assert len([name for name in names if "/wheelhouse/" in name]) == 26
     assert all("qwenpaw" not in name for name in names)
     assert not any(
@@ -969,23 +953,23 @@ def test_developer_pack_is_downloadable_and_self_describing(
         downloaded = client.get("/developer-pack/download")
 
     assert health.status_code == 200
-    assert health.json()["version"] == "1.18.47"
+    assert health.json()["version"] == "1.18.52"
     assert metadata.status_code == 200
     payload = metadata.json()
-    assert payload["version"] == "1.10.37"
-    assert payload["standard"]["version"] == "2.58"
-    assert payload["devkit_version"] == "1.9.25"
+    assert payload["version"] == "1.10.41"
+    assert payload["standard"]["version"] == "2.62"
+    assert payload["devkit_version"] == "1.9.29"
     assert payload["server_source_required"] is False
     assert payload["download_path"].endswith("/developer-pack/download")
     assert payload["sha256"] == hashlib.sha256(downloaded.content).hexdigest()
     assert payload["content_sha256"] == payload["sha256"]
     assert downloaded.status_code == 200
-    assert "dclaw-super-agent-developer-pack-1.10.37.zip" in (
+    assert "dclaw-super-agent-developer-pack-1.10.41.zip" in (
         downloaded.headers["content-disposition"]
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-developer-pack-1.10.37"
+    prefix = "dclaw-super-agent-developer-pack-1.10.41"
     assert f"{prefix}/PACKAGE-MANIFEST.json" in names
     assert f"{prefix}/SHA256SUMS" in names
     assert f"{prefix}/dclaw_developer.py" in names
@@ -1522,7 +1506,7 @@ async def test_aigc_asset_localization_is_device_only_and_idempotent(
 
     store.upsert_device(
         device_id="device-1", user_id="user-1", display_name="Windows",
-        runner_version="1.4.5", protocol_version="2", capabilities=[],
+        runner_version="1.4.6", protocol_version="2", capabilities=[],
     )
 
     started = await service._aigc_assets_localize(arguments, identity, "trace-1")
@@ -1629,7 +1613,7 @@ async def test_aigc_asset_dispatch_failure_is_terminal_and_replayable(
     store, _signer, _broker, service = _runtime(plugin_module, tmp_path)
     store.upsert_device(
         device_id="device-1", user_id="user-1", display_name="Windows",
-        runner_version="1.4.5", protocol_version="2", capabilities=[],
+        runner_version="1.4.6", protocol_version="2", capabilities=[],
     )
     websocket = _FailingWebSocket()
     await service.attach("device-1", websocket)

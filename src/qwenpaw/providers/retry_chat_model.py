@@ -31,8 +31,9 @@ from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 
-from agentscope.model import ChatModelBase
-from agentscope.model._model_response import ChatResponse
+from agentscope.model import ChatModelBase, ChatResponse
+
+from .agentscope2_compat import LegacyModelNameMixin, initialize_model_wrapper
 from qwenpaw.runtime.exceptions import (
     RateLimitExceededException,
 )
@@ -269,7 +270,7 @@ def _compute_backoff(attempt: int, retry_config: RetryConfig) -> float:
     )
 
 
-class RetryChatModel(ChatModelBase):
+class RetryChatModel(LegacyModelNameMixin, ChatModelBase):
     """Transparent retry wrapper around any :class:`ChatModelBase`.
 
     The wrapper delegates every call to the underlying *inner* model and
@@ -287,7 +288,7 @@ class RetryChatModel(ChatModelBase):
         retry_config: RetryConfig | None = None,
         rate_limit_config: RateLimitConfig | None = None,
     ) -> None:
-        super().__init__(model_name=inner.model_name, stream=inner.stream)
+        initialize_model_wrapper(self, inner)
         self._inner = inner
         self._retry_config = _normalize_retry_config(retry_config)
         self._rate_limit_config = _normalize_rate_limit_config(
@@ -304,7 +305,11 @@ class RetryChatModel(ChatModelBase):
     def model_key(self) -> str:
         """Stable key for the underlying model: ``provider_id:model_name``."""
         provider_id = getattr(self._inner, "_provider_id", None)
-        name = self._inner.model_name
+        name = getattr(self._inner, "model", None) or getattr(
+            self._inner,
+            "model_name",
+            "unknown",
+        )
         return f"{provider_id}:{name}" if provider_id else name
 
     async def __call__(

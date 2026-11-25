@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from agentscope.message import Msg
+from qwenpaw.agents.message_compat import Msg
 
 from qwenpaw.app.runner import runner as runner_module
 from qwenpaw.app.runner.runner import AgentRunner
@@ -241,13 +241,13 @@ async def test_undeclared_business_turn_uses_exact_standard_agent_path(
     calls = []
 
     class Agent:
-        async def __call__(self, messages):
+        async def reply(self, messages):
             calls.append(messages)
             return Msg(name="assistant", role="assistant", content="standard")
 
-    async def fake_stream(*, agents, coroutine_task):
+    async def fake_stream(*, agents, inputs):
         assert len(agents) == 1
-        yield await coroutine_task, True
+        yield await agents[0].reply(inputs), True
 
     def fail_authorization(**_kwargs):
         pytest.fail(
@@ -283,7 +283,7 @@ async def test_undeclared_business_turn_uses_exact_standard_agent_path(
     ]
 
     assert len(actual) == 1
-    assert actual[0][0].content == "standard"
+    assert actual[0][0].get_text_content() == "standard"
     assert actual[0][1:] == (True, True)
     assert calls == [messages]
 
@@ -396,7 +396,7 @@ async def test_declared_turn_never_falls_back_to_direct_model_on_failure(
         )
     ]
 
-    assert actual[0][0].content == (
+    assert actual[0][0].get_text_content() == (
         "本轮处理未能安全完成：专家运行失败。请稍后重试；"
         "若再次发生，请联系平台维护人员核查。关联 ID：未生成"
     )
@@ -533,11 +533,11 @@ async def test_declared_turn_passes_loaded_conversation_history_to_runtime(
         )
     ]
 
-    assert actual[0][0].content == "继续"
+    assert actual[0][0].get_text_content() == "继续"
     assert actual[0][1:] == (True, True)
     assert agent.memory.added[:1] == current_messages
     assert agent.memory.added[1].role == "assistant"
-    assert agent.memory.added[1].content == "继续"
+    assert agent.memory.added[1].get_text_content() == "继续"
 
 
 @pytest.mark.asyncio
@@ -678,5 +678,5 @@ async def test_active_release_can_review_a_task_bound_to_its_previous_installati
             )
         ]
 
-    assert actual[0][0].content == "审核完成"
+    assert actual[0][0].get_text_content() == "审核完成"
     assert calls[0]["installation_id"] == "old-installation"

@@ -1,6 +1,6 @@
 import pytest
 from types import SimpleNamespace
-from agentscope.message import Msg
+from qwenpaw.agents.message_compat import Msg
 from qwenpaw.app.workspace.empty_reply import recover_empty_reply, reply_shape
 
 
@@ -87,7 +87,8 @@ async def test_actual_text_generation_path_disables_tools():
         async def __call__(self, prompt, **kwargs):
             calls.append(kwargs)
             return ChatResponse(
-                content=[{"type": "text", "text": "缺少审核证据，保持当前步骤。"}]
+                content=[{"type": "text", "text": "缺少审核证据，保持当前步骤。"}],
+                is_last=True,
             )
 
     class Formatter:

@@ -1,6 +1,6 @@
 import asyncio
 import pytest
-from agentscope.message import Msg
+from qwenpaw.agents.message_compat import Msg
 from qwenpaw.app.workspace.public_stream import execute_public_agent, public_snapshot
 
 
@@ -8,7 +8,7 @@ def test_public_snapshot_excludes_internal_blocks_and_json_envelopes():
     msg = Msg('agent', [{'type':'thinking','thinking':'private'}, {'type':'text','text':'Hello'}], 'assistant')
     snap = public_snapshot(msg)
     assert snap.id == msg.id and snap.get_text_content() == 'Hello'
-    assert all(b['type']=='text' for b in snap.content)
+    assert all(b.type == 'text' for b in snap.content)
     assert public_snapshot(Msg('agent', [{'type':'tool_result','id':'x','name':'skill','output':'private'}], 'assistant')) is None
     assert public_snapshot(Msg('agent', '{"reply":', 'assistant')) is None
 
@@ -102,21 +102,43 @@ def create_runtime():return Runtime()
 
 @pytest.mark.asyncio
 async def test_real_agent_streams_text_while_excluding_reasoning():
-    from agentscope.agent import ReActAgent
+    from agentscope.agent import Agent
+    from agentscope.credential import CredentialBase
     from agentscope.formatter import OpenAIChatFormatter
+    from agentscope.message import TextBlock, ThinkingBlock
     from agentscope.model import ChatModelBase, ChatResponse
-    from agentscope.tool import Toolkit
+    from pydantic import BaseModel
     release = asyncio.Event()
     class Model(ChatModelBase):
-        def __init__(self): super().__init__(model_name='scripted', stream=True)
+        class Parameters(BaseModel):
+            pass
+        def __init__(self):
+            super().__init__(
+                credential=CredentialBase(),
+                model='scripted',
+                parameters=self.Parameters(),
+                stream=True,
+            )
+            self.formatter = OpenAIChatFormatter()
         async def __call__(self, *args, **kwargs):
             async def stream():
-                yield ChatResponse(content=[{'type':'thinking','thinking':'internal'}, {'type':'text','text':'Hello'}])
+                yield ChatResponse(
+                    content=[
+                        ThinkingBlock(thinking='internal'),
+                        TextBlock(text='Hello'),
+                    ],
+                    is_last=False,
+                )
                 await release.wait()
-                yield ChatResponse(content=[{'type':'thinking','thinking':'internal'}, {'type':'text','text':'Hello world'}])
+                yield ChatResponse(
+                    content=[
+                        ThinkingBlock(thinking='internal'),
+                        TextBlock(text='Hello world'),
+                    ],
+                    is_last=True,
+                )
             return stream()
-    agent = ReActAgent(name='expert',sys_prompt='Respond.',model=Model(),formatter=OpenAIChatFormatter(),toolkit=Toolkit())
-    agent.set_console_output_enabled(False)
+    agent = Agent(name='expert', system_prompt='Respond.', model=Model())
     snapshots = []
     async def receive(message):
         snapshots.append(message)
@@ -125,4 +147,4 @@ async def test_real_agent_streams_text_while_excluding_reasoning():
     assert snapshots[0].get_text_content() == 'Hello'
     assert snapshots[-1].get_text_content() == 'Hello world'
     assert all(snapshot.id == final.id for snapshot in snapshots)
-    assert all(b['type']=='text' for snapshot in snapshots for b in snapshot.content)
+    assert all(b.type == 'text' for snapshot in snapshots for b in snapshot.content)

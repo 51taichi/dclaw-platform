@@ -2495,7 +2495,9 @@ async def test_asset_review_dispatch_uses_bound_session_and_media(
         "chat-id-1" if lookup_by_session else "conversation-1"
     )
     assert captured["request"].channel == "console"
-    assert captured["messages"][0].content[1]["type"] == "video"
+    media_block = captured["messages"][0].content[1]
+    assert media_block.type == "data"
+    assert media_block.source.media_type == "video/mp4"
     trusted = captured["review_input"]
     assert trusted["asset_id"] == "asset-1"
     assert trusted["binding"]["conversation_id"] == "conversation-1"
@@ -2614,7 +2616,7 @@ async def test_asset_review_dispatch_temporarily_routes_media_to_a_compatible_mo
 async def test_asset_review_does_not_report_success_until_platform_state_is_terminal(
     monkeypatch,
 ):
-    from agentscope.message import Msg
+    from qwenpaw.agents.message_compat import Msg
 
     final = Msg(name="agent-1", role="assistant", content="✅ 审核通过！")
     task = SimpleNamespace(

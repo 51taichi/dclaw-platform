@@ -10,9 +10,9 @@ from qwenpaw.agents.tools.python_sandbox import python_sandbox
 
 def _response_payload(response) -> dict:
     text = "\n".join(
-        block.get("text", "")
+        block.text
         for block in response.content
-        if block.get("type") == "text"
+        if block.type == "text"
     )
     return json.loads(text)
 

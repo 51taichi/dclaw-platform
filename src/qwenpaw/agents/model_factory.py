@@ -17,6 +17,7 @@ from typing import List, Sequence, Tuple, Type, Any, Union, Optional
 from urllib.parse import unquote, urlparse
 
 from agentscope.formatter import FormatterBase, OpenAIChatFormatter
+from agentscope.message import DataBlock, TextBlock, ToolResultBlock, URLSource
 from agentscope.model import ChatModelBase, OpenAIChatModel
 
 try:
@@ -290,9 +291,15 @@ def _replace_video_placeholders(
                 and item.get("type") == "text"
                 and item.get("text") in video_subs
             ):
+                video = video_subs[item["text"]]
+                if isinstance(video, DataBlock):
+                    video = {
+                        "type": "video",
+                        "source": video.source.model_dump(mode="json"),
+                    }
                 new_content.append(
                     _format_openai_video_block(
-                        video_subs[item["text"]],
+                        video,
                     ),
                 )
             else:
@@ -500,42 +507,49 @@ def _get_formatter_for_chat_model(
 
 def _substitute_video_blocks(
     msgs: list,
-) -> dict[str, dict]:
+) -> dict[str, Any]:
     """Replace video blocks in msgs with text placeholders.
 
     Returns a mapping from placeholder text to the original video
     block so they can be restored later.
     """
-    video_subs: dict[str, dict] = {}
+    video_subs: dict[str, Any] = {}
     for msg in msgs:
         if not isinstance(msg.content, list):
             continue
         for i, blk in enumerate(msg.content):
-            if isinstance(blk, dict) and blk.get("type") == "video":
+            is_legacy_video = (
+                isinstance(blk, dict) and blk.get("type") == "video"
+            )
+            is_data_video = (
+                isinstance(blk, DataBlock)
+                and blk.source.media_type.startswith("video/")
+            )
+            if is_legacy_video or is_data_video:
                 ph = f"__QWENPAW_VID_{id(blk)}__"
                 video_subs[ph] = blk
-                msg.content[i] = {
-                    "type": "text",
-                    "text": ph,
-                }
+                msg.content[i] = TextBlock(text=ph)
     return video_subs
 
 
 def _restore_video_blocks(
     msgs: list,
-    video_subs: dict[str, dict],
+    video_subs: dict[str, Any],
 ) -> None:
     """Restore original video blocks in msgs after formatting."""
     for msg in msgs:
         if not isinstance(msg.content, list):
             continue
         for i, blk in enumerate(msg.content):
-            if (
-                isinstance(blk, dict)
-                and blk.get("type") == "text"
-                and blk.get("text") in video_subs
-            ):
-                msg.content[i] = video_subs[blk["text"]]
+            text = (
+                blk.get("text")
+                if isinstance(blk, dict) and blk.get("type") == "text"
+                else blk.text
+                if isinstance(blk, TextBlock)
+                else None
+            )
+            if text in video_subs:
+                msg.content[i] = video_subs[text]
 
 
 def _promote_tool_result_videos(
@@ -550,22 +564,45 @@ def _promote_tool_result_videos(
     promotions: dict[str, tuple[str, list]] = {}
     for msg in msgs:
         for block in msg.get_content_blocks():
-            if block.get("type") != "tool_result":
+            block_type = (
+                block.get("type")
+                if isinstance(block, dict)
+                else getattr(block, "type", None)
+            )
+            if block_type != "tool_result":
                 continue
-            output = block.get("output")
+            output = (
+                block.get("output")
+                if isinstance(block, dict)
+                else block.output
+            )
             if not isinstance(output, list):
                 continue
-            videos = [
-                (
-                    item.get("source", {}).get("url", ""),
-                    item,
-                )
-                for item in output
-                if isinstance(item, dict) and item.get("type") == "video"
-            ]
+            videos = []
+            for item in output:
+                if isinstance(item, dict) and item.get("type") == "video":
+                    videos.append(
+                        (item.get("source", {}).get("url", ""), item),
+                    )
+                elif isinstance(item, DataBlock) and (
+                    item.source.media_type.startswith("video/")
+                ):
+                    source = item.source.model_dump(mode="json")
+                    videos.append(
+                        (
+                            source.get("url", ""),
+                            {"type": "video", "source": source},
+                        ),
+                    )
             if videos:
-                promotions[block.get("id")] = (
-                    block.get("name", ""),
+                block_id = block.get("id") if isinstance(block, dict) else block.id
+                block_name = (
+                    block.get("name", "")
+                    if isinstance(block, dict)
+                    else block.name
+                )
+                promotions[block_id] = (
+                    block_name,
                     videos,
                 )
 
@@ -685,6 +722,29 @@ def _fixup_media_list(items: list) -> None:
     - Recurses into ``tool_result`` output lists.
     """
     for i, block in enumerate(items):
+        if isinstance(block, DataBlock):
+            source = block.source
+            if not isinstance(source, URLSource):
+                continue
+            url = str(source.url)
+            if not url.startswith("file://"):
+                continue
+            local_path = _file_url_to_path(url)
+            if os.path.exists(local_path):
+                continue
+            kind = source.media_type.partition("/")[0] or "media"
+            logger.warning(
+                "Media file no longer exists, replacing with placeholder: %s",
+                local_path,
+            )
+            items[i] = TextBlock(
+                text=f"[{kind.title()} unavailable - file deleted from disk]",
+            )
+            continue
+        if isinstance(block, ToolResultBlock):
+            if isinstance(block.output, list):
+                _fixup_media_list(block.output)
+            continue
         if not isinstance(block, dict):
             continue
         btype = block.get("type")
@@ -740,7 +800,7 @@ def _create_file_block_support_formatter(
         """Formatter with file block support for tool results."""
 
         # pylint: disable=too-many-branches
-        async def _format(self, msgs):
+        async def format(self, msgs):
             """Override to sanitize tool messages, handle thinking blocks,
             and relay ``extra_content`` (Gemini thought_signature).
 
@@ -766,17 +826,17 @@ def _create_file_block_support_formatter(
                 if msg.role != "assistant":
                     continue
                 for block in msg.get_content_blocks():
-                    if block.get("type") == "thinking":
-                        thinking = block.get("thinking", "")
+                    if getattr(block, "type", None) == "thinking":
+                        thinking = getattr(block, "thinking", "")
                         if thinking:
                             reasoning_contents[id(msg)] = thinking
                         break
                 for block in msg.get_content_blocks():
                     if (
-                        block.get("type") == "tool_use"
-                        and "extra_content" in block
+                        getattr(block, "type", None) == "tool_call"
+                        and hasattr(block, "extra_content")
                     ):
-                        extra_contents[block["id"]] = block["extra_content"]
+                        extra_contents[block.id] = block.extra_content
 
             # Convert file:// URLs to paths for all media blocks,
             # and replace deleted local files with text placeholders.
@@ -800,7 +860,7 @@ def _create_file_block_support_formatter(
                         normalized_msgs,
                     )
 
-                messages = await super()._format(normalized_msgs)
+                messages = await super().format(normalized_msgs)
 
                 if video_subs:
                     _replace_video_placeholders(
@@ -851,7 +911,10 @@ def _create_file_block_support_formatter(
                     is_thinking_only = (
                         isinstance(m.content, list)
                         and m.content
-                        and all(b.get("type") == "thinking" for b in m.content)
+                        and all(
+                            getattr(b, "type", None) == "thinking"
+                            for b in m.content
+                        )
                     )
                     if not is_thinking_only:
                         aligned_reasoning.append(
@@ -877,8 +940,8 @@ def _create_file_block_support_formatter(
 
             return _strip_top_level_message_name(messages)
 
-        @staticmethod
         def convert_tool_result_to_string(
+            self,
             output: Union[str, List[dict]],
         ) -> tuple[str, Sequence[Tuple[str, dict]]]:
             """Extend parent class to support file blocks.
@@ -897,6 +960,7 @@ def _create_file_block_support_formatter(
             # Try parent class method first
             try:
                 return base_formatter_class.convert_tool_result_to_string(
+                    self,
                     output,
                 )
             except ValueError as e:
@@ -936,6 +1000,7 @@ def _create_file_block_support_formatter(
                             text,
                             data,
                         ) = base_formatter_class.convert_tool_result_to_string(
+                            self,
                             [block],
                         )
                         textual_output.append(text)

@@ -9,15 +9,16 @@ from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, AsyncGenerator, Type
 
-from agentscope.model import OpenAIChatModel
-from agentscope.model._model_response import ChatResponse
+from agentscope.credential import OpenAICredential
+from agentscope.model import ChatResponse, OpenAIChatModel
 from openai import NOT_GIVEN
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 
 from qwenpaw.local_models.tag_parser import (
     parse_tool_calls_from_text,
     text_contains_tool_call_tag,
 )
+from qwenpaw.agents.message_compat import LegacyToolCallBlock
 from qwenpaw.providers.openai_response_diagnostics import (
     OpenAIResponseDiagnostics,
     is_openai_response_diagnostics_capture_enabled,
@@ -425,6 +426,56 @@ class OpenAIChatModelCompat(OpenAIChatModel):
 
     billing_provider_kind = "openai"
 
+    def __init__(
+        self,
+        model_name: str | None = None,
+        *,
+        model: str | None = None,
+        credential: OpenAICredential | None = None,
+        api_key: str | None = None,
+        generate_kwargs: dict[str, Any] | None = None,
+        stream_tool_parsing: bool | None = None,
+        parameters: OpenAIChatModel.Parameters | None = None,
+        stream: bool = True,
+        **kwargs: Any,
+    ) -> None:
+        """Translate DClaw's persisted 1.x model config to AgentScope 2."""
+        del stream_tool_parsing
+        model_id = model or model_name
+        if not isinstance(model_id, str) or not model_id:
+            raise ValueError("model is required")
+        client_kwargs = dict(kwargs.pop("client_kwargs", None) or {})
+        if credential is None:
+            credential = OpenAICredential(
+                api_key=SecretStr(api_key or ""),
+                base_url=client_kwargs.pop("base_url", None),
+            )
+        self.generate_kwargs = dict(generate_kwargs or {})
+        if parameters is None:
+            parameter_values = {
+                key: self.generate_kwargs[key]
+                for key in OpenAIChatModel.Parameters.model_fields
+                if key in self.generate_kwargs
+                and self.generate_kwargs[key] is not None
+            }
+            parameters = OpenAIChatModel.Parameters(**parameter_values)
+        super().__init__(
+            credential=credential,
+            model=model_id,
+            parameters=parameters,
+            stream=stream,
+            client_kwargs=client_kwargs or None,
+            **kwargs,
+        )
+
+    @property
+    def model_name(self) -> str:
+        return self.model
+
+    @model_name.setter
+    def model_name(self, value: str) -> None:
+        self.model = value
+
     async def __call__(
         self,
         messages: list[dict],
@@ -440,16 +491,25 @@ class OpenAIChatModelCompat(OpenAIChatModel):
         Normal ReAct turns do not need structured output, so retrying without
         that optional request parameter is safe and avoids a blank response.
         """
+        call_kwargs = {**self.generate_kwargs, **kwargs}
+        for key in OpenAIChatModel.Parameters.model_fields:
+            call_kwargs.pop(key, None)
+        if structured_model is not None:
+            call_kwargs.pop("response_format", None)
+            return await self.generate_structured_output(
+                messages,
+                structured_model,
+                **call_kwargs,
+            )
         try:
             return await super().__call__(
                 messages=messages,
                 tools=tools,
                 tool_choice=tool_choice,
-                structured_model=structured_model,
-                **kwargs,
+                **call_kwargs,
             )
         except Exception as exc:
-            response_format = kwargs.get(
+            response_format = call_kwargs.get(
                 "response_format",
                 self.generate_kwargs.get("response_format"),
             )
@@ -464,13 +524,12 @@ class OpenAIChatModelCompat(OpenAIChatModel):
                 "Provider rejected response_format=json_object for a normal "
                 "chat prompt; retrying once without response_format",
             )
-            retry_kwargs = dict(kwargs)
+            retry_kwargs = dict(call_kwargs)
             retry_kwargs["response_format"] = NOT_GIVEN
             return await super().__call__(
                 messages=messages,
                 tools=tools,
                 tool_choice=tool_choice,
-                structured_model=structured_model,
                 **retry_kwargs,
             )
 
@@ -497,10 +556,9 @@ class OpenAIChatModelCompat(OpenAIChatModel):
         structured_model: Type[BaseModel] | None = None,
     ) -> ChatResponse:
         """Label the raw OpenAI completion ID before it becomes generic."""
-        parsed = super()._parse_openai_completion_response(
+        parsed = super()._parse_completion_response(
             start_datetime,
             response,
-            structured_model,
         )
         if is_openai_response_diagnostics_capture_enabled():
             stash_openai_response_diagnostics(
@@ -508,6 +566,35 @@ class OpenAIChatModelCompat(OpenAIChatModel):
                 _completion_diagnostics(response),
             )
         return attach_openai_supplier_billing_reference(parsed, response)
+
+    def _parse_completion_response(
+        self,
+        start_datetime: datetime,
+        response: Any,
+        audio_format: str = "wav",
+    ) -> ChatResponse:
+        parsed = super()._parse_completion_response(
+            start_datetime,
+            response,
+            audio_format,
+        )
+        if is_openai_response_diagnostics_capture_enabled():
+            stash_openai_response_diagnostics(
+                parsed,
+                _completion_diagnostics(response),
+            )
+        return attach_openai_supplier_billing_reference(parsed, response)
+
+    async def _parse_stream_response(
+        self,
+        start_datetime: datetime,
+        response: Any,
+    ) -> AsyncGenerator[ChatResponse, None]:
+        async for parsed in self._parse_openai_stream_response(
+            start_datetime,
+            response,
+        ):
+            yield parsed
 
     # pylint: disable=too-many-branches, too-many-statements
     async def _parse_openai_stream_response(
@@ -524,10 +611,9 @@ class OpenAIChatModelCompat(OpenAIChatModel):
         _think_tool_calls: dict[str, dict] = {}
         _text_tool_calls: dict[str, dict] = {}
 
-        async for parsed in super()._parse_openai_stream_response(
+        async for parsed in super()._parse_stream_response(
             start_datetime=start_datetime,
             response=sanitized_response,
-            structured_model=structured_model,
         ):
             # Filter out malformed tool_use blocks (null id or empty name)
             # emitted by some OpenAI-compatible models, to prevent bad entries
@@ -536,8 +622,11 @@ class OpenAIChatModelCompat(OpenAIChatModel):
                 b
                 for b in parsed.content
                 if not (
-                    b.get("type") == "tool_use"
-                    and (not isinstance(b.get("id"), str) or not b.get("name"))
+                    getattr(b, "type", None) == "tool_call"
+                    and (
+                        not isinstance(getattr(b, "id", None), str)
+                        or not getattr(b, "name", None)
+                    )
                 )
             ]
 
@@ -545,19 +634,28 @@ class OpenAIChatModelCompat(OpenAIChatModel):
             # blocks.
             if sanitized_response.extra_contents:
                 for block in parsed.content:
-                    if block.get("type") != "tool_use":
+                    if getattr(block, "type", None) != "tool_call":
                         continue
-                    tool_id = block.get("id")
+                    tool_id = getattr(block, "id", None)
                     if not isinstance(tool_id, str):
                         continue
                     ec = sanitized_response.extra_contents.get(tool_id)
                     if ec:
-                        block["extra_content"] = ec
+                        index = parsed.content.index(block)
+                        parsed.content[index] = LegacyToolCallBlock(
+                            id=block.id,
+                            name=block.name,
+                            input=block.input,
+                            state=block.state,
+                            suggested_rules=block.suggested_rules,
+                            extra_content=ec,
+                        )
 
             # Check whether the response already carries structured tool_use
             # blocks (either from the model or from extra_content above).
             has_tool_use = any(
-                b.get("type") == "tool_use" for b in parsed.content
+                getattr(b, "type", None) == "tool_call"
+                for b in parsed.content
             )
 
             if has_tool_use:
@@ -568,9 +666,9 @@ class OpenAIChatModelCompat(OpenAIChatModel):
             else:
                 # --- 1. Scan thinking blocks ---
                 for block in parsed.content:
-                    if block.get("type") != "thinking":
+                    if getattr(block, "type", None) != "thinking":
                         continue
-                    thinking_text = block.get("thinking") or ""
+                    thinking_text = block.thinking or ""
                     if not text_contains_tool_call_tag(thinking_text):
                         continue
 
@@ -581,16 +679,15 @@ class OpenAIChatModelCompat(OpenAIChatModel):
                     # Keep only the text before the first <tool_call>.
                     # Everything after is the model's simulated continuation
                     # (may include </tool_response>, </think> artefacts).
-                    block["thinking"] = think_parsed.text_before.strip()
+                    block.thinking = think_parsed.text_before.strip()
 
                     _think_tool_calls = {
-                        f"thinking_{i}": {
-                            "type": "tool_use",
-                            "id": f"think_call_{i}",
-                            "name": ptc.name,
-                            "input": ptc.arguments,
-                            "raw_input": ptc.raw_arguments,
-                        }
+                        f"thinking_{i}": LegacyToolCallBlock(
+                            id=f"think_call_{i}",
+                            name=ptc.name,
+                            input=json.dumps(ptc.arguments),
+                            raw_input=ptc.raw_arguments,
+                        )
                         for i, ptc in enumerate(think_parsed.tool_calls)
                     }
 
@@ -599,9 +696,9 @@ class OpenAIChatModelCompat(OpenAIChatModel):
                 # response text instead of (or in addition to) thinking.
                 new_content: list | None = None
                 for i, block in enumerate(parsed.content):
-                    if block.get("type") != "text":
+                    if getattr(block, "type", None) != "text":
                         continue
-                    text = block.get("text") or ""
+                    text = block.text or ""
                     if not text_contains_tool_call_tag(text):
                         continue
 
@@ -609,17 +706,16 @@ class OpenAIChatModelCompat(OpenAIChatModel):
                     # Keep only text_before; discard the tag block and
                     # everything after (same rationale as thinking).
                     clean_text = text_parsed.text_before.strip()
-                    block["text"] = clean_text
+                    block.text = clean_text
 
                     if text_parsed.tool_calls:
                         _text_tool_calls = {
-                            f"text_{j}": {
-                                "type": "tool_use",
-                                "id": f"text_call_{j}",
-                                "name": ptc.name,
-                                "input": ptc.arguments,
-                                "raw_input": ptc.raw_arguments,
-                            }
+                            f"text_{j}": LegacyToolCallBlock(
+                                id=f"text_call_{j}",
+                                name=ptc.name,
+                                input=json.dumps(ptc.arguments),
+                                raw_input=ptc.raw_arguments,
+                            )
                             for j, ptc in enumerate(text_parsed.tool_calls)
                         }
 

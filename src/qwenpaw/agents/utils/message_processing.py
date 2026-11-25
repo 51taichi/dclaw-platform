@@ -13,7 +13,9 @@ import urllib.parse
 from pathlib import Path
 from typing import Optional
 
-from agentscope.message import Msg
+from agentscope.message import DataBlock, TextBlock
+
+from ..message_compat import Msg, normalize_legacy_blocks
 
 from ...config import load_config
 from ...mindspace.parsers import (
@@ -82,16 +84,36 @@ def _document_text_block(
     text: str,
     filename: Optional[str],
     local_path: str,
-) -> dict:
+) -> TextBlock:
     display_name = _safe_attachment_name(filename, local_path)
-    return {
-        "type": "text",
-        "text": (
+    return TextBlock(
+        type="text",
+        text=(
             f"[附件正文开始：{display_name}]\n"
             f"{text}\n"
             f"[附件正文结束：{display_name}]"
         ),
+    )
+
+
+def _legacy_data_block(block: DataBlock) -> tuple[dict, str]:
+    """Convert an AgentScope data block for the existing download pipeline."""
+    media_type = block.source.media_type
+    if media_type.startswith("image/"):
+        block_type = "image"
+    elif media_type.startswith("audio/"):
+        block_type = "audio"
+    elif media_type.startswith("video/"):
+        block_type = "video"
+    else:
+        block_type = "file"
+    legacy = {
+        "type": block_type,
+        "source": block.source.model_dump(mode="json"),
     }
+    if block.name:
+        legacy["filename"] = block.name
+    return legacy, block_type
 
 
 async def _process_single_file_block(
@@ -473,17 +495,31 @@ async def process_file_and_media_blocks_in_message(msg) -> None:
         downloaded_files = []
 
         for i, block in enumerate(message.content):
-            if not isinstance(block, dict):
+            if isinstance(block, DataBlock):
+                legacy_block, block_type = _legacy_data_block(block)
+            elif isinstance(block, dict):
+                legacy_block = block
+                block_type = block.get("type")
+            else:
                 continue
-
-            block_type = block.get("type")
             if block_type not in ["file", "image", "audio", "video"]:
                 continue
 
-            local_path = await _process_single_block(message.content, i, block)
+            processing_content = [legacy_block]
+            local_path = await _process_single_block(
+                processing_content,
+                0,
+                legacy_block,
+            )
+            message.content[i] = normalize_legacy_blocks(processing_content)[0]
             if local_path:
                 downloaded_files.append(
-                    (i, local_path, block_type, block.get("filename")),
+                    (
+                        i,
+                        local_path,
+                        block_type,
+                        legacy_block.get("filename"),
+                    ),
                 )
 
         if downloaded_files:
@@ -512,7 +548,7 @@ async def process_file_and_media_blocks_in_message(msg) -> None:
                     if lang == "zh"
                     else f"User uploaded a file, downloaded to {local_path}"
                 )
-                text_block = {"type": "text", "text": text}
+                text_block = TextBlock(type="text", text=text)
                 message.content.insert(i + 1, text_block)
 
 
@@ -557,5 +593,8 @@ def prepend_to_message_content(msg, guidance: str) -> None:
         if isinstance(block, dict) and block.get("type") == "text":
             block["text"] = guidance + "\n\n" + block.get("text", "")
             return
+        if isinstance(block, TextBlock):
+            block.text = guidance + "\n\n" + block.text
+            return
 
-    msg.content.insert(0, {"type": "text", "text": guidance})
+    msg.content.insert(0, TextBlock(type="text", text=guidance))

@@ -8,9 +8,9 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional, List, Dict
 
 import aiohttp
-from agentscope.agent import ReActAgent
-from agentscope.message import Msg
-from agentscope.tool import Toolkit
+from agentscope.agent import Agent
+from ...message_compat import Msg
+from ...toolkit import DClawToolkit as Toolkit
 
 from ....config.config import load_agent_config
 from ...tools import (
@@ -99,7 +99,7 @@ async def generate_proactive_response(
 
 async def _initialize_single_proactive_agent(
     agent_id: str = "proactive",
-) -> ReActAgent:
+) -> Agent:
     """Initialize a single proactive agent instance."""
     agent_config = load_agent_config(agent_id)
     agent_config.running.max_iters = 50
@@ -121,7 +121,7 @@ async def _initialize_single_proactive_agent(
     if get_active_model_supports_multimodal():
         toolkit.register_tool_function(desktop_screenshot)
 
-    agent = ReActAgent(
+    agent = Agent(
         name="ProactiveAssistant",
         model=model,
         sys_prompt="You are a helpful assistant.",
@@ -136,7 +136,7 @@ async def _initialize_single_proactive_agent(
 
 async def _extract_tasks_from_memory(
     memory_context: str,
-    agent: ReActAgent,
+    agent: Agent,
 ) -> List[ProactiveTask]:
     """Extract likely user tasks from memory context."""
     prompt = f"{PROACTIVE_TASK_EXTRACTION_PROMPT}\n#Contexts: {memory_context}"
@@ -178,7 +178,7 @@ def _create_tasks_from_data(tasks_data: List[Dict]) -> List[ProactiveTask]:
 
 async def _execute_query(
     query: str,
-    agent: ReActAgent,
+    agent: Agent,
 ) -> ProactiveQueryResult:
     """Execute a query using available tools."""
     prompt = (

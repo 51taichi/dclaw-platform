@@ -20,7 +20,7 @@ class RecordingContextManager:
         self.calls: list[dict[str, Any]] = []
 
     def get_agent_context(self, **kwargs: Any):
-        from agentscope.memory import InMemoryMemory
+        from qwenpaw.agents.context.memory_state import InMemoryMemory
 
         self.calls.append(kwargs)
         return InMemoryMemory()
@@ -40,11 +40,14 @@ def test_session_isolation_keeps_system_prompt_on_agent_root_workspace(
         captured["agent_id"] = kwargs["agent_id"]
         return "root profile prompt"
 
-    def fake_react_init(self, **kwargs: Any) -> None:
-        captured["sys_prompt"] = kwargs["sys_prompt"]
+    def fake_agent_init(self, **kwargs: Any) -> None:
+        captured["system_prompt"] = kwargs["system_prompt"]
+        captured["state"] = kwargs["state"]
+        captured["react_config"] = kwargs["react_config"]
         object.__setattr__(self, "name", kwargs["name"])
         object.__setattr__(self, "toolkit", kwargs["toolkit"])
-        object.__setattr__(self, "memory", kwargs["memory"])
+        object.__setattr__(self, "state", kwargs["state"])
+        object.__setattr__(self, "react_config", kwargs["react_config"])
 
     monkeypatch.setattr(
         react_agent,
@@ -55,7 +58,7 @@ def test_session_isolation_keeps_system_prompt_on_agent_root_workspace(
     monkeypatch.setattr(
         react_agent,
         "create_model_and_formatter",
-        lambda agent_id=None: (object(), object()),
+        lambda agent_id=None: (SimpleNamespace(), object()),
     )
     monkeypatch.setattr(
         QwenPawAgent,
@@ -64,7 +67,7 @@ def test_session_isolation_keeps_system_prompt_on_agent_root_workspace(
     )
     monkeypatch.setattr(QwenPawAgent, "_register_skills", lambda self, toolkit: None)
     monkeypatch.setattr(QwenPawAgent, "_register_hooks", lambda self: None)
-    monkeypatch.setattr(react_agent.ReActAgent, "__init__", fake_react_init)
+    monkeypatch.setattr(react_agent.Agent, "__init__", fake_agent_init)
     monkeypatch.setattr(
         react_agent,
         "CommandHandler",
@@ -87,9 +90,11 @@ def test_session_isolation_keeps_system_prompt_on_agent_root_workspace(
 
     assert captured["working_dir"] == agent_root
     assert captured["agent_id"] == "support_agent"
-    assert captured["sys_prompt"].startswith("root profile prompt")
-    assert "Knowledge-base retrieval policy" in captured["sys_prompt"]
-    assert "cite the exact [kb:" in captured["sys_prompt"].lower()
+    assert captured["system_prompt"].startswith("root profile prompt")
+    assert "Knowledge-base retrieval policy" in captured["system_prompt"]
+    assert "cite the exact [kb:" in captured["system_prompt"].lower()
+    assert captured["state"].session_id == session_id
+    assert captured["react_config"].max_iters > 0
     assert (agent_root / "sessions_data" / session_id).exists()
 
 
@@ -120,7 +125,7 @@ def test_isolated_open_api_disables_context_dialog_persistence(
     monkeypatch.setattr(
         react_agent,
         "create_model_and_formatter",
-        lambda agent_id=None: (object(), object()),
+        lambda agent_id=None: (SimpleNamespace(), object()),
     )
     monkeypatch.setattr(
         QwenPawAgent,
@@ -130,13 +135,13 @@ def test_isolated_open_api_disables_context_dialog_persistence(
     monkeypatch.setattr(QwenPawAgent, "_register_skills", lambda self, toolkit: None)
     monkeypatch.setattr(QwenPawAgent, "_register_hooks", lambda self: None)
     monkeypatch.setattr(
-        react_agent.ReActAgent,
+        react_agent.Agent,
         "__init__",
         lambda self, **kwargs: (
-            object.__setattr__(self, "_module_dict", {}),
             object.__setattr__(self, "name", kwargs["name"]),
             object.__setattr__(self, "toolkit", kwargs["toolkit"]),
-            object.__setattr__(self, "memory", kwargs["memory"]),
+            object.__setattr__(self, "state", kwargs["state"]),
+            object.__setattr__(self, "react_config", kwargs["react_config"]),
         )[-1],
     )
     monkeypatch.setattr(

@@ -12,8 +12,13 @@ from threading import Lock
 from typing import Any, Literal, Type
 
 from agentscope.model import ChatModelBase
-from agentscope.model._model_response import ChatResponse
+from agentscope.model import ChatResponse
 from pydantic import BaseModel
+
+from ...providers.agentscope2_compat import (
+    LegacyModelNameMixin,
+    initialize_model_wrapper,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +117,7 @@ def _is_retryable_failure(exc: BaseException) -> bool:
     )
 
 
-class OpenApiModelFailover(ChatModelBase):
+class OpenApiModelFailover(LegacyModelNameMixin, ChatModelBase):
     """Try one configured fallback without replaying the Agent request."""
 
     def __init__(
@@ -124,7 +129,7 @@ class OpenApiModelFailover(ChatModelBase):
         invocation_id: str = "",
         timeout_seconds: float = PRIMARY_TIMEOUT_SECONDS,
     ) -> None:
-        super().__init__(model_name=primary.model_name, stream=primary.stream)
+        initialize_model_wrapper(self, primary)
         self._inner = primary
         self._fallback = fallback
         self._fallback_label = fallback_label

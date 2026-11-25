@@ -10,12 +10,16 @@ import logging
 from typing import Any, NoReturn, Type
 
 from agentscope.model import ChatModelBase
-from agentscope.model._model_response import ChatResponse
+from agentscope.model import ChatResponse
 from openai import NOT_GIVEN
 from pydantic import BaseModel
 from qwenpaw.runtime.exceptions import AppBaseException
 
 from ...providers.openai_chat_model_compat import OpenAIChatModelCompat
+from ...providers.agentscope2_compat import (
+    LegacyModelNameMixin,
+    initialize_model_wrapper,
+)
 from ...providers.openai_response_diagnostics import (
     OpenAIResponseDiagnostics,
     capture_openai_response_diagnostics,
@@ -164,7 +168,7 @@ def _raise_adapter_unavailable(model: Any, reason: str) -> NoReturn:
     )
 
 
-class OpenApiAgentResponseFormatModel(ChatModelBase):
+class OpenApiAgentResponseFormatModel(LegacyModelNameMixin, ChatModelBase):
     """Split direct OpenAPI Agent calls into planning and finalization."""
 
     def __init__(
@@ -173,10 +177,7 @@ class OpenApiAgentResponseFormatModel(ChatModelBase):
         *,
         response_format: dict[str, Any],
     ) -> None:
-        super().__init__(
-            model_name=inner.model_name,
-            stream=inner.stream,
-        )
+        initialize_model_wrapper(self, inner)
         self._inner = inner
         self.response_format = deepcopy(response_format)
 
@@ -361,7 +362,7 @@ class OpenApiAgentResponseFormatModel(ChatModelBase):
             if current_other:
                 other_blocks = current_other
         if last is None:
-            return ChatResponse(content=[])
+            return ChatResponse(content=[], is_last=True)
         merged_content: list[Any] = []
         if thinking.value:
             merged_content.append(

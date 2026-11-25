@@ -10,9 +10,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Set
 
-from agentscope.agent import ReActAgent
+from agentscope.agent import Agent
 from agentscope.formatter import FormatterBase
-from agentscope.message import Msg, TextBlock
+from agentscope.message import TextBlock
+
+from ..message_compat import Msg
 from agentscope.model import ChatModelBase
 
 from .agent_context import AgentContext
@@ -478,8 +480,8 @@ class LightContextManager(BaseContextManager):
             UPDATE_USER_MESSAGE_ZH if is_zh else UPDATE_USER_MESSAGE_EN
         )
 
-        # Create ReActAgent for compaction
-        agent = ReActAgent(
+        # Create an AgentScope 2 agent for compaction
+        agent = Agent(
             name="qwenpaw_compactor",
             model=as_llm,
             sys_prompt=system_prompt,

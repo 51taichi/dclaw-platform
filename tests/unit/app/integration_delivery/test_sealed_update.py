@@ -124,6 +124,7 @@ class _SealedService:
         self.trusted_signers = {"delivery": public_key}
         self.super_expert_trust_store = SimpleNamespace(
             is_official=lambda signer_id: signer_id == "delivery",
+            is_authorized=lambda signer_id: signer_id == "delivery",
         )
         self.old_release = SimpleNamespace(
             release_id="release-old",

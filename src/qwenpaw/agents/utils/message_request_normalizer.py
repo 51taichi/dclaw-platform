@@ -9,9 +9,9 @@ stored conversation state.
 
 from __future__ import annotations
 
-from copy import deepcopy
+from agentscope.message import DataBlock, TextBlock, ToolCallBlock, ToolResultBlock
 
-from agentscope.message import Msg
+from ..message_compat import Msg
 
 from ...constant import MEDIA_UNSUPPORTED_PLACEHOLDER
 from .tool_message_utils import _sanitize_tool_messages
@@ -55,17 +55,16 @@ def _clean_provider_specific_fields(
         if not isinstance(msg.content, list):
             continue
         for block in msg.content:
-            if not isinstance(block, dict):
-                continue
-            if block.get("type") != "tool_use":
+            if not isinstance(block, ToolCallBlock):
                 continue
             for field in strip_fields:
-                block.pop(field, None)
+                extras = block.__pydantic_extra__ or {}
+                extras.pop(field, None)
 
 
 def _clone_msg(msg: Msg) -> Msg:
     """Return a deep copy of an AgentScope message."""
-    return Msg.from_dict(deepcopy(msg.to_dict()))
+    return msg.model_copy(deep=True)
 
 
 def _clone_messages(msgs: list[Msg]) -> list[Msg]:
@@ -88,39 +87,32 @@ def _strip_media_blocks_in_place(msgs: list[Msg]) -> int:
         new_content = []
         stripped_this_message = 0
         for block in msg.content:
-            if (
-                isinstance(block, dict)
-                and block.get("type") in _MEDIA_BLOCK_TYPES
-            ):
+            if isinstance(block, DataBlock):
                 total_stripped += 1
                 stripped_this_message += 1
                 continue
 
             if (
-                isinstance(block, dict)
-                and block.get("type") == "tool_result"
-                and isinstance(block.get("output"), list)
+                isinstance(block, ToolResultBlock)
+                and isinstance(block.output, list)
             ):
-                original_len = len(block["output"])
-                block["output"] = [
+                original_len = len(block.output)
+                block.output = [
                     item
-                    for item in block["output"]
-                    if not (
-                        isinstance(item, dict)
-                        and item.get("type") in _MEDIA_BLOCK_TYPES
-                    )
+                    for item in block.output
+                    if not isinstance(item, DataBlock)
                 ]
-                stripped_count = original_len - len(block["output"])
+                stripped_count = original_len - len(block.output)
                 total_stripped += stripped_count
                 stripped_this_message += stripped_count
-                if stripped_count > 0 and not block["output"]:
-                    block["output"] = MEDIA_UNSUPPORTED_PLACEHOLDER
+                if stripped_count > 0 and not block.output:
+                    block.output = MEDIA_UNSUPPORTED_PLACEHOLDER
 
             new_content.append(block)
 
         if not new_content and stripped_this_message > 0:
             new_content.append(
-                {"type": "text", "text": MEDIA_UNSUPPORTED_PLACEHOLDER},
+                TextBlock(text=MEDIA_UNSUPPORTED_PLACEHOLDER),
             )
 
         msg.content = new_content

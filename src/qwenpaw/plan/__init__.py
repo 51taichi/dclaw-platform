@@ -8,6 +8,7 @@ from .hints import (
     clear_plan_awaiting_user_confirm,
     should_skip_auto_continue,
 )
+from .notebook import InMemoryPlanStorage, Plan, PlanNotebook, SubTask
 
 __all__ = [
     "SimplePlanToHint",
@@ -15,4 +16,8 @@ __all__ = [
     "check_plan_tool_gate",
     "clear_plan_awaiting_user_confirm",
     "should_skip_auto_continue",
+    "InMemoryPlanStorage",
+    "Plan",
+    "PlanNotebook",
+    "SubTask",
 ]

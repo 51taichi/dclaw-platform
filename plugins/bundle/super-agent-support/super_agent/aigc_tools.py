@@ -7,7 +7,7 @@ through the platform dispatcher and its live grant validation.
 # namespace and cannot resolve postponed Literal annotations from this module.
 
 from contextlib import contextmanager
-from copy import copy, deepcopy
+from copy import deepcopy
 import hashlib
 import inspect
 import json
@@ -789,13 +789,14 @@ def bind_aigc_tools(
     if not tools and base_tool_names is None:
         yield
         return
+    from qwenpaw.agents.toolkit import DClawToolkit
+    from agentscope.permission import PermissionBehavior, PermissionDecision
+
     original = agent.toolkit
-    scoped = copy(original)
-    scoped.tools = {
-        name: tool
-        for name, tool in original.tools.items()
-        if base_tool_names is None or name in base_tool_names
-    }
+    scoped = DClawToolkit.from_toolkit(
+        original,
+        tool_names=base_tool_names,
+    )
     selected_tools = (
         tools.values()
         if added_tool_names is None
@@ -811,6 +812,10 @@ def bind_aigc_tools(
             tool,
             json_schema=schema,
             namesake_strategy="raise",
+            permission=PermissionDecision(
+                behavior=PermissionBehavior.ALLOW,
+                message="Authorized workspace-scoped AIGC tool.",
+            ),
         )
     agent.toolkit = scoped
     try:

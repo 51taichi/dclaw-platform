@@ -133,15 +133,16 @@ async def test_imagegen_generates_image_with_mxapi(monkeypatch, tmp_path):
     image_blocks = [
         block
         for block in response.content
-        if block.get("type") == "image"
+        if block.type == "data"
+        and block.source.media_type.startswith("image/")
     ]
     assert len(image_blocks) == 1
-    image_url = image_blocks[0]["source"]["url"]
+    image_url = str(image_blocks[0].source.url)
     assert image_url == f"file://{saved[0]}"
     text = "\n".join(
-        block.get("text", "")
+        block.text
         for block in response.content
-        if block.get("type") == "text"
+        if block.type == "text"
     )
     assert "The generated image is attached as an image block" in text
     assert "workspace artifact" in text
@@ -238,7 +239,9 @@ async def test_presentation_visual_scheme_rejects_non_widescreen():
         presentation_context={"stage": "visual_scheme"},
     )
 
-    text = "\n".join(block.get("text", "") for block in response.content)
+    text = "\n".join(
+        block.text for block in response.content if block.type == "text"
+    )
     assert "must use aspect_ratio='16:9'" in text
 
 

@@ -9,7 +9,9 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from agentscope.message import Msg, TextBlock
+from agentscope.message import TextBlock
+
+from .message_compat import Msg
 
 from ..config.config import load_agent_config
 from ..constant import DEBUG_HISTORY_FILE, MAX_LOAD_HISTORY_COUNT

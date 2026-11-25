@@ -7,7 +7,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from agentscope.message import Msg
+from ..message_compat import Msg
 from agentscope.tool import ToolResponse
 
 from ..utils.registry import Registry

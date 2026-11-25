@@ -5,7 +5,7 @@
 import json
 import logging
 
-from agentscope.message import Msg
+from ..message_compat import Msg
 
 from .as_msg_stat import AsMsgStat, AsBlockStat
 from ..utils.estimate_token_counter import EstimatedTokenCounter
@@ -26,7 +26,7 @@ class AsMsgHandler:
 
     async def _format_tool_result_output(
         self,
-        output: str | list[dict],
+        output: str | list,
     ) -> tuple[str, int]:
         """Convert tool result output to string."""
         if isinstance(output, str):
@@ -36,6 +36,8 @@ class AsMsgHandler:
         total_token_count = 0
         for block in output:
             try:
+                if hasattr(block, "model_dump"):
+                    block = block.model_dump(mode="json")
                 if not isinstance(block, dict) or "type" not in block:
                     logger.warning(
                         f"Invalid block: {block}, expected a dict "
@@ -51,7 +53,7 @@ class AsMsgHandler:
                         textual_parts[-1],
                     )
 
-                elif block_type in ["image", "audio", "video"]:
+                elif block_type == "data":
                     source = block.get("source", {})
                     if source.get("type") == "base64":
                         data = source.get("data", "")
@@ -61,7 +63,7 @@ class AsMsgHandler:
                         total_token_count += (
                             await self.count_str_token(url) if url else 10
                         )
-                        textual_parts.append(f"[{block_type}] {url}")
+                        textual_parts.append(f"[data] {url}")
 
                 elif block_type == "file":
                     file_path = block.get("path", "") or block.get("url", "")
@@ -102,6 +104,8 @@ class AsMsgHandler:
             )
 
         for block in message.content:
+            if hasattr(block, "model_dump"):
+                block = block.model_dump(mode="json")
             block_type = block.get("type", "unknown")
 
             if block_type == "text":
@@ -126,7 +130,7 @@ class AsMsgHandler:
                     ),
                 )
 
-            elif block_type in ("image", "audio", "video"):
+            elif block_type == "data":
                 source = block.get("source", {})
                 url = source.get("url", "")
                 if source.get("type") == "base64":
@@ -145,11 +149,15 @@ class AsMsgHandler:
                     ),
                 )
 
-            elif block_type == "tool_use":
+            elif block_type == "tool_call":
                 tool_name = block.get("name", "")
                 tool_input = block.get("input", "")
                 try:
-                    input_str = json.dumps(tool_input, ensure_ascii=False)
+                    input_str = (
+                        tool_input
+                        if isinstance(tool_input, str)
+                        else json.dumps(tool_input, ensure_ascii=False)
+                    )
                 except (TypeError, ValueError):
                     input_str = str(tool_input)
                 token_count = await self.count_str_token(tool_name + input_str)
@@ -274,11 +282,11 @@ class AsMsgHandler:
         tool_result_ids: set[str] = set()
 
         for msg in messages:
-            for block in msg.get_content_blocks("tool_use"):
-                if tool_id := block.get("id"):
+            for block in msg.get_content_blocks("tool_call"):
+                if tool_id := block.id:
                     tool_use_ids.add(tool_id)
             for block in msg.get_content_blocks("tool_result"):
-                if tool_id := block.get("id"):
+                if tool_id := block.id:
                     tool_result_ids.add(tool_id)
 
         return tool_use_ids == tool_result_ids

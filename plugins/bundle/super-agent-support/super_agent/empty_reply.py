@@ -1,6 +1,14 @@
 """Recover an empty public reply without replaying Agent tools or side effects."""
 
-from agentscope.message import Msg
+from qwenpaw.agents.message_compat import Msg
+
+
+def _block_value(block, key, default=None):
+    return block.get(key, default) if isinstance(block, dict) else getattr(
+        block,
+        key,
+        default,
+    )
 
 
 def public_text(message):
@@ -12,11 +20,10 @@ def public_text(message):
         return content
     if isinstance(content, list):
         return "".join(
-            b.get("text", "")
+            _block_value(b, "text", "")
             for b in content
-            if isinstance(b, dict)
-            and b.get("type") == "text"
-            and isinstance(b.get("text"), str)
+            if _block_value(b, "type") == "text"
+            and isinstance(_block_value(b, "text"), str)
         )
     return ""
 
@@ -33,9 +40,8 @@ def reply_shape(message):
         "text_length": len(public_text(message)),
         "block_types": (
             [
-                str(b.get("type", "unknown"))[:32]
+                str(_block_value(b, "type", "unknown"))[:32]
                 for b in content
-                if isinstance(b, dict)
             ]
             if isinstance(content, list)
             else []
@@ -59,7 +65,7 @@ async def recover_empty_reply(
         else getattr(candidate, "content", None)
     )
     if isinstance(content, list) and any(
-        isinstance(b, dict) and b.get("type") in {"tool_use", "tool_result"}
+        _block_value(b, "type") in {"tool_use", "tool_call", "tool_result"}
         for b in content
     ):
         return candidate
@@ -70,7 +76,9 @@ async def recover_empty_reply(
         else original_messages
     )
     prompt = str(
-        getattr(agent, "sys_prompt", "") or getattr(agent, "_sys_prompt", ""),
+        getattr(agent, "_system_prompt", "")
+        or getattr(agent, "sys_prompt", "")
+        or getattr(agent, "_sys_prompt", ""),
     )
     messages = [Msg("system", prompt, "system")] if prompt else []
     messages.extend(history)

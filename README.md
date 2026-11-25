@@ -34,7 +34,7 @@ DClaw 是一套功能强大的企业级 AI 智能体管理中台与个人工作�
 
 ### 环境依赖 (Prerequisites)
 - Node.js 18+ & npm
-- Python 3.10+
+- Python 3.11+
 
 ### 本地启动 (Local Development)
 

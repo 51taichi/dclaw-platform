@@ -14,19 +14,11 @@ Differences from AgentScope's DefaultPlanToHint:
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from agentscope.plan import Plan
+from .notebook import DefaultPlanToHint, Plan
 
 logger = logging.getLogger(__name__)
 
-try:
-    from agentscope.plan._plan_notebook import DefaultPlanToHint
-
-    _HAS_DEFAULT_HINT = True
-except ImportError:
-    _HAS_DEFAULT_HINT = False
+_HAS_DEFAULT_HINT = True
 
 _DESC_LIMIT = 80
 _PLAN_DESC_LIMIT = 200

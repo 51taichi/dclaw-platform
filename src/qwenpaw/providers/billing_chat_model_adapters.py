@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any, AsyncGenerator, AsyncIterator, Type
 
-from agentscope.model import AnthropicChatModel, GeminiChatModel
-from agentscope.model._model_response import ChatResponse
-from pydantic import BaseModel
+from agentscope.credential import AnthropicCredential, GeminiCredential
+from agentscope.model import AnthropicChatModel, ChatResponse, GeminiChatModel
+from pydantic import BaseModel, SecretStr
 
 from ..app.billing.supplier_reference_sidecar import stash_supplier_reference
 
@@ -26,6 +26,83 @@ class BillingAnthropicChatModel(AnthropicChatModel):
 
     billing_provider_kind = "anthropic"
 
+    def __init__(
+        self,
+        model_name: str | None = None,
+        *,
+        model: str | None = None,
+        credential: AnthropicCredential | None = None,
+        api_key: str | None = None,
+        generate_kwargs: dict[str, Any] | None = None,
+        stream_tool_parsing: bool | None = None,
+        max_tokens: int | None = None,
+        parameters: AnthropicChatModel.Parameters | None = None,
+        stream: bool = True,
+        **kwargs: Any,
+    ) -> None:
+        del stream_tool_parsing
+        model_id = model or model_name
+        if not isinstance(model_id, str) or not model_id:
+            raise ValueError("model is required")
+        client_kwargs = dict(kwargs.pop("client_kwargs", None) or {})
+        if credential is None:
+            credential = AnthropicCredential(
+                api_key=SecretStr(api_key or ""),
+                base_url=client_kwargs.pop("base_url", None),
+            )
+        self.generate_kwargs = dict(generate_kwargs or {})
+        parameter_values = {
+            key: self.generate_kwargs[key]
+            for key in AnthropicChatModel.Parameters.model_fields
+            if key in self.generate_kwargs
+            and self.generate_kwargs[key] is not None
+        }
+        if max_tokens is not None:
+            parameter_values["max_tokens"] = max_tokens
+        super().__init__(
+            credential=credential,
+            model=model_id,
+            parameters=(
+                parameters
+                or AnthropicChatModel.Parameters(**parameter_values)
+            ),
+            stream=stream,
+            client_kwargs=client_kwargs or None,
+            **kwargs,
+        )
+
+    @property
+    def model_name(self) -> str:
+        return self.model
+
+    @model_name.setter
+    def model_name(self, value: str) -> None:
+        self.model = value
+
+    async def __call__(
+        self,
+        messages: list[Any],
+        tools: list[dict] | None = None,
+        tool_choice: Any = None,
+        structured_model: Type[BaseModel] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        call_kwargs = {**self.generate_kwargs, **kwargs}
+        for key in AnthropicChatModel.Parameters.model_fields:
+            call_kwargs.pop(key, None)
+        if structured_model is not None:
+            return await self.generate_structured_output(
+                messages,
+                structured_model,
+                **call_kwargs,
+            )
+        return await super().__call__(
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            **call_kwargs,
+        )
+
     async def _parse_anthropic_completion_response(
         self,
         start_datetime: Any,
@@ -35,7 +112,6 @@ class BillingAnthropicChatModel(AnthropicChatModel):
         parsed = await super()._parse_anthropic_completion_response(
             start_datetime,
             response,
-            structured_model,
         )
         return _attach_reference(
             parsed,
@@ -64,7 +140,6 @@ class BillingAnthropicChatModel(AnthropicChatModel):
         parsed_stream = super()._parse_anthropic_stream_completion_response(
             start_datetime,
             captured_events(),
-            structured_model,
         )
         async for parsed in parsed_stream:
             yield _attach_reference(
@@ -79,16 +154,81 @@ class BillingGeminiChatModel(GeminiChatModel):
 
     billing_provider_kind = "gemini"
 
-    def _parse_gemini_generation_response(
+    def __init__(
+        self,
+        model_name: str | None = None,
+        *,
+        model: str | None = None,
+        credential: GeminiCredential | None = None,
+        api_key: str | None = None,
+        generate_kwargs: dict[str, Any] | None = None,
+        parameters: GeminiChatModel.Parameters | None = None,
+        stream: bool = True,
+        **kwargs: Any,
+    ) -> None:
+        model_id = model or model_name
+        if not isinstance(model_id, str) or not model_id:
+            raise ValueError("model is required")
+        if credential is None:
+            credential = GeminiCredential(api_key=SecretStr(api_key or ""))
+        self.generate_kwargs = dict(generate_kwargs or {})
+        parameter_values = {
+            key: self.generate_kwargs[key]
+            for key in GeminiChatModel.Parameters.model_fields
+            if key in self.generate_kwargs
+            and self.generate_kwargs[key] is not None
+        }
+        super().__init__(
+            credential=credential,
+            model=model_id,
+            parameters=(
+                parameters or GeminiChatModel.Parameters(**parameter_values)
+            ),
+            stream=stream,
+            **kwargs,
+        )
+
+    @property
+    def model_name(self) -> str:
+        return self.model
+
+    @model_name.setter
+    def model_name(self, value: str) -> None:
+        self.model = value
+
+    async def __call__(
+        self,
+        messages: list[Any],
+        tools: list[dict] | None = None,
+        tool_choice: Any = None,
+        structured_model: Type[BaseModel] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        call_kwargs = {**self.generate_kwargs, **kwargs}
+        for key in GeminiChatModel.Parameters.model_fields:
+            call_kwargs.pop(key, None)
+        if structured_model is not None:
+            return await self.generate_structured_output(
+                messages,
+                structured_model,
+                **call_kwargs,
+            )
+        return await super().__call__(
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            **call_kwargs,
+        )
+
+    def _parse_completion_response(
         self,
         start_datetime: Any,
         response: Any,
         structured_model: Type[BaseModel] | None = None,
     ) -> ChatResponse:
-        parsed = super()._parse_gemini_generation_response(
+        parsed = super()._parse_completion_response(
             start_datetime,
             response,
-            structured_model,
         )
         return _attach_reference(
             parsed,
@@ -96,7 +236,7 @@ class BillingGeminiChatModel(GeminiChatModel):
             "gemini.response_id",
         )
 
-    async def _parse_gemini_stream_generation_response(
+    async def _parse_stream_response(
         self,
         start_datetime: Any,
         response: AsyncIterator[Any],
@@ -111,10 +251,9 @@ class BillingGeminiChatModel(GeminiChatModel):
                     reference = _raw_field(chunk, "response_id")
                 yield chunk
 
-        async for parsed in super()._parse_gemini_stream_generation_response(
+        async for parsed in super()._parse_stream_response(
             start_datetime,
             captured_chunks(),
-            structured_model,
         ):
             yield _attach_reference(
                 parsed,

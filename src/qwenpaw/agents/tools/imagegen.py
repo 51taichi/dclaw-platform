@@ -19,8 +19,10 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from agentscope.message import ImageBlock, TextBlock
+from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
+
+from ..message_compat import ImageBlock
 
 from ...config.context import get_current_workspace_dir
 from ...constant import DEFAULT_MEDIA_DIR

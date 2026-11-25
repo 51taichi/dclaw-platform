@@ -15,7 +15,7 @@ import zipfile
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
-from agentscope.message import Msg
+from qwenpaw.agents.message_compat import Msg, normalize_legacy_blocks
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -302,7 +302,7 @@ def _select_review_chat_model(
 
 def _replace_review_message_text(message: Any, text: str) -> None:
     if hasattr(message, "content"):
-        message.content = text
+        message.content = normalize_legacy_blocks(text)
 
 
 def _review_runtime_installation_id(

@@ -231,7 +231,7 @@ def test_devkit_has_no_server_source_import_and_runs_standalone():
     )
     result = json.loads(completed.stdout)
     assert result["status"] == "ok"
-    assert result["devkit_version"] == "1.9.25"
+    assert result["devkit_version"] == "1.9.29"
     assert result["dependency_mode"] == "bundled-wheelhouse"
     assert result["cryptography_version"] == "46.0.3"
     assert "schemas/super-expert-manifest.schema.json" in result["schemas"]
@@ -444,7 +444,7 @@ def test_devkit_bundles_and_verifies_locked_encryption_dependencies():
     )
     result = json.loads(completed.stdout)
     assert result["status"] == "ok"
-    assert result["devkit_version"] == "1.9.25"
+    assert result["devkit_version"] == "1.9.29"
     assert result["wheelhouse_verified"] is True
     assert result["wheelhouse_files"] == 26
 

@@ -458,7 +458,7 @@ async def test_continue_message_resumes_paused_team_without_new_run(
     monkeypatch.setattr(
         console,
         "resume_user_billing_execution",
-        lambda *_args: prepared,
+        lambda *_args, **_kwargs: prepared,
     )
     monkeypatch.setattr(
         console,

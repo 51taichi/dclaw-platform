@@ -14,8 +14,10 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
-from agentscope.message import Msg, TextBlock, ToolResultBlock, ToolUseBlock
+from agentscope.message import TextBlock, ToolResultBlock
 from agentscope.tool import ToolResponse
+
+from ..message_compat import Msg, ToolUseBlock
 
 from .adbpg_client import (
     ADBPGConfig,

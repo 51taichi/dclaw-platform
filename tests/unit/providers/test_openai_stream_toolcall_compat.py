@@ -16,6 +16,7 @@ from qwenpaw.providers.openai_chat_model_compat import (
     OpenAIChatModelCompat,
     _sanitize_tool_call,
 )
+from qwenpaw.agents.message_compat import Msg
 from qwenpaw.providers.openai_response_diagnostics import (
     capture_openai_response_diagnostics,
     pop_openai_response_diagnostics,
@@ -213,11 +214,11 @@ async def test_stream_parser_skips_tool_call_without_function() -> None:
         block
         for response in responses
         for block in response.content
-        if block.get("type") == "tool_use"
+        if block.type == "tool_call"
     ]
     assert tool_blocks
-    assert tool_blocks[-1]["name"] == "ping"
-    assert tool_blocks[-1]["input"] == {"x": 1}
+    assert tool_blocks[-1].name == "ping"
+    assert json.loads(tool_blocks[-1].input) == {"x": 1}
 
 
 def test_sanitize_tool_call_normalizes_non_string_arguments() -> None:
@@ -298,7 +299,7 @@ async def test_not_given_overrides_persistent_json_format_for_tool_planning():
 
     with pytest.raises(_StopAfterCapture):
         await model(
-            [{"role": "user", "content": "plan"}],
+            [Msg(name="user", role="user", content="plan")],
             tools=[{"type": "function", "function": {"name": "search"}}],
             response_format=NOT_GIVEN,
         )
@@ -323,7 +324,7 @@ async def test_structured_tool_fallback_removes_persistent_response_format():
 
     with pytest.raises(_StopAfterCapture):
         await model(
-            [{"role": "user", "content": "rewrite"}],
+            [Msg(name="user", role="user", content="rewrite")],
             structured_model=_InternalResult,
         )
 
@@ -349,7 +350,7 @@ async def test_json_object_prompt_rejection_retries_without_response_format(
     mocked_call = AsyncMock(side_effect=[error, expected])
     with patch.object(OpenAIChatModel, "__call__", mocked_call):
         result = await model(
-            messages=[{"role": "user", "content": "hello"}],
+            messages=[Msg(name="user", role="user", content="hello")],
         )
 
     assert result is expected
@@ -369,6 +370,6 @@ async def test_unrelated_bad_request_is_not_retried() -> None:
     mocked_call = AsyncMock(side_effect=error)
     with patch.object(OpenAIChatModel, "__call__", mocked_call):
         with pytest.raises(_ProviderBadRequest, match="Invalid API key"):
-            await model(messages=[{"role": "user", "content": "hello"}])
+            await model(messages=[Msg(name="user", role="user", content="hello")])
 
     assert mocked_call.await_count == 1

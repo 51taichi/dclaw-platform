@@ -13,7 +13,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, TYPE_CHECKING
 
-from agentscope.message import Msg, TextBlock
+from agentscope.message import TextBlock
+
+from ...agents.message_compat import Msg
 
 from ...constant import WORKING_DIR
 from ...config import load_config

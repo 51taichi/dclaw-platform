@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 import httpx
-from agentscope.tool import Toolkit
 
+from qwenpaw.agents.toolkit import DClawToolkit
 from qwenpaw.agents.tools import agent_management
 
 
@@ -217,13 +217,13 @@ def test_collect_final_agent_chat_response_keeps_last_sse_payload(monkeypatch):
     assert agent_management.extract_agent_text_content(result) == "second"
 
 
-def test_agent_management_tools_can_be_registered_in_toolkit():
-    toolkit = Toolkit()
+async def test_agent_management_tools_can_be_registered_in_toolkit():
+    toolkit = DClawToolkit()
 
     toolkit.register_tool_function(agent_management.list_agents)
     toolkit.register_tool_function(agent_management.chat_with_agent)
 
-    schemas = toolkit.get_json_schemas()
+    schemas = await toolkit.get_tool_schemas()
     schema_names = {schema["function"]["name"] for schema in schemas}
 
     assert "list_agents" in schema_names
@@ -249,7 +249,7 @@ async def test_list_agents_uses_to_thread(monkeypatch):
 
     assert calls
     assert calls[0][0] is agent_management.list_agents_data
-    assert '"id": "bot_a"' in response.content[0].get("text", "")
+    assert '"id": "bot_a"' in response.content[0].text
 
 
 async def test_check_agent_task_formats_finished_background_result(
@@ -276,7 +276,7 @@ async def test_check_agent_task_formats_finished_background_result(
 
     response = await agent_management.check_agent_task("task-1")
 
-    text = response.content[0].get("text", "")
+    text = response.content[0].text
     assert "[TASK_ID: task-1]" in text
     assert "Background reply" in text
 
@@ -321,7 +321,7 @@ async def test_chat_with_agent_uses_to_thread_for_final_mode(monkeypatch):
 
     assert calls
     assert calls[-1][0] is agent_management.collect_final_agent_chat_response
-    assert "reply from peer" in response.content[0].get("text", "")
+    assert "reply from peer" in response.content[0].text
 
 
 async def test_chat_with_agent_normalizes_agent_ids(monkeypatch):
@@ -369,7 +369,7 @@ async def test_chat_with_agent_normalizes_agent_ids(monkeypatch):
     assert captured["to_agent"] == "bot_b"
     assert captured["session_id"].startswith("bot_a:to:bot_b:")
     assert captured["text"].startswith("[Agent bot_a requesting] ")
-    assert "reply from peer" in response.content[0].get("text", "")
+    assert "reply from peer" in response.content[0].text
 
 
 async def test_chat_with_agent_returns_clear_error_when_agent_missing(
@@ -391,5 +391,5 @@ async def test_chat_with_agent_returns_clear_error_when_agent_missing(
     )
 
     assert (
-        response.content[0].get("text", "") == "Agent [missing_bot] not exists"
+        response.content[0].text == "Agent [missing_bot] not exists"
     )

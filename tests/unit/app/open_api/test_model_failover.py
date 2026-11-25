@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 import pytest
+from agentscope.credential import CredentialBase
 from agentscope.model import ChatModelBase
 from agentscope.model._model_response import ChatResponse
 
@@ -14,7 +15,10 @@ from qwenpaw.app.open_api.model_failover import (
 
 
 def _text(value: str) -> ChatResponse:
-    return ChatResponse(content=[{"type": "text", "text": value}])
+    return ChatResponse(
+        content=[{"type": "text", "text": value}],
+        is_last=True,
+    )
 
 
 class StatusError(Exception):
@@ -25,7 +29,14 @@ class StatusError(Exception):
 
 class StubModel(ChatModelBase):
     def __init__(self, outcomes):
-        super().__init__(model_name="deepseek", stream=True)
+        super().__init__(
+            credential=CredentialBase(),
+            model="deepseek",
+            parameters=ChatModelBase.Parameters(),
+            stream=True,
+            context_size=32768,
+        )
+        self.model_name = self.model
         self.outcomes = list(outcomes)
         self.calls = 0
 

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from agentscope.credential import CredentialBase
 from agentscope.model import ChatModelBase
 from agentscope.model._model_response import ChatResponse
 from openai import NOT_GIVEN
@@ -25,7 +26,10 @@ from qwenpaw.providers.openai_response_diagnostics import (
 
 
 def _text(value: str) -> ChatResponse:
-    return ChatResponse(content=[{"type": "text", "text": value}])
+    return ChatResponse(
+        content=[{"type": "text", "text": value}],
+        is_last=True,
+    )
 
 
 def _tool(name: str, call_id: str = "call-1") -> ChatResponse:
@@ -38,6 +42,7 @@ def _tool(name: str, call_id: str = "call-1") -> ChatResponse:
                 "input": {"query": "customer"},
             },
         ],
+        is_last=True,
     )
 
 
@@ -52,7 +57,14 @@ def _text_and_tool(name: str) -> ChatResponse:
 
 class RecordingModel(ChatModelBase):
     def __init__(self, responses: list[ChatResponse | Exception]) -> None:
-        super().__init__(model_name="deepseek-v4-flash", stream=True)
+        super().__init__(
+            credential=CredentialBase(),
+            model="deepseek-v4-flash",
+            parameters=ChatModelBase.Parameters(),
+            stream=True,
+            context_size=32768,
+        )
+        self.model_name = self.model
         self.responses = list(responses)
         self.calls: list[dict[str, Any]] = []
 
@@ -288,9 +300,13 @@ class RecordingOpenAICompat(OpenAIChatModelCompat):
     def __init__(self) -> None:
         ChatModelBase.__init__(
             self,
-            model_name="deepseek-v4-flash",
+            credential=CredentialBase(),
+            model="deepseek-v4-flash",
+            parameters=ChatModelBase.Parameters(),
             stream=True,
+            context_size=32768,
         )
+        self.model_name = self.model
         self.generate_kwargs = {
             "temperature": 0.2,
             "response_format": {"type": "json_object"},
@@ -350,7 +366,14 @@ def test_installer_leaves_non_exact_or_missing_format_unchanged(configured):
 
 class UnsupportedConfiguredModel(ChatModelBase):
     def __init__(self) -> None:
-        super().__init__(model_name="wrapped-deepseek", stream=True)
+        super().__init__(
+            credential=CredentialBase(),
+            model="wrapped-deepseek",
+            parameters=ChatModelBase.Parameters(),
+            stream=True,
+            context_size=32768,
+        )
+        self.model_name = self.model
         self.generate_kwargs = {
             "response_format": {"type": "json_object"},
         }
@@ -386,14 +409,16 @@ async def test_delta_stream_aggregates_all_text_and_drops_reasoning():
                         {"type": "thinking", "thinking": "private "},
                         {"type": "text", "text": '{"answer":'},
                     ],
+                    is_last=False,
                 ),
                 ChatResponse(
                     content=[
                         {"type": "thinking", "thinking": "reasoning"},
                         {"type": "text", "text": '"ok"}'},
                     ],
+                    is_last=False,
                 ),
-                ChatResponse(content=[]),
+                ChatResponse(content=[], is_last=True),
             ],
         ],
     )
@@ -423,14 +448,16 @@ async def test_cumulative_stream_is_not_duplicated_and_ignores_empty_tail():
                         {"type": "thinking", "thinking": "secret"},
                         {"type": "text", "text": '{"answer":'},
                     ],
+                    is_last=False,
                 ),
                 ChatResponse(
                     content=[
                         {"type": "thinking", "thinking": "secret plan"},
                         {"type": "text", "text": '{"answer":"ok"}'},
                     ],
+                    is_last=False,
                 ),
-                ChatResponse(content=[]),
+                ChatResponse(content=[], is_last=True),
             ],
         ],
     )
@@ -457,8 +484,9 @@ async def test_reasoning_only_stream_fails_instead_of_leaking_reasoning():
                     content=[
                         {"type": "thinking", "thinking": "private answer"},
                     ],
+                    is_last=False,
                 ),
-                ChatResponse(content=[]),
+                ChatResponse(content=[], is_last=True),
             ],
         ],
     )

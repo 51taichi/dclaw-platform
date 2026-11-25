@@ -2,6 +2,7 @@
 """Wiki reading and searching tools for agents."""
 
 from pathlib import Path
+from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
 
 from ...config.context import get_current_workspace_dir
@@ -52,6 +53,10 @@ def _normalize_concept(concept: str) -> str:
     if value.endswith(".md"):
         return value[:-3]
     return value
+
+
+def _text_response(text: str) -> ToolResponse:
+    return ToolResponse(content=[TextBlock(type="text", text=text)])
 
 
 def _read_mindspace_wiki(
@@ -107,26 +112,28 @@ def read_wiki_page(concept: str, scope: str = "all") -> ToolResponse:
     """
     workspace_dir = get_current_workspace_dir()
     if not workspace_dir:
-        return ToolResponse(content="Error: No active workspace found.")
+        return _text_response("Error: No active workspace found.")
 
     service = _service()
     if service is None:
-        return ToolResponse(content="Error: No authenticated user context found.")
+        return _text_response("Error: No authenticated user context found.")
     content = _read_mindspace_wiki(service, concept, scope)
     if content is not None:
-        return ToolResponse(content=content)
+        return _text_response(content)
 
     normalized_concept = _normalize_concept(concept)
     wiki_path = Path(workspace_dir) / "memory" / "wiki" / f"{normalized_concept}.md"
     if not wiki_path.exists():
-        return ToolResponse(content=f"Wiki page for '{normalized_concept}' not found.")
+        return _text_response(
+            f"Wiki page for '{normalized_concept}' not found.",
+        )
         
     try:
         with open(wiki_path, "r", encoding="utf-8") as f:
             content = f.read()
-        return ToolResponse(content=content)
+        return _text_response(content)
     except Exception as e:
-        return ToolResponse(content=f"Error reading wiki page: {e}")
+        return _text_response(f"Error reading wiki page: {e}")
 
 
 def search_wiki(keyword: str, scope: str = "all") -> ToolResponse:
@@ -144,21 +151,21 @@ def search_wiki(keyword: str, scope: str = "all") -> ToolResponse:
     """
     workspace_dir = get_current_workspace_dir()
     if not workspace_dir:
-        return ToolResponse(content="Error: No active workspace found.")
+        return _text_response("Error: No active workspace found.")
 
     service = _service()
     if service is None:
-        return ToolResponse(content="Error: No authenticated user context found.")
+        return _text_response("Error: No authenticated user context found.")
     results = _search_mindspace_wiki(service, keyword, scope)
     if results:
         names = [f"{item['concept']} ({item['scope']})" for item in results]
-        return ToolResponse(
-            content=f"Found {len(results)} pages: " + ", ".join(names)
+        return _text_response(
+            f"Found {len(results)} pages: " + ", ".join(names),
         )
 
     wiki_dir = Path(workspace_dir) / "memory" / "wiki"
     if not wiki_dir.exists():
-        return ToolResponse(content="No wiki directory found.")
+        return _text_response("No wiki directory found.")
 
     results = []
     try:
@@ -167,7 +174,9 @@ def search_wiki(keyword: str, scope: str = "all") -> ToolResponse:
             if keyword.lower() in name.lower():
                 results.append(name)
         if not results:
-            return ToolResponse(content="No matching wiki pages found.")
-        return ToolResponse(content=f"Found {len(results)} pages: " + ", ".join(results))
+            return _text_response("No matching wiki pages found.")
+        return _text_response(
+            f"Found {len(results)} pages: " + ", ".join(results),
+        )
     except Exception as e:
-        return ToolResponse(content=f"Error searching wiki: {e}")
+        return _text_response(f"Error searching wiki: {e}")

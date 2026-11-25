@@ -9,7 +9,7 @@ Covers:
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from agentscope.message import Msg
+from qwenpaw.agents.message_compat import Msg
 
 from qwenpaw.agents.utils.message_processing import (
     is_first_user_interaction,
@@ -114,7 +114,8 @@ class TestPrependToMessageContent:
         )
         prepend_to_message_content(msg, "guidance")
         first = msg.content[0]
-        assert first == {"type": "text", "text": "guidance"}
+        assert first.type == "text"
+        assert first.text == "guidance"
 
     def test_prepend_to_non_list_non_str_content_noop(self):
         """Non-string, non-list content is left untouched."""
@@ -179,13 +180,12 @@ async def test_uploaded_document_text_is_injected_before_model_call(
 
     await process_file_and_media_blocks_in_message(message)
 
-    assert message.content[0]["type"] == "file"
-    assert message.content[1] == {
-        "type": "text",
-        "text": (
-            "[附件正文开始：私域常见Q&A.docx]\n"
-            "第一问：如何获取客户线索？\n"
-            "[附件正文结束：私域常见Q&A.docx]"
-        ),
-    }
+    assert message.content[0].type == "data"
+    assert message.content[0].name == "私域常见Q&A.docx"
+    assert message.content[1].type == "text"
+    assert message.content[1].text == (
+        "[附件正文开始：私域常见Q&A.docx]\n"
+        "第一问：如何获取客户线索？\n"
+        "[附件正文结束：私域常见Q&A.docx]"
+    )
     assert all("已经下载到" not in str(block) for block in message.content)

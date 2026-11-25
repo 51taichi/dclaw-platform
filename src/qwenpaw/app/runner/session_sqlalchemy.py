@@ -8,7 +8,6 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Sequence, Union
 
-from agentscope.session import SessionBase
 from qwenpaw.runtime.exceptions import ConfigurationException
 from sqlalchemy import delete, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
@@ -22,7 +21,7 @@ from ..storage.schema import chats, messages, session_states
 logger = logging.getLogger(__name__)
 
 
-class SqlAlchemySession(SessionBase):
+class SqlAlchemySession:
     """SessionBase implementation backed by SQLAlchemy Core."""
 
     def __init__(self, agent_id: str, engine: Engine) -> None:

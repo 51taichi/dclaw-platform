@@ -3,8 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from agentscope.memory import InMemoryMemory
-from agentscope.message import Msg
+from qwenpaw.agents.context.memory_state import InMemoryMemory
+from qwenpaw.agents.message_compat import Msg
 
 from super_agent import orchestration
 
@@ -225,7 +225,7 @@ async def test_missing_legacy_state_contract_falls_back_to_standard_agent(
         def __init__(self):
             self.memory = memory
 
-        async def __call__(self, messages):
+        async def reply(self, messages):
             calls.append(messages)
 
     agent = Agent()
@@ -261,9 +261,9 @@ async def test_missing_legacy_state_contract_falls_back_to_standard_agent(
         no_super_agent_runtime,
     )
 
-    async def standard_stream(*, agents, coroutine_task):
+    async def standard_stream(*, agents, inputs):
         assert agents == [agent]
-        await coroutine_task
+        await agent.reply(inputs)
         yield Msg(name="Comic", role="assistant", content="基础专家回复"), True
 
     result = [item async for item in orchestration.handle_workspace_turn(

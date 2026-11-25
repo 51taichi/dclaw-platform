@@ -52,7 +52,7 @@ _FORBIDDEN_INJECTED_HEADERS = {
 }
 
 
-@dataclass(frozen=True)
+@dataclass
 class AgentOutboundError(ValueError):
     reason: str
 

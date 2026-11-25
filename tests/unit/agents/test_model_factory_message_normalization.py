@@ -6,7 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 from agentscope.formatter import OpenAIChatFormatter
-from agentscope.message import Msg, ToolResultBlock
+from agentscope.message import DataBlock, ToolResultBlock, URLSource
+from qwenpaw.agents.message_compat import Msg
 
 try:
     from agentscope.formatter import AnthropicChatFormatter
@@ -24,14 +25,14 @@ from qwenpaw.constant import MEDIA_UNSUPPORTED_PLACEHOLDER
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("selected,default,capability,expected_type", [
-    ("chat", "text", {"supports_multimodal": True}, "image"),
-    ("chat", "text", {"supports_image": True}, "image"),
-    ("chat", "text", {"supports_video": True}, "image"),
+    ("chat", "text", {"supports_multimodal": True}, "data"),
+    ("chat", "text", {"supports_image": True}, "data"),
+    ("chat", "text", {"supports_video": True}, "data"),
     ("chat", "vision", {"supports_multimodal": False}, "text"),
     ("missing", "vision", {}, "text"),
-    (None, "vision", {}, "image"),
+    (None, "vision", {}, "data"),
     (None, "text", {}, "text"),
-    ("auto", "vision", {}, "image"),
+    ("auto", "vision", {}, "data"),
     ("auto", "text", {}, "text"),
 ])
 async def test_selected_chat_model_controls_actual_media_normalization(monkeypatch, selected, default, capability, expected_type):
@@ -57,8 +58,8 @@ async def test_selected_chat_model_controls_actual_media_normalization(monkeypat
         original = _media_messages()
         normalized, _, _ = model_factory._normalize_messages_for_formatter(
             original, OpenAIChatFormatter, SimpleNamespace())
-        assert normalized[0].content[0]["type"] == expected_type
-        assert original[0].content[0]["type"] == "image"
+        assert normalized[0].content[0].type == expected_type
+        assert original[0].content[0].type == "data"
         # Exercise the real formatter through its outbound OpenAI payload,
         # not only the pre-format copy. A remote image URL is not fetched here.
         image = Msg(name="user", role="user", content=[{
@@ -67,7 +68,7 @@ async def test_selected_chat_model_controls_actual_media_normalization(monkeypat
         formatter = model_factory._create_file_block_support_formatter(OpenAIChatFormatter)()
         outbound = await formatter.format(msgs=[image])
         blocks = outbound[0]["content"]
-        if expected_type == "image":
+        if expected_type == "data":
             assert any(block.get("type") == "image_url" and
                        block["image_url"]["url"] == "https://assets.example.test/current.png"
                        for block in blocks)
@@ -114,13 +115,12 @@ def _media_messages() -> list[Msg]:
                     id="call_1",
                     name="view_image",
                     output=[
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "url",
-                                "url": "file:///tmp/demo.png",
-                            },
-                        },
+                        DataBlock(
+                            source=URLSource(
+                                url="file:///tmp/demo.png",
+                                media_type="image/png",
+                            ),
+                        ),
                     ],
                 ),
             ],
@@ -142,19 +142,14 @@ def _assert_request_time_stripped(formatter_class) -> None:
     )
 
     # First message (user image) should be replaced with placeholder
-    assert normalized[0].content == [
-        {
-            "type": "text",
-            "text": MEDIA_UNSUPPORTED_PLACEHOLDER,
-        },
-    ]
+    assert normalized[0].get_text_content() == MEDIA_UNSUPPORTED_PLACEHOLDER
 
     # Third message (tool result with image) should have output replaced
-    assert normalized[2].content[0]["output"] == MEDIA_UNSUPPORTED_PLACEHOLDER
+    assert normalized[2].content[0].output == MEDIA_UNSUPPORTED_PLACEHOLDER
 
     # Original messages should be unchanged
-    assert original[0].content[0]["type"] == "image"
-    assert original[2].content[0]["output"][0]["type"] == "image"
+    assert original[0].content[0].type == "data"
+    assert original[2].content[0].output[0].type == "data"
 
 
 def test_openai_formatter_normalizes_on_copy(monkeypatch) -> None:
@@ -213,11 +208,11 @@ def test_multimodal_support_preserves_media(monkeypatch) -> None:
     )
 
     # Media should be preserved in normalized messages
-    assert normalized[0].content[0]["type"] == "image"
-    assert normalized[2].content[0]["output"][0]["type"] == "image"
+    assert normalized[0].content[0].type == "data"
+    assert normalized[2].content[0].output[0].type == "data"
 
     # Original should be unchanged
-    assert original[0].content[0]["type"] == "image"
+    assert original[0].content[0].type == "data"
 
 
 def test_force_strip_media_flag_overrides_multimodal_support(
@@ -244,8 +239,8 @@ def test_force_strip_media_flag_overrides_multimodal_support(
     )
 
     # Media should be stripped despite multimodal support
-    assert normalized[0].content[0]["type"] == "text"
-    assert normalized[0].content[0]["text"] == MEDIA_UNSUPPORTED_PLACEHOLDER
+    assert normalized[0].content[0].type == "text"
+    assert normalized[0].content[0].text == MEDIA_UNSUPPORTED_PLACEHOLDER
 
 
 def test_formatter_flags_returned_correctly() -> None:
@@ -346,7 +341,7 @@ def test_original_messages_not_modified_by_formatter_prep() -> None:
 
     # Original message should be completely unchanged
     assert original.to_dict() == original_dict
-    assert original.content[1]["type"] == "image"
+    assert original.content[1].type == "data"
 
 
 # -----------------------------------------------------------------------------

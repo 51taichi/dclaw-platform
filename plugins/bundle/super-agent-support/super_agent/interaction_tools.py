@@ -9,7 +9,6 @@ meaning, wording, and the decision to ask a closed question stay with the Agent.
 # tool schemas and cannot reliably resolve postponed Literal annotations.
 
 from contextlib import contextmanager
-from copy import copy
 import hashlib
 import json
 import re
@@ -364,11 +363,20 @@ def bind_interaction_tools(agent: Any, tools: dict[str, Callable]):
     if not tools:
         yield
         return
+    from qwenpaw.agents.toolkit import DClawToolkit
+    from agentscope.permission import PermissionBehavior, PermissionDecision
+
     original = agent.toolkit
-    scoped = copy(original)
-    scoped.tools = dict(original.tools)
+    scoped = DClawToolkit.from_toolkit(original)
     for tool in tools.values():
-        scoped.register_tool_function(tool, namesake_strategy="raise")
+        scoped.register_tool_function(
+            tool,
+            namesake_strategy="raise",
+            permission=PermissionDecision(
+                behavior=PermissionBehavior.ALLOW,
+                message="Authorized workspace-scoped interaction tool.",
+            ),
+        )
     agent.toolkit = scoped
     try:
         yield

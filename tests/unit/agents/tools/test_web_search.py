@@ -18,7 +18,7 @@ web_search_tool = importlib.import_module("qwenpaw.agents.tools.web_search")
 
 
 def _tool_text(response) -> str:
-    return str(response.content[0].get("text", ""))
+    return str(response.content[0].text)
 
 
 def test_web_search_is_a_default_builtin_tool() -> None:

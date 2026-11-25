@@ -6,8 +6,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, List, Optional, Any
 
-from agentscope.agent import ReActAgent
-from agentscope.message import Msg
+from agentscope.agent import Agent
+from ...message_compat import Msg
 
 if TYPE_CHECKING:
     from ....app.workspace import Workspace
@@ -38,7 +38,7 @@ def ensure_tz_aware(dt: datetime) -> datetime:
 
 async def build_proactive_memory_context(
     workspace: "Workspace",
-    agent: ReActAgent,
+    agent: Agent,
     max_session_messages: int = 100,
     max_session_chars: int = 50000,
 ) -> str:
@@ -121,7 +121,7 @@ async def _process_session_memory(
     channel: str = "",
 ) -> List[dict]:
     """Process a session's memory and return a list of messages."""
-    from agentscope.memory import InMemoryMemory
+    from ...context.memory_state import InMemoryMemory
 
     try:
         state = await workspace.runner.session.get_session_state_dict(
@@ -234,7 +234,7 @@ def extract_content(content) -> str:
 
 
 async def _analyze_screen_activity(
-    agent: ReActAgent,
+    agent: Agent,
 ) -> Optional[str]:
     """Analyze user's screen activity using multimodal capabilities."""
     # Removed duplicate import: from agentscope.message import Msg

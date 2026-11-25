@@ -1,10 +1,7 @@
 # -*- coding: utf-8 -*-
 """Estimated token counter implementation."""
 
-from agentscope.token import TokenCounterBase
-
-
-class EstimatedTokenCounter(TokenCounterBase):
+class EstimatedTokenCounter:
     """Token counter that estimates tokens using character-based calculation.
 
     This is a lightweight approximation suitable for cases where exact token

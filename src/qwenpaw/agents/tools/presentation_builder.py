@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 import json
+import mimetypes
 import os
 import re
 import shutil
@@ -23,11 +24,10 @@ from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape
 
-from agentscope.message import TextBlock
+from agentscope.message import DataBlock, TextBlock, URLSource
 from agentscope.tool import ToolResponse
 from PIL import Image, ImageDraw, UnidentifiedImageError
 
-from ..schema import FileBlock
 from ...config.context import get_current_workspace_dir
 from ...constant import WORKING_DIR
 from .file_io import _resolve_file_path
@@ -595,11 +595,14 @@ def _text_response(text: str) -> ToolResponse:
     return ToolResponse(content=[TextBlock(type="text", text=text)])
 
 
-def _file_block(path: Path) -> FileBlock:
-    return FileBlock(
-        type="file",
-        source={"type": "url", "url": _path_to_file_url(str(path))},
-        filename=path.name,
+def _file_block(path: Path) -> DataBlock:
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return DataBlock(
+        source=URLSource(
+            url=_path_to_file_url(str(path)),
+            media_type=media_type,
+        ),
+        name=path.name,
     )
 
 

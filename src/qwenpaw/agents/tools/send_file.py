@@ -7,14 +7,9 @@ import unicodedata
 from urllib.parse import quote
 
 from agentscope.tool import ToolResponse
-from agentscope.message import (
-    TextBlock,
-    ImageBlock,
-    AudioBlock,
-    VideoBlock,
-)
+from agentscope.message import DataBlock, TextBlock, URLSource
 
-from ..schema import FileBlock
+from ..message_compat import AudioBlock, ImageBlock, VideoBlock
 from .file_io import _resolve_file_path
 
 
@@ -139,10 +134,12 @@ async def send_file_to_user(
 
         return ToolResponse(
             content=[
-                FileBlock(
-                    type="file",
-                    source=source,
-                    filename=os.path.basename(file_path),
+                DataBlock(
+                    source=URLSource(
+                        url=file_url,
+                        media_type=mime_type,
+                    ),
+                    name=os.path.basename(file_path),
                 ),
                 TextBlock(type="text", text="File sent successfully."),
             ],

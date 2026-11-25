@@ -9,13 +9,16 @@ from datetime import date, datetime, timezone
 from typing import Any, Literal, Type
 
 from agentscope.model import ChatModelBase
-from agentscope.model._model_response import ChatResponse
-from agentscope.model._model_usage import ChatUsage
+from agentscope.model import ChatResponse, ChatUsage
 from pydantic import BaseModel
 
 from .buffer import _UsageEvent
 from .manager import get_token_usage_manager
 from ..app.billing.supplier_reference_sidecar import pop_supplier_reference
+from ..providers.agentscope2_compat import (
+    LegacyModelNameMixin,
+    initialize_model_wrapper,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -25,7 +28,7 @@ class UnsupportedBillingProviderError(RuntimeError):
     """An enforced OpenAPI call lacks a safe provider cap adapter."""
 
 
-class TokenRecordingModelWrapper(ChatModelBase):
+class TokenRecordingModelWrapper(LegacyModelNameMixin, ChatModelBase):
     """Wraps a ChatModelBase to record token usage on each call."""
 
     _usage_by_session: dict[str, dict[str, Any]] = {}
@@ -37,10 +40,7 @@ class TokenRecordingModelWrapper(ChatModelBase):
         *,
         meter: Any | None = None,
     ) -> None:
-        super().__init__(
-            model_name=getattr(model, "model_name", "unknown"),
-            stream=getattr(model, "stream", True),
-        )
+        initialize_model_wrapper(self, model)
         self._model = model
         self._provider_id = provider_id
         self._meter = meter

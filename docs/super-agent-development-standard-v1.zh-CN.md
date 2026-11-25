@@ -2296,10 +2296,10 @@ Agent 名称：<可选，中文显示名称>
 2. 开发方自己的业务目标、源 Agent 材料和测试凭证；
 3. 从目标 DClaw 认证调用元数据接口并按其 `download_path` 下载、核对 SHA-256 的官方开发包；兼容自动化可以继续单独下载同版本官方 DevKit。
 
-当前开发包 `1.10.21` 是推荐的单一离线移交物，必须提供：
+当前开发包 `1.10.41` 是推荐的单一离线移交物，必须提供：
 
 - 唯一标准文件与明确的标准版本，不复制第二套人工规则；
-- 官方 DevKit `1.9.8` 及其完整离线加密依赖；
+- 官方 DevKit `1.9.29` 及其完整离线加密依赖；
 - `dclaw_developer.py` 的 `doctor`、`info`、`init`、`validate`、`test`、`keygen`、`capability-build`、`build`、`upgrade` 和 `demo`；
 - 超级专家、业务服务和本地能力包模板，以及职责边界示例；
 - Agent 自主出站、公共业务服务、本地执行和能力包 Schema/SDK；
@@ -2311,7 +2311,7 @@ Agent 名称：<可选，中文显示名称>
 
 开发包本身不得包含平台管理员凭据、生产地址、签名私钥、供应商 Secret、客户数据或 DClaw 私有实现。包内公开工具不得导入 `qwenpaw` 或要求开发者克隆服务器仓库。
 
-当前 DevKit `1.9.13` 必须提供：
+当前 DevKit `1.9.29` 必须提供：
 
 - `dclaw_agent_devkit.py`：`doctor`、`contracts`、`digest`、`validate`、`keygen`、`build`、`verify`；
 - `capability-catalog.json`：当前可声明的能力、版本、组和依赖；

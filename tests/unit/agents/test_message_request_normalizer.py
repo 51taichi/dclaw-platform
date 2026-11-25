@@ -2,8 +2,11 @@
 """Tests for message_request_normalizer module."""
 
 # pylint: disable=redefined-outer-name,protected-access
+import json
+
 import pytest
-from agentscope.message import Msg, ToolResultBlock
+from agentscope.message import DataBlock, ToolResultBlock, URLSource
+from qwenpaw.agents.message_compat import Msg
 
 from qwenpaw.agents.utils.message_request_normalizer import (
     _clean_provider_specific_fields,
@@ -96,13 +99,12 @@ def tool_result_with_image():
                 id="call_1",
                 name="view_image",
                 output=[
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "url",
-                            "url": "file:///tmp/result.png",
-                        },
-                    },
+                    DataBlock(
+                        source=URLSource(
+                            url="file:///tmp/result.png",
+                            media_type="image/png",
+                        ),
+                    ),
                 ],
             ),
         ],
@@ -156,10 +158,10 @@ def test_clone_msg_modifications_dont_affect_original(text_message):
     cloned = _clone_msg(text_message)
 
     # Modify the clone
-    cloned.content[0]["text"] = "Modified text"
+    cloned.content[0].text = "Modified text"
 
     # Original should be unchanged
-    assert text_message.content[0]["text"] == "Hello world"
+    assert text_message.content[0].text == "Hello world"
 
 
 # -----------------------------------------------------------------------------
@@ -191,8 +193,8 @@ def test_strip_media_blocks_removes_image(image_message):
 
     assert count == 1
     assert len(msgs[0].content) == 1
-    assert msgs[0].content[0]["type"] == "text"
-    assert msgs[0].content[0]["text"] == MEDIA_UNSUPPORTED_PLACEHOLDER
+    assert msgs[0].content[0].type == "text"
+    assert msgs[0].content[0].text == MEDIA_UNSUPPORTED_PLACEHOLDER
 
 
 def test_strip_media_blocks_removes_video(video_message):
@@ -202,8 +204,8 @@ def test_strip_media_blocks_removes_video(video_message):
 
     assert count == 1
     assert len(msgs[0].content) == 1
-    assert msgs[0].content[0]["type"] == "text"
-    assert msgs[0].content[0]["text"] == MEDIA_UNSUPPORTED_PLACEHOLDER
+    assert msgs[0].content[0].type == "text"
+    assert msgs[0].content[0].text == MEDIA_UNSUPPORTED_PLACEHOLDER
 
 
 def test_strip_media_blocks_removes_audio(audio_message):
@@ -213,8 +215,8 @@ def test_strip_media_blocks_removes_audio(audio_message):
 
     assert count == 1
     assert len(msgs[0].content) == 1
-    assert msgs[0].content[0]["type"] == "text"
-    assert msgs[0].content[0]["text"] == MEDIA_UNSUPPORTED_PLACEHOLDER
+    assert msgs[0].content[0].type == "text"
+    assert msgs[0].content[0].text == MEDIA_UNSUPPORTED_PLACEHOLDER
 
 
 def test_strip_media_blocks_handles_tool_result_with_media(
@@ -226,7 +228,7 @@ def test_strip_media_blocks_handles_tool_result_with_media(
 
     assert count == 1
     tool_result = msgs[0].content[0]
-    assert tool_result["output"] == MEDIA_UNSUPPORTED_PLACEHOLDER
+    assert tool_result.output == MEDIA_UNSUPPORTED_PLACEHOLDER
 
 
 def test_strip_media_blocks_handles_mixed_content(mixed_content_message):
@@ -237,10 +239,10 @@ def test_strip_media_blocks_handles_mixed_content(mixed_content_message):
     assert count == 2  # image + video
     # Should have 2 text blocks remaining
     assert len(msgs[0].content) == 2
-    assert msgs[0].content[0]["type"] == "text"
-    assert msgs[0].content[0]["text"] == "Look at this:"
-    assert msgs[0].content[1]["type"] == "text"
-    assert msgs[0].content[1]["text"] == "And this video:"
+    assert msgs[0].content[0].type == "text"
+    assert msgs[0].content[0].text == "Look at this:"
+    assert msgs[0].content[1].type == "text"
+    assert msgs[0].content[1].text == "And this video:"
 
 
 def test_strip_media_blocks_preserves_non_media_content(text_message):
@@ -269,7 +271,7 @@ def test_strip_media_blocks_handles_string_content():
     count = _strip_media_blocks_in_place(msgs)
 
     assert count == 0
-    assert msgs[0].content == "Plain text message"
+    assert msgs[0].get_text_content() == "Plain text message"
 
 
 # -----------------------------------------------------------------------------
@@ -286,10 +288,10 @@ def test_normalize_with_multimodal_support_keeps_media(image_message):
     )
 
     # Original should be unchanged
-    assert msgs[0].content[0]["type"] == "image"
+    assert msgs[0].content[0].type == "data"
 
     # Normalized copy should also have media
-    assert normalized[0].content[0]["type"] == "image"
+    assert normalized[0].content[0].type == "data"
     assert normalized[0] is not msgs[0]
 
 
@@ -302,11 +304,11 @@ def test_normalize_without_multimodal_support_strips_media(image_message):
     )
 
     # Original should be unchanged
-    assert msgs[0].content[0]["type"] == "image"
+    assert msgs[0].content[0].type == "data"
 
     # Normalized should have placeholder
-    assert normalized[0].content[0]["type"] == "text"
-    assert normalized[0].content[0]["text"] == MEDIA_UNSUPPORTED_PLACEHOLDER
+    assert normalized[0].content[0].type == "text"
+    assert normalized[0].content[0].text == MEDIA_UNSUPPORTED_PLACEHOLDER
 
 
 def test_normalize_preserves_original_messages(mixed_content_message):
@@ -377,20 +379,18 @@ def test_normalize_conversation_with_multiple_messages():
 
     # First message: text preserved, image stripped
     assert len(normalized[0].content) == 1
-    assert normalized[0].content[0]["text"] == "Hello"
+    assert normalized[0].content[0].text == "Hello"
 
     # Second message: unchanged
-    assert normalized[1].content == [
-        {"type": "text", "text": "I see the image"},
-    ]
+    assert normalized[1].get_text_content() == "I see the image"
 
     # Third message: video replaced with placeholder
     assert len(normalized[2].content) == 1
-    assert normalized[2].content[0]["text"] == MEDIA_UNSUPPORTED_PLACEHOLDER
+    assert normalized[2].content[0].text == MEDIA_UNSUPPORTED_PLACEHOLDER
 
     # Originals unchanged
-    assert msgs[0].content[1]["type"] == "image"
-    assert msgs[2].content[0]["type"] == "video"
+    assert msgs[0].content[1].type == "data"
+    assert msgs[2].content[0].type == "data"
 
 
 # -----------------------------------------------------------------------------
@@ -440,9 +440,9 @@ def test_clean_strips_extra_content_for_openai(tool_use_with_extra_content):
     _clean_provider_specific_fields(msgs, "openai")
 
     block = msgs[0].content[0]
-    assert "extra_content" not in block
-    assert block["id"] == "call_1"
-    assert block["input"] == {"q": "test"}
+    assert not hasattr(block, "extra_content")
+    assert block.id == "call_1"
+    assert json.loads(block.input) == {"q": "test"}
 
 
 def test_clean_strips_extra_content_for_anthropic(
@@ -452,7 +452,7 @@ def test_clean_strips_extra_content_for_anthropic(
     msgs = [tool_use_with_extra_content]
     _clean_provider_specific_fields(msgs, "anthropic")
 
-    assert "extra_content" not in msgs[0].content[0]
+    assert not hasattr(msgs[0].content[0], "extra_content")
 
 
 def test_clean_preserves_extra_content_for_gemini(
@@ -463,8 +463,7 @@ def test_clean_preserves_extra_content_for_gemini(
     _clean_provider_specific_fields(msgs, "gemini")
 
     block = msgs[0].content[0]
-    assert "extra_content" in block
-    assert block["extra_content"]["thought_signature"] == "sig123"
+    assert block.extra_content["thought_signature"] == "sig123"
 
 
 def test_clean_strips_raw_input_for_all_targets():
@@ -485,9 +484,9 @@ def test_clean_strips_raw_input_for_all_targets():
         )
         _clean_provider_specific_fields([msg], family)
         assert (
-            "raw_input" not in msg.content[0]
+            not hasattr(msg.content[0], "raw_input")
         ), f"raw_input should be stripped for {family}"
-        assert msg.content[0]["input"] == {"path": "/tmp/x"}
+        assert json.loads(msg.content[0].input) == {"path": "/tmp/x"}
 
 
 def test_clean_ignores_non_tool_use_blocks():
@@ -508,8 +507,10 @@ def test_clean_ignores_non_tool_use_blocks():
     )
     _clean_provider_specific_fields([msg], "openai")
 
-    assert msg.content[0] == {"type": "thinking", "thinking": "some thought"}
-    assert msg.content[1] == {"type": "text", "text": "hello"}
+    assert msg.content[0].type == "thinking"
+    assert msg.content[0].thinking == "some thought"
+    assert msg.content[1].type == "text"
+    assert msg.content[1].text == "hello"
 
 
 def test_clean_handles_string_content():
@@ -517,7 +518,7 @@ def test_clean_handles_string_content():
     msg = Msg(name="user", role="user", content="just text")
     _clean_provider_specific_fields([msg], "openai")
 
-    assert msg.content == "just text"
+    assert msg.get_text_content() == "just text"
 
 
 def test_clean_handles_empty_list():
@@ -572,7 +573,7 @@ def test_normalize_default_target_family_strips_extra_content():
         msgs,
         supports_multimodal=True,
     )
-    assert "extra_content" not in normalized[0].content[0]
+    assert not hasattr(normalized[0].content[0], "extra_content")
 
 
 def test_normalize_does_not_mutate_original_with_target_family():
@@ -599,7 +600,7 @@ def test_normalize_gemini_target_keeps_extra_content():
         supports_multimodal=True,
         target_family="gemini",
     )
-    assert "extra_content" in normalized[0].content[0]
+    assert hasattr(normalized[0].content[0], "extra_content")
 
 
 def test_raw_input_used_for_repair_before_stripping():
@@ -644,7 +645,7 @@ def test_raw_input_used_for_repair_before_stripping():
     )
 
     block = normalized[0].content[0]
-    assert block["input"] == {
+    assert json.loads(block.input) == {
         "cmd": "ls",
     }, "raw_input should have repaired the empty input before being stripped"
-    assert "raw_input" not in block, "raw_input should be cleaned after repair"
+    assert not hasattr(block, "raw_input"), "raw_input should be cleaned after repair"

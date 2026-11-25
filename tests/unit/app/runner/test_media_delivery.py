@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 from agentscope.formatter import OpenAIChatFormatter
-from agentscope.message import Msg
+from qwenpaw.agents.message_compat import Msg
 
 from qwenpaw.agents import model_factory
 from qwenpaw.app.workspace.orchestration import _execute_internal_candidate
@@ -96,7 +96,8 @@ async def test_actual_formatter_media_delivery_not_model_claim(monkeypatch, supp
     assert 'private-current.png' not in json.dumps(delivery)
     assert 'untrusted' not in delivery
     assert delivery['input_digest'].startswith('sha256:')
-    assert messages[0].content[0]['type'] == 'image'
+    assert messages[0].content[0].type == 'data'
+    assert messages[0].content[0].source.media_type == 'image/png'
 
 
 @pytest.mark.asyncio

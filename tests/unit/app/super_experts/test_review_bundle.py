@@ -344,9 +344,11 @@ async def test_bundle_dispatch_delivers_real_text_and_both_images(tmp_path, monk
     result = await router._dispatch_agent_asset_review(request, service=service, installation_id='install',
         binding=binding, asset_id='a-copy', request_key='review')
     assert result['reply'] == '模型给出的整组审核结果'
-    assert [block['source']['url'] for block in captured['content'] if block['type'] == 'image'] == [
+    assert [str(block.source.url) for block in captured['content']
+            if block.type == 'data' and block.source.media_type.startswith('image/')] == [
         (tmp_path / 'first.png').as_uri(), (tmp_path / 'second.png').as_uri()]
-    assert any(block.get('text') == '完整作品正文' for block in captured['content'])
+    assert any(block.type == 'text' and block.text == '完整作品正文'
+               for block in captured['content'])
     assert [entry['asset_id'] for entry in captured['metadata']['review_assets']] == ['a-copy', 'a-first', 'a-second']
     assert len(captured['metadata']['review_blocks']) == 6
     assert captured['message_metadata']['dclaw_aigc_review_bundle'] == {

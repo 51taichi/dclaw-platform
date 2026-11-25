@@ -9,12 +9,16 @@ from pathlib import Path
 
 import aiofiles
 import aiofiles.os
-from agentscope.agent._react_agent import _MemoryMark  # noqa
-from agentscope.memory import InMemoryMemory
-from agentscope.message import Msg
+from ..message_compat import Msg
 
 from .as_msg_handler import AsMsgHandler
 from .compactor_prompts import SUMMARY_PROMPT_EN
+from .memory_state import (
+    InMemoryMemory,
+    MemoryMark,
+    message_from_dict,
+    message_to_dict,
+)
 from ..utils.estimate_token_counter import EstimatedTokenCounter
 
 logger = logging.getLogger(__name__)
@@ -79,9 +83,9 @@ class AgentContext(InMemoryMemory):
         messages_by_date: dict[str, list[Msg]] = {}
         for msg in messages:
             try:
-                if msg.timestamp:
+                if msg.created_at:
                     # Extract date part from timestamp
-                    date_str = msg.timestamp.split()[0]  # "YYYY-mm-dd"
+                    date_str = msg.created_at.split("T", 1)[0]
                 else:
                     date_str = datetime.now().strftime("%Y-%m-%d")
 
@@ -104,7 +108,7 @@ class AgentContext(InMemoryMemory):
         for date_str, msgs in messages_by_date.items():
             # Sort messages by timestamp within the same date
             try:
-                msgs_sorted = sorted(msgs, key=lambda m: m.timestamp or "")
+                msgs_sorted = sorted(msgs, key=lambda m: m.created_at or "")
             except Exception as e:
                 logger.warning(f"Failed to sort messages by timestamp: {e}")
                 msgs_sorted = msgs
@@ -119,7 +123,7 @@ class AgentContext(InMemoryMemory):
                     encoding="utf-8",
                 ) as f:
                     for msg in msgs_sorted:
-                        msg_dict = msg.to_dict()
+                        msg_dict = message_to_dict(msg)
                         await f.write(
                             json.dumps(msg_dict, ensure_ascii=False) + "\n",
                         )
@@ -152,15 +156,22 @@ class AgentContext(InMemoryMemory):
         filtered_content = [
             (msg, marks)
             for msg, marks in self.content
-            if _MemoryMark.COMPRESSED not in marks
+            if MemoryMark.COMPRESSED not in marks
         ]
 
         if prepend_summary and self._compressed_summary:
             return [
                 Msg(
-                    "user",
-                    SUMMARY_PROMPT_EN.format(summary=self._compressed_summary),
-                    "user",
+                    name="user",
+                    content=[
+                        {
+                            "type": "text",
+                            "text": SUMMARY_PROMPT_EN.format(
+                                summary=self._compressed_summary,
+                            ),
+                        },
+                    ],
+                    role="user",
                 ),
                 *[msg for msg, _ in filtered_content],
             ]
@@ -174,7 +185,9 @@ class AgentContext(InMemoryMemory):
     def state_dict(self) -> dict:
         """Get the state dictionary for serialization."""
         return {
-            "content": [[msg.to_dict(), marks] for msg, marks in self.content],
+            "content": [
+                [message_to_dict(msg), marks] for msg, marks in self.content
+            ],
             "_compressed_summary": self._compressed_summary,
         }
 
@@ -191,12 +204,12 @@ class AgentContext(InMemoryMemory):
         for item in state_dict.get("content", []):
             if isinstance(item, (tuple, list)) and len(item) == 2:
                 msg_dict, marks = item
-                msg = Msg.from_dict(msg_dict)
+                msg = message_from_dict(msg_dict)
                 self.content.append((msg, marks))
 
             elif isinstance(item, dict):
                 # For compatibility with older versions
-                msg = Msg.from_dict(item)
+                msg = message_from_dict(item)
                 self.content.append((msg, []))
 
             else:

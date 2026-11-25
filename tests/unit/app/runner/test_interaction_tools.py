@@ -4,7 +4,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from agentscope.tool import Toolkit
+from qwenpaw.agents.toolkit import DClawToolkit as Toolkit
 
 from qwenpaw.app.super_experts.interaction_cards import InteractionError
 from qwenpaw.app.super_experts.interaction_contract import build_interaction_catalog
@@ -18,7 +18,7 @@ from qwenpaw.app.workspace.interaction_tools import (
 
 
 def _result(response):
-    return json.loads(response.content[0]["text"])
+    return json.loads(response.content[0].text)
 
 
 def _single_card():
@@ -367,7 +367,7 @@ def test_toolkit_is_restored_after_binding_success_and_failure():
 
 @pytest.mark.asyncio
 async def test_authorized_agent_loop_binds_interaction_and_aigc_tools_together(tmp_path):
-    from agentscope.message import Msg
+    from qwenpaw.agents.message_compat import Msg
 
     from qwenpaw.app.workspace.aigc_tools import CATALOG as AIGC_CATALOG
     from qwenpaw.app.workspace.orchestration import (
