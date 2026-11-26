@@ -121,6 +121,9 @@ class _OperationRecord(BaseModel):
 
     operation_digest: str
     interaction_id: str
+    invocation_id: str | None = None
+    operation_kind: str | None = None
+    replaced_interaction_id: str | None = None
 
 
 class _InteractionDocument(BaseModel):

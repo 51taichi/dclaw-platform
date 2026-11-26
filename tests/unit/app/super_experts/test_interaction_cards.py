@@ -237,6 +237,37 @@ def test_legacy_continuation_state_is_discarded_on_the_next_write(tmp_path):
     assert "continuation_receipts" not in rewritten
 
 
+def test_production_operation_metadata_survives_read_and_write(tmp_path):
+    root = tmp_path / "interactions"
+    instance = InteractionService(
+        InteractionCardRepository(root),
+        clock=lambda: NOW,
+    )
+    card = _create(instance, _request("production-metadata"))
+    path = root / "interaction_cards.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["operations"]["create-1"].update(
+        {
+            "invocation_id": "invocation-1",
+            "operation_kind": "create",
+            "replaced_interaction_id": "interaction-previous",
+        },
+    )
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    instance.cancel(
+        interaction_id=card.interaction_id,
+        installation_id="install-1",
+        conversation_id="chat-1",
+        operation_key="cancel-production-metadata",
+    )
+
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["operations"]["create-1"] == document["operations"][
+        "create-1"
+    ]
+
+
 def test_reusing_operation_key_for_different_request_is_conflict(service):
     _create(service, _request("first"), "same-operation")
 
