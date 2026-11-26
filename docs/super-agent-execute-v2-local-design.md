@@ -1,10 +1,9 @@
-# Super Agent `agent.execute` v2 (local upgrade draft)
+# Super Agent `agent.execute` v2 release contract
 
-This describes the AgentScope 2 lab implementation. It is not a published
-Developer Pack contract or evidence that a target instance supports v2. The
-lab starts from standard 2.62 / DevKit 1.9.29, while the other source tree
-has progressed to standard 2.67 / DevKit 1.9.31. Reconcile those intervening
-releases and their server behavior before assigning release version numbers.
+This document records the implementation notes for standard 2.68, Support
+Plugin 1.18.58, Developer Pack 1.10.47, and DevKit 1.9.32. The normative
+developer requirements are in `super-agent-development-standard-v1.zh-CN.md`;
+the DevKit JSON Schemas are the machine contracts.
 
 ## Runtime contract
 
@@ -24,7 +23,8 @@ releases and their server behavior before assigning release version numbers.
   require existing declarations, grants and trusted Host receipts. A common
   Agent Loop does not grant these capabilities automatically.
 
-The lab DevKit contains `schemas/agent-execute-v2/` and templates declaring
-v2. These remain source-level development artifacts until the version baseline,
-packaged schemas, examples and integration tests are reconciled. Do not build,
-upload or deploy them as the currently numbered Pack 1.10.41.
+DevKit 1.9.32 contains `schemas/agent-execute-v2/`, reference calls, and new
+templates declaring v2. Developer Pack 1.10.47 bundles that exact DevKit and
+standard 2.68. Support Plugin 1.18.58 enforces the declared version at the Host
+boundary; it does not infer v2 from the request or migrate an existing signed
+v1 release.

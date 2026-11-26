@@ -1,8 +1,13 @@
 # DClaw Super Agent DevKit
 
-Version 1.9.31 adds closed `agent.execute` and `runtime.fail` schemas plus
-`agent_execute_api_demo.py`. Use its three explicit execution modes and do not
-combine candidate-only `response_format` with `agent_loop` instructions.
+Version 1.9.32 publishes the closed `agent.execute` v2 schema and reference
+calls. A v2 request defaults to `agent_loop` when `execution_mode` is omitted;
+use explicit `candidate` for model-only text or JSON candidates. Signed v1
+releases retain their original candidate default. Candidate-only
+`response_format` must not be combined with Agent Loop instructions.
+
+Version 1.9.31 adds closed `agent.execute` v1 and `runtime.fail` schemas plus
+`agent_execute_api_demo.py`. Its v1 default remains model-only candidate mode.
 
 Version 1.9.30 adds owner-scoped `developer.runtime.diagnostics.by-reference/6`.
 Use `runtime_diagnostics_api_demo.py --root-cause` with one invocation ID to

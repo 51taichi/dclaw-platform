@@ -33,6 +33,26 @@ from qwenpaw.plugins.registry import PluginRegistry
 
 ROOT = Path(__file__).parents[3]
 PLUGIN_ROOT = ROOT / "plugins" / "bundle" / "super-agent-support"
+PLUGIN_MANIFEST = json.loads(
+    (PLUGIN_ROOT / "plugin.json").read_text(encoding="utf-8"),
+)
+CURRENT_PLUGIN_VERSION = PLUGIN_MANIFEST["version"]
+CURRENT_DEVKIT_VERSION = (
+    PLUGIN_ROOT / "devkit" / "VERSION"
+).read_text(encoding="ascii").strip()
+CURRENT_PACK_VERSION = (
+    PLUGIN_ROOT / "developer_pack" / "VERSION"
+).read_text(encoding="ascii").strip()
+CURRENT_PROJECT = json.loads(
+    (
+        PLUGIN_ROOT
+        / "developer_pack"
+        / "templates"
+        / "project"
+        / "project.json"
+    ).read_text(encoding="utf-8"),
+)
+CURRENT_STANDARD_VERSION = CURRENT_PROJECT["standard"]["version"]
 
 
 @pytest.fixture
@@ -769,7 +789,7 @@ def test_developer_kit_is_downloadable_without_server_source(
 
     assert metadata.status_code == 200
     assert metadata.json()["name"] == "dclaw-super-agent-devkit"
-    assert metadata.json()["version"] == "1.9.29"
+    assert metadata.json()["version"] == CURRENT_DEVKIT_VERSION
     assert metadata.json()["download_path"] == (
         "/api/super-agent-support/developer-kit/v1.zip"
     )
@@ -788,7 +808,7 @@ def test_developer_kit_is_downloadable_without_server_source(
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-devkit-1.9.29"
+    prefix = f"dclaw-super-agent-devkit-{CURRENT_DEVKIT_VERSION}"
     assert f"{prefix}/dclaw_agent_devkit.py" in names
     assert f"{prefix}/bootstrap.ps1" in names
     assert f"{prefix}/bootstrap.sh" in names
@@ -953,23 +973,23 @@ def test_developer_pack_is_downloadable_and_self_describing(
         downloaded = client.get("/developer-pack/download")
 
     assert health.status_code == 200
-    assert health.json()["version"] == "1.18.52"
+    assert health.json()["version"] == CURRENT_PLUGIN_VERSION
     assert metadata.status_code == 200
     payload = metadata.json()
-    assert payload["version"] == "1.10.41"
-    assert payload["standard"]["version"] == "2.62"
-    assert payload["devkit_version"] == "1.9.29"
+    assert payload["version"] == CURRENT_PACK_VERSION
+    assert payload["standard"]["version"] == CURRENT_STANDARD_VERSION
+    assert payload["devkit_version"] == CURRENT_DEVKIT_VERSION
     assert payload["server_source_required"] is False
     assert payload["download_path"].endswith("/developer-pack/download")
     assert payload["sha256"] == hashlib.sha256(downloaded.content).hexdigest()
     assert payload["content_sha256"] == payload["sha256"]
     assert downloaded.status_code == 200
-    assert "dclaw-super-agent-developer-pack-1.10.41.zip" in (
+    assert f"dclaw-super-agent-developer-pack-{CURRENT_PACK_VERSION}.zip" in (
         downloaded.headers["content-disposition"]
     )
     with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
         names = set(archive.namelist())
-    prefix = "dclaw-super-agent-developer-pack-1.10.41"
+    prefix = f"dclaw-super-agent-developer-pack-{CURRENT_PACK_VERSION}"
     assert f"{prefix}/PACKAGE-MANIFEST.json" in names
     assert f"{prefix}/SHA256SUMS" in names
     assert f"{prefix}/dclaw_developer.py" in names

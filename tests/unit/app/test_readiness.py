@@ -49,8 +49,8 @@ def test_all_agents_and_exact_plugin_versions_are_ready(monkeypatch):
         monkeypatch,
         phase="ready",
         agents={"a": True, "b": True},
-        expected={"support": "1.18.57"},
-        loaded={"support": "1.18.57"},
+        expected={"support": "1.18.58"},
+        loaded={"support": "1.18.58"},
     )
     response = get_readiness()
     assert response.status_code == 200
@@ -62,7 +62,7 @@ def test_plugin_fallback_or_agent_failure_blocks_readiness(monkeypatch):
         monkeypatch,
         phase="ready",
         agents={"a": True, "b": False},
-        expected={"support": "1.18.57"},
+        expected={"support": "1.18.58"},
         loaded={"support": "1.18.52"},
     )
     response = get_readiness()

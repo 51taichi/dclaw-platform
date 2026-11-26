@@ -20,6 +20,16 @@ PLUGIN_ROOT = ROOT / "plugins" / "bundle" / "super-agent-support"
 PACK_ROOT = PLUGIN_ROOT / "developer_pack"
 PACK_CLI = PACK_ROOT / "dclaw_developer.py"
 PLAYBOOK_NAME = "super-agent-development-standard-v1.zh-CN.md"
+CURRENT_PACK_VERSION = (PACK_ROOT / "VERSION").read_text(encoding="ascii").strip()
+CURRENT_DEVKIT_VERSION = (
+    PLUGIN_ROOT / "devkit" / "VERSION"
+).read_text(encoding="ascii").strip()
+CURRENT_PROJECT = json.loads(
+    (PACK_ROOT / "templates" / "project" / "project.json").read_text(
+        encoding="utf-8",
+    ),
+)
+CURRENT_STANDARD_VERSION = CURRENT_PROJECT["standard"]["version"]
 
 
 def _module(name: str, path: Path):
@@ -36,16 +46,16 @@ def test_developer_pack_archive_is_complete_and_reproducible():
     second, repeated = archive.build_archive(PLUGIN_ROOT)
     assert first == second
     assert metadata == repeated
-    assert metadata["version"] == "1.10.41"
+    assert metadata["version"] == CURRENT_PACK_VERSION
     assert metadata["standard"] == {
         "id": "dclaw.super-agent-development",
-        "version": "2.62",
+        "version": CURRENT_STANDARD_VERSION,
     }
-    assert metadata["devkit_version"] == "1.9.29"
+    assert metadata["devkit_version"] == CURRENT_DEVKIT_VERSION
     assert metadata["server_source_required"] is False
     assert metadata["sha256"] == hashlib.sha256(first).hexdigest()
 
-    prefix = "dclaw-super-agent-developer-pack-1.10.41/"
+    prefix = f"dclaw-super-agent-developer-pack-{CURRENT_PACK_VERSION}/"
     with zipfile.ZipFile(io.BytesIO(first)) as package:
         names = set(package.namelist())
         manifest = json.loads(package.read(prefix + "PACKAGE-MANIFEST.json"))
@@ -72,7 +82,7 @@ def test_developer_pack_archive_is_complete_and_reproducible():
         "examples/minimal-local/example.json",
     }
     assert {prefix + name for name in expected} <= names
-    assert manifest["version"] == "1.10.41"
+    assert manifest["version"] == CURRENT_PACK_VERSION
     assert "devkit/wheelhouse/cryptography-46.0.3" in checksums
     assert not any(
         "src/qwenpaw" in name
@@ -148,11 +158,11 @@ def test_upgrade_updates_devkit_version_and_immediately_validates(tmp_path):
     result = cli.upgrade_project(project, accept_standard=False)
 
     upgraded = json.loads(metadata_path.read_text(encoding="utf-8"))
-    assert upgraded["developer_pack_version"] == "1.10.41"
-    assert upgraded["standard"]["version"] == "2.62"
-    assert upgraded["devkit_version"] == "1.9.29"
+    assert upgraded["developer_pack_version"] == cli.PACK_VERSION
+    assert upgraded["standard"]["version"] == cli.STANDARD_VERSION
+    assert upgraded["devkit_version"] == cli.DEVKIT_VERSION
     assert result["previous"]["devkit_version"] == "1.4.0"
-    assert result["current"]["devkit_version"] == "1.9.29"
+    assert result["current"]["devkit_version"] == cli.DEVKIT_VERSION
     assert cli.release_gate(project)["status"] == "valid"
 
 

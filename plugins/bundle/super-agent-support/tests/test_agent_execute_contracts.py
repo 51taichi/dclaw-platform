@@ -10,6 +10,8 @@ from devkit.agent_execute_api_demo import (
     execute_agent_loop,
     execute_json,
     execute_text,
+    execute_v2_agent_loop,
+    execute_v2_candidate,
     fail_turn,
 )
 from super_agent.orchestration_contract import WorkspaceTurnFailure
@@ -72,6 +74,8 @@ async def test_reference_demo_calls_exact_host_contracts():
     assert (await execute_text(host, messages))["text"] == "ok"
     assert (await execute_json(host, messages))["text"] == "ok"
     assert (await execute_agent_loop(host, messages, "Use tools."))["text"] == "ok"
+    assert (await execute_v2_agent_loop(host, messages))["text"] == "ok"
+    assert (await execute_v2_candidate(host, messages, json_object=True))["text"] == "ok"
     assert (await fail_turn(
         host, "invocation", "HOST.AGENT_EXECUTE_FAILED",
     )) == {"accepted": True}

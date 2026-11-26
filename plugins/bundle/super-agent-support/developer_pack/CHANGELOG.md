@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.10.47 - 2026-11-26
+
+- Bundle standard 2.68 and DevKit 1.9.32 with the closed `agent.execute` v2
+  contract and reference calls.
+- Default new v2 releases to the governed Agent Loop while preserving the v1
+  candidate default and requiring explicit `candidate` for v2 model-only JSON.
+
 ## 1.10.46 - 2026-11-20
 
 - Bundle standard 2.67 and DevKit 1.9.31 with backward-compatible workspace

@@ -53,6 +53,43 @@ async def execute_agent_loop(
     return result
 
 
+async def execute_v2_agent_loop(
+    host: Any,
+    messages: list[dict[str, Any]],
+    instruction: str | None = None,
+    *,
+    require_interaction: bool = False,
+) -> dict[str, Any]:
+    request: dict[str, Any] = {
+        "messages": messages,
+        "require_interaction": require_interaction,
+    }
+    if instruction is not None:
+        request["instruction"] = instruction
+    validate(request, _schema("agent-execute-v2", "request"))
+    result = await host.call("agent.execute", request)
+    validate(result, _schema("agent-execute-v2", "response"))
+    return result
+
+
+async def execute_v2_candidate(
+    host: Any,
+    messages: list[dict[str, Any]],
+    *,
+    json_object: bool = False,
+) -> dict[str, Any]:
+    request: dict[str, Any] = {
+        "messages": messages,
+        "execution_mode": "candidate",
+    }
+    if json_object:
+        request["response_format"] = "json_object"
+    validate(request, _schema("agent-execute-v2", "request"))
+    result = await host.call("agent.execute", request)
+    validate(result, _schema("agent-execute-v2", "response"))
+    return result
+
+
 async def fail_turn(
     host: Any,
     invocation_id: str,

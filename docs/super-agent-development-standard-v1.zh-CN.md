@@ -4,9 +4,9 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.67`
+当前版本：`2.68`
 
-发布日期：`2026-11-20`
+发布日期：`2026-11-26`
 
 ## 1. 文档目的
 
@@ -502,7 +502,7 @@ Host 调用合同：
 | 调用 | 请求要点 | 成功结果 |
 |---|---|---|
 | `session.context` | `{}` | 当前可信会话上下文 |
-| `agent.execute` | 至少传本轮 `messages`；普通文本和 JSON 候选使用默认无工具模式，其他确需模型工具调用的能力才传 `execution_mode="agent_loop"` | 内部模型候选，不自动成为客户回复 |
+| `agent.execute` | 至少传本轮 `messages`；合同 v2 省略 `execution_mode` 时进入 Agent Loop，显式 `candidate` 才是无工具候选；已签名 v1 保持原默认候选行为 | Agent Loop 结果或内部模型候选，均须由 Agent 验证后完成本轮 |
 | `runtime.trace` | 结构化、无 Secret 的诊断对象 | `{"accepted":true}` |
 | `runtime.complete` | 当前 `invocation_id`、合法 assistant `message`、可选 `diagnostics` | `{"accepted":true}` 并原子提交 |
 | `runtime.fail` | 当前 `invocation_id`、稳定 `error_code`、可选 `diagnostic_ref` | `{"accepted":true}` 并丢弃事务 |
@@ -510,7 +510,9 @@ Host 调用合同：
 
 `runtime.complete` 与 `runtime.fail` 每轮只能二选一调用一次。DevKit 的 `templates/minimal/agent/runtime.py` 是不依赖服务器源码的最小可运行示例。
 
-`agent.execute` 的正式控制边界：默认候选模式可选传 `response_format="json_object"`，Host 会以无工具的模型调用请求 JSON object，但模型是否返回可见文本、是否符合业务 Schema 仍必须由 Agent 校验。`response_format` 不得与 `execution_mode="agent_loop"` 同用。当前合同不支持强制业务 JSON Schema、调用方指定 `max_tokens` 或调用方控制 thinking。`agent_loop` 可使用 `instruction`、`require_interaction`、`public_stream` 及 `recover_empty_reply` 的已实现参数；其中空回复恢复只尝试一次无工具的文本生成，不保证结构化 JSON，不得代替 Agent 自己的候选校验。
+`agent.execute` 的正式控制边界按签名 Release 声明的合同版本决定。v2 省略 `execution_mode` 或显式传 `agent_loop` 都进入该专家现有的 AgentScope Agent Loop；只有显式 `execution_mode="candidate"` 才执行无工具模型候选。v2 的 `response_format="json_object"` 只允许与显式 `candidate` 同用。已签名 v1 Release 保持原默认候选行为：省略模式时为候选，显式 `agent_loop` 仍进入工具循环，v1 不接受 `candidate`。Host 不根据请求形状猜测或改写合同版本。
+
+Agent Loop 可使用 `instruction`、`require_interaction`、`public_stream` 及 `recover_empty_reply` 的已实现参数；工具仍受该 Release 的签名能力声明、安装授权和专家配置约束，统一 Agent Loop 不会自动授予交互卡、AIGC 或本地助手能力。候选模式的模型输出不是客户回复或可信操作回执，必须通过业务 Schema 与不变量校验后才能使用。当前合同不支持调用方指定 `max_tokens`、控制 thinking 或用 `response_format` 强制业务 JSON Schema。空回复恢复只尝试一次无工具文本生成，不保证结构化 JSON，也不能代替 Agent 自己的候选校验。
 
 模型选择以客户当前会话显式选模优先，其次为签名专家默认模型；`auto/routing` 保留平台自动路由。固定模型必须在目标实例当前聊天模型目录中可用，且 Host 实际执行模型须与选定模型一致。固定模型已退役或运行时静默切到其他模型时，Host 在专家 runtime 前给出稳定的模型路由错误并丢弃事务；开发方应更新签名包默认模型或由客户选择受支持模型，不得依赖全局回退掩盖旧声明。`agent_loop` 的 Host 执行预算先于整轮截止时间，模型请求、模型流与整段执行超时分别记录无正文的阶段、尝试次数和关联 ID；历史未采集阶段不得补造。普通开发账号仍通过既有授权诊断接口按关联 ID 查询，Schema 与调用入口不变。
 
@@ -727,8 +729,8 @@ DClaw 平台负责卡片持久化、渲染、提交和可信回传；开发方�
 
 新建或更新的超级专家使用相同的两段式业务回复与建卡流程；业务内容仍由各专家自己的需求和状态机决定，卡片组件、字段与回执统一遵守插件实时合同：
 
-1. 专家运行时用默认无工具模式调用 `agent.execute`，取得内部业务文本候选。此调用不设置 `response_format="json_object"`，不直接流式展示给客户，也不以候选正文证明卡片已创建。
-2. 若已确认业务流程或状态机需要客户输入，运行时先调用 Host `interaction.capabilities.list/1` 取得本轮所需组件的实时详细 Schema，再以第一段文本、可信业务状态及该 Schema 为输入，第二次调用无工具的 `agent.execute` 生成卡片草案。第二次调用可以设置 `response_format="json_object"`；模型只建议组件类型和参数，不调用建卡工具，不增加、删除或改写第一段确定的业务问题和选项。无需客户输入的回合不创建卡片。
+1. 专家运行时用无工具候选模式调用 `agent.execute`，取得内部业务文本候选。声明合同 v2 的新包必须显式传 `execution_mode="candidate"`；已签名 v1 包可继续省略模式。此调用不设置 `response_format="json_object"`，不直接流式展示给客户，也不以候选正文证明卡片已创建。
+2. 若已确认业务流程或状态机需要客户输入，运行时先调用 Host `interaction.capabilities.list/1` 取得本轮所需组件的实时详细 Schema，再以第一段文本、可信业务状态及该 Schema 为输入，第二次调用无工具的 `agent.execute` 生成卡片草案。v2 同样显式传 `execution_mode="candidate"`，并可设置 `response_format="json_object"`；模型只建议组件类型和参数，不调用建卡工具，不增加、删除或改写第一段确定的业务问题和选项。无需客户输入的回合不创建卡片。
 3. 运行时解析第二段候选，核对业务问题、字段顺序、必填关系、选项、状态、`task_key` 和 `interaction_revision`，并按实时组件 Schema 校验。校验失败时只针对第二段做有界重试；仍不合格则记录脱敏错误并失败关闭。需要卡片的回合禁止降级为仅输出文本问题。
 4. 只有校验通过后，运行时才以稳定幂等键调用 Host `interaction.card.create/1`；插件再次执行权威 Schema、授权和作用域校验。运行时核对真实 `interaction_id`、`PENDING` 状态及 `interaction.card.receipt/1` 的 `created` 回执，再调用 `runtime.complete` 原子提交客户回复及卡片。任何内部候选、失败草案和未经确认的建卡结果都不得提前展示为已完成回复。
 
@@ -2300,10 +2302,10 @@ Agent 名称：<可选，中文显示名称>
 2. 开发方自己的业务目标、源 Agent 材料和测试凭证；
 3. 从目标 DClaw 认证调用元数据接口并按其 `download_path` 下载、核对 SHA-256 的官方开发包；兼容自动化可以继续单独下载同版本官方 DevKit。
 
-当前开发包 `1.10.41` 是推荐的单一离线移交物，必须提供：
+当前开发包 `1.10.47` 是推荐的单一离线移交物，必须提供：
 
 - 唯一标准文件与明确的标准版本，不复制第二套人工规则；
-- 官方 DevKit `1.9.29` 及其完整离线加密依赖；
+- 官方 DevKit `1.9.32` 及其完整离线加密依赖；
 - `dclaw_developer.py` 的 `doctor`、`info`、`init`、`validate`、`test`、`keygen`、`capability-build`、`build`、`upgrade` 和 `demo`；
 - 超级专家、业务服务和本地能力包模板，以及职责边界示例；
 - Agent 自主出站、公共业务服务、本地执行和能力包 Schema/SDK；
@@ -2315,7 +2317,7 @@ Agent 名称：<可选，中文显示名称>
 
 开发包本身不得包含平台管理员凭据、生产地址、签名私钥、供应商 Secret、客户数据或 DClaw 私有实现。包内公开工具不得导入 `qwenpaw` 或要求开发者克隆服务器仓库。
 
-当前 DevKit `1.9.29` 必须提供：
+当前 DevKit `1.9.32` 必须提供：
 
 - `dclaw_agent_devkit.py`：`doctor`、`contracts`、`digest`、`validate`、`keygen`、`build`、`verify`；
 - `capability-catalog.json`：当前可声明的能力、版本、组和依赖；
@@ -2375,7 +2377,7 @@ curl --fail-with-body -H "Authorization: Bearer ${DCLAW_ACCESS_TOKEN}" \
 
 开发者先查看 `failure_events` 的时间顺序及 `outcome`，再以 `final_blocker` 判断本轮最终阻断。`first_failure` 仅为兼容字段，可能是已恢复的早期错误，不能单独当作整轮原因。`status=not_recorded`、`unrecorded_fields` 或 `provider_code/param=null` 表示当时没有留存，不得用模型解释补造。新回合的卡片参数校验失败返回 `field_path`、稳定 `constraint` 及 `contract`；提供方拒绝只记录 HTTP 状态、稳定 code 与 param，不记录错误正文、模型原文、提示词或客户数据。`stages` 中 `interaction.tool.invoked` 才证明模型进入了插件工具；`interaction.operation.started/completed/failed` 分别证明已发起、已完成或已失败的平台卡片操作。没有这些记录的旧回合不能据此推断工具未执行。
 
-`agent.execute(execution_mode="agent_loop")` 会使用普通文本/工具调用模式，不继承模型配置里的 JSON-only 默认值。旧专家继续通过实时 `interaction_component_catalog` 的详细 Schema 使用建卡模型工具；新建或更新专家按第 13.1 节使用 Host 目录、两段无工具候选及直接 Host 建卡。两条路径都要求 `task_key` 为字符串、`interaction_revision` 为正整数、`card` 为对象，并取得真实 `PENDING` 回执。`response_format="json_object"` 只适用于候选模式，不与 `agent_loop` 组合。历史已签名专家无需变更请求；新增合同是可选的开发者读接口。
+`agent.execute` v2 省略模式或显式 `execution_mode="agent_loop"` 时使用普通文本/工具调用模式，不继承模型配置里的 JSON-only 默认值。旧专家继续通过实时 `interaction_component_catalog` 的详细 Schema 使用建卡模型工具；新建或更新专家按第 13.1 节使用 Host 目录、两段显式 `candidate` 候选及直接 Host 建卡。两条路径都要求 `task_key` 为字符串、`interaction_revision` 为正整数、`card` 为对象，并取得真实 `PENDING` 回执。`response_format="json_object"` 只适用于候选模式，不与 Agent Loop 组合。历史已签名 v1 专家无需变更请求。
 
 ### 33.2 六部分公共能力验收
 
@@ -2435,6 +2437,11 @@ Skill 和专家发布前须对每条实际使用的路径同时验证：正确�
 以上是通用 Skill 的平台合同输入。Skill 维护方应在其 `references/capability-verification.md` 补 `/v2/` 的首错和终止根因区分，在 `scripts/runtime_diagnostics_with_login.py` 增加按官方 DevKit v2 Schema 查询和摘要，在相关脚本测试加入已恢复错误、最终阻断、`no_record`、越权及旧版回退案例。平台不直接覆盖 Skill 发布仓库，也不把单个专家的业务字段写成公共规则。
 
 ## 34. 版本记录
+
+### 2.68 - 2026-11-26
+
+- Support Plugin `1.18.58` 正式发布 `agent.execute` v2：省略执行模式时进入统一 AgentScope Agent Loop，显式 `candidate` 保留无工具文本或 JSON 候选；工具能力仍按签名声明和安装授权逐项限制。
+- 已签名 v1 Release 保持省略模式即候选的原行为，显式 `agent_loop` 继续兼容。DevKit `1.9.32` 发布关闭 v2 Schema 与参考调用，Developer Pack `1.10.47` 的新模板声明 v2；平台不按请求形状猜测版本，也不把旧 Harness 状态后端带入新合同。
 
 ### 2.67 - 2026-11-20
 

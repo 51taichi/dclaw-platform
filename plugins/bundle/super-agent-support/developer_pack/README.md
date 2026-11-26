@@ -1,5 +1,10 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.47 bundles standard 2.68 and DevKit 1.9.32. New releases that
+declare `agent.execute` v2 use the governed Agent Loop by default and request
+model-only generation with explicit `execution_mode="candidate"`. Existing
+signed v1 releases retain their candidate default and remain compatible.
+
 Version 1.10.46 bundles standard 2.67 and DevKit 1.9.31. Retired Release
 membership no longer blocks an otherwise scoped, schema-compatible workspace
 state continuation. Unbound legacy auxiliary JSON without a trusted identity is
