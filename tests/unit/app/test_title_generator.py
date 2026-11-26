@@ -8,12 +8,14 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from agentscope.message import Msg as AgentScopeMsg
 
 from qwenpaw.app.runner.manager import ChatManager
 from qwenpaw.app.runner.models import ChatSpec, ChatUpdate
 from qwenpaw.app.runner.repo.json_repo import JsonChatRepository
 from qwenpaw.app.runner.title_generator import (
     MAX_TITLE_CHARS,
+    TITLE_PROMPT,
     _clean_title,
     _extract_text_from_response,
     generate_and_update_title,
@@ -257,6 +259,12 @@ async def test_updates_chat_name_with_cleaned_title(
     assert saved is not None
     assert saved.name == "Trip Planning Assistant"
     model.assert_awaited_once()
+    messages = model.await_args.args[0]
+    assert all(isinstance(item, AgentScopeMsg) for item in messages)
+    assert messages[0].get_text_content() == TITLE_PROMPT
+    assert messages[1].get_text_content() == (
+        "Help me plan a trip to Tokyo next week."
+    )
 
 
 async def test_skips_when_user_message_blank(

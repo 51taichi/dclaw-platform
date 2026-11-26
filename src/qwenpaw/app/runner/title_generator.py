@@ -8,9 +8,9 @@ the active chat model for a concise title and persists it via
 ``ChatManager.patch_chat``. Failures are logged and swallowed so title
 generation never affects the user-facing request.
 
-The LLM call mirrors ``app/routers/skills_stream.py``: build raw
-role/content dicts, await ``model(messages)`` directly without a formatter,
-and tolerate the same ``(ValueError, AppBaseException)`` factory failures.
+The LLM call uses AgentScope ``Msg`` objects, awaits ``model(messages)``
+directly, and tolerates the same ``(ValueError, AppBaseException)`` factory
+failures as other best-effort background model tasks.
 """
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from qwenpaw.runtime.exceptions import AppBaseException
+from qwenpaw.agents.message_compat import Msg
 
 from .models import ChatUpdate
 
@@ -182,8 +183,16 @@ async def generate_and_update_title(
             return
 
         messages = [
-            {"role": "system", "content": TITLE_PROMPT},
-            {"role": "user", "content": message},
+            Msg(
+                name="system",
+                role="system",
+                content=TITLE_PROMPT,
+            ),
+            Msg(
+                name="user",
+                role="user",
+                content=message,
+            ),
         ]
 
         raw_title = await asyncio.wait_for(
