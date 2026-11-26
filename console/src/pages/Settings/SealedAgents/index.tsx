@@ -4,11 +4,9 @@ import {
   Avatar,
   Button,
   Card,
-  Divider,
   Modal,
   Select,
   Space,
-  Switch,
   Table,
   Tag,
   Typography,
@@ -16,7 +14,6 @@ import {
 } from "antd";
 import type { UploadProps } from "antd";
 import {
-  Cpu,
   PackageCheck,
   RefreshCw,
   ShieldCheck,
@@ -59,31 +56,6 @@ function activationErrorMessage(error: unknown) {
   } catch {
     return error.message;
   }
-}
-
-function HarnessStatusRow({
-  label,
-  value,
-}: {
-  label: string;
-  value: boolean | null;
-}) {
-  return (
-    <div className={styles.harnessStatusRow}>
-      <Typography.Text strong>{label}</Typography.Text>
-      <Space size={8}>
-        {value === null ? (
-          <Typography.Text type="secondary">未声明</Typography.Text>
-        ) : null}
-        <Switch
-          aria-label={label}
-          checked={value === true}
-          disabled
-          size="small"
-        />
-      </Space>
-    </div>
-  );
 }
 
 export default function SealedAgentsPage() {
@@ -441,36 +413,6 @@ export default function SealedAgentsPage() {
             expandable={{
               expandedRowRender: (agent) => (
                 <div className={styles.expandedContent}>
-                  {agent.harness_status ? (
-                    <div
-                      className={styles.harnessPanel}
-                      data-testid="harness-status"
-                    >
-                      <div className={styles.harnessTitle}>
-                        <Cpu
-                          aria-hidden="true"
-                          data-testid="harness-title-icon"
-                          size={18}
-                        />
-                        <Typography.Text strong>Harness 能力</Typography.Text>
-                      </div>
-                      <div className={styles.harnessControls}>
-                        <HarnessStatusRow
-                          label="Skill 智能调用"
-                          value={agent.harness_status.skill_reader_enabled}
-                        />
-                        <Divider
-                          className={styles.harnessDivider}
-                          data-testid="harness-control-divider"
-                          type="vertical"
-                        />
-                        <HarnessStatusRow
-                          label="完整 Agent 循环"
-                          value={agent.harness_status.agent_loop_enabled}
-                        />
-                      </div>
-                    </div>
-                  ) : null}
                   <div
                     className={styles.expertProfile}
                     data-testid="expert-profile"

@@ -42,10 +42,6 @@ export interface SealedAgentOperational {
   version?: string | null;
   signer_id?: string | null;
   content_digest?: string | null;
-  harness_status?: {
-    skill_reader_enabled: boolean | null;
-    agent_loop_enabled: boolean | null;
-  };
   releases: SealedRelease[];
   capabilities: AgentCapabilities;
 }

@@ -342,7 +342,7 @@ it("uploads a promotional banner with a visible size hint", async () => {
   expect(screen.getByText("更新宣传图")).toBeVisible();
 });
 
-it("shows configured harness states as disabled switches", async () => {
+it("shows the expert profile without obsolete harness controls", async () => {
   const user = userEvent.setup();
   vi.mocked(sealedAgentsApi.list).mockResolvedValue([
     {
@@ -352,10 +352,6 @@ it("shows configured harness states as disabled switches", async () => {
       enabled: true,
       availability: "available",
       releases: [],
-      harness_status: {
-        skill_reader_enabled: true,
-        agent_loop_enabled: false,
-      },
       capabilities: {
         invoke: true,
         inspect: false,
@@ -371,68 +367,7 @@ it("shows configured harness states as disabled switches", async () => {
   render(<SealedAgentsPage />);
   await user.click(await screen.findByRole("button", { name: /Expand row/ }));
 
-  expect(screen.getByText("Harness 能力")).toBeVisible();
-  const skillReader = screen.getByRole("switch", {
-    name: "Skill 智能调用",
-  });
-  const agentLoop = screen.getByRole("switch", {
-    name: "完整 Agent 循环",
-  });
-  expect(skillReader).toBeChecked();
-  expect(skillReader).toBeDisabled();
-  expect(agentLoop).not.toBeChecked();
-  expect(agentLoop).toBeDisabled();
-  expect(screen.queryByText("已开启")).not.toBeInTheDocument();
-  expect(screen.queryByText("已关闭")).not.toBeInTheDocument();
-  expect(screen.getByTestId("harness-control-divider")).toBeVisible();
-  expect(screen.getByTestId("harness-title-icon")).toBeVisible();
-  const harnessPanel = screen.getByTestId("harness-status");
-  expect(harnessPanel.parentElement?.firstElementChild).toBe(harnessPanel);
-  expect(
-    screen.queryByText("状态由当前激活版本配置决定，暂不支持在此调整"),
-  ).not.toBeInTheDocument();
-  expect(
-    screen.queryByText("按需读取当前超级专家已注册的 Skill"),
-  ).not.toBeInTheDocument();
-  expect(
-    screen.queryByText("允许当前超级专家运行完整 Agent 推理与工具循环"),
-  ).not.toBeInTheDocument();
-});
-
-it("marks missing harness declarations without inventing a state", async () => {
-  const user = userEvent.setup();
-  vi.mocked(sealedAgentsApi.list).mockResolvedValue([
-    {
-      agent_id: "legacy-super-expert",
-      name: "旧超级专家",
-      description: "",
-      enabled: true,
-      availability: "available",
-      releases: [],
-      harness_status: {
-        skill_reader_enabled: null,
-        agent_loop_enabled: null,
-      },
-      capabilities: {
-        invoke: true,
-        inspect: false,
-        edit: false,
-        clone: false,
-        export: false,
-        download: false,
-        trace: false,
-      },
-    },
-  ]);
-
-  render(<SealedAgentsPage />);
-  await user.click(await screen.findByRole("button", { name: /Expand row/ }));
-
-  expect(screen.getAllByText("未声明")).toHaveLength(2);
-  expect(screen.getAllByRole("switch")).toHaveLength(2);
-  expect(
-    screen
-      .getAllByRole("switch")
-      .every((item) => item.hasAttribute("disabled")),
-  ).toBe(true);
+  expect(screen.getByTestId("expert-profile")).toBeVisible();
+  expect(screen.queryByText("Harness 能力")).not.toBeInTheDocument();
+  expect(screen.queryByRole("switch")).not.toBeInTheDocument();
 });
