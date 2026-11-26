@@ -13,6 +13,16 @@ from ..utils.estimate_token_counter import EstimatedTokenCounter
 logger = logging.getLogger(__name__)
 
 
+def _message_timestamp(message: Msg) -> str:
+    """Read AgentScope 1.x or 2.x message time as a stable string."""
+    value = getattr(message, "timestamp", None)
+    if not value:
+        value = getattr(message, "created_at", None)
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value or "")
+
+
 class AsMsgHandler:
     """Handles token counting, formatting, and context
     compaction for AgentScope messages."""
@@ -99,7 +109,7 @@ class AsMsgHandler:
                 name=message.name or message.role,
                 role=message.role,
                 content=blocks,
-                timestamp=message.timestamp or "",
+                timestamp=_message_timestamp(message),
                 metadata=message.metadata or {},
             )
 
@@ -197,7 +207,7 @@ class AsMsgHandler:
             name=message.name or message.role,
             role=message.role,
             content=blocks,
-            timestamp=message.timestamp or "",
+            timestamp=_message_timestamp(message),
             metadata=message.metadata or {},
         )
 

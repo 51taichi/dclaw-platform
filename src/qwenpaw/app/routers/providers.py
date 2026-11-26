@@ -33,6 +33,7 @@ from ...providers.provider import (
 )
 from ...config.config import ActiveModelsInfo
 from ...providers.provider_manager import ProviderManager
+from ...providers.model_aliases import normalize_model_selection
 from ...providers.openrouter_provider import OpenRouterProvider
 from ...config.config import ModelSlotConfig
 from ..chat_access import ensure_chat_access
@@ -939,6 +940,11 @@ async def get_active_models(
     def visible(slot: ModelSlotConfig | None) -> ModelSlotConfig | None:
         if slot is None or published is None:
             return None
+        provider_id, model = normalize_model_selection(
+            slot.provider_id,
+            slot.model,
+        )
+        slot = ModelSlotConfig(provider_id=provider_id, model=model)
         if slot.provider_id == AUTO_MODEL_PROVIDER_ID:
             return slot if published else None
         return slot if (slot.provider_id, slot.model) in published else None
@@ -1031,8 +1037,12 @@ async def set_active_model(
     body: ModelSlotRequest = Body(...),
 ) -> ActiveModelsInfo:
     """Set active model by scope."""
+    provider_id, model = normalize_model_selection(
+        body.provider_id,
+        body.model,
+    )
     is_auto_slot = (
-        body.provider_id == AUTO_MODEL_PROVIDER_ID and body.model == AUTO_MODEL_ID
+        provider_id == AUTO_MODEL_PROVIDER_ID and model == AUTO_MODEL_ID
     )
     if body.scope == "global":
         if is_auto_slot:
@@ -1041,7 +1051,7 @@ async def set_active_model(
                 detail="Auto routing can only be set for agent or chat scope",
             )
         try:
-            await manager.activate_model(body.provider_id, body.model)
+            await manager.activate_model(provider_id, model)
         except (
             FileNotFoundError,
             RuntimeError,
@@ -1063,7 +1073,7 @@ async def set_active_model(
             )
 
         if not is_auto_slot:
-            _validate_model_slot(manager, body.provider_id, body.model)
+            _validate_model_slot(manager, provider_id, model)
         workspace = await get_agent_for_request(request)
         chat_row = ensure_chat_access(request, body.chat_id)
 
@@ -1074,19 +1084,19 @@ async def set_active_model(
             ChatUpdate(
                 meta={
                     "active_model": {
-                        "provider_id": body.provider_id,
-                        "model": body.model,
+                        "provider_id": provider_id,
+                        "model": model,
                     },
                 },
             ),
         )
 
         if not is_auto_slot:
-            manager.maybe_probe_multimodal(body.provider_id, body.model)
+            manager.maybe_probe_multimodal(provider_id, model)
         return ActiveModelsInfo(
             active_llm=ModelSlotConfig(
-                provider_id=body.provider_id,
-                model=body.model,
+                provider_id=provider_id,
+                model=model,
             ),
         )
 
@@ -1108,8 +1118,8 @@ async def set_active_model(
         profile = config.agents.profiles[workspace.agent_id]
         profile.active_model_override = True
         profile.active_model = ModelSlotConfig(
-            provider_id=body.provider_id,
-            model=body.model,
+            provider_id=provider_id,
+            model=model,
         )
         save_config(config)
         # Hot reload agent (async, non-blocking)
@@ -1133,12 +1143,12 @@ async def set_active_model(
         ) from exc
 
     if not is_auto_slot:
-        manager.maybe_probe_multimodal(body.provider_id, body.model)
+        manager.maybe_probe_multimodal(provider_id, model)
 
     return ActiveModelsInfo(
         active_llm=ModelSlotConfig(
-            provider_id=body.provider_id,
-            model=body.model,
+            provider_id=provider_id,
+            model=model,
         ),
     )
 

@@ -32,9 +32,11 @@ class _FakeChannelManager:
 
 
 class _FakeChatManager:
-    def __init__(self, chat_id: str = "chat-real-id"):
+    def __init__(self, chat_id: str = "chat-real-id", meta=None):
         self.chat_id = chat_id
+        self.meta = meta or {}
         self.calls: list[dict[str, str]] = []
+        self.patches = []
 
     async def get_or_create_chat(
         self,
@@ -51,7 +53,15 @@ class _FakeChatManager:
                 "name": name,
             },
         )
-        return SimpleNamespace(id=self.chat_id, name="existing", meta={})
+        return SimpleNamespace(
+            id=self.chat_id,
+            name="existing",
+            meta=self.meta,
+        )
+
+    async def patch_chat(self, chat_id, patch):
+        self.patches.append((chat_id, patch))
+        return None
 
 
 class _FakeTaskTracker:
@@ -82,12 +92,36 @@ class _FakeTaskTracker:
 
 
 class _FakeRequest:
-    def __init__(self, limiter=None):
+    def __init__(self, limiter=None, provider_manager=None):
         self.state = SimpleNamespace(user_id=42)
-        if limiter is not None:
+        if limiter is not None or provider_manager is not None:
             self.app = SimpleNamespace(
-                state=SimpleNamespace(task_limiter=limiter),
+                state=SimpleNamespace(
+                    task_limiter=limiter,
+                    provider_manager=provider_manager,
+                ),
             )
+
+
+class _FakeProvider:
+    disabled = False
+    extra_models = []
+
+    def __init__(self, *models):
+        self.models = [
+            SimpleNamespace(id=model, model_type="llm") for model in models
+        ]
+
+    def has_model(self, model):
+        return any(item.id == model for item in self.models)
+
+
+class _FakeProviderManager:
+    def __init__(self, providers):
+        self.providers = providers
+
+    def get_provider(self, provider_id):
+        return self.providers.get(provider_id)
 
 
 @pytest.mark.asyncio
@@ -149,6 +183,103 @@ async def test_console_chat_stream_response_exposes_real_chat_id(monkeypatch):
 
     assert response.headers["x-qwenpaw-chat-id"] == "chat-real-id"
     assert response.headers["x-qwenpaw-session-id"] == "draft-session"
+
+
+@pytest.mark.asyncio
+async def test_console_chat_migrates_legacy_model_override(monkeypatch):
+    chat_manager = _FakeChatManager(
+        meta={
+            "active_model": {
+                "provider_id": "deepseek",
+                "model": "deepseek-v4-flash",
+            },
+        },
+    )
+    workspace = SimpleNamespace(
+        channel_manager=_FakeChannelManager(),
+        chat_manager=chat_manager,
+        task_tracker=_FakeTaskTracker(),
+    )
+    selected = []
+
+    async def fake_get_agent_for_request(request):
+        _ = request
+        return workspace
+
+    monkeypatch.setattr(
+        console,
+        "get_agent_for_request",
+        fake_get_agent_for_request,
+    )
+    monkeypatch.setattr(console, "set_current_chat_model", selected.append)
+    manager = _FakeProviderManager(
+        {
+            "volcengine-cn": _FakeProvider(
+                "deepseek-v4-flash-ga-260731",
+            ),
+        },
+    )
+
+    await console.post_console_chat(
+        {
+            "channel": "console",
+            "user_id": "default",
+            "session_id": "draft-session",
+            "input": [],
+        },
+        request=_FakeRequest(provider_manager=manager),
+    )
+
+    expected = {
+        "provider_id": "volcengine-cn",
+        "model": "deepseek-v4-flash-ga-260731",
+    }
+    assert selected == [expected]
+    assert chat_manager.patches[0][1].meta == {"active_model": expected}
+
+
+@pytest.mark.asyncio
+async def test_console_chat_clears_unavailable_model_override(monkeypatch):
+    chat_manager = _FakeChatManager(
+        meta={
+            "active_model": {
+                "provider_id": "removed-provider",
+                "model": "removed-model",
+            },
+        },
+    )
+    workspace = SimpleNamespace(
+        channel_manager=_FakeChannelManager(),
+        chat_manager=chat_manager,
+        task_tracker=_FakeTaskTracker(),
+    )
+    selected = []
+
+    async def fake_get_agent_for_request(request):
+        _ = request
+        return workspace
+
+    monkeypatch.setattr(
+        console,
+        "get_agent_for_request",
+        fake_get_agent_for_request,
+    )
+    monkeypatch.setattr(console, "set_current_chat_model", selected.append)
+
+    await console.post_console_chat(
+        {
+            "channel": "console",
+            "user_id": "default",
+            "session_id": "draft-session",
+            "input": [],
+        },
+        request=_FakeRequest(
+            provider_manager=_FakeProviderManager({}),
+        ),
+    )
+
+    assert selected == [None]
+    assert chat_manager.patches[0][1].meta == {"active_model": None}
 
 
 def test_console_chat_dict_input_text_stays_single_text_part():

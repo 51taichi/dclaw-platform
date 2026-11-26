@@ -60,6 +60,17 @@ _anthropic_retryable: tuple[type[Exception], ...] | None = None
 _httpx_retryable: tuple[type[Exception], ...] | None = None
 
 
+class IncompleteModelStreamError(RuntimeError):
+    """Raised when a streaming model response has no terminal chunk."""
+
+    def __init__(self, received_chunks: int) -> None:
+        super().__init__(
+            "Model stream ended before a terminal is_last=True response "
+            f"was received (received_chunks={received_chunks}).",
+        )
+        self.received_chunks = received_chunks
+
+
 @dataclass(frozen=True, slots=True)
 class RetryConfig:
     """Retry policy for transient LLM API failures."""
@@ -143,6 +154,9 @@ def _get_httpx_retryable() -> tuple[type[Exception], ...]:
 
 def _is_retryable(exc: Exception) -> bool:
     """Return *True* if *exc* should trigger a retry."""
+    if isinstance(exc, IncompleteModelStreamError):
+        return True
+
     retryable = (
         _get_openai_retryable()
         + _get_anthropic_retryable()
@@ -454,6 +468,9 @@ class _RetryStreamOwner(AsyncGenerator[ChatResponse, None]):
         self._owns_permit = True
         self._stream_active = False
         self._closed = False
+        self._observed_response_protocol: bool | None = None
+        self._saw_terminal_chunk = False
+        self._delivered_chunks = 0
 
     @classmethod
     async def create(
@@ -567,10 +584,27 @@ class _RetryStreamOwner(AsyncGenerator[ChatResponse, None]):
             try:
                 chunk = await iterator.__anext__()
             except StopAsyncIteration:
-                self._closed = True
                 cleanup_errors = await self._cleanup_current()
                 _raise_cleanup_cancellation(cleanup_errors)
-                raise
+                incomplete = (
+                    self._delivered_chunks == 0
+                    or (
+                        self._observed_response_protocol is True
+                        and not self._saw_terminal_chunk
+                    )
+                )
+                if not incomplete:
+                    self._closed = True
+                    raise
+
+                error = IncompleteModelStreamError(self._delivered_chunks)
+                # Retrying after yielding content would duplicate customer-
+                # visible output. Only a zero-chunk stream is safe to replay.
+                if self._delivered_chunks > 0:
+                    self._closed = True
+                    raise error
+                failure = error
+                continue
             except BaseException as stream_exc:
                 await self._cleanup_current(stream_exc)
                 failure = stream_exc
@@ -583,6 +617,13 @@ class _RetryStreamOwner(AsyncGenerator[ChatResponse, None]):
                 self._limiter.mark_stream_started()
                 self._stream_active = True
                 self._release_permit()
+            if hasattr(chunk, "is_last"):
+                self._observed_response_protocol = True
+                if chunk.is_last is True:
+                    self._saw_terminal_chunk = True
+            elif self._observed_response_protocol is None:
+                self._observed_response_protocol = False
+            self._delivered_chunks += 1
             return chunk
 
     async def aclose(self) -> None:
@@ -629,6 +670,9 @@ class _RetryStreamOwner(AsyncGenerator[ChatResponse, None]):
     def _install_stream(self, stream: AsyncIterable[ChatResponse]) -> None:
         self._stream = stream
         self._iterator = _get_async_iterator(stream)
+        self._observed_response_protocol = None
+        self._saw_terminal_chunk = False
+        self._delivered_chunks = 0
 
     async def _cleanup_current(
         self,

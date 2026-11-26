@@ -6,9 +6,11 @@ import asyncio
 from collections.abc import AsyncGenerator
 
 import pytest
+from agentscope.model import ChatResponse
 
 from qwenpaw import constant
 from qwenpaw.providers.retry_chat_model import (
+    IncompleteModelStreamError,
     RateLimitConfig,
     RetryChatModel,
     RetryConfig,
@@ -102,6 +104,13 @@ class _ImmediateModel:
         return "done"
 
 
+def _response(text: str, *, is_last: bool) -> ChatResponse:
+    return ChatResponse(
+        content=[{"type": "text", "text": text}],
+        is_last=is_last,
+    )
+
+
 @pytest.mark.asyncio
 async def test_agent_rate_limit_does_not_override_platform_model_concurrency(
     monkeypatch,
@@ -149,6 +158,113 @@ async def test_custom_async_iterator_retries_and_closes_failed_stream(
     assert model.calls == 2
     assert first.closed
     assert second.closed
+
+
+@pytest.mark.asyncio
+async def test_empty_model_stream_retries_before_delivering_content(
+    monkeypatch,
+):
+    first = _CustomAsyncIterator([])
+    final = _response("recovered", is_last=True)
+    second = _CustomAsyncIterator([final])
+    model = _StreamingModel([first, second])
+    wrapper = RetryChatModel(
+        model,
+        retry_config=RetryConfig(
+            enabled=True,
+            max_retries=1,
+            backoff_base=0.1,
+            backoff_cap=0.1,
+        ),
+        rate_limit_config=RateLimitConfig(max_concurrent=1, max_qpm=0),
+    )
+
+    async def no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+
+    result = await wrapper(messages=[])
+
+    assert [chunk async for chunk in result] == [final]
+    assert model.calls == 2
+    assert first.closed
+    assert second.closed
+    assert (await get_rate_limiter()).stats()["current_in_flight"] == 0
+
+
+@pytest.mark.asyncio
+async def test_empty_model_stream_raises_stable_error_after_retry_exhaustion(
+    monkeypatch,
+):
+    first = _CustomAsyncIterator([])
+    second = _CustomAsyncIterator([])
+    model = _StreamingModel([first, second])
+    wrapper = RetryChatModel(
+        model,
+        retry_config=RetryConfig(
+            enabled=True,
+            max_retries=1,
+            backoff_base=0.1,
+            backoff_cap=0.1,
+        ),
+        rate_limit_config=RateLimitConfig(max_concurrent=1, max_qpm=0),
+    )
+
+    async def no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    result = await wrapper(messages=[])
+
+    with pytest.raises(IncompleteModelStreamError, match="is_last=True"):
+        await result.__anext__()
+
+    assert model.calls == 2
+    assert first.closed
+    assert second.closed
+    assert (await get_rate_limiter()).stats()["current_in_flight"] == 0
+
+
+@pytest.mark.asyncio
+async def test_partial_model_stream_does_not_retry_and_duplicate_content():
+    partial = _response("partial", is_last=False)
+    first = _CustomAsyncIterator([partial])
+    unused = _CustomAsyncIterator([_response("duplicate", is_last=True)])
+    model = _StreamingModel([first, unused])
+    wrapper = RetryChatModel(
+        model,
+        retry_config=RetryConfig(enabled=True, max_retries=1),
+        rate_limit_config=RateLimitConfig(max_concurrent=1, max_qpm=0),
+    )
+    result = await wrapper(messages=[])
+
+    assert await result.__anext__() is partial
+    with pytest.raises(IncompleteModelStreamError) as exc_info:
+        await result.__anext__()
+
+    assert exc_info.value.received_chunks == 1
+    assert model.calls == 1
+    assert first.closed
+    assert not unused.closed
+    assert (await get_rate_limiter()).stats()["current_active_calls"] == 0
+
+
+@pytest.mark.asyncio
+async def test_terminal_model_stream_does_not_retry():
+    final = _response("done", is_last=True)
+    stream = _CustomAsyncIterator([final])
+    model = _StreamingModel([stream])
+    wrapper = RetryChatModel(
+        model,
+        retry_config=RetryConfig(enabled=True, max_retries=1),
+        rate_limit_config=RateLimitConfig(max_concurrent=1, max_qpm=0),
+    )
+    result = await wrapper(messages=[])
+
+    assert [chunk async for chunk in result] == [final]
+    assert model.calls == 1
+    assert stream.closed
 
 
 @pytest.mark.asyncio

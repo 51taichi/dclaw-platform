@@ -38,6 +38,8 @@ from ..runner.title_generator import generate_and_update_title
 from ..guards import require_admin
 from ..chat_access import current_user_id, ensure_chat_access, is_admin_request
 from ..task_limits import get_task_limiter
+from ...providers import ProviderManager
+from ...providers.model_aliases import resolve_task_model_override
 
 
 logger = logging.getLogger(__name__)
@@ -331,7 +333,28 @@ async def post_console_chat(
         name=name,
     )
     if chat and chat.meta and "active_model" in chat.meta:
-        set_current_chat_model(chat.meta["active_model"])
+        stored_model = chat.meta["active_model"]
+        app_state = getattr(getattr(request, "app", None), "state", None)
+        provider_manager = getattr(app_state, "provider_manager", None)
+        if provider_manager is None:
+            provider_manager = ProviderManager.get_instance()
+        active_model = resolve_task_model_override(
+            provider_manager,
+            stored_model,
+        )
+        if active_model != stored_model:
+            from ..runner.models import ChatUpdate
+
+            await workspace.chat_manager.patch_chat(
+                chat.id,
+                ChatUpdate(meta={"active_model": active_model}),
+            )
+            logger.info(
+                "Normalized chat model override: chat_id=%s active=%s",
+                chat.id,
+                bool(active_model),
+            )
+        set_current_chat_model(active_model)
     else:
         set_current_chat_model(None)
 

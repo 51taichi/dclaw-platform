@@ -3,6 +3,8 @@
 # pylint: disable=line-too-long,unused-argument,unused-variable,redefined-outer-name
 """Unit tests for AsMsgHandler context_check with tool_call/tool_result alignment."""
 
+from types import SimpleNamespace
+
 import pytest
 from qwenpaw.agents.message_compat import Msg
 
@@ -23,6 +25,22 @@ class MockTokenCounter(EstimatedTokenCounter):
             return self.token_map[text]
         # Simple estimation: roughly 4 chars per token for Chinese
         return len(text) // 4 if text else 0
+
+
+@pytest.mark.asyncio
+async def test_stat_message_reads_agentscope2_created_at_without_timestamp():
+    handler = AsMsgHandler(MockTokenCounter())
+    message = SimpleNamespace(
+        name="assistant",
+        role="assistant",
+        content="done",
+        created_at="2026-11-26T01:02:03Z",
+        metadata={},
+    )
+
+    stat = await handler.stat_message(message)
+
+    assert stat.timestamp == "2026-11-26T01:02:03Z"
 
 
 class TestAsMsgHandlerToolAlignment:

@@ -46,6 +46,10 @@ from ..providers.retry_chat_model import (
     RetryConfig,
     RateLimitConfig,
 )
+from ..providers.model_aliases import (
+    normalize_model_selection,
+    resolve_task_model_override,
+)
 from ..token_usage import TokenRecordingModelWrapper
 
 
@@ -1248,15 +1252,15 @@ def create_model_and_formatter(
         except Exception:
             pass
 
+    manager = ProviderManager.get_instance()
     model_slot = None
 
     # Try to get chat-specific model first (highest priority)
     chat_model = get_current_chat_model()
     if chat_model:
-        model_slot = ModelSlotConfig(
-            provider_id=chat_model.get("provider_id", ""),
-            model=chat_model.get("model", ""),
-        )
+        resolved_chat_model = resolve_task_model_override(manager, chat_model)
+        if resolved_chat_model:
+            model_slot = ModelSlotConfig(**resolved_chat_model)
 
     # Try to get agent-specific model config (retry config, rate limit,
     # fallback model).
@@ -1266,7 +1270,16 @@ def create_model_and_formatter(
         try:
             agent_config = load_agent_config(agent_id)
             if model_slot is None:
-                model_slot = agent_config.active_model
+                agent_model = agent_config.active_model
+                if agent_model:
+                    provider_id, model = normalize_model_selection(
+                        agent_model.provider_id,
+                        agent_model.model,
+                    )
+                    model_slot = ModelSlotConfig(
+                        provider_id=provider_id,
+                        model=model,
+                    )
             retry_config = RetryConfig(
                 enabled=agent_config.running.llm_retry_enabled,
                 max_retries=agent_config.running.llm_max_retries,
@@ -1285,7 +1298,6 @@ def create_model_and_formatter(
 
     # Create a chat model from chat-specific, agent-specific, auto, or global
     # config.
-    manager = ProviderManager.get_instance()
     if model_slot and is_auto_model_slot(model_slot):
         return _build_auto_routing_model_and_formatter(
             manager,
@@ -1306,7 +1318,6 @@ def create_model_and_formatter(
         provider_id = model_slot.provider_id
     else:
         # Fallback to global active model
-        model = ProviderManager.get_active_chat_model()
         global_model = manager.get_active_model()
         if not global_model:
             raise ProviderError(
@@ -1316,7 +1327,22 @@ def create_model_and_formatter(
                     "or set an agent-specific model."
                 ),
             )
-        provider_id = global_model.provider_id
+        provider_id, model_name = normalize_model_selection(
+            global_model.provider_id,
+            global_model.model,
+        )
+        if (provider_id, model_name) == (
+            global_model.provider_id,
+            global_model.model,
+        ):
+            model = ProviderManager.get_active_chat_model()
+        else:
+            provider = manager.get_provider(provider_id)
+            if provider is None:
+                raise ProviderError(
+                    message=f"Provider '{provider_id}' not found.",
+                )
+            model = provider.get_chat_model_instance(model_name)
 
     # Create the formatter based on the real model class
     formatter = _create_formatter_instance(model.__class__)

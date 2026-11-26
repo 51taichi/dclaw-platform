@@ -231,6 +231,16 @@ def convert_model_exception(  # pylint: disable=too-many-return-statements
     if any(
         kw in error_message
         for kw in [
+            "empty streaming response",
+            "no is_last=true chunk",
+            "before a terminal is_last=true response",
+        ]
+    ):
+        return ModelExecutionException(model, details=details)
+
+    if any(
+        kw in error_message
+        for kw in [
             "timeout",
             "timed out",
             "deadline exceeded",
