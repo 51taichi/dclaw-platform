@@ -8,8 +8,10 @@ for runtime updates without restarting the application.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
+import re
 from typing import Any, Dict, List, TYPE_CHECKING
 
 from .stateful_client import HttpStatefulClient, StdIOStatefulClient
@@ -106,7 +108,7 @@ class MCPClientManager:
         """
         # 1. Create and connect new client outside lock (may be slow)
         logger.debug(f"Connecting new MCP client: {key}")
-        new_client = self._build_client(client_config)
+        new_client = self._build_client(key, client_config)
 
         try:
             # Add timeout to prevent indefinite blocking
@@ -180,7 +182,7 @@ class MCPClientManager:
             client_config: Client configuration
             timeout: Connection timeout in seconds (default 60s)
         """
-        client = self._build_client(client_config)
+        client = self._build_client(key, client_config)
 
         try:
             await asyncio.wait_for(client.connect(), timeout=timeout)
@@ -243,10 +245,15 @@ class MCPClientManager:
         return result
 
     @staticmethod
-    def _build_client(client_config: "MCPClientConfig") -> Any:
+    def _build_client(key: str, client_config: "MCPClientConfig") -> Any:
         """Build MCP client instance by configured transport."""
+        name = client_config.name
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
+            slug = re.sub(r"[^A-Za-z0-9_-]+", "_", key).strip("_")[:48]
+            digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
+            name = f"{slug or 'mcp'}_{digest}"
         rebuild_info = {
-            "name": client_config.name,
+            "name": name,
             "transport": client_config.transport,
             "url": client_config.url,
             "headers": client_config.headers or None,
@@ -258,7 +265,7 @@ class MCPClientManager:
 
         if client_config.transport == "stdio":
             client = StdIOStatefulClient(
-                name=client_config.name,
+                name=name,
                 command=client_config.command,
                 args=client_config.args,
                 env=client_config.env,
@@ -277,7 +284,7 @@ class MCPClientManager:
         )
 
         client = HttpStatefulClient(
-            name=client_config.name,
+            name=name,
             transport=client_config.transport,
             url=client_config.url,
             headers=headers or None,
