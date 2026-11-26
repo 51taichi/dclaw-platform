@@ -82,6 +82,47 @@ from .sealed_agents.workspace_reconciliation import (
 # Apply log level on load so reload child process gets same level as CLI.
 logger = setup_logger(os.environ.get(LOG_LEVEL_ENV, "info"))
 
+
+async def _recover_local_capability_gateways(
+    manager: MultiAgentManager,
+) -> tuple[int, int]:
+    """Connect local MCP clients after all workspaces can serve requests."""
+    expected = connected = 0
+    for agent_id, agent in manager.agents.items():
+        mcp_config = agent.config.mcp
+        client_config = (
+            mcp_config.clients.get("local_capability_gateway")
+            if mcp_config
+            else None
+        )
+        if client_config is None or not client_config.enabled:
+            continue
+
+        expected += 1
+        mcp_manager = agent.mcp_manager
+        if mcp_manager is None:
+            logger.warning("Local capability gateway unavailable for %s", agent_id)
+            continue
+        try:
+            client = await mcp_manager.get_client("local_capability_gateway")
+            if client is None or not getattr(client, "is_connected", False):
+                await mcp_manager.replace_client(
+                    "local_capability_gateway", client_config, timeout=15.0,
+                )
+                client = await mcp_manager.get_client("local_capability_gateway")
+            if client is not None and getattr(client, "is_connected", False):
+                connected += 1
+                logger.info("Local capability gateway connected for %s", agent_id)
+            else:
+                logger.warning("Local capability gateway unavailable for %s", agent_id)
+        except Exception:
+            logger.warning(
+                "Local capability gateway reconnect failed for %s",
+                agent_id,
+                exc_info=True,
+            )
+    return expected, connected
+
 # Ensure static assets are served with browser-compatible MIME types across
 # platforms (notably Windows may miss .js/.mjs mappings).
 mimetypes.init()
@@ -429,6 +470,8 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
     app.state.failed_control_commands = 0
     app.state.failed_startup_hooks = 0
     app.state.knowledge_worker_ready = knowledge_worker_ready
+    app.state.local_gateways_expected = 0
+    app.state.local_gateways_ready = 0
 
     if isinstance(runner, DynamicMultiAgentRunner):
         runner.set_multi_agent_manager(multi_agent_manager)
@@ -611,6 +654,11 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
             except Exception as e:
                 logger.warning(f"Approval service setup skipped: {e}")
 
+            (
+                app.state.local_gateways_expected,
+                app.state.local_gateways_ready,
+            ) = await _recover_local_capability_gateways(multi_agent_manager)
+
             startup_elapsed = time.time() - startup_start_time
             expected_plugins = set(app.state.expected_plugin_ids)
             loaded_plugin_ids = set(app.state.loaded_plugin_ids)
@@ -628,6 +676,8 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
                 and app.state.failed_control_commands == 0
                 and app.state.failed_startup_hooks == 0
                 and app.state.knowledge_worker_ready
+                and app.state.local_gateways_ready
+                == app.state.local_gateways_expected
                 and not (sealed_result and sealed_result.unavailable)
                 else "degraded"
             )
@@ -851,6 +901,8 @@ def get_readiness():
     control_failures = getattr(app.state, "failed_control_commands", 0)
     hook_failures = getattr(app.state, "failed_startup_hooks", 0)
     knowledge_ready = getattr(app.state, "knowledge_worker_ready", False)
+    local_gateways_expected = getattr(app.state, "local_gateways_expected", 0)
+    local_gateways_ready = getattr(app.state, "local_gateways_ready", 0)
     matching_plugins = sum(
         loaded_versions.get(plugin_id) == version
         for plugin_id, version in expected_versions.items()
@@ -863,6 +915,7 @@ def get_readiness():
         and control_failures == 0
         and hook_failures == 0
         and knowledge_ready
+        and local_gateways_ready == local_gateways_expected
     )
     payload = {
         "status": "ready" if ready else ("degraded" if phase == "ready" else phase),
@@ -873,6 +926,8 @@ def get_readiness():
         "control_commands_failed": control_failures,
         "startup_hooks_failed": hook_failures,
         "knowledge_worker_ready": knowledge_ready,
+        "local_gateways_expected": local_gateways_expected,
+        "local_gateways_ready": local_gateways_ready,
     }
     return JSONResponse(
         status_code=200 if ready else 503,
