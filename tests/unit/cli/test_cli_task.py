@@ -11,7 +11,7 @@ import pytest
 from click.testing import CliRunner
 
 from qwenpaw.cli.main import cli
-from qwenpaw.cli.task_cmd import _read_instruction
+from qwenpaw.cli.task_cmd import _read_instruction, _run_task
 
 
 # ── _read_instruction ────────────────────────────────────────────────
@@ -30,6 +30,45 @@ def test_read_instruction_reads_file_content(tmp_path) -> None:
 def test_read_instruction_nonexistent_path_returns_raw() -> None:
     result = _read_instruction("/nonexistent/path/to/file.md")
     assert result == "/nonexistent/path/to/file.md"
+
+
+async def test_run_task_builds_agentscope2_text_content(monkeypatch) -> None:
+    from agentscope.message import Msg, TextBlock
+
+    captured: list[Msg] = []
+
+    class _Agent:
+        def __init__(self, **_kwargs) -> None:
+            self.model = None
+
+        async def reply(self, messages):
+            captured.extend(messages)
+            return Msg(
+                name="assistant",
+                role="assistant",
+                content=[TextBlock(text="done")],
+            )
+
+    monkeypatch.setattr("qwenpaw.agents.react_agent.QwenPawAgent", _Agent)
+    config = MagicMock()
+    config.workspace_dir = None
+
+    result = await _run_task(
+        instruction="do something",
+        agent_config=config,
+        request_context={},
+        max_iters=1,
+        timeout=1,
+        output_dir=None,
+    )
+
+    assert result["status"] == "success"
+    assert result["response"] == "done"
+    assert len(captured) == 1
+    assert isinstance(captured[0].content, list)
+    assert len(captured[0].content) == 1
+    assert isinstance(captured[0].content[0], TextBlock)
+    assert captured[0].content[0].text == "do something"
 
 
 # ── CLI surface ──────────────────────────────────────────────────────

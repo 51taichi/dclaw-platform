@@ -93,7 +93,7 @@ async def _run_task(
     output_dir: str | None,
     skills_dir: str | None = None,
 ) -> dict:
-    from agentscope.message import Msg
+    from agentscope.message import Msg, TextBlock
     from ..agents.react_agent import QwenPawAgent
 
     agent_config.running.max_iters = max_iters
@@ -113,7 +113,13 @@ async def _run_task(
         try:
             response = await asyncio.wait_for(
                 agent.reply(
-                    [Msg(name="user", role="user", content=instruction)],
+                    [
+                        Msg(
+                            name="user",
+                            role="user",
+                            content=[TextBlock(text=instruction)],
+                        ),
+                    ],
                 ),
                 timeout=timeout,
             )
