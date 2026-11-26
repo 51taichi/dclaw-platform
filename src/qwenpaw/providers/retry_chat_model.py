@@ -331,6 +331,15 @@ class RetryChatModel(LegacyModelNameMixin, ChatModelBase):
         *args: Any,
         **kwargs: Any,
     ) -> ChatResponse | AsyncIterator[ChatResponse]:
+        if getattr(self._inner, "stream", None) is not False:
+            return self._lazy_stream(*args, **kwargs)
+        return await self._call_with_retry(*args, **kwargs)
+
+    async def _call_with_retry(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> ChatResponse | AsyncIterator[ChatResponse]:
         cache = get_capability_cache()
         key = self.model_key
 
@@ -436,6 +445,28 @@ class RetryChatModel(LegacyModelNameMixin, ChatModelBase):
 
         # Should be unreachable, but satisfies the type-checker.
         raise last_exc  # type: ignore[misc]
+
+    def _lazy_stream(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> AsyncGenerator[ChatResponse, None]:
+        """Defer stream creation and expose AgentScope's required type."""
+
+        async def stream() -> AsyncGenerator[ChatResponse, None]:
+            result: ChatResponse | AsyncIterator[ChatResponse] | None = None
+            try:
+                result = await self._call_with_retry(*args, **kwargs)
+                if _is_async_iterable(result):
+                    async for chunk in result:
+                        yield chunk
+                else:
+                    yield result
+            finally:
+                if _is_async_iterable(result):
+                    await _close_async_iterable(result)
+
+        return stream()
 
 
 class _RetryStreamOwner(AsyncGenerator[ChatResponse, None]):

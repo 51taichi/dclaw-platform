@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import AsyncGenerator
 
 import pytest
@@ -262,6 +263,7 @@ async def test_terminal_model_stream_does_not_retry():
     )
     result = await wrapper(messages=[])
 
+    assert inspect.isasyncgen(result)
     assert [chunk async for chunk in result] == [final]
     assert model.calls == 1
     assert stream.closed
@@ -300,11 +302,12 @@ async def test_custom_async_iterable_closes_its_inner_iterator(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_unstarted_stream_close_releases_slot_and_closes_inner():
+async def test_unstarted_stream_close_does_not_acquire_resources():
     first = _CustomAsyncIterator(["unused"])
     second = _CustomAsyncIterator(["next"])
+    model = _StreamingModel([first, second])
     wrapper = RetryChatModel(
-        _StreamingModel([first, second]),
+        model,
         retry_config=RetryConfig(enabled=False),
         rate_limit_config=RateLimitConfig(max_concurrent=1, max_qpm=0),
     )
@@ -313,10 +316,11 @@ async def test_unstarted_stream_close_releases_slot_and_closes_inner():
     await result.aclose()
 
     limiter = await get_rate_limiter()
-    assert first.close_calls == 1
+    assert model.calls == 0
+    assert first.close_calls == 0
     assert limiter.stats()["current_in_flight"] == 0
     next_result = await asyncio.wait_for(wrapper(messages=[]), timeout=0.2)
-    assert [chunk async for chunk in next_result] == ["next"]
+    assert [chunk async for chunk in next_result] == ["unused"]
     assert limiter.stats()["current_in_flight"] == 0
 
 
@@ -332,6 +336,7 @@ async def test_stream_preserves_agentscope_async_generator_contract():
 
     result = await wrapper(messages=[])
 
+    assert inspect.isasyncgen(result)
     assert isinstance(result, AsyncGenerator)
     assert [chunk async for chunk in result] == ["chunk"]
     assert (await get_rate_limiter()).stats()["current_active_calls"] == 0
@@ -348,7 +353,7 @@ async def test_stream_is_reported_active_until_consumption_finishes():
 
     result = await wrapper(messages=[])
     limiter = await get_rate_limiter()
-    assert limiter.stats()["current_active_calls"] == 1
+    assert limiter.stats()["current_active_calls"] == 0
 
     assert await result.__anext__() == "first"
     assert limiter.stats()["current_active_calls"] == 1
