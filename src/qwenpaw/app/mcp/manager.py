@@ -248,6 +248,9 @@ class MCPClientManager:
     def _build_client(key: str, client_config: "MCPClientConfig") -> Any:
         """Build MCP client instance by configured transport."""
         name = client_config.name
+        url = client_config.url
+        if key == "local_capability_gateway" and client_config.transport != "stdio":
+            url = os.getenv("DCLAW_LOCAL_CAPABILITY_GATEWAY_URL") or url
         if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
             slug = re.sub(r"[^A-Za-z0-9_-]+", "_", key).strip("_")[:48]
             digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
@@ -255,7 +258,7 @@ class MCPClientManager:
         rebuild_info = {
             "name": name,
             "transport": client_config.transport,
-            "url": client_config.url,
+            "url": url,
             "headers": client_config.headers or None,
             "command": client_config.command,
             "args": list(client_config.args),
@@ -286,7 +289,7 @@ class MCPClientManager:
         client = HttpStatefulClient(
             name=name,
             transport=client_config.transport,
-            url=client_config.url,
+            url=url,
             headers=headers or None,
         )
         setattr(client, "_qwenpaw_rebuild_info", rebuild_info)

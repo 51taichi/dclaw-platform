@@ -41,3 +41,23 @@ def test_provider_name_keeps_existing_ascii_name_and_distinguishes_keys():
 
     assert first.name != second.name
     assert ascii_client.name == "search-mcp"
+
+
+def test_local_gateway_url_override_keeps_release_config_unchanged(monkeypatch):
+    local_url = "http://127.0.0.1:8088/api/super-agent-support/mcp"
+    release_url = "https://production.example/api/super-agent-support/mcp"
+    monkeypatch.setenv("DCLAW_LOCAL_CAPABILITY_GATEWAY_URL", local_url)
+    config = MCPClientConfig(
+        name="local-gateway",
+        transport="streamable_http",
+        url=release_url,
+    )
+
+    gateway = MCPClientManager._build_client("local_capability_gateway", config)
+    other = MCPClientManager._build_client("external_gateway", config)
+
+    assert gateway.mcp_config.url == local_url
+    assert other.mcp_config.url == release_url
+    assert gateway._qwenpaw_rebuild_info["url"] == local_url
+    assert other._qwenpaw_rebuild_info["url"] == release_url
+    assert config.url == release_url
