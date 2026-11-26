@@ -10,6 +10,7 @@ Each Workspace represents a standalone agent workspace with its own:
 
 All existing single-agent components are reused without modification.
 """
+import asyncio
 import logging
 from pathlib import Path
 from typing import Optional
@@ -361,7 +362,7 @@ class Workspace:
         )
 
         try:
-            ensure_skill_pool_initialized()
+            await asyncio.to_thread(ensure_skill_pool_initialized)
         except Exception as e:
             logger.warning(
                 f"Skill pool initialization failed (non-fatal): {e}",
