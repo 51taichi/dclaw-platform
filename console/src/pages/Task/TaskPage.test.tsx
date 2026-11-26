@@ -41,6 +41,7 @@ const {
   mockGetAigcTask,
   mockListInteractions,
   mockSubmitInteraction,
+  mockPreparingOverlayRender,
 } = vi.hoisted(() => {
   const store = vi.fn(() => ({
     selectedAgent: "default",
@@ -76,6 +77,7 @@ const {
     mockGetAigcTask: vi.fn(),
     mockListInteractions: vi.fn(),
     mockSubmitInteraction: vi.fn(),
+    mockPreparingOverlayRender: vi.fn(),
   };
 });
 
@@ -315,19 +317,22 @@ vi.mock("../Chat/components/PreparingOverlay", () => ({
     mode?: string;
     error?: boolean;
     onRetry?: () => void;
-  }) => (
-    <div
-      data-testid="preparing-overlay"
-      data-mode={mode}
-      data-error={error || undefined}
-    >
-      {error && onRetry ? (
-        <button type="button" onClick={onRetry}>
-          重试
-        </button>
-      ) : null}
-    </div>
-  ),
+  }) => {
+    mockPreparingOverlayRender(mode);
+    return (
+      <div
+        data-testid="preparing-overlay"
+        data-mode={mode}
+        data-error={error || undefined}
+      >
+        {error && onRetry ? (
+          <button type="button" onClick={onRetry}>
+            重试
+          </button>
+        ) : null}
+      </div>
+    );
+  },
 }));
 
 vi.mock("../Chat/components/TaskArtifactCard", () => ({
@@ -841,6 +846,15 @@ describe("TaskPage", () => {
     view.unmount();
 
     expect(mockSetActiveSessionId).toHaveBeenCalledWith(null);
+  });
+
+  it("shows conversation loading on the first render of an existing task", () => {
+    renderWithProviders(<TaskPage />, {
+      initialEntries: ["/task/existing-task"],
+    });
+
+    expect(mockPreparingOverlayRender).toHaveBeenCalled();
+    expect(mockPreparingOverlayRender.mock.calls[0][0]).toBe("conversation");
   });
 
   it("keeps loading feedback visible until the selected task history settles", async () => {

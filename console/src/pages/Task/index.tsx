@@ -584,12 +584,12 @@ export default function ChatPage() {
   }, [location.pathname]);
   const [showModelPrompt, setShowModelPrompt] = useState(false);
   const [showArtifactPanel, setShowArtifactPanel] = useState(false);
-  const [isPreparing, setIsPreparing] = useState(false);
+  const [isPreparing, setIsPreparing] = useState(() => !!chatId);
   const [sessionRestoreErrorId, setSessionRestoreErrorId] = useState<
     string | null
   >(null);
   const [preparingMode, setPreparingMode] = useState<"task" | "conversation">(
-    "task",
+    () => (chatId ? "conversation" : "task"),
   );
   const [isGenerating, setIsGenerating] = useState(false);
   const [runtimeReloadKey, setRuntimeReloadKey] = useState(0);
