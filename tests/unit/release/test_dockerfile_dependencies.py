@@ -66,3 +66,19 @@ def test_runtime_image_builds_local_helper_into_support_plugin() -> None:
         "./plugins/auto-load/super-agent-support/platform_helpers/"
         "windows-x64/DClaw.LocalHelper.exe"
     ) in dockerfile
+
+
+def test_server_patch_updates_support_plugin_and_standard() -> None:
+    dockerfile = (ROOT / "deploy" / "Dockerfile.server-patch").read_text(
+        encoding="utf-8",
+    )
+
+    assert (
+        "COPY plugins/bundle/super-agent-support "
+        "./plugins/auto-load/super-agent-support"
+    ) in dockerfile
+    assert (
+        "COPY docs/super-agent-development-standard-v1.zh-CN.md "
+        "./plugins/auto-load/super-agent-support/developer_pack/standard/"
+        "super-agent-development-standard-v1.zh-CN.md"
+    ) in dockerfile
