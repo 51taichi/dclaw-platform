@@ -1,5 +1,6 @@
 import asyncio
 import pytest
+from agentscope.event import TextBlockDeltaEvent
 from qwenpaw.agents.message_compat import Msg
 from qwenpaw.app.workspace.public_stream import execute_public_agent, public_snapshot
 
@@ -11,54 +12,6 @@ def test_public_snapshot_excludes_internal_blocks_and_json_envelopes():
     assert all(b.type == 'text' for b in snap.content)
     assert public_snapshot(Msg('agent', [{'type':'tool_result','id':'x','name':'skill','output':'private'}], 'assistant')) is None
     assert public_snapshot(Msg('agent', '{"reply":', 'assistant')) is None
-
-
-@pytest.mark.asyncio
-async def test_public_text_arrives_before_agent_finishes_and_queue_is_restored():
-    release = asyncio.Event()
-    output = []
-    class Agent:
-        msg_queue = None
-        _disable_msg_queue = True
-        def set_msg_queue_enabled(self, enabled, queue=None):
-            self.msg_queue = queue if enabled else None
-            self._disable_msg_queue = not enabled
-        async def __call__(self, messages):
-            msg = Msg('agent', 'Hello', 'assistant')
-            await self.msg_queue.put((msg, False, None))
-            await release.wait()
-            return msg
-    agent = Agent()
-    async def receive(msg):
-        output.append(msg)
-        release.set()
-    result = await asyncio.wait_for(execute_public_agent(agent, [], receive), 2)
-    assert output[0].id == result.id
-    assert agent.msg_queue is None and agent._disable_msg_queue
-
-
-@pytest.mark.asyncio
-async def test_cancelling_stream_stops_agent_and_restores_queue():
-    started, cancelled = asyncio.Event(), asyncio.Event()
-    class Agent:
-        msg_queue = None
-        _disable_msg_queue = True
-        def set_msg_queue_enabled(self, enabled, queue=None):
-            self.msg_queue = queue if enabled else None
-            self._disable_msg_queue = not enabled
-        async def __call__(self, messages):
-            started.set()
-            try:
-                await asyncio.Event().wait()
-            finally:
-                cancelled.set()
-    async def receive(message): pass
-    agent = Agent()
-    task = asyncio.create_task(execute_public_agent(agent, [], receive))
-    await started.wait()
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError): await task
-    assert cancelled.is_set() and agent.msg_queue is None
 
 
 @pytest.mark.asyncio
@@ -77,16 +30,19 @@ class Runtime:
 def create_runtime():return Runtime()
 '''.replace('OPT_IN', repr(opt_in)))
     class Agent:
-        msg_queue = None
-        _disable_msg_queue = True
-        def set_msg_queue_enabled(self, enabled, queue=None):
-            self.msg_queue = queue if enabled else None
-            self._disable_msg_queue = not enabled
+        name = 'agent'
+        model = None
         async def __call__(self, messages):
+            return Msg('agent', 'Hello', 'assistant')
+        async def reply_stream(self, messages, yield_final_msg=True):
             msg = Msg('agent', 'Hello', 'assistant')
-            if self.msg_queue:
-                await self.msg_queue.put((msg, False, None))
-            return msg
+            yield TextBlockDeltaEvent(
+                reply_id=msg.id,
+                block_id=msg.content[0].id,
+                delta='Hello',
+            )
+            if yield_final_msg:
+                yield msg
     outputs = []
     async for finished, value in stream_workspace_turn(agent=Agent(), original_messages=[Msg('user','hi','user')],
         request=SimpleNamespace(session_id='s',user_id='u',channel='console',channel_meta={}),

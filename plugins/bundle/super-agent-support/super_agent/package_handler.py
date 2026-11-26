@@ -20,7 +20,6 @@ class SuperAgentPackageHandler:
     runtime_features = frozenset(
         {
             "extended_output",
-            "harness_status",
             "mcp_client",
             "mutable_skill_overlay",
             "unrestricted_tools",
@@ -99,7 +98,7 @@ class PublicSuperAgentPackageHandler(SuperAgentPackageHandler):
     """Self-service type with bounded platform tools and developer signers."""
 
     package_type = "super_expert_public"
-    runtime_features = frozenset({"extended_output", "harness_status"})
+    runtime_features = frozenset({"extended_output"})
 
     def __init__(
         self,

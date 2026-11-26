@@ -116,44 +116,19 @@ async def _execute_reply_stream(agent, messages, on_public_message):
 
 
 async def execute_public_agent(agent, messages, on_public_message):
-    if callable(getattr(agent, "reply_stream", None)):
-        previous_model = getattr(agent, "model", None)
-        if previous_model is not None:
-            agent.model = public_text_model(previous_model)
-        try:
-            return await _execute_reply_stream(
-                agent,
-                messages,
-                on_public_message,
-            )
-        finally:
-            if previous_model is not None:
-                agent.model = previous_model
+    if not callable(getattr(agent, "reply_stream", None)):
+        raise TypeError("AgentScope 2 agent must provide reply_stream")
 
-    queue = asyncio.Queue()
-    previous_queue = getattr(agent, "msg_queue", None)
-    previous_enabled = not getattr(agent, "_disable_msg_queue", True)
     previous_model = getattr(agent, "model", None)
     if previous_model is not None:
         agent.model = public_text_model(previous_model)
-    agent.set_msg_queue_enabled(True, queue)
-    task = asyncio.create_task(agent(messages))
-    end = object()
-    task.add_done_callback(lambda _: queue.put_nowait(end))
     try:
-        while True:
-            item = await queue.get()
-            if item is end:
-                break
-            snapshot = public_snapshot(item[0])
-            if snapshot is not None:
-                await on_public_message(snapshot)
-        return await task
+        return await _execute_reply_stream(
+            agent,
+            messages,
+            on_public_message,
+        )
     finally:
-        if not task.done():
-            task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-        agent.set_msg_queue_enabled(previous_enabled, previous_queue)
         if previous_model is not None:
             agent.model = previous_model
 

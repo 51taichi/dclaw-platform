@@ -49,6 +49,7 @@ from qwenpaw.app.sealed_agents.models import (
 )
 from qwenpaw.app.sealed_agents.package import inspect_extracted_payload
 from qwenpaw.app.sealed_agents.package import (
+    SealedPackageManifest,
     build_signed_package_bytes,
     validate_sealed_package,
 )
@@ -413,8 +414,16 @@ def test_agent_execute_response_format_is_closed_and_does_not_coerce_values():
             )
 
 
-def test_agent_execute_mode_is_closed_and_defaults_to_internal_candidate():
+def test_agent_execute_mode_preserves_v1_and_defaults_v2_to_agent_loop():
     assert _agent_execute_mode({"messages": []}) == "candidate"
+    assert _agent_execute_mode(
+        {"messages": []},
+        contract_version="2",
+    ) == "agent_loop"
+    assert _agent_execute_mode(
+        {"messages": [], "execution_mode": "candidate"},
+        contract_version="2",
+    ) == "candidate"
     assert (
         _agent_execute_mode(
             {
@@ -432,6 +441,11 @@ def test_agent_execute_mode_is_closed_and_defaults_to_internal_candidate():
                     "execution_mode": invalid,
                 },
             )
+    with pytest.raises(WorkspaceOrchestrationError):
+        _agent_execute_mode(
+            {"messages": [], "execution_mode": "candidate"},
+            contract_version="1",
+        )
 
 
 def test_agent_execute_instruction_is_optional_stripped_and_closed():
@@ -1916,6 +1930,85 @@ def test_business_turn_classification_excludes_platform_control_paths():
 
 
 @pytest.mark.asyncio
+async def test_v2_default_calls_agent_loop_without_candidate_path(tmp_path, monkeypatch):
+    import qwenpaw.app.workspace.orchestration as orchestration_module
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _write_runtime(
+        workspace,
+        """
+        class Runtime:
+            async def handle(self, request, host):
+                answer = await host.call("agent.execute", {"messages": [
+                    {"role": "user", "content": "hello"},
+                ]})
+                await host.call("runtime.complete", {
+                    "invocation_id": request.invocation_id,
+                    "message": {"reply": answer["text"]},
+                })
+        def create_runtime(): return Runtime()
+        """,
+    )
+
+    async def reject_candidate(*_args, **_kwargs):
+        raise AssertionError("v2 default entered candidate path")
+
+    monkeypatch.setattr(
+        orchestration_module, "_execute_internal_candidate", reject_candidate,
+    )
+
+    class Agent:
+        def __init__(self):
+            self.calls = []
+
+        async def __call__(self, messages):
+            self.calls.append(messages)
+            return Msg(name="assistant", role="assistant", content="loop reply")
+
+    agent = Agent()
+    authorization = AuthorizedWorkspaceRelease(
+        installation_id="installation-1",
+        release_id="release-1",
+        release_digest=f"sha256:{'a' * 64}",
+        granted_capabilities={
+            **{capability: "1" for capability in HOST_CAPABILITIES_V1},
+            "agent.execute": "2",
+        },
+        signed_workspace_files=frozenset({"runtime.py"}),
+    )
+
+    result = await run_workspace_orchestration_turn(
+        agent=agent,
+        original_messages=[Msg(name="user", role="user", content="hello")],
+        request=SimpleNamespace(
+            session_id="session-1", user_id="user-1", channel="console",
+            channel_meta={},
+        ),
+        agent_id="generic-agent",
+        workspace_root=workspace,
+        state_storage_root=tmp_path / "state-store",
+        config=OrchestrationConfig.model_validate(_orchestration()),
+        authorization=authorization,
+    )
+
+    assert result.message["reply"] == "loop reply"
+    assert len(agent.calls) == 1
+    trace = [
+        json.loads(line)
+        for line in runtime_trace_path(
+            tmp_path / "state-store",
+            installation_id="installation-1", session_id="session-1",
+        ).read_text(encoding="utf-8").splitlines()
+    ]
+    assert any(
+        item["event_type"] == "agent.execute.safe_started"
+        and item["payload"]["execution_mode"] == "agent_loop"
+        for item in trace
+    )
+
+
+@pytest.mark.asyncio
 async def test_runner_adapter_executes_internal_candidate_without_streaming(
     tmp_path,
 ):
@@ -2002,12 +2095,18 @@ async def test_runner_adapter_executes_internal_candidate_without_streaming(
 
 
 @pytest.mark.asyncio
-async def test_runner_adapter_can_opt_into_the_standard_agent_loop(tmp_path):
+@pytest.mark.parametrize(
+    ("contract_version", "mode_field"),
+    [("1", '"execution_mode": "agent_loop",'), ("2", "")],
+)
+async def test_super_expert_uses_the_standard_agent_loop(
+    tmp_path,
+    contract_version,
+    mode_field,
+):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    _write_runtime(
-        workspace,
-        """
+    runtime_source = """
         class Runtime:
             async def handle(self, request, host):
                 candidate = await host.call("agent.execute", {
@@ -2019,7 +2118,10 @@ async def test_runner_adapter_can_opt_into_the_standard_agent_loop(tmp_path):
                     "message": candidate["message"],
                 })
         def create_runtime(): return Runtime()
-        """,
+        """
+    _write_runtime(
+        workspace,
+        runtime_source.replace('"execution_mode": "agent_loop",', mode_field),
     )
 
     class DirectModel:
@@ -2049,7 +2151,10 @@ async def test_runner_adapter_can_opt_into_the_standard_agent_loop(tmp_path):
         release_id="release-1",
         release_digest=f"sha256:{'a' * 64}",
         granted_capabilities={
-            capability: "1" for capability in HOST_CAPABILITIES_V1
+            capability: (
+                contract_version if capability == "agent.execute" else "1"
+            )
+            for capability in HOST_CAPABILITIES_V1
         },
         signed_workspace_files=frozenset({"runtime.py"}),
     )
@@ -2389,6 +2494,34 @@ async def test_server_owned_platform_events_reach_the_workspace_runtime(
     )
 
     assert result.message == {"reply": "event-1"}
+
+
+@pytest.mark.parametrize("execute_version", ["1", "2"])
+def test_super_expert_manifest_accepts_both_execute_contracts(
+    execute_version,
+):
+    fixture = (
+        Path(__file__).parents[3]
+        / "fixtures/super_expert/generic-orchestration-v1"
+    )
+    manifest = json.loads((fixture / "manifest.template.json").read_text())
+    for capability in manifest["capabilities"]:
+        if capability["capability_id"] == "agent.execute":
+            capability["contract_version"] = execute_version
+    manifest["content_digest"] = "sha256:" + "0" * 64
+    manifest["capability_digest"] = compute_capability_set_digest(manifest)
+
+    validated = validate_super_expert_manifest(
+        SealedPackageManifest.model_validate(manifest),
+        SuperExpertTrustStore(
+            official_signer_ids=frozenset({"official-test"}),
+        ),
+    )
+
+    assert dict(
+        (item.capability_id, item.contract_version)
+        for item in validated.capabilities
+    )["agent.execute"] == execute_version
 
 
 @pytest.mark.asyncio

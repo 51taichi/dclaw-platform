@@ -357,7 +357,9 @@ def _add_capability_declaration(
     definition = catalog.get(capability_id)
     if definition is None:
         raise DevKitError(f"unknown capability: {capability_id}")
-    if item.get("contract_version") != definition["contract_version"]:
+    if item.get("contract_version") != definition["contract_version"] and not (
+        capability_id == "agent.execute" and item.get("contract_version") == "1"
+    ):
         raise DevKitError(f"unsupported capability version: {capability_id}")
     declared[capability_id] = definition
 

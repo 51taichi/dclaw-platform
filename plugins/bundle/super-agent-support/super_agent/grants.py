@@ -13,7 +13,10 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from qwenpaw.app.sealed_agents.models import SealedReleaseRecord
-from .capabilities import get_platform_capability_catalog
+from .capabilities import (
+    get_platform_capability_catalog,
+    supports_capability_version,
+)
 
 
 class SuperExpertGrantError(ValueError):
@@ -94,9 +97,10 @@ class SuperExpertGrantRepository:
         catalog = get_platform_capability_catalog()
         for capability_id, contract_version in release.declared_capabilities:
             definition = catalog.get(capability_id)
-            if (
-                definition is None
-                or definition.contract_version != contract_version
+            if not supports_capability_version(
+                capability_id,
+                contract_version,
+                definition,
             ):
                 raise SuperExpertGrantError(
                     f"platform capability is unavailable: {capability_id}",

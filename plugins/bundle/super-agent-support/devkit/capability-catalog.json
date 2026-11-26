@@ -2,7 +2,7 @@
   "catalog_version": "1",
   "capabilities": [
     {"capability_id":"workspace.turn.orchestrate/1","contract_version":"1","group":"runtime","dependencies":["agent.execute","session.context","runtime.trace","runtime.complete","runtime.fail"]},
-    {"capability_id":"agent.execute","contract_version":"1","group":"runtime_host","dependencies":[]},
+    {"capability_id":"agent.execute","contract_version":"2","group":"runtime_host","dependencies":[]},
     {"capability_id":"session.context","contract_version":"1","group":"runtime_host","dependencies":[]},
     {"capability_id":"runtime.trace","contract_version":"1","group":"runtime_host","dependencies":[]},
     {"capability_id":"runtime.complete","contract_version":"1","group":"runtime_host","dependencies":[]},

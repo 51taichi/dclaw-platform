@@ -4,21 +4,17 @@ from __future__ import annotations
 
 import base64
 import asyncio
-import json
 import logging
 from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
-from pydantic import ValidationError
-
 from ...constant import WORKING_DIR
-from ...config.config import AgentProfileConfig, AgentProfileRef
+from ...config.config import AgentProfileRef
 from ...config.utils import load_config, save_config
 from ..sealed_agents.models import SealedAgentRecord
 from ..sealed_agents.registry import get_sealed_agent_registry
-from ..sealed_agents.runtime_workspace import runtime_workspace_root
 from ..sealed_agents.service import SealedAgentReleaseError, SealedAgentService
 from ..sealed_agents.signing import load_trusted_signers
 
@@ -46,62 +42,6 @@ def get_sealed_agent_service() -> SealedAgentService:
             trusted_signers=trusted_signers,
         )
     return _service
-
-
-def _explicit_bool(value: Any) -> bool | None:
-    return value if isinstance(value, bool) else None
-
-
-def _active_harness_status(
-    record: SealedAgentRecord,
-) -> dict[str, bool | None] | None:
-    active = record.active_release
-    if active is None:
-        return None
-    from ...plugins.registry import PluginRegistry
-
-    if not PluginRegistry().sealed_package_type_supports(
-        active.package_type,
-        "harness_status",
-    ):
-        return None
-    config_path = (
-        runtime_workspace_root(
-            Path(WORKING_DIR) / "sealed_agents",
-            record.agent_id,
-            active.release_id,
-        )
-        / "agent.json"
-    )
-    try:
-        payload = json.loads(config_path.read_text(encoding="utf-8"))
-        AgentProfileConfig.model_validate(payload)
-    except (OSError, json.JSONDecodeError, ValidationError, ValueError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    tools = payload.get("tools")
-    builtin_tools = (
-        tools.get("builtin_tools") if isinstance(tools, dict) else None
-    )
-    skill_reader = (
-        builtin_tools.get("read_agent_skill")
-        if isinstance(builtin_tools, dict)
-        else None
-    )
-    orchestration = payload.get("orchestration")
-    return {
-        "skill_reader_enabled": _explicit_bool(
-            skill_reader.get("enabled")
-            if isinstance(skill_reader, dict)
-            else None,
-        ),
-        "agent_loop_enabled": _explicit_bool(
-            orchestration.get("agent_loop_enabled")
-            if isinstance(orchestration, dict)
-            else None,
-        ),
-    }
 
 
 def _operational_dto(record: SealedAgentRecord) -> dict[str, Any]:
@@ -174,9 +114,6 @@ def _operational_dto(record: SealedAgentRecord) -> dict[str, Any]:
             "trace": False,
         },
     }
-    harness_status = _active_harness_status(record)
-    if harness_status is not None:
-        payload["harness_status"] = harness_status
     return payload
 
 

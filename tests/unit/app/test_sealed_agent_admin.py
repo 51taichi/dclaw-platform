@@ -14,7 +14,7 @@ from qwenpaw.app.sealed_agents.models import (
     SealedAgentRecord,
     SealedReleaseRecord,
 )
-from qwenpaw.config.config import Config, OrchestrationConfig
+from qwenpaw.config.config import Config
 from qwenpaw.app.super_experts.grants import (
     SuperExpertGrant,
     SuperExpertGrantPreview,
@@ -58,20 +58,6 @@ def _super_expert_record():
     return record.model_copy(update={"releases": [release]})
 
 
-def _write_active_agent_config(tmp_path, payload):
-    config_path = (
-        tmp_path
-        / "sealed_agents"
-        / "runtime_workspaces"
-        / "luyu"
-        / "rel-1"
-        / "agent"
-        / "agent.json"
-    )
-    config_path.parent.mkdir(parents=True)
-    config_path.write_text(json.dumps(payload), encoding="utf-8")
-
-
 def test_admin_list_returns_operational_metadata_without_asset_paths(
     monkeypatch,
 ):
@@ -99,94 +85,10 @@ def test_admin_list_returns_operational_metadata_without_asset_paths(
     assert "path" not in serialized
 
 
-def test_agent_loop_harness_declaration_is_nullable_and_explicit():
-    assert OrchestrationConfig().agent_loop_enabled is None
-    assert (
-        OrchestrationConfig(agent_loop_enabled=True).agent_loop_enabled is True
-    )
-
-
-def test_admin_list_projects_active_super_expert_harness_config(
-    monkeypatch,
-    tmp_path,
-):
-    monkeypatch.setattr(router_module, "WORKING_DIR", tmp_path)
-    monkeypatch.setattr(
-        PluginRegistry,
-        "sealed_package_type_supports",
-        lambda _self, package_type, feature: (
-            package_type == "super_expert" and feature == "harness_status"
-        ),
-    )
-    _write_active_agent_config(
-        tmp_path,
-        {
-            "id": "luyu",
-            "name": "陆羽",
-            "tools": {
-                "builtin_tools": {
-                    "read_agent_skill": {
-                        "name": "read_agent_skill",
-                        "enabled": False,
-                    },
-                },
-            },
-            "orchestration": {
-                "agent_loop_enabled": True,
-            },
-        },
-    )
-
+def test_admin_list_omits_obsolete_harness_status_for_all_packages():
     response = router_module._operational_dto(_super_expert_record())
-
-    assert response["harness_status"] == {
-        "skill_reader_enabled": False,
-        "agent_loop_enabled": True,
-    }
-    serialized = str(response)
-    assert "agent.json" not in serialized
-    assert "runtime_workspaces" not in serialized
-
-
-def test_admin_list_marks_missing_super_expert_harness_config_undeclared(
-    monkeypatch,
-    tmp_path,
-):
-    monkeypatch.setattr(router_module, "WORKING_DIR", tmp_path)
-    monkeypatch.setattr(
-        PluginRegistry,
-        "sealed_package_type_supports",
-        lambda _self, package_type, feature: (
-            package_type == "super_expert" and feature == "harness_status"
-        ),
-    )
-    _write_active_agent_config(tmp_path, {"id": "luyu", "name": "陆羽"})
-
-    response = router_module._operational_dto(_super_expert_record())
-
-    assert response["harness_status"] == {
-        "skill_reader_enabled": None,
-        "agent_loop_enabled": None,
-    }
-
-
-def test_admin_list_omits_harness_status_for_ordinary_sealed_agent(
-    monkeypatch,
-    tmp_path,
-):
-    monkeypatch.setattr(router_module, "WORKING_DIR", tmp_path)
-    _write_active_agent_config(
-        tmp_path,
-        {
-            "id": "luyu",
-            "name": "陆羽",
-            "orchestration": {"agent_loop_enabled": True},
-        },
-    )
-
-    response = router_module._operational_dto(_record())
-
     assert "harness_status" not in response
+    assert "harness_status" not in router_module._operational_dto(_record())
 
 
 def test_invalid_active_release_is_reported_unavailable_without_internal_path():

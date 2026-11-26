@@ -5,11 +5,10 @@ class AgentRuntime:
             "runtime.trace",
             {"event": "agent.turn.started", "session_id": context["session_id"]},
         )
-        candidate = await host.call(
+        reply = await host.call(
             "agent.execute",
             {
                 "messages": request.normalized_input["messages"],
-                "execution_mode": "agent_loop",
             },
         )
         await host.call(
@@ -19,7 +18,7 @@ class AgentRuntime:
                 "message": {
                     "name": "assistant",
                     "role": "assistant",
-                    "content": candidate["text"],
+                    "content": reply["text"],
                 },
                 "diagnostics": {"runtime": "{{AGENT_ID}}"},
             },

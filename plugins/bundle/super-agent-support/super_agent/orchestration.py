@@ -258,7 +258,9 @@ def authorize_workspace_release(
     if declared.get("workspace.turn.orchestrate/1") != config.contract_version:
         raise WorkspaceOrchestrationError("unauthorized_capability")
     if any(
-        declared.get(capability) != "1"
+        declared.get(capability) not in (
+            {"1", "2"} if capability == "agent.execute" else {"1"}
+        )
         for capability in config.required_host_capabilities
     ):
         raise WorkspaceOrchestrationError("unauthorized_capability")
@@ -823,15 +825,21 @@ def _agent_execute_require_interaction(arguments: dict[str, Any]) -> bool:
     return value
 
 
-def _agent_execute_mode(arguments: dict[str, Any]) -> str:
+def _agent_execute_mode(
+    arguments: dict[str, Any],
+    *,
+    contract_version: str = "1",
+) -> str:
     """Select the host execution path without truthy coercion."""
     if not isinstance(arguments, dict):
         raise WorkspaceOrchestrationError("orchestration_error")
     if "execution_mode" not in arguments:
-        return "candidate"
-    if arguments["execution_mode"] != "agent_loop":
+        return "agent_loop" if contract_version == "2" else "candidate"
+    if arguments["execution_mode"] == "agent_loop":
+        return "agent_loop"
+    if arguments["execution_mode"] != "candidate" or contract_version != "2":
         raise WorkspaceOrchestrationError("orchestration_error")
-    return "agent_loop"
+    return "candidate"
 
 
 def _safe_provider_error(exc: Exception) -> dict[str, Any]:
@@ -1109,7 +1117,12 @@ async def run_workspace_orchestration_turn(
     ) -> dict[str, Any]:
         nonlocal agent_execute_call_number
         response_format = _agent_execute_response_format(arguments)
-        execution_mode = _agent_execute_mode(arguments)
+        execution_mode = _agent_execute_mode(
+            arguments,
+            contract_version=authorization.granted_capabilities.get(
+                "agent.execute", "1",
+            ),
+        )
         instruction = _agent_execute_instruction(arguments)
         if active_safe_metadata.get("aigcReviewContinuation") is True:
             instruction = "\n\n".join(
@@ -1790,7 +1803,10 @@ class WorkspaceRuntimeHost:
     async def call(self, capability: str, arguments: dict[str, Any]) -> Any:
         if self.completion is not None or self.failure is not None:
             raise WorkspaceOrchestrationError("invalid_completion")
-        if self.request.granted_capabilities.get(capability) != "1":
+        granted_version = self.request.granted_capabilities.get(capability)
+        if granted_version not in (
+            {"1", "2"} if capability == "agent.execute" else {"1"}
+        ):
             raise WorkspaceOrchestrationError("unauthorized_capability")
         if capability == "agent.execute":
             return await _maybe_await(self._execute_agent(arguments))

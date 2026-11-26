@@ -42,11 +42,12 @@ def _definition(
     capability_id: str,
     group: str,
     *,
+    contract_version: str = "1",
     dependencies: tuple[str, ...] = (),
 ) -> PlatformCapabilityDefinition:
     return PlatformCapabilityDefinition(
         capability_id=capability_id,
-        contract_version="1",
+        contract_version=contract_version,
         group=group,
         dependencies=dependencies,
     )
@@ -60,7 +61,14 @@ PLATFORM_CAPABILITY_CATALOG_V1 = {
             "runtime",
             dependencies=_HOST,
         ),
-        *(_definition(capability, "runtime_host") for capability in _HOST),
+        *(
+            _definition(
+                capability,
+                "runtime_host",
+                contract_version="2" if capability == "agent.execute" else "1",
+            )
+            for capability in _HOST
+        ),
         _definition("runtime.failure.read/1", "runtime_host"),
         _definition("card.create", "card"),
         _definition("card.update", "card", dependencies=("card.create",)),
@@ -130,6 +138,18 @@ PLATFORM_CAPABILITY_CATALOG_V1 = {
         ),
     )
 }
+
+
+def supports_capability_version(
+    capability_id: str,
+    contract_version: str,
+    definition: PlatformCapabilityDefinition | None,
+) -> bool:
+    """Keep signed v1 execute grants valid while new releases use v2."""
+    return definition is not None and (
+        contract_version == definition.contract_version
+        or (capability_id == "agent.execute" and contract_version == "1")
+    )
 
 
 def get_platform_capability_catalog() -> (
@@ -260,7 +280,11 @@ def validate_super_expert_manifest(
             raise CapabilityManifestError(
                 f"unknown capability: {capability_id}",
             )
-        if declaration.contract_version != definition.contract_version:
+        if not supports_capability_version(
+            capability_id,
+            declaration.contract_version,
+            definition,
+        ):
             raise CapabilityManifestError(
                 f"unsupported capability version: {capability_id}",
             )

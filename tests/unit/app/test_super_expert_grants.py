@@ -65,6 +65,24 @@ def test_preview_and_accept_persist_the_complete_immutable_manifest(tmp_path):
     assert repository.get(grant.installation_id) == grant
 
 
+def test_new_execute_contract_can_be_granted_without_changing_legacy_grants(
+    tmp_path,
+):
+    repository = SuperExpertGrantRepository(tmp_path)
+    capabilities = tuple(
+        (capability, "2" if capability == "agent.execute" else version)
+        for capability, version in CAPABILITIES
+    )
+    preview = repository.preview(
+        "agent-v2",
+        _release(declared_capabilities=capabilities),
+        tenant_id="tenant-a",
+    )
+
+    assert ("agent.execute", "2") in preview.capabilities
+    assert ("agent.execute", "1") not in preview.capabilities
+
+
 def test_cancel_preview_does_not_create_an_installation(tmp_path):
     repository = SuperExpertGrantRepository(tmp_path)
     preview = repository.preview("agent-1", _release(), tenant_id="tenant-a")

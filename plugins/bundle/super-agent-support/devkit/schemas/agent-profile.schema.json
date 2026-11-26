@@ -15,8 +15,7 @@
         "enabled":{"type":"boolean"},
         "contract_version":{"const":"1"},
         "entrypoint":{"type":"string"},
-        "required_host_capabilities":{"type":"array","uniqueItems":true,"items":{"type":"string"}},
-        "agent_loop_enabled":{"type":["boolean","null"]}
+        "required_host_capabilities":{"type":"array","uniqueItems":true,"items":{"type":"string"}}
       }
     }
   }

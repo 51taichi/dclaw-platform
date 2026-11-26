@@ -8,7 +8,7 @@ class ExampleRuntime:
                 "session_id": context["session_id"],
             },
         )
-        candidate = await host.call(
+        reply = await host.call(
             "agent.execute",
             {"messages": request.normalized_input["messages"]},
         )
@@ -19,7 +19,7 @@ class ExampleRuntime:
                 "message": {
                     "name": "assistant",
                     "role": "assistant",
-                    "content": candidate["text"],
+                    "content": reply["text"],
                 },
                 "diagnostics": {"runtime": "example-business-agent"},
             },

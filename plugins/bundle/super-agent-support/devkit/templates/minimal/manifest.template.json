@@ -25,7 +25,7 @@
   },
   "capabilities": [
     {"capability_id":"workspace.turn.orchestrate/1","contract_version":"1"},
-    {"capability_id":"agent.execute","contract_version":"1"},
+    {"capability_id":"agent.execute","contract_version":"2"},
     {"capability_id":"session.context","contract_version":"1"},
     {"capability_id":"runtime.trace","contract_version":"1"},
     {"capability_id":"runtime.complete","contract_version":"1"},
