@@ -29,6 +29,40 @@ from ...config import load_config
 logger = logging.getLogger(__name__)
 
 
+def _runtime_message_id(
+    original_id: str,
+    message_type: str,
+    block_id: str | None = None,
+) -> str:
+    """Build a stable wire ID for all chunks of one AgentScope reply."""
+    base = str(original_id or "message")
+    if message_type == MessageType.MESSAGE:
+        return base
+    suffix = f":{block_id}" if block_id else ""
+    return f"{base}:{message_type}{suffix}"
+
+
+def _finish_projected_message(message: Message, is_delta: bool) -> Message:
+    """Keep stream chunks open; snapshots and history entries are terminal."""
+    return message.in_progress() if is_delta else message.completed()
+
+
+def _new_projected_message(
+    original_id: str,
+    message_type: str,
+    role: str,
+    metadata: dict,
+    block_id: str | None = None,
+) -> Message:
+    message = Message(
+        id=_runtime_message_id(original_id, message_type, block_id),
+        type=message_type,
+        role=role,
+    )
+    message.metadata = {**metadata, "content_block_ids": []}
+    return message
+
+
 def build_env_context(
     session_id: Optional[str] = None,
     user_id: Optional[str] = None,
@@ -365,15 +399,19 @@ def agentscope_msg_to_message(
         }
 
         if isinstance(msg.content, str):
-            message = Message(type=MessageType.MESSAGE, role=role)
-            message.metadata = metadata
+            message = Message(
+                id=_runtime_message_id(msg.id, MessageType.MESSAGE),
+                type=MessageType.MESSAGE,
+                role=role,
+            )
+            message.metadata = {**metadata, "content_block_ids": [None]}
             text_content = TextContent(
-                delta=False,
+                delta=is_delta,
                 index=None,
                 text=msg.content,
             )
             message.add_content(new_content=text_content)
-            results.append(message)
+            results.append(_finish_projected_message(message, is_delta))
             continue
 
         current_message = None
@@ -400,12 +438,15 @@ def agentscope_msg_to_message(
             if btype == "text":
                 if current_type != MessageType.MESSAGE:
                     if current_message:
-                        results.append(current_message.completed())
-                    current_message = Message(
-                        type=MessageType.MESSAGE,
-                        role=role,
+                        results.append(
+                            _finish_projected_message(current_message, is_delta),
+                        )
+                    current_message = _new_projected_message(
+                        msg.id,
+                        MessageType.MESSAGE,
+                        role,
+                        metadata,
                     )
-                    current_message.metadata = metadata
                     current_type = MessageType.MESSAGE
 
                 text_content = TextContent(
@@ -414,16 +455,22 @@ def agentscope_msg_to_message(
                     text=block.get("text", ""),
                 )
                 current_message.add_content(new_content=text_content)
+                current_message.metadata["content_block_ids"].append(
+                    block.get("id"),
+                )
 
             elif btype == "thinking":
                 if current_type != MessageType.REASONING:
                     if current_message:
-                        results.append(current_message.completed())
-                    current_message = Message(
-                        type=MessageType.REASONING,
-                        role=role,
+                        results.append(
+                            _finish_projected_message(current_message, is_delta),
+                        )
+                    current_message = _new_projected_message(
+                        msg.id,
+                        MessageType.REASONING,
+                        role,
+                        metadata,
                     )
-                    current_message.metadata = metadata
                     current_type = MessageType.REASONING
 
                 text_content = TextContent(
@@ -432,16 +479,26 @@ def agentscope_msg_to_message(
                     text=block.get("thinking", ""),
                 )
                 current_message.add_content(new_content=text_content)
+                current_message.metadata["content_block_ids"].append(
+                    block.get("id"),
+                )
 
             elif btype in {"tool_use", "tool_call"}:
                 if current_message:
-                    results.append(current_message.completed())
+                    results.append(
+                        _finish_projected_message(current_message, is_delta),
+                    )
 
-                current_message = Message(
-                    type=MessageType.PLUGIN_CALL,
-                    role=role,
+                current_message = _new_projected_message(
+                    msg.id,
+                    MessageType.PLUGIN_CALL,
+                    role,
+                    metadata,
+                    block.get("id"),
                 )
-                current_message.metadata = metadata
+                current_message.metadata["content_block_ids"].append(
+                    block.get("id"),
+                )
                 current_type = MessageType.PLUGIN_CALL
 
                 if isinstance(block.get("input"), (dict, list)):
@@ -459,7 +516,7 @@ def agentscope_msg_to_message(
                 ).model_dump()
 
                 data_content = DataContent(
-                    delta=False,
+                    delta=is_delta,
                     index=None,
                     data=call_data,
                 )
@@ -467,13 +524,20 @@ def agentscope_msg_to_message(
 
             elif btype == "tool_result":
                 if current_message:
-                    results.append(current_message.completed())
+                    results.append(
+                        _finish_projected_message(current_message, is_delta),
+                    )
 
-                current_message = Message(
-                    type=MessageType.PLUGIN_CALL_OUTPUT,
-                    role=role,
+                current_message = _new_projected_message(
+                    msg.id,
+                    MessageType.PLUGIN_CALL_OUTPUT,
+                    role,
+                    metadata,
+                    block.get("id"),
                 )
-                current_message.metadata = metadata
+                current_message.metadata["content_block_ids"].append(
+                    block.get("id"),
+                )
                 current_type = MessageType.PLUGIN_CALL_OUTPUT
 
                 if isinstance(block.get("output"), (dict, list)):
@@ -491,7 +555,7 @@ def agentscope_msg_to_message(
                 ).model_dump(exclude_none=True)
 
                 data_content = DataContent(
-                    delta=False,
+                    delta=is_delta,
                     index=None,
                     data=output_data,
                 )
@@ -508,12 +572,15 @@ def agentscope_msg_to_message(
             elif btype == "image":
                 if current_type != MessageType.MESSAGE:
                     if current_message:
-                        results.append(current_message.completed())
-                    current_message = Message(
-                        type=MessageType.MESSAGE,
-                        role=role,
+                        results.append(
+                            _finish_projected_message(current_message, is_delta),
+                        )
+                    current_message = _new_projected_message(
+                        msg.id,
+                        MessageType.MESSAGE,
+                        role,
+                        metadata,
                     )
-                    current_message.metadata = metadata
                     current_type = MessageType.MESSAGE
 
                 kwargs = {}
@@ -543,16 +610,22 @@ def agentscope_msg_to_message(
                     **kwargs,
                 )
                 current_message.add_content(new_content=image_content)
+                current_message.metadata["content_block_ids"].append(
+                    block.get("id"),
+                )
 
             elif btype == "audio":
                 if current_type != MessageType.MESSAGE:
                     if current_message:
-                        results.append(current_message.completed())
-                    current_message = Message(
-                        type=MessageType.MESSAGE,
-                        role=role,
+                        results.append(
+                            _finish_projected_message(current_message, is_delta),
+                        )
+                    current_message = _new_projected_message(
+                        msg.id,
+                        MessageType.MESSAGE,
+                        role,
+                        metadata,
                     )
-                    current_message.metadata = metadata
                     current_type = MessageType.MESSAGE
 
                 kwargs = {}
@@ -584,16 +657,22 @@ def agentscope_msg_to_message(
                     **kwargs,
                 )
                 current_message.add_content(new_content=audio_content)
+                current_message.metadata["content_block_ids"].append(
+                    block.get("id"),
+                )
 
             elif btype == "video":
                 if current_type != MessageType.MESSAGE:
                     if current_message:
-                        results.append(current_message.completed())
-                    current_message = Message(
-                        type=MessageType.MESSAGE,
-                        role=role,
+                        results.append(
+                            _finish_projected_message(current_message, is_delta),
+                        )
+                    current_message = _new_projected_message(
+                        msg.id,
+                        MessageType.MESSAGE,
+                        role,
+                        metadata,
                     )
-                    current_message.metadata = metadata
                     current_type = MessageType.MESSAGE
 
                 kwargs = {}
@@ -623,16 +702,22 @@ def agentscope_msg_to_message(
                     **kwargs,
                 )
                 current_message.add_content(new_content=video_content)
+                current_message.metadata["content_block_ids"].append(
+                    block.get("id"),
+                )
 
             elif btype == "file":
                 if current_type != MessageType.MESSAGE:
                     if current_message:
-                        results.append(current_message.completed())
-                    current_message = Message(
-                        type=MessageType.MESSAGE,
-                        role=role,
+                        results.append(
+                            _finish_projected_message(current_message, is_delta),
+                        )
+                    current_message = _new_projected_message(
+                        msg.id,
+                        MessageType.MESSAGE,
+                        role,
+                        metadata,
                     )
-                    current_message.metadata = metadata
                     current_type = MessageType.MESSAGE
 
                 kwargs = {
@@ -667,26 +752,17 @@ def agentscope_msg_to_message(
                     **kwargs,
                 )
                 current_message.add_content(new_content=file_content)
+                current_message.metadata["content_block_ids"].append(
+                    block.get("id"),
+                )
 
             else:
-                if current_type != MessageType.MESSAGE:
-                    if current_message:
-                        results.append(current_message.completed())
-                    current_message = Message(
-                        type=MessageType.MESSAGE,
-                        role=role,
-                    )
-                    current_message.metadata = metadata
-                    current_type = MessageType.MESSAGE
-
-                text_content = TextContent(
-                    delta=False,
-                    index=None,
-                    text=str(block),
+                logger.debug(
+                    "Skipping non-public AgentScope block type %r",
+                    btype,
                 )
-                current_message.add_content(new_content=text_content)
 
         if current_message:
-            results.append(current_message.completed())
+            results.append(_finish_projected_message(current_message, is_delta))
 
     return results

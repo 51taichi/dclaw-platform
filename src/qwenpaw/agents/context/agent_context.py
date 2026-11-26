@@ -200,17 +200,17 @@ class AgentContext(InMemoryMemory):
                 "required for InMemoryMemory.",
             )
 
-        self.content = []  # pylint: disable=attribute-defined-outside-init
+        restored_content: list[tuple[Msg, list[str]]] = []
         for item in state_dict.get("content", []):
             if isinstance(item, (tuple, list)) and len(item) == 2:
                 msg_dict, marks = item
                 msg = message_from_dict(msg_dict)
-                self.content.append((msg, marks))
+                restored_content.append((msg, list(marks or [])))
 
             elif isinstance(item, dict):
                 # For compatibility with older versions
                 msg = message_from_dict(item)
-                self.content.append((msg, []))
+                restored_content.append((msg, []))
 
             else:
                 raise ValueError(
@@ -218,6 +218,7 @@ class AgentContext(InMemoryMemory):
                 )
 
         self._compressed_summary = state_dict.get("_compressed_summary", "")
+        self.content = restored_content
 
     async def mark_messages_compressed(
         self,

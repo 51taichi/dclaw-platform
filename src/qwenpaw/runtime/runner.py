@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import logging
 import traceback
+from copy import deepcopy
 from contextlib import AsyncExitStack
 from typing import Any, AsyncGenerator
 from uuid import uuid4
@@ -26,6 +27,65 @@ from .contracts import (
 from .exceptions import AppBaseException, UnknownAgentException
 
 logger = logging.getLogger(__name__)
+
+
+def _stream_metadata(message: Message) -> dict[str, Any]:
+    metadata = message.metadata or {}
+    nested = metadata.get("metadata")
+    return nested if isinstance(nested, dict) else {}
+
+
+def _merge_stream_terminal(active: Message, terminal: Message) -> None:
+    """Apply a terminal snapshot without discarding accumulated tool output."""
+    if _stream_metadata(terminal).get("stream_snapshot"):
+        active.content = deepcopy(terminal.content)
+    elif terminal.content:
+        for index, incoming in enumerate(terminal.content):
+            if index >= len(active.content or []):
+                active.add_content(incoming.model_copy(deep=True))
+                continue
+            previous = active.content[index]
+            if incoming.type == ContentType.DATA and previous.type == ContentType.DATA:
+                merged = {**(previous.data or {}), **(incoming.data or {})}
+                if not (incoming.data or {}).get("output") and (
+                    previous.data or {}
+                ).get("output"):
+                    merged["output"] = previous.data["output"]
+                previous.data = merged
+            elif incoming.type == ContentType.TEXT and incoming.text:
+                previous.text = incoming.text
+            else:
+                active.content[index] = incoming.model_copy(deep=True)
+    active.metadata = terminal.metadata
+    active.usage = terminal.usage
+
+
+def _add_stream_content(
+    active: Message,
+    content: Any,
+    content_index: int | None,
+) -> Event | None:
+    """Accumulate a chunk and return the content event sent to the client."""
+    if content_index is not None:
+        content.index = content_index
+        if (
+            active.type == "plugin_call_output"
+            and content.type == ContentType.DATA
+            and active.content
+        ):
+            previous = active.content[content_index]
+            previous_data = previous.data or {}
+            incoming_data = content.data or {}
+            merged = {**previous_data, **incoming_data}
+            if isinstance(previous_data.get("output"), str) and isinstance(
+                incoming_data.get("output"),
+                str,
+            ):
+                merged["output"] = (
+                    previous_data["output"] + incoming_data["output"]
+                )
+            content.data = merged
+    return active.add_delta_content(content)
 
 
 def _request_messages_to_agent_msgs(messages: list[Message]) -> list[Msg]:
@@ -140,8 +200,23 @@ class Runner:
 
         sequence = SequenceNumberGenerator()
         response = AgentResponse(id=request.id, session_id=request.session_id)
+        active_streams: dict[str, Message] = {}
+        active_content_indexes: dict[str, dict[str, int]] = {}
         yield sequence.yield_with_sequence(response)
         yield sequence.yield_with_sequence(response.in_progress())
+
+        def finalize_stream(message_id: str) -> list[Event]:
+            active = active_streams.pop(message_id)
+            active_content_indexes.pop(message_id, None)
+            terminal_events: list[Event] = []
+            for index in range(len(active.content or [])):
+                content_event = active.content_completed(index)
+                if content_event is not None:
+                    terminal_events.append(content_event)
+            active.completed()
+            response.add_new_message(active.model_copy(deep=True))
+            terminal_events.append(active)
+            return terminal_events
 
         try:
             source = self.query_handler(
@@ -159,8 +234,54 @@ class Runner:
 
                     projected = agentscope_msg_to_message(value)
                 for event in projected:
+                    if event.status == RunStatus.InProgress:
+                        active = active_streams.get(event.id)
+                        if active is None:
+                            active = Message(
+                                id=event.id,
+                                type=event.type,
+                                role=event.role,
+                                metadata=event.metadata,
+                            ).in_progress()
+                            active_streams[event.id] = active
+                            active_content_indexes[event.id] = {}
+                            yield sequence.yield_with_sequence(
+                                active.model_copy(deep=True),
+                            )
+
+                        block_ids = (event.metadata or {}).get(
+                            "content_block_ids",
+                            [],
+                        )
+                        indexes = active_content_indexes[event.id]
+                        for position, content in enumerate(event.content or []):
+                            block_id = (
+                                block_ids[position]
+                                if position < len(block_ids)
+                                else None
+                            )
+                            block_key = str(
+                                block_id or f"{content.type}:{position}",
+                            )
+                            content_event = _add_stream_content(
+                                active,
+                                content.model_copy(deep=True),
+                                indexes.get(block_key),
+                            )
+                            if content_event is None:
+                                continue
+                            indexes.setdefault(block_key, content_event.index)
+                            yield sequence.yield_with_sequence(content_event)
+                        continue
+
+                    if event.id in active_streams:
+                        _merge_stream_terminal(active_streams[event.id], event)
+                        for terminal_event in finalize_stream(event.id):
+                            yield sequence.yield_with_sequence(terminal_event)
+                        continue
+
                     if event.status == RunStatus.Completed:
-                        response.add_new_message(event)
+                        response.add_new_message(event.model_copy(deep=True))
                     yield sequence.yield_with_sequence(event)
         except Exception as exc:  # terminal error is projected into response
             converted = (
@@ -173,6 +294,10 @@ class Runner:
                 response.failed(Error(code=converted.code, message=converted.message)),
             )
             return
+
+        for message_id in list(active_streams):
+            for terminal_event in finalize_stream(message_id):
+                yield sequence.yield_with_sequence(terminal_event)
 
         if response.output:
             response.usage = response.output[-1].usage
