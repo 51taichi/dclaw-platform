@@ -419,7 +419,7 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
     ensure_default_agent_exists()
     migrate_all_agents_global_data()
     migrate_legacy_skills_to_skill_pool()
-    ensure_product_builtin_assets()
+    ensure_product_builtin_assets(distribute_default_skills=False)
     ensure_qa_agent_exists()
 
     # Create core managers (instant — no I/O)
@@ -501,6 +501,12 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
 
     async def _background_startup():  # pylint: disable=too-many-statements
         try:
+            # Distribution scans all workspaces. Keep it outside the event
+            # loop so HTTP remains responsive on large installations.
+            from ..agents.skill_system import ensure_skill_pool_initialized
+
+            await asyncio.to_thread(ensure_skill_pool_initialized)
+
             # ---- Plugin System ----
             logger.debug("Initializing plugin system...")
 

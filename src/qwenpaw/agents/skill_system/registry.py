@@ -997,55 +997,78 @@ def _sync_managed_editable_ppt_builtin() -> None:
 
 
 _pool_initializing = False
+_pool_initialized_for: Path | None = None
+_pool_defaults_distributed_for: Path | None = None
+_pool_init_lock = threading.RLock()
 
 
-def ensure_skill_pool_initialized() -> bool:
-    """Ensure the local skill pool exists and built-ins are synced into it."""
+def ensure_skill_pool_initialized(*, distribute_defaults: bool = True) -> bool:
+    """Initialize the pool once and optionally distribute defaults.
+
+    Default-skill distribution scans every workspace and can be expensive on
+    established installations. Callers in the fast application-startup path
+    may defer that work, then request it from the background startup task.
+    """
     global _pool_initializing
-    if _pool_initializing:
-        # Prevent recursive initialization re-entrancy from SkillPoolService constructor
-        return False
+    global _pool_initialized_for
+    global _pool_defaults_distributed_for
 
-    _pool_initializing = True
-    try:
-        pool_dir = get_skill_pool_dir()
-        created = False
-        if not pool_dir.exists():
-            pool_dir.mkdir(parents=True, exist_ok=True)
-            created = True
+    pool_dir = get_skill_pool_dir().resolve()
+    with _pool_init_lock:
+        initialized = _pool_initialized_for == pool_dir
+        distributed = _pool_defaults_distributed_for == pool_dir
+        if initialized and (not distribute_defaults or distributed):
+            return False
+        if _pool_initializing:
+            # Prevent recursive initialization from SkillPoolService.
+            return False
 
-        manifest_path = get_pool_skill_manifest_path()
-        if not manifest_path.exists():
-            write_json_atomic(manifest_path, default_pool_manifest())
-            created = True
-
-        if created:
-            import_builtin_skills()
-        else:
-            _incrementally_import_new_builtins()
-            migrate_pool_builtin_language_fields()
-
-        _sync_default_skill_creator_builtin()
-        _sync_managed_editable_ppt_builtin()
-
-        # Automatically distribute every default pool skill to all active workspaces.
+        _pool_initializing = True
         try:
-            from .pool_service import SkillPoolService
+            created = False
+            if not initialized:
+                if not pool_dir.exists():
+                    pool_dir.mkdir(parents=True, exist_ok=True)
+                    created = True
 
-            pool_service = SkillPoolService()
-            pool_service.install_default_skills_to_all_workspaces(
-                overwrite=True,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Failed to auto-distribute default skills to active workspaces: %s",
-                exc,
-                exc_info=True,
-            )
+                manifest_path = get_pool_skill_manifest_path()
+                if not manifest_path.exists():
+                    write_json_atomic(manifest_path, default_pool_manifest())
+                    created = True
 
-        return created
-    finally:
-        _pool_initializing = False
+                if created:
+                    import_builtin_skills()
+                else:
+                    _incrementally_import_new_builtins()
+                    migrate_pool_builtin_language_fields()
+
+                _sync_default_skill_creator_builtin()
+                _sync_managed_editable_ppt_builtin()
+                _pool_initialized_for = pool_dir
+
+            if distribute_defaults and not distributed:
+                try:
+                    from .pool_service import SkillPoolService
+
+                    pool_service = SkillPoolService()
+                    pool_service.install_default_skills_to_all_workspaces(
+                        overwrite=True,
+                    )
+                    _pool_defaults_distributed_for = pool_dir
+                except Exception as exc:
+                    # Distribution is best effort, matching the previous
+                    # behavior. Pool creation and builtin sync above remain
+                    # fail-closed.
+                    logger.warning(
+                        "Failed to auto-distribute default skills to active "
+                        "workspaces: %s",
+                        exc,
+                        exc_info=True,
+                    )
+
+            return created
+        finally:
+            _pool_initializing = False
 
 
 # ---------------------------------------------------------------------------

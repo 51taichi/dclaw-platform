@@ -311,7 +311,10 @@ def _product_first_agent_order(existing_order: list[str], profiles) -> list[str]
     return ordered
 
 
-def ensure_product_builtin_assets() -> None:
+def ensure_product_builtin_assets(
+    *,
+    distribute_default_skills: bool = True,
+) -> None:
     """Seed packaged product agents and custom skills into WORKING_DIR.
 
     This makes a fresh Docker or local deployment start with the product's
@@ -322,7 +325,9 @@ def ensure_product_builtin_assets() -> None:
     if not assets_root.exists():
         return
 
-    ensure_skill_pool_initialized()
+    ensure_skill_pool_initialized(
+        distribute_defaults=distribute_default_skills,
+    )
     config = load_config()
     changed_config = False
 
