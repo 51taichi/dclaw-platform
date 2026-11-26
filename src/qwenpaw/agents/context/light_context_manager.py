@@ -487,7 +487,6 @@ class LightContextManager(BaseContextManager):
             sys_prompt=system_prompt,
             formatter=as_llm_formatter,
         )
-        agent.set_console_output_enabled(False)
 
         # Build user message
         if previous_summary:

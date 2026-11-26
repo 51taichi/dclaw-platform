@@ -1000,7 +1000,6 @@ class AgentRunner(Runner):
                 else:
                     install_open_api_agent_response_format(agent)
             await agent.register_mcp_clients()
-            agent.set_console_output_enabled(enabled=False)
 
             logger.debug(
                 f"Agent Query msgs {msgs}",

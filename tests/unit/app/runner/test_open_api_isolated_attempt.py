@@ -55,9 +55,6 @@ class FakeAgent:
     async def register_mcp_clients(self):
         return None
 
-    def set_console_output_enabled(self, *, enabled):
-        assert enabled is False
-
     def rebuild_sys_prompt(self):
         return None
 
