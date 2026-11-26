@@ -13,6 +13,10 @@ def _patch_working_dir(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("qwenpaw.config.config.WORKING_DIR", tmp_path)
     monkeypatch.setattr("qwenpaw.config.utils.WORKING_DIR", tmp_path)
     monkeypatch.setattr("qwenpaw.app.migration.WORKING_DIR", tmp_path)
+    monkeypatch.setattr(
+        "qwenpaw.agents.builtin_product_assets.WORKING_DIR",
+        tmp_path,
+    )
 
 
 def test_packaged_product_assets_seed_agents_and_skills(

@@ -940,14 +940,19 @@ def _do_ensure_qa_agent() -> None:
     )
 
 
-def ensure_product_builtin_assets() -> None:
+def ensure_product_builtin_assets(
+    *,
+    distribute_default_skills: bool = True,
+) -> None:
     """Ensure packaged product agents and custom builtins are installed."""
     try:
         from ..agents.builtin_product_assets import (
             ensure_product_builtin_assets as _ensure_assets,
         )
 
-        _ensure_assets()
+        _ensure_assets(
+            distribute_default_skills=distribute_default_skills,
+        )
     except Exception as e:
         logger.error(
             "Failed to ensure product builtin assets: %s",

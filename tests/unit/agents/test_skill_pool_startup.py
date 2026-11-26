@@ -57,3 +57,21 @@ def test_default_distribution_can_be_deferred_and_runs_once(
     assert calls == [True]
     assert registry._pool_initialized_for == Path(pool_dir).resolve()
     assert registry._pool_defaults_distributed_for == Path(pool_dir).resolve()
+
+
+def test_migration_wrapper_forwards_deferred_distribution(monkeypatch):
+    from qwenpaw.agents import builtin_product_assets
+    from qwenpaw.app import migration
+
+    calls = []
+    monkeypatch.setattr(
+        builtin_product_assets,
+        "ensure_product_builtin_assets",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    migration.ensure_product_builtin_assets(
+        distribute_default_skills=False,
+    )
+
+    assert calls == [{"distribute_default_skills": False}]
