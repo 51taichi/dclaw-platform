@@ -19,11 +19,12 @@ DClaw 中所有 Agent，无论是普通 Agent 还是密封 Agent，在激活后�
 
 ## 设计取代关系
 
-本设计取代以下文档中关于“密封专用在线运行”的部分：
+本设计取代此前关于 Runtime Adapter、密封 Harness 子进程、
+`sealed_entrypoint/1`、Worker、HostBridge、`/release` 与 `/session` 隔离的两份
+试验性方案。旧方案已从当前文档集删除，需要审计时可从 Git 历史查阅。
 
-- `2026-09-01-sealed-runtime-adapter-design.md` 的 Runtime Adapter、密封 Harness 子进程和危险工具裁剪方案；
-- `2026-09-01-sealed-agent-capability-parity-runtime-design.md` 的 `sealed_entrypoint/1`、Worker、HostBridge、`/release` 与 `/session` 隔离方案；
-- `2026-08-26-sealed-global-agents-design.md` 的运行时文件隔离、默认禁用 Shell、密封专用输出策略和密封专用 OpenAPI 执行策略。
+本设计同时取代 `2026-08-26-sealed-global-agents-design.md` 中关于运行时文件隔离、
+默认禁用 Shell、密封专用输出策略和密封专用 OpenAPI 执行策略的部分。
 
 以下既有设计继续有效：
 
