@@ -4,9 +4,9 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.68`
+当前版本：`2.69`
 
-发布日期：`2026-11-26`
+发布日期：`2026-11-27`
 
 ## 1. 文档目的
 
@@ -727,20 +727,20 @@ DClaw 平台负责卡片持久化、渲染、提交和可信回传；开发方�
 
 ### 13.1 统一建卡顺序
 
-新建或更新的超级专家使用相同的两段式业务回复与建卡流程；业务内容仍由各专家自己的需求和状态机决定，卡片组件、字段与回执统一遵守插件实时合同：
+新建或更新的超级专家使用单次模型业务回复与可选卡片建议合同；业务内容仍由各专家自己的需求、阶段和状态机决定，卡片组件、字段与回执统一遵守插件实时合同：
 
-1. 专家运行时用无工具候选模式调用 `agent.execute`，取得内部业务文本候选。声明合同 v2 的新包必须显式传 `execution_mode="candidate"`；已签名 v1 包可继续省略模式。此调用不设置 `response_format="json_object"`，不直接流式展示给客户，也不以候选正文证明卡片已创建。
-2. 若已确认业务流程或状态机需要客户输入，运行时先调用 Host `interaction.capabilities.list/1` 取得本轮所需组件的实时详细 Schema，再以第一段文本、可信业务状态及该 Schema 为输入，第二次调用无工具的 `agent.execute` 生成卡片草案。v2 同样显式传 `execution_mode="candidate"`，并可设置 `response_format="json_object"`；模型只建议组件类型和参数，不调用建卡工具，不增加、删除或改写第一段确定的业务问题和选项。无需客户输入的回合不创建卡片。
-3. 运行时解析第二段候选，核对业务问题、字段顺序、必填关系、选项、状态、`task_key` 和 `interaction_revision`，并按实时组件 Schema 校验。校验失败时只针对第二段做有界重试；仍不合格则记录脱敏错误并失败关闭。需要卡片的回合禁止降级为仅输出文本问题。
-4. 只有校验通过后，运行时才以稳定幂等键调用 Host `interaction.card.create/1`；插件再次执行权威 Schema、授权和作用域校验。运行时核对真实 `interaction_id`、`PENDING` 状态及 `interaction.card.receipt/1` 的 `created` 回执，再调用 `runtime.complete` 原子提交客户回复及卡片。任何内部候选、失败草案和未经确认的建卡结果都不得提前展示为已完成回复。
+1. 每次客户交流先调用模型，输入本轮消息、会话历史、已核验答案和当前业务阶段。声明 `agent.execute` v2 的新包显式使用无工具 `candidate` 模式，可设置 `response_format="json_object"`；同一次模型输出包含非空业务回复、可独立理解的文字回退，以及零或一张卡片建议。不得用固定开场或固定卡片跳过模型。候选仅供内部校验，不提前公开流式展示。
+2. 专家运行时检查阶段、业务字段、`task_key`、修订及卡片类型；有建议时调用 Host `interaction.capabilities.list/1` 读取该组件实时详细 Schema，并用完整 JSON Schema 验证卡片。合法建议以稳定幂等键调用 `interaction.card.create/1`，核对真实 `interaction_id`、`PENDING` 状态与 `created` 回执。创建失败或建议不合法时，使用同次模型提供的文字问题继续，不伪称卡片存在，不为修卡再调用模型。
+3. 新卡使用 `card_or_text`，卡片与普通输入框同时可用。单选预设项与卡内自行输入互斥；多选可并存，自行输入计入最少/最多数量。文字完整回答当前问题时关闭旧卡；部分回答时关闭旧卡，仅为剩余缺口建议新卡。已签名旧包的 `card_only` 记录保持原合同兼容，不能把文字当作可信卡片提交。
+4. 业务执行、AIGC 和本地助手工具仍按各自授权与真实回执工作；发布、执行等外部动作须有明确、可核验且符合业务规则的客户授权。工具工作可另用 `agent_loop`，但不得绕过本轮已完成的卡片决策重复建卡。最终回复、卡片回执和状态按运行时事务提交。
 
-这两段模型调用分别处理业务回复和卡片表达；修改通用卡片表达规则时，只调整第二段的候选与校验模块，不改变第一段的业务目标、原始需求或既有状态机。`json_object` 只帮助第二段返回可解析对象，不能替代实时组件 Schema、业务不变量或 Host 最终校验。已签名旧专家的固定卡直建和模型工具建卡路径继续受原合同支持；各责任方在更新其发布包时迁入上述统一流程并验证旧任务续接，不由插件静默改写业务实现。
+`json_object` 只帮助候选返回可解析对象，不能替代实时组件 Schema、业务不变量或 Host 最终校验。已签名旧专家的固定卡直建和模型工具建卡路径继续受原合同支持；更新其发布包时迁入上述流程并验证旧任务续接，插件不静默改写旧包。
 
 直接 Host 调用的关闭外层请求/响应 Schema 分别位于 DevKit `schemas/interaction-capabilities-list-v1/` 与 `schemas/interaction-card-create-v1/`，成功的 `single_select` 建卡请求、规范化结果和 `created` 回执位于 `examples/interaction-host-v1/single-select-success.json`。调用 `await host.call("interaction.capabilities.list/1", {"component_types": ["single_select"]})` 后，实时组件 Schema 在响应 `components[0].schema`；空数组或省略类型只返回精简索引，没有组件 Schema。开发方须先按详细目录的 Schema 校验 `request.card`，再按业务不变量校验候选。公共 Component Registry 是本地助手依赖目录，不是交互卡目录，不得替代此 Host 调用。
 
 实时组件 Schema 是完整 JSON Schema，可能包含 `$defs`、`$ref`、`anyOf` 等关键词。运行时必须用支持该 Schema 草案的完整校验器验证 `request.card`，不得用手写关键词白名单或简化模拟 Schema 代替；否则即使平台给出的 `create_example` 合法，也可能在 Host 建卡前被专家自身拒绝。DevKit `fixtures/interaction-host-v1/single-select-live-catalog.json` 是当前 `single_select` 的完整脱敏目录快照，`validate_live_card.py` 提供 Draft 2020-12 验证示例。发布前应验证快照中的合法示例和反例，再用目标实例实时目录验证；静态快照不是目标实例的权威 Schema。若专家运行时使用第三方校验库，开发方负责将其适配版本作为专家依赖纳入签名包，不能假定 DevKit 开发环境或当前沙箱的偶然预装会永久存在。业务选项 ID、顺序、状态及可信回执仍须另行校验。此要求仅针对新建或更新专家，不改变已签名旧包和 Host 卡片合同。
 
-所有新建及更新超级专家的交互卡实现必须以 DevKit `interaction_card_api_demo.py` 的同一 Host 边界为基线，适用于 `single_select`、`multi_select`、`question_form` 和 `file_selector`：按确定类型读取实时详细目录，验证平台 `create_example.card` 与本轮草案；由专家校验业务问题、选项或问题 ID 顺序及其他业务不变量；使用稳定 `task_key`、递增修订和幂等键调用 `interaction.card.create/1`；仅在真实 `PENDING` 卡片与 `interaction.card.receipt/1` 的 `created` 回执在 ID、作用域、版本和事件上匹配后，才提交客户回复。`file_selector` 仍须单独声明和授权 `interaction.file.select/1`。业务内容可不同，但不得跳过上述公共调用与失败关闭门禁。Skill 和各专家的发布前测试至少要覆盖合法实时示例、非法字段、业务不变量被改写、错误创建回执及同任务点击续接；模拟 Host 只能辅助测试，不能替代目标实例实时目录校验。现有签名专家不受静默改写，下一次更新时按本节迁入并复测。
+所有新建及更新超级专家的交互卡实现必须以 DevKit `interaction_card_api_demo.py` 的同一 Host 边界为基线，适用于 `single_select`、`multi_select`、`question_form` 和 `file_selector`：按确定类型读取实时详细目录，验证平台 `create_example.card` 与本轮草案；由专家校验业务问题、选项或问题 ID 顺序及其他业务不变量；使用稳定 `task_key`、递增修订和幂等键调用 `interaction.card.create/1`；仅在真实 `PENDING` 卡片与 `interaction.card.receipt/1` 的 `created` 回执匹配后才报告卡片存在。`file_selector` 仍须单独声明和授权 `interaction.file.select/1`。发布前测试至少覆盖单次模型建议、无效建议文字回退、实时目录和创建失败回退、单选互斥、多选计数、文字续接与旧卡关闭、可信点击及重复回执；缺少相应受控证据不得通过发布门槛。现有签名专家不受静默改写，下一次更新时按本节迁入并复测。
 
 直接建卡请求的 `idempotency_key` 与 `request` 同级；`request` 包含稳定 `task_key`、正整数 `interaction_revision`、类型、卡片对象及可选输入策略，默认 `card_only`。`card_only` 的待提交卡阻塞普通文本输入；`card_or_text`、`concurrent` 均保留文本输入，但文本本身不证明卡片已提交。Host 从可信执行上下文注入租户、installation 和任务身份，调用方不得传入这些作用域字段。相同作用域、问题、修订和载荷的重试沿用原幂等键；实质改动须递增修订并换键，已存在阻塞卡须显式提供其 `replaces_interaction_id`。首次成功时核对 `interaction.status=PENDING`、真实 `interaction_id`，以及 `receipt.contract=interaction.card.receipt/1`、`action=created`、`status=PENDING`；回执的交互 ID、可信作用域、`task_key`、修订、版本和 `event_id` 应与创建结果的 `create` 转换一致。后续 `session.context.interaction_receipts` 中的同一 `created` 回执以 `event_id` 和 `interaction_id` 关联。卡片已提交后重放原幂等请求可能返回当前非 `PENDING` 的卡片状态，但原 `created` 回执仍为 `PENDING`；不得把该重放当作新卡展示。
 
@@ -777,7 +777,7 @@ DClaw 平台负责卡片持久化、渲染、提交和可信回传；开发方�
 
 迁移项目的默认交互规则：
 
-1. DClaw 卡片是唯一面向客户的业务入口。源包的命令行和 JSON 入口只保留为内部适配层或自动测试入口，不继续作为客户操作方式。
+1. DClaw 客户可用普通文字或卡片完成同一业务问题。源包的命令行和 JSON 入口只保留为内部适配层或自动测试入口，不继续作为客户操作方式。
 2. 开发方先从源包的真实输入合同推导卡片字段、默认值和必填关系，并复用客户已经提供的值；不得把能从源代码、示例或历史输入确定的字段重新问客户。
 3. 只有新增选择会改变产品行为、费用、数据去向或不可逆操作时才需要确认卡片方案。纯展示名称、字段顺序和已有默认值由开发方直接完成。
 4. 源流程能够自动检索素材时，不得为了套用上传组件而要求客户人工上传素材。只有源行为本来需要客户文件，或自动检索失败后的产品规则明确允许上传，才展示素材上传入口。
@@ -2302,10 +2302,10 @@ Agent 名称：<可选，中文显示名称>
 2. 开发方自己的业务目标、源 Agent 材料和测试凭证；
 3. 从目标 DClaw 认证调用元数据接口并按其 `download_path` 下载、核对 SHA-256 的官方开发包；兼容自动化可以继续单独下载同版本官方 DevKit。
 
-当前开发包 `1.10.47` 是推荐的单一离线移交物，必须提供：
+当前开发包 `1.10.48` 是推荐的单一离线移交物，必须提供：
 
 - 唯一标准文件与明确的标准版本，不复制第二套人工规则；
-- 官方 DevKit `1.9.32` 及其完整离线加密依赖；
+- 官方 DevKit `1.9.33` 及其完整离线加密依赖；
 - `dclaw_developer.py` 的 `doctor`、`info`、`init`、`validate`、`test`、`keygen`、`capability-build`、`build`、`upgrade` 和 `demo`；
 - 超级专家、业务服务和本地能力包模板，以及职责边界示例；
 - Agent 自主出站、公共业务服务、本地执行和能力包 Schema/SDK；
@@ -2317,7 +2317,7 @@ Agent 名称：<可选，中文显示名称>
 
 开发包本身不得包含平台管理员凭据、生产地址、签名私钥、供应商 Secret、客户数据或 DClaw 私有实现。包内公开工具不得导入 `qwenpaw` 或要求开发者克隆服务器仓库。
 
-当前 DevKit `1.9.32` 必须提供：
+当前 DevKit `1.9.33` 必须提供：
 
 - `dclaw_agent_devkit.py`：`doctor`、`contracts`、`digest`、`validate`、`keygen`、`build`、`verify`；
 - `capability-catalog.json`：当前可声明的能力、版本、组和依赖；
@@ -2437,6 +2437,10 @@ Skill 和专家发布前须对每条实际使用的路径同时验证：正确�
 以上是通用 Skill 的平台合同输入。Skill 维护方应在其 `references/capability-verification.md` 补 `/v2/` 的首错和终止根因区分，在 `scripts/runtime_diagnostics_with_login.py` 增加按官方 DevKit v2 Schema 查询和摘要，在相关脚本测试加入已恢复错误、最终阻断、`no_record`、越权及旧版回退案例。平台不直接覆盖 Skill 发布仓库，也不把单个专家的业务字段写成公共规则。
 
 ## 34. 版本记录
+
+### 2.69 - 2026-11-27
+
+- 新建或更新专家的问答交互统一为单次模型输出业务回复与可选卡片建议。无效建议或建卡失败使用同轮文字问题继续；`card_or_text` 保留普通输入，单选自行输入互斥，多选自行输入计为一项。旧签名包保留原合同。Support Plugin `1.18.59`、DevKit `1.9.33`、Developer Pack `1.10.48` 对齐可选字段与受控测试门槛。
 
 ### 2.68 - 2026-11-26
 

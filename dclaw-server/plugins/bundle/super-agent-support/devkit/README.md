@@ -1,6 +1,8 @@
 # DClaw Super Agent DevKit
 
-Version 1.9.32 publishes the closed `agent.execute` v2 schema and reference
+Version 1.9.33 adds optional interaction tool suppression for model-first
+card orchestration and custom written choices for selection cards. Version
+1.9.32 publishes the closed `agent.execute` v2 schema and reference
 calls. A v2 request defaults to `agent_loop` when `execution_mode` is omitted;
 use explicit `candidate` for model-only text or JSON candidates. Signed v1
 releases retain their original candidate default. Candidate-only

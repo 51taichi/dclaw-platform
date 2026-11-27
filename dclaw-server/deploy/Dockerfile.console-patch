@@ -1,0 +1,5 @@
+ARG DCLAW_CONSOLE_BASE_IMAGE
+FROM ${DCLAW_CONSOLE_BASE_IMAGE}
+
+RUN rm -rf /usr/share/nginx/html/*
+COPY console/dist/ /usr/share/nginx/html/

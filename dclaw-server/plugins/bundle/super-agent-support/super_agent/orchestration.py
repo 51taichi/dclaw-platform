@@ -48,6 +48,7 @@ from . import empty_reply as _empty_reply
 from . import failure_diagnostics as _failure_diagnostics
 from . import interaction_contract as _interaction_contract
 from . import interaction_tools as _interaction_tools
+from .interaction_cards import InteractionError
 from .interaction_receipts import card_receipt
 from . import media_delivery as _media_delivery
 from . import media_review_context as _media_review_context
@@ -2914,11 +2915,21 @@ async def handle_workspace_turn(
                 return None
             try:
                 if interaction_id:
-                    card = interactions.get_owned(
-                        interaction_id,
-                        installation_id=authorization.installation_id,
-                        conversation_id=str(request.session_id),
-                    )
+                    card = None
+                    for compatible_id in compatible_interaction_installations:
+                        try:
+                            card = interactions.get_owned(
+                                interaction_id,
+                                installation_id=compatible_id,
+                                conversation_id=str(request.session_id),
+                            )
+                        except InteractionError as exc:
+                            if exc.code != "INTERACTION_NOT_FOUND":
+                                raise
+                        else:
+                            break
+                    if card is None:
+                        return None
                 else:
                     cards = interactions.list_owned(
                         installation_id=authorization.installation_id,

@@ -1,5 +1,9 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.48 bundles standard 2.69 and DevKit 1.9.33. New and updated
+experts use one model response for the business reply and optional card
+proposal, with a same-turn text fallback when the card cannot be created.
+
 Version 1.10.47 bundles standard 2.68 and DevKit 1.9.32. New releases that
 declare `agent.execute` v2 use the governed Agent Loop by default and request
 model-only generation with explicit `execution_mode="candidate"`. Existing

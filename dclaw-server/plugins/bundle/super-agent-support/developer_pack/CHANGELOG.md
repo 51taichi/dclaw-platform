@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.48 - 2026-11-27
+
+- Bundle standard 2.69 and DevKit 1.9.33 for single-call model-first card
+  suggestions, nonblocking text entry, custom choice counting and fallback.
+- Preserve signed legacy releases and their existing interaction policies.
+
 ## 1.10.47 - 2026-11-26
 
 - Bundle standard 2.68 and DevKit 1.9.32 with the closed `agent.execute` v2

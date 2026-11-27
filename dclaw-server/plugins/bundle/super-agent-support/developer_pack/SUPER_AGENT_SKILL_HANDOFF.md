@@ -1,7 +1,7 @@
 # Super Agent Skill 统一交接：模型调用、交互卡与失败终止
 
-适用基线：标准 2.68、Support 1.18.58、Developer Pack 1.10.47、
-DevKit 1.9.32。本文适用于所有 Super Agent，不包含任何单一专家业务规则。
+适用基线：标准 2.69、Support 1.18.59、Developer Pack 1.10.48、
+DevKit 1.9.33。本文适用于所有 Super Agent，不包含任何单一专家业务规则。
 
 ## 平台统一保证
 
