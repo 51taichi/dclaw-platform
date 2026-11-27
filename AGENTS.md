@@ -25,3 +25,10 @@
 
 - A source-code change or commit does not authorize building deployment images, publishing artifacts, restarting services, or deploying to any environment.
 - Build or deploy only after the user explicitly approves that specific operation.
+
+## Super Agent contract synchronization
+
+- `超级专家/` is the source root for Super Agent projects in this workspace. Keep each expert's source and release evidence under its own project directory.
+- When a platform change affects a Super Agent's public contract, development standard, Developer Pack, DevKit, runtime behavior, or release gate, update the actual `dclaw-super-agent-porting` developer Skill and its affected references in the same task. Updating only the platform's Skill handoff document does not complete this synchronization.
+- Compare the Skill against the current standard and machine contracts; update its version and release notes, run its relevant validation, and report both platform and Skill commit identities and compatibility status. If concurrent Skill edits prevent a verified update, preserve them and report the synchronization as unfinished before any expert package is frozen.
+- After an expert's source and release inputs are frozen, packaging may be handed to the user-designated task `超级专家加密打包 (2)`. That handoff does not authorize building images, publishing packages, or deploying.
