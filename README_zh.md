@@ -568,7 +568,7 @@ QwenPaw 既承接 Qwen 智能体工作台的技术根基，也寓意 Qwen 的智
 
 ## 由谁构建
 
-[AgentScope 团队](https://github.com/agentscope-ai) · [AgentScope](https://github.com/agentscope-ai/agentscope) · [AgentScope Runtime](https://github.com/agentscope-ai/agentscope-runtime) · [ReMe](https://github.com/agentscope-ai/ReMe)
+[AgentScope 团队](https://github.com/agentscope-ai) · [AgentScope](https://github.com/agentscope-ai/agentscope) · [ReMe](https://github.com/agentscope-ai/ReMe)
 
 ---
 

@@ -44,6 +44,27 @@ def test_agent_execute_schema_accepts_three_modes_and_rejects_mixtures():
         })
 
 
+def test_v2_agent_loop_can_disable_legacy_interaction_tools():
+    validator = _validator("agent-execute-v2")
+    messages = [{"role": "user", "content": "hello"}]
+    validator.validate({
+        "messages": messages, "execution_mode": "agent_loop",
+        "instruction": "Use permitted tools.",
+        "interaction_tool_access": "disabled",
+    })
+    with pytest.raises(ValidationError):
+        validator.validate({
+            "messages": messages, "execution_mode": "candidate",
+            "interaction_tool_access": "disabled",
+        })
+    with pytest.raises(ValidationError):
+        _validator("agent-execute-v1").validate({
+            "messages": messages, "execution_mode": "agent_loop",
+            "instruction": "Use tools.",
+            "interaction_tool_access": "disabled",
+        })
+
+
 def test_runtime_fail_codes_are_backward_compatible_and_bounded():
     validator = _validator("runtime-fail-v1")
     for code in ("runtime_failed", "INVALID_TURN_RESULT", "HOST.AGENT_EXECUTE_FAILED"):

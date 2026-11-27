@@ -502,7 +502,7 @@ QwenPaw расшифровывается как **Qwen Personal Agent Workstatio
 
 ## Кто разрабатывает
 
-[Команда AgentScope](https://github.com/agentscope-ai) · [AgentScope](https://github.com/agentscope-ai/agentscope) · [AgentScope Runtime](https://github.com/agentscope-ai/agentscope-runtime) · [ReMe](https://github.com/agentscope-ai/ReMe)
+[Команда AgentScope](https://github.com/agentscope-ai) · [AgentScope](https://github.com/agentscope-ai/agentscope) · [ReMe](https://github.com/agentscope-ai/ReMe)
 
 ---
 

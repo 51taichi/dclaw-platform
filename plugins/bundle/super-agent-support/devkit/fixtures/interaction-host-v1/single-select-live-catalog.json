@@ -344,6 +344,15 @@
                 "title": "Enabled",
                 "type": "boolean"
               },
+              "answer_mode": {
+                "default": "note",
+                "enum": [
+                  "note",
+                  "choice"
+                ],
+                "title": "Answer Mode",
+                "type": "string"
+              },
               "label": {
                 "default": "补充信息",
                 "maxLength": 80,

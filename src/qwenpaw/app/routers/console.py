@@ -291,8 +291,8 @@ async def _acquire_task_permit(
     "/chat",
     status_code=200,
     summary="Chat with console (streaming response)",
-    description="Agent API Request Format. See runtime.agentscope.io. "
-    "Use body.reconnect=true to attach to a running stream.",
+    description="DClaw Agent API request format. Use body.reconnect=true "
+    "to attach to a running stream.",
 )
 async def post_console_chat(
     request_data: Union[AgentRequest, dict],

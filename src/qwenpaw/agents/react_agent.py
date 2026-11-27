@@ -195,7 +195,7 @@ KNOWLEDGE_RETRIEVAL_POLICY = """## Knowledge-base retrieval policy
 class QwenPawAgent(ToolGuardMixin, Agent):
     """DClaw agent with integrated tools, skills, and memory management.
 
-    This agent extends ReActAgent with:
+    This agent extends the AgentScope 2 Agent with:
     - Built-in tools (shell, file operations, browser, etc.)
     - Dynamic skill loading from working directory
     - Memory management with auto-compaction
@@ -206,7 +206,7 @@ class QwenPawAgent(ToolGuardMixin, Agent):
     MRO note
     ~~~~~~~~
     ``ToolGuardMixin`` overrides ``_acting`` and ``_reasoning`` via
-    Python's MRO: QwenPawAgent → ToolGuardMixin → ReActAgent.  If you
+    Python's MRO: QwenPawAgent -> ToolGuardMixin -> Agent. If you
     add a ``_acting`` or ``_reasoning`` override in this class, you
     **must** call ``super()._acting(...)`` / ``super()._reasoning(...)``
     so the guard interception remains active.

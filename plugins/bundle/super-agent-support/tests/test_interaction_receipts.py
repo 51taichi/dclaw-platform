@@ -10,6 +10,7 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from super_agent.interaction_cards import InteractionCardRepository, InteractionService
+from super_agent.interaction_cards import InteractionError
 from super_agent.interaction_contract import InteractionAnswer, InteractionCreateRequest
 from super_agent.interaction_receipts import card_receipt
 from super_agent.capabilities import PLATFORM_CAPABILITY_CATALOG_V1
@@ -20,6 +21,89 @@ SCHEMA = json.loads((
     Path(__file__).parents[1] / "devkit" / "schemas"
     / "interaction-card-receipt-v1" / "receipt.schema.json"
 ).read_text())
+
+
+@pytest.mark.parametrize(
+    "kind,selected,custom,valid",
+    [
+        ("single_select", [], "我有不同情况", True),
+        ("single_select", [{"id": "a"}], None, True),
+        ("single_select", [{"id": "a"}], "我有不同情况", False),
+        ("single_select", [], None, False),
+        ("multi_select", [{"id": "a"}, {"id": "b"}], "第三种情况", True),
+        ("multi_select", [{"id": "a"}, {"id": "b"}], None, True),
+        ("multi_select", [], "第三种情况", False),
+    ],
+)
+def test_custom_choice_is_exclusive_for_single_and_counted_for_multi(
+    tmp_path, kind, selected, custom, valid,
+):
+    request = InteractionCreateRequest.model_validate({
+        "task_key": "choice",
+        "interaction_revision": 1,
+        "component_type": kind,
+        "card": {
+            "title": "Choice",
+            "options": [{"id": "a", "text": "A"}, {"id": "b", "text": "B"}],
+            "supplement": {"enabled": True, "answer_mode": "choice"},
+            **({"min_selections": 2, "max_selections": 3}
+               if kind == "multi_select" else {}),
+        },
+        "input_policy": "card_or_text",
+    })
+    repo = InteractionCardRepository(tmp_path)
+    created = repo.create(
+        installation_id="install-a", conversation_id="task-a",
+        request=request, idempotency_key="create-1",
+        now=datetime(2026, 11, 27, tzinfo=timezone.utc),
+    )
+    kwargs = {
+        "interaction_id": created.interaction_id,
+        "installation_id": "install-a",
+        "conversation_id": "task-a",
+        "version": created.version,
+        "selected": selected,
+        "supplement": custom,
+        "answers": None,
+        "files": None,
+        "idempotency_key": "submit-1",
+        "now": datetime(2026, 11, 27, tzinfo=timezone.utc),
+    }
+    if valid:
+        submitted = repo.submit(**kwargs)
+        assert submitted.status.value == "SUBMITTED"
+        assert submitted.answer.supplement == custom
+        assert len(submitted.answer.selected) == len(selected)
+    else:
+        with pytest.raises(InteractionError, match="INVALID_SELECTION"):
+            repo.submit(**kwargs)
+
+
+def test_old_supplement_remains_a_note_and_does_not_replace_selection(tmp_path):
+    request = InteractionCreateRequest.model_validate({
+        "task_key": "old-choice",
+        "interaction_revision": 1,
+        "component_type": "single_select",
+        "card": {
+            "title": "Choice",
+            "options": [{"id": "a", "text": "A"}, {"id": "b", "text": "B"}],
+            "supplement": {"enabled": True},
+        },
+    })
+    repo = InteractionCardRepository(tmp_path)
+    created = repo.create(
+        installation_id="install-a", conversation_id="task-a",
+        request=request, idempotency_key="create-old",
+        now=datetime(2026, 11, 27, tzinfo=timezone.utc),
+    )
+    with pytest.raises(InteractionError, match="INVALID_SELECTION"):
+        repo.submit(
+            interaction_id=created.interaction_id,
+            installation_id="install-a", conversation_id="task-a",
+            version=1, selected=[], supplement="只填文字",
+            answers=None, files=None, idempotency_key="submit-old",
+            now=datetime(2026, 11, 27, tzinfo=timezone.utc),
+        )
 
 
 def test_create_submit_and_replay_have_stable_scoped_receipts(tmp_path):
@@ -110,6 +194,7 @@ def test_card_read_is_opt_in_scoped_and_schema_valid(tmp_path):
     pending = read()
     Draft202012Validator(response_schema).validate(pending)
     assert pending["status"] == "PENDING"
+    assert pending["input_policy"] == "card_only"
     assert pending["answer"] is None
     assert pending["submission_receipt"] is None
     for scope in ({"conversation_id": "task-b"}, {"installation_id": "install-b"}):

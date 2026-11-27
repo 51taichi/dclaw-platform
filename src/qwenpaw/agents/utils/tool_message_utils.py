@@ -261,9 +261,8 @@ def _repair_empty_tool_inputs(
 ) -> list:
     """Repair tool_use blocks with empty input but valid raw_input.
 
-    This fixes a bug in AgentScope 1.0.16dev where stream_tool_parsing
-    may fail to parse arguments correctly, leaving input={} while
-    raw_input contains valid JSON.
+    Some provider streams retain parsed arguments only in ``raw_input`` while
+    leaving ``input`` empty. Recover those arguments before normalization.
 
     Args:
         msgs: List of Msg objects to repair.

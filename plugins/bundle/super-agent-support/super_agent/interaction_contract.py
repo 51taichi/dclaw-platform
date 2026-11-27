@@ -145,6 +145,7 @@ class InteractionOption(_StrictFrozenModel):
 
 class InteractionSupplement(_StrictFrozenModel):
     enabled: bool = False
+    answer_mode: Literal["note", "choice"] = "note"
     label: str = Field(default="补充信息", min_length=1, max_length=80)
     placeholder: str = Field(
         default="如有其他情况可以补充",
@@ -158,6 +159,19 @@ class InteractionSupplement(_StrictFrozenModel):
     _clean_placeholder = field_validator("placeholder", mode="before")(
         _strip_required,
     )
+
+    @model_validator(mode="after")
+    def validate_answer_mode(self) -> "InteractionSupplement":
+        if self.answer_mode == "choice" and (not self.enabled or self.required):
+            raise ValueError("custom choice requires optional enabled input")
+        return self
+
+    @model_serializer(mode="wrap")
+    def serialize_answer_mode(self, handler: Any) -> dict[str, Any]:
+        payload = handler(self)
+        if self.answer_mode == "note":
+            payload.pop("answer_mode", None)
+        return payload
 
 
 class _ChoiceCard(_StrictFrozenModel):
@@ -192,10 +206,13 @@ class MultiSelectCard(_ChoiceCard):
     @model_validator(mode="after")
     def resolve_and_validate_bounds(self) -> "MultiSelectCard":
         maximum = self.max_selections
+        available = len(self.options) + int(
+            self.supplement.enabled and self.supplement.answer_mode == "choice"
+        )
         if maximum is None:
-            maximum = len(self.options)
+            maximum = available
             object.__setattr__(self, "max_selections", maximum)
-        if maximum > len(self.options) or self.min_selections > maximum:
+        if maximum > available or self.min_selections > maximum:
             raise ValueError("selection bounds are invalid")
         return self
 

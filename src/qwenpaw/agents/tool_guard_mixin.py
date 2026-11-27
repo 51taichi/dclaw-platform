@@ -80,10 +80,10 @@ class _GuardAction:
 
 
 class ToolGuardMixin:
-    """Mixin that adds tool-guard interception to a ReActAgent.
+    """Mixin that adds tool-guard interception to an AgentScope 2 Agent.
 
     At runtime this class is always combined with
-    ``agentscope.agent.ReActAgent`` via MRO, so ``super()._acting``
+    ``agentscope.agent.Agent`` via MRO, so ``super()._acting``
     and ``super()._reasoning`` resolve to the concrete agent methods.
     """
 
@@ -779,7 +779,7 @@ class ToolGuardMixin:
     # ------------------------------------------------------------------
 
     async def _reasoning(self, tool_choice=None):
-        """Delegate to parent ReActAgent reasoning.
+        """Delegate to the parent Agent reasoning implementation.
 
         Tool guard approval is now handled synchronously in
         _acting_with_approval, so no special reasoning logic is needed.

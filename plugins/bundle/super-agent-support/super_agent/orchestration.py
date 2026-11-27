@@ -1224,6 +1224,16 @@ async def run_workspace_orchestration_turn(
                 ),
             )
         require_interaction = _agent_execute_require_interaction(arguments)
+        interaction_tool_access = arguments.get("interaction_tool_access", "legacy")
+        if interaction_tool_access not in {"legacy", "disabled"}:
+            raise WorkspaceOrchestrationError("orchestration_error")
+        if (
+            interaction_tool_access != "legacy"
+            and authorization.granted_capabilities.get("agent.execute") != "2"
+        ):
+            raise WorkspaceOrchestrationError("orchestration_error")
+        if interaction_tool_access != "legacy" and execution_mode != "agent_loop":
+            raise WorkspaceOrchestrationError("orchestration_error")
         if instruction is not None and execution_mode != "agent_loop":
             raise WorkspaceOrchestrationError("orchestration_error")
         if require_interaction and execution_mode != "agent_loop":
@@ -1378,7 +1388,7 @@ async def run_workspace_orchestration_turn(
                         event_type=event_type,
                         payload=payload,
                     ),
-                )
+                ) if interaction_tool_access == "legacy" else {}
                 if aigc_tools or interaction_tools:
                     with _aigc_tools.bind_aigc_tools(
                         agent,

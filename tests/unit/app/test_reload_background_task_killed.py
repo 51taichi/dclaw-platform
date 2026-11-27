@@ -10,8 +10,8 @@ Root cause
 ``MultiAgentManager._graceful_stop_old_instance()`` only consulted
 ``Workspace.task_tracker`` (QwenPaw's internal ``TaskTracker``).  Background
 tasks submitted through ``AgentApp`` were tracked in
-``AgentApp.active_tasks`` (managed by ``agentscope_runtime``'s
-``TaskEngineMixin``) and were *invisible* to the graceful-shutdown check.
+the legacy runtime's ``AgentApp.active_tasks`` and were *invisible* to the
+graceful-shutdown check.
 
 Fix (Option A)
 --------------

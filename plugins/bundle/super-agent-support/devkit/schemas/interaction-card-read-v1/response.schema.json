@@ -22,6 +22,7 @@
         "task_key": {"type": "string", "minLength": 1, "maxLength": 160},
         "interaction_revision": {"type": "integer", "minimum": 1},
         "component_type": {"enum": ["single_select", "multi_select", "question_form", "file_selector"]},
+        "input_policy": {"enum": ["card_only", "card_or_text", "concurrent"]},
         "status": {"enum": ["PENDING", "SUBMITTED", "CANCELLED", "REPLACED", "EXPIRED"]},
         "version": {"type": "integer", "minimum": 1},
         "answer": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/answer"}]},

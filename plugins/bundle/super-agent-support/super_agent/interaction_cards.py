@@ -573,10 +573,12 @@ class InteractionCardRepository:
                         "INVALID_INTERACTION_REQUEST",
                         field="files" if files is not None else "answers",
                     )
-                resolved = self._resolve_selection(current, selected)
                 normalized_supplement = self._validate_supplement(
                     current,
                     supplement,
+                )
+                resolved = self._resolve_selection(
+                    current, selected, normalized_supplement,
                 )
                 answer = InteractionAnswer(
                     interaction_id=interaction_id,
@@ -797,6 +799,7 @@ class InteractionCardRepository:
     def _resolve_selection(
         record: InteractionCardRecord,
         selected: Any,
+        supplement: str | None,
     ) -> tuple[InteractionResolvedOption, ...]:
         if not isinstance(selected, list):
             raise InteractionError("INVALID_SELECTION", field="selected")
@@ -841,7 +844,11 @@ class InteractionCardRepository:
             resolved.append(
                 InteractionResolvedOption(id=option.id, text=option.text),
             )
-        count = len(resolved)
+        custom_choice = (
+            record.card.supplement.answer_mode == "choice"
+            and supplement is not None
+        )
+        count = len(resolved) + int(custom_choice)
         if record.component_type is InteractionComponentType.SINGLE_SELECT:
             valid = count == 1
         else:

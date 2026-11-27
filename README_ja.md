@@ -501,7 +501,7 @@ QwenPaw は Qwen Personal Agent Workstation（Qwen 個人エージェントワ�
 
 ## 開発チーム
 
-[AgentScope team](https://github.com/agentscope-ai) · [AgentScope](https://github.com/agentscope-ai/agentscope) · [AgentScope Runtime](https://github.com/agentscope-ai/agentscope-runtime) · [ReMe](https://github.com/agentscope-ai/ReMe)
+[AgentScope team](https://github.com/agentscope-ai) · [AgentScope](https://github.com/agentscope-ai/agentscope) · [ReMe](https://github.com/agentscope-ai/ReMe)
 
 ---
 

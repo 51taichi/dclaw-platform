@@ -369,6 +369,7 @@ class SuperExpertPlatformService:
             "task_key": card.task_key,
             "interaction_revision": card.interaction_revision,
             "component_type": card.component_type.value,
+            "input_policy": card.input_policy.value,
             "status": card.status.value,
             "version": card.version,
             "answer": (
