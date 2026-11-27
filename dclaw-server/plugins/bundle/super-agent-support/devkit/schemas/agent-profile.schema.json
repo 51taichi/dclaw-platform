@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/contracts/agent-profile/v1",
+  "title": "DClaw sealed workspace agent profile",
+  "type": "object",
+  "required": ["id", "name"],
+  "properties": {
+    "id": {"type":"string","minLength":1},
+    "name": {"type":"string","minLength":1},
+    "description": {"type":"string"},
+    "orchestration": {
+      "type":"object",
+      "additionalProperties":false,
+      "properties": {
+        "enabled":{"type":"boolean"},
+        "contract_version":{"const":"1"},
+        "entrypoint":{"type":"string"},
+        "required_host_capabilities":{"type":"array","uniqueItems":true,"items":{"type":"string"}}
+      }
+    }
+  }
+}

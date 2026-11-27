@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "artifact": {
+    "source": "members",
+    "members": [
+      "runner.py",
+      "input.schema.json",
+      "result.schema.json",
+      "checkpoint.schema.json"
+    ]
+  }
+}

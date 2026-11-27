@@ -1,0 +1,48 @@
+{
+  "operation": "GENERATE_PLAN",
+  "systemRules": {
+    "operation": "GENERATE_PLAN",
+    "totalCount": 3,
+    "rootCount": 1,
+    "level2Count": 1,
+    "level3Count": 1,
+    "startsAt": "2030-10-01T09:00:00+08:00",
+    "endsAt": "2030-10-01T10:00:00+08:00"
+  },
+  "userScriptRequirements": {
+    "goal": "围绕产品真实使用体验展开讨论",
+    "rootIntent": "提出清晰观点",
+    "level2Intent": "补充事实",
+    "level3Intent": "自然追问"
+  },
+  "response": {
+    "schemaVersion": 1,
+    "summary": "三级评论剧本",
+    "nodes": [
+      {
+        "clientNodeId": "root-1",
+        "level": 1,
+        "parentClientNodeId": null,
+        "intent": "提出观点",
+        "text": "这个体验确实值得讨论。",
+        "plannedAt": "2030-10-01T09:05:00+08:00"
+      },
+      {
+        "clientNodeId": "reply-2",
+        "level": 2,
+        "parentClientNodeId": "root-1",
+        "intent": "补充事实",
+        "text": "实际使用时细节更明显。",
+        "plannedAt": "2030-10-01T09:20:00+08:00"
+      },
+      {
+        "clientNodeId": "reply-3",
+        "level": 3,
+        "parentClientNodeId": "reply-2",
+        "intent": "自然追问",
+        "text": "你更在意其中哪个环节？",
+        "plannedAt": "2030-10-01T09:35:00+08:00"
+      }
+    ]
+  }
+}

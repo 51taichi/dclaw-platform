@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/schemas/workspace-state-continuity-v1/state-contract.schema.json",
+  "title": "Signed workspace state continuity declaration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract", "format_id", "schema_version", "filename_template"],
+  "properties": {
+    "contract": {"const": "workspace.state.continuity/1"},
+    "format_id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,127}$"},
+    "schema_version": {"type": "integer", "minimum": 1},
+    "filename_template": {
+      "type": "string",
+      "minLength": 6,
+      "maxLength": 132,
+      "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*)?\\{identity_sha256_24\\}[A-Za-z0-9._-]*\\.json$",
+      "description": "A safe JSON filename containing exactly one {identity_sha256_24} placeholder."
+    }
+  }
+}

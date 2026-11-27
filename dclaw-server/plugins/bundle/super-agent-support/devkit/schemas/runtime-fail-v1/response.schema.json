@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/schemas/runtime-fail-v1/response.schema.json",
+  "type": "object",
+  "required": ["accepted"],
+  "properties": {"accepted": {"const": true}},
+  "additionalProperties": false
+}

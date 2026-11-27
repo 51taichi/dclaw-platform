@@ -1,0 +1,8 @@
+{
+  "agent_id": "example-local-agent",
+  "name": "Example Local Agent",
+  "local_helper": "required",
+  "expected_artifact": "release/example-local-agent-0.1.0.zip",
+  "network_required": false,
+  "production_credentials_required": false
+}

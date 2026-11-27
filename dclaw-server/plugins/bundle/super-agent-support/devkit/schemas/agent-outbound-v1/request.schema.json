@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/schemas/agent-outbound-v1/request.schema.json",
+  "title": "Provider-neutral Agent outbound request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["credential_scope", "method", "url"],
+  "properties": {
+    "credential_ref": {"type": "string", "pattern": "^cred_[0-9a-f]{32}$"},
+    "credential_slot": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,127}$"},
+    "credential_scope": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"},
+    "method": {"enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
+    "url": {"type": "string", "format": "uri", "pattern": "^https://", "maxLength": 2048},
+    "headers": {"type": "object", "maxProperties": 8, "propertyNames": {"enum": ["Accept", "Content-Type", "Idempotency-Key", "User-Agent", "X-Request-Id", "accept", "content-type", "idempotency-key", "user-agent", "x-request-id"]}, "additionalProperties": {"type": "string", "maxLength": 2048}},
+    "json_body": {},
+    "text_body": {"type": "string", "maxLength": 1048576},
+    "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 60, "default": 30}
+  },
+  "allOf": [
+    {"oneOf": [{"required": ["credential_ref"]}, {"required": ["credential_slot"]}]},
+    {"not": {"required": ["json_body", "text_body"]}}
+  ],
+  "x-dclaw-transport": {"business_owner": "sealed-super-agent", "credential_owner": "agent-installation", "credential_injection": "transport-boundary-only", "agent_authentication_header": "forbidden", "local_helper_long_term_credential": "forbidden", "redirects_allowed": false, "request_body": "zero-or-one-of-json_body-or-text_body"}
+}

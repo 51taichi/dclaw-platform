@@ -1,0 +1,60 @@
+{
+  "schema_version": "workspace-skill-manifest.v1",
+  "version": 2026100401,
+  "skills": {
+    "douyin_operation_contract": {
+      "enabled": true,
+      "channels": ["all"],
+      "source": "local",
+      "metadata": {
+        "name": "douyin_operation_contract",
+        "description": "抖音评论剧本、B 计划、私信归因和回复的六种 OpenAPI 操作契约。",
+        "version_text": "1.1.0",
+        "source": "local",
+        "protected": false,
+        "requirements": {
+          "require_bins": [],
+          "require_envs": []
+        },
+        "updated_at": "2026-10-04T00:00:00Z"
+      },
+      "requirements": {
+        "require_bins": [],
+        "require_envs": []
+      },
+      "updated_at": "2026-10-04T00:00:00Z"
+    },
+    "jev_private_message_routing": {
+      "enabled": true,
+      "channels": ["all"],
+      "source": "local",
+      "metadata": {
+        "name": "jev_private_message_routing",
+        "description": "使用 TypeSafe Jev 对私信进行评论任务归因，保留无法判断分支。",
+        "version_text": "1.0.0",
+        "source": "local",
+        "protected": false,
+        "requirements": {"require_bins": [], "require_envs": []},
+        "updated_at": "2026-10-04T00:00:00Z"
+      },
+      "requirements": {"require_bins": [], "require_envs": []},
+      "updated_at": "2026-10-04T00:00:00Z"
+    },
+    "typesafe-ai": {
+      "enabled": true,
+      "channels": ["all"],
+      "source": "local",
+      "metadata": {
+        "name": "typesafe-ai",
+        "description": "TypeSafe 官方 System One 开发与集成指南。",
+        "version_text": "1.0.0",
+        "source": "local",
+        "protected": false,
+        "requirements": {"require_bins": [], "require_envs": []},
+        "updated_at": "2026-10-04T00:00:00Z"
+      },
+      "requirements": {"require_bins": [], "require_envs": []},
+      "updated_at": "2026-10-04T00:00:00Z"
+    }
+  }
+}

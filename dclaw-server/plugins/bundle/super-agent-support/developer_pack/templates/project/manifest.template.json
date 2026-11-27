@@ -1,0 +1,34 @@
+{
+  "schema_version": 3,
+  "agent_id": "{{AGENT_ID}}",
+  "name": "{{AGENT_NAME}}",
+  "version": "0.1.0",
+  "agent_type": "sealed",
+  "scope": "global",
+  "entrypoint": "agent/agent.json",
+  "package_type": "super_expert_public",
+  "orchestration": {
+    "capability_id": "workspace.turn.orchestrate/1",
+    "contract_version": "1",
+    "entrypoint": "runtime.py:create_runtime",
+    "required_host_capabilities": [
+      "agent.execute",
+      "session.context",
+      "runtime.trace",
+      "runtime.complete",
+      "runtime.fail"
+    ]
+  },
+  "platform_contract_versions": {"runtime": "1", "runtime_host": "1"},
+  "capabilities": [
+    {"capability_id": "workspace.turn.orchestrate/1", "contract_version": "1"},
+    {"capability_id": "agent.execute", "contract_version": "2"},
+    {"capability_id": "session.context", "contract_version": "1"},
+    {"capability_id": "runtime.trace", "contract_version": "1"},
+    {"capability_id": "runtime.complete", "contract_version": "1"},
+    {"capability_id": "runtime.fail", "contract_version": "1"}
+  ],
+  "capability_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "signer_id": "replace-with-registered-signer-id",
+  "public_metadata": {"description": "{{AGENT_NAME}}", "tags": []}
+}

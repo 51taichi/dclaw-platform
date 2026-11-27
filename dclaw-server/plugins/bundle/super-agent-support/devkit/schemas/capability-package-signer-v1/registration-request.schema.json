@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Plugin administrator capability-package signer registration",
+  "type": "object",
+  "required": ["signer_id", "public_key"],
+  "properties": {
+    "signer_id": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,128}$"},
+    "public_key": {"type": "string", "minLength": 40, "maxLength": 100}
+  },
+  "additionalProperties": false
+}

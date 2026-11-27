@@ -1,0 +1,1367 @@
+# -*- coding: utf-8 -*-
+"""Authenticated command boundary for signed super-expert capabilities."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from pathlib import Path
+from tempfile import SpooledTemporaryFile
+from types import SimpleNamespace
+from typing import Any, Awaitable, Callable
+import uuid
+import zipfile
+
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import Response, StreamingResponse
+from qwenpaw.agents.message_compat import Msg, normalize_legacy_blocks
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from qwenpaw.constant import WORKING_DIR
+from qwenpaw.aigc.operation_contract import load_operation_catalog
+from qwenpaw.aigc.workflow_compiler import (
+    AvailableWorkflowModel,
+    WorkflowCompileError,
+    compile_workflow,
+    plan_manual_workflow,
+)
+from qwenpaw.aigc.workflow_contract import (
+    WorkflowBlueprint,
+    workflow_node_registry,
+)
+
+from qwenpaw.app.billing.context import BillingSource
+from qwenpaw.app.aigc.workflow_execution import AigcWorkflowExecutionService
+from qwenpaw.app.agent_context import (
+    get_current_chat_model,
+    set_current_chat_model,
+)
+from qwenpaw.app.billing.entrypoint import prepare_user_billing_execution
+from qwenpaw.app.billing.usage import InsufficientUsageCreditsError
+from qwenpaw.app.chat_access import ensure_chat_access
+from qwenpaw.app.aigc.resource_store import AigcResourceError
+from qwenpaw.app.runtime.aigc_media import (
+    review_media_source,
+    resource_http_error,
+)
+from qwenpaw.app.runtime.aigc_media import (
+    artifact_root_for_request,
+    cloud_storage_client_or_error,
+)
+from qwenpaw.app.runtime.event_bus import RuntimeEvent, get_runtime_event_bus
+from .aigc_tasks import (
+    AigcTaskCommand,
+    AigcTaskError,
+    AigcTaskRepository,
+)
+from .events import (
+    SuperExpertEventEnvelope,
+    SuperExpertEventRepository,
+)
+from .grants import SuperExpertGrantRepository
+from .models import (
+    AigcTaskBinding,
+    AigcTaskScope,
+    AigcTaskStatus,
+    AigcWorkflowDefinition,
+    AigcWorkflowGuideEvent,
+)
+from .interaction_cards import InteractionError
+from .interaction_receipts import card_receipt
+from . import failure_diagnostics
+
+_diagnostic_audit = logging.getLogger("dclaw.super_agent.diagnostics.audit")
+
+
+def _history_snapshot(
+    task_id: str, agent_id: str, user_id: str,
+) -> tuple[dict[str, int | None], set[str]]:
+    from sqlalchemy import func, or_, select
+    from qwenpaw.app.storage.engine import get_app_engine
+    from qwenpaw.app.storage.schema import chats, messages, session_states
+
+    with get_app_engine().connect() as connection:
+        rows = connection.execute(
+            select(chats.c.id).where(
+                or_(chats.c.id == task_id, chats.c.session_id == task_id),
+                chats.c.agent_id == agent_id, chats.c.user_id == user_id,
+            ).limit(2),
+        ).all()
+        if len(rows) != 1:
+            raise failure_diagnostics.FailureDiagnosticsUnauthorized(
+                "failure diagnostic scope denied",
+            )
+        chat_id = rows[0][0]
+        message_count = connection.execute(
+            select(func.count()).select_from(messages).where(
+                messages.c.chat_id == chat_id,
+            ),
+        ).scalar_one()
+        state_json = connection.execute(
+            select(session_states.c.state_json).where(
+                session_states.c.chat_id == chat_id,
+            ),
+        ).scalar_one_or_none()
+    try:
+        state = json.loads(state_json) if state_json else {}
+        memory = state.get("agent", {}).get("memory", {}).get("content")
+        memory_count = len(memory) if isinstance(memory, list) else None
+        memory_ids = _memory_message_ids(memory)
+    except (TypeError, ValueError, AttributeError):
+        memory_count = None
+        memory_ids = set()
+    return {
+        "messages_table_count": message_count,
+        "agent_memory_count": memory_count,
+    }, memory_ids
+
+
+def _memory_message_ids(memory: Any) -> set[str]:
+    if not isinstance(memory, list):
+        return set()
+    result = set()
+    for item in memory:
+        message = (
+            item[0] if isinstance(item, list) and item else item
+        )
+        if isinstance(message, dict) and isinstance(message.get("id"), str):
+            result.add(message["id"])
+    return result
+
+
+class InteractionSubmitRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    selected: list[dict[str, Any]] | None = None
+    supplement: str | None = None
+    answers: list[dict[str, Any]] | None = None
+    files: list[dict[str, Any]] | None = None
+    idempotency_key: str = Field(min_length=1, max_length=160)
+
+    @model_validator(mode="after")
+    def require_exact_submission_branch(self) -> "InteractionSubmitRequest":
+        branches = sum(
+            value is not None
+            for value in (self.selected, self.answers, self.files)
+        )
+        if branches != 1:
+            raise ValueError(
+                "exactly one of selected, answers or files is required",
+            )
+        if (
+            self.answers is not None or self.files is not None
+        ) and self.supplement is not None:
+            raise ValueError("supplement is not valid for this answer type")
+        return self
+
+
+def _review_provider_is_configured(provider: Any) -> bool:
+    if bool(getattr(provider, "disabled", False)):
+        return False
+    if bool(getattr(provider, "is_local", False)):
+        return True
+    if bool(getattr(provider, "is_custom", False)):
+        return bool(str(getattr(provider, "base_url", "") or "").strip())
+    if getattr(provider, "require_api_key", True) is False:
+        return bool(str(getattr(provider, "base_url", "") or "").strip())
+    return bool(str(getattr(provider, "api_key", "") or "").strip())
+
+
+def _review_provider_inventory(manager: Any) -> list[Any]:
+    providers: list[Any] = []
+    seen: set[str] = set()
+    for collection_name in ("builtin_providers", "custom_providers"):
+        for provider in getattr(manager, collection_name, {}).values():
+            provider_id = str(getattr(provider, "id", "") or "")
+            if provider_id and provider_id not in seen:
+                providers.append(provider)
+                seen.add(provider_id)
+    get_provider = getattr(manager, "get_provider", None)
+    for provider_id, entry in getattr(manager, "plugin_providers", {}).items():
+        provider = (
+            get_provider(provider_id)
+            if callable(get_provider)
+            else (entry.get("provider") if isinstance(entry, dict) else entry)
+        )
+        resolved_id = str(getattr(provider, "id", "") or provider_id)
+        if provider is not None and resolved_id not in seen:
+            providers.append(provider)
+            seen.add(resolved_id)
+    return providers
+
+
+def _model_slot_values(slot: Any) -> tuple[str, str]:
+    if isinstance(slot, dict):
+        return (
+            str(slot.get("provider_id") or "").strip(),
+            str(slot.get("model") or "").strip(),
+        )
+    return (
+        str(getattr(slot, "provider_id", "") or "").strip(),
+        str(getattr(slot, "model", "") or "").strip(),
+    )
+
+
+def _select_review_chat_model(
+    manager: Any,
+    current_slot: Any,
+    required_modalities: set[str],
+) -> dict[str, str] | None:
+    """Select a configured chat model with confirmed media capabilities."""
+    providers = _review_provider_inventory(manager)
+    provider_by_id = {
+        str(getattr(provider, "id", "") or ""): provider
+        for provider in providers
+    }
+    ordered_slots: list[Any] = []
+
+    def append_slot_and_provider_models(slot: Any) -> None:
+        provider_id, model_id = _model_slot_values(slot)
+        if not provider_id:
+            return
+        if model_id:
+            ordered_slots.append(
+                {"provider_id": provider_id, "model": model_id},
+            )
+        provider = provider_by_id.get(provider_id)
+        if provider is None:
+            return
+        ordered_slots.extend(
+            {"provider_id": provider_id, "model": model.id}
+            for model in (
+                list(getattr(provider, "models", ()) or ())
+                + list(getattr(provider, "extra_models", ()) or ())
+            )
+        )
+
+    append_slot_and_provider_models(current_slot)
+    get_active_model = getattr(manager, "get_active_model", None)
+    if callable(get_active_model):
+        append_slot_and_provider_models(get_active_model())
+    ordered_slots.extend(
+        {"provider_id": provider_id, "model": model.id}
+        for provider_id, provider in provider_by_id.items()
+        for model in (
+            list(getattr(provider, "models", ()) or ())
+            + list(getattr(provider, "extra_models", ()) or ())
+        )
+    )
+
+    seen: set[tuple[str, str]] = set()
+    for slot in ordered_slots:
+        provider_id, model_id = _model_slot_values(slot)
+        key = (provider_id, model_id)
+        if not all(key) or key in seen:
+            continue
+        seen.add(key)
+        provider = provider_by_id.get(provider_id)
+        if provider is None or not _review_provider_is_configured(provider):
+            continue
+        model = next(
+            (
+                item
+                for item in (
+                    list(getattr(provider, "models", ()) or ())
+                    + list(getattr(provider, "extra_models", ()) or ())
+                )
+                if str(getattr(item, "id", "") or "") == model_id
+            ),
+            None,
+        )
+        if model is None or getattr(model, "model_type", "llm") != "llm":
+            continue
+        if list(getattr(model, "aigc_capabilities", ()) or ()):
+            continue
+        if (
+            "image" in required_modalities
+            and getattr(
+                model,
+                "supports_image",
+                None,
+            )
+            is not True
+        ):
+            continue
+        if (
+            "video" in required_modalities
+            and getattr(
+                model,
+                "supports_video",
+                None,
+            )
+            is not True
+        ):
+            continue
+        return {"provider_id": provider_id, "model": model_id}
+    return None
+
+
+def _replace_review_message_text(message: Any, text: str) -> None:
+    if hasattr(message, "content"):
+        message.content = normalize_legacy_blocks(text)
+
+
+def _review_runtime_installation_id(
+    service: SuperExpertPlatformService,
+    historical_grant: Any,
+    historical_installation_id: str | None = None,
+) -> str:
+    """Resolve the active grant used by the runtime for a durable older task."""
+    from qwenpaw.app.sealed_agents.registry import get_sealed_agent_registry
+
+    record = get_sealed_agent_registry().get_agent(historical_grant.agent_id)
+    release = (
+        record.active_release
+        if record is not None and record.enabled
+        else None
+    )
+    if release is None:
+        return str(
+            historical_installation_id
+            or getattr(historical_grant, "installation_id", ""),
+        )
+    finder = getattr(service.grant_repository, "find_release_grant", None)
+    if not callable(finder):
+        return str(
+            historical_installation_id
+            or getattr(historical_grant, "installation_id", ""),
+        )
+    active_grant = finder(
+        historical_grant.agent_id,
+        release,
+        tenant_id=historical_grant.tenant_id,
+    )
+    if active_grant is None:
+        raise SuperExpertPlatformError(
+            "active installation grant is unavailable",
+        )
+    return active_grant.installation_id
+
+
+user_routes = APIRouter()
+frontend_read_routes = APIRouter()
+
+
+@user_routes.get("/runtime-diagnostics/v1/tasks/{task_id}")
+async def read_developer_runtime_diagnostics(
+    task_id: str,
+    agent_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    """Return sanitized failures only for a developer's own task."""
+    from .composition import resolve_event_scope
+
+    user_id = str(getattr(request.state, "user_id", "") or "")
+    if not user_id or len(task_id) > 128 or len(agent_id) > 128:
+        raise HTTPException(status_code=404, detail="task not found")
+    try:
+        history, message_ids = _history_snapshot(task_id, agent_id, user_id)
+        result = failure_diagnostics.read_owner_failures(
+            storage_root=Path(WORKING_DIR) / "workspace_runtime_state",
+            grants=get_super_expert_platform_service().grant_repository,
+            agent_id=agent_id,
+            user_id=user_id,
+            session_id=task_id,
+            owner_resolver=resolve_event_scope,
+            persisted_message_ids=message_ids,
+        )
+        result["history_readback"] = history
+        _diagnostic_audit.info(
+            "developer failure diagnostics read actor=%s agent=%s task_scope=%s count=%d",
+            failure_diagnostics._scope(user_id)[:12], agent_id,
+            failure_diagnostics._scope(task_id)[:12], len(result["failures"]),
+        )
+        return result
+    except failure_diagnostics.FailureDiagnosticsUnauthorized as exc:
+        _diagnostic_audit.warning(
+            "developer failure diagnostics denied actor=%s task_scope=%s",
+            failure_diagnostics._scope(user_id)[:12],
+            failure_diagnostics._scope(task_id)[:12],
+        )
+        raise HTTPException(status_code=404, detail="task not found") from exc
+    except failure_diagnostics.FailureDiagnosticsUnavailable as exc:
+        _diagnostic_audit.error(
+            "developer failure diagnostics unavailable actor=%s task_scope=%s",
+            failure_diagnostics._scope(user_id)[:12],
+            failure_diagnostics._scope(task_id)[:12],
+        )
+        raise HTTPException(status_code=503, detail="diagnostics unavailable") from exc
+
+
+from .service import (
+    SuperExpertPlatformService,
+    SuperExpertPlatformError,
+    PlatformCommandRequest,
+    AigcCreateOperation,
+    AigcWorkflowCreateArguments,
+    _operation_catalog_path,
+)
+from .aigc_adapter import (
+    load_workflow_capability_catalog as _load_workflow_capability_catalog,
+)
+from .composition import (
+    get_super_expert_platform_service,
+    _resolve_runtime_session_id,
+)
+
+
+async def resolve_owned_asset_for_agent_review(
+    request: Request,
+    asset_id: str,
+    *,
+    canvas_id: str,
+    node_ids: set[str],
+    asset_kinds: set[str] | None = None,
+    service=None,
+) -> dict[str, Any]:
+    service = service or get_super_expert_platform_service()
+    if service.aigc is None:
+        raise SuperExpertPlatformError("AIGC service is unavailable")
+    assets = service.aigc.assets
+    try:
+        asset = assets.resolve_owned(
+            str(getattr(request.state, "user_id", "") or ""),
+            asset_id,
+        )
+    except AigcResourceError as exc:
+        if exc.code == "RESOURCE_NOT_FOUND":
+            raise HTTPException(
+                status_code=404,
+                detail="Asset not found.",
+            ) from exc
+        raise resource_http_error(exc) from exc
+    return await review_media_source(
+        request,
+        assets,
+        asset,
+        canvas_id=canvas_id,
+        node_ids=node_ids,
+        asset_kinds=asset_kinds,
+    )
+
+
+def _workflow_review_binding(
+    task: Any,
+    logical_node_id: str | None = None,
+) -> tuple[set[str], set[str]]:
+    """Return the exact physical producers and media kinds allowed for review."""
+    binding = task.binding
+    workflow = task.workflow
+    if workflow is None:
+        return {binding.node_id}, {"image", "video", "audio"}
+
+    blueprint = workflow.blueprint
+    by_id = {node.node_id: node for node in blueprint.nodes}
+    incoming: dict[str, list[str]] = {}
+    for edge in blueprint.edges:
+        incoming.setdefault(edge.target, []).append(edge.source)
+
+    producer_ids: set[str] = set()
+
+    def collect(logical_node_id: str, visited: set[str]) -> None:
+        if logical_node_id in visited:
+            return
+        visited.add(logical_node_id)
+        node = by_id.get(logical_node_id)
+        if node is None:
+            return
+        if node.kind == "output":
+            for source in incoming.get(logical_node_id, []):
+                collect(source, visited)
+            return
+        producer_ids.add(logical_node_id)
+
+    collect(logical_node_id or blueprint.output_node_id, set())
+    physical_ids = {
+        binding.node_bindings[logical_id]
+        for logical_id in producer_ids
+        if logical_id in binding.node_bindings
+    }
+    if not physical_ids:
+        physical_ids = {binding.output_node_id or binding.node_id}
+
+    registry = workflow_node_registry()
+    output_types = {
+        registry[logical.kind].output_type
+        for logical_id in producer_ids
+        if (logical := by_id.get(logical_id)) is not None
+        and logical.kind in registry
+    }
+    if not output_types or "asset" in output_types:
+        asset_kinds = {"image", "video", "audio", "text"}
+    else:
+        asset_kinds = output_types & {"image", "video", "audio", "text"}
+    return physical_ids, asset_kinds
+
+
+async def _resolve_review_bundle(request, task, entries, *, service):
+    """Resolve the declared, ordered submission; ownership stays platform-bound."""
+    expected = task.workflow.blueprint.review_node_ids if task.workflow else ()
+    physical = [task.binding.node_bindings[node] for node in expected]
+    if not isinstance(entries, list) or any(
+        not isinstance(entry, dict)
+        or not isinstance(entry.get("node_id"), str)
+        or not isinstance(entry.get("asset_id"), str)
+        or not entry["asset_id"]
+        for entry in entries
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Completion asset selection is invalid.",
+        )
+    groups = []
+    for entry in entries:
+        if not groups or groups[-1] != entry["node_id"]:
+            groups.append(entry["node_id"])
+    if not expected or groups != physical:
+        raise HTTPException(
+            status_code=400,
+            detail="Completion assets do not match declared output nodes.",
+        )
+    blocks = []
+    by_id = {node.node_id: node for node in task.workflow.blueprint.nodes}
+    logical_by_physical = dict(zip(physical, expected))
+    for entry in entries:
+        logical = logical_by_physical[entry["node_id"]]
+        node = by_id[logical]
+        nodes, kinds = _workflow_review_binding(task, logical)
+        block = await resolve_owned_asset_for_agent_review(
+            request,
+            str(entry.get("asset_id") or ""),
+            canvas_id=task.binding.canvas_id,
+            node_ids=nodes,
+            asset_kinds=kinds,
+            service=service,
+        )
+        prompt = str((node.inputs or {}).get("prompt") or "").strip()
+        requirement = f"；制作要求：{prompt}" if prompt else ""
+        blocks.append(
+            {
+                "type": "text",
+                "text": (
+                    f"提交节点：{node.title}；node_id={entry['node_id']}；"
+                    f"asset_id={entry['asset_id']}{requirement}"
+                ),
+            },
+        )
+        blocks.append(block)
+    return blocks
+
+
+def _workflow_review_node_ids(task: Any) -> set[str]:
+    """Compatibility helper used by tests and review dispatch diagnostics."""
+    return _workflow_review_binding(task)[0]
+
+
+@frontend_read_routes.get("/conversation-route")
+def get_conversation_route(
+    conversation_id: str,
+    request: Request,
+) -> dict[str, str]:
+    """Resolve a user's deep link before any agent-scoped chat request."""
+    row = ensure_chat_access(request, conversation_id)
+    agent_id = str((row or {}).get("agent_id") or "").strip()
+    if not agent_id:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    return {
+        "conversation_id": conversation_id,
+        "agent_id": agent_id,
+        "chat_id": str(row.get("id") or conversation_id),
+    }
+
+
+@frontend_read_routes.get("/cards")
+@user_routes.get("/cards")
+def list_super_expert_cards(
+    conversation_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    """Restore cards from persisted tasks, independently of the SSE buffer."""
+    row = ensure_chat_access(request, conversation_id, allow_admin=True)
+    aliases = {conversation_id}
+    if isinstance(row, dict):
+        aliases.update(
+            str(row[key]) for key in ("id", "session_id") if row.get(key)
+        )
+    service = get_super_expert_platform_service()
+    tenant_id = str(getattr(request.state, "tenant_id", "local") or "local")
+    from urllib.parse import quote
+
+    cards = []
+    for task in service.task_repository.list_for_conversations(aliases):
+        grant = service.grant_repository.get(task.binding.installation_id)
+        if grant is None or grant.tenant_id != tenant_id:
+            continue
+        title = (
+            task.workflow.blueprint.title
+            if task.workflow is not None
+            else task.operation_arguments.get("title")
+        ) or "AIGC 素材制作任务"
+        cards.append(
+            {
+                "material_task_id": task.binding.material_task_id,
+                "title": title,
+                "instruction": "打开已绑定画布，按向导完成当前制作步骤。",
+                "status": task.status.value,
+                "binding": task.binding.model_dump(mode="json"),
+                "href": "/aigc-studio?task="
+                + quote(task.binding.material_task_id, safe=""),
+            },
+        )
+    return {"cards": cards}
+
+
+@frontend_read_routes.get("/interactions")
+@user_routes.get("/interactions")
+def list_super_expert_interactions(
+    conversation_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    """Restore persisted interaction cards; SSE is only a refresh channel."""
+    row = ensure_chat_access(request, conversation_id, allow_admin=True)
+    aliases = {conversation_id}
+    if isinstance(row, dict):
+        aliases.update(
+            str(row[key]) for key in ("id", "session_id") if row.get(key)
+        )
+    service = get_super_expert_platform_service()
+    if service.interactions is None:
+        return {"interactions": []}
+    tenant_id = str(getattr(request.state, "tenant_id", "local") or "local")
+    authorized_installations = {
+        grant.installation_id
+        for grant in service.grant_repository.list_grants()
+        if grant.tenant_id == tenant_id
+    }
+    cards = sorted(
+        (
+            card
+            for card in service.interactions.list_for_conversations(
+                conversation_ids=aliases,
+            )
+            if card.binding.installation_id in authorized_installations
+        ),
+        key=lambda item: item.created_at,
+    )
+    return {
+        "interactions": [item.model_dump(mode="json") for item in cards],
+    }
+
+
+def _interaction_http_error(error: InteractionError) -> HTTPException:
+    status = {
+        "INTERACTION_NOT_FOUND": 404,
+        "INTERACTION_NOT_PENDING": 409,
+        "INTERACTION_VERSION_CONFLICT": 409,
+        "IDEMPOTENCY_CONFLICT": 409,
+        "SUPPLEMENT_REQUIRED": 422,
+        "INVALID_SELECTION": 422,
+        "REQUIRED_ANSWER_MISSING": 422,
+        "ANSWER_TOO_LONG": 422,
+        "INVALID_ANSWER_REFERENCE": 422,
+        "INVALID_INTERACTION_REQUEST": 422,
+        "FILE_SELECTOR.PERMISSION_DENIED": 403,
+        "FILE_SELECTOR.FILE_TOO_LARGE": 422,
+        "FILE_SELECTOR.FILE_COUNT_EXCEEDED": 422,
+    }.get(error.code, 400)
+    detail: dict[str, Any] = {
+        "error": error.code,
+        "retryable": error.retryable,
+    }
+    if error.field:
+        detail["field"] = error.field
+    if error.guidance:
+        detail["guidance"] = error.guidance
+    return HTTPException(status_code=status, detail=detail)
+
+
+@frontend_read_routes.post("/interactions/{interaction_id}/submit")
+@user_routes.post("/interactions/{interaction_id}/submit")
+async def submit_super_expert_interaction(
+    interaction_id: str,
+    submission: InteractionSubmitRequest,
+    request: Request,
+) -> dict[str, Any]:
+    service = get_super_expert_platform_service()
+    if service.interactions is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Interaction service unavailable",
+        )
+    try:
+        bound = service.interactions.resolve_for_authorization(interaction_id)
+        grant = service.grant_repository.get(bound.binding.installation_id)
+        tenant_id = str(
+            getattr(request.state, "tenant_id", "local") or "local",
+        )
+        if grant is None or grant.tenant_id != tenant_id:
+            raise InteractionError("INTERACTION_NOT_FOUND")
+        ensure_chat_access(
+            request,
+            bound.binding.conversation_id,
+            allow_admin=True,
+        )
+        async with service.interaction_lock(interaction_id):
+            current = service.interactions.get_owned(
+                interaction_id,
+                installation_id=bound.binding.installation_id,
+                conversation_id=bound.binding.conversation_id,
+            )
+            was_pending = current.status.value == "PENDING"
+            card = service.interactions.submit(
+                interaction_id=interaction_id,
+                installation_id=bound.binding.installation_id,
+                conversation_id=bound.binding.conversation_id,
+                version=submission.version,
+                selected=submission.selected,
+                supplement=submission.supplement,
+                answers=submission.answers,
+                files=submission.files,
+                idempotency_key=submission.idempotency_key,
+            )
+            if was_pending:
+                await service.publish_interaction_event(
+                    card,
+                    event_type="interaction.card.submitted",
+                )
+            return {
+                "interaction": card.model_dump(mode="json"),
+                "user_input": _interaction_submission_summary(card),
+                "receipt": card_receipt(card, "submitted"),
+            }
+    except InteractionError as exc:
+        raise _interaction_http_error(exc) from exc
+    except SuperExpertPlatformError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@frontend_read_routes.get("/tasks/{material_task_id}")
+@user_routes.get("/tasks/{material_task_id}")
+def get_super_expert_task(
+    material_task_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    service = get_super_expert_platform_service()
+    task = service.get_task(material_task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="AIGC task not found")
+    ensure_chat_access(
+        request,
+        task.binding.conversation_id,
+        allow_admin=True,
+    )
+    payload = task.model_dump(mode="json")
+    payload["latest_review"] = service.latest_task_review(material_task_id)
+    return payload
+
+
+@frontend_read_routes.delete(
+    "/tasks/{material_task_id}",
+    status_code=204,
+    response_class=Response,
+)
+@user_routes.delete(
+    "/tasks/{material_task_id}",
+    status_code=204,
+    response_class=Response,
+)
+def dismiss_super_expert_task(
+    material_task_id: str,
+    request: Request,
+) -> Response:
+    service = get_super_expert_platform_service()
+    task = service.get_task(material_task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="AIGC task not found")
+    ensure_chat_access(
+        request,
+        task.binding.conversation_id,
+        allow_admin=True,
+    )
+    grant = service.grant_repository.get(task.binding.installation_id)
+    tenant_id = str(getattr(request.state, "tenant_id", "local") or "local")
+    if grant is None or grant.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="AIGC task not found")
+    service.task_repository.dismiss(material_task_id)
+    return Response(status_code=204)
+
+
+def _unique_archive_name(name: str, asset_id: str, used: set[str]) -> str:
+    candidate = Path(name).name.strip() or f"{asset_id}.png"
+    stem = Path(candidate).stem or asset_id
+    suffix = Path(candidate).suffix or ".png"
+    resolved = candidate
+    counter = 2
+    while resolved.casefold() in used:
+        resolved = f"{stem}-{counter}{suffix}"
+        counter += 1
+    used.add(resolved.casefold())
+    return resolved
+
+
+async def _review_image_bytes(
+    request: Request,
+    assets: Any,
+    asset: Any,
+) -> bytes:
+    storage = assets.cloud_storage_meta(asset)
+    if storage is not None:
+        client = cloud_storage_client_or_error()
+        content, _media_type = await client.download(
+            str(storage["object_key"]),
+        )
+        return content
+    artifact_root = await artifact_root_for_request(request, assets.store)
+    target = assets.local_path(asset, artifact_root=artifact_root)
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="Asset file not found.")
+    return target.read_bytes()
+
+
+@frontend_read_routes.get("/tasks/{material_task_id}/review-assets/archive")
+@user_routes.get("/tasks/{material_task_id}/review-assets/archive")
+async def download_review_assets_archive(
+    material_task_id: str,
+    request: Request,
+) -> StreamingResponse:
+    service = get_super_expert_platform_service()
+    task = service.get_task(material_task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="AIGC task not found")
+    ensure_chat_access(request, task.binding.conversation_id, allow_admin=True)
+    if service.aigc is None:
+        raise HTTPException(
+            status_code=503,
+            detail="AIGC service is unavailable",
+        )
+
+    assets = service.aigc.assets
+    owner_user_id = str(getattr(request.state, "user_id", "") or "")
+    archive = SpooledTemporaryFile(max_size=64 * 1024 * 1024, mode="w+b")
+    used_names: set[str] = set()
+    image_count = 0
+    try:
+        with zipfile.ZipFile(
+            archive,
+            mode="w",
+            compression=zipfile.ZIP_DEFLATED,
+        ) as bundle:
+            for entry in task.review_assets:
+                try:
+                    asset = assets.resolve_owned(owner_user_id, entry.asset_id)
+                    assets.validate_review_binding(
+                        asset,
+                        canvas_id=task.binding.canvas_id,
+                        node_ids={entry.node_id},
+                    )
+                except AigcResourceError as exc:
+                    raise resource_http_error(exc) from exc
+                if asset.kind != "image":
+                    continue
+                content = await _review_image_bytes(request, assets, asset)
+                bundle.writestr(
+                    _unique_archive_name(asset.name, asset.id, used_names),
+                    content,
+                )
+                image_count += 1
+        if image_count == 0:
+            raise HTTPException(
+                status_code=409,
+                detail="No review images are available.",
+            )
+        archive.seek(0)
+    except Exception:
+        archive.close()
+        raise
+
+    async def stream_archive():
+        try:
+            while chunk := archive.read(1024 * 1024):
+                yield chunk
+        finally:
+            archive.close()
+
+    return StreamingResponse(
+        stream_archive(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="review-assets-{material_task_id}.zip"'
+            ),
+        },
+    )
+
+
+@frontend_read_routes.get("/tasks/{material_task_id}/guide")
+@user_routes.get("/tasks/{material_task_id}/guide")
+def get_super_expert_task_guide(
+    material_task_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    task = get_super_expert_platform_service().get_task(material_task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="AIGC task not found")
+    ensure_chat_access(
+        request,
+        task.binding.conversation_id,
+        allow_admin=True,
+    )
+    if task.workflow is None:
+        raise HTTPException(
+            status_code=409,
+            detail="LEGACY_TASK_GUIDE_REQUIRED",
+        )
+    from .aigc_guide import project_aigc_guide
+
+    service = get_super_expert_platform_service()
+    if service.aigc is None:
+        raise HTTPException(
+            status_code=503,
+            detail="AIGC service is unavailable",
+        )
+
+    canvas, jobs = service.aigc.workflow_context(
+        canvas_id=task.binding.canvas_id,
+        material_task_id=task.binding.material_task_id,
+    )
+    return project_aigc_guide(
+        task=task,
+        canvas=canvas,
+        jobs=jobs,
+    ).model_dump(mode="json")
+
+
+@frontend_read_routes.get("/operations/{operation_id}")
+@user_routes.get("/operations/{operation_id}")
+def get_aigc_operation_contract(
+    operation_id: str,
+    _request: Request,
+) -> dict[str, Any]:
+    try:
+        operation = load_operation_catalog(
+            _operation_catalog_path(),
+        ).operation(
+            operation_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="AIGC operation not found",
+        ) from exc
+    return operation.model_dump(mode="json")
+
+
+@frontend_read_routes.get("/workflow-capabilities")
+@user_routes.get("/workflow-capabilities")
+async def get_workflow_capability_catalog(_request: Request) -> dict[str, Any]:
+    catalog = await _load_workflow_capability_catalog()
+    return catalog.model_dump(mode="json")
+
+
+@frontend_read_routes.post("/commands/{capability:path}")
+async def execute_frontend_super_expert_command(
+    capability: str,
+    command: PlatformCommandRequest,
+    request: Request,
+) -> dict[str, Any]:
+    # The shipped card sends the original seven-field binding. Only enrich
+    # this exact shape for resume, after ownership and every supplied field
+    # match. Canonical agent commands retain their full-binding requirement.
+    binding = command.arguments.get("binding")
+    legacy_keys = {
+        "installation_id",
+        "conversation_id",
+        "agent_task_id",
+        "content_revision",
+        "material_task_id",
+        "canvas_id",
+        "node_id",
+    }
+    if (
+        capability == "aigc.task.resume"
+        and isinstance(binding, dict)
+        and set(binding) == legacy_keys
+    ):
+        ensure_chat_access(
+            request,
+            str(binding.get("conversation_id") or ""),
+            allow_admin=True,
+        )
+        current = get_super_expert_platform_service().get_task(
+            str(binding.get("material_task_id") or ""),
+        )
+        expected = (
+            current.binding.model_dump(mode="json")
+            if current is not None
+            else {}
+        )
+        if current is None or any(
+            expected.get(key) != value for key, value in binding.items()
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="card task binding mismatch",
+            )
+        command = command.model_copy(
+            update={
+                "arguments": {**command.arguments, "binding": expected},
+            },
+        )
+    return await _execute_super_expert_command(
+        capability, command, request, frontend_workflow_resume=True,
+    )
+
+
+@user_routes.post("/commands/{capability:path}")
+async def execute_super_expert_command(
+    capability: str,
+    command: PlatformCommandRequest,
+    request: Request,
+) -> dict[str, Any]:
+    return await _execute_super_expert_command(capability, command, request)
+
+
+async def _execute_super_expert_command(
+    capability: str,
+    command: PlatformCommandRequest,
+    request: Request,
+    *,
+    frontend_workflow_resume: bool = False,
+) -> dict[str, Any]:
+    tenant_id = str(getattr(request.state, "tenant_id", "local") or "local")
+    binding = (
+        command.arguments.get("scope")
+        if capability in {"aigc.task.create/2", "aigc.workflow.create/1"}
+        else command.arguments.get("binding")
+    )
+    conversation_id = (
+        str(binding.get("conversation_id") or "")
+        if isinstance(binding, dict)
+        else ""
+    )
+    if not conversation_id:
+        raise HTTPException(
+            status_code=400,
+            detail="command binding is invalid",
+        )
+    ensure_chat_access(request, conversation_id, allow_admin=True)
+    service = get_super_expert_platform_service()
+    try:
+        asset_validator = None
+        if capability == "aigc.asset.submit":
+
+            async def validate_asset(
+                candidate_binding: AigcTaskBinding,
+                asset_id: str,
+                current_task: Any,
+            ) -> None:
+                node_ids, asset_kinds = _workflow_review_binding(current_task)
+                await resolve_owned_asset_for_agent_review(
+                    request,
+                    asset_id,
+                    canvas_id=candidate_binding.canvas_id,
+                    node_ids=node_ids,
+                    asset_kinds=asset_kinds,
+                    service=service,
+                )
+
+            asset_validator = validate_asset
+        result = await service.execute(
+            tenant_id=tenant_id,
+            user_id=str(getattr(request.state, "user_id", "") or ""),
+            installation_id=command.installation_id,
+            capability=capability,
+            contract_version=command.contract_version,
+            arguments=command.arguments,
+            idempotency_key=command.idempotency_key,
+            asset_validator=asset_validator,
+            frontend_workflow_resume=frontend_workflow_resume,
+            frontend_asset_submit=capability == "aigc.asset.submit",
+        )
+        return result
+    except InsufficientUsageCreditsError as exc:
+        raise HTTPException(
+            status_code=402,
+            detail="insufficient usage credits",
+        ) from exc
+    except SuperExpertPlatformError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+async def _dispatch_agent_asset_review(
+    request: Request,
+    *,
+    service: SuperExpertPlatformService,
+    installation_id: str,
+    binding: AigcTaskBinding,
+    asset_id: str,
+    request_key: str,
+) -> dict[str, Any]:
+    """Run a generic platform-originated Agent turn while the customer stays in AIGC."""
+    grant = service.grant_repository.get(installation_id)
+    if grant is None:
+        raise SuperExpertPlatformError("installation grant is unavailable")
+    if not asset_id:
+        raise SuperExpertPlatformError("submitted asset is unavailable")
+    try:
+        task_getter = getattr(service, "get_task", None)
+        current_task = (
+            task_getter(binding.material_task_id)
+            if callable(task_getter)
+            else None
+        )
+        node_ids, asset_kinds = (
+            _workflow_review_binding(current_task)
+            if current_task is not None
+            else ({binding.node_id}, {"image", "video", "audio"})
+        )
+        review_assets = getattr(current_task, "review_assets", ())
+        if review_assets:
+            media_blocks = await _resolve_review_bundle(
+                request,
+                current_task,
+                [entry.model_dump(mode="json") for entry in review_assets],
+                service=service,
+            )
+        else:
+            media_blocks = [
+                await resolve_owned_asset_for_agent_review(
+                    request,
+                    asset_id,
+                    canvas_id=binding.canvas_id,
+                    node_ids=node_ids,
+                    asset_kinds=asset_kinds,
+                    service=service,
+                ),
+            ]
+        media_block = media_blocks[1] if review_assets else media_blocks[0]
+        manager = request.app.state.multi_agent_manager
+        workspace = await manager.get_agent(grant.agent_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise SuperExpertPlatformError(
+            "agent review dispatch is unavailable",
+        ) from exc
+
+    user_id = str(
+        getattr(request.state, "user_id", "platform-user") or "platform-user",
+    )
+    runtime_installation_id = _review_runtime_installation_id(
+        service,
+        grant,
+        installation_id,
+    )
+    # Review continues the bound conversation. Resolve that chat first so its
+    # selected model remains the preferred candidate for the review turn.
+    resolved_chat_id = binding.conversation_id
+    chat = await workspace.chat_manager.get_chat(binding.conversation_id)
+    if chat is None:
+        chat_id = await workspace.chat_manager.get_chat_id_by_session(
+            binding.conversation_id,
+            "console",
+            user_id=user_id,
+        )
+        if chat_id:
+            resolved_chat_id = chat_id
+            chat = await workspace.chat_manager.get_chat(chat_id)
+    chat_model = (
+        chat.meta.get("active_model")
+        if chat is not None
+        and str(chat.user_id) == user_id
+        and isinstance(chat.meta, dict)
+        else None
+    )
+    required_modalities = {
+        str(block.get("type") or "")
+        for block in media_blocks
+        if isinstance(block, dict) and block.get("type") in {"image", "video"}
+    }
+    provider_manager = getattr(request.app.state, "provider_manager", None)
+    review_model = chat_model
+    if provider_manager is not None and required_modalities:
+        review_model = _select_review_chat_model(
+            provider_manager,
+            chat_model,
+            required_modalities,
+        )
+        if review_model is None:
+            names = "、".join(
+                "图片" if item == "image" else "视频"
+                for item in sorted(required_modalities)
+            )
+            return {
+                "status": "model_required",
+                "reply": f"素材已提交，但当前没有已配置且支持{names}识别的模型，暂未完成审核。",
+                "required_modalities": sorted(required_modalities),
+            }
+    turn_request = SimpleNamespace(
+        # Continue the exact bound chat on its original channel. Supplying the
+        # conversation id with a synthetic platform channel used to create a
+        # second chat whose short history then shadowed the original one.
+        session_id=str(getattr(chat, "id", None) or resolved_chat_id),
+        user_id=user_id,
+        channel=str(getattr(chat, "channel", None) or "console"),
+        tenant_id=grant.tenant_id,
+        channel_meta={},
+        request_context={"platform_event": "aigc.asset.submitted"},
+        root_session_id=str(getattr(chat, "id", None) or resolved_chat_id),
+    )
+    review_bundle_assets = []
+    if review_assets:
+        review_bundle_assets = [
+            {"asset_id": entry.asset_id}
+            for entry, block in zip(review_assets, media_blocks[1::2])
+            if isinstance(block, dict) and block.get("type") == "image"
+        ]
+    elif isinstance(media_block, dict) and media_block.get("type") == "image":
+        review_bundle_assets = [{"asset_id": asset_id}]
+
+    messages = [
+        Msg(
+            name="user",
+            role="user",
+            content=[
+                {
+                    "type": "text",
+                    "text": (
+                        "当前绑定的 DClaw AIGC 素材已由客户明确提交。"
+                        f"任务ID：{binding.material_task_id}。"
+                        "历史自动审核消息和历史工具错误已经失效，不得据此跳过本次审核。"
+                        "请以当前附件、当前任务绑定和当前签名 Agent 规则为准完成审核；"
+                        "需要审核细则时先读取当前 Agent 的审核 Skill，并在本轮调用 "
+                        "aigc_task_review。"
+                        "只有该工具成功返回且任务状态已经变为 ACCEPTED 或 REVISION_REQUIRED，"
+                        "才可以向客户表示审核已经完成；只输出一个当前结论和一个下一步动作。"
+                    ),
+                },
+                *media_blocks,
+            ],
+            metadata=(
+                {
+                    "dclaw_aigc_review_bundle": {
+                        "material_task_id": binding.material_task_id,
+                        "assets": review_bundle_assets,
+                    },
+                }
+                if review_bundle_assets
+                else {}
+            ),
+        ),
+    ]
+    final_message: Msg | None = None
+    prepared = prepare_user_billing_execution(
+        user_id,
+        BillingSource(
+            type="client",
+            id=binding.conversation_id,
+            expert_id=grant.agent_id,
+        ),
+        request_key,
+        {
+            "installation_id": installation_id,
+            "conversation_id": binding.conversation_id,
+            "material_task_id": binding.material_task_id,
+            "asset_id": asset_id,
+        },
+    )
+    previous_model = get_current_chat_model()
+    set_current_chat_model(review_model)
+    from .media_review_context import bind_review_input
+
+    review_status = "completed"
+    try:
+        with prepared.activate(), bind_review_input(
+            user_id=user_id,
+            binding=binding,
+            asset_id=asset_id,
+            media_block=media_block,
+            review_assets=[
+                entry.model_dump(mode="json") for entry in review_assets
+            ],
+            media_blocks=media_blocks,
+            runtime_installation_id=runtime_installation_id,
+        ):
+            async for message, is_last in workspace.runner.query_handler(
+                messages,
+                turn_request,
+            ):
+                if is_last:
+                    task_getter = getattr(service, "get_task", None)
+                    reviewed_task = (
+                        task_getter(binding.material_task_id)
+                        if callable(task_getter)
+                        else None
+                    )
+                    if callable(task_getter) and (
+                        reviewed_task is None
+                        or reviewed_task.status
+                        not in {
+                            AigcTaskStatus.ACCEPTED,
+                            AigcTaskStatus.REVISION_REQUIRED,
+                        }
+                    ):
+                        review_status = "review_incomplete"
+                        _replace_review_message_text(
+                            message,
+                            "素材已收到，但审核结果尚未成功写入任务，请重新发起审核。",
+                        )
+                    final_message = message
+    except InsufficientUsageCreditsError:
+        prepared.finalize("failed", error_code="INSUFFICIENT_CREDITS")
+        raise
+    except asyncio.CancelledError:
+        prepared.finalize("cancelled", error_code="CANCELLED")
+        raise
+    except Exception as exc:
+        prepared.finalize("failed", error_code="MODEL_ERROR")
+        raise SuperExpertPlatformError("agent review dispatch failed") from exc
+    finally:
+        set_current_chat_model(previous_model)
+    if final_message is None:
+        prepared.finalize("failed", error_code="MISSING_COMPLETION")
+        raise SuperExpertPlatformError("agent review did not complete")
+    reply = final_message.get_text_content()
+    if not isinstance(reply, str) or not reply.strip():
+        prepared.finalize("failed", error_code="INVALID_COMPLETION")
+        raise SuperExpertPlatformError("agent review result is invalid")
+    prepared.finalize_completed()
+    return {"status": review_status, "reply": reply}
+
+
+def _interaction_submission_summary(card: Any) -> str:
+    """Render the trusted persisted answer as customer-readable conversation text."""
+    answer = card.answer
+    if answer is None:
+        raise SuperExpertPlatformError(
+            "submitted interaction answer is unavailable",
+        )
+    component_type = getattr(card.component_type, "value", card.component_type)
+    if component_type == "question_form":
+        return "\n".join(item.value for item in answer.answers if item.value)
+    if component_type == "file_selector":
+        return "\n".join(item.display_name for item in answer.files)
+
+    lines = [item.text for item in answer.selected]
+    if answer.supplement:
+        lines.append(answer.supplement)
+    return "\n".join(lines)
+
+
+# Historical imports mounted these prefixed routers from core. Keep them as
+# compatibility exports while production registration uses the unprefixed
+# plugin-owned route sets above.
+router = APIRouter(
+    prefix="/super-expert-platform",
+    tags=["super-expert-platform"],
+)
+router.include_router(user_routes)
+frontend_read_router = APIRouter(
+    prefix="/super-expert-platform",
+    tags=["super-expert-platform"],
+)
+frontend_read_router.include_router(frontend_read_routes)

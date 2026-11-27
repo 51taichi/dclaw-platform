@@ -1,0 +1,34 @@
+{
+  "schemaVersion": "dclaw-integration-capabilities.v1",
+  "version": "2026.10.02",
+  "platformCapabilities": [
+    "agent-delivery-context",
+    "agent-source-bundle",
+    "knowledge-source-bundle",
+    "agent-delivery-validate",
+    "agent-delivery-update",
+    "knowledge-delivery-update",
+    "delivery-restore"
+  ],
+  "profiles": {
+    "standard-2026.09": {
+      "profileId": "standard-2026.09",
+      "name": "普通专家",
+      "capabilities": [
+        "文件化Agent源码",
+        "DClaw平台工具",
+        "经验库检索"
+      ]
+    },
+    "super-expert-2026.09": {
+      "profileId": "super-expert-2026.09",
+      "name": "超级专家",
+      "capabilities": [
+        "超级专家源码快照",
+        "超级专家运行能力",
+        "DClaw平台工具",
+        "经验库检索"
+      ]
+    }
+  }
+}

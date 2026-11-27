@@ -1,0 +1,60 @@
+{
+  "contract_version": "1",
+  "minimum_runner_version": "1.3.0",
+  "positive": [
+    {
+      "name": "whisper-model-root",
+      "public_components": [
+        {"component_id": "python-runtime", "version": "3.12.14"},
+        {"component_id": "whisper-small", "version": "536b0662742c02347bc0e980a01041f333bce120"}
+      ],
+      "component_exports": [
+        {
+          "environment_variable": "DCLAW_COMPONENT_WHISPER_MODEL_ROOT",
+          "component_id": "whisper-small",
+          "export": "model_root"
+        }
+      ]
+    }
+  ],
+  "negative": [
+    {
+      "name": "undeclared-component",
+      "error": "component_export_component_undeclared",
+      "component_exports": [
+        {
+          "environment_variable": "DCLAW_COMPONENT_MODEL_ROOT",
+          "component_id": "missing-model",
+          "export": "model_root"
+        }
+      ]
+    },
+    {
+      "name": "unscoped-variable",
+      "error": "component_export_environment_invalid",
+      "component_exports": [
+        {
+          "environment_variable": "MODEL_ROOT",
+          "component_id": "whisper-small",
+          "export": "model_root"
+        }
+      ]
+    },
+    {
+      "name": "duplicate-variable",
+      "error": "component_export_environment_duplicate",
+      "component_exports": [
+        {
+          "environment_variable": "DCLAW_COMPONENT_MODEL_ROOT",
+          "component_id": "whisper-small",
+          "export": "model_root"
+        },
+        {
+          "environment_variable": "DCLAW_COMPONENT_MODEL_ROOT",
+          "component_id": "another-model",
+          "export": "model_root"
+        }
+      ]
+    }
+  ]
+}

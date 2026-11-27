@@ -1,0 +1,28 @@
+{
+  "start_request": {
+    "capability_id": "example.private.video.render",
+    "input": {"timeline_ref": "example-timeline"},
+    "idempotency_key": "render-revision-1"
+  },
+  "accepted_receipt": {
+    "contract": "local.task.receipt/1",
+    "task_id": "task-example",
+    "capability_id": "example.private.video.render",
+    "idempotency_key": "render-revision-1",
+    "status": "queued",
+    "error_code": null,
+    "artifact_ids": [],
+    "result_sha256": null
+  },
+  "read_request": {"task_id": "task-example"},
+  "success_receipt": {
+    "contract": "local.task.receipt/1",
+    "task_id": "task-example",
+    "capability_id": "example.private.video.render",
+    "idempotency_key": "render-revision-1",
+    "status": "succeeded",
+    "error_code": null,
+    "artifact_ids": ["artifact_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+    "result_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+}

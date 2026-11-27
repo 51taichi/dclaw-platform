@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Public Component direct upload completion receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["upload_id", "status", "artifact_url", "sha256", "size_bytes"],
+  "properties": {
+    "upload_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "status": {"const": "verified"},
+    "artifact_url": {"type": "string", "pattern": "^https://"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "size_bytes": {"type": "integer", "minimum": 1, "maximum": 2147483648}
+  }
+}

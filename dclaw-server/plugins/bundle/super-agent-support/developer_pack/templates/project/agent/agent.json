@@ -1,0 +1,17 @@
+{
+  "id": "{{AGENT_ID}}",
+  "name": "{{AGENT_NAME}}",
+  "description": "Replace with the verified customer-facing promise.",
+  "orchestration": {
+    "enabled": true,
+    "contract_version": "1",
+    "entrypoint": "runtime.py:create_runtime",
+    "required_host_capabilities": [
+      "agent.execute",
+      "session.context",
+      "runtime.trace",
+      "runtime.complete",
+      "runtime.fail"
+    ]
+  }
+}

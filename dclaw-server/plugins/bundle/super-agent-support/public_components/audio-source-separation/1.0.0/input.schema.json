@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["input_path"],
+  "properties": {
+    "input_path": {
+      "type": "string",
+      "pattern": "^res/bindings/(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9_./ -]+$",
+      "maxLength": 512
+    },
+    "output_directory": {
+      "type": "string",
+      "pattern": "^res/(?!bindings(?:/|$))(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9_./ -]+$",
+      "maxLength": 256,
+      "default": "res/separation"
+    }
+  }
+}

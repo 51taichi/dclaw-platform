@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/schemas/interaction-card-read-v1/response.schema.json",
+  "title": "interaction.card.read/1 response",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["contract", "result"],
+      "properties": {
+        "contract": {"const": "interaction.card.read/1"},
+        "result": {"const": "not_found"}
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["contract", "result", "interaction_id", "task_key", "interaction_revision", "component_type", "status", "version", "answer", "submission_receipt"],
+      "properties": {
+        "contract": {"const": "interaction.card.read/1"},
+        "result": {"const": "found"},
+        "interaction_id": {"type": "string", "pattern": "^interaction-[a-f0-9]{32}$"},
+        "task_key": {"type": "string", "minLength": 1, "maxLength": 160},
+        "interaction_revision": {"type": "integer", "minimum": 1},
+        "component_type": {"enum": ["single_select", "multi_select", "question_form", "file_selector"]},
+        "input_policy": {"enum": ["card_only", "card_or_text", "concurrent"]},
+        "status": {"enum": ["PENDING", "SUBMITTED", "CANCELLED", "REPLACED", "EXPIRED"]},
+        "version": {"type": "integer", "minimum": 1},
+        "answer": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/answer"}]},
+        "submission_receipt": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/receipt"}]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "SUBMITTED"}}, "required": ["status"]},
+          "then": {"properties": {"answer": {"$ref": "#/$defs/answer"}, "submission_receipt": {"$ref": "#/$defs/receipt"}}},
+          "else": {"properties": {"answer": {"type": "null"}, "submission_receipt": {"type": "null"}}}
+        }
+      ],
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "option": {
+      "type": "object",
+      "required": ["id", "text"],
+      "properties": {"id": {"type": ["string", "null"]}, "text": {"type": "string", "minLength": 1, "maxLength": 500}},
+      "additionalProperties": false
+    },
+    "question_answer": {
+      "type": "object",
+      "required": ["id", "question", "value"],
+      "properties": {"id": {"type": ["string", "null"]}, "question": {"type": "string", "minLength": 1, "maxLength": 500}, "value": {"type": ["string", "null"], "maxLength": 5000}},
+      "additionalProperties": false
+    },
+    "file": {
+      "type": "object",
+      "required": ["local_file_ref", "display_name", "mime_type", "size_bytes", "device_id", "last_modified_ms"],
+      "properties": {
+        "local_file_ref": {"type": "string", "pattern": "^lfr_[A-Za-z0-9_-]{32,156}$"},
+        "display_name": {"type": "string", "minLength": 1, "maxLength": 255},
+        "mime_type": {"type": "string", "minLength": 1, "maxLength": 255},
+        "size_bytes": {"type": "integer", "minimum": 0},
+        "device_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "last_modified_ms": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "answer": {
+      "type": "object",
+      "required": ["interaction_id", "component_type", "submitted_at", "schema_version"],
+      "properties": {
+        "interaction_id": {"type": "string", "minLength": 1},
+        "component_type": {"enum": ["single_select", "multi_select", "question_form", "file_selector"]},
+        "selected": {"type": "array", "items": {"$ref": "#/$defs/option"}},
+        "supplement": {"type": ["string", "null"], "maxLength": 5000},
+        "answers": {"type": "array", "items": {"$ref": "#/$defs/question_answer"}},
+        "files": {"type": "array", "items": {"$ref": "#/$defs/file"}},
+        "submitted_at": {"type": "string", "format": "date-time"},
+        "schema_version": {"const": 1}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"component_type": {"enum": ["single_select", "multi_select"]}}, "required": ["component_type"]},
+          "then": {"required": ["selected", "supplement"], "properties": {"answers": false, "files": false}}
+        },
+        {
+          "if": {"properties": {"component_type": {"const": "question_form"}}, "required": ["component_type"]},
+          "then": {"required": ["answers"], "properties": {"selected": false, "supplement": false, "files": false}}
+        },
+        {
+          "if": {"properties": {"component_type": {"const": "file_selector"}}, "required": ["component_type"]},
+          "then": {"required": ["files"], "properties": {"selected": false, "supplement": false, "answers": false}}
+        }
+      ],
+      "additionalProperties": false
+    },
+    "receipt": {
+      "type": "object",
+      "required": ["contract", "action", "event_id", "interaction_id", "installation_id", "conversation_id", "task_key", "interaction_revision", "version", "status", "answer_sha256", "occurred_at"],
+      "properties": {
+        "contract": {"const": "interaction.card.receipt/1"},
+        "action": {"const": "submitted"},
+        "event_id": {"type": "string", "minLength": 1},
+        "interaction_id": {"type": "string", "minLength": 1},
+        "installation_id": {"type": "string", "minLength": 1},
+        "conversation_id": {"type": "string", "minLength": 1},
+        "task_key": {"type": "string", "minLength": 1},
+        "interaction_revision": {"type": "integer", "minimum": 1},
+        "version": {"type": "integer", "minimum": 1},
+        "status": {"const": "SUBMITTED"},
+        "answer_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "occurred_at": {"type": "string", "format": "date-time"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

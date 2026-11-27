@@ -1,0 +1,1125 @@
+"""Persistence for trusted pricing costs, policies, imports, and unlocks."""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping
+from datetime import datetime, timedelta, timezone
+from typing import Any
+from uuid import uuid4
+
+from sqlalchemy import insert, or_, select, update
+from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
+
+from ...billing.pricing_spec import spec_key
+
+from ..schema import (
+    billing_cost_snapshots,
+    billing_official_price_candidates,
+    billing_pricing_audits,
+    billing_pricing_collection_items,
+    billing_pricing_collection_jobs,
+    billing_pricing_draft_exclusions,
+    billing_pricing_imports,
+    billing_pricing_model_mappings,
+    billing_pricing_model_decisions,
+    billing_pricing_policies,
+    billing_pricing_sync_state,
+    billing_pricing_unlock_attempts,
+    billing_pricing_unlocks,
+)
+
+
+class PricingRevisionConflict(RuntimeError):
+    """A pricing policy was changed after the caller loaded it."""
+
+
+def _json(value: Mapping[str, Any]) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+class PricingAdminRepository:
+    def __init__(self, engine: Engine) -> None:
+        self.engine = engine
+
+    def append_cost_snapshot(self, values: Mapping[str, Any]) -> str:
+        row = dict(values)
+        row["id"] = str(uuid4())
+        row["conditions_json"] = _json(row.pop("conditions", {}))
+        with self.engine.begin() as conn:
+            conn.execute(insert(billing_cost_snapshots).values(**row))
+        return str(row["id"])
+
+    def list_cost_snapshots(self) -> list[dict[str, Any]]:
+        with self.engine.connect() as conn:
+            return [
+                dict(row)
+                for row in conn.execute(
+                    select(billing_cost_snapshots).order_by(
+                        billing_cost_snapshots.c.verified_at.desc(),
+                        billing_cost_snapshots.c.created_at.desc(),
+                    ),
+                ).mappings()
+            ]
+
+    def latest_trusted_costs(self) -> list[dict[str, Any]]:
+        latest: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
+        for row in self.list_cost_snapshots():
+            if row["verification_status"] != "verified":
+                continue
+            key = (
+                str(row["provider_id"]),
+                str(row["model_key"]),
+                str(row["capability"]),
+                str(row["unit_key"]),
+                str(row["conditions_json"]),
+            )
+            latest.setdefault(key, row)
+        return list(latest.values())
+
+    def append_official_candidate(self, values: Mapping[str, Any]) -> str:
+        row = dict(values)
+        row["id"] = str(uuid4())
+        row["conditions_json"] = _json(row.pop("conditions", {}))
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(insert(billing_official_price_candidates).values(**row))
+        except IntegrityError:
+            pass
+        with self.engine.connect() as conn:
+            return str(
+                conn.execute(
+                    select(billing_official_price_candidates.c.id).where(
+                        billing_official_price_candidates.c.content_sha256
+                        == values["content_sha256"]
+                    )
+                ).scalar_one()
+            )
+
+    def latest_official_candidates(self) -> list[dict[str, Any]]:
+        with self.engine.connect() as conn:
+            return [
+                dict(row)
+                for row in conn.execute(
+                    select(billing_official_price_candidates).order_by(
+                        billing_official_price_candidates.c.created_at.desc()
+                    )
+                ).mappings()
+            ]
+
+    def replace_model_mapping(
+        self,
+        provider_id: str,
+        model_key: str,
+        official_provider_id: str,
+        official_model_id: str,
+        actor_id: str,
+        expected_revision: int,
+    ) -> dict[str, Any]:
+        with self.engine.begin() as conn:
+            current = (
+                conn.execute(
+                    select(billing_pricing_model_mappings).where(
+                        billing_pricing_model_mappings.c.provider_id == provider_id,
+                        billing_pricing_model_mappings.c.model_key == model_key,
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if current is None:
+                if expected_revision != 0:
+                    raise PricingRevisionConflict(model_key)
+                row = {
+                    "id": str(uuid4()),
+                    "provider_id": provider_id,
+                    "model_key": model_key,
+                    "official_provider_id": official_provider_id,
+                    "official_model_id": official_model_id,
+                    "revision": 1,
+                    "updated_by": actor_id,
+                }
+                revision = 1
+                conn.execute(insert(billing_pricing_model_mappings).values(**row))
+            else:
+                if int(current["revision"]) != expected_revision:
+                    raise PricingRevisionConflict(model_key)
+                row = dict(current)
+                revision = expected_revision + 1
+                row.update(
+                    official_model_id=official_model_id,
+                    official_provider_id=official_provider_id,
+                    revision=expected_revision + 1,
+                    updated_by=actor_id,
+                )
+                result = conn.execute(
+                    update(billing_pricing_model_mappings)
+                    .where(
+                        billing_pricing_model_mappings.c.id == current["id"],
+                        billing_pricing_model_mappings.c.revision == expected_revision,
+                    )
+                    .values(
+                        official_model_id=official_model_id,
+                        official_provider_id=official_provider_id,
+                        revision=expected_revision + 1,
+                        updated_by=actor_id,
+                    )
+                )
+                if result.rowcount != 1:
+                    raise PricingRevisionConflict(model_key)
+            return {
+                "id": str(row["id"]),
+                "provider_id": provider_id,
+                "model_key": model_key,
+                "official_provider_id": official_provider_id,
+                "official_model_id": official_model_id,
+                "revision": revision,
+            }
+
+    def list_model_mappings(self) -> list[dict[str, Any]]:
+        with self.engine.connect() as conn:
+            return [
+                dict(row)
+                for row in conn.execute(
+                    select(billing_pricing_model_mappings).order_by(
+                        billing_pricing_model_mappings.c.provider_id,
+                        billing_pricing_model_mappings.c.model_key,
+                    )
+                ).mappings()
+            ]
+
+    def replace_draft_exclusion(
+        self,
+        draft_key: str,
+        provider_id: str,
+        model_key: str,
+        excluded: bool,
+        reason: str | None,
+        actor_id: str,
+    ) -> dict[str, Any]:
+        normalized_reason = (reason or "").strip() or None
+        if excluded and normalized_reason is None:
+            raise ValueError("exclusion reason is required")
+        with self.engine.begin() as conn:
+            current = (
+                conn.execute(
+                    select(billing_pricing_draft_exclusions).where(
+                        billing_pricing_draft_exclusions.c.draft_key == draft_key,
+                        billing_pricing_draft_exclusions.c.provider_id == provider_id,
+                        billing_pricing_draft_exclusions.c.model_key == model_key,
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            values = {
+                "excluded": excluded,
+                "reason": normalized_reason,
+                "updated_by": actor_id,
+            }
+            if current is None:
+                row_id = str(uuid4())
+                conn.execute(
+                    insert(billing_pricing_draft_exclusions).values(
+                        id=row_id,
+                        draft_key=draft_key,
+                        provider_id=provider_id,
+                        model_key=model_key,
+                        **values,
+                    )
+                )
+            else:
+                row_id = str(current["id"])
+                conn.execute(
+                    update(billing_pricing_draft_exclusions)
+                    .where(billing_pricing_draft_exclusions.c.id == row_id)
+                    .values(**values)
+                )
+        return {
+            "id": row_id,
+            "draft_key": draft_key,
+            "provider_id": provider_id,
+            "model_key": model_key,
+            **values,
+        }
+
+    def list_draft_exclusions(self, draft_key: str) -> list[dict[str, Any]]:
+        with self.engine.connect() as conn:
+            return [
+                dict(row)
+                for row in conn.execute(
+                    select(billing_pricing_draft_exclusions)
+                    .where(billing_pricing_draft_exclusions.c.draft_key == draft_key)
+                    .order_by(
+                        billing_pricing_draft_exclusions.c.provider_id,
+                        billing_pricing_draft_exclusions.c.model_key,
+                    )
+                ).mappings()
+            ]
+
+    def create_collection_job(
+        self,
+        inventory_digest: str,
+        requested_by: str,
+        now: datetime,
+    ) -> dict[str, Any]:
+        try:
+            with self.engine.begin() as conn:
+                active = (
+                    conn.execute(
+                        select(billing_pricing_collection_jobs)
+                        .where(
+                            billing_pricing_collection_jobs.c.inventory_digest
+                            == inventory_digest,
+                            billing_pricing_collection_jobs.c.status.in_(
+                                ("pending", "running")
+                            ),
+                        )
+                        .order_by(billing_pricing_collection_jobs.c.created_at.desc())
+                        .limit(1)
+                    )
+                    .mappings()
+                    .first()
+                )
+                if active is not None:
+                    return dict(active)
+                row = {
+                    "id": str(uuid4()),
+                    "inventory_digest": inventory_digest,
+                    "status": "pending",
+                    "requested_by": requested_by,
+                    "progress_json": "{}",
+                    "created_at": now,
+                }
+                conn.execute(insert(billing_pricing_collection_jobs).values(**row))
+            return dict(row)
+        except IntegrityError:
+            with self.engine.connect() as conn:
+                winner = (
+                    conn.execute(
+                        select(billing_pricing_collection_jobs)
+                        .where(
+                            billing_pricing_collection_jobs.c.inventory_digest
+                            == inventory_digest,
+                            billing_pricing_collection_jobs.c.status.in_(
+                                ("pending", "running")
+                            ),
+                        )
+                        .limit(1)
+                    )
+                    .mappings()
+                    .one()
+                )
+            return dict(winner)
+
+    def list_collection_jobs(self, limit: int = 20) -> list[dict[str, Any]]:
+        with self.engine.connect() as conn:
+            rows = list(
+                conn.execute(
+                    select(billing_pricing_collection_jobs)
+                    .order_by(billing_pricing_collection_jobs.c.created_at.desc())
+                    .limit(max(1, min(limit, 100)))
+                ).mappings()
+            )
+        return [self._collection_job_result(row) for row in rows]
+
+    def get_collection_job(self, job_id: str) -> dict[str, Any] | None:
+        with self.engine.connect() as conn:
+            row = (
+                conn.execute(
+                    select(billing_pricing_collection_jobs).where(
+                        billing_pricing_collection_jobs.c.id == job_id
+                    )
+                )
+                .mappings()
+                .first()
+            )
+        if row is None:
+            return None
+        result = self._collection_job_result(row)
+        with self.engine.connect() as conn:
+            items = list(
+                conn.execute(
+                    select(billing_pricing_collection_items)
+                    .where(billing_pricing_collection_items.c.job_id == job_id)
+                    .order_by(
+                        billing_pricing_collection_items.c.provider_id,
+                        billing_pricing_collection_items.c.model_key,
+                    )
+                ).mappings()
+            )
+        result["items"] = [
+            {
+                **dict(item),
+                "result": json.loads(str(item["result_json"] or "{}")),
+            }
+            for item in items
+        ]
+        for item in result["items"]:
+            item.pop("result_json", None)
+        return result
+
+    @staticmethod
+    def _collection_job_result(row: Mapping[str, Any]) -> dict[str, Any]:
+        result = dict(row)
+        result["progress"] = json.loads(str(result.pop("progress_json") or "{}"))
+        return result
+
+    def claim_collection_job(
+        self,
+        worker_id: str,
+        now: datetime,
+        lease_seconds: int,
+    ) -> dict[str, Any] | None:
+        with self.engine.begin() as conn:
+            claimable = or_(
+                billing_pricing_collection_jobs.c.status == "pending",
+                (billing_pricing_collection_jobs.c.status == "running")
+                & (billing_pricing_collection_jobs.c.lease_expires_at < now),
+            )
+            candidate_id = conn.execute(
+                select(billing_pricing_collection_jobs.c.id)
+                .where(claimable)
+                .order_by(billing_pricing_collection_jobs.c.created_at)
+                .limit(1)
+            ).scalar_one_or_none()
+            if candidate_id is None:
+                return None
+            result = conn.execute(
+                update(billing_pricing_collection_jobs)
+                .where(
+                    billing_pricing_collection_jobs.c.id == candidate_id,
+                    claimable,
+                )
+                .values(
+                    status="running",
+                    worker_id=worker_id,
+                    started_at=now,
+                    lease_expires_at=now + timedelta(seconds=lease_seconds),
+                )
+            )
+            if result.rowcount != 1:
+                return None
+            row = (
+                conn.execute(
+                    select(billing_pricing_collection_jobs).where(
+                        billing_pricing_collection_jobs.c.id == candidate_id
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            return dict(row)
+
+    def update_collection_item(
+        self,
+        job_id: str,
+        provider_id: str,
+        model_key: str,
+        pricing_region: str | None,
+        *,
+        status: str,
+        result: Mapping[str, Any],
+        candidate_id: str | None,
+        error_summary: str | None,
+        now: datetime,
+    ) -> dict[str, Any]:
+        region = pricing_region or ""
+        with self.engine.begin() as conn:
+            current = (
+                conn.execute(
+                    select(billing_pricing_collection_items).where(
+                        billing_pricing_collection_items.c.job_id == job_id,
+                        billing_pricing_collection_items.c.provider_id == provider_id,
+                        billing_pricing_collection_items.c.model_key == model_key,
+                        billing_pricing_collection_items.c.pricing_region == region,
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            values = {
+                "status": status,
+                "candidate_id": candidate_id,
+                "result_json": _json(result),
+                "error_summary": error_summary,
+                "started_at": None if status == "pending" else now,
+                "finished_at": (None if status in {"pending", "running"} else now),
+            }
+            if current is None:
+                row_id = str(uuid4())
+                try:
+                    with conn.begin_nested():
+                        conn.execute(
+                            insert(billing_pricing_collection_items).values(
+                                id=row_id,
+                                job_id=job_id,
+                                provider_id=provider_id,
+                                model_key=model_key,
+                                pricing_region=region,
+                                **values,
+                            )
+                        )
+                except IntegrityError:
+                    winner = (
+                        conn.execute(
+                            select(billing_pricing_collection_items).where(
+                                billing_pricing_collection_items.c.job_id == job_id,
+                                billing_pricing_collection_items.c.provider_id
+                                == provider_id,
+                                billing_pricing_collection_items.c.model_key
+                                == model_key,
+                                billing_pricing_collection_items.c.pricing_region
+                                == region,
+                            )
+                        )
+                        .mappings()
+                        .one()
+                    )
+                    row_id = str(winner["id"])
+                    conn.execute(
+                        update(billing_pricing_collection_items)
+                        .where(billing_pricing_collection_items.c.id == row_id)
+                        .values(**values)
+                    )
+            else:
+                row_id = str(current["id"])
+                conn.execute(
+                    update(billing_pricing_collection_items)
+                    .where(billing_pricing_collection_items.c.id == row_id)
+                    .values(**values)
+                )
+            item_rows = list(
+                conn.execute(
+                    select(billing_pricing_collection_items.c.status).where(
+                        billing_pricing_collection_items.c.job_id == job_id
+                    )
+                ).scalars()
+            )
+            progress = {
+                "total": len(item_rows),
+                "completed": sum(
+                    value not in {"pending", "running"} for value in item_rows
+                ),
+                "pending": sum(value == "pending" for value in item_rows),
+                "running": sum(value == "running" for value in item_rows),
+                "official": sum(value == "official_succeeded" for value in item_rows),
+                "ai": sum(value.startswith("ai_") for value in item_rows),
+                "manual": sum(value == "manual_required" for value in item_rows),
+                "failed": sum(value == "failed" for value in item_rows),
+            }
+            conn.execute(
+                update(billing_pricing_collection_jobs)
+                .where(billing_pricing_collection_jobs.c.id == job_id)
+                .values(progress_json=_json(progress))
+            )
+        return {
+            "id": row_id,
+            "job_id": job_id,
+            "provider_id": provider_id,
+            "model_key": model_key,
+            "pricing_region": pricing_region,
+            **values,
+            "result": dict(result),
+        }
+
+    def renew_collection_job(
+        self,
+        job_id: str,
+        worker_id: str,
+        now: datetime,
+        lease_seconds: int,
+    ) -> bool:
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                update(billing_pricing_collection_jobs)
+                .where(
+                    billing_pricing_collection_jobs.c.id == job_id,
+                    billing_pricing_collection_jobs.c.status == "running",
+                    billing_pricing_collection_jobs.c.worker_id == worker_id,
+                )
+                .values(lease_expires_at=now + timedelta(seconds=lease_seconds))
+            )
+        return result.rowcount == 1
+
+    def finish_collection_job(
+        self,
+        job_id: str,
+        worker_id: str,
+        now: datetime,
+    ) -> str:
+        with self.engine.begin() as conn:
+            conn.execute(
+                update(billing_pricing_collection_items)
+                .where(
+                    billing_pricing_collection_items.c.job_id == job_id,
+                    billing_pricing_collection_items.c.status.in_(
+                        ("pending", "running")
+                    ),
+                )
+                .values(
+                    status="failed",
+                    error_summary="model inventory changed before collection",
+                    finished_at=now,
+                )
+            )
+            item_statuses = tuple(
+                conn.execute(
+                    select(billing_pricing_collection_items.c.status).where(
+                        billing_pricing_collection_items.c.job_id == job_id
+                    )
+                ).scalars()
+            )
+            failed = sum(value == "failed" for value in item_statuses)
+            succeeded = len(item_statuses) - failed
+            if failed and succeeded:
+                status = "partially_succeeded"
+            elif failed:
+                status = "failed"
+            else:
+                status = "succeeded"
+            progress = {
+                "total": len(item_statuses),
+                "completed": len(item_statuses),
+                "pending": 0,
+                "running": 0,
+                "official": sum(
+                    value == "official_succeeded" for value in item_statuses
+                ),
+                "ai": sum(value.startswith("ai_") for value in item_statuses),
+                "manual": sum(value == "manual_required" for value in item_statuses),
+                "failed": failed,
+            }
+            result = conn.execute(
+                update(billing_pricing_collection_jobs)
+                .where(
+                    billing_pricing_collection_jobs.c.id == job_id,
+                    billing_pricing_collection_jobs.c.status == "running",
+                    billing_pricing_collection_jobs.c.worker_id == worker_id,
+                )
+                .values(
+                    status=status,
+                    lease_expires_at=None,
+                    finished_at=now,
+                    progress_json=_json(progress),
+                )
+            )
+            if result.rowcount != 1:
+                raise RuntimeError("pricing collection job ownership lost")
+        return status
+
+    def set_model_publication_decisions(
+        self,
+        draft_key: str,
+        decisions: list[Mapping[str, Any]],
+        actor_id: str,
+    ) -> list[dict[str, Any]]:
+        saved: list[dict[str, Any]] = []
+        with self.engine.begin() as conn:
+            for decision in decisions:
+                provider_id = str(decision["provider_id"])
+                model_key = str(decision["model_key"])
+                current = (
+                    conn.execute(
+                        select(billing_pricing_model_decisions).where(
+                            billing_pricing_model_decisions.c.draft_key == draft_key,
+                            billing_pricing_model_decisions.c.provider_id
+                            == provider_id,
+                            billing_pricing_model_decisions.c.model_key == model_key,
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+                values = {
+                    "include_in_publish": bool(decision["include_in_publish"]),
+                    "reason": decision.get("reason"),
+                    "updated_by": actor_id,
+                    "updated_at": datetime.now(timezone.utc),
+                }
+                if current is None:
+                    row_id = str(uuid4())
+                    conn.execute(
+                        insert(billing_pricing_model_decisions).values(
+                            id=row_id,
+                            draft_key=draft_key,
+                            provider_id=provider_id,
+                            model_key=model_key,
+                            **values,
+                        )
+                    )
+                else:
+                    row_id = str(current["id"])
+                    conn.execute(
+                        update(billing_pricing_model_decisions)
+                        .where(billing_pricing_model_decisions.c.id == row_id)
+                        .values(**values)
+                    )
+                saved.append(
+                    {
+                        "id": row_id,
+                        "draft_key": draft_key,
+                        "provider_id": provider_id,
+                        "model_key": model_key,
+                        **values,
+                    }
+                )
+        return saved
+
+    def list_model_publication_decisions(self, draft_key: str) -> list[dict[str, Any]]:
+        with self.engine.connect() as conn:
+            return [
+                dict(row)
+                for row in conn.execute(
+                    select(billing_pricing_model_decisions)
+                    .where(billing_pricing_model_decisions.c.draft_key == draft_key)
+                    .order_by(
+                        billing_pricing_model_decisions.c.provider_id,
+                        billing_pricing_model_decisions.c.model_key,
+                    )
+                ).mappings()
+            ]
+
+    def replace_policy(
+        self,
+        *,
+        scope_type: str,
+        scope_key: str,
+        multiplier_decimal: str,
+        settings: Mapping[str, Any],
+        actor_id: str,
+        expected_revision: int,
+    ) -> dict[str, Any]:
+        with self.engine.begin() as conn:
+            current = (
+                conn.execute(
+                    select(billing_pricing_policies).where(
+                        billing_pricing_policies.c.scope_type == scope_type,
+                        billing_pricing_policies.c.scope_key == scope_key,
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if current is None:
+                if expected_revision != 0:
+                    raise PricingRevisionConflict(scope_key)
+                policy_id, revision = str(uuid4()), 1
+                conn.execute(
+                    insert(billing_pricing_policies).values(
+                        id=policy_id,
+                        scope_type=scope_type,
+                        scope_key=scope_key,
+                        multiplier_decimal=multiplier_decimal,
+                        settings_json=_json(settings),
+                        revision=revision,
+                        updated_by=actor_id,
+                    )
+                )
+            else:
+                if int(current["revision"]) != expected_revision:
+                    raise PricingRevisionConflict(scope_key)
+                policy_id, revision = str(current["id"]), expected_revision + 1
+                result = conn.execute(
+                    update(billing_pricing_policies)
+                    .where(
+                        billing_pricing_policies.c.id == policy_id,
+                        billing_pricing_policies.c.revision == expected_revision,
+                    )
+                    .values(
+                        multiplier_decimal=multiplier_decimal,
+                        settings_json=_json(settings),
+                        revision=revision,
+                        updated_by=actor_id,
+                    )
+                )
+                if result.rowcount != 1:
+                    raise PricingRevisionConflict(scope_key)
+            return {
+                "id": policy_id,
+                "scope_type": scope_type,
+                "scope_key": scope_key,
+                "revision": revision,
+                "multiplier_decimal": multiplier_decimal,
+            }
+
+    def list_policies(self) -> list[dict[str, Any]]:
+        with self.engine.connect() as conn:
+            return [
+                dict(row)
+                for row in conn.execute(
+                    select(billing_pricing_policies).order_by(
+                        billing_pricing_policies.c.scope_type,
+                        billing_pricing_policies.c.scope_key,
+                    ),
+                ).mappings()
+            ]
+
+    def record_import(
+        self,
+        digest: str,
+        filename: str,
+        actor_id: str,
+        preview: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        row = {
+            "id": str(uuid4()),
+            "content_sha256": digest,
+            "filename": filename,
+            "status": "previewed",
+            "preview_json": _json(preview),
+            "created_by": actor_id,
+        }
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(insert(billing_pricing_imports).values(**row))
+        except IntegrityError:
+            pass
+        with self.engine.connect() as conn:
+            return dict(
+                conn.execute(
+                    select(billing_pricing_imports).where(
+                        billing_pricing_imports.c.content_sha256 == digest,
+                    )
+                )
+                .mappings()
+                .one()
+            )
+
+    def get_import(self, import_id: str) -> dict[str, Any] | None:
+        with self.engine.connect() as conn:
+            row = (
+                conn.execute(
+                    select(billing_pricing_imports).where(
+                        billing_pricing_imports.c.id == import_id,
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if row is None:
+                return None
+            result = dict(row)
+            result["preview"] = json.loads(result["preview_json"])
+            return result
+
+    def replace_import_preview(
+        self, import_id: str, preview: Mapping[str, Any]
+    ) -> None:
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                update(billing_pricing_imports)
+                .where(
+                    billing_pricing_imports.c.id == import_id,
+                    billing_pricing_imports.c.status == "previewed",
+                )
+                .values(preview_json=_json(preview))
+            )
+            if result.rowcount != 1:
+                raise ValueError("import already confirmed or missing")
+
+    def import_allows_publish(self, import_id: str, catalog_id: str) -> bool:
+        imported = self.get_import(import_id)
+        if imported is None or imported["status"] != "confirmed":
+            return False
+        pricing_preview = imported["preview"].get("pricing_preview", {})
+        return pricing_preview.get("catalog_id") == catalog_id
+
+    def confirm_import(self, import_id: str) -> None:
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                update(billing_pricing_imports)
+                .where(
+                    billing_pricing_imports.c.id == import_id,
+                    billing_pricing_imports.c.status == "previewed",
+                )
+                .values(status="confirmed")
+            )
+            if result.rowcount != 1:
+                raise ValueError("import already confirmed or missing")
+
+    def apply_import_rows(
+        self,
+        import_id: str,
+        rows: list[Mapping[str, Any]],
+        filename: str,
+        actor_id: str,
+        pricing_preview: Mapping[str, Any] | None,
+        ip_address: str | None = None,
+    ) -> None:
+        """Apply every imported cost/policy and claim the import atomically."""
+        with self.engine.begin() as conn:
+            imported = (
+                conn.execute(
+                    select(billing_pricing_imports).where(
+                        billing_pricing_imports.c.id == import_id,
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            if imported["status"] != "previewed":
+                raise ValueError("import already confirmed or missing")
+            policy_revisions: dict[str, int] = {}
+            for source in rows:
+                if source.get("excluded") is True:
+                    continue
+                verified_at = source.get("verified_at")
+                conditions = dict(source.get("conditions") or {})
+                if source.get("unit_size"):
+                    conditions.setdefault(
+                        "unit_size", int(source.get("unit_size") or 1)
+                    )
+                row = {
+                    "id": str(uuid4()),
+                    "provider_id": source["provider_id"],
+                    "model_key": source["model_key"],
+                    "capability": source.get("capability") or source["category"],
+                    "unit_key": source["unit_key"],
+                    "source_type": source.get("source_type") or "excel",
+                    "source_reference": source.get("source_url") or filename,
+                    "original_currency": "CNY",
+                    "original_price_decimal": source["rmb_cost_decimal"],
+                    "fx_rate_decimal": "1",
+                    "rmb_cost_decimal": source["rmb_cost_decimal"],
+                    "conditions_json": _json(conditions),
+                    "verification_status": "verified",
+                    "verified_at": (
+                        datetime.fromisoformat(str(verified_at).replace("Z", "+00:00"))
+                        if verified_at
+                        else datetime.now(timezone.utc)
+                    ),
+                }
+                conn.execute(insert(billing_cost_snapshots).values(**row))
+                scope_key = f"{source['provider_id']}/{source['model_key']}"
+                current = (
+                    conn.execute(
+                        select(billing_pricing_policies).where(
+                            billing_pricing_policies.c.scope_type == "model",
+                            billing_pricing_policies.c.scope_key == scope_key,
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+                settings = (
+                    json.loads(current["settings_json"] or "{}") if current else {}
+                )
+                if source.get("unit_size"):
+                    dimension_key = _json(spec_key(source))
+                    settings.setdefault("dimension_multipliers", {})[
+                        dimension_key
+                    ] = source["multiplier_decimal"]
+                settings_json = _json(settings)
+                expected = policy_revisions.get(
+                    scope_key,
+                    int(current["revision"]) if current else 0,
+                )
+                revision = expected + 1
+                if current is None:
+                    conn.execute(
+                        insert(billing_pricing_policies).values(
+                            id=str(uuid4()),
+                            scope_type="model",
+                            scope_key=scope_key,
+                            multiplier_decimal=source["multiplier_decimal"],
+                            settings_json=settings_json,
+                            revision=revision,
+                            updated_by=actor_id,
+                        )
+                    )
+                else:
+                    result = conn.execute(
+                        update(billing_pricing_policies)
+                        .where(
+                            billing_pricing_policies.c.id == current["id"],
+                            billing_pricing_policies.c.revision == expected,
+                        )
+                        .values(
+                            multiplier_decimal=source["multiplier_decimal"],
+                            settings_json=settings_json,
+                            revision=revision,
+                            updated_by=actor_id,
+                        )
+                    )
+                    if result.rowcount != 1:
+                        raise PricingRevisionConflict(scope_key)
+                policy_revisions[scope_key] = revision
+            preview = json.loads(imported["preview_json"])
+            preview["pricing_preview"] = dict(pricing_preview or {})
+            conn.execute(
+                update(billing_pricing_imports)
+                .where(
+                    billing_pricing_imports.c.id == import_id,
+                    billing_pricing_imports.c.status == "previewed",
+                )
+                .values(status="confirmed", preview_json=_json(preview))
+            )
+            conn.execute(
+                insert(billing_pricing_audits).values(
+                    id=str(uuid4()),
+                    action="excel.confirmed",
+                    actor_id=actor_id,
+                    before_json="{}",
+                    after_json=_json(
+                        {
+                            "import_id": import_id,
+                            "catalog_id": (pricing_preview or {}).get("catalog_id"),
+                        }
+                    ),
+                    metadata_json=_json({"ip_address": ip_address}),
+                )
+            )
+
+    def create_unlock(
+        self,
+        actor_id: str,
+        token_hash: str,
+        credential_fingerprint: str,
+        expires_at: datetime,
+        ip_address: str | None,
+    ) -> str:
+        unlock_id = str(uuid4())
+        with self.engine.begin() as conn:
+            conn.execute(
+                insert(billing_pricing_unlocks).values(
+                    id=unlock_id,
+                    actor_id=actor_id,
+                    token_hash=token_hash,
+                    credential_fingerprint=credential_fingerprint,
+                    expires_at=expires_at,
+                    ip_address=ip_address,
+                )
+            )
+        return unlock_id
+
+    def record_unlock_attempt(
+        self,
+        actor_id: str,
+        ip_address: str | None,
+        succeeded: bool,
+        occurred_at: datetime,
+    ) -> None:
+        with self.engine.begin() as conn:
+            conn.execute(
+                insert(billing_pricing_unlock_attempts).values(
+                    id=str(uuid4()),
+                    actor_id=actor_id,
+                    ip_address=ip_address,
+                    succeeded=succeeded,
+                    created_at=occurred_at,
+                )
+            )
+
+    def recent_unlock_failures(
+        self,
+        actor_id: str,
+        ip_address: str | None,
+        since: datetime,
+    ) -> int:
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                select(
+                    billing_pricing_unlock_attempts.c.succeeded,
+                )
+                .where(
+                    billing_pricing_unlock_attempts.c.actor_id == actor_id,
+                    billing_pricing_unlock_attempts.c.ip_address == ip_address,
+                    billing_pricing_unlock_attempts.c.created_at > since,
+                )
+                .order_by(
+                    billing_pricing_unlock_attempts.c.created_at.desc(),
+                )
+            ).all()
+        failures = 0
+        for row in rows:
+            if row[0]:
+                break
+            failures += 1
+        return failures
+
+    def append_audit(
+        self,
+        action: str,
+        actor_id: str,
+        before: Mapping[str, Any],
+        after: Mapping[str, Any],
+        metadata: Mapping[str, Any] | None = None,
+    ) -> str:
+        audit_id = str(uuid4())
+        with self.engine.begin() as conn:
+            conn.execute(
+                insert(billing_pricing_audits).values(
+                    id=audit_id,
+                    action=action,
+                    actor_id=actor_id,
+                    before_json=_json(before),
+                    after_json=_json(after),
+                    metadata_json=_json(metadata or {}),
+                )
+            )
+        return audit_id
+
+    def list_audits(self) -> list[dict[str, Any]]:
+        with self.engine.connect() as conn:
+            return [
+                dict(row)
+                for row in conn.execute(
+                    select(billing_pricing_audits).order_by(
+                        billing_pricing_audits.c.created_at.desc()
+                    ),
+                ).mappings()
+            ]
+
+    def get_pricing_sync_time(self, state_key: str) -> datetime | None:
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                select(
+                    billing_pricing_sync_state.c.occurred_at,
+                ).where(
+                    billing_pricing_sync_state.c.state_key == state_key,
+                )
+            ).first()
+            return row[0] if row else None
+
+    def set_pricing_sync_time(self, state_key: str, occurred_at: datetime) -> None:
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                update(billing_pricing_sync_state)
+                .where(
+                    billing_pricing_sync_state.c.state_key == state_key,
+                )
+                .values(
+                    occurred_at=occurred_at,
+                    updated_at=datetime.now(occurred_at.tzinfo),
+                )
+            )
+            if result.rowcount == 0:
+                conn.execute(
+                    insert(billing_pricing_sync_state).values(
+                        state_key=state_key, occurred_at=occurred_at
+                    )
+                )
+
+    def validate_unlock(
+        self,
+        token_hash: str,
+        actor_id: str,
+        credential_fingerprint: str,
+        now: datetime,
+    ) -> bool:
+        with self.engine.connect() as conn:
+            return (
+                conn.execute(
+                    select(billing_pricing_unlocks.c.id).where(
+                        billing_pricing_unlocks.c.token_hash == token_hash,
+                        billing_pricing_unlocks.c.actor_id == actor_id,
+                        billing_pricing_unlocks.c.credential_fingerprint
+                        == credential_fingerprint,
+                        billing_pricing_unlocks.c.revoked_at.is_(None),
+                        billing_pricing_unlocks.c.expires_at > now,
+                    )
+                ).first()
+                is not None
+            )

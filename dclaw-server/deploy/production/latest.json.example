@@ -1,0 +1,19 @@
+{
+  "version": "2.1.0",
+  "notes": "本次更新内容",
+  "pub_date": "2026-09-08T00:00:00Z",
+  "platforms": {
+    "darwin-aarch64": {
+      "signature": "替换为 macOS Universal 更新包的 Tauri 签名",
+      "url": "https://dclaw.deepmega.cn/desktop/2.1.0/DClaw_2.1.0_universal.app.tar.gz"
+    },
+    "darwin-x86_64": {
+      "signature": "与 darwin-aarch64 使用同一个 Universal 更新包签名",
+      "url": "https://dclaw.deepmega.cn/desktop/2.1.0/DClaw_2.1.0_universal.app.tar.gz"
+    },
+    "windows-x86_64": {
+      "signature": "替换为 Windows x64 更新包的 Tauri 签名",
+      "url": "https://dclaw.deepmega.cn/desktop/2.1.0/DClaw_2.1.0_x64-setup.nsis.zip"
+    }
+  }
+}

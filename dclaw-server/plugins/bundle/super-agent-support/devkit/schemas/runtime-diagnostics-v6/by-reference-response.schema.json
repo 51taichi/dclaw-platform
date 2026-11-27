@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "developer.runtime.diagnostics.by-reference/6 response",
+  "oneOf": [
+    {
+      "type": "object", "required": ["contract", "status", "retention_days"],
+      "properties": {
+        "contract": {"const": "developer.runtime.diagnostics.by-reference/6"},
+        "status": {"const": "no_record"},
+        "retention_days": {"const": 30}
+      }, "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["contract", "status", "retention_days", "invocation_id", "runtime_evidence", "local_task_evidence", "release_id", "installation_id", "runtime_outcome", "transaction_status", "task_acceptance", "local_tasks", "diagnosis_status", "findings"],
+      "properties": {
+        "contract": {"const": "developer.runtime.diagnostics.by-reference/6"},
+        "status": {"const": "found"},
+        "retention_days": {"const": 30},
+        "invocation_id": {"type": "string", "pattern": "^(?:[0-9a-f]{32}|preflight-[0-9a-f]{32})$"},
+        "runtime_evidence": {"enum": ["found", "no_record"]},
+        "local_task_evidence": {"enum": ["available", "unavailable"]},
+        "release_id": {"type": ["string", "null"]},
+        "installation_id": {"type": ["string", "null"]},
+        "runtime_outcome": {"enum": ["completed", "failed", "not_recorded"]},
+        "transaction_status": {"enum": ["committed", "discarded", "partially_committed", "not_recorded"]},
+        "task_acceptance": {"enum": ["accepted", "not_accepted", "not_recorded"]},
+        "local_tasks": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/task"}},
+        "diagnosis_status": {"enum": ["no_failure_recorded", "specific_recorded", "first_observed_only", "historical_detail_not_recorded", "multiple_failures"]},
+        "findings": {"type": "array", "maxItems": 101, "items": {"$ref": "#/$defs/finding"}}
+      }, "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "task": {
+      "type": "object",
+      "required": ["task_id", "capability", "task_status", "release_id", "installation_id", "host_dispatched", "helper_received", "helper_version", "first_failure_phase", "phase_evidence", "exception_category", "category_evidence", "error_code", "responsibility", "recovery_action"],
+      "properties": {
+        "task_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+        "capability": {"type": "string", "maxLength": 128},
+        "task_status": {"enum": ["queued", "running", "awaiting_input", "cancelling", "succeeded", "failed", "cancelled"]},
+        "release_id": {"type": "string"}, "installation_id": {"type": "string"},
+        "host_dispatched": {"type": ["boolean", "null"]},
+        "helper_received": {"type": ["boolean", "null"]},
+        "helper_version": {"type": ["string", "null"]},
+        "first_failure_phase": {"type": ["string", "null"]},
+        "phase_evidence": {"enum": ["recorded", "historical_detail_not_recorded", "not_applicable"]},
+        "exception_category": {"type": ["string", "null"]},
+        "category_evidence": {"enum": ["recorded", "historical_detail_not_recorded", "not_applicable"]},
+        "error_code": {"type": ["string", "null"], "pattern": "^[A-Z][A-Z0-9_.]{0,63}$"},
+        "responsibility": {"enum": ["developer", "environment", "platform", "undetermined"]},
+        "recovery_action": {"type": "string"}
+      }, "additionalProperties": false
+    },
+    "finding": {
+      "type": "object",
+      "required": ["layer", "task_id", "capability", "phase", "category", "error_code", "field_path", "constraint", "responsibility", "recovery_action", "evidence", "observed_at"],
+      "properties": {
+        "layer": {"enum": ["agent", "host", "helper", "platform_preflight", "unknown"]},
+        "task_id": {"type": ["string", "null"]},
+        "capability": {"type": ["string", "null"]},
+        "phase": {"type": ["string", "null"]},
+        "category": {"type": ["string", "null"]},
+        "error_code": {"type": ["string", "null"]},
+        "field_path": {"type": ["string", "null"]},
+        "constraint": {"type": ["string", "null"]},
+        "responsibility": {"enum": ["developer", "environment", "platform", "undetermined"]},
+        "recovery_action": {"type": "string"},
+        "evidence": {"enum": ["specific_recorded", "first_observed_only", "historical_detail_not_recorded"]},
+        "observed_at": {"type": "string", "format": "date-time"}
+      }, "additionalProperties": false
+    }
+  }
+}

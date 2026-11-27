@@ -1,0 +1,133 @@
+name: dclaw-production
+
+services:
+  dclaw:
+    image: ${DCLAW_IMAGE:?DCLAW_IMAGE is required}
+    container_name: dclaw
+    restart: unless-stopped
+    ports:
+      - "${DCLAW_BIND_HOST:-0.0.0.0}:${DCLAW_HOST_PORT:-18088}:8088"
+    environment:
+      QWENPAW_AUTH_ENABLED: ${QWENPAW_AUTH_ENABLED:-true}
+      QWENPAW_AUTH_USERNAME: ${DCLAW_ADMIN_USERNAME:-admin}
+      QWENPAW_AUTH_PASSWORD: ${DCLAW_ADMIN_PASSWORD:?DCLAW_ADMIN_PASSWORD is required}
+      QWENPAW_DATABASE_BACKEND: postgres
+      QWENPAW_DATABASE_URL: postgresql+psycopg://qwenpaw:${DCLAW_POSTGRES_PASSWORD:?DCLAW_POSTGRES_PASSWORD is required}@dclaw-postgres:5432/qwenpaw
+      QWENPAW_RUNTIME_BACKEND: redis
+      QWENPAW_REDIS_URL: redis://dclaw-redis:6379/0
+      QWENPAW_KNOWLEDGE_WORKERS: ${QWENPAW_KNOWLEDGE_WORKERS:-2}
+      DCLAW_WORKSPACE_ORCHESTRATION_TIMEOUT_SECONDS: ${DCLAW_WORKSPACE_ORCHESTRATION_TIMEOUT_SECONDS:-600}
+      DCLAW_WORKSPACE_MODEL_TRACE_RAW: ${DCLAW_WORKSPACE_MODEL_TRACE_RAW:-true}
+      DCLAW_OPEN_API_DEFAULT_OUTPUT_TOKENS: ${DCLAW_OPEN_API_DEFAULT_OUTPUT_TOKENS:-2048}
+      DCLAW_EXTENSION_DEFAULT_OUTPUT_TOKENS: ${DCLAW_EXTENSION_DEFAULT_OUTPUT_TOKENS:-4096}
+      DCLAW_OPEN_API_MAX_RUNNING_TASKS_GLOBAL: ${DCLAW_OPEN_API_MAX_RUNNING_TASKS_GLOBAL:-100}
+      DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_PUBLICATION: ${DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_PUBLICATION:-60}
+      DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_API_KEY: ${DCLAW_OPEN_API_MAX_RUNNING_TASKS_PER_API_KEY:-20}
+      DCLAW_OPEN_API_MAX_WAITING_PER_PUBLICATION: ${DCLAW_OPEN_API_MAX_WAITING_PER_PUBLICATION:-200}
+      DCLAW_OPEN_API_MAX_WAITING_PER_API_KEY: ${DCLAW_OPEN_API_MAX_WAITING_PER_API_KEY:-100}
+      DCLAW_OPEN_API_WAIT_TIMEOUT_SECONDS: ${DCLAW_OPEN_API_WAIT_TIMEOUT_SECONDS:-120}
+      QWENPAW_MAX_RUNNING_TASKS: ${QWENPAW_MAX_RUNNING_TASKS:-150}
+      QWENPAW_TASK_OWNER_TTL_SECONDS: ${QWENPAW_TASK_OWNER_TTL_SECONDS:-180}
+      QWENPAW_LLM_MAX_CONCURRENT: ${QWENPAW_LLM_MAX_CONCURRENT:-999}
+      QWENPAW_PUBLIC_BASE_URL: ${DCLAW_PUBLIC_BASE_URL:-}
+      PUBLIC_BASE_URL: ${DCLAW_PUBLIC_BASE_URL:-}
+      VOLCANO_API_KEY: ${VOLCANO_API_KEY:-}
+      MXAPI_API_KEY: ${MXAPI_API_KEY:-}
+      DCLAW_REALTIME_STT_ENABLED: ${DCLAW_REALTIME_STT_ENABLED:-false}
+      DCLAW_STT_UPSTREAM_URL: ws://dclaw-stt:8090/v1/transcribe
+      DCLAW_STT_INTERNAL_TOKEN: ${DCLAW_STT_INTERNAL_TOKEN:?DCLAW_STT_INTERNAL_TOKEN is required}
+    volumes:
+      - dclaw-data:/app/working
+      - dclaw-secrets:/app/working.secret
+      - dclaw-backups:/app/working.backups
+    networks:
+      - dclaw-net
+    depends_on:
+      dclaw-postgres:
+        condition: service_healthy
+      dclaw-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8088/api/version"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+
+  dclaw-stt:
+    image: ${DCLAW_STT_IMAGE:?DCLAW_STT_IMAGE is required}
+    container_name: dclaw-stt
+    restart: unless-stopped
+    environment:
+      DCLAW_STT_INTERNAL_TOKEN: ${DCLAW_STT_INTERNAL_TOKEN:?DCLAW_STT_INTERNAL_TOKEN is required}
+      DCLAW_STT_MODEL: ${DCLAW_STT_MODEL:-base}
+      DCLAW_STT_DEVICE: ${DCLAW_STT_DEVICE:-cpu}
+      DCLAW_STT_COMPUTE_TYPE: ${DCLAW_STT_COMPUTE_TYPE:-int8}
+      DCLAW_STT_MAX_SESSIONS: ${DCLAW_STT_MAX_SESSIONS:-10}
+      DCLAW_STT_INFERENCE_CONCURRENCY: ${DCLAW_STT_INFERENCE_CONCURRENCY:-2}
+    volumes:
+      - dclaw-stt-models:/models
+    networks:
+      - dclaw-net
+    cpus: "2.0"
+    mem_limit: 3g
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 180s
+
+  dclaw-postgres:
+    image: postgres:16-alpine
+    container_name: dclaw-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: qwenpaw
+      POSTGRES_USER: qwenpaw
+      POSTGRES_PASSWORD: ${DCLAW_POSTGRES_PASSWORD:?DCLAW_POSTGRES_PASSWORD is required}
+    volumes:
+      - dclaw-postgres:/var/lib/postgresql/data
+    networks:
+      - dclaw-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qwenpaw -d qwenpaw"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  dclaw-redis:
+    image: redis:7-alpine
+    container_name: dclaw-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - dclaw-redis:/data
+    networks:
+      - dclaw-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+networks:
+  dclaw-net:
+    name: dclaw-net
+
+volumes:
+  dclaw-data:
+    name: dclaw-data
+  dclaw-secrets:
+    name: dclaw-secrets
+  dclaw-backups:
+    name: dclaw-backups
+  dclaw-postgres:
+    name: dclaw-postgres
+  dclaw-redis:
+    name: dclaw-redis
+  dclaw-stt-models:
+    name: dclaw-stt-models

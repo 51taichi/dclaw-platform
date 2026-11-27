@@ -1,0 +1,38 @@
+{
+  "operation": "REPAIR_PLAN",
+  "systemRules": {
+    "operation": "REPAIR_PLAN",
+    "totalCount": 2,
+    "rootCount": 1,
+    "level2Count": 1,
+    "level3Count": 0,
+    "startsAt": "2030-10-01T11:00:00+08:00",
+    "endsAt": "2030-10-01T12:00:00+08:00"
+  },
+  "userScriptRequirements": {
+    "goal": "修复父子依赖并保留原业务目标",
+    "validationIssues": ["三级节点缺少二级父节点"]
+  },
+  "response": {
+    "schemaVersion": 1,
+    "summary": "已修复依赖的评论剧本",
+    "nodes": [
+      {
+        "clientNodeId": "root-fixed",
+        "level": 1,
+        "parentClientNodeId": null,
+        "intent": "提出观点",
+        "text": "这个角度很有意思。",
+        "plannedAt": "2030-10-01T11:10:00+08:00"
+      },
+      {
+        "clientNodeId": "reply-fixed",
+        "level": 2,
+        "parentClientNodeId": "root-fixed",
+        "intent": "补充观点",
+        "text": "也可以结合真实场景来看。",
+        "plannedAt": "2030-10-01T11:30:00+08:00"
+      }
+    ]
+  }
+}

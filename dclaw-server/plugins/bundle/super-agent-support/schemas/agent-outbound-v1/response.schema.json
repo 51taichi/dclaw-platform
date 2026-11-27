@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/schemas/agent-outbound-v1/response.schema.json",
+  "title": "Bounded Agent outbound response",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status_code", "content_type"],
+  "properties": {
+    "status_code": {"type": "integer", "minimum": 100, "maximum": 599},
+    "content_type": {"type": "string", "maxLength": 255},
+    "body_json": {},
+    "body_text": {"type": "string", "maxLength": 1048576}
+  },
+  "oneOf": [
+    {"required": ["body_json"], "not": {"required": ["body_text"]}},
+    {"required": ["body_text"], "not": {"required": ["body_json"]}}
+  ]
+}

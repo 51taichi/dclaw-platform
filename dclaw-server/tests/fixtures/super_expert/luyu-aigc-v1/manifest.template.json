@@ -1,0 +1,34 @@
+{
+  "schema_version": 3,
+  "agent_id": "luyu-aigc-fixture",
+  "name": "Luyu AIGC Protocol Fixture",
+  "version": "1.0.0",
+  "agent_type": "sealed",
+  "scope": "global",
+  "entrypoint": "agent/agent.json",
+  "package_type": "super_expert",
+  "orchestration": {
+    "capability_id": "workspace.turn.orchestrate/1",
+    "contract_version": "1",
+    "entrypoint": "runtime.py:create_runtime",
+    "required_host_capabilities": ["agent.execute", "session.context", "runtime.trace", "runtime.complete", "runtime.fail"]
+  },
+  "platform_contract_versions": {"runtime": "1", "runtime_host": "1", "card": "1", "aigc": "1"},
+  "capabilities": [
+    {"capability_id": "workspace.turn.orchestrate/1", "contract_version": "1"},
+    {"capability_id": "agent.execute", "contract_version": "1"},
+    {"capability_id": "session.context", "contract_version": "1"},
+    {"capability_id": "runtime.trace", "contract_version": "1"},
+    {"capability_id": "runtime.complete", "contract_version": "1"},
+    {"capability_id": "runtime.fail", "contract_version": "1"},
+    {"capability_id": "card.create", "contract_version": "1"},
+    {"capability_id": "card.update", "contract_version": "1"},
+    {"capability_id": "aigc.task.create", "contract_version": "1"},
+    {"capability_id": "aigc.task.resume", "contract_version": "1"},
+    {"capability_id": "aigc.task.cancel", "contract_version": "1"},
+    {"capability_id": "aigc.guide.update", "contract_version": "1"},
+    {"capability_id": "aigc.asset.submit", "contract_version": "1"},
+    {"capability_id": "aigc.review.complete", "contract_version": "1"}
+  ],
+  "signer_id": "official-test"
+}

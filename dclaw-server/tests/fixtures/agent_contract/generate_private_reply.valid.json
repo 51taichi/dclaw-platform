@@ -1,0 +1,41 @@
+{
+  "operation": "GENERATE_PRIVATE_REPLY",
+  "systemRules": {
+    "operation": "GENERATE_PRIVATE_REPLY",
+    "mustReturnPlainText": true,
+    "maxLength": 1000,
+    "noHtml": true
+  },
+  "safetyRules": {"noHtml": true},
+  "userScriptRequirements": {
+    "schemaVersion": 1,
+    "conversation": {
+      "conversationId": "conversation-1",
+      "displayName": "测试客户",
+      "douyinId": "douyin-customer-1",
+      "category": "CONTACT"
+    },
+    "inboundMessage": {
+      "messageId": "message-2",
+      "kind": "TEXT",
+      "text": "请问售后怎么处理？",
+      "observedAt": "2030-10-01T09:00:00+08:00"
+    },
+    "recentHistory": [
+      {
+        "direction": "INBOUND",
+        "text": "我想了解售后政策",
+        "observedAt": "2030-10-01T08:59:00+08:00"
+      }
+    ],
+    "businessInstructions": {"policy": "先确认订单情况，再说明人工会跟进"}
+  },
+  "response": {
+    "schemaVersion": 1,
+    "action": "REPLY",
+    "replyText": "可以的，请把订单情况发给我，我帮你继续核实。",
+    "replyGoalReached": false,
+    "intent": "收集售后所需信息",
+    "conversationSummary": "客户正在咨询售后处理流程。"
+  }
+}

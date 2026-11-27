@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "local.task.start/1 request",
+  "type": "object",
+  "required": ["capability_id", "input", "idempotency_key"],
+  "properties": {
+    "capability_id": {"type": "string", "minLength": 1},
+    "input": {"type": "object"},
+    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 160},
+    "local_file_bindings": {"type": "object"}
+  },
+  "additionalProperties": false
+}

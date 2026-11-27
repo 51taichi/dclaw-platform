@@ -1,0 +1,34 @@
+name: dclaw-production
+
+services:
+  dclaw:
+    image: ${DCLAW_IMAGE:?DCLAW_IMAGE is required}
+    container_name: dclaw
+    restart: unless-stopped
+    env_file:
+      - ./production.env
+    ports:
+      - 127.0.0.1:18088:8088
+    volumes:
+      - dclaw-data:/app/working
+      - dclaw-secrets:/app/working.secret
+      - dclaw-backups:/app/working.backups
+      - /opt/dclaw-updates:/opt/dclaw-updates:ro
+    networks:
+      - dclaw-net
+
+networks:
+  dclaw-net:
+    external: true
+    name: dclaw-net
+
+volumes:
+  dclaw-data:
+    external: true
+    name: dclaw-data
+  dclaw-secrets:
+    external: true
+    name: dclaw-secrets
+  dclaw-backups:
+    external: true
+    name: dclaw-backups

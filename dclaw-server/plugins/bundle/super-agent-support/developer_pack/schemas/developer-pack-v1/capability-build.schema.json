@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/schemas/developer-pack-v1/capability-build.schema.json",
+  "title": "DClaw local capability build manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "artifact"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "artifact": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "members"],
+          "properties": {
+            "source": {"const": "members"},
+            "members": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "oneOf": [
+                  {"$ref": "#/$defs/relativePath"},
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["source"],
+                    "properties": {
+                      "source": {"$ref": "#/$defs/relativePath"},
+                      "target": {"$ref": "#/$defs/relativePath"},
+                      "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "path"],
+          "properties": {
+            "source": {"const": "prebuilt"},
+            "path": {"$ref": "#/$defs/relativePath"}
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    }
+  }
+}

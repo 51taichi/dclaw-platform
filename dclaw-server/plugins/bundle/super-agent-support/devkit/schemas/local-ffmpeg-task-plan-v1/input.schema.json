@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "dclaw.ffmpeg.task.plan input 0.1.0",
+  "type": "object", "additionalProperties": false,
+  "required": ["plan_version", "clips", "output"],
+  "properties": {
+    "plan_version": {"const": "1"},
+    "clips": {
+      "type": "array", "minItems": 1, "maxItems": 16,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["slot", "trim_start_ms", "trim_end_ms"],
+        "properties": {
+          "slot": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+          "trim_start_ms": {"type": "integer", "minimum": 0, "maximum": 86399999},
+          "trim_end_ms": {"type": "integer", "minimum": 1, "maximum": 86400000},
+          "crop": {
+            "type": "object", "additionalProperties": false,
+            "required": ["x", "y", "width", "height"],
+            "properties": {
+              "x": {"type": "integer", "minimum": 0},
+              "y": {"type": "integer", "minimum": 0},
+              "width": {"type": "integer", "minimum": 2},
+              "height": {"type": "integer", "minimum": 2}
+            }
+          }
+        }
+      }
+    },
+    "output": {
+      "type": "object", "additionalProperties": false,
+      "required": ["filename", "width", "height", "fps", "audio_policy"],
+      "properties": {
+        "filename": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.mp4$"},
+        "width": {"type": "integer", "minimum": 16, "maximum": 3840, "multipleOf": 2},
+        "height": {"type": "integer", "minimum": 16, "maximum": 2160, "multipleOf": 2},
+        "fps": {"type": "integer", "minimum": 1, "maximum": 60},
+        "audio_policy": {"enum": ["mute", "preserve"]}
+      }
+    }
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "aigc.task.assets.list/1 response",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "status"],
+      "properties": {
+        "contract": {"const": "aigc.task.assets.list/1"},
+        "status": {"enum": ["not_found", "unavailable"]}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "status", "material_task_id", "assets"],
+      "properties": {
+        "contract": {"const": "aigc.task.assets.list/1"},
+        "status": {"const": "found"},
+        "material_task_id": {"type": "string", "minLength": 1},
+        "assets": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["asset_id", "node_id", "job_id", "kind", "name", "mime_type", "size_bytes", "sha256"],
+            "properties": {
+              "asset_id": {"type": "string", "minLength": 1},
+              "node_id": {"type": "string", "minLength": 1},
+              "job_id": {"type": "string", "minLength": 1},
+              "kind": {"enum": ["image", "video", "audio", "file"]},
+              "name": {"type": "string"},
+              "mime_type": {"type": ["string", "null"]},
+              "size_bytes": {"type": "integer", "minimum": 0},
+              "sha256": {"type": "string"}
+            }
+          }
+        }
+      }
+    }
+  ]
+}

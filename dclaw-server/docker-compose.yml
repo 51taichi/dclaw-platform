@@ -1,0 +1,95 @@
+volumes:
+  qwenpaw-data:
+    name: qwenpaw-data
+  qwenpaw-secrets:
+    name: qwenpaw-secrets
+  qwenpaw-backups:
+    name: qwenpaw-backups
+  qwenpaw-postgres:
+    name: qwenpaw-postgres
+  qwenpaw-redis:
+    name: qwenpaw-redis
+
+x-qwenpaw-common: &qwenpaw-common
+  image: ${QWENPAW_IMAGE:-agentscope/qwenpaw:latest}
+  restart: always
+  volumes:
+    - qwenpaw-data:/app/working
+    - qwenpaw-secrets:/app/working.secret
+    - qwenpaw-backups:/app/working.backups
+
+services:
+  qwenpaw:
+    <<: *qwenpaw-common
+    container_name: qwenpaw
+    ports:
+      - "127.0.0.1:8088:8088"
+    # environment:
+    #   - QWENPAW_AUTH_ENABLED=true
+    #   - QWENPAW_AUTH_USERNAME=admin
+    #   - QWENPAW_AUTH_PASSWORD=yourpassword
+
+  qwenpaw-saas:
+    <<: *qwenpaw-common
+    profiles: ["saas"]
+    container_name: qwenpaw-saas
+    ports:
+      - "${QWENPAW_SAAS_BIND_HOST:-127.0.0.1}:${QWENPAW_SAAS_HOST_PORT:-18088}:8088"
+    environment:
+      QWENPAW_AUTH_ENABLED: ${QWENPAW_AUTH_ENABLED:-true}
+      QWENPAW_DATABASE_BACKEND: postgres
+      QWENPAW_DATABASE_URL: postgresql+psycopg://qwenpaw:${QWENPAW_POSTGRES_PASSWORD:-change-me}@postgres:5432/qwenpaw
+      QWENPAW_RUNTIME_BACKEND: redis
+      QWENPAW_REDIS_URL: redis://redis:6379/0
+      QWENPAW_KNOWLEDGE_WORKERS: ${QWENPAW_KNOWLEDGE_WORKERS:-2}
+      QWENPAW_KNOWLEDGE_HEARTBEAT_SECONDS: ${QWENPAW_KNOWLEDGE_HEARTBEAT_SECONDS:-5}
+      QWENPAW_KNOWLEDGE_PARSE_TIMEOUT_SECONDS: ${QWENPAW_KNOWLEDGE_PARSE_TIMEOUT_SECONDS:-180}
+      QWENPAW_KNOWLEDGE_PDF_PAGE_TIMEOUT_SECONDS: ${QWENPAW_KNOWLEDGE_PDF_PAGE_TIMEOUT_SECONDS:-45}
+      QWENPAW_KNOWLEDGE_PARSE_MAX_MEMORY_MB: ${QWENPAW_KNOWLEDGE_PARSE_MAX_MEMORY_MB:-768}
+      QWENPAW_KNOWLEDGE_PARSE_MAX_CPU_SECONDS: ${QWENPAW_KNOWLEDGE_PARSE_MAX_CPU_SECONDS:-180}
+      QWENPAW_KNOWLEDGE_PDF_TEXT_TIMEOUT_SECONDS: ${QWENPAW_KNOWLEDGE_PDF_TEXT_TIMEOUT_SECONDS:-30}
+      QWENPAW_KNOWLEDGE_PDF_OCR_ENABLED: ${QWENPAW_KNOWLEDGE_PDF_OCR_ENABLED:-true}
+      QWENPAW_KNOWLEDGE_PDF_OCR_MIN_CHARS: ${QWENPAW_KNOWLEDGE_PDF_OCR_MIN_CHARS:-80}
+      QWENPAW_KNOWLEDGE_PDF_OCR_CONCURRENCY: ${QWENPAW_KNOWLEDGE_PDF_OCR_CONCURRENCY:-2}
+      QWENPAW_KNOWLEDGE_PDF_OCR_PAGE_TIMEOUT_SECONDS: ${QWENPAW_KNOWLEDGE_PDF_OCR_PAGE_TIMEOUT_SECONDS:-30}
+      QWENPAW_KNOWLEDGE_PDF_OCR_RENDER_MAX_PIXELS: ${QWENPAW_KNOWLEDGE_PDF_OCR_RENDER_MAX_PIXELS:-2000}
+      QWENPAW_KNOWLEDGE_PDF_OCR_LANGUAGE: ${QWENPAW_KNOWLEDGE_PDF_OCR_LANGUAGE:-chi_sim+eng}
+      QWENPAW_KNOWLEDGE_PDF_OCR_MIN_CONFIDENCE: ${QWENPAW_KNOWLEDGE_PDF_OCR_MIN_CONFIDENCE:-50}
+      QWENPAW_KNOWLEDGE_EMBEDDING_CONCURRENCY: ${QWENPAW_KNOWLEDGE_EMBEDDING_CONCURRENCY:-2}
+      AIGC_STUDIO_PUBLIC_BASE_URL: ${AIGC_STUDIO_PUBLIC_BASE_URL:-}
+      QWENPAW_PUBLIC_BASE_URL: ${QWENPAW_PUBLIC_BASE_URL:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["saas"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: qwenpaw
+      POSTGRES_USER: qwenpaw
+      POSTGRES_PASSWORD: ${QWENPAW_POSTGRES_PASSWORD:-change-me}
+    volumes:
+      - qwenpaw-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qwenpaw -d qwenpaw"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    profiles: ["saas"]
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - qwenpaw-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

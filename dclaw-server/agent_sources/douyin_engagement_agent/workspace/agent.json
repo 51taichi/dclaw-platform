@@ -1,0 +1,120 @@
+{
+  "id": "douyin_engagement_agent",
+  "name": "抖音互动 Agent",
+  "description": "为抖音机器人生成评论剧本与 B 计划，使用 Jev 归因私信任务并生成对应回复。",
+  "workspace_dir": "/app/working/workspaces/douyin_engagement_agent",
+  "channels": {
+    "console": {
+      "enabled": true
+    }
+  },
+  "heartbeat": {
+    "enabled": false,
+    "every": "6h",
+    "target": "main"
+  },
+  "running": {
+    "max_iters": 8,
+    "auto_continue_on_text_only": false,
+    "llm_retry_enabled": true,
+    "llm_max_retries": 3,
+    "llm_backoff_base": 1,
+    "llm_backoff_cap": 10,
+    "max_input_length": 131072,
+    "history_max_length": 10000,
+    "context_manager_backend": "light",
+    "light_context_config": {
+      "dialog_path": "dialog",
+      "context_compact_config": {
+        "enabled": true,
+        "compact_threshold_ratio": 0.8,
+        "reserve_threshold_ratio": 0.1,
+        "compact_with_thinking_block": false
+      },
+      "tool_result_pruning_config": {
+        "enabled": true,
+        "pruning_recent_n": 2,
+        "pruning_old_msg_max_bytes": 1500,
+        "pruning_recent_msg_max_bytes": 16000,
+        "offload_retention_days": 5,
+        "tool_results_cache": "tool_results",
+        "exempt_file_extensions": [],
+        "exempt_tool_names": []
+      }
+    },
+    "auto_title_config": {
+      "enabled": false,
+      "timeout_seconds": 30
+    },
+    "memory_manager_backend": "remelight",
+    "reme_light_memory_config": {
+      "summarize_when_compact": false,
+      "auto_memory_interval": null,
+      "dream_cron": "",
+      "auto_memory_search_config": {
+        "enabled": false,
+        "max_results": 2,
+        "min_score": 0.3
+      },
+      "rebuild_memory_index_on_start": false,
+      "recursive_file_watcher": false
+    },
+    "daily_memory_dir": "memory"
+  },
+  "llm_routing": {
+    "enabled": false,
+    "mode": "local_first"
+  },
+  "language": "zh",
+  "approval_level": "AUTO",
+  "system_prompt_files": [
+    "AGENTS.md",
+    "SOUL.md",
+    "PROFILE.md"
+  ],
+  "tools": {
+    "builtin_tools": {
+      "execute_shell_command": {"name": "execute_shell_command", "enabled": false},
+      "read_file": {"name": "read_file", "enabled": false},
+      "read_agent_skill": {"name": "read_agent_skill", "enabled": true},
+      "route_private_message_jev": {"name": "route_private_message_jev", "enabled": true},
+      "write_file": {"name": "write_file", "enabled": false},
+      "edit_file": {"name": "edit_file", "enabled": false},
+      "grep_search": {"name": "grep_search", "enabled": false},
+      "glob_search": {"name": "glob_search", "enabled": false},
+      "browser_use": {"name": "browser_use", "enabled": false},
+      "web_search": {"name": "web_search", "enabled": false},
+      "read_web_page": {"name": "read_web_page", "enabled": false},
+      "desktop_screenshot": {"name": "desktop_screenshot", "enabled": false},
+      "view_image": {"name": "view_image", "enabled": false},
+      "view_video": {"name": "view_video", "enabled": false},
+      "imagegen": {"name": "imagegen", "enabled": false},
+      "generate_image_gpt": {"name": "generate_image_gpt", "enabled": false},
+      "edit_image_gpt": {"name": "edit_image_gpt", "enabled": false},
+      "presentation_builder": {"name": "presentation_builder", "enabled": false},
+      "send_file_to_user": {"name": "send_file_to_user", "enabled": false},
+      "get_current_time": {"name": "get_current_time", "enabled": false},
+      "set_user_timezone": {"name": "set_user_timezone", "enabled": false},
+      "get_token_usage": {"name": "get_token_usage", "enabled": false},
+      "delegate_external_agent": {"name": "delegate_external_agent", "enabled": false},
+      "list_agents": {"name": "list_agents", "enabled": false},
+      "chat_with_agent": {"name": "chat_with_agent", "enabled": false},
+      "submit_to_agent": {"name": "submit_to_agent", "enabled": false},
+      "check_agent_task": {"name": "check_agent_task", "enabled": false},
+      "search_mindspace": {"name": "search_mindspace", "enabled": false},
+      "read_mindspace_doc": {"name": "read_mindspace_doc", "enabled": false},
+      "search_knowledge": {"name": "search_knowledge", "enabled": false},
+      "read_knowledge_doc": {"name": "read_knowledge_doc", "enabled": false},
+      "query_knowledge_table": {"name": "query_knowledge_table", "enabled": false}
+    }
+  },
+  "plan": {
+    "enabled": false
+  },
+  "orchestration": {
+    "enabled": false,
+    "contract_version": "1",
+    "entrypoint": "",
+    "required_host_capabilities": []
+  }
+}

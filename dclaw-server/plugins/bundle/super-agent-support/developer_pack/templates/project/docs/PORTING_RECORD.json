@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "source": "replace-with-source-or-from-scratch",
+  "differences": [],
+  "pending": ["Complete and verify the source behavior baseline before release."]
+}

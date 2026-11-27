@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "developer.local-task.diagnostics.read/2 HTTP error",
+  "type": "object",
+  "required": ["detail"],
+  "properties": {
+    "detail": {"enum": ["authentication required", "diagnostic not found", "invalid diagnostic reference", "diagnostic rate limit exceeded", "diagnostics unavailable"]}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "developer.runtime.diagnostics.by-reference/3 path and query",
+  "type": "object",
+  "required": ["invocation_id", "agent_id"],
+  "properties": {
+    "invocation_id": {"type": "string", "pattern": "^(?:[0-9a-f]{32}|preflight-[0-9a-f]{32})$"},
+    "agent_id": {"type": "string", "minLength": 1, "maxLength": 128}
+  },
+  "additionalProperties": false
+}

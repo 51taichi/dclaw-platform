@@ -1,0 +1,4 @@
+interface:
+  display_name: "可编辑 PPT 视觉设计师"
+  short_description: "按设计公司标准完成 PPT 策略、分镜、视觉 DNA、小样、素材、QA 和 PPTX/PDF 交付"
+  default_prompt: "使用 $editable-ppt-visual-builder 把我的文档生成一套设计公司级别的可编辑 PPTX/PDF：包含中文创意简报、优化文案、故事分镜、商业亮点、3 个独立评分且真正不同的设计 DNA 候选、通过结构化 presentation_context 生成并留存提示词账本的 imagegen 视觉方案图、中文视觉方案选项、可选择换一批、用户选择的视觉方案、沿同一选中 DNA 生成的背景/主视觉/组件素材、视觉 DNA 落地协议、3-5 页可编辑 PPT 小样确认、字体系统、信息设计系统、母版/组件库、逐页视觉与动效说明、交付说明和商业级 QA。用户选择视觉方案后，必须调用 presentation_builder 的 custom_compose 路线制作真实可编辑小样和最终 PPTX/PDF，不得回退到通用固定布局；每次传 expected_slide_count，custom_compose 报错时修正参数并重试同一路线，小样返回后展示渲染图并停止等待用户确认，不得同回合继续生成最终稿；同时保留 imagegen 与 compose 内部来源账本用于提示词、图层、内容、素材映射和 QA 复现。所有面向用户的提问、选项和方案名默认使用中文。"

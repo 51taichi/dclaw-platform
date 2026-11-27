@@ -1,0 +1,116 @@
+{
+  "schema_version": "1",
+  "operations": [
+    {
+      "operation_id": "aigc.text_to_video.create",
+      "version": "1",
+      "title": "从文字提示词创建视频素材",
+      "arguments_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["project_name", "prompt", "model_id", "aspect_ratio", "duration_seconds"],
+        "properties": {
+          "project_name": {"type": "string", "minLength": 1},
+          "prompt": {"type": "string", "minLength": 1},
+          "model_id": {"type": "string", "minLength": 1},
+          "aspect_ratio": {"enum": ["9:16", "16:9", "1:1"]},
+          "duration_seconds": {"type": "integer", "minimum": 3, "maximum": 15}
+        }
+      },
+      "preconditions": [
+        "客户已经登录 DClaw，并从陆羽会话卡片进入当前 AIGC 素材任务。",
+        "当前任务状态不是已取消、已失效或已通过。",
+        "DClaw 已配置至少一个可用的视频生成模型。"
+      ],
+      "expected_result": {
+        "asset_kind": "video",
+        "required_binding": ["material_task_id", "canvas_id", "node_id", "asset_id"],
+        "success_status": "ACCEPTED"
+      },
+      "human_guide": [
+        {
+          "step_id": "open-studio",
+          "title": "确认进入 AIGC 创意工作室",
+          "instruction": "查看页面左侧菜单，确认“AIGC 创意工作室”已经高亮；如果没有高亮，点击左侧的“AIGC 创意工作室”。",
+          "control_id": "nav.aigc-studio",
+          "action": "click",
+          "success_signal": "页面中央出现画布区域，右侧持续显示当前任务操作助手。",
+          "recovery": "回到陆羽会话，点击当前素材任务卡片上的“继续制作”，不要从其他入口新建无绑定项目。"
+        },
+        {
+          "step_id": "create-project",
+          "title": "创建当前任务项目",
+          "instruction": "点击画布区域上方的“新建项目”，在弹窗中输入操作助手给出的项目名称，然后点击“创建”。",
+          "control_id": "aigc.canvas.create",
+          "action": "click",
+          "success_signal": "页面顶部显示新项目名称，画布为空且可以添加节点。",
+          "recovery": "如果已经自动打开绑定项目，跳过新建；如果按钮不可用，刷新页面后重新从任务卡片进入。"
+        },
+        {
+          "step_id": "add-video-node",
+          "title": "添加视频生成节点",
+          "instruction": "点击画布左侧圆形“+”按钮，在展开的节点菜单中点击“视频生成”，节点会放到当前画布。",
+          "control_id": "aigc.toolbar.video-generate",
+          "action": "click",
+          "success_signal": "画布中出现一个视频生成节点，节点右侧参数面板自动展开。",
+          "recovery": "确认当前没有选中其他节点；仍找不到时点击操作助手中的“重新定位当前控件”。"
+        },
+        {
+          "step_id": "enter-prompt",
+          "title": "粘贴视频提示词",
+          "instruction": "点击右侧参数面板的“提示词”输入框，清空原内容，粘贴操作助手提供的完整提示词。",
+          "control_id": "aigc.video.prompt-input",
+          "action": "input",
+          "success_signal": "输入框完整显示提示词，且没有红色必填提示。",
+          "recovery": "点击操作助手中的“复制提示词”再次粘贴；不要自行删改镜头、主体和画面要求。"
+        },
+        {
+          "step_id": "select-model",
+          "title": "选择指定模型",
+          "instruction": "点击“生成模型”下拉框，选择操作助手指定的模型；不要改用外部平台或其他模型。",
+          "control_id": "aigc.video.model-select",
+          "action": "select",
+          "success_signal": "下拉框中显示指定模型名称，页面没有“模型不可用”提示。",
+          "recovery": "如果指定模型不在列表中，停止生成并点击操作助手中的“模型不可用”，让当前任务保持暂停。"
+        },
+        {
+          "step_id": "select-ratio",
+          "title": "选择画面比例",
+          "instruction": "点击“画面比例”，选择操作助手指定的比例；抖音竖版内容通常选择 9:16。",
+          "control_id": "aigc.video.aspect-ratio-select",
+          "action": "select",
+          "success_signal": "比例选项显示为指定值。",
+          "recovery": "如果模型不支持该比例，点击操作助手中的“参数不兼容”，不要自行替换比例。"
+        },
+        {
+          "step_id": "select-duration",
+          "title": "选择视频时长",
+          "instruction": "点击“时长”，选择操作助手给出的秒数。",
+          "control_id": "aigc.video.duration-select",
+          "action": "select",
+          "success_signal": "时长选项显示为指定秒数。",
+          "recovery": "如果没有指定秒数，保持操作助手当前推荐值，不要选择更昂贵的最长时长。"
+        },
+        {
+          "step_id": "generate-video",
+          "title": "提交生成",
+          "instruction": "再次核对提示词、模型、比例和时长，然后点击参数面板底部的“生成视频”。",
+          "control_id": "aigc.video.generate-submit",
+          "action": "click",
+          "success_signal": "节点显示排队中或生成中，并出现可识别的任务进度。",
+          "recovery": "如果按钮不可点击，按操作助手从上到下检查所有必填项；不要连续重复点击。"
+        },
+        {
+          "step_id": "verify-result",
+          "title": "确认生成结果",
+          "instruction": "等待节点显示生成完成，点击播放按钮完整观看一次；确认画面可以正常播放后，点击操作助手中的“完成并返回会话”。",
+          "control_id": "aigc.video.result-preview",
+          "action": "verify",
+          "success_signal": "视频资产已绑定到当前素材任务，任务状态变为“已完成”。",
+          "recovery": "生成失败时点击节点上的“查看原因”，按操作助手给出的恢复动作重试；离开页面不会丢失当前任务进度。"
+        }
+      ],
+      "machine_executor": null
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "operation": "GENERATE_RECOVERY",
+  "systemRules": {
+    "operation": "GENERATE_RECOVERY",
+    "mustReturnOneReply": true,
+    "allowedNewLevels": [1, 2, 3]
+  },
+  "userScriptRequirements": {
+    "schemaVersion": 1,
+    "taskId": "task-1",
+    "nodeId": "node-3",
+    "originalLevel": 3,
+    "originalIntent": "追问使用感受",
+    "originalText": "具体哪里最明显？",
+    "missingDependency": {"nodeId": "node-2", "reason": "COMMENT_NOT_FOUND"},
+    "nearbyComments": [
+      {"shortId": "near-1", "author": "附近用户", "text": "我比较关心使用成本"}
+    ],
+    "taskContext": {"goal": "讨论产品体验"}
+  },
+  "response": {
+    "schemaVersion": 1,
+    "newLevel": 2,
+    "targetType": "NEARBY_COMMENT",
+    "targetShortId": "near-1",
+    "intent": "承接附近评论",
+    "text": "使用成本确实也是关键因素。"
+  }
+}

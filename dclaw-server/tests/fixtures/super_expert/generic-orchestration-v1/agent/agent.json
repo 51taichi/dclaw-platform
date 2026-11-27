@@ -1,0 +1,17 @@
+{
+  "id": "generic-orchestration",
+  "name": "Generic Orchestration Fixture",
+  "description": "Protocol-only fixture with no product-specific logic.",
+  "orchestration": {
+    "enabled": true,
+    "contract_version": "1",
+    "entrypoint": "runtime.py:create_runtime",
+    "required_host_capabilities": [
+      "agent.execute",
+      "session.context",
+      "runtime.trace",
+      "runtime.complete",
+      "runtime.fail"
+    ]
+  }
+}

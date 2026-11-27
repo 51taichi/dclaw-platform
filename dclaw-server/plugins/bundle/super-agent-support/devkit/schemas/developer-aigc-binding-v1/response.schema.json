@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "developer.aigc.binding.lookup/1 response",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["contract", "status"],
+      "properties": {
+        "contract": {"const": "developer.aigc.binding.lookup/1"},
+        "status": {"enum": ["not_found", "ambiguous", "unavailable", "invalid_request"]}
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["contract", "status", "material_task_id", "source_installation_id", "content_revision", "task_status", "created_event_persisted", "current_workspace_references_task"],
+      "properties": {
+        "contract": {"const": "developer.aigc.binding.lookup/1"},
+        "status": {"const": "found"},
+        "material_task_id": {"type": "string", "minLength": 1},
+        "source_installation_id": {"type": "string", "minLength": 1},
+        "content_revision": {"type": "integer", "minimum": 0},
+        "task_status": {"type": "string"},
+        "created_event_persisted": {"type": "boolean"},
+        "current_workspace_references_task": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    }
+  ]
+}

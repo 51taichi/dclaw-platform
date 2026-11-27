@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/schemas/resource-exchange-v1/response.schema.json",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["resource_ref", "status"],
+  "properties": {"resource_ref": {"type": "string", "pattern": "^res_[0-9a-f]{32}$"}, "status": {"enum": ["pending", "ready", "revoked"]}, "read_url": {"type": "string", "pattern": "^https://"}, "mime_type": {"type": "string"}, "size_bytes": {"type": "integer", "minimum": 1}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "expires_at": {"type": "integer", "minimum": 1}}
+}

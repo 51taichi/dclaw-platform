@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "contract": "aigc.workflow.create/1",
+  "required_capabilities": [
+    "aigc.workflow.capabilities.list/1",
+    "aigc.workflow.create/1",
+    "aigc.task.resume",
+    "aigc.asset.submit"
+  ],
+  "fixtures": [
+    "one-node.json",
+    "three-node.json"
+  ]
+}

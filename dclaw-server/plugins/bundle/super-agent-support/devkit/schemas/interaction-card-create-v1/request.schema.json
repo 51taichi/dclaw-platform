@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/schemas/interaction-card-create-v1/request.schema.json",
+  "title": "interaction.card.create/1 direct Host request",
+  "type": "object",
+  "required": ["idempotency_key", "request"],
+  "properties": {
+    "idempotency_key": {"type": "string", "minLength": 1},
+    "request": {
+      "type": "object",
+      "required": ["task_key", "interaction_revision", "component_type", "card"],
+      "properties": {
+        "task_key": {"type": "string", "minLength": 1, "maxLength": 160},
+        "interaction_revision": {"type": "integer", "minimum": 1},
+        "component_type": {"enum": ["single_select", "multi_select", "question_form", "file_selector"]},
+        "card": {
+          "type": "object",
+          "$comment": "Validate this object against the exact components[].schema returned by interaction.capabilities.list/1 for component_type."
+        },
+        "input_policy": {"enum": ["card_only", "card_or_text", "concurrent"]},
+        "replaces_interaction_id": {"type": ["string", "null"], "minLength": 1},
+        "expires_at": {
+          "type": ["string", "null"],
+          "pattern": "(?:Z|[+-][0-9]{2}:[0-9]{2})$"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "developer.runtime.diagnostics.by-reference/2 response",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["contract", "status", "retention_days"],
+      "properties": {
+        "contract": {"const": "developer.runtime.diagnostics.by-reference/2"},
+        "status": {"const": "no_record"},
+        "retention_days": {"const": 30}
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["contract", "status", "retention_days", "task_id", "invocation_id", "installation_id", "release_id", "started_at", "failed_at", "first_failure", "first_failure_source", "error_code", "transaction_status", "stages", "failure_events", "final_blocker", "unrecorded_fields"],
+      "properties": {
+        "contract": {"const": "developer.runtime.diagnostics.by-reference/2"},
+        "status": {"const": "found"},
+        "retention_days": {"const": 30},
+        "task_id": {"type": "string"},
+        "invocation_id": {"type": "string"},
+        "installation_id": {"type": "string"},
+        "release_id": {"type": "string"},
+        "started_at": {"type": ["string", "null"], "format": "date-time"},
+        "failed_at": {"type": "string", "format": "date-time"},
+        "first_failure": {"type": "object", "required": ["phase", "category", "attempt"], "properties": {"phase": {"type": ["string", "null"]}, "category": {"type": ["string", "null"]}, "attempt": {"type": ["integer", "null"]}}, "additionalProperties": false},
+        "first_failure_source": {"enum": ["agent_trace", "host_stage", "platform_preflight", "not_recorded"]},
+        "error_code": {"type": ["string", "null"]},
+        "transaction_status": {"const": "discarded"},
+        "stages": {"type": "array", "maxItems": 100, "items": {"type": "object", "required": ["event", "source", "at", "duration_ms"], "properties": {"event": {"type": "string"}, "source": {"enum": ["host", "agent"]}, "at": {"type": "string", "format": "date-time"}, "duration_ms": {"type": ["integer", "null"], "minimum": 0}, "call_number": {"type": "integer"}, "has_text": {"type": "boolean"}, "text_length": {"type": "integer"}, "complete_json_object": {"type": "boolean"}, "execution_mode": {"type": "string"}, "response_format": {"type": "string"}, "capability": {"type": "string"}, "category": {"type": "string"}, "field_path": {"type": "string"}, "constraint": {"type": "string"}}, "additionalProperties": false}},
+        "failure_events": {"type": "array", "maxItems": 50, "items": {"type": "object", "required": ["phase", "category", "attempt", "source", "at", "status_code", "provider_code", "provider_param", "outcome"], "properties": {"phase": {"type": "string"}, "category": {"type": "string"}, "attempt": {"type": ["integer", "null"]}, "source": {"enum": ["host", "agent", "platform_preflight"]}, "at": {"type": "string", "format": "date-time"}, "status_code": {"type": ["integer", "null"]}, "provider_code": {"type": ["string", "null"]}, "provider_param": {"type": ["string", "null"]}, "outcome": {"enum": ["recovered", "terminal", "not_recorded"]}, "field_path": {"type": ["string", "null"]}, "constraint": {"type": ["string", "null"]}, "contract": {"type": ["string", "null"]}}, "additionalProperties": false}},
+        "final_blocker": {"type": "object", "required": ["status", "phase", "category", "attempt", "responsibility", "reason"], "properties": {"status": {"enum": ["recorded", "not_recorded"]}, "phase": {"type": "string"}, "category": {"type": "string"}, "attempt": {"type": ["integer", "null"]}, "responsibility": {"enum": ["model_provider", "agent", "host_or_tool", "platform_preflight", "request_validation", "not_recorded"]}, "reason": {"enum": ["provider_rejected_request", "agent_reported_failure", "host_call_failed", "preflight_rejected", "request_rejected", "not_recorded"]}, "field_path": {"type": "string"}, "constraint": {"type": "string"}, "contract": {"type": "string"}}, "additionalProperties": false},
+        "unrecorded_fields": {"type": "array", "uniqueItems": true, "items": {"enum": ["provider_code", "provider_param"]}}
+      },
+      "additionalProperties": false
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "developer.runtime.diagnostics.by-reference/3 response",
+  "$defs": {
+    "blocker": {
+      "type": "object",
+      "required": ["status", "phase", "category", "attempt", "responsibility", "reason"],
+      "properties": {
+        "status": {"enum": ["recorded", "not_recorded"]},
+        "phase": {"type": "string"}, "category": {"type": "string"},
+        "attempt": {"type": ["integer", "null"]},
+        "responsibility": {"type": "string"}, "reason": {"type": "string"},
+        "field_path": {"type": "string"}, "constraint": {"type": "string"},
+        "contract": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "host_failure_detail": {
+      "type": "object",
+      "required": ["status", "error_code", "field_path", "constraint", "recovery_action", "contract"],
+      "properties": {
+        "status": {"enum": ["recorded", "not_recorded", "not_applicable"]},
+        "error_code": {"type": ["string", "null"]},
+        "field_path": {"type": ["string", "null"]},
+        "constraint": {"type": ["string", "null"]},
+        "recovery_action": {"enum": ["correct_request", "correct_request_or_resolve_conflict", "retry_same_idempotency_key", "contact_platform_with_invocation_id", null]},
+        "contract": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    }
+  },
+  "oneOf": [
+    {
+      "type": "object", "required": ["contract", "status", "retention_days"],
+      "properties": {
+        "contract": {"const": "developer.runtime.diagnostics.by-reference/3"},
+        "status": {"const": "no_record"}, "retention_days": {"const": 30}
+      }, "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["contract", "status", "retention_days", "task_id", "invocation_id", "installation_id", "release_id", "started_at", "failed_at", "transaction_status", "final_blocker", "host_failure_detail"],
+      "properties": {
+        "contract": {"const": "developer.runtime.diagnostics.by-reference/3"},
+        "status": {"const": "found"}, "retention_days": {"const": 30},
+        "task_id": {"type": "string"}, "invocation_id": {"type": "string"},
+        "installation_id": {"type": "string"}, "release_id": {"type": "string"},
+        "started_at": {"type": ["string", "null"], "format": "date-time"},
+        "failed_at": {"type": "string", "format": "date-time"},
+        "transaction_status": {"const": "discarded"},
+        "final_blocker": {"$ref": "#/$defs/blocker"},
+        "host_failure_detail": {"$ref": "#/$defs/host_failure_detail"}
+      }, "additionalProperties": false
+    }
+  ]
+}

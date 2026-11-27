@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/schemas/business-identity-v1/outbound-request.schema.json",
+  "title": "Controlled business service outbound request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["binding_ref", "method", "url"],
+  "properties": {
+    "binding_ref": {"type": "string", "pattern": "^bir_[0-9a-f]{32}$"},
+    "method": {"enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
+    "url": {"type": "string", "format": "uri", "pattern": "^https://", "maxLength": 2048},
+    "headers": {"type": "object", "maxProperties": 5, "propertyNames": {"enum": ["Accept", "Content-Type", "Idempotency-Key", "User-Agent", "X-Request-Id", "accept", "content-type", "idempotency-key", "user-agent", "x-request-id"]}, "additionalProperties": {"type": "string", "maxLength": 2048}},
+    "json_body": {},
+    "text_body": {"type": "string", "maxLength": 1048576},
+    "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 60, "default": 30}
+  },
+  "allOf": [{"not": {"required": ["json_body", "text_body"]}}],
+  "x-dclaw-transport": {
+    "agent_header_allowlist": ["Accept", "Content-Type", "Idempotency-Key", "User-Agent", "X-Request-Id"],
+    "agent_authorization_header": "forbidden",
+    "platform_authorization_header": "Authorization",
+    "platform_authorization_format": "Bearer <assertion>",
+    "platform_authorization_cardinality": 1,
+    "proxy_forwarding": "verbatim-single-value",
+    "receiver_fail_closed_on": ["missing", "duplicate", "combined-multi-value", "non-bearer", "empty-token"],
+    "logging": "authorization-value-forbidden",
+    "request_body": "zero-or-one-of-json_body-or-text_body"
+  }
+}

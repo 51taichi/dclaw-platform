@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/schemas/interaction-card-create-v1/response.schema.json",
+  "title": "interaction.card.create/1 direct Host response",
+  "type": "object",
+  "required": ["interaction", "receipt"],
+  "properties": {
+    "interaction": {
+      "type": "object",
+      "required": ["interaction_id", "binding", "task_key", "interaction_revision", "component_type", "input_policy", "card", "status", "version", "transitions", "answer", "expires_at", "created_at", "updated_at"],
+      "properties": {
+        "interaction_id": {"type": "string", "pattern": "^interaction-[a-f0-9]{32}$"},
+        "binding": {
+          "type": "object",
+          "required": ["installation_id", "conversation_id", "agent_task_id"],
+          "properties": {
+            "installation_id": {"type": "string", "minLength": 1},
+            "conversation_id": {"type": "string", "minLength": 1},
+            "agent_task_id": {"type": "string", "pattern": "^interaction-task-[a-f0-9]{32}$"}
+          },
+          "additionalProperties": false
+        },
+        "task_key": {"type": "string", "minLength": 1, "maxLength": 160},
+        "interaction_revision": {"type": "integer", "minimum": 1},
+        "component_type": {"enum": ["single_select", "multi_select", "question_form", "file_selector"]},
+        "input_policy": {"enum": ["card_only", "card_or_text", "concurrent"]},
+        "card": {"type": "object"},
+        "status": {"enum": ["PENDING", "SUBMITTED", "CANCELLED", "REPLACED", "EXPIRED"]},
+        "version": {"type": "integer", "minimum": 1},
+        "transitions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["event_id", "action", "from_status", "to_status", "occurred_at"],
+            "properties": {
+              "event_id": {"type": "string", "minLength": 1},
+              "action": {"enum": ["create", "replace", "cancel", "expire", "submit"]},
+              "from_status": {"enum": [null, "PENDING", "SUBMITTED", "CANCELLED", "REPLACED", "EXPIRED"]},
+              "to_status": {"enum": ["PENDING", "SUBMITTED", "CANCELLED", "REPLACED", "EXPIRED"]},
+              "occurred_at": {"type": "string", "format": "date-time"}
+            },
+            "additionalProperties": false
+          }
+        },
+        "answer": {"type": ["object", "null"]},
+        "expires_at": {"type": ["string", "null"], "format": "date-time"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      },
+      "additionalProperties": false
+    },
+    "receipt": {
+      "type": "object",
+      "required": ["contract", "action", "event_id", "interaction_id", "installation_id", "conversation_id", "task_key", "interaction_revision", "version", "status", "answer_sha256", "occurred_at"],
+      "properties": {
+        "contract": {"const": "interaction.card.receipt/1"},
+        "action": {"const": "created"},
+        "event_id": {"type": "string", "minLength": 1},
+        "interaction_id": {"type": "string", "pattern": "^interaction-[a-f0-9]{32}$"},
+        "installation_id": {"type": "string", "minLength": 1},
+        "conversation_id": {"type": "string", "minLength": 1},
+        "task_key": {"type": "string", "minLength": 1, "maxLength": 160},
+        "interaction_revision": {"type": "integer", "minimum": 1},
+        "version": {"type": "integer", "minimum": 1},
+        "status": {"const": "PENDING"},
+        "answer_sha256": {"type": "null"},
+        "occurred_at": {"type": "string", "format": "date-time"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

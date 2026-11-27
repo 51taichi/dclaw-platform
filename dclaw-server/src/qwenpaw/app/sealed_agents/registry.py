@@ -1,0 +1,180 @@
+"""Atomic metadata registry for optional sealed agents."""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import threading
+from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from ...constant import WORKING_DIR
+from .models import SealedAgentRecord
+
+logger = logging.getLogger(__name__)
+
+
+class _RegistryDocument(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = 1
+    agents: list[SealedAgentRecord] = Field(default_factory=list)
+
+
+class SealedAgentRegistry:
+    """Small process-safe registry whose absence never blocks DClaw."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = Path(root)
+        self.path = self.root / "registry.json"
+        self._lock = threading.RLock()
+
+    def list_agents(
+        self,
+        *,
+        include_deleted: bool = False,
+    ) -> list[SealedAgentRecord]:
+        with self._lock:
+            document = self._read()
+        return [
+            agent
+            for agent in document.agents
+            if include_deleted or agent.deleted_at is None
+        ]
+
+    def get_agent(self, agent_id: str) -> SealedAgentRecord | None:
+        return next(
+            (
+                agent
+                for agent in self.list_agents(include_deleted=True)
+                if agent.agent_id == agent_id
+            ),
+            None,
+        )
+
+    def is_sealed(self, agent_id: str) -> bool:
+        return self.get_agent(agent_id) is not None
+
+    def active_package_type(
+        self,
+        agent_id: str,
+        workspace_dir: Path | None = None,
+    ) -> str | None:
+        """Return the enabled package type, optionally pinned to its workspace."""
+        record = self.get_agent(agent_id)
+        if record is None or not record.enabled:
+            return None
+        release = record.active_release
+        if release is None or release.state != "active":
+            return None
+        if workspace_dir is not None:
+            expected = (
+                self.root
+                / "runtime_workspaces"
+                / agent_id
+                / release.release_id
+                / "agent"
+            ).resolve()
+            if Path(workspace_dir).resolve() != expected:
+                return None
+        return release.package_type
+
+    def package_supports(
+        self,
+        agent_id: str,
+        feature: str,
+        *,
+        workspace_dir: Path | None = None,
+    ) -> bool:
+        """Resolve runtime behavior through the owning package-type plugin."""
+        package_type = self.active_package_type(agent_id, workspace_dir)
+        if package_type is None:
+            return False
+        from ...plugins.registry import PluginRegistry
+
+        return PluginRegistry().sealed_package_type_supports(
+            package_type,
+            feature,
+        )
+
+    def is_super_expert(self, agent_id: str) -> bool:
+        """Compatibility classification for callers predating package SPI."""
+        return self.active_package_type(agent_id) == "super_expert"
+
+    def is_super_expert_workspace(
+        self,
+        agent_id: str,
+        workspace_dir: Path,
+    ) -> bool:
+        """Classify a pinned runtime workspace without an activation race."""
+        return (
+            self.active_package_type(agent_id, workspace_dir) == "super_expert"
+        )
+
+    def upsert_agent(self, record: SealedAgentRecord) -> SealedAgentRecord:
+        with self._lock:
+            agents = self._read().agents
+            replaced = False
+            updated: list[SealedAgentRecord] = []
+            for current in agents:
+                if current.agent_id == record.agent_id:
+                    updated.append(record)
+                    replaced = True
+                else:
+                    updated.append(current)
+            if not replaced:
+                updated.append(record)
+            self._write(_RegistryDocument(agents=updated))
+        return record
+
+    def remove_agent(self, agent_id: str) -> None:
+        with self._lock:
+            agents = [
+                agent for agent in self._read().agents
+                if agent.agent_id != agent_id
+            ]
+            self._write(_RegistryDocument(agents=agents))
+
+    def _read(self) -> _RegistryDocument:
+        if not self.path.exists():
+            return _RegistryDocument()
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            return _RegistryDocument.model_validate(payload)
+        except (
+            OSError,
+            json.JSONDecodeError,
+            ValidationError,
+            ValueError,
+        ) as exc:
+            logger.error("Ignoring invalid sealed agent registry: %s", exc)
+            return _RegistryDocument()
+
+    def _write(self, document: _RegistryDocument) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        temporary = self.root / "registry.json.tmp"
+        temporary.write_text(
+            json.dumps(
+                document.model_dump(mode="json"),
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        os.replace(temporary, self.path)
+
+
+_registry: SealedAgentRegistry | None = None
+_registry_lock = threading.Lock()
+
+
+def get_sealed_agent_registry() -> SealedAgentRegistry:
+    global _registry
+    with _registry_lock:
+        if _registry is None:
+            _registry = SealedAgentRegistry(
+                Path(WORKING_DIR) / "sealed_agents",
+            )
+        return _registry

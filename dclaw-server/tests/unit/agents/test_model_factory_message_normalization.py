@@ -1,0 +1,471 @@
+# -*- coding: utf-8 -*-
+"""Tests for model_factory message normalization integration."""
+
+# pylint: disable=protected-access,redefined-outer-name
+from types import SimpleNamespace
+
+import pytest
+from agentscope.formatter import OpenAIChatFormatter
+from agentscope.message import DataBlock, ToolResultBlock, URLSource
+from qwenpaw.agents.message_compat import Msg
+
+try:
+    from agentscope.formatter import AnthropicChatFormatter
+except ImportError:  # pragma: no cover - compatibility fallback
+    AnthropicChatFormatter = None
+
+try:
+    from agentscope.formatter import GeminiChatFormatter
+except ImportError:  # pragma: no cover - compatibility fallback
+    GeminiChatFormatter = None
+
+from qwenpaw.agents import model_factory
+from qwenpaw.constant import MEDIA_UNSUPPORTED_PLACEHOLDER
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selected,default,capability,expected_type", [
+    ("chat", "text", {"supports_multimodal": True}, "data"),
+    ("chat", "text", {"supports_image": True}, "data"),
+    ("chat", "text", {"supports_video": True}, "data"),
+    ("chat", "vision", {"supports_multimodal": False}, "text"),
+    ("missing", "vision", {}, "text"),
+    (None, "vision", {}, "data"),
+    (None, "text", {}, "text"),
+    ("auto", "vision", {}, "data"),
+    ("auto", "text", {}, "text"),
+])
+async def test_selected_chat_model_controls_actual_media_normalization(monkeypatch, selected, default, capability, expected_type):
+    from qwenpaw.app.agent_context import get_current_chat_model, set_current_chat_model
+    from qwenpaw.config import config
+    from qwenpaw.providers.provider import ModelInfo
+    from qwenpaw.providers.provider_manager import ProviderManager
+    models = [
+        ModelInfo(id="text", name="text", supports_multimodal=False),
+        ModelInfo(id="vision", name="vision", supports_multimodal=True),
+        ModelInfo(id="chat", name="chat", **capability),
+    ]
+    provider = SimpleNamespace(models=models, extra_models=[])
+    manager = SimpleNamespace(get_provider=lambda _id: provider)
+    monkeypatch.setattr(ProviderManager, "get_instance", lambda: manager)
+    monkeypatch.setattr(config, "load_agent_config", lambda _id: SimpleNamespace(
+        active_model=config.ModelSlotConfig(provider_id="test", model=default)))
+    previous = get_current_chat_model()
+    slot = {"provider_id": "auto", "model": "routing"} if selected == "auto" else (
+        {"provider_id": "test", "model": selected} if selected else None)
+    set_current_chat_model(slot)
+    try:
+        original = _media_messages()
+        normalized, _, _ = model_factory._normalize_messages_for_formatter(
+            original, OpenAIChatFormatter, SimpleNamespace())
+        assert normalized[0].content[0].type == expected_type
+        assert original[0].content[0].type == "data"
+        # Exercise the real formatter through its outbound OpenAI payload,
+        # not only the pre-format copy. A remote image URL is not fetched here.
+        image = Msg(name="user", role="user", content=[{
+            "type": "image", "source": {"type": "url", "url": "https://assets.example.test/current.png"},
+        }])
+        formatter = model_factory._create_file_block_support_formatter(OpenAIChatFormatter)()
+        outbound = await formatter.format(msgs=[image])
+        blocks = outbound[0]["content"]
+        if expected_type == "data":
+            assert any(block.get("type") == "image_url" and
+                       block["image_url"]["url"] == "https://assets.example.test/current.png"
+                       for block in blocks)
+        else:
+            assert all(block.get("type") == "text" for block in blocks)
+    finally:
+        set_current_chat_model(previous)
+
+
+def _media_messages() -> list[Msg]:
+    """Create a list of messages with media blocks for testing."""
+    return [
+        Msg(
+            name="user",
+            role="user",
+            content=[
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "url",
+                        "url": "file:///tmp/demo.png",
+                    },
+                },
+            ],
+        ),
+        Msg(
+            name="assistant",
+            role="assistant",
+            content=[
+                {
+                    "type": "tool_use",
+                    "id": "call_1",
+                    "name": "view_image",
+                    "input": {},
+                },
+            ],
+        ),
+        Msg(
+            name="system",
+            role="system",
+            content=[
+                ToolResultBlock(
+                    type="tool_result",
+                    id="call_1",
+                    name="view_image",
+                    output=[
+                        DataBlock(
+                            source=URLSource(
+                                url="file:///tmp/demo.png",
+                                media_type="image/png",
+                            ),
+                        ),
+                    ],
+                ),
+            ],
+        ),
+    ]
+
+
+def _assert_request_time_stripped(formatter_class) -> None:
+    """Helper to assert that media is stripped from normalized messages."""
+    original = _media_messages()
+    (
+        normalized,
+        _is_anthropic,
+        _is_gemini,
+    ) = model_factory._normalize_messages_for_formatter(
+        original,
+        formatter_class,
+        SimpleNamespace(),
+    )
+
+    # First message (user image) should be replaced with placeholder
+    assert normalized[0].get_text_content() == MEDIA_UNSUPPORTED_PLACEHOLDER
+
+    # Third message (tool result with image) should have output replaced
+    assert normalized[2].content[0].output == MEDIA_UNSUPPORTED_PLACEHOLDER
+
+    # Original messages should be unchanged
+    assert original[0].content[0].type == "data"
+    assert original[2].content[0].output[0].type == "data"
+
+
+def test_openai_formatter_normalizes_on_copy(monkeypatch) -> None:
+    """Test that OpenAI formatter normalizes messages with media stripped."""
+    monkeypatch.setattr(
+        model_factory,
+        "_supports_multimodal_for_current_model",
+        lambda: False,
+    )
+    _assert_request_time_stripped(OpenAIChatFormatter)
+
+
+def test_anthropic_formatter_normalizes_on_copy(monkeypatch) -> None:
+    """Test Anthropic formatter normalizes messages with media stripped."""
+    if AnthropicChatFormatter is None:
+        pytest.skip("AnthropicChatFormatter not available")
+
+    monkeypatch.setattr(
+        model_factory,
+        "_supports_multimodal_for_current_model",
+        lambda: False,
+    )
+    _assert_request_time_stripped(AnthropicChatFormatter)
+
+
+def test_gemini_formatter_normalizes_on_copy(monkeypatch) -> None:
+    """Test that Gemini formatter normalizes messages with media stripped."""
+    if GeminiChatFormatter is None:
+        pytest.skip("GeminiChatFormatter not available")
+
+    monkeypatch.setattr(
+        model_factory,
+        "_supports_multimodal_for_current_model",
+        lambda: False,
+    )
+    _assert_request_time_stripped(GeminiChatFormatter)
+
+
+def test_multimodal_support_preserves_media(monkeypatch) -> None:
+    """Test that when multimodal is supported, media is preserved."""
+    monkeypatch.setattr(
+        model_factory,
+        "_supports_multimodal_for_current_model",
+        lambda: True,
+    )
+
+    original = _media_messages()
+    (
+        normalized,
+        _is_anthropic,
+        _is_gemini,
+    ) = model_factory._normalize_messages_for_formatter(
+        original,
+        OpenAIChatFormatter,
+        SimpleNamespace(),
+    )
+
+    # Media should be preserved in normalized messages
+    assert normalized[0].content[0].type == "data"
+    assert normalized[2].content[0].output[0].type == "data"
+
+    # Original should be unchanged
+    assert original[0].content[0].type == "data"
+
+
+def test_force_strip_media_flag_overrides_multimodal_support(
+    monkeypatch,
+) -> None:
+    """Test that _qwenpaw_force_strip_media flag forces media stripping."""
+    monkeypatch.setattr(
+        model_factory,
+        "_supports_multimodal_for_current_model",
+        lambda: True,  # Model supports multimodal
+    )
+
+    original = _media_messages()
+    formatter_instance = SimpleNamespace(_qwenpaw_force_strip_media=True)
+
+    (
+        normalized,
+        _is_anthropic,
+        _is_gemini,
+    ) = model_factory._normalize_messages_for_formatter(
+        original,
+        OpenAIChatFormatter,
+        formatter_instance,
+    )
+
+    # Media should be stripped despite multimodal support
+    assert normalized[0].content[0].type == "text"
+    assert normalized[0].content[0].text == MEDIA_UNSUPPORTED_PLACEHOLDER
+
+
+def test_formatter_flags_returned_correctly() -> None:
+    """Test that formatter family flags are returned correctly."""
+    msgs = [Msg(name="user", role="user", content="Hello")]
+
+    (
+        _normalized,
+        is_anthropic,
+        is_gemini,
+    ) = model_factory._normalize_messages_for_formatter(
+        msgs,
+        OpenAIChatFormatter,
+        None,
+    )
+
+    # OpenAI formatter should not be anthropic or gemini
+    assert is_anthropic is False
+    assert is_gemini is False
+
+
+def test_anthropic_flag_detected(monkeypatch) -> None:
+    """Test that Anthropic formatter is correctly detected."""
+    if AnthropicChatFormatter is None:
+        pytest.skip("AnthropicChatFormatter not available")
+
+    monkeypatch.setattr(
+        model_factory,
+        "_supports_multimodal_for_current_model",
+        lambda: True,
+    )
+
+    msgs = [Msg(name="user", role="user", content="Hello")]
+
+    (
+        _normalized,
+        is_anthropic,
+        _is_gemini,
+    ) = model_factory._normalize_messages_for_formatter(
+        msgs,
+        AnthropicChatFormatter,
+        None,
+    )
+
+    assert is_anthropic is True
+
+
+def test_gemini_flag_detected(monkeypatch) -> None:
+    """Test that Gemini formatter is correctly detected."""
+    if GeminiChatFormatter is None:
+        pytest.skip("GeminiChatFormatter not available")
+
+    monkeypatch.setattr(
+        model_factory,
+        "_supports_multimodal_for_current_model",
+        lambda: True,
+    )
+
+    msgs = [Msg(name="user", role="user", content="Hello")]
+
+    (
+        _normalized,
+        _is_anthropic,
+        is_gemini,
+    ) = model_factory._normalize_messages_for_formatter(
+        msgs,
+        GeminiChatFormatter,
+        None,
+    )
+
+    assert is_gemini is True
+
+
+def test_original_messages_not_modified_by_formatter_prep() -> None:
+    """Test that preparing messages for formatter doesn't modify originals."""
+    original = Msg(
+        name="user",
+        role="user",
+        content=[
+            {"type": "text", "text": "Hello"},
+            {
+                "type": "image",
+                "source": {"type": "url", "url": "file:///tmp/test.png"},
+            },
+        ],
+    )
+    original_dict = original.to_dict()
+
+    (
+        _normalized,
+        _is_anthropic,
+        _is_gemini,
+    ) = model_factory._normalize_messages_for_formatter(
+        [original],
+        OpenAIChatFormatter,
+        SimpleNamespace(_qwenpaw_force_strip_media=False),
+    )
+
+    # Original message should be completely unchanged
+    assert original.to_dict() == original_dict
+    assert original.content[1].type == "data"
+
+
+# -----------------------------------------------------------------------------
+# target_family propagation tests
+# -----------------------------------------------------------------------------
+
+
+def _messages_with_extra_content() -> list[Msg]:
+    """Create messages that include Gemini-specific extra_content."""
+    return [
+        Msg(
+            name="assistant",
+            role="assistant",
+            content=[
+                {
+                    "type": "tool_use",
+                    "id": "call_ec",
+                    "name": "search",
+                    "input": {"q": "hello"},
+                    "extra_content": {"thought_signature": "sig_abc"},
+                },
+            ],
+        ),
+        Msg(
+            name="system",
+            role="system",
+            content=[
+                ToolResultBlock(
+                    type="tool_result",
+                    id="call_ec",
+                    name="search",
+                    output="42",
+                ),
+            ],
+        ),
+    ]
+
+
+def test_openai_formatter_strips_extra_content(monkeypatch) -> None:
+    """OpenAI formatter should strip extra_content from tool_use blocks."""
+    monkeypatch.setattr(
+        model_factory,
+        "_supports_multimodal_for_current_model",
+        lambda: True,
+    )
+
+    (
+        normalized,
+        _is_anthropic,
+        _is_gemini,
+    ) = model_factory._normalize_messages_for_formatter(
+        _messages_with_extra_content(),
+        OpenAIChatFormatter,
+        SimpleNamespace(),
+    )
+
+    assert "extra_content" not in normalized[0].content[0]
+
+
+def test_anthropic_formatter_strips_extra_content(monkeypatch) -> None:
+    """Anthropic formatter should strip extra_content from tool_use blocks."""
+    if AnthropicChatFormatter is None:
+        pytest.skip("AnthropicChatFormatter not available")
+
+    monkeypatch.setattr(
+        model_factory,
+        "_supports_multimodal_for_current_model",
+        lambda: True,
+    )
+
+    (
+        normalized,
+        _is_anthropic,
+        _is_gemini,
+    ) = model_factory._normalize_messages_for_formatter(
+        _messages_with_extra_content(),
+        AnthropicChatFormatter,
+        SimpleNamespace(),
+    )
+
+    assert "extra_content" not in normalized[0].content[0]
+
+
+def test_gemini_formatter_preserves_extra_content(monkeypatch) -> None:
+    """Gemini formatter should keep extra_content on tool_use blocks."""
+    if GeminiChatFormatter is None:
+        pytest.skip("GeminiChatFormatter not available")
+
+    monkeypatch.setattr(
+        model_factory,
+        "_supports_multimodal_for_current_model",
+        lambda: True,
+    )
+
+    (
+        normalized,
+        _is_anthropic,
+        _is_gemini,
+    ) = model_factory._normalize_messages_for_formatter(
+        _messages_with_extra_content(),
+        GeminiChatFormatter,
+        SimpleNamespace(),
+    )
+
+    block = normalized[0].content[0]
+    assert "extra_content" in block
+    assert block["extra_content"]["thought_signature"] == "sig_abc"
+
+
+def test_extra_content_original_preserved(monkeypatch) -> None:
+    """Cleaning for any target must not mutate the original messages."""
+    monkeypatch.setattr(
+        model_factory,
+        "_supports_multimodal_for_current_model",
+        lambda: True,
+    )
+
+    msgs = _messages_with_extra_content()
+    original_block = msgs[0].content[0].copy()
+
+    model_factory._normalize_messages_for_formatter(
+        msgs,
+        OpenAIChatFormatter,
+        SimpleNamespace(),
+    )
+
+    assert msgs[0].content[0] == original_block

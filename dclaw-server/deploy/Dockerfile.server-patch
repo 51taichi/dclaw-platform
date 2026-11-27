@@ -1,0 +1,24 @@
+ARG DCLAW_BASE_IMAGE
+FROM ${DCLAW_BASE_IMAGE}
+
+WORKDIR /app
+
+# The base production image already contains the separately built console,
+# Chromium, system packages, and the Python environment.  A server-only patch
+# replaces the tracked backend and bundled Support Plugin source, then
+# reinstalls this repository package without rebuilding or changing the base
+# runtime assets. The existing compiled Local Helper remains in place.
+COPY pyproject.toml uv.lock setup.py README.md ./
+COPY scripts/db ./scripts/db
+COPY deploy/pricing ./deploy/pricing
+COPY scripts/perf ./scripts/perf
+COPY src ./src
+COPY plugins/bundle/super-agent-support ./plugins/auto-load/super-agent-support
+COPY docs/super-agent-development-standard-v1.zh-CN.md ./plugins/auto-load/super-agent-support/developer_pack/standard/super-agent-development-standard-v1.zh-CN.md
+
+RUN /bin/uv pip install \
+      --python /app/venv/bin/python \
+      --no-cache-dir \
+      --no-deps \
+      . \
+    && rm -rf ./build

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status"],
+  "properties": {
+    "status": {"enum": ["succeeded", "failed"]},
+    "voice_track_relative_path": {"type": "string", "pattern": "^res/"},
+    "background_track_relative_path": {"type": "string", "pattern": "^res/"},
+    "voice_rms_db": {"type": "number", "minimum": -160, "maximum": 20},
+    "background_rms_db": {"type": "number", "minimum": -160, "maximum": 20},
+    "snr_db": {"type": "number", "minimum": -180, "maximum": 180},
+    "duration_seconds": {"type": "number", "minimum": 0, "maximum": 600},
+    "sample_rate": {"const": 44100},
+    "channels": {"const": 2},
+    "input_duration_seconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 600},
+    "input_sample_rate": {"type": "integer", "minimum": 1},
+    "input_channels": {"type": "integer", "minimum": 1},
+    "engine": {"const": "demucs-4.0.1-htdemucs"},
+    "rms_algorithm": {"const": "pcm16-interleaved-all-channels-dbfs-floor--160"},
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "enum": [
+            "AUDIO_SEPARATION.INPUT_INVALID",
+            "AUDIO_SEPARATION.PATH_OUTSIDE_TASK",
+            "AUDIO_SEPARATION.INPUT_NOT_BOUND",
+            "AUDIO_SEPARATION.INPUT_TOO_LARGE",
+            "AUDIO_SEPARATION.DURATION_LIMIT",
+            "AUDIO_SEPARATION.UNSUPPORTED_AUDIO",
+            "AUDIO_SEPARATION.MODEL_UNAVAILABLE",
+            "AUDIO_SEPARATION.SEPARATION_FAILED",
+            "AUDIO_SEPARATION.NUMERIC_INVALID"
+          ]
+        },
+        "message": {"type": "string", "minLength": 1, "maxLength": 512}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "succeeded"}}},
+      "then": {
+        "required": [
+          "voice_track_relative_path",
+          "background_track_relative_path",
+          "voice_rms_db",
+          "background_rms_db",
+          "snr_db",
+          "duration_seconds",
+          "sample_rate",
+          "channels",
+          "input_duration_seconds",
+          "input_sample_rate",
+          "input_channels",
+          "engine",
+          "rms_algorithm"
+        ]
+      },
+      "else": {"required": ["error"]}
+    }
+  ]
+}

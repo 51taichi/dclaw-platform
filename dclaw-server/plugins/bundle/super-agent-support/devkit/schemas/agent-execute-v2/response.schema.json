@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/schemas/agent-execute-v2/response.schema.json",
+  "type": "object",
+  "required": ["message", "text"],
+  "properties": {
+    "message": {"type": "object"},
+    "text": {"type": "string"},
+    "media_delivery": {"type": "object"}
+  },
+  "additionalProperties": false
+}

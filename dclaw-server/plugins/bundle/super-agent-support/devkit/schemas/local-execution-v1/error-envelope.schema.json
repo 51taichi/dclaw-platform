@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/contracts/local-execution/v1/error-envelope.schema.json",
+  "title": "DClaw local execution error envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "standard_version",
+    "code",
+    "source",
+    "category",
+    "retryable",
+    "user_action",
+    "public_message",
+    "trace_id"
+  ],
+  "properties": {
+    "standard_version": {"const": "1.1"},
+    "code": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]*\\.[A-Z][A-Z0-9_]*$",
+      "maxLength": 128
+    },
+    "legacy_code": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]*$",
+      "maxLength": 128
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["layer", "component", "operation"],
+      "properties": {
+        "layer": {
+          "enum": [
+            "dclaw_platform",
+            "super_agent",
+            "local_gateway",
+            "runner",
+            "capability",
+            "external_service"
+          ]
+        },
+        "component": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_.-]*$",
+          "maxLength": 128
+        },
+        "operation": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_.-]*$",
+          "maxLength": 128
+        }
+      }
+    },
+    "category": {
+      "enum": [
+        "invalid_request",
+        "authentication",
+        "authorization",
+        "permission",
+        "unsupported",
+        "compatibility",
+        "connection",
+        "state_conflict",
+        "not_found",
+        "resource_exhausted",
+        "timeout",
+        "external_dependency",
+        "execution",
+        "integrity",
+        "cancelled",
+        "unknown"
+      ]
+    },
+    "retryable": {"type": "boolean"},
+    "user_action": {
+      "enum": [
+        "none",
+        "retry_later",
+        "correct_request",
+        "complete_local_action",
+        "reconnect_runner",
+        "update_runner",
+        "update_local_helper",
+        "select_file_again",
+        "select_different_file",
+        "select_smaller_file",
+        "select_fewer_files",
+        "use_original_device",
+        "contact_administrator",
+        "start_new_task"
+      ]
+    },
+    "public_message": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "trace_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._:-]{8,128}$"
+    }
+  }
+}

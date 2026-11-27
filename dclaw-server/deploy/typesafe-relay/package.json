@@ -1,0 +1,8 @@
+{
+  "name": "dclaw-typesafe-relay",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

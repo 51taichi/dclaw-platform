@@ -1,0 +1,42 @@
+{
+  "id": "dclaw.super-agent-support",
+  "name": "DClaw Super Agent Support",
+  "version": "1.18.58",
+  "type": "general",
+  "description": "Generic local execution, Agent-owned controlled outbound transport, credential broker, capability package, offline developer pack and DevKit, client adapter, and platform helper support for Super Agents.",
+  "author": "DClaw",
+  "entry": {
+    "backend": "plugin.py"
+  },
+  "dependencies": [],
+  "min_version": "1.1.10",
+  "meta": {
+    "standard": "dclaw.super-agent-support/1",
+    "modules": [
+      "local-execution",
+      "credential-broker",
+      "agent-outbound",
+      "capability-packages",
+      "public-components",
+      "developer-kit",
+      "developer-pack",
+      "client-adapter",
+      "windows-helper",
+      "mac-helper",
+      "interaction-components",
+      "aigc-adapter",
+      "workspace-runtime",
+      "sealed-super-agent-lifecycle",
+      "self-service-publishing",
+      "workspace-state-migration",
+      "workspace-state-continuity",
+      "workspace-failure-diagnostics"
+    ],
+    "platform_helpers": {
+      "windows-x64": {"module": "windows-helper", "status": "available"},
+      "windows-arm64": {"module": "windows-helper", "status": "reserved"},
+      "macos-arm64": {"module": "mac-helper", "status": "reserved"},
+      "macos-x64": {"module": "mac-helper", "status": "reserved"}
+    }
+  }
+}

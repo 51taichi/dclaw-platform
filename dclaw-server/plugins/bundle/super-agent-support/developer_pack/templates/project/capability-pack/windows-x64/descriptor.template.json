@@ -1,0 +1,33 @@
+{
+  "descriptor_version": "1",
+  "contract_version": "1",
+  "capability_id": "example.local.transform",
+  "package_id": "example.local.transform",
+  "package_version": "0.1.0",
+  "implementation_status": "release",
+  "min_runner_version": "1.2.0",
+  "artifact": {
+    "url": "https://developer.example.invalid/capabilities/example-local-transform-0.1.0.zip",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "size_bytes": 1
+  },
+  "entrypoint": {"component_id": "python-runtime", "export": "python", "arguments": ["{package_root}/runner.py"]},
+  "public_components": [
+    {"component_id": "python-runtime", "version": "3.12.14"}
+  ],
+  "component_exports": [],
+  "schemas": {
+    "input": {"path": "input.schema.json", "sha256": "{{INPUT_SCHEMA_SHA256}}", "document": {}},
+    "result": {"path": "result.schema.json", "sha256": "{{RESULT_SCHEMA_SHA256}}", "document": {}},
+    "checkpoint": {"path": "checkpoint.schema.json", "sha256": "{{CHECKPOINT_SCHEMA_SHA256}}", "document": {}}
+  },
+  "operating_systems": ["windows-x64"],
+  "permissions": {"workspace": "task-only", "network_domains": [], "processes": ["python.exe"], "browser": false},
+  "limits": {"max_runtime_seconds": 60, "max_memory_mib": 256, "max_disk_mib": 32, "max_concurrency": 1, "max_output_bytes": 1048576},
+  "semantics": {
+    "idempotency": "The same key and input return the same output.",
+    "cancellation": "Stop the child process and remove temporary files.",
+    "recovery": "Retry from the original immutable input.",
+    "cleanup": "Keep declared outputs and remove task temporary files."
+  }
+}

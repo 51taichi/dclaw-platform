@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/schemas/resource-exchange-v1/upload-create-response.schema.json",
+  "title": "Presigned temporary resource upload target",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["resource_ref", "status", "mime_type", "max_size_bytes", "expires_at", "upload"],
+  "properties": {
+    "resource_ref": {"type": "string", "pattern": "^res_[0-9a-f]{32}$"},
+    "status": {"const": "pending"},
+    "mime_type": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.+-]{0,63}/[a-z0-9][a-z0-9.+-]{0,127}$"},
+    "max_size_bytes": {"type": "integer", "minimum": 1, "maximum": 1073741824},
+    "expires_at": {"type": "integer", "minimum": 1},
+    "upload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "method", "headers", "allowed_domains", "max_size_bytes"],
+      "properties": {
+        "url": {"type": "string", "pattern": "^https://"},
+        "method": {"const": "PUT"},
+        "headers": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Content-Type"],
+          "properties": {
+            "Content-Type": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.+-]{0,63}/[a-z0-9][a-z0-9.+-]{0,127}$"}
+          }
+        },
+        "allowed_domains": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 253}
+        },
+        "max_size_bytes": {"type": "integer", "minimum": 1, "maximum": 1073741824}
+      }
+    }
+  }
+}

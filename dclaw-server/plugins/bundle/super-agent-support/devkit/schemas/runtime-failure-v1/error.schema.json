@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dclaw.deepmega.cn/schemas/runtime-failure-v1/error.schema.json",
+  "title": "runtime.failure.read/1 Host error",
+  "type": "object",
+  "required": ["error_code"],
+  "properties": {
+    "error_code": {"enum": ["unauthorized_capability", "orchestration_error"]}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,1592 @@
+# -*- coding: utf-8 -*-
+# pylint: disable=redefined-outer-name
+from __future__ import annotations
+
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+from threading import Barrier, Lock
+
+import pytest
+from fastapi import Depends, FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy import event, func, insert, select
+
+from qwenpaw.app.billing.models import LedgerTransaction, WalletBalance
+from qwenpaw.app.billing.credit_alerts import CreditAlertService
+from qwenpaw.app.billing.pricing import (
+    PriceCatalogDraft,
+    PriceCatalogService,
+    PriceRule,
+    QuoteRequest,
+)
+from qwenpaw.app.billing.official_pricing import OfficialPriceRegistry
+from qwenpaw.app.billing.pricing_draft import PricingDraftBuilder
+from qwenpaw.app.billing.pricing_excel import PricingExcelService
+from qwenpaw.app.billing.pricing_inventory import PriceableModel
+from qwenpaw.app.billing.usage import UsageOrderStateError, UsageService
+from qwenpaw.app.billing.top_up import TopUpService
+from qwenpaw.app import auth as app_auth
+from qwenpaw.app.guards import require_admin, require_user
+from qwenpaw.app.routers import billing
+from qwenpaw.app.storage.engine import create_engine_from_settings
+from qwenpaw.app.storage.repos.billing_repo import BillingRepository
+from qwenpaw.app.storage.repos.price_catalog_repo import PriceCatalogRepository
+from qwenpaw.app.storage.repos.top_up_repo import TopUpRepository
+from qwenpaw.app.storage.repos.user_repo import SqlAlchemyUserRepository
+from qwenpaw.app.storage.schema import (
+    billing_usage_orders,
+    create_all,
+    users,
+)
+from qwenpaw.app.storage.settings import get_storage_settings
+
+
+NOW = datetime(2026, 8, 26, 8, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def engine(tmp_path):
+    settings = get_storage_settings(
+        {"QWENPAW_SQLITE_PATH": str(tmp_path / "billing-api.db")},
+    )
+    engine = create_engine_from_settings(settings)
+    create_all(engine)
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture
+def wallet_repo(engine):
+    return BillingRepository(engine, clock=lambda: NOW)
+
+
+@pytest.fixture
+def catalog_repo(engine):
+    return PriceCatalogRepository(engine)
+
+
+@pytest.fixture
+def pricing(catalog_repo):
+    return PriceCatalogService(catalog_repo, clock=lambda: NOW)
+
+
+def _publish_catalog(pricing: PriceCatalogService, version: str = "retail-v1"):
+    pricing.publish(
+        PriceCatalogDraft(
+            version=version,
+            effective_at=NOW,
+            created_by="admin:1",
+            rules=(
+                PriceRule(
+                    id=f"{version}-image",
+                    provider_id="aliyun",
+                    model_key="wan-2.7",
+                    capability="text_to_image",
+                    unit_type="image_count",
+                    credits_per_unit=50,
+                ),
+            ),
+        ),
+    )
+
+
+def _app(
+    monkeypatch,
+    usage: UsageService,
+    wallet_repo: BillingRepository,
+    pricing: PriceCatalogService,
+) -> FastAPI:
+    monkeypatch.setattr(app_auth, "is_auth_enabled", lambda: True)
+    monkeypatch.setattr(billing, "get_usage_service", lambda: usage)
+    monkeypatch.setattr(billing, "get_billing_repository", lambda: wallet_repo)
+    monkeypatch.setattr(billing, "get_price_catalog_service", lambda: pricing)
+    monkeypatch.setattr(
+        billing, "get_credit_alert_service", lambda: CreditAlertService(wallet_repo.engine),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        billing,
+        "get_user_repository",
+        lambda: SqlAlchemyUserRepository(wallet_repo.engine),
+    )
+    monkeypatch.setattr(
+        billing,
+        "get_pricing_unlock_service",
+        lambda: type(
+            "Unlocked", (), {"is_valid": lambda self, token, actor: True}
+        )(),
+    )
+
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def trusted_auth_context(request, call_next):
+        user_id = request.headers.get("x-test-user")
+        if user_id:
+            request.state.user_id = user_id
+            request.state.role = request.headers.get("x-test-role", "user")
+        return await call_next(request)
+
+    app.include_router(
+        billing.user_router,
+        prefix="/api/user",
+        dependencies=[Depends(require_user)],
+    )
+    app.include_router(
+        billing.admin_router,
+        prefix="/api/admin",
+        dependencies=[Depends(require_admin)],
+    )
+    return app
+
+
+def _quote_payload(business_key: str = "job-1") -> dict:
+    return {
+        "business_key": business_key,
+        "provider_id": "aliyun",
+        "model_key": "wan-2.7",
+        "capability": "text_to_image",
+        "parameters": {"count": 2},
+    }
+
+
+def _headers(user_id: str, role: str = "user") -> dict[str, str]:
+    return {"x-test-user": user_id, "x-test-role": role}
+
+
+def test_billing_mode_defaults_to_shadow(monkeypatch, wallet_repo, pricing):
+    monkeypatch.delenv("DCLAW_BILLING_MODE", raising=False)
+
+    service = UsageService(wallet_repo, pricing)
+
+    assert service.mode == "shadow"
+
+
+def test_customer_credit_alert_routes_are_owner_scoped(
+    monkeypatch, engine, wallet_repo, pricing,
+):
+    with engine.begin() as conn:
+        alice_id = conn.execute(insert(users).values(
+            username="alert-alice", password_hash="h", password_salt="s", role="user",
+        ).returning(users.c.id)).scalar_one()
+        bob_id = conn.execute(insert(users).values(
+            username="alert-bob", password_hash="h", password_salt="s", role="user",
+        ).returning(users.c.id)).scalar_one()
+    alice_wallet = wallet_repo.ensure_wallet("user", str(alice_id))
+    bob_wallet = wallet_repo.ensure_wallet("user", str(bob_id))
+    wallet_repo.grant(alice_wallet["id"], credits=6000, credit_type="purchased", expires_at=None, idempotency_key="alice-alert-seed")
+    wallet_repo.grant(bob_wallet["id"], credits=9000, credit_type="purchased", expires_at=None, idempotency_key="bob-alert-seed")
+    client = TestClient(_app(monkeypatch, UsageService(wallet_repo, pricing, mode="shadow"), wallet_repo, pricing))
+
+    initial = client.get("/api/user/billing/credit-alerts", headers=_headers(str(alice_id)))
+    assert initial.status_code == 200
+    assert initial.json() == {
+        "preferences": {"warning_threshold": 5000, "critical_threshold": 1000},
+        "available": 6000, "alert": None, "phone_number": None,
+    }
+    updated = client.patch(
+        "/api/user/billing/credit-alerts/preferences", headers=_headers(str(alice_id)),
+        json={"warning_threshold": 7000, "critical_threshold": 2000},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["alert"]["tier"] == "warning"
+    assert client.get("/api/user/billing/credit-alerts", headers=_headers(str(bob_id))).json()["preferences"] == {
+        "warning_threshold": 5000, "critical_threshold": 1000,
+    }
+    assert client.post("/api/user/billing/credit-alerts/unknown/dismiss", headers=_headers(str(alice_id))).status_code == 404
+    assert client.post("/api/user/billing/credit-alerts/critical/dismiss", headers=_headers(str(alice_id))).status_code == 409
+    first = client.post("/api/user/billing/credit-alerts/warning/dismiss", headers=_headers(str(alice_id)))
+    second = client.post("/api/user/billing/credit-alerts/warning/dismiss", headers=_headers(str(alice_id)))
+    assert first.status_code == second.status_code == 200
+    assert first.json()["alert"] is None and second.json()["alert"] is None
+
+
+def test_customer_credit_alert_phone_updates_current_user_without_suppressing_alert(
+    monkeypatch, engine, wallet_repo, pricing,
+):
+    with engine.begin() as conn:
+        alice_id = conn.execute(insert(users).values(
+            username="phone-alice", password_hash="h", password_salt="s", role="user",
+        ).returning(users.c.id)).scalar_one()
+        bob_id = conn.execute(insert(users).values(
+            username="phone-bob", password_hash="h", password_salt="s", role="user",
+            phone_number_e164="+8613900139000",
+        ).returning(users.c.id)).scalar_one()
+    alice_wallet = wallet_repo.ensure_wallet("user", str(alice_id))
+    wallet_repo.ensure_wallet("user", str(bob_id))
+    wallet_repo.grant(
+        alice_wallet["id"], credits=800, credit_type="purchased", expires_at=None,
+        idempotency_key="alice-phone-alert-seed",
+    )
+    client = TestClient(
+        _app(
+            monkeypatch,
+            UsageService(wallet_repo, pricing, mode="shadow"),
+            wallet_repo,
+            pricing,
+        ),
+    )
+
+    before = client.get(
+        "/api/user/billing/credit-alerts", headers=_headers(str(alice_id)),
+    )
+    assert before.status_code == 200
+    assert before.json()["phone_number"] is None
+    assert before.json()["alert"]["tier"] == "critical"
+
+    invalid = client.patch(
+        "/api/user/billing/credit-alerts/phone", headers=_headers(str(alice_id)),
+        json={"phone_number": "12345"},
+    )
+    assert invalid.status_code == 422
+
+    updated = client.patch(
+        "/api/user/billing/credit-alerts/phone", headers=_headers(str(alice_id)),
+        json={"phone_number": "13800138000"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["phone_number"] == "+8613800138000"
+    assert updated.json()["alert"]["tier"] == "critical"
+
+    with engine.connect() as conn:
+        assert conn.execute(
+            select(users.c.phone_number_e164).where(users.c.id == alice_id),
+        ).scalar_one() == "+8613800138000"
+        assert conn.execute(
+            select(users.c.phone_number_e164).where(users.c.id == bob_id),
+        ).scalar_one() == "+8613900139000"
+
+
+@pytest.mark.parametrize("warning,critical", [(1000, 1000), (999, 1000), (5000, -1), (2**63, 1000)])
+def test_customer_credit_alert_routes_reject_invalid_thresholds(
+    monkeypatch, engine, wallet_repo, pricing, warning, critical,
+):
+    with engine.begin() as conn:
+        user_id = conn.execute(insert(users).values(
+            username=f"invalid-{warning}-{critical}", password_hash="h", password_salt="s",
+        ).returning(users.c.id)).scalar_one()
+    wallet_repo.ensure_wallet("user", str(user_id))
+    client = TestClient(_app(monkeypatch, UsageService(wallet_repo, pricing, mode="shadow"), wallet_repo, pricing))
+    response = client.patch(
+        "/api/user/billing/credit-alerts/preferences", headers=_headers(str(user_id)),
+        json={"warning_threshold": warning, "critical_threshold": critical},
+    )
+    assert response.status_code == 422
+
+
+def test_manual_top_up_routes_use_auth_owner_and_server_product_snapshot(
+    monkeypatch,
+    engine,
+    wallet_repo,
+    pricing,
+):
+    wallet_repo.ensure_wallet("user", "alice")
+    top_up_repo = TopUpRepository(engine)
+    product = top_up_repo.create_product(
+        {
+            "name": "1000 credits",
+            "payment_amount_fen": 1000,
+            "purchased_credits": 1000,
+            "promotional_credits": 0,
+            "promotional_expiry_days": None,
+            "status": "active",
+            "display_order": 1,
+            "created_by": "admin-1",
+        },
+    )
+    top_up_service = TopUpService(top_up_repo, wallet_repo)
+    monkeypatch.setattr(
+        billing,
+        "get_top_up_service",
+        lambda: top_up_service,
+        raising=False,
+    )
+    client = TestClient(
+        _app(
+            monkeypatch,
+            UsageService(wallet_repo, pricing, mode="shadow"),
+            wallet_repo,
+            pricing,
+        ),
+    )
+
+    rejected = client.post(
+        "/api/user/billing/top-up/claims",
+        headers={**_headers("alice"), "Idempotency-Key": "claim-1"},
+        json={
+            "product_id": product["public_id"],
+            "payment_channel": "wechat",
+            "payer_reference": "tail-1234",
+            "purchased_credits": 999999,
+        },
+    )
+    assert rejected.status_code == 422
+
+    submitted = client.post(
+        "/api/user/billing/top-up/claims",
+        headers={**_headers("alice"), "Idempotency-Key": "claim-1"},
+        json={
+            "product_id": product["public_id"],
+            "payment_channel": "wechat",
+            "payer_reference": "tail-1234",
+        },
+    )
+    assert submitted.status_code == 200
+    claim_id = submitted.json()["public_id"]
+    assert "owner_id" not in submitted.json()
+    assert "reviewed_by" not in submitted.json()
+
+    approved = client.post(
+        f"/api/admin/billing/top-up/claims/{claim_id}/approve",
+        headers={
+            **_headers("real-admin", "admin"),
+            "Idempotency-Key": "approve-1",
+        },
+        json={"reason": "receipt verified"},
+    )
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "approved"
+    assert wallet_repo.get_wallet("user", "alice")["available_credits"] == 1000
+
+
+def test_user_wallet_and_ledger_are_resolved_only_from_auth_context(
+    monkeypatch,
+    engine,
+    wallet_repo,
+    pricing,
+):
+    alice = wallet_repo.ensure_wallet("user", "alice")
+    bob = wallet_repo.ensure_wallet("user", "bob")
+    wallet_repo.append_transaction(
+        LedgerTransaction(
+            wallet_id=alice["id"],
+            event_type="purchase_grant",
+            credits=80,
+            business_type="grant",
+            business_key="internal-business-alice",
+            idempotency_key="alice-purchase",
+            credit_type="purchased",
+            metadata={
+                "capability": "text",
+                "tier": "standard",
+                "billability": "billable",
+                "supplier_reference": "supplier-secret",
+                "evidence": {"invoice": "private"},
+                "source_id": "internal-source-id",
+                "credit_lot_id": "internal-lot-id",
+            },
+        ),
+    )
+    wallet_repo.grant(
+        bob["id"],
+        credits=25,
+        credit_type="promotional",
+        expires_at=None,
+        idempotency_key="bob-grant",
+    )
+    usage = UsageService(wallet_repo, pricing, mode="shadow")
+    client = TestClient(_app(monkeypatch, usage, wallet_repo, pricing))
+
+    wallet = client.get(
+        "/api/user/billing/wallet",
+        headers=_headers("alice"),
+    )
+    ledger = client.get(
+        "/api/user/billing/ledger",
+        headers=_headers("alice"),
+    )
+
+    assert wallet.status_code == 200
+    assert wallet.json() == {
+        "available": 80,
+        "funded_available": 80,
+        "held": 0,
+        "debt": 0,
+        "held_overdraft": 0,
+        "purchased": 80,
+        "promotional": 0,
+        "package": 0,
+    }
+    ledger_item = ledger.json()["items"][0]
+    assert set(ledger_item) == {
+        "id",
+        "event_type",
+        "status",
+        "credit_delta",
+        "cash_delta_fen",
+        "business_type",
+        "metadata",
+        "created_at",
+    }
+    assert ledger_item["metadata"] == {
+        "billability": "billable",
+        "capability": "text",
+        "tier": "standard",
+    }
+    for forbidden in (
+        "alice-purchase",
+        "internal-business-alice",
+        "supplier-secret",
+        "invoice",
+        "internal-source-id",
+        "internal-lot-id",
+    ):
+        assert forbidden not in ledger.text
+    assert "alice" not in wallet.text
+    assert bob["id"] not in wallet.text
+
+    injected = _quote_payload("job-injected") | {
+        "wallet_id": bob["id"],
+        "credits": 1,
+        "price": 1,
+    }
+    rejected = client.post(
+        "/api/user/billing/quotes",
+        json=injected,
+        headers=_headers("alice"),
+    )
+    assert rejected.status_code == 422
+    with engine.connect() as conn:
+        assert (
+            conn.scalar(select(func.count()).select_from(billing_usage_orders))
+            == 0
+        )
+
+
+def test_shadow_quote_uses_published_snapshot_and_never_moves_balance(
+    monkeypatch,
+    engine,
+    wallet_repo,
+    pricing,
+):
+    _publish_catalog(pricing)
+    wallet = wallet_repo.ensure_wallet("user", "alice")
+    wallet_repo.grant(
+        wallet["id"],
+        credits=10,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key="purchase",
+    )
+    before = wallet_repo.balance(wallet["id"])
+    usage = UsageService(wallet_repo, pricing, mode="shadow")
+    client = TestClient(_app(monkeypatch, usage, wallet_repo, pricing))
+
+    response = client.post(
+        "/api/user/billing/quotes",
+        json=_quote_payload(),
+        headers=_headers("alice"),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["billing_mode"] == "shadow"
+    assert body["status"] == "quoted"
+    assert body["quote"]["credits"] == 100
+    assert body["quote"]["catalog_version"] == "retail-v1"
+    assert body["quote"]["snapshot"]["rule"] == {
+        "id": "retail-v1-image",
+        "provider_id": "aliyun",
+        "model_key": "wan-2.7",
+        "capability": "text_to_image",
+        "unit_type": "image_count",
+        "priority": 0,
+        "unit_size": 1,
+        "credits_per_unit": 50,
+        "input_credits_per_1k": 0,
+        "output_credits_per_1k": 0,
+        "parameter_match": {},
+        "metadata": {},
+    }
+    assert wallet_repo.balance(wallet["id"]) == before
+    assert [
+        row["event_type"]
+        for row in wallet_repo.list_ledger(wallet["id"], 10, None)
+    ] == ["purchase_grant"]
+    with engine.connect() as conn:
+        order = conn.execute(select(billing_usage_orders)).mappings().one()
+    assert order["wallet_id"] == wallet["id"]
+    assert order["status"] == "quoted"
+    assert order["quoted_credits"] == 100
+    assert order["held_credits"] == 0
+    assert '"credits":100' in order["price_snapshot_json"]
+
+
+def test_off_mode_quotes_without_recording_an_order(
+    monkeypatch,
+    engine,
+    wallet_repo,
+    pricing,
+):
+    _publish_catalog(pricing)
+    usage = UsageService(wallet_repo, pricing, mode="off")
+    client = TestClient(_app(monkeypatch, usage, wallet_repo, pricing))
+
+    response = client.post(
+        "/api/user/billing/quotes",
+        json=_quote_payload(),
+        headers=_headers("alice"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["billing_mode"] == "off"
+    assert response.json()["id"] is None
+    assert response.json()["status"] == "off"
+    with engine.connect() as conn:
+        assert (
+            conn.scalar(select(func.count()).select_from(billing_usage_orders))
+            == 0
+        )
+
+
+def test_enforced_quote_records_price_without_holding_an_empty_wallet(
+    monkeypatch,
+    engine,
+    wallet_repo,
+    pricing,
+):
+    _publish_catalog(pricing)
+    usage = UsageService(wallet_repo, pricing, mode="enforced")
+    client = TestClient(_app(monkeypatch, usage, wallet_repo, pricing))
+
+    response = client.post(
+        "/api/user/billing/quotes",
+        json=_quote_payload(),
+        headers=_headers("alice"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "quoted"
+    assert response.json()["quoted_credits"] == 100
+    assert response.json()["held_credits"] == 0
+    with engine.connect() as conn:
+        order = conn.execute(select(billing_usage_orders)).mappings().one()
+    assert order["status"] == "quoted"
+    assert order["held_credits"] == 0
+
+
+def test_quote_rejects_usage_above_the_product_limit_with_422(
+    monkeypatch,
+    wallet_repo,
+    pricing,
+):
+    _publish_catalog(pricing)
+    usage = UsageService(wallet_repo, pricing, mode="shadow")
+    client = TestClient(_app(monkeypatch, usage, wallet_repo, pricing))
+
+    response = client.post(
+        "/api/user/billing/quotes",
+        json=_quote_payload("oversized") | {"input_tokens": 100_000_001},
+        headers=_headers("alice"),
+    )
+
+    assert response.status_code == 422
+
+    legacy_duration = client.post(
+        "/api/user/billing/quotes",
+        json=_quote_payload("oversized-duration")
+        | {"parameters": {"duration": 10**100}},
+        headers=_headers("alice"),
+    )
+    assert legacy_duration.status_code == 422
+
+
+def test_same_client_business_key_is_namespaced_per_authenticated_user(
+    monkeypatch,
+    engine,
+    wallet_repo,
+    pricing,
+):
+    _publish_catalog(pricing)
+    usage = UsageService(wallet_repo, pricing, mode="shadow")
+    client = TestClient(_app(monkeypatch, usage, wallet_repo, pricing))
+
+    alice = client.post(
+        "/api/user/billing/quotes",
+        json=_quote_payload("shared-key"),
+        headers=_headers("alice"),
+    )
+    bob = client.post(
+        "/api/user/billing/quotes",
+        json=_quote_payload("shared-key"),
+        headers=_headers("bob"),
+    )
+
+    assert alice.status_code == 200
+    assert bob.status_code == 200
+    assert alice.json()["id"] != bob.json()["id"]
+    assert alice.json()["business_key"] == "shared-key"
+    assert bob.json()["business_key"] == "shared-key"
+    with engine.connect() as conn:
+        stored_keys = conn.scalars(
+            select(billing_usage_orders.c.business_key),
+        ).all()
+    assert len(set(stored_keys)) == 2
+    assert "shared-key" not in stored_keys
+
+
+@pytest.mark.parametrize(
+    "payload_update",
+    [
+        {"provider_id": "other-provider"},
+        {"model_key": "other-model"},
+        {"capability": "text_to_video"},
+        {"parameters": {"count": 3}},
+        {"input_tokens": 1},
+        {"output_tokens": 1},
+    ],
+)
+def test_same_owner_key_with_changed_quote_request_returns_409_conflict(
+    monkeypatch,
+    wallet_repo,
+    pricing,
+    payload_update,
+):
+    _publish_catalog(pricing)
+    usage = UsageService(wallet_repo, pricing, mode="shadow")
+    client = TestClient(_app(monkeypatch, usage, wallet_repo, pricing))
+    first = client.post(
+        "/api/user/billing/quotes",
+        json=_quote_payload("stable-key"),
+        headers=_headers("alice"),
+    )
+
+    changed = client.post(
+        "/api/user/billing/quotes",
+        json=_quote_payload("stable-key") | payload_update,
+        headers=_headers("alice"),
+    )
+
+    assert first.status_code == 200
+    assert changed.status_code == 409
+    assert changed.json()["code"] == "idempotency_conflict"
+
+
+@pytest.mark.parametrize("terminal_state", ["captured", "released"])
+def test_terminal_quote_replay_returns_the_existing_order_without_reholding(
+    monkeypatch,
+    wallet_repo,
+    pricing,
+    terminal_state,
+):
+    _publish_catalog(pricing)
+    usage = UsageService(wallet_repo, pricing, mode="shadow")
+    order = usage.create_quote(
+        "alice",
+        QuoteRequest(
+            "aliyun",
+            "wan-2.7",
+            "text_to_image",
+            {"count": 2},
+        ),
+        business_key=f"terminal-{terminal_state}",
+    )
+    usage.hold(order["id"])
+    if terminal_state == "captured":
+        usage.settle_supplier(
+            order["id"],
+            supplier_reference="dashscope:terminal-capture",
+            evidence={"charged": True},
+            billability="billable",
+            actual_credits=100,
+        )
+    else:
+        usage.settle_supplier(
+            order["id"],
+            supplier_reference="dashscope:terminal-release",
+            evidence={"charged": False},
+            billability="not_billable",
+        )
+    client = TestClient(_app(monkeypatch, usage, wallet_repo, pricing))
+
+    replay = client.post(
+        "/api/user/billing/quotes",
+        json=_quote_payload(f"terminal-{terminal_state}"),
+        headers=_headers("alice"),
+    )
+
+    assert replay.status_code == 200
+    assert replay.json()["id"] == order["id"]
+    assert replay.json()["status"] == terminal_state
+
+
+def test_quote_replay_returns_a_reconciling_order_without_settling_it(
+    monkeypatch,
+    wallet_repo,
+    pricing,
+):
+    _publish_catalog(pricing)
+    usage = UsageService(wallet_repo, pricing, mode="shadow")
+    order = usage.create_quote(
+        "alice",
+        QuoteRequest(
+            "aliyun",
+            "wan-2.7",
+            "text_to_image",
+            {"count": 2},
+        ),
+        business_key="reconciling-replay",
+    )
+    usage.hold(order["id"])
+    usage.settle_supplier(
+        order["id"],
+        supplier_reference="dashscope:reconciling",
+        evidence={"task_status": "UNKNOWN"},
+        billability="unknown",
+    )
+    client = TestClient(
+        _app(monkeypatch, usage, wallet_repo, pricing),
+        raise_server_exceptions=False,
+    )
+
+    replay = client.post(
+        "/api/user/billing/quotes",
+        json=_quote_payload("reconciling-replay"),
+        headers=_headers("alice"),
+    )
+
+    assert replay.status_code == 200
+    assert replay.json()["status"] == "reconciling"
+
+
+def test_quote_without_published_catalog_returns_catalog_not_ready(
+    monkeypatch,
+    wallet_repo,
+    pricing,
+):
+    usage = UsageService(wallet_repo, pricing, mode="shadow")
+    client = TestClient(
+        _app(monkeypatch, usage, wallet_repo, pricing),
+        raise_server_exceptions=False,
+    )
+
+    response = client.post(
+        "/api/user/billing/quotes",
+        json=_quote_payload("no-catalog"),
+        headers=_headers("alice"),
+    )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "catalog_not_ready"
+
+
+def test_enforced_usage_state_machine_holds_captures_and_releases(
+    wallet_repo,
+    pricing,
+):
+    _publish_catalog(pricing)
+    capture_wallet = wallet_repo.ensure_wallet("user", "capture-user")
+    release_wallet = wallet_repo.ensure_wallet("user", "release-user")
+    for label, wallet in (
+        ("capture", capture_wallet),
+        ("release", release_wallet),
+    ):
+        wallet_repo.grant(
+            wallet["id"],
+            credits=150,
+            credit_type="purchased",
+            expires_at=None,
+            idempotency_key=f"{label}-purchase",
+        )
+    usage = UsageService(wallet_repo, pricing, mode="enforced")
+
+    capture_order = usage.create_quote(
+        "capture-user",
+        QuoteRequest(
+            "aliyun",
+            "wan-2.7",
+            "text_to_image",
+            {"count": 2},
+        ),
+        business_key="capture-job",
+    )
+    held = usage.hold(capture_order["id"])
+    reconciling = usage.settle_supplier(
+        capture_order["id"],
+        supplier_reference="dashscope:capture",
+        evidence={"task_status": "UNKNOWN"},
+        billability="unknown",
+    )
+    captured = usage.settle_supplier(
+        capture_order["id"],
+        supplier_reference="dashscope:capture",
+        evidence={"task_status": "SUCCEEDED"},
+        billability="billable",
+        actual_credits=100,
+    )
+
+    assert held["status"] == "held"
+    assert reconciling["status"] == "reconciling"
+    assert captured["status"] == "captured"
+    assert wallet_repo.balance(capture_wallet["id"]) == WalletBalance(
+        50,
+        0,
+        50,
+        0,
+        0,
+    )
+    entries = wallet_repo.list_ledger(capture_wallet["id"], 10, None)
+    assert {row["event_type"] for row in entries} == {
+        "purchase_grant",
+        "usage_hold",
+        "usage_capture",
+    }
+    hold_entry = next(
+        row for row in entries if row["event_type"] == "usage_hold"
+    )
+    capture_entry = next(
+        row for row in entries if row["event_type"] == "usage_capture"
+    )
+    assert (
+        capture_entry["metadata"]["source_ledger_entry_id"] == hold_entry["id"]
+    )
+
+    release_order = usage.create_quote(
+        "release-user",
+        QuoteRequest(
+            "aliyun",
+            "wan-2.7",
+            "text_to_image",
+            {"count": 2},
+        ),
+        business_key="release-job",
+    )
+    usage.hold(release_order["id"])
+    released = usage.settle_supplier(
+        release_order["id"],
+        supplier_reference="dashscope:release",
+        evidence={"task_status": "FAILED", "charged": False},
+        billability="not_billable",
+    )
+
+    assert released["status"] == "released"
+    assert wallet_repo.balance(release_wallet["id"]) == WalletBalance(
+        150,
+        0,
+        150,
+        0,
+        0,
+    )
+
+
+def test_supplier_evidence_drives_unknown_then_partial_billable_settlement(
+    wallet_repo,
+    pricing,
+):
+    _publish_catalog(pricing)
+    wallet = wallet_repo.ensure_wallet("user", "evidence-user")
+    wallet_repo.grant(
+        wallet["id"],
+        credits=150,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key="evidence-purchase",
+    )
+    usage = UsageService(wallet_repo, pricing, mode="enforced")
+    order = usage.create_quote(
+        "evidence-user",
+        QuoteRequest(
+            "aliyun",
+            "wan-2.7",
+            "text_to_image",
+            {"count": 2, "tier": "standard"},
+        ),
+        business_key="evidence-job",
+    )
+    usage.hold(order["id"])
+
+    unknown = usage.settle_supplier(
+        order["id"],
+        supplier_reference="dashscope:req-1",
+        evidence={"task_status": "UNKNOWN", "attempt": 1},
+        billability="unknown",
+    )
+    captured = usage.settle_supplier(
+        order["id"],
+        supplier_reference="dashscope:req-1",
+        evidence={"task_status": "SUCCEEDED", "images": 1},
+        billability="billable",
+        actual_credits=50,
+    )
+    replay = usage.settle_supplier(
+        order["id"],
+        supplier_reference="dashscope:req-1",
+        evidence={"task_status": "SUCCEEDED", "images": 1},
+        billability="billable",
+        actual_credits=50,
+    )
+
+    assert unknown["status"] == "reconciling"
+    assert captured == replay
+    assert captured["status"] == "captured"
+    assert captured["billability"] == "billable"
+    assert captured["supplier_reference"] == "dashscope:req-1"
+    assert captured["supplier_evidence"] == {
+        "images": 1,
+        "task_status": "SUCCEEDED",
+    }
+    assert captured["captured_credits"] == 50
+    assert wallet_repo.balance(wallet["id"]) == WalletBalance(
+        100,
+        0,
+        100,
+        0,
+        0,
+    )
+
+
+def test_not_billable_supplier_evidence_releases_the_complete_hold(
+    wallet_repo,
+    pricing,
+):
+    _publish_catalog(pricing)
+    wallet = wallet_repo.ensure_wallet("user", "not-billable-user")
+    wallet_repo.grant(
+        wallet["id"],
+        credits=100,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key="not-billable-purchase",
+    )
+    usage = UsageService(wallet_repo, pricing, mode="enforced")
+    order = usage.create_quote(
+        "not-billable-user",
+        QuoteRequest(
+            "aliyun",
+            "wan-2.7",
+            "text_to_image",
+            {"count": 2},
+        ),
+        business_key="not-billable-job",
+    )
+    usage.hold(order["id"])
+
+    released = usage.settle_supplier(
+        order["id"],
+        supplier_reference="dashscope:req-2",
+        evidence={"task_status": "FAILED", "charged": False},
+        billability="not_billable",
+    )
+
+    assert released["status"] == "released"
+    assert released["billability"] == "not_billable"
+    assert wallet_repo.balance(wallet["id"]) == WalletBalance(
+        100,
+        0,
+        100,
+        0,
+        0,
+    )
+
+
+def test_shadow_capture_records_theoretical_charge_without_wallet_ledger(
+    wallet_repo,
+    pricing,
+):
+    _publish_catalog(pricing)
+    wallet = wallet_repo.ensure_wallet("user", "shadow-user")
+    usage = UsageService(wallet_repo, pricing, mode="shadow")
+    order = usage.create_quote(
+        "shadow-user",
+        QuoteRequest(
+            "aliyun",
+            "wan-2.7",
+            "text_to_image",
+            {"count": 2},
+        ),
+        business_key="shadow-job",
+    )
+
+    usage.hold(order["id"])
+    captured = usage.settle_supplier(
+        order["id"],
+        supplier_reference="dashscope:shadow",
+        evidence={"task_status": "SUCCEEDED"},
+        billability="billable",
+        actual_credits=100,
+    )
+
+    assert captured["status"] == "captured"
+    assert captured["captured_credits"] == 100
+    assert wallet_repo.balance(wallet["id"]) == WalletBalance(0, 0, 0, 0, 0)
+    assert wallet_repo.list_ledger(wallet["id"], 10, None) == []
+
+
+def test_enforced_hold_rolls_back_wallet_when_order_transition_fails(
+    engine,
+    wallet_repo,
+    pricing,
+):
+    _publish_catalog(pricing)
+    wallet = wallet_repo.ensure_wallet("user", "atomic-user")
+    wallet_repo.grant(
+        wallet["id"],
+        credits=150,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key="atomic-purchase",
+    )
+    usage = UsageService(wallet_repo, pricing, mode="enforced")
+    order = usage.create_quote(
+        "atomic-user",
+        QuoteRequest(
+            "aliyun",
+            "wan-2.7",
+            "text_to_image",
+            {"count": 2},
+        ),
+        business_key="atomic-job",
+    )
+
+    def fail_order_update(
+        _conn,
+        _cursor,
+        statement,
+        _parameters,
+        _context,
+        _executemany,
+    ):
+        if (
+            statement.lstrip()
+            .upper()
+            .startswith(
+                "UPDATE BILLING_USAGE_ORDERS",
+            )
+        ):
+            raise RuntimeError("injected order transition failure")
+
+    event.listen(engine, "before_cursor_execute", fail_order_update)
+    try:
+        with pytest.raises(RuntimeError, match="injected order transition"):
+            usage.hold(order["id"])
+    finally:
+        event.remove(engine, "before_cursor_execute", fail_order_update)
+
+    assert wallet_repo.balance(wallet["id"]) == WalletBalance(
+        150,
+        0,
+        150,
+        0,
+        0,
+    )
+    assert [
+        row["event_type"]
+        for row in wallet_repo.list_ledger(wallet["id"], 10, None)
+    ] == ["purchase_grant"]
+    assert usage.get_order(order["id"])["status"] == "quoted"
+
+
+def test_admin_cannot_bypass_cost_derived_prices_and_can_inspect_wallet(
+    monkeypatch,
+    wallet_repo,
+    pricing,
+):
+    wallet = wallet_repo.ensure_wallet("user", "alice")
+    wallet_repo.grant(
+        wallet["id"],
+        credits=30,
+        credit_type="promotional",
+        expires_at=None,
+        idempotency_key="admin-visible-grant",
+    )
+    usage = UsageService(wallet_repo, pricing, mode="shadow")
+    client = TestClient(_app(monkeypatch, usage, wallet_repo, pricing))
+
+    denied = client.get(
+        "/api/admin/billing/wallets/alice",
+        headers=_headers("alice", "user"),
+    )
+    assert denied.status_code == 403
+
+    created = client.post(
+        "/api/admin/billing/catalogs/drafts",
+        headers=_headers("admin-1", "admin") | {"X-Billing-Unlock": "test"},
+        json={
+            "version": "admin-v1",
+            "effective_at": NOW.isoformat(),
+            "rules": [
+                {
+                    "id": "admin-v1-image",
+                    "provider_id": "aliyun",
+                    "model_key": "wan-2.7",
+                    "capability": "text_to_image",
+                    "unit_type": "image_count",
+                    "credits_per_unit": 60,
+                },
+            ],
+        },
+    )
+    assert created.status_code == 404
+    published = client.post(
+        "/api/admin/billing/catalogs/forged-catalog/publish",
+        headers=_headers("admin-1", "admin") | {"X-Billing-Unlock": "test"},
+    )
+    assert published.status_code == 404
+    catalogs = client.get(
+        "/api/admin/billing/catalogs",
+        headers=_headers("admin-1", "admin"),
+    )
+    assert catalogs.json() == []
+
+    inspected = client.get(
+        "/api/admin/billing/wallets/alice",
+        headers=_headers("admin-1", "admin"),
+    )
+    ledger = client.get(
+        "/api/admin/billing/wallets/alice/ledger",
+        headers=_headers("admin-1", "admin"),
+    )
+    assert inspected.status_code == 200
+    assert inspected.json()["owner"] == {"type": "user", "id": "alice"}
+    assert inspected.json()["balance"]["promotional"] == 30
+    assert [item["idempotency_key"] for item in ledger.json()["items"]] == [
+        "admin-visible-grant",
+    ]
+
+
+def test_billing_routers_are_mounted_on_trusted_user_and_admin_prefixes():
+    from qwenpaw.app.routers import router as api_router
+
+    def route_paths(route) -> set[str]:
+        if hasattr(route, "path"):
+            return {route.path}
+        paths: set[str] = set()
+        for candidate in route.effective_candidates():
+            paths.update(route_paths(candidate))
+        return paths
+
+    paths = set().union(*(route_paths(route) for route in api_router.routes))
+
+    assert "/user/billing/wallet" in paths
+    assert "/user/billing/ledger" in paths
+    assert "/user/billing/quotes" in paths
+    assert "/user/billing/usage-orders" in paths
+    assert "/user/billing/usage-orders/{order_id}" in paths
+    assert "/user/billing/open-api-summary" in paths
+    assert "/admin/billing/catalogs" in paths
+    assert "/admin/billing/wallets/{owner_id}" in paths
+    assert "/admin/billing/usage-orders" in paths
+    assert "/admin/billing/reconciliation" in paths
+    assert "/admin/billing/reconciliation/{reconciliation_id}/resolve" in paths
+    assert "/admin/billing/reconciliation-audits" in paths
+    assert "/admin/billing/reconciliation-audits/{audit_id}" in paths
+    assert "/admin/billing/rollout/activate" in paths
+
+
+def _synchronize_first_order_reads(order_id: str):
+    barrier = Barrier(2)
+    lock = Lock()
+    synchronized = 0
+
+    def synchronize(
+        _conn,
+        _cursor,
+        statement,
+        parameters,
+        _context,
+        _executemany,
+    ):
+        nonlocal synchronized
+        if (
+            not statement.lstrip().upper().startswith("SELECT")
+            or "FROM billing_usage_orders" not in statement
+            or order_id not in parameters
+        ):
+            return
+        with lock:
+            if synchronized >= 2:
+                return
+            synchronized += 1
+        barrier.wait(timeout=5)
+
+    return synchronize
+
+
+def test_concurrent_hold_replay_returns_one_consistent_held_order(
+    engine,
+    wallet_repo,
+    pricing,
+):
+    _publish_catalog(pricing)
+    wallet = wallet_repo.ensure_wallet("user", "concurrent-hold")
+    wallet_repo.grant(
+        wallet["id"],
+        credits=100,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key="concurrent-hold-purchase",
+    )
+    usage = UsageService(wallet_repo, pricing, mode="enforced")
+    order = usage.create_quote(
+        "concurrent-hold",
+        QuoteRequest(
+            "aliyun",
+            "wan-2.7",
+            "text_to_image",
+            {"count": 2},
+        ),
+        business_key="concurrent-hold-job",
+    )
+    synchronize = _synchronize_first_order_reads(order["id"])
+    event.listen(engine, "after_cursor_execute", synchronize)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(
+                executor.map(lambda _index: usage.hold(order["id"]), range(2)),
+            )
+    finally:
+        event.remove(engine, "after_cursor_execute", synchronize)
+
+    assert [result["status"] for result in results] == ["held", "held"]
+    assert wallet_repo.balance(wallet["id"]) == WalletBalance(
+        0,
+        100,
+        100,
+        0,
+        0,
+    )
+    entries = wallet_repo.list_ledger(wallet["id"], 10, None)
+    assert sum(row["event_type"] == "usage_hold" for row in entries) == 1
+
+
+def test_concurrent_capture_and_release_has_one_controlled_winner(
+    engine,
+    wallet_repo,
+    pricing,
+):
+    _publish_catalog(pricing)
+    wallet = wallet_repo.ensure_wallet("user", "concurrent-settlement")
+    wallet_repo.grant(
+        wallet["id"],
+        credits=150,
+        credit_type="purchased",
+        expires_at=None,
+        idempotency_key="concurrent-settlement-purchase",
+    )
+    usage = UsageService(wallet_repo, pricing, mode="enforced")
+    order = usage.create_quote(
+        "concurrent-settlement",
+        QuoteRequest(
+            "aliyun",
+            "wan-2.7",
+            "text_to_image",
+            {"count": 2},
+        ),
+        business_key="concurrent-settlement-job",
+    )
+    usage.hold(order["id"])
+    synchronize = _synchronize_first_order_reads(order["id"])
+    event.listen(engine, "after_cursor_execute", synchronize)
+
+    def settle(billability):
+        try:
+            return usage.settle_supplier(
+                order["id"],
+                supplier_reference="dashscope:race",
+                evidence={"billability": billability},
+                billability=billability,
+                actual_credits=70 if billability == "billable" else None,
+            )
+        except UsageOrderStateError as exc:
+            return exc
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(
+                executor.map(settle, ("billable", "not_billable")),
+            )
+    finally:
+        event.remove(engine, "after_cursor_execute", synchronize)
+
+    assert (
+        sum(isinstance(item, UsageOrderStateError) for item in outcomes) == 1
+    )
+    terminal = usage.get_order(order["id"])
+    assert terminal["status"] in {"captured", "released"}
+    expected_available = 80 if terminal["status"] == "captured" else 150
+    assert wallet_repo.balance(wallet["id"]).available == expected_available
+    assert wallet_repo.balance(wallet["id"]).held == 0
+
+
+def test_admin_pricing_draft_routes_use_authenticated_actor_and_export_xlsx(
+    monkeypatch,
+    wallet_repo,
+    pricing,
+):
+    model = PriceableModel(
+        "dashscope",
+        "百炼",
+        "qwen3-max",
+        "Qwen3 Max",
+        "text",
+        official_model_id="qwen3-max",
+    )
+    result = PricingDraftBuilder(OfficialPriceRegistry.load_bundled()).build(
+        (model,), (), (), ()
+    )
+
+    class FakeAdmin:
+        def __init__(self):
+            self.exclusion_actor = None
+            self.decision_actor = None
+            self.unpublish_actor = None
+            self.generated_actors = []
+
+        def generate_draft(self, actor_id):
+            self.generated_actors.append(actor_id)
+            return {
+                "draft_key": "draft-current",
+                "coverage": {
+                    "enabled_models": 1,
+                    "matched_models": 1,
+                    "missing_models": 0,
+                    "excluded_models": 0,
+                    "blocking_models": 0,
+                },
+                "rows": [],
+                "risks": [],
+                "result": result,
+            }
+
+        def set_exclusion(
+            self,
+            draft_key,
+            provider_id,
+            model_key,
+            excluded,
+            reason,
+            actor_id,
+            ip_address=None,
+        ):
+            self.exclusion_actor = actor_id
+            return {
+                "draft_key": draft_key,
+                "provider_id": provider_id,
+                "model_key": model_key,
+                "excluded": excluded,
+                "reason": reason,
+            }
+
+        def set_model_decisions(
+            self,
+            draft_key,
+            decisions,
+            actor_id,
+            ip_address=None,
+        ):
+            self.decision_actor = actor_id
+            return decisions
+
+        def batch_set_model_decision(self, draft_key, **values):
+            self.decision_actor = values["actor_id"]
+            return {"updated_models": 1, "decisions": []}
+
+        def unpublish_model(
+            self,
+            provider_id,
+            model_key,
+            actor_id,
+            reason=None,
+            ip_address=None,
+        ):
+            self.unpublish_actor = actor_id
+            return {
+                "version": "unpublish-v1",
+                "provider_id": provider_id,
+                "model_key": model_key,
+                "reason": reason,
+            }
+
+    class ExcelRepo:
+        def record_import(self, *_args):
+            return {"id": "unused"}
+
+    fake = FakeAdmin()
+    monkeypatch.setattr(billing, "get_pricing_admin_service", lambda: fake)
+    monkeypatch.setattr(
+        billing,
+        "get_pricing_excel_service",
+        lambda: PricingExcelService(ExcelRepo()),
+    )
+    client = TestClient(
+        _app(
+            monkeypatch,
+            UsageService(wallet_repo, pricing, mode="shadow"),
+            wallet_repo,
+            pricing,
+        )
+    )
+    headers = _headers("admin-7", "admin")
+
+    generated = client.post(
+        "/api/admin/billing/pricing/drafts",
+        headers=headers | {"X-Billing-Unlock": "valid"},
+    )
+    exported = client.get(
+        "/api/admin/billing/pricing/drafts/draft-current/export",
+        headers=headers,
+    )
+    exported_current = client.get(
+        "/api/admin/billing/pricing/export",
+        headers=headers,
+    )
+    excluded = client.put(
+        "/api/admin/billing/pricing/drafts/draft-current/exclusions/"
+        "dashscope/qwen3-max",
+        headers=headers | {"X-Billing-Unlock": "valid"},
+        json={"excluded": True, "reason": "暂不发布"},
+    )
+    decisions = client.put(
+        "/api/admin/billing/pricing/drafts/draft-current/model-decisions",
+        headers=headers | {"X-Billing-Unlock": "valid"},
+        json={
+            "decisions": [
+                {
+                    "provider_id": "dashscope",
+                    "model_key": "qwen3-max",
+                    "include_in_publish": True,
+                    "reason": None,
+                }
+            ]
+        },
+    )
+    batch = client.post(
+        "/api/admin/billing/pricing/drafts/draft-current/batch-decision",
+        headers=headers | {"X-Billing-Unlock": "valid"},
+        json={
+            "include_in_publish": False,
+            "provider_ids": ["dashscope"],
+            "evidence_levels": ["ai_no_evidence"],
+            "model_keys": [],
+            "reason": "等待复核",
+        },
+    )
+    unpublished = client.post(
+        "/api/admin/billing/pricing/models/unpublish",
+        headers=headers | {"X-Billing-Unlock": "valid"},
+        json={
+            "provider_id": "dashscope",
+            "model_key": "qwen3-max",
+            "reason": "供应商临时维护",
+        },
+    )
+
+    assert generated.status_code == 200
+    assert "result" not in generated.json()
+    assert exported.status_code == 200
+    assert exported_current.status_code == 200
+    assert "read-only" in fake.generated_actors
+    assert exported.headers["content-type"].startswith(
+        "application/vnd.openxmlformats"
+    )
+    assert excluded.status_code == 200
+    assert fake.exclusion_actor == "admin-7"
+    assert decisions.status_code == 200
+    assert fake.decision_actor == "admin-7"
+    assert batch.status_code == 200
+    assert batch.json()["updated_models"] == 1
+    assert unpublished.status_code == 200
+    assert unpublished.json()["version"] == "unpublish-v1"
+    assert fake.unpublish_actor == "admin-7"
+
+
+def test_admin_can_start_and_read_collection_job_without_pricing_unlock(
+    monkeypatch,
+    wallet_repo,
+    pricing,
+):
+    class Runtime:
+        def enqueue(self, actor_id):
+            return {"id": "job-1", "status": "pending", "actor": actor_id}
+
+        def get(self, job_id):
+            return {
+                "id": job_id,
+                "status": "running",
+                "progress": {"total": 2, "completed": 1},
+            }
+
+        def list(self):
+            return [
+                {
+                    "id": "job-1",
+                    "status": "running",
+                    "progress": {"total": 2, "completed": 1},
+                }
+            ]
+
+    monkeypatch.setattr(
+        billing, "get_pricing_collection_runtime", lambda: Runtime()
+    )
+    monkeypatch.setattr(
+        billing,
+        "get_pricing_unlock_service",
+        lambda: type(
+            "Locked", (), {"is_valid": lambda self, token, actor: False}
+        )(),
+    )
+    client = TestClient(
+        _app(
+            monkeypatch,
+            UsageService(wallet_repo, pricing, mode="shadow"),
+            wallet_repo,
+            pricing,
+        )
+    )
+    headers = _headers("admin-7", "admin")
+
+    started = client.post(
+        "/api/admin/billing/pricing/collection-jobs", headers=headers
+    )
+    loaded = client.get(
+        "/api/admin/billing/pricing/collection-jobs/job-1", headers=headers
+    )
+    listed = client.get(
+        "/api/admin/billing/pricing/collection-jobs", headers=headers
+    )
+
+    assert started.status_code == 202
+    assert started.json() == {
+        "id": "job-1",
+        "status": "pending",
+        "actor": "admin-7",
+    }
+    assert loaded.status_code == 200
+    assert loaded.json()["progress"]["completed"] == 1
+    assert listed.status_code == 200
+    assert listed.json()[0]["id"] == "job-1"
+
+
+def test_user_quote_returns_stable_model_not_priced_error(
+    monkeypatch,
+    wallet_repo,
+    pricing,
+):
+    _publish_catalog(pricing)
+    client = TestClient(
+        _app(
+            monkeypatch,
+            UsageService(wallet_repo, pricing, mode="shadow"),
+            wallet_repo,
+            pricing,
+        )
+    )
+    payload = _quote_payload("unpriced-job") | {
+        "provider_id": "volcengine-cn",
+        "model_key": "unpriced-model",
+    }
+
+    response = client.post(
+        "/api/user/billing/quotes",
+        headers=_headers("unpriced-user"),
+        json=payload,
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "code": "model_not_priced",
+        "provider_id": "volcengine-cn",
+        "model_key": "unpriced-model",
+    }
