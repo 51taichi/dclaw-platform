@@ -32,6 +32,7 @@ class SkillVersionTests(unittest.TestCase):
         ]
         contents = "\n".join(path.read_text(encoding="utf-8") for path in active)
         self.assertIn("https://dclaw.rouhigh.com", contents)
+        self.assertIn("https://api.rouhigh.com", contents)
         self.assertIn("当前 `main`", contents)
         self.assertNotIn("https://dclaw.deepmega.cn", contents)
         self.assertNotIn("https://github.com/zimo528/dclaw-super-agent-porting.git", contents)

@@ -1,12 +1,12 @@
 # DClaw 超级专家开发 Skill（EC 工作区）
 
-本目录是当前 `dclaw-agentscope2-lab` monorepo 中的独立维护版。它以原 Skill 候选提交 `f4c62fac` 为基线，对齐平台标准 2.70、Support Plugin 1.18.60、Developer Pack 1.10.49 和 DevKit 1.9.34。当前版本为 `v1.9.13`。本目录不使用旧 Skill 仓库或用户级安装副本作为更新源，也不包含其他专家的源码交接包。
+本目录是当前 `dclaw-agentscope2-lab` monorepo 中的独立维护版。它以原 Skill 候选提交 `f4c62fac` 为基线，对齐平台标准 2.70、Support Plugin 1.18.60、Developer Pack 1.10.49 和 DevKit 1.9.34。当前版本为 `v1.9.14`。本目录不使用旧 Skill 仓库或用户级安装副本作为更新源，也不包含其他专家的源码交接包。
 
 ## 工作入口
 
 在这个工作区开发、修复或发布超级专家时，先读根目录与 `超级专家/` 下的 `AGENTS.md`、[主 Skill](SKILL.md)、[知识库](references/knowledge-base.md) 和平台当前标准。按专家项目的实际状态走 `new-development` 或 `optimization`；节点记录、源码、密封输入和发布回执留在该专家自己的目录。Skill 中的相对链接均相对于本目录。
 
-本工作区的默认目标是 EC `https://dclaw.rouhigh.com`。正式标准、DevKit、能力目录和发布状态仍须从实际目标实例认证读取；本地源码版本不能代替部署回执。本仓库的 Skill 维护不向阿里云上传或部署。
+EC 客户端入口是 `https://dclaw.rouhigh.com`。陆羽 1.1.34 的正式工具链和发布回执使用 `https://api.rouhigh.com`，与当前专家构建器的来源检查一致。正式标准、DevKit、能力目录和发布状态仍须从实际目标实例认证读取；本地源码版本不能代替部署回执。本仓库的 Skill 维护不向阿里云上传或部署。
 
 ## 维护与验证
 
