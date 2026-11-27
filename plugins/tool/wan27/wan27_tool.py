@@ -13,8 +13,9 @@ from pathlib import Path
 from typing import List, Optional
 
 import httpx
-from agentscope.message import TextBlock, VideoBlock
+from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
+from qwenpaw.agents.message_compat import VideoBlock
 from qwenpaw.constant import DEFAULT_MEDIA_DIR
 from qwenpaw.plugins import get_tool_config
 

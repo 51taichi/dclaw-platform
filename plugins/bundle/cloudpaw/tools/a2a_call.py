@@ -5,11 +5,9 @@ Supports resolution by alias (reading from per-agent a2a_config.json)
 or by direct URL.  When using alias, auth config is automatically
 applied from the stored registration.
 
-The tool is an ``AsyncGenerator`` that yields intermediate
-``ToolResponse(stream=True, is_last=False)`` chunks as SSE events
-arrive from the remote agent, so the QwenPaw frontend can render
-incremental progress in real time via the tool renderer.  The final
-chunk carries ``is_last=True``.
+The tool is an ``AsyncGenerator`` that yields AgentScope 2 ``ToolChunk``
+objects as SSE events arrive from the remote agent, so the QwenPaw frontend
+can render incremental progress in real time via the tool renderer.
 """
 
 import json
@@ -17,7 +15,7 @@ import logging
 from collections.abc import AsyncGenerator
 
 from agentscope.message import TextBlock
-from agentscope.tool import ToolResponse
+from agentscope.tool import ToolChunk
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +25,7 @@ async def a2a_call(  # pylint: disable=too-many-branches,too-many-statements
     agent_alias: str = "",
     agent_url: str = "",
     context_id: str = "",
-) -> AsyncGenerator[ToolResponse, None]:
+) -> AsyncGenerator[ToolChunk, None]:
     """向远程 A2A Agent 发送消息并获取响应。
 
     通过 ``agent_alias``（已注册的别名）或 ``agent_url``（URL）指定目标 Agent。
@@ -40,7 +38,7 @@ async def a2a_call(  # pylint: disable=too-many-branches,too-many-statements
         context_id:  可选，会话上下文 ID（多轮对话时传入上次返回的 contextId）
 
     Yields:
-        ToolResponse: 远程 Agent 的流式响应，包含：
+        ToolChunk: 远程 Agent 的流式响应，包含：
         - response_text: Agent 回复的文本内容（累积）
         - task_id: 任务 ID（如有）
         - context_id: 会话上下文 ID（用于多轮对话）
@@ -69,8 +67,8 @@ async def a2a_call(  # pylint: disable=too-many-branches,too-many-statements
     auth_type = ""
     auth_token = ""
 
-    def _error_response(error_msg: str) -> ToolResponse:
-        return ToolResponse(
+    def _error_response(error_msg: str) -> ToolChunk:
+        return ToolChunk(
             content=[
                 TextBlock(
                     type="text",
@@ -80,7 +78,6 @@ async def a2a_call(  # pylint: disable=too-many-branches,too-many-statements
                     ),
                 ),
             ],
-            stream=True,
             is_last=True,
         )
 
@@ -157,14 +154,13 @@ async def a2a_call(  # pylint: disable=too-many-branches,too-many-statements
                 }
                 if stream_queue is not None:
                     _push(stream_queue, payload)
-                yield ToolResponse(
+                yield ToolChunk(
                     content=[
                         TextBlock(
                             type="text",
                             text=json.dumps(payload, ensure_ascii=False),
                         ),
                     ],
-                    stream=True,
                     is_last=False,
                 )
 
@@ -197,14 +193,13 @@ async def a2a_call(  # pylint: disable=too-many-branches,too-many-statements
         if _has_call_stream:
             finish_stream()
 
-    yield ToolResponse(
+    yield ToolChunk(
         content=[
             TextBlock(
                 type="text",
                 text=json.dumps(result, ensure_ascii=False),
             ),
         ],
-        stream=True,
         is_last=True,
     )
 

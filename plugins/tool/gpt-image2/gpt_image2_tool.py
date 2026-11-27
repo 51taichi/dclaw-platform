@@ -9,8 +9,9 @@ from pathlib import Path
 from typing import List
 
 import httpx
-from agentscope.message import ImageBlock, TextBlock
+from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
+from qwenpaw.agents.message_compat import ImageBlock
 from qwenpaw.constant import DEFAULT_MEDIA_DIR
 from qwenpaw.plugins import get_tool_config
 

@@ -614,13 +614,13 @@ class ReMeLightMemoryManager(BaseMemoryManager):
         else:
             logger.debug("No existing MEMORY.md file to backup")
 
+        setattr(chat_model, "formatter", formatter)
         dream_agent = Agent(
             name="DreamOptimizer",
             model=chat_model,
-            sys_prompt="You are a Dream Memory Organizer specialized"
+            system_prompt="You are a Dream Memory Organizer specialized"
             " in optimizing long-term memory files.",
             toolkit=self.summary_toolkit,
-            formatter=formatter,
         )
 
         user_msg = Msg(

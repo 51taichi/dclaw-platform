@@ -481,11 +481,11 @@ class LightContextManager(BaseContextManager):
         )
 
         # Create an AgentScope 2 agent for compaction
+        setattr(as_llm, "formatter", as_llm_formatter)
         agent = Agent(
             name="qwenpaw_compactor",
             model=as_llm,
-            sys_prompt=system_prompt,
-            formatter=as_llm_formatter,
+            system_prompt=system_prompt,
         )
 
         # Build user message
@@ -504,7 +504,7 @@ class LightContextManager(BaseContextManager):
             user_message += f"\n\n# extra-instruction\n{extra_instruction}"
 
         logger.info(
-            f"Compactor sys_prompt={agent.sys_prompt} "
+            f"Compactor system_prompt={system_prompt} "
             f"user_message={user_message[:500]}...",
         )
 

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional, List, Dict
 
 import aiohttp
-from agentscope.agent import Agent
+from agentscope.agent import Agent, ReActConfig
 from ...message_compat import Msg
 from ...toolkit import DClawToolkit as Toolkit
 
@@ -121,14 +121,13 @@ async def _initialize_single_proactive_agent(
     if get_active_model_supports_multimodal():
         toolkit.register_tool_function(desktop_screenshot)
 
+    setattr(model, "formatter", formatter)
     agent = Agent(
         name="ProactiveAssistant",
         model=model,
-        sys_prompt="You are a helpful assistant.",
+        system_prompt="You are a helpful assistant.",
         toolkit=toolkit,
-        formatter=formatter,
-        memory=None,
-        max_iters=agent_config.running.max_iters,
+        react_config=ReActConfig(max_iters=agent_config.running.max_iters),
     )
 
     return agent
