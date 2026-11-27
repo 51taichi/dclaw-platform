@@ -159,6 +159,94 @@ async def test_local_host_dispatch_uses_the_turn_invocation_id(monkeypatch, tmp_
 
 
 @pytest.mark.asyncio
+async def test_continuity_scopes_previous_installation_card_receipts(monkeypatch, tmp_path):
+    from super_agent import aigc_binding
+
+    _allow_state_preflight(monkeypatch)
+    authorization = SimpleNamespace(
+        installation_id="installation-new",
+        release_id="release-new",
+        granted_capabilities={"interaction.card.read/1": "1"},
+    )
+    monkeypatch.setattr(
+        orchestration, "resolve_active_workspace_authorization",
+        lambda **_: authorization,
+    )
+    card = SimpleNamespace(
+        interaction_id="interaction-" + "a" * 32,
+        status=SimpleNamespace(value="SUBMITTED"),
+        updated_at="2026-11-27T04:00:00Z",
+    )
+    observed = {}
+
+    def list_owned(*, installation_id, conversation_ids):
+        assert conversation_ids == {"task"}
+        return (card,) if installation_id == "installation-old" else ()
+
+    def read_interaction(**kwargs):
+        observed["read_scope"] = kwargs["compatible_installation_ids"]
+        assert kwargs["conversation_id"] == "task"
+        return {"contract": "interaction.card.read/1", "result": "found"}
+
+    service = SimpleNamespace(
+        list_session_events=lambda **_: [],
+        interactions=SimpleNamespace(list_owned=list_owned),
+        read_interaction=read_interaction,
+    )
+    monkeypatch.setattr(
+        orchestration._composition, "get_super_expert_platform_service",
+        lambda: service,
+    )
+    monkeypatch.setattr(
+        orchestration._media_review_context, "current_review_input",
+        lambda **_: None,
+    )
+    monkeypatch.setattr(
+        aigc_binding, "compatible_installations",
+        lambda **_: frozenset({"installation-new", "installation-old"}),
+    )
+    monkeypatch.setattr(
+        orchestration, "card_receipt",
+        lambda item, action: {
+            "interaction_id": item.interaction_id,
+            "installation_id": "installation-old",
+            "action": action,
+        },
+    )
+
+    async def stream(**kwargs):
+        observed["receipts"] = kwargs["interaction_receipts"]
+        observed["compatible"] = kwargs["compatible_installation_ids"]
+        await kwargs["business_call"](
+            "interaction.card.read/1", {"interaction_id": card.interaction_id},
+        )
+        yield True, orchestration.WorkspaceTurnResult(
+            message={"reply": "accepted"}, invocation_id=kwargs["invocation_id"],
+        )
+
+    monkeypatch.setattr(orchestration._public_stream, "stream_workspace_turn", stream)
+    result = [item async for item in orchestration.handle_workspace_turn(
+        agent=SimpleNamespace(memory=InMemoryMemory()),
+        messages=[Msg(name="user", role="user", content="continue")],
+        request=SimpleNamespace(session_id="task", user_id="user", tenant_id="local"),
+        query="continue", mission_info=None, agent_id="comic",
+        agent_name="Comic", workspace_root=tmp_path,
+        orchestration=SimpleNamespace(), standard_stream=None,
+    )]
+
+    assert result[-1][0].get_text_content() == "accepted"
+    assert observed["compatible"] == frozenset(
+        {"installation-new", "installation-old"}
+    )
+    assert observed["read_scope"] == observed["compatible"]
+    assert observed["receipts"] == [{
+        "interaction_id": card.interaction_id,
+        "installation_id": "installation-old",
+        "action": "submitted",
+    }]
+
+
+@pytest.mark.asyncio
 async def test_incompatible_state_blocks_runtime_and_records_category(monkeypatch, tmp_path):
     from super_agent import state_continuity
 

@@ -99,11 +99,12 @@ def test_card_read_is_opt_in_scoped_and_schema_valid(tmp_path):
     arguments = {"interaction_id": card.interaction_id}
     Draft202012Validator(request_schema).validate(arguments)
 
-    def read(*, installation_id="install-a", conversation_id="task-a", tenant_id="tenant-a", args=None):
+    def read(*, installation_id="install-a", conversation_id="task-a", tenant_id="tenant-a", args=None, compatible=None):
         return service.read_interaction(
             tenant_id=tenant_id, installation_id=installation_id,
             conversation_id=conversation_id, contract_version="1",
             arguments=arguments if args is None else args,
+            compatible_installation_ids=compatible,
         )
 
     pending = read()
@@ -135,6 +136,13 @@ def test_card_read_is_opt_in_scoped_and_schema_valid(tmp_path):
         encoded_answer,
     ).hexdigest()
     assert read() == result
+    assert read(installation_id="install-b") == missing
+    compatible = frozenset({"install-a", "install-b"})
+    assert read(installation_id="install-b", compatible=compatible) == result
+    assert read(
+        installation_id="install-b", conversation_id="task-b",
+        compatible=compatible,
+    ) == missing
     assert "interaction.card.read/1" in PLATFORM_CAPABILITY_CATALOG_V1
 
     from super_agent.interaction_cards import InteractionError
@@ -143,6 +151,8 @@ def test_card_read_is_opt_in_scoped_and_schema_valid(tmp_path):
         read(args={"interaction_id": card.interaction_id, "idempotency_key": "forbidden"})
     with pytest.raises(SuperExpertPlatformError, match="not authorized"):
         read(tenant_id="tenant-b")
+    with pytest.raises(SuperExpertPlatformError, match="current installation"):
+        read(installation_id="install-b", compatible=frozenset({"install-a"}))
 
 
 @pytest.mark.parametrize("component_type,fields", [

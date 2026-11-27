@@ -895,6 +895,7 @@ async def run_workspace_orchestration_turn(
     read_interaction_card: Callable[[str], dict[str, Any] | None]
     | None = None,
     interaction_receipts: list[dict[str, Any]] | None = None,
+    compatible_installation_ids: frozenset[str] | None = None,
     on_public_message: Callable | None = None,
     safe_metadata: dict[str, Any] | None = None,
     timeout_seconds: float | None = None,
@@ -930,6 +931,9 @@ async def run_workspace_orchestration_turn(
             invocation_id=invocation_id,
         )
         trusted_context["interaction_receipts"] = list(interaction_receipts or [])
+        trusted_context["compatible_installation_ids"] = sorted(
+            compatible_installation_ids or {authorization.installation_id}
+        )
     except Exception as exc:
         logger.exception("Plugin workspace context enrichment failed")
         raise WorkspaceOrchestrationError("orchestration_error") from exc
@@ -2462,16 +2466,41 @@ async def handle_workspace_turn(
             ) from exc
         setup_phase = "turn_context"
         platform_service = _composition.get_super_expert_platform_service()
+        interaction_service = getattr(platform_service, "interactions", None)
+        compatible_interaction_installations = frozenset(
+            {authorization.installation_id}
+        )
+        if interaction_service is not None:
+            from .aigc_binding import compatible_installations
+
+            try:
+                compatible_interaction_installations = compatible_installations(
+                    storage_root=Path(WORKING_DIR) / "workspace_runtime_state",
+                    grants=SuperExpertGrantRepository(sealed_root),
+                    agent_id=agent_id,
+                    tenant_id=tenant_id,
+                    installation_id=authorization.installation_id,
+                    release_id=authorization.release_id,
+                    session_id=str(request.session_id),
+                    user_id=str(request.user_id),
+                )
+            except StateContinuityError as exc:
+                raise WorkspaceOrchestrationError(
+                    "orchestration_error", "state_continuity_failed",
+                ) from exc
         platform_events = platform_service.list_session_events(
             installation_id=authorization.installation_id,
             conversation_id=str(request.session_id),
         )
         interaction_receipts = []
-        interaction_service = getattr(platform_service, "interactions", None)
         if interaction_service is not None:
-            cards = interaction_service.list_owned(
-                installation_id=authorization.installation_id,
-                conversation_ids={str(request.session_id)},
+            cards = tuple(
+                card
+                for compatible_id in compatible_interaction_installations
+                for card in interaction_service.list_owned(
+                    installation_id=compatible_id,
+                    conversation_ids={str(request.session_id)},
+                )
             )
             for card in sorted(cards, key=lambda item: item.updated_at)[-20:]:
                 if card.status.value in {"PENDING", "SUBMITTED"}:
@@ -2560,6 +2589,7 @@ async def handle_workspace_turn(
                     conversation_id=str(request.session_id),
                     contract_version=contract_version,
                     arguments=payload,
+                    compatible_installation_ids=compatible_interaction_installations,
                 )
             if capability == "aigc.task.binding.resolve/1":
                 if set(payload) - {"task_key", "content_revision"}:
@@ -2915,6 +2945,7 @@ async def handle_workspace_turn(
             read_aigc_task=read_aigc_task,
             read_interaction_card=read_interaction_card,
             interaction_receipts=interaction_receipts,
+            compatible_installation_ids=compatible_interaction_installations,
             invocation_id=invocation_id,
             safe_metadata={
                 "platformEvents": [

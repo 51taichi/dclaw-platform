@@ -321,6 +321,7 @@ class SuperExpertPlatformService:
         conversation_id: str,
         contract_version: str,
         arguments: dict[str, Any],
+        compatible_installation_ids: frozenset[str] | None = None,
     ) -> dict[str, Any]:
         """Read one persisted card using only Host-supplied scope."""
         decision = self.grant_repository.authorize_capability(
@@ -343,16 +344,23 @@ class SuperExpertPlatformService:
             )
         if self.interactions is None:
             raise SuperExpertPlatformError("interaction service is unavailable")
-        try:
-            card = self.interactions.get_owned(
-                interaction_id,
-                installation_id=installation_id,
-                conversation_id=conversation_id,
-            )
-        except InteractionError as exc:
-            if exc.code == "INTERACTION_NOT_FOUND":
-                return {"contract": "interaction.card.read/1", "result": "not_found"}
-            raise
+        allowed = compatible_installation_ids or frozenset({installation_id})
+        if installation_id not in allowed:
+            raise SuperExpertPlatformError("current installation is not authorized")
+        card = None
+        for owner_installation_id in (installation_id, *sorted(allowed - {installation_id})):
+            try:
+                card = self.interactions.get_owned(
+                    interaction_id,
+                    installation_id=owner_installation_id,
+                    conversation_id=conversation_id,
+                )
+                break
+            except InteractionError as exc:
+                if exc.code != "INTERACTION_NOT_FOUND":
+                    raise
+        if card is None:
+            return {"contract": "interaction.card.read/1", "result": "not_found"}
         submitted = card.status.value == "SUBMITTED"
         return {
             "contract": "interaction.card.read/1",
