@@ -1,5 +1,15 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.34 assigns complete component Schema validation to Support Plugin
+1.18.60 at the create boundary. The runtime card example checks the live
+catalog and Agent business rules without requiring `jsonschema` in the signed
+Agent. The offline validator remains available for developer regression tests.
+
+The Support Plugin validates each card against the complete published
+component Schema at the create boundary. Signed Agents check their own
+business invariants and use the same model turn's text fallback on rejection.
+`validate_live_card.py` remains a developer-side regression tool.
+
 Version 1.9.33 adds optional interaction tool suppression for model-first
 card orchestration and custom written choices for selection cards. Version
 1.9.32 publishes the closed `agent.execute` v2 schema and reference
@@ -163,9 +173,9 @@ Version 1.9.10 adds a complete `single_select` live catalog fixture at
 `fixtures/interaction-host-v1/single-select-live-catalog.json` and a Draft
 2020-12 validation reference at `validate_live_card.py`. The reference requires
 the separate `jsonschema>=4.20,<5` Python package in the developer test
-environment. Do not assume it is installed in a sealed Agent runtime; package
-the chosen runtime validator with the signed Agent when needed. The target
-Host catalog remains authoritative over this offline fixture.
+environment. The signed runtime does not need this library for the Host's
+create-time component validation. The target Host catalog remains
+authoritative over this offline fixture.
 
 Version 1.9.9 adds direct Host `interaction.capabilities.list/1` and
 `interaction.card.create/1` request/response schemas in

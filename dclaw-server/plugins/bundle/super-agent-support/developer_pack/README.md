@@ -1,6 +1,6 @@
 # DClaw Super Agent Developer Pack
 
-Version 1.10.48 bundles standard 2.69 and DevKit 1.9.33. New and updated
+Version 1.10.49 bundles standard 2.70 and DevKit 1.9.34. New and updated
 experts use one model response for the business reply and optional card
 proposal, with a same-turn text fallback when the card cannot be created.
 

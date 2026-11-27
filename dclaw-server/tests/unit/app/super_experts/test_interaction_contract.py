@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 import json
 
 import pytest
+from jsonschema import Draft202012Validator
+from pydantic import ValidationError as PydanticValidationError
 
 from qwenpaw.app.super_experts.interaction_contract import (
     InteractionAnswer,
@@ -113,6 +115,33 @@ def test_card_string_fields_reject_non_strings_with_stable_validation_issue():
     assert error.value.issues == [
         {"field": "card.title", "code": "INVALID_VALUE"},
     ]
+
+
+def test_card_creation_enforces_the_published_complete_schema():
+    card = {
+        "title": "请选择一项",
+        "options": [{"text": "甲"}, {"text": "乙"}],
+        "supplement": {"max_length": True},
+    }
+    schema = build_interaction_catalog(["single_select"])["components"][0]["schema"]
+    assert not Draft202012Validator(schema).is_valid(card)
+
+    with pytest.raises(InteractionValidationError) as error:
+        validate_card("single_select", card)
+
+    assert error.value.code == "INVALID_INTERACTION_REQUEST"
+    assert error.value.issues == [
+        {"field": "card.supplement.max_length", "code": "INVALID_VALUE"},
+    ]
+    with pytest.raises(PydanticValidationError):
+        InteractionCreateRequest.model_validate(
+            {
+                "task_key": "customer-choice",
+                "interaction_revision": 1,
+                "component_type": "single_select",
+                "card": card,
+            },
+        )
 
 
 def test_question_form_catalog_exposes_strict_defaults_and_schema():

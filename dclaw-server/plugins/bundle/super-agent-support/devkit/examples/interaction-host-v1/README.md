@@ -9,9 +9,8 @@ direct Host calls. `create_card` uses the same boundary for `single_select`,
 `multi_select`, `question_form`, and `file_selector`; its required
 `check_business` callback checks each Agent's own fixed business fields.
 The `create_single_select` wrapper below shows option ID and order checks.
-A signed Agent can adapt its shared card module to this
-boundary after its own first model call has determined the business question
-and its second model call has proposed only a card presentation:
+A signed Agent can adapt its shared card module to this boundary after one
+model call has produced the business reply and optional card suggestion:
 
 ```python
 from devkit.interaction_card_api_demo import create_single_select
@@ -35,23 +34,25 @@ interaction_id = await create_single_select(
 ```
 
 The function calls `interaction.capabilities.list/1` with the exact component
-type, validates against `components[0].schema`, checks the fixed business
-question and IDs, calls `interaction.card.create/1`, and requires the returned
+type, checks the fixed business question and IDs, calls
+`interaction.card.create/1`, and requires the returned
 `interaction` and `interaction.card.receipt/1` to match. It raises on any
 failure. The calling Agent must keep the business state, stable key, revision,
-replacement rules and `runtime.complete/fail` transaction handling. Copy or
-adapt the reference in each signed Agent; if using `jsonschema`, include it
-and its dependencies in that Agent's signed private package. A Developer Pack
-file is not automatically importable by the sealed runtime.
+replacement rules and `runtime.complete/fail` transaction handling. The
+Support Plugin validates the card against its published complete Schema at
+the create boundary. The signed Agent need not carry `jsonschema` for this
+platform check. Copy or adapt the reference in each signed Agent; a Developer
+Pack file is not automatically importable by the sealed runtime.
 
 1. Declare and obtain grants for `interaction.capabilities.list/1` and
    `interaction.card.create/1`. Call
    `await host.call("interaction.capabilities.list/1", {"component_types": ["single_select"]})`.
    An empty or omitted `component_types` returns only the compact index.
    The filtered response returns the complete, current card JSON Schema at
-   `components[0].schema`, plus `defaults` and `create_example`. Validate the
-   draft `request.card` against that exact Schema and check business invariants
-   before creating. `GET /api/super-agent-support/component-registry` lists
+   `components[0].schema`, plus `defaults` and `create_example`. Check the
+   Agent's business invariants before creating; the Host checks the draft
+   `request.card` against that exact Schema during create. On rejection, use
+   the same model turn's text fallback. `GET /api/super-agent-support/component-registry` lists
    local-helper public components; it is not the interaction-card catalog.
 2. Call `await host.call("interaction.card.create/1", create_call.arguments)`
    with a stable `idempotency_key` for the same installation, task, `task_key`,
@@ -86,11 +87,12 @@ For a pre-publication regression, validate the included `create_example.card`
 against `fixtures/interaction-host-v1/single-select-live-catalog.json` and
 reject cards missing `title` or carrying unknown fields. This fixture contains
 real `$defs` and nested `$ref` nodes. `devkit/validate_live_card.py` shows
-complete Draft 2020-12 validation; it requires `jsonschema>=4.20,<5` in the
-developer test environment. A custom keyword whitelist is insufficient even
-if it accepts one version of the catalog. Repeat validation against the target
-Host's detailed catalog before creating a card. Keep option IDs, order and
-business state checks separate from structural Schema validation.
+complete Draft 2020-12 validation for developer tests; it requires
+`jsonschema>=4.20,<5` in that test environment. A custom keyword whitelist is
+insufficient even if it accepts one version of the catalog. Repeat the check
+against the target Host's detailed catalog before publication. The Support
+Plugin performs the authoritative create-time check. Keep option IDs, order
+and business state checks separate from structural Schema validation.
 
 The Skill's release gate must run the API reference or an equivalent shared
 Agent implementation against the real catalog fixture, invalid cards and a

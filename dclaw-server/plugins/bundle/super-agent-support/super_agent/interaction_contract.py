@@ -6,9 +6,11 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from enum import Enum
+from functools import lru_cache
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
+from jsonschema import Draft202012Validator, FormatChecker
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -332,6 +334,19 @@ class FileSelectorCard(_StrictFrozenModel):
 InteractionCard = (
     SingleSelectCard | MultiSelectCard | QuestionFormCard | FileSelectorCard
 )
+_CARD_MODELS = {
+    InteractionComponentType.SINGLE_SELECT: SingleSelectCard,
+    InteractionComponentType.MULTI_SELECT: MultiSelectCard,
+    InteractionComponentType.QUESTION_FORM: QuestionFormCard,
+    InteractionComponentType.FILE_SELECTOR: FileSelectorCard,
+}
+
+
+@lru_cache(maxsize=4)
+def _card_schema_validator(kind: InteractionComponentType) -> Draft202012Validator:
+    schema = _CARD_MODELS[kind].model_json_schema()
+    Draft202012Validator.check_schema(schema)
+    return Draft202012Validator(schema, format_checker=FormatChecker())
 
 
 def _preflight_card(component_type: str, card: Any) -> None:
@@ -489,19 +504,24 @@ def validate_card(component_type: str, card: Any) -> InteractionCard:
             [{"field": "component_type", "code": "UNKNOWN_COMPONENT_TYPE"}],
         ) from exc
     _preflight_card(kind.value, card)
-    model = {
-        InteractionComponentType.SINGLE_SELECT: SingleSelectCard,
-        InteractionComponentType.MULTI_SELECT: MultiSelectCard,
-        InteractionComponentType.QUESTION_FORM: QuestionFormCard,
-        InteractionComponentType.FILE_SELECTOR: FileSelectorCard,
-    }[kind]
+    model = _CARD_MODELS[kind]
     try:
-        return model.model_validate(card)
+        normalized = model.model_validate(card)
     except ValidationError as exc:
         raise InteractionValidationError(
             "INVALID_INTERACTION_REQUEST",
             _validation_issues(exc),
         ) from exc
+    schema_error = next(_card_schema_validator(kind).iter_errors(card), None)
+    if schema_error is not None:
+        field = "card"
+        for part in schema_error.absolute_path:
+            field += f"[{part}]" if isinstance(part, int) else f".{part}"
+        raise InteractionValidationError(
+            "INVALID_INTERACTION_REQUEST",
+            [{"field": field, "code": "INVALID_VALUE"}],
+        ) from schema_error
+    return normalized
 
 
 class InteractionCreateRequest(_StrictFrozenModel):
@@ -684,12 +704,7 @@ def _component_entry(
     }
     if not detailed:
         return entry
-    model = {
-        InteractionComponentType.SINGLE_SELECT: SingleSelectCard,
-        InteractionComponentType.MULTI_SELECT: MultiSelectCard,
-        InteractionComponentType.QUESTION_FORM: QuestionFormCard,
-        InteractionComponentType.FILE_SELECTOR: FileSelectorCard,
-    }[kind]
+    model = _CARD_MODELS[kind]
     if kind is InteractionComponentType.FILE_SELECTOR:
         entry.update(
             {

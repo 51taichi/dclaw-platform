@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from jsonschema import Draft202012Validator, FormatChecker, ValidationError
+from pydantic import ValidationError as PydanticValidationError
 
 from developer_pack.archive import build_archive
 from super_agent.interaction_cards import InteractionCardRepository
@@ -300,10 +301,14 @@ async def test_api_demo_uses_live_catalog_and_verifies_created_receipt(tmp_path)
             if capability == "interaction.capabilities.list/1":
                 return self.catalog_override or catalog
             assert capability == "interaction.card.create/1"
+            try:
+                request = InteractionCreateRequest.model_validate(arguments["request"])
+            except PydanticValidationError:
+                return {"error": "INVALID_INTERACTION_REQUEST"}
             card = repo.create(
                 installation_id="install-demo",
                 conversation_id="task-demo",
-                request=InteractionCreateRequest.model_validate(arguments["request"]),
+                request=request,
                 idempotency_key=arguments["idempotency_key"],
                 now=datetime(2026, 11, 10, tzinfo=timezone.utc),
             )
@@ -329,11 +334,13 @@ async def test_api_demo_uses_live_catalog_and_verifies_created_receipt(tmp_path)
     assert host.calls[1][1]["request"]["card"] == example["card"]
 
     host.calls.clear()
-    with pytest.raises(ValidationError):
+    with pytest.raises(CardContractError, match="missing persisted interaction"):
         await create_single_select(host, **{**arguments, "card": {
             **example["card"], "unknown": True,
         }})
-    assert [name for name, _ in host.calls] == ["interaction.capabilities.list/1"]
+    assert [name for name, _ in host.calls] == [
+        "interaction.capabilities.list/1", "interaction.card.create/1",
+    ]
 
     host.calls.clear()
     with pytest.raises(CardContractError, match="option IDs or order"):
@@ -348,8 +355,8 @@ async def test_api_demo_uses_live_catalog_and_verifies_created_receipt(tmp_path)
 
     host.calls.clear()
     host.catalog_override = copy.deepcopy(catalog)
-    host.catalog_override["components"][0]["create_example"]["card"]["unknown"] = True
-    with pytest.raises(ValidationError):
+    host.catalog_override["components"][0]["schema"] = None
+    with pytest.raises(CardContractError, match="missing detailed component"):
         await create_single_select(host, **arguments)
     assert [name for name, _ in host.calls] == ["interaction.capabilities.list/1"]
 

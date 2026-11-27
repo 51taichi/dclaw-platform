@@ -1,7 +1,7 @@
 # Super Agent Skill 统一交接：模型调用、交互卡与失败终止
 
-适用基线：标准 2.69、Support 1.18.59、Developer Pack 1.10.48、
-DevKit 1.9.33。本文适用于所有 Super Agent，不包含任何单一专家业务规则。
+适用基线：标准 2.70、Support 1.18.60、Developer Pack 1.10.49、
+DevKit 1.9.34。本文适用于所有 Super Agent，不包含任何单一专家业务规则。
 
 ## 平台统一保证
 
@@ -39,12 +39,11 @@ DevKit 1.9.33。本文适用于所有 Super Agent，不包含任何单一专家�
 
 ## 统一交互卡流程
 
-1. 调用 `interaction.capabilities.list/1` 获取实时组件 Schema。
-2. 按实时 Schema 校验卡片，并校验专家自己的业务字段和稳定 option ID。
-3. 调用 `interaction.card.create/1`，使用稳定幂等键。
+1. 每轮先调用一次模型，同时取得业务回复、文字回退和可选卡片建议。
+2. 调用 `interaction.capabilities.list/1` 获取建议组件的实时详细目录，并校验专家自己的业务字段和稳定 option ID。
+3. 调用 `interaction.card.create/1`，使用稳定幂等键；Support Plugin 按公开的完整组件 Schema 校验卡片。
 4. 同时核对持久卡记录与 `interaction.card.receipt/1` created 回执。
-5. 只有 Host 回执通过后才调用 `runtime.complete`；失败则调用一次
-   `runtime.fail`，不得伪造成功或让回合无终态。
+5. 成功时通过 `runtime.complete` 提交卡片与回复；建议无效或建卡失败时提交同轮文字回退，不声称卡片存在。其他失败调用一次 `runtime.fail`，不得伪造成功或让回合无终态。
 
 卡片 API 参考：`devkit/interaction_card_api_demo.py`；模型与失败 API 参考：
 `devkit/agent_execute_api_demo.py`；完整规则见
@@ -57,7 +56,7 @@ DevKit 1.9.33。本文适用于所有 Super Agent，不包含任何单一专家�
 - 默认候选调用是否错误携带 `instruction`；
 - 工具循环是否错误叠加 `response_format=json_object`；
 - 自定义失败码是否符合安全大写点分语法；
-- 是否读取实时卡片 Schema，而不是使用本地猜测字段；
+- 是否读取实时卡片详细目录并校验业务规则，而不是使用本地猜测字段；
 - 是否严格核对 created receipt、点击续接、幂等重放和 replacement；
 - Fake Host 是否复用正式 Schema 和 Demo 的严格 validator；
 - 失败路径是否调用一次 `runtime.fail`，成功路径是否调用一次

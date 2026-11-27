@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.49 - 2026-11-27
+
+- Bundle standard 2.70 and DevKit 1.9.34. Support Plugin 1.18.60 validates
+  cards against its published complete component Schema at create time;
+  signed Agents retain their business checks and same-turn text fallback.
+
 ## 1.10.48 - 2026-11-27
 
 - Bundle standard 2.69 and DevKit 1.9.33 for single-call model-first card

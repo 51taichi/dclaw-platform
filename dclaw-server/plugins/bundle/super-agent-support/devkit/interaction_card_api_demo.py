@@ -10,9 +10,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from devkit.validate_live_card import validate_live_card
-
-
 class CardContractError(ValueError):
     """A catalog, candidate or Host receipt failed the public card contract."""
 
@@ -91,15 +88,17 @@ async def create_card(
         item for item in catalog.get("components", [])
         if isinstance(item, dict) and item.get("component_type") == component_type
     ] if isinstance(catalog, dict) else []
-    if len(components) != 1:
+    if (
+        len(components) != 1
+        or components[0].get("contract_version") != "1"
+        or not isinstance(components[0].get("schema"), dict)
+    ):
         raise CardContractError("missing detailed component")
     create_example = components[0].get("create_example")
     if not isinstance(create_example, dict) or not isinstance(
         create_example.get("card"), dict,
     ):
         raise CardContractError("missing Host create example")
-    validate_live_card(catalog, component_type, create_example["card"])
-    validate_live_card(catalog, component_type, card)
     check_business(card)
 
     request = {
