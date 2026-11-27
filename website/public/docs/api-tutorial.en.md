@@ -2,8 +2,9 @@
 
 This document will guide you through using the RESTful API to interact with QwenPaw Agents.
 
-> **Protocol Details**: QwenPaw's API is based on an extension of the AgentScope Runtime protocol. For more details, see:
-> [AgentScope Runtime Protocol Documentation (English)](https://runtime.agentscope.io/en/protocol.html)
+> **Protocol Details**: QwenPaw owns its Agent request, streaming response,
+> and task management contracts. Use this guide and the server OpenAPI schema
+> as the authoritative references.
 
 > ⚠️ **Security Warning**:
 > If your QwenPaw instance is **exposed to the public internet**, strongly recommend enabling [Web Login Authentication](./security#web-authentication)!

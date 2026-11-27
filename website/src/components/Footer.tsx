@@ -7,8 +7,6 @@ import { GitHubIcon, XIcon, DiscordIcon, WChatIcon } from "./Icon";
 
 const AGENTSCOPE_ORG = "https://github.com/agentscope-ai";
 const AGENTSCOPE_REPO = "https://github.com/agentscope-ai/agentscope";
-const AGENTSCOPE_RUNTIME =
-  "https://github.com/agentscope-ai/agentscope-runtime";
 const REME_REPO = "https://github.com/agentscope-ai/ReMe";
 
 interface SocialLink {
@@ -94,10 +92,6 @@ const poweredByLinks: PoweredByLink[] = [
   {
     href: AGENTSCOPE_REPO,
     labelKey: "footer.poweredBy.agentscope",
-  },
-  {
-    href: AGENTSCOPE_RUNTIME,
-    labelKey: "footer.poweredBy.runtime",
   },
   {
     href: REME_REPO,

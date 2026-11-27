@@ -19,8 +19,7 @@ QwenPaw / DClaw 是一款部署在你自己环境中的**企业 AI 工作台与�
 - **多端触达** — 控制台、桌面端、小程序以及钉钉、飞书、Discord、Telegram 等频道按场景接入。
 
 QwenPaw 由 [AgentScope 团队](https://github.com/agentscope-ai) 基于
-[AgentScope](https://github.com/agentscope-ai/agentscope)、
-[AgentScope Runtime](https://github.com/agentscope-ai/agentscope-runtime) 与
+[AgentScope 2](https://github.com/agentscope-ai/agentscope) 与
 [ReMe](https://github.com/agentscope-ai/ReMe) 构建。
 
 ---

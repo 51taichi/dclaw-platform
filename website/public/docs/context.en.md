@@ -189,12 +189,12 @@ graph LR
 
 ### 3. compact_memory — Conversation Compaction
 
-Uses ReActAgent to compress historical conversations into a **structured context summary**:
+Uses an AgentScope 2 Agent to compress historical conversations into a **structured context summary**:
 
 ```mermaid
 graph LR
     M[messages] --> H[format_msgs_to_str]
-    H --> A[ReActAgent<br>reme_compactor]
+    H --> A[AgentScope 2 Agent<br>qwenpaw_compactor]
     P[previous_summary] -->|Incremental update| A
     A --> S[Structured summary]
 ```

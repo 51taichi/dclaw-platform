@@ -189,12 +189,12 @@ graph LR
 
 ### 3. compact_memory — 对话压缩
 
-使用 ReActAgent 将历史对话压缩为**结构化上下文摘要**：
+使用 AgentScope 2 Agent 将历史对话压缩为**结构化上下文摘要**：
 
 ```mermaid
 graph LR
     M[messages] --> H[format_msgs_to_str]
-    H --> A[ReActAgent<br>reme_compactor]
+    H --> A[AgentScope 2 Agent<br>qwenpaw_compactor]
     P[previous_summary] -->|增量更新| A
     A --> S[结构化摘要]
 ```

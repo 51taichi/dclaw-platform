@@ -142,6 +142,7 @@ export interface InteractionOption {
 
 export interface InteractionSupplement {
   enabled: boolean;
+  answer_mode?: "note" | "choice";
   label: string;
   placeholder: string;
   required: boolean;

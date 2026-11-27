@@ -20,8 +20,7 @@ QwenPaw / DClaw is an **enterprise AI workspace and multi-agent execution platfo
 - **Multi-endpoint access** — Use the console, desktop app, mini app, DingTalk, Feishu, Discord, Telegram, and other channels where each workflow lives.
 
 QwenPaw is built by the [AgentScope team](https://github.com/agentscope-ai) on
-[AgentScope](https://github.com/agentscope-ai/agentscope),
-[AgentScope Runtime](https://github.com/agentscope-ai/agentscope-runtime), and
+[AgentScope 2](https://github.com/agentscope-ai/agentscope) and
 [ReMe](https://github.com/agentscope-ai/ReMe).
 
 ---

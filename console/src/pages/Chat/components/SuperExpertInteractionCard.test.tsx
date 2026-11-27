@@ -96,6 +96,67 @@ describe("SuperExpertInteractionCard", () => {
     ensureLocalHelper.mockResolvedValue({ available: false, status: null });
   });
 
+  it("submits either a preset single choice or a custom written answer", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    render(
+      <SuperExpertInteractionCard
+        projection={single({
+          inputPolicy: "card_or_text",
+          supplement: {
+            enabled: true,
+            answerMode: "choice",
+            required: false,
+            label: "自行撰写回复",
+            placeholder: "写下你的实际情况",
+            maxLength: 500,
+          },
+        })}
+        onSubmit={onSubmit}
+      />,
+    );
+    fireEvent.click(screen.getByRole("radio", { name: /方案甲/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "自行撰写回复" }), {
+      target: { value: "我的情况不同" },
+    });
+    expect(screen.getByRole("radio", { name: /方案甲/ })).not.toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "提交选择" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({
+      version: 1, selected: [], supplement: "我的情况不同",
+    }));
+  });
+
+  it("counts a custom answer alongside preset multi choices", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    render(
+      <SuperExpertInteractionCard
+        projection={single({
+          componentType: "multi_select",
+          minSelections: 2,
+          maxSelections: 3,
+          supplement: {
+            enabled: true,
+            answerMode: "choice",
+            required: false,
+            label: "自行撰写回复",
+            placeholder: "补充另一个选项",
+            maxLength: 500,
+          },
+        })}
+        onSubmit={onSubmit}
+      />,
+    );
+    fireEvent.click(screen.getByRole("checkbox", { name: /方案甲/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "自行撰写回复" }), {
+      target: { value: "第三种情况" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "提交选择" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({
+      version: 1,
+      selected: [{ id: "a", text: "方案甲：保留稳定业务 ID 与完整显示文本" }],
+      supplement: "第三种情况",
+    }));
+  });
+
   it("only trusts DClaw bootstrap connection actions", () => {
     expect(
       isTrustedLocalToolActionUrl(

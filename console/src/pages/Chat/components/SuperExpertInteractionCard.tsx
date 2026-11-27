@@ -38,6 +38,7 @@ export interface ChoiceInteractionProjection extends InteractionProjectionBase {
   }>;
   supplement: {
     enabled: boolean;
+    answerMode?: "note" | "choice";
     required: boolean;
     label: string;
     placeholder: string;
@@ -211,7 +212,10 @@ function ChoiceInteractionCard({
     const key = optionKey(option);
     setError("");
     setSelected((current) => {
-      if (projection.componentType === "single_select") return new Set([key]);
+      if (projection.componentType === "single_select") {
+        if (projection.supplement.answerMode === "choice") setSupplement("");
+        return new Set([key]);
+      }
       const next = new Set(current);
       if (next.has(key)) next.delete(key);
       else if (next.size < projection.maxSelections) next.add(key);
@@ -222,14 +226,18 @@ function ChoiceInteractionCard({
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!actionable || busy || submittingRef.current) return;
+    const customChoice =
+      projection.supplement.answerMode === "choice" &&
+      supplement.trim().length > 0;
+    const selectionCount = selected.size + (customChoice ? 1 : 0);
     if (
-      selected.size < projection.minSelections ||
-      selected.size > projection.maxSelections
+      selectionCount < projection.minSelections ||
+      selectionCount > projection.maxSelections
     ) {
       setError(
         projection.componentType === "single_select"
-          ? "请选择一项"
-          : `请选择 ${projection.minSelections}–${projection.maxSelections} 项`,
+          ? "请选择一项或自行填写"
+          : `请选择或填写 ${projection.minSelections}–${projection.maxSelections} 项`,
       );
       return;
     }
@@ -269,7 +277,9 @@ function ChoiceInteractionCard({
           const atLimit =
             projection.componentType === "multi_select" &&
             !checked &&
-            selected.size >= projection.maxSelections;
+            selected.size +
+              (projection.supplement.answerMode === "choice" && supplement.trim() ? 1 : 0) >=
+            projection.maxSelections;
           return (
             <label
               key={key}
@@ -331,7 +341,13 @@ function ChoiceInteractionCard({
             disabled={!pending || busy}
             rows={2}
             onChange={(event) => {
-              setSupplement(event.target.value);
+              const value = event.target.value;
+              if (
+                projection.componentType === "single_select" &&
+                projection.supplement.answerMode === "choice" &&
+                value.trim()
+              ) setSelected(new Set());
+              setSupplement(value);
               setError("");
               event.currentTarget.style.height = "auto";
               event.currentTarget.style.height = `${event.currentTarget.scrollHeight}px`;
@@ -356,7 +372,9 @@ function ChoiceInteractionCard({
               : submissionFailed
               ? "提交结果未送达，请重试"
               : projection.componentType === "multi_select"
-              ? `可选 ${projection.minSelections}–${projection.maxSelections} 项`
+              ? `可选 ${projection.minSelections}–${projection.maxSelections} 项${projection.supplement.answerMode === "choice" ? "，自行填写计为一项" : ""}`
+              : projection.supplement.answerMode === "choice"
+              ? "选择一项或自行填写"
               : "请选择一项"}
           </span>
           <button type="submit" disabled={busy} aria-busy={busy}>

@@ -58,6 +58,7 @@ function projectInteraction(
     })),
     supplement: {
       enabled: record.card.supplement.enabled,
+      answerMode: record.card.supplement.answer_mode ?? "note",
       required: record.card.supplement.required,
       label: record.card.supplement.label,
       placeholder: record.card.supplement.placeholder,

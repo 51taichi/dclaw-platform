@@ -2,8 +2,8 @@
 
 本文档将指导你如何使用 RESTful API 调用 QwenPaw 的 Agent。
 
-> **协议详情**：QwenPaw 的 API 基于 AgentScope Runtime 协议的拓展。更多详细信息请参考：
-> [AgentScope Runtime 协议文档（中文）](https://runtime.agentscope.io/zh/protocol.html)
+> **协议详情**：QwenPaw 使用自有的 Agent 请求、流式响应和任务管理协议，
+> 具体字段与示例以本文档及服务端 OpenAPI 定义为准。
 
 > ⚠️ **安全提醒**：
 > 如果您的 QwenPaw 实例对**公网开放**，强烈建议启用 [Web 登录认证](./security#Web-登录认证)！
