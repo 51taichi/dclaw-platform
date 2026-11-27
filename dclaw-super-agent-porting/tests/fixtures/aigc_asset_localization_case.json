@@ -1,0 +1,61 @@
+{
+  "bound_material_task_id": "material-example",
+  "bound_canvas_id": "canvas-example",
+  "snapshot_response": {
+    "contract": "aigc.task.snapshot/1",
+    "status": "found",
+    "material_task_id": "material-example",
+    "workflow_id": "workflow-example",
+    "canvas_id": "canvas-example",
+    "task_status": "RUNNING",
+    "task_version": 2,
+    "submitted_asset_id": null,
+    "node_jobs": [
+      {"node_id": "video-node", "job_id": "job-example", "job_status": "succeeded"},
+      {"node_id": "audio-node", "job_id": "job-pending", "job_status": "running"}
+    ],
+    "generation_assets": [
+      {"node_id": "video-node", "job_id": "job-example", "asset_id": "asset-01", "asset_kind": "video"},
+      {"node_id": "video-node", "job_id": "job-example", "asset_id": "asset-02", "asset_kind": "video"}
+    ]
+  },
+  "list_request": {"material_task_id": "material-example"},
+  "list_response": {
+    "contract": "aigc.task.assets.list/1",
+    "status": "found",
+    "material_task_id": "material-example",
+    "assets": [
+      {"asset_id": "asset-01", "node_id": "video-node", "job_id": "job-example", "kind": "video", "name": "clip-01.mp4", "mime_type": "video/mp4", "size_bytes": 1024, "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+      {"asset_id": "asset-02", "node_id": "video-node", "job_id": "job-example", "kind": "video", "name": "clip-02.mp4", "mime_type": "video/mp4", "size_bytes": 2048, "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+    ]
+  },
+  "localize_request": {
+    "material_task_id": "material-example",
+    "idempotency_key": "localize-material-example-revision-1",
+    "assets": [
+      {"asset_id": "asset-02", "usage": "timeline_clip", "slot": "clip_02", "order": 1, "destination": "res"},
+      {"asset_id": "asset-01", "usage": "timeline_clip", "slot": "clip_01", "order": 0, "destination": "res"}
+    ]
+  },
+  "localize_response": {
+    "contract": "local.task.receipt/1",
+    "task_id": "local-task-example",
+    "capability_id": "aigc.task.assets.localize/1",
+    "idempotency_key": "localize-material-example-revision-1",
+    "status": "queued",
+    "error_code": null,
+    "artifact_ids": [],
+    "result_sha256": null
+  },
+  "read_request": {"task_id": "local-task-example"},
+  "read_response": {
+    "contract": "local.task.receipt/1",
+    "task_id": "local-task-example",
+    "capability_id": "aigc.task.assets.localize/1",
+    "idempotency_key": "localize-material-example-revision-1",
+    "status": "succeeded",
+    "error_code": null,
+    "artifact_ids": ["artifact_11111111111111111111111111111111"],
+    "result_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  }
+}
