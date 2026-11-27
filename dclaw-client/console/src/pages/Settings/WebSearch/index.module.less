@@ -1,0 +1,76 @@
+.page {
+  padding: 24px;
+}
+
+.content {
+  display: grid;
+  gap: 16px;
+  max-width: 1080px;
+}
+
+.providerCard {
+  border-radius: 8px;
+}
+
+.providerHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.providerTitle {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.providerDesc {
+  margin: 4px 0 0;
+  color: rgba(0, 0, 0, 0.55);
+  font-size: 13px;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 16px;
+}
+
+.formGrid :global(.ant-input-number) {
+  width: 100%;
+}
+
+.billingAlert {
+  margin-top: 4px;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+@media (max-width: 760px) {
+  .page {
+    padding: 16px;
+  }
+
+  .providerHeader {
+    flex-direction: column;
+  }
+
+  .formGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .actions {
+    flex-wrap: wrap;
+    justify-content: stretch;
+  }
+
+  .actions :global(.ant-btn) {
+    flex: 1;
+  }
+}

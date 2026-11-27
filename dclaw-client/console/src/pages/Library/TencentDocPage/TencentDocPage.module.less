@@ -1,0 +1,811 @@
+// ─── Tencent Document & RAG Knowledgebase Premium Styles ───────────────────────
+
+.pageContainer {
+  padding: 28px 32px;
+  max-width: 1200px;
+  margin: 0 auto;
+  min-height: 100vh;
+  background: radial-gradient(
+      circle at 80% 20%,
+      rgba(37, 99, 235, 0.03) 0%,
+      transparent 40%
+    ),
+    radial-gradient(
+      circle at 10% 80%,
+      rgba(99, 102, 241, 0.02) 0%,
+      transparent 40%
+    );
+}
+
+// ─── Page Header ──────────────────────────────────────────────────────────────
+.pageHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 28px;
+}
+
+.pageHeaderLeft {
+  flex: 1;
+}
+
+.pageTitle {
+  font-size: 24px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.88);
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pageTitleIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: #fff;
+  font-size: 18px;
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.2);
+}
+
+.pageSubtitle {
+  font-size: 14px;
+  color: rgba(0, 0, 0, 0.45);
+  line-height: 1.6;
+}
+
+.headerActions {
+  display: flex;
+  gap: 12px;
+}
+
+.experiencePanel {
+  padding: 24px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 8px 28px rgba(15, 23, 42, 0.05);
+}
+
+.primaryBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: #fff;
+  border: none;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.2);
+  transition: all 0.25s ease;
+
+  &:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(16, 185, 129, 0.3);
+    filter: brightness(1.05);
+  }
+}
+
+.secondaryBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: #fff;
+  color: rgba(0, 0, 0, 0.65);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+
+  &:hover {
+    border-color: rgba(16, 185, 129, 0.3);
+    color: #10b981;
+    background: rgba(16, 185, 129, 0.02);
+  }
+}
+
+// ─── Dashboard Stats ──────────────────────────────────────────────────────────
+.statsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 20px;
+  margin-bottom: 32px;
+}
+
+.statCard {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.02);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+
+  &::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 4px;
+    height: 100%;
+    background: transparent;
+    transition: background 0.3s;
+  }
+
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.04);
+    border-color: rgba(16, 185, 129, 0.15);
+
+    &::before {
+      background: #10b981;
+    }
+  }
+}
+
+.statHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.statTitle {
+  font-size: 13px;
+  color: rgba(0, 0, 0, 0.45);
+  font-weight: 500;
+}
+
+.statIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.02);
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.statValue {
+  font-size: 28px;
+  font-weight: 700;
+  color: rgba(0, 0, 0, 0.88);
+  line-height: 1.2;
+}
+
+.statDesc {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.trendUp {
+  color: #10b981;
+  font-weight: 600;
+}
+
+.pulseWrapper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pulseDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #10b981;
+  box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
+  animation: pulse 2s infinite;
+}
+
+.pulseDotWarning {
+  background-color: #f59e0b;
+  box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4);
+  animation: pulseWarning 2s infinite;
+}
+
+@keyframes pulse {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+  }
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 8px rgba(16, 185, 129, 0);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+}
+
+@keyframes pulseWarning {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.7);
+  }
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 8px rgba(245, 158, 11, 0);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0);
+  }
+}
+
+// ─── Filter & Toolbar ─────────────────────────────────────────────────────────
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.searchWrapper {
+  position: relative;
+  flex: 1;
+  max-width: 320px;
+  min-width: 240px;
+}
+
+.searchInput {
+  width: 100%;
+  height: 38px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  padding: 0 14px 0 36px;
+  font-size: 13px;
+  outline: none;
+  background: #fff;
+  transition: all 0.25s ease;
+
+  &:focus {
+    border-color: #10b981;
+    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.08);
+  }
+
+  &::placeholder {
+    color: rgba(0, 0, 0, 0.3);
+  }
+}
+
+.searchIcon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+}
+
+.filterTabs {
+  display: flex;
+  gap: 6px;
+}
+
+.filterTab {
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.04);
+  background: rgba(0, 0, 0, 0.02);
+  color: rgba(0, 0, 0, 0.55);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+
+  &:hover {
+    color: #10b981;
+    background: rgba(16, 185, 129, 0.04);
+  }
+}
+
+.filterTabActive {
+  background: #fff !important;
+  color: #10b981 !important;
+  border-color: rgba(16, 185, 129, 0.2) !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+// ─── Documents Table / List ───────────────────────────────────────────────────
+.tableWrapper {
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.01);
+}
+
+.docList {
+  display: flex;
+  flex-direction: column;
+}
+
+.docRowHeader {
+  display: grid;
+  grid-template-columns: 2.5fr 1fr 1fr 1fr 1fr;
+  padding: 14px 24px;
+  background: rgba(0, 0, 0, 0.01);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.docRow {
+  display: grid;
+  grid-template-columns: 2.5fr 1fr 1fr 1fr 1fr;
+  padding: 18px 24px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+  align-items: center;
+  transition: background 0.2s ease;
+
+  &:last-child {
+    border-bottom: none;
+  }
+
+  &:hover {
+    background: rgba(16, 185, 129, 0.01);
+  }
+}
+
+.docCellName {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.docIconWrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: rgba(16, 185, 129, 0.05);
+  color: #10b981;
+  flex-shrink: 0;
+}
+
+.docInfo {
+  min-width: 0;
+}
+
+.docTitle {
+  font-size: 14px;
+  font-weight: 500;
+  color: rgba(0, 0, 0, 0.88);
+  margin-bottom: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.docLink {
+  font-size: 11px;
+  color: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+
+  &:hover {
+    color: #10b981;
+  }
+}
+
+.docCellType {
+  font-size: 13px;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+.docCellSize {
+  font-size: 13px;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.docCellSlices {
+  font-size: 13px;
+  color: rgba(0, 0, 0, 0.65);
+  font-weight: 500;
+}
+
+.docCellStatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.statusIndicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.statusIndicator_ready {
+  color: #10b981;
+}
+
+.statusIndicator_syncing {
+  color: #f59e0b;
+}
+
+.statusIndicator_failed {
+  color: #ef4444;
+}
+
+.statusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.statusDot_ready {
+  background-color: #10b981;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
+}
+
+.statusDot_syncing {
+  background-color: #f59e0b;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.6);
+}
+
+.statusDot_failed {
+  background-color: #ef4444;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.45);
+}
+
+.actionMenuBtn {
+  border: none;
+  background: transparent;
+  color: rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  transition: all 0.2s;
+
+  &:hover {
+    background: rgba(0, 0, 0, 0.05);
+    color: rgba(0, 0, 0, 0.88);
+  }
+}
+
+// ─── Dialog Custom Designs ────────────────────────────────────────────────────
+.uploadDragger {
+  border: 2px dashed rgba(16, 185, 129, 0.2);
+  border-radius: 12px;
+  padding: 40px 20px;
+  text-align: center;
+  background: rgba(16, 185, 129, 0.01);
+  cursor: pointer;
+  transition: all 0.25s ease;
+  margin-bottom: 20px;
+
+  &:hover {
+    border-color: #10b981;
+    background: rgba(16, 185, 129, 0.03);
+  }
+}
+
+.draggerIcon {
+  font-size: 40px;
+  color: #10b981;
+  margin-bottom: 12px;
+  display: flex;
+  justify-content: center;
+}
+
+.draggerText {
+  font-size: 14px;
+  font-weight: 500;
+  color: rgba(0, 0, 0, 0.88);
+  margin-bottom: 4px;
+}
+
+.draggerHint {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+// ─── Flowing Slice Progress ──────────────────────────────────────────────────
+.flowProgressWrapper {
+  background: rgba(0, 0, 0, 0.02);
+  border: 1px solid rgba(0, 0, 0, 0.04);
+  border-radius: 12px;
+  padding: 16px;
+  margin-top: 16px;
+}
+
+.flowHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.flowStatus {
+  color: #10b981;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.flowPercent {
+  color: rgba(0, 0, 0, 0.65);
+}
+
+.flowBarOuter {
+  height: 6px;
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 3px;
+  overflow: hidden;
+  position: relative;
+}
+
+.flowBarInner {
+  height: 100%;
+  background: linear-gradient(90deg, #10b981, #34d399);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+  position: relative;
+
+  &::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0) 0%,
+      rgba(255, 255, 255, 0.4) 50%,
+      rgba(255, 255, 255, 0) 100%
+    );
+    animation: flowLight 1.5s infinite;
+  }
+}
+
+@keyframes flowLight {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.sliceStages {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  margin-top: 10px;
+  gap: 8px;
+}
+
+.stage {
+  font-size: 10px;
+  text-align: center;
+  color: rgba(0, 0, 0, 0.35);
+  font-weight: 500;
+  padding: 4px 2px;
+  background: rgba(0, 0, 0, 0.02);
+  border-radius: 4px;
+}
+
+.stageActive {
+  background: rgba(16, 185, 129, 0.06);
+  color: #10b981;
+  font-weight: 600;
+}
+
+// ─── Dark Mode Adaptability ──────────────────────────────────────────────────
+:global(.dark-mode) {
+  .pageTitle {
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .pageSubtitle {
+    color: rgba(255, 255, 255, 0.45);
+  }
+
+  .secondaryBtn {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.75);
+
+    &:hover {
+      background: rgba(16, 185, 129, 0.08);
+      border-color: rgba(16, 185, 129, 0.4);
+      color: #34d399;
+    }
+  }
+
+  .statCard {
+    background: rgba(255, 255, 255, 0.03);
+    border-color: rgba(255, 255, 255, 0.06);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
+
+    &:hover {
+      border-color: rgba(16, 185, 129, 0.25);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+    }
+  }
+
+  .statTitle {
+    color: rgba(255, 255, 255, 0.45);
+  }
+
+  .statIcon {
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(255, 255, 255, 0.45);
+  }
+
+  .statValue {
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .statDesc {
+    color: rgba(255, 255, 255, 0.45);
+  }
+
+  .searchInput {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.9);
+
+    &:focus {
+      border-color: #34d399;
+    }
+
+    &::placeholder {
+      color: rgba(255, 255, 255, 0.3);
+    }
+  }
+
+  .searchIcon {
+    color: rgba(255, 255, 255, 0.3);
+  }
+
+  .filterTab {
+    background: rgba(255, 255, 255, 0.03);
+    border-color: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.55);
+
+    &:hover {
+      color: #34d399;
+      background: rgba(16, 185, 129, 0.08);
+    }
+  }
+
+  .filterTabActive {
+    background: rgba(255, 255, 255, 0.08) !important;
+    color: #34d399 !important;
+    border-color: rgba(16, 185, 129, 0.3) !important;
+  }
+
+  .tableWrapper {
+    background: rgba(255, 255, 255, 0.02);
+    border-color: rgba(255, 255, 255, 0.06);
+  }
+
+  .docRowHeader {
+    background: rgba(0, 0, 0, 0.2);
+    border-bottom-color: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.4);
+  }
+
+  .docRow {
+    border-bottom-color: rgba(255, 255, 255, 0.05);
+
+    &:hover {
+      background: rgba(16, 185, 129, 0.02);
+    }
+  }
+
+  .docIconWrapper {
+    background: rgba(16, 185, 129, 0.1);
+  }
+
+  .docTitle {
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .docLink {
+    color: rgba(255, 255, 255, 0.35);
+
+    &:hover {
+      color: #34d399;
+    }
+  }
+
+  .docCellType {
+    color: rgba(255, 255, 255, 0.65);
+  }
+
+  .docCellSize {
+    color: rgba(255, 255, 255, 0.4);
+  }
+
+  .docCellSlices {
+    color: rgba(255, 255, 255, 0.7);
+  }
+
+  .actionMenuBtn {
+    color: rgba(255, 255, 255, 0.45);
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: rgba(255, 255, 255, 0.88);
+    }
+  }
+
+  .uploadDragger {
+    border-color: rgba(16, 185, 129, 0.3);
+    background: rgba(16, 185, 129, 0.02);
+
+    &:hover {
+      border-color: #34d399;
+      background: rgba(16, 185, 129, 0.04);
+    }
+  }
+
+  .draggerText {
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .draggerHint {
+    color: rgba(255, 255, 255, 0.45);
+  }
+
+  .flowProgressWrapper {
+    background: rgba(255, 255, 255, 0.02);
+    border-color: rgba(255, 255, 255, 0.04);
+  }
+
+  .flowPercent {
+    color: rgba(255, 255, 255, 0.55);
+  }
+
+  .flowBarOuter {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .stage {
+    background: rgba(255, 255, 255, 0.02);
+    color: rgba(255, 255, 255, 0.35);
+  }
+
+  .stageActive {
+    background: rgba(16, 185, 129, 0.1);
+    color: #34d399;
+  }
+}

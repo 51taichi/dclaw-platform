@@ -1,0 +1,181 @@
+.walletPage {
+  width: 100%;
+}
+
+.loadingState {
+  height: 100%;
+  min-height: 100%;
+}
+
+.summaryRow {
+  margin-bottom: 32px;
+}
+
+.alertSettings {
+  margin-bottom: 28px;
+}
+
+.summaryCard {
+  height: 100%;
+  border-radius: 12px;
+
+  :global(.ant-card-body) {
+    padding: 20px 22px;
+  }
+}
+
+.summaryLabel {
+  margin-bottom: 8px;
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 13px;
+}
+
+.summaryValue {
+  color: rgba(0, 0, 0, 0.88);
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.topUpSection {
+  margin-bottom: 28px;
+}
+
+.sectionHeader {
+  margin-bottom: 16px;
+}
+
+.sectionTitle {
+  color: rgba(0, 0, 0, 0.88);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.sectionSubtitle {
+  margin-top: 4px;
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.topUpNotice {
+  margin-bottom: 16px;
+}
+
+.productGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.productCard {
+  min-width: 0;
+  height: 100%;
+  border-radius: 12px;
+
+  :global(.ant-card-body) {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: 20px;
+  }
+}
+
+.productCardContent {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  flex: 1;
+  height: 100%;
+  min-height: 210px;
+  gap: 10px;
+
+  > :global(.ant-btn) {
+    margin-top: auto;
+  }
+}
+
+.productTitle {
+  margin: 0 !important;
+}
+
+.promotionRow {
+  min-height: 22px;
+  line-height: 22px;
+}
+
+.customCard {
+  border-style: dashed;
+}
+
+.customAmountInput {
+  width: 100%;
+}
+
+.customHint {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.modalProductSummary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: #f5f7fb;
+
+  > div {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  span {
+    color: rgba(0, 0, 0, 0.45);
+    font-size: 12px;
+  }
+
+  strong {
+    overflow: hidden;
+    color: rgba(0, 0, 0, 0.88);
+    font-size: 14px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.historyTabs {
+  margin-top: 4px;
+}
+
+@media (max-width: 1100px) {
+  .productGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 680px) {
+  .summaryRow {
+    margin-bottom: 24px;
+  }
+
+  .productGrid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .productCard :global(.ant-card-body) {
+    padding: 16px;
+  }
+
+  .productCardContent {
+    min-height: 190px;
+  }
+
+  .modalProductSummary {
+    grid-template-columns: 1fr;
+  }
+}

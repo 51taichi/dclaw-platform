@@ -1,0 +1,145 @@
+.result-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+
+  .result-hero {
+    display: flex;
+    align-items: center;
+    min-height: 120px;
+    box-sizing: border-box;
+    padding: 16px;
+    border: 1px solid #ffe9c4;
+    border-radius: 18px;
+    background: #fff6e5;
+    box-shadow: 0 12px 36px rgba(32, 28, 24, 0.08);
+  }
+
+  .result-hero__copy {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .result-hero__title {
+    color: #19191b;
+    font-size: 20px;
+    font-weight: 800;
+  }
+
+  .result-hero__desc {
+    color: #777d89;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .result-hero__mascot {
+    width: 84px;
+    height: 84px;
+    flex: 0 0 84px;
+    border-radius: 24px;
+  }
+
+  .file-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .file-card {
+    display: flex;
+    align-items: center;
+    flex-direction: row;
+    gap: 12px;
+  }
+
+  .file-card--image .file-icon {
+    background: linear-gradient(135deg, #ff7a2f, #ffc23d);
+  }
+
+  .file-card--document .file-icon {
+    background: linear-gradient(135deg, #2f80ed, #26b99a);
+  }
+
+  .file-card--archive .file-icon {
+    background: linear-gradient(135deg, #9b6cff, #2f80ed);
+  }
+
+  .file-card--code .file-icon {
+    background: linear-gradient(135deg, #19191b, #777d89);
+  }
+
+  .file-icon {
+    width: 44px;
+    height: 44px;
+    flex: 0 0 44px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, #26b99a, #2f80ed);
+  }
+
+  .file-preview {
+    width: 56px;
+    height: 56px;
+    flex: 0 0 56px;
+  }
+
+  .file-actions {
+    display: flex;
+    flex: 0 0 auto;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .file-body {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .file-title {
+    display: block;
+    overflow: hidden;
+    color: #19191b;
+    font-size: 16px;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .file-path,
+  .file-meta,
+  .empty-card {
+    color: #777d89;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .file-path {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .file-action {
+    flex: 0 0 auto;
+    padding: 7px 10px;
+    border: 1px solid #ffe1cd;
+    border-radius: 12px;
+    color: #ff5a1f;
+    background: #fffaf3;
+    font-size: 12px;
+    font-weight: 800;
+    text-align: center;
+  }
+
+  .file-action--save-image {
+    border-color: #ff5a1f;
+    color: #ffffff;
+    background: #ff5a1f;
+  }
+}

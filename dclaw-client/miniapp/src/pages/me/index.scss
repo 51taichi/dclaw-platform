@@ -1,0 +1,144 @@
+.me-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+
+  .profile-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 126px;
+    border-color: #ffe1cd;
+    background: #fff0df;
+  }
+
+  .profile-avatar {
+    width: 86px;
+    height: 86px;
+    flex: 0 0 86px;
+    border-radius: 24px;
+    background: #fff7ef;
+  }
+
+  .profile-copy {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .profile-name {
+    color: #19191b;
+    font-size: 18px;
+    font-weight: 700;
+  }
+
+  .profile-meta {
+    color: #777d89;
+    font-size: 13px;
+  }
+
+  .profile-badge {
+    align-self: flex-start;
+    margin-top: 4px;
+    padding: 4px 8px;
+    border-radius: 10px;
+    color: #ff5a1f;
+    background: rgba(255, 90, 31, 0.11);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+
+    .state-view {
+      grid-column: 1 / -1;
+    }
+  }
+
+  .stat-card {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    text-align: center;
+  }
+
+  .stat-value {
+    color: #ff5a1f;
+    font-size: 24px;
+    font-weight: 800;
+  }
+
+  .stat-label,
+  .entry-item {
+    color: #777d89;
+    font-size: 14px;
+  }
+
+  .entry-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .entry-title {
+    color: #19191b;
+    font-size: 16px;
+    font-weight: 800;
+  }
+
+  .entry-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 0;
+    border-top: 1px solid rgba(25, 25, 27, 0.06);
+  }
+
+  .entry-copy {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .entry-label {
+    color: #19191b;
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  .entry-desc {
+    color: #8c93a1;
+    font-size: 12px;
+  }
+
+  .entry-arrow {
+    flex: 0 0 auto;
+    color: #b7bdc8;
+    font-size: 16px;
+    font-weight: 700;
+  }
+
+  .logout-button {
+    box-sizing: border-box;
+    height: 46px;
+    margin-bottom: 24px;
+    border: 0;
+    border-radius: 14px;
+    color: #ff5a1f;
+    background: #ffffff;
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 46px;
+  }
+
+  .logout-button::after {
+    border: 0;
+    border-radius: 14px;
+  }
+}

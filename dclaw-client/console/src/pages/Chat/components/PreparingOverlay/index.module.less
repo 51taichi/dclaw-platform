@@ -1,0 +1,52 @@
+.overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--ant-color-bg-layout, #fff);
+  z-index: 1000;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.feedback {
+  height: 100%;
+}
+
+.progressBar {
+  width: 160px;
+  height: 4px;
+  background-color: var(--ant-color-fill-secondary, #f0f0f0);
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+}
+
+.progressInner {
+  position: absolute;
+  top: 0;
+  left: -50%;
+  width: 50%;
+  height: 100%;
+  background-color: var(--ant-color-primary, #315efb);
+  border-radius: 2px;
+  animation: sweep 1.5s ease-in-out infinite;
+}
+
+@keyframes sweep {
+  0% {
+    left: -50%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progressInner {
+    animation-duration: 1ms;
+    animation-iteration-count: 1;
+  }
+}

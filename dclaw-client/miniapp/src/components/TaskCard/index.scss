@@ -1,0 +1,169 @@
+@use "../../theme/tokens.scss" as *;
+
+.task-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 72px;
+  overflow: hidden;
+  padding: 12px;
+  border: 1px solid $color-line;
+  border-radius: $radius-card;
+  background: $color-card;
+
+  &__icon {
+    width: 46px;
+    height: 46px;
+    flex: 0 0 46px;
+    border-radius: 15px;
+  }
+
+  &__body {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  &__title {
+    overflow: hidden;
+    color: $color-text;
+    font-size: 15px;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__meta {
+    color: $color-muted;
+    font-size: 12px;
+  }
+
+  &__status {
+    flex: 0 0 auto;
+    padding: 4px 8px;
+    border-radius: 10px;
+    color: $color-orange;
+    background: rgba(255, 90, 31, 0.1);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  &__running-indicator {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+    padding: 5px 9px;
+    border-radius: 12px;
+    color: #ffffff;
+    background: $color-orange;
+    box-shadow: 0 6px 14px rgba(255, 90, 31, 0.24);
+  }
+
+  &__running-dot {
+    width: 6px;
+    height: 6px;
+    flex: 0 0 6px;
+    border-radius: 50%;
+    background: #ffffff;
+    animation: task-running-pulse 1.1s ease-in-out infinite;
+  }
+
+  &__running-text {
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 1;
+  }
+
+  &__more {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    flex: 0 0 28px;
+    border: 1px solid #ffe1cd;
+    border-radius: 50%;
+    color: $color-orange;
+    background: #fffaf3;
+    font-size: 16px;
+    font-weight: 800;
+    line-height: 1;
+  }
+
+  &__avatar {
+    width: 34px;
+    height: 34px;
+    flex: 0 0 34px;
+    border: 3px solid #fff7ef;
+    border-radius: 50%;
+    background: #fffaf3;
+  }
+
+  &--running {
+    border-color: rgba(255, 90, 31, 0.38);
+    background: linear-gradient(135deg, #ffffff 0%, #fff1e7 100%);
+    box-shadow: 0 12px 28px rgba(255, 90, 31, 0.16);
+  }
+
+  &--running::after {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    height: 3px;
+    background: linear-gradient(
+      90deg,
+      rgba(255, 90, 31, 0.05) 0%,
+      rgba(255, 90, 31, 0.95) 50%,
+      rgba(255, 90, 31, 0.05) 100%
+    );
+    content: "";
+    transform: translateX(-70%);
+    animation: task-running-bar 1.6s ease-in-out infinite;
+  }
+
+  &--running &__avatar {
+    border-color: #ffffff;
+    box-shadow: 0 0 0 5px rgba(255, 90, 31, 0.08);
+    animation: task-running-pulse 1.6s ease-in-out infinite;
+  }
+
+  &--completed &__status {
+    color: $color-green;
+    background: rgba(38, 185, 154, 0.12);
+  }
+
+  &--failed &__status {
+    color: #d92d20;
+    background: rgba(217, 45, 32, 0.1);
+  }
+}
+
+@keyframes task-running-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.55;
+    transform: scale(0.86);
+  }
+}
+
+@keyframes task-running-bar {
+  0% {
+    transform: translateX(-70%);
+  }
+
+  100% {
+    transform: translateX(70%);
+  }
+}

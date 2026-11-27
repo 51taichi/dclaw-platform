@@ -1,0 +1,1288 @@
+// ─── MainLayout ───────────────────────────────────────────────────────────────
+.mainLayout {
+  --client-header-height: 56px;
+
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.creditAlertSlot {
+  flex: 0 0 auto;
+}
+
+// ─── Header ───────────────────────────────────────────────────────────────────
+.header {
+  height: var(--client-header-height);
+  padding: 0 28px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  background: #f7f8fa;
+}
+
+.headerActions {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.sceneTabs {
+  align-self: stretch;
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  margin-left: 64px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+.sceneTab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 112px;
+  height: 44px;
+  padding: 0 18px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: rgba(26, 23, 22, 0.58);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+
+  &:hover {
+    color: rgba(26, 23, 22, 0.88);
+    background: rgba(26, 23, 22, 0.04);
+  }
+}
+
+.sceneTabActive {
+  color: #2563eb;
+  border-bottom-color: #2563eb;
+  background: rgba(37, 99, 235, 0.05);
+}
+
+.sceneTabDivider {
+  flex: 0 0 1px;
+  align-self: flex-end;
+  width: 1px;
+  height: 24px;
+  margin: 0 10px 10px;
+  background: rgba(26, 23, 22, 0.18);
+}
+
+.sceneContent {
+  min-width: 0;
+  min-height: 0;
+  padding: 0 8px 8px;
+  background: #f9f8f4;
+}
+
+.sceneWebviewHost {
+  position: fixed;
+  top: var(--client-header-height);
+  right: 8px;
+  bottom: 8px;
+  left: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  height: auto;
+  border: 1px solid #eae9e7;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.headerTitle {
+  font-size: 18px;
+  font-weight: 500;
+  min-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// ─── Sidebar ─────────────────────────────────────────────────────────────────
+.sider {
+  background: #f9f8f4 !important;
+  overflow: hidden;
+  height: calc(100vh - 64px);
+  padding: 0 16px;
+  flex-shrink: 0;
+
+  :global {
+    .ant-layout-sider-children,
+    .qwenpaw-layout-sider-children {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      min-height: 0;
+    }
+  }
+
+  // Hide scrollbar in browser
+  &::-webkit-scrollbar {
+    display: none;
+    /* Safari and Chrome */
+  }
+
+  &::-moz-scrollbar {
+    display: none;
+    /* Firefox */
+  }
+
+  &::-ms-scrollbar {
+    display: none;
+    /* IE/Edge */
+  }
+
+  scrollbar-width: none;
+  /* Firefox */
+  -ms-overflow-style: none;
+  /* IE and Edge */
+
+  // Agent-scoped section: selector + Chat + Control + Workspace
+  .agentScopedSection {
+    background: rgba(37, 99, 235, 0.03);
+    border-radius: 12px;
+    border: 1px solid rgba(0, 0, 0, 0.06);
+    padding: 4px;
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+
+    :global {
+      .qwenpaw-menu {
+        background: transparent !important;
+      }
+    }
+  }
+  // AgentSelector + Chat container - sticky at top
+  .agentSelectorContainer {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    margin-bottom: 4px;
+    // Opaque background so scrolled content is hidden behind
+    background: #f5f6fa;
+    border-radius: 12px 12px 0 0;
+  }
+
+  // Sticky Chat button — matches menu item appearance
+  .stickyChatButton {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    height: 40px;
+    padding: 0 8px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: rgba(0, 0, 0, 0.88);
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.2s;
+    padding-left: 12px;
+
+    &:hover {
+      background: rgba(0, 0, 0, 0.06);
+    }
+  }
+
+  .stickyChatButtonActive {
+    background: rgba(37, 99, 235, 0.08);
+  }
+
+  // Menu takes remaining space
+  .sideMenu {
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+
+    // Hide scrollbar for menu too
+    &::-webkit-scrollbar {
+      display: none;
+    }
+
+    &::-moz-scrollbar {
+      display: none;
+    }
+
+    &::-ms-scrollbar {
+      display: none;
+    }
+
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  // The admin menu can grow as settings and plugins are added. Keep the
+  // footer visible and let only the menu area scroll instead of clipping it.
+  .settingsSideMenu {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-bottom: 8px;
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+
+    &:hover {
+      scrollbar-color: rgba(26, 23, 22, 0.18) transparent;
+    }
+
+    &::-webkit-scrollbar {
+      display: block;
+      width: 4px;
+    }
+
+    &::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    &::-webkit-scrollbar-thumb {
+      background: transparent;
+      border-radius: 4px;
+    }
+
+    &:hover::-webkit-scrollbar-thumb {
+      background: rgba(26, 23, 22, 0.18);
+    }
+  }
+
+  &.siderCollapsed {
+    padding: 0 8px;
+
+    .agentSelectorContainer {
+      display: flex;
+      justify-content: center;
+    }
+
+    .collapseToggleContainer {
+      justify-content: center;
+      width: calc(100% + 16px);
+      margin: 0 -8px;
+      padding: 8px 0;
+    }
+
+    :global {
+      /* Center icon in collapsed menu items */
+      .qwenpaw-menu-item,
+      .qwenpaw-menu-submenu .qwenpaw-menu-item {
+        padding-left: 0 !important;
+        padding-right: 0 !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        overflow: visible !important;
+      }
+
+      /* Ensure icon container allows badge overflow */
+      .qwenpaw-menu-item-icon,
+      .qwenpaw-menu-item .anticon {
+        overflow: visible !important;
+      }
+
+      /* Hide label text in collapsed mode */
+      .qwenpaw-menu-title-content,
+      .qwenpaw-menu-item > span:not([role]):not(.qwenpaw-badge),
+      .qwenpaw-menu-item-only-child > span:not(.qwenpaw-badge) {
+        display: none !important;
+      }
+
+      /* Hide group labels */
+      .qwenpaw-menu-submenu-title {
+        display: none !important;
+      }
+    }
+  }
+
+  :global {
+    .qwenpaw-menu {
+      border-inline-end: 0 !important;
+    }
+
+    /* Group title (一级菜单分组) */
+    .qwenpaw-menu-submenu-title {
+      font-family: "PingFang SC", sans-serif !important;
+      font-size: 12px !important;
+      font-weight: 500 !important;
+      line-height: 32px !important;
+      letter-spacing: normal !important;
+      color: rgba(26, 23, 22, 0.25) !important;
+      padding-left: 8px !important;
+
+      /* No hover effect for group titles */
+      &:hover {
+        background: transparent !important;
+        color: rgba(26, 23, 22, 0.25) !important;
+      }
+    }
+
+    /* Hide submenu arrow */
+    .qwenpaw-menu-submenu-arrow {
+      display: none !important;
+    }
+
+    /* Always expand submenus */
+    .qwenpaw-menu-submenu {
+      > .qwenpaw-menu {
+        display: block !important;
+      }
+    }
+
+    /* Menu item padding - align all items */
+    .qwenpaw-menu-item {
+      padding-left: 8px !important;
+    }
+
+    /* Remove submenu indent - align with parent */
+    .qwenpaw-menu-submenu .qwenpaw-menu-item {
+      padding-left: 8px !important;
+    }
+
+    /* Selected item */
+    .qwenpaw-menu-item-selected {
+      background: rgba(37, 99, 235, 0.08) !important;
+      color: inherit !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+
+      .qwenpaw-menu-title-content {
+        display: flex !important;
+        align-items: center !important;
+      }
+    }
+
+    /* Selected submenu item - keep text color unchanged */
+    .qwenpaw-menu-submenu .qwenpaw-menu-item-selected {
+      color: inherit !important;
+    }
+  }
+}
+
+.siderInner {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.siderFooter {
+  flex: 0 0 auto;
+  margin-top: auto;
+  background: #f9f8f4;
+}
+
+.siderDark {
+  background: #1a1a1a !important;
+  border-right-color: rgba(255, 255, 255, 0.08) !important;
+
+  // Agent-scoped section (dark mode)
+  .agentScopedSection {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  // Sticky container background (dark mode)
+  .agentSelectorContainer {
+    background: #1e1e1e;
+  }
+
+  // Chat button (dark mode)
+  .stickyChatButton {
+    color: rgba(255, 255, 255, 0.75);
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: rgba(255, 255, 255, 0.95);
+    }
+  }
+
+  .stickyChatButtonActive {
+    background: rgba(37, 99, 235, 0.5);
+    color: #2563eb;
+  }
+
+  .settingsSideMenu {
+    &:hover {
+      scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+    }
+
+    &:hover::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.2);
+    }
+  }
+
+  :global {
+    .qwenpaw-menu {
+      background: #1a1a1a !important;
+      border-inline-end: 0 !important;
+    }
+
+    /* Group title (sub-menu label) */
+    .qwenpaw-menu-submenu-title {
+      color: rgba(255, 255, 255, 0.45) !important;
+
+      /* No hover effect for group titles in dark mode */
+      &:hover {
+        background: transparent !important;
+        color: rgba(255, 255, 255, 0.45) !important;
+      }
+    }
+
+    /* Regular menu item */
+    .qwenpaw-menu-item {
+      color: rgba(255, 255, 255, 0.75) !important;
+    }
+
+    /* Hover state - only for menu items, not group titles */
+    .qwenpaw-menu-item:hover {
+      background: rgba(255, 255, 255, 0.1) !important;
+      color: rgba(255, 255, 255, 0.95) !important;
+    }
+
+    /* Selected item */
+    .qwenpaw-menu-item-selected {
+      background: rgba(37, 99, 235, 0.5) !important;
+      color: #2563eb !important;
+    }
+  }
+}
+
+.logoWrapper {
+  display: flex;
+  align-items: center;
+  min-width: 118px;
+}
+
+.desktopVersion {
+  margin-left: 9px;
+  color: rgba(26, 23, 22, 0.45);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.logoImg {
+  display: block;
+  height: 26px;
+  width: auto;
+  max-width: 142px;
+  object-fit: contain;
+  user-select: none;
+}
+
+.logoDivider {
+  width: 16px;
+  height: 0px;
+  transform: rotate(90deg);
+  border-top: 1px solid rgba(234, 232, 231, 1);
+  margin: 0 8px;
+}
+
+.headerDivider {
+  width: 16px;
+  height: 0px;
+  transform: rotate(90deg);
+  z-index: 4;
+  border-top: 1px solid rgba(234, 232, 231, 1);
+}
+
+.versionBadge {
+  font-size: 12px;
+  color: #1a171673;
+  font-weight: 600;
+  line-height: 1;
+  position: relative;
+  top: 3px;
+}
+
+.versionBadgeClickable {
+  cursor: pointer;
+}
+
+.versionBadgeDefault {
+  cursor: default;
+}
+
+.collapseBtn {
+  margin: auto;
+  color: #2563eb;
+}
+
+// ─── Auth actions (account + logout) ──────────────────────────────────────────
+.authActions {
+  padding: 8px 16px 6px;
+  border-top: 1px solid #f0f0f0;
+}
+
+.authBtn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-start;
+  color: rgba(0, 0, 0, 0.65);
+
+  &:hover {
+    color: rgba(0, 0, 0, 0.88) !important;
+    background: rgba(0, 0, 0, 0.04) !important;
+  }
+}
+
+.authBtnCollapsed {
+  justify-content: center;
+}
+
+.authBtn + .authBtn {
+  margin-top: 4px;
+}
+
+/* Collapse Toggle Button */
+.collapseToggleContainer {
+  flex-shrink: 0;
+  z-index: 10;
+  width: calc(100% + 32px);
+  margin: 0 -16px;
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.collapseToggle {
+  color: rgba(0, 0, 0, 0.45);
+  border-radius: 8px;
+  transition: all 0.2s;
+
+  &:hover {
+    background: rgba(0, 0, 0, 0.06) !important;
+    color: #2563eb !important;
+  }
+}
+
+/* Collapsed nav (icon-only group list) */
+.collapsedNav {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+.collapsedNavItem {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: rgba(0, 0, 0, 0.55);
+  transition: all 0.15s;
+
+  &:hover {
+    background: rgba(0, 0, 0, 0.06);
+    color: rgba(0, 0, 0, 0.88);
+  }
+}
+
+.collapsedNavItemActive {
+  background: rgba(43, 18, 0, 0.08) !important;
+  color: rgba(0, 0, 0, 0.88) !important;
+}
+
+@media (max-width: 768px) {
+  .sider {
+    height: calc(100vh - 56px);
+    padding: 0 8px;
+    flex: 0 0 auto !important;
+    max-width: 240px !important;
+
+    &.siderCollapsed {
+      padding: 0 6px;
+
+      .collapseToggleContainer {
+        width: calc(100% + 12px);
+        margin: 0 -6px;
+      }
+    }
+  }
+
+  .collapsedNav {
+    gap: 2px;
+    padding: 2px 0;
+  }
+
+  .collapsedNavItem {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+  }
+
+  .collapseToggleContainer {
+    width: calc(100% + 16px);
+    margin: 0 -8px;
+    padding: 8px 0;
+    justify-content: center;
+  }
+}
+
+// ─── Update Modal ─────────────────────────────────────────────────────────────
+.updateModal {
+  :global(.qwenpaw-modal-content) {
+    padding: 0 !important;
+    border-radius: 12px !important;
+    overflow: visible !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+
+  :global(.qwenpaw-modal-body) {
+    padding: 0 !important;
+  }
+
+  :global(.qwenpaw-modal-footer) {
+    padding: 12px 24px;
+    margin-top: 0;
+  }
+
+  :global(.qwenpaw-modal-header) {
+    display: none !important;
+  }
+
+  :global(.qwenpaw-modal-close) {
+    display: none !important;
+  }
+}
+
+.updateModalBanner {
+  background: url("/dclawBack.png") no-repeat center top;
+  background-size: contain;
+  padding: 48px 28px 0px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  min-height: 100px;
+  position: relative;
+  transform: translateY(-48px);
+}
+
+.updateModalBannerLeft {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.updateModalVersionTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #fff;
+  border: 1px solid rgba(43, 18, 0, 0.12);
+  border-radius: 20px;
+  padding: 3px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(26, 23, 22, 0.65);
+  width: fit-content;
+}
+
+.updateModalBannerTitle {
+  font-size: 32px;
+  font-weight: 500;
+  line-height: 64.78px;
+  letter-spacing: normal;
+  color: #2563eb;
+}
+
+.updateModalTitle {
+  color: #2563eb;
+}
+
+.updateModalBody {
+  max-height: 400px;
+  overflow-y: auto;
+  padding: 16px 24px 8px;
+  min-height: 120px;
+  margin-top: -40px;
+}
+
+.updateModalSpinWrapper {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 120px;
+}
+
+.updateViewReleasesBtn {
+  background: #2563eb !important;
+  border-color: #2563eb !important;
+  color: #fff !important;
+
+  &:hover {
+    background: #d45b0a !important;
+    border-color: #d45b0a !important;
+  }
+}
+
+.updateModalPrimaryBtn {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
+// ─── Code block inside update modal ──────────────────────────────────────────
+.codeBlock {
+  position: relative;
+  background: #f5f5f5;
+  border: 1px solid #e8e8e8;
+  border-radius: 6px;
+  padding: 12px 40px 12px 16px;
+  overflow-x: auto;
+  margin: 8px 0;
+}
+
+.codeBlockInner {
+  font-family: monospace;
+  font-size: 13px;
+}
+
+.codeInline {
+  background: #f5f5f5;
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-family: monospace;
+  font-size: 13px;
+}
+
+// ─── CopyButton ───────────────────────────────────────────────────────────────
+.copyBtn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  transition: color 0.2s;
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  cursor: pointer;
+  line-height: 1;
+  border-radius: 4px;
+
+  &:hover {
+    background: rgba(0, 0, 0, 0.06);
+  }
+}
+
+.copyBtnCopied {
+  color: #52c41a;
+}
+
+.copyBtnDefault {
+  color: #999;
+}
+
+/* ─── Dark mode overrides ─────────────────────────────────────────────────── */
+:global(.dark-mode) {
+  .header {
+    background: #1a1a1a !important;
+    border-bottom-color: rgba(255, 255, 255, 0.08) !important;
+    color: rgba(255, 255, 255, 0.85);
+
+    /* Text buttons (Docs / FAQ / GitHub / Changelog) */
+    :global(.qwenpaw-btn-text),
+    :global(.ant-btn-text) {
+      color: rgba(255, 255, 255, 0.75) !important;
+
+      &:hover {
+        color: #fff !important;
+        background: rgba(255, 255, 255, 0.08) !important;
+      }
+
+      .anticon,
+      svg {
+        color: inherit !important;
+      }
+    }
+
+    /* Fallback: any icon or text directly inside header */
+    :global(.anticon) {
+      color: rgba(255, 255, 255, 0.75);
+    }
+  }
+
+  .sceneTab {
+    color: rgba(255, 255, 255, 0.62);
+
+    &:hover {
+      color: rgba(255, 255, 255, 0.9);
+      background: rgba(255, 255, 255, 0.06);
+    }
+  }
+
+  .sceneTabActive {
+    color: #7ca7ff;
+    border-bottom-color: #7ca7ff;
+    background: rgba(37, 99, 235, 0.12);
+  }
+
+  .sceneTabDivider {
+    background: rgba(255, 255, 255, 0.2);
+  }
+
+  .sceneContent {
+    background: #141414;
+  }
+
+  .sceneWebviewHost {
+    border-color: rgba(255, 255, 255, 0.12);
+  }
+
+  .headerTitle {
+    color: rgba(255, 255, 255, 0.85);
+  }
+
+  .sider {
+    background: #1a1a1a !important;
+    border-right-color: rgba(255, 255, 255, 0.08) !important;
+  }
+
+  .siderFooter {
+    background: #1a1a1a;
+  }
+
+  .siderTop {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .versionBadge {
+    color: #2563eb;
+  }
+
+  .collapseBtn {
+    color: #2563eb;
+  }
+
+  .authActions {
+    border-top-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .authBtn {
+    color: rgba(255, 255, 255, 0.75);
+
+    &:hover {
+      color: rgba(255, 255, 255, 0.9) !important;
+      background: rgba(255, 255, 255, 0.06) !important;
+    }
+  }
+
+  .collapseToggle {
+    color: rgba(255, 255, 255, 0.45);
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: #2563eb;
+    }
+  }
+
+  .collapsedNavItem {
+    color: rgba(255, 255, 255, 0.5);
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: rgba(255, 255, 255, 0.88);
+    }
+  }
+
+  .collapsedNavItemActive {
+    background: rgba(37, 99, 235, 0.5) !important;
+    color: rgba(255, 255, 255, 0.88) !important;
+  }
+
+  .codeBlock {
+    background: #2a2a2a;
+    border-color: rgba(255, 255, 255, 0.1);
+  }
+
+  .codeInline {
+    background: #2a2a2a;
+    color: rgba(255, 255, 255, 0.85);
+  }
+
+  .copyBtnDefault {
+    color: rgba(255, 255, 255, 0.3);
+  }
+}
+
+// ── Task List Section ──────────────────────────────────────────────────────
+.taskListSection {
+  margin-top: 8px;
+  padding: 0 4px;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  padding-top: 8px;
+  flex: 0 0 auto;
+  min-height: 0;
+  overflow: visible;
+  display: flex;
+  flex-direction: column;
+}
+
+.taskListItems {
+  flex: 0 0 auto;
+  min-height: 0;
+  overflow-y: visible;
+  padding-right: 2px;
+
+  &::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.12);
+    border-radius: 2px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+.taskListTitle {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.35);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 4px 8px;
+  margin-bottom: 2px;
+}
+
+.taskListEmpty {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.3);
+  padding: 8px;
+  text-align: center;
+}
+
+.taskItem {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  padding: 7px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(0, 0, 0, 0.75);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+  line-height: 1.3;
+
+  &:hover {
+    background: rgba(0, 0, 0, 0.04);
+  }
+}
+
+.taskItemGenerating {
+  background: linear-gradient(
+    90deg,
+    rgba(37, 99, 235, 0.06),
+    rgba(37, 99, 235, 0.02),
+    rgba(37, 99, 235, 0.06)
+  );
+  background-size: 220% 100%;
+  animation: taskGeneratingGlow 2.4s ease-in-out infinite;
+
+  &:hover {
+    background: linear-gradient(
+      90deg,
+      rgba(37, 99, 235, 0.09),
+      rgba(37, 99, 235, 0.04),
+      rgba(37, 99, 235, 0.09)
+    );
+    background-size: 220% 100%;
+  }
+}
+
+.taskItemActive {
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.taskItemActive.taskItemGenerating {
+  background: linear-gradient(
+    90deg,
+    rgba(37, 99, 235, 0.16),
+    rgba(37, 99, 235, 0.07),
+    rgba(37, 99, 235, 0.16)
+  );
+  background-size: 220% 100%;
+}
+
+.taskItemIcon {
+  flex-shrink: 0;
+  font-size: 12px;
+  margin-top: 1px;
+  color: #52c41a;
+}
+
+.taskGeneratingSpinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 2px solid rgba(37, 99, 235, 0.22);
+  border-top-color: #2563eb;
+  border-radius: 999px;
+  animation: taskGeneratingSpin 0.85s linear infinite;
+}
+
+@keyframes taskGeneratingSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes taskGeneratingGlow {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+.taskItemContent {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.taskItemTitle {
+  overflow: hidden;
+  display: block;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.taskItemTime {
+  font-size: 11px;
+  color: rgba(0, 0, 0, 0.35);
+}
+
+.taskItemMoreBtn {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  color: rgba(0, 0, 0, 0.45);
+  background: transparent;
+  opacity: 0;
+  transition: all 0.2s;
+
+  &:hover {
+    background: rgba(0, 0, 0, 0.08);
+    color: rgba(0, 0, 0, 0.88);
+  }
+}
+
+.taskItem:hover .taskItemMoreBtn {
+  opacity: 1;
+}
+
+// Dark mode for task list
+:global(.dark-mode) {
+  .taskListSection {
+    border-top-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .taskListItems {
+    &::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.2);
+    }
+  }
+
+  .taskListTitle {
+    color: rgba(255, 255, 255, 0.35);
+  }
+
+  .taskListEmpty {
+    color: rgba(255, 255, 255, 0.25);
+  }
+
+  .taskItem {
+    color: rgba(255, 255, 255, 0.75);
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.06);
+    }
+  }
+
+  .taskItemActive {
+    background: rgba(37, 99, 235, 0.15);
+  }
+
+  .taskItemActive.taskItemGenerating {
+    background: linear-gradient(
+      90deg,
+      rgba(96, 165, 250, 0.22),
+      rgba(96, 165, 250, 0.09),
+      rgba(96, 165, 250, 0.22)
+    );
+    background-size: 220% 100%;
+  }
+
+  .taskItemGenerating {
+    background: linear-gradient(
+      90deg,
+      rgba(96, 165, 250, 0.16),
+      rgba(96, 165, 250, 0.05),
+      rgba(96, 165, 250, 0.16)
+    );
+    background-size: 220% 100%;
+
+    &:hover {
+      background: linear-gradient(
+        90deg,
+        rgba(96, 165, 250, 0.2),
+        rgba(96, 165, 250, 0.08),
+        rgba(96, 165, 250, 0.2)
+      );
+      background-size: 220% 100%;
+    }
+  }
+
+  .taskGeneratingSpinner {
+    border-color: rgba(96, 165, 250, 0.28);
+    border-top-color: #60a5fa;
+  }
+
+  .taskItemTime {
+    color: rgba(255, 255, 255, 0.3);
+  }
+
+  .taskItemMoreBtn {
+    color: rgba(255, 255, 255, 0.45);
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: rgba(255, 255, 255, 0.88);
+    }
+  }
+}
+
+.taskNumberBadge {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  border-radius: 0;
+  background: transparent;
+  color: #595959;
+  font-size: 14px;
+  font-weight: 400;
+}
+.taskStateDot {
+  position: absolute;
+  right: -2px;
+  top: -2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.taskStateRunning {
+  background: #3275ff;
+}
+.taskStateFailed {
+  background: #f05252;
+}
+.earlierTasksButton {
+  display: flex;
+  flex: 0 0 44px;
+  min-height: 44px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 8px;
+  padding: 9px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #595959;
+  font-weight: 400;
+  cursor: pointer;
+  text-align: left;
+  font-size: 14px;
+  > :global(.spark-icon) {
+    font-size: 16px;
+    flex: 0 0 18px;
+  }
+  > span:not(:global(.spark-icon)) {
+    flex: 1;
+  }
+  &:hover {
+    background: rgba(0, 0, 0, 0.08);
+  }
+}
+:global(.dark-mode) {
+  .taskNumberBadge {
+    background: transparent;
+    color: #d9d9d9;
+  }
+  .earlierTasksButton {
+    background: transparent;
+    color: #d9d9d9;
+    &:hover {
+      background: rgba(255, 255, 255, 0.12);
+    }
+  }
+}
+.earlierTaskList {
+  width: min(300px, calc(100vw - 64px));
+  max-height: min(420px, 60vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}

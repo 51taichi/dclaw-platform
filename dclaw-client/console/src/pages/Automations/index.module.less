@@ -1,0 +1,1187 @@
+// ─── Automations Page Exclusive Styles ──────────────────────────────────────────
+// High-fidelity clone of WorkBuddy automation UI
+
+.automationsPage {
+  padding: 24px 32px;
+  max-width: 1280px;
+  margin: 0 auto;
+  min-height: 100vh;
+  background-color: #fafbfc;
+  transition: background-color 0.3s ease;
+}
+
+// ─── Header Section ──────────────────────────────────────────────────────────
+.headerSection {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 28px;
+}
+
+.headerLeft {
+  flex: 1;
+}
+
+.pageTitle {
+  font-size: 22px;
+  font-weight: 600;
+  color: #1f2937;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pageSubtitle {
+  font-size: 13px;
+  color: #6b7280;
+  line-height: 1.5;
+}
+
+.addButton {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background-color: #ffffff;
+  color: #111827;
+  border: 1px solid #e5e7eb;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: all 0.2s ease;
+
+  &:hover {
+    background-color: #f9fafb;
+    border-color: #d1d5db;
+    transform: translateY(-0.5px);
+  }
+
+  &:active {
+    background-color: #f3f4f6;
+  }
+}
+
+// ─── Category Selection ────────────────────────────────────────────────────────
+.sectionTitle {
+  font-size: 14px;
+  font-weight: 500;
+  color: #4b5563;
+  margin-bottom: 16px;
+}
+
+.categoryTabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.categoryTab {
+  padding: 6px 16px;
+  border-radius: 20px;
+  border: 1px solid transparent;
+  background: #f3f4f6;
+  color: #4b5563;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+
+  &:hover {
+    background: #e5e7eb;
+    color: #1f2937;
+  }
+}
+
+.categoryTabActive {
+  background: #2563eb !important;
+  color: #ffffff !important;
+}
+
+// ─── Cards Grid ────────────────────────────────────────────────────────────────
+.cardsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  gap: 16px;
+  margin-bottom: 36px;
+}
+
+// ─── Card Style (WorkBuddy Style) ────────────────────────────────────────────────
+.templateCard {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 20px;
+  cursor: pointer;
+  position: relative;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: 160px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+
+  &:hover {
+    border-color: #d1d5db;
+    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.05);
+    transform: translateY(-2px);
+
+    .deployBtn {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+}
+
+.cardHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.iconWrapper {
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.cardMeta {
+  flex: 1;
+  min-width: 0;
+}
+
+.cardTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: #111827;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cardFreq {
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cardDesc {
+  font-size: 12px;
+  color: #6b7280;
+  line-height: 1.6;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-bottom: 12px;
+  flex: 1;
+}
+
+.deployBtn {
+  font-size: 11px;
+  font-weight: 500;
+  color: #2563eb;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0.8;
+  transition: all 0.2s ease;
+  margin-top: auto;
+  align-self: flex-start;
+  padding: 2px 0;
+
+  &:hover {
+    color: #1d4ed8;
+    text-decoration: underline;
+  }
+}
+
+// ─── Active Automations Section ───────────────────────────────────────────────
+.activeSection {
+  border-top: 1px solid #e5e7eb;
+  padding-top: 28px;
+  margin-top: 36px;
+}
+
+.activeHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.activeGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 16px;
+}
+
+// ─── Active Job Card ──────────────────────────────────────────────────────────
+.jobCard {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 18px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+  transition: all 0.2s ease;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 12px;
+
+  &:hover {
+    border-color: #d1d5db;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+  }
+}
+
+.jobHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.jobTitleSection {
+  flex: 1;
+  min-width: 0;
+}
+
+.jobTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: #111827;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jobTime {
+  font-size: 11px;
+  color: #9ca3af;
+  margin-top: 4px;
+}
+
+.jobSchedule {
+  font-size: 12px;
+  color: #6b7280;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: #f3f4f6;
+  padding: 3px 8px;
+  border-radius: 12px;
+  width: fit-content;
+}
+
+.jobBody {
+  font-size: 12px;
+  color: #4b5563;
+  background: #f9fafb;
+  padding: 8px 12px;
+  border-radius: 8px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 80px;
+  overflow-y: auto;
+}
+
+.jobFooter {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 8px;
+  border-top: 1px solid #f3f4f6;
+}
+
+.jobActions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.actionButton {
+  background: none;
+  border: none;
+  color: #4b5563;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+
+  &:hover {
+    background-color: #f3f4f6;
+    color: #111827;
+  }
+}
+
+.runButton {
+  color: #2563eb;
+  &:hover {
+    background-color: rgba(37, 99, 235, 0.05);
+    color: #1d4ed8;
+  }
+}
+
+.deleteButton {
+  color: #ef4444;
+  &:hover {
+    background-color: rgba(239, 68, 68, 0.05);
+    color: #dc2626;
+  }
+}
+
+// ─── Modal Form (High-fidelity WorkBuddy) ──────────────────────────────────────
+.modalWrapper {
+  :global {
+    .ant-modal-content {
+      border-radius: 12px !important;
+      padding: 24px !important;
+    }
+    .ant-modal-title {
+      font-size: 16px !important;
+      font-weight: 600 !important;
+      color: #111827 !important;
+      margin-bottom: 20px !important;
+    }
+  }
+}
+
+.formLabel {
+  font-size: 13px;
+  font-weight: 500;
+  color: #374151;
+  margin-bottom: 6px;
+}
+
+.formInput {
+  border-radius: 6px !important;
+  border: 1px solid #d1d5db !important;
+  font-size: 13px !important;
+  padding: 6px 12px !important;
+
+  &:focus, &:hover {
+    border-color: #2563eb !important;
+    box-shadow: none !important;
+  }
+}
+
+.promptContainer {
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 12px;
+  overflow: hidden;
+  background-color: #ffffff;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02);
+
+  &:hover, &:focus-within {
+    border-color: rgba(37, 99, 235, 0.3);
+    box-shadow: 0 4px 16px rgba(37, 99, 235, 0.06);
+  }
+}
+
+.promptTextarea {
+  width: 100%;
+  border: none !important;
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.6;
+  resize: vertical;
+  min-height: 120px;
+  outline: none;
+  color: #1f2937;
+  background-color: transparent;
+
+  &::placeholder {
+    color: #9ca3af;
+  }
+}
+
+.promptFooterBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background-color: transparent;
+  border-top: 1px solid rgba(0, 0, 0, 0.04);
+}
+
+.promptActionsLeft {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.modelSelect {
+  :global {
+    .ant-select-selector {
+      border: none !important;
+      background-color: transparent !important;
+      border-radius: 8px !important;
+      height: 28px !important;
+      padding: 0 10px !important;
+      font-size: 13px !important;
+      font-weight: 500 !important;
+      color: #555 !important;
+      display: flex !important;
+      align-items: center !important;
+      box-shadow: none !important;
+      transition: all 0.2s ease !important;
+    }
+  }
+
+  &:hover :global(.ant-select-selector) {
+    background-color: rgba(0, 0, 0, 0.04) !important;
+    color: #333 !important;
+  }
+}
+
+.modelSelectChevron {
+  opacity: 0.5;
+  transition: transform 0.2s;
+}
+
+.skillBadgeButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #555;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  height: 28px;
+
+  &:hover {
+    background-color: rgba(0, 0, 0, 0.04);
+    color: #333;
+  }
+}
+
+// ─── Execution Frequency Tab Layout ────────────────────────────────────────────
+.freqTabGroup {
+  display: flex;
+  background-color: #f3f4f6;
+  border-radius: 6px;
+  padding: 2px;
+  width: fit-content;
+  margin-bottom: 12px;
+}
+
+.freqTab {
+  border: none;
+  background: none;
+  padding: 5px 16px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #4b5563;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+
+  &:hover {
+    color: #111827;
+  }
+}
+
+.freqTabActive {
+  background-color: #ffffff !important;
+  color: #111827 !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.freqOptionsRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+  animation: fadeIn 0.2s ease;
+}
+
+.freqSelect {
+  width: 100px;
+  :global {
+    .ant-select-selector {
+      border-radius: 6px !important;
+      height: 32px !important;
+      display: flex !important;
+      align-items: center !important;
+    }
+  }
+}
+
+.timePicker {
+  border-radius: 6px !important;
+  height: 32px !important;
+}
+
+// ─── Switch Control Line ────────────────────────────────────────────────────────
+.switchLine {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 0;
+}
+
+.switchInfo {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #374151;
+}
+
+.infoIcon {
+  color: #9ca3af;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+
+  &:hover {
+    color: #4b5563;
+  }
+}
+
+// ─── Modal Footer Buttons ──────────────────────────────────────────────────────
+.modalFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+.cancelBtn {
+  border: 1px solid #d1d5db !important;
+  background-color: #ffffff !important;
+  color: #374151 !important;
+  border-radius: 6px !important;
+  height: 34px !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+
+  &:hover {
+    background-color: #f9fafb !important;
+    border-color: #c5c7c9 !important;
+  }
+}
+
+.submitBtn {
+  background-color: #111827 !important;
+  border-color: #111827 !important;
+  color: #ffffff !important;
+  border-radius: 6px !important;
+  height: 34px !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+
+  &:hover {
+    background-color: #1f2937 !important;
+    border-color: #1f2937 !important;
+  }
+}
+
+// ─── Dynamic Animations ────────────────────────────────────────────────────────
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+// ─── Dark Mode Support ─────────────────────────────────────────────────────────
+:global(.dark-mode) {
+  .automationsPage {
+    background-color: #111827;
+  }
+
+  .pageTitle {
+    color: #f9fafb;
+  }
+
+  .pageSubtitle {
+    color: #9ca3af;
+  }
+
+  .addButton {
+    background-color: #1f2937;
+    border-color: #374151;
+    color: #f9fafb;
+
+    &:hover {
+      background-color: #374151;
+      border-color: #4b5563;
+    }
+  }
+
+  .sectionTitle {
+    color: #9ca3af;
+  }
+
+  .categoryTab {
+    background: #1f2937;
+    color: #9ca3af;
+
+    &:hover {
+      background: #374151;
+      color: #f9fafb;
+    }
+  }
+
+  .templateCard {
+    background: #1f2937;
+    border-color: #374151;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+
+    &:hover {
+      border-color: #4b5563;
+      box-shadow: 0 10px 20px rgba(0, 0, 0, 0.3);
+    }
+  }
+
+  .cardTitle {
+    color: #f9fafb;
+  }
+
+  .cardFreq {
+    color: #9ca3af;
+  }
+
+  .cardDesc {
+    color: #9ca3af;
+  }
+
+  .deployBtn {
+    color: #60a5fa;
+
+    &:hover {
+      color: #93c5fd;
+    }
+  }
+
+  .activeSection {
+    border-top-color: #374151;
+  }
+
+  .jobCard {
+    background: #1f2937;
+    border-color: #374151;
+
+    &:hover {
+      border-color: #4b5563;
+    }
+  }
+
+  .jobTitle {
+    color: #f9fafb;
+  }
+
+  .jobSchedule {
+    background: #374151;
+    color: #f3f4f6;
+  }
+
+  .jobBody {
+    background: #111827;
+    color: #d1d5db;
+  }
+
+  .jobFooter {
+    border-top-color: #374151;
+  }
+
+  .actionButton {
+    color: #9ca3af;
+
+    &:hover {
+      background-color: #374151;
+      color: #f9fafb;
+    }
+  }
+
+  // Modal in Dark Mode
+  :global {
+    .ant-modal-content {
+      background-color: #1f2937 !important;
+      color: #f9fafb !important;
+    }
+    .ant-modal-title {
+      color: #f9fafb !important;
+    }
+  }
+
+  .formLabel {
+    color: #d1d5db;
+  }
+
+  .formInput {
+    border-color: #374151 !important;
+    background-color: #111827 !important;
+    color: #f9fafb !important;
+
+    &:focus, &:hover {
+      border-color: #60a5fa !important;
+    }
+  }
+
+  .promptContainer {
+    border-color: rgba(255, 255, 255, 0.1);
+    background-color: rgba(255, 255, 255, 0.04);
+
+    &:hover, &:focus-within {
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+  }
+
+  .promptTextarea {
+    background-color: transparent;
+    color: #f9fafb;
+  }
+
+  .promptFooterBar {
+    background-color: transparent;
+    border-top-color: rgba(255, 255, 255, 0.06);
+  }
+
+  .modelSelect {
+    :global {
+      .ant-select-selector {
+        color: #aaa !important;
+      }
+    }
+
+    &:hover :global(.ant-select-selector) {
+      background-color: rgba(255, 255, 255, 0.06) !important;
+      color: #ddd !important;
+    }
+  }
+
+  .skillBadgeButton {
+    background-color: transparent;
+    border: none;
+    color: #aaa;
+
+    &:hover {
+      background-color: rgba(255, 255, 255, 0.06);
+      color: #ddd;
+    }
+  }
+
+  .freqTabGroup {
+    background-color: #111827;
+  }
+
+  .freqTab {
+    color: #9ca3af;
+  }
+
+  .freqTabActive {
+    background-color: #1f2937 !important;
+    color: #f9fafb !important;
+  }
+
+  .switchLine {
+    border-color: #374151;
+  }
+
+  .switchInfo {
+    color: #d1d5db;
+  }
+
+  .cancelBtn {
+    border-color: #374151 !important;
+    background-color: #1f2937 !important;
+    color: #d1d5db !important;
+
+    &:hover {
+      background-color: #374151 !important;
+    }
+  }
+
+  .submitBtn {
+    background-color: #f9fafb !important;
+    border-color: #f9fafb !important;
+    color: #111827 !important;
+
+    &:hover {
+      background-color: #e5e7eb !important;
+    }
+  }
+}
+
+// ─── Custom High-Fidelity Selectors and Popovers (仿 ChatToolbar 完美对齐) ───
+
+.popoverNoPaddingCustom {
+  :global {
+    .ant-popover-inner-content {
+      padding: 0 !important;
+    }
+  }
+}
+
+// ─── Custom Model Selector Button ───
+.modelSelectButtonCustom {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #555;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  height: 28px;
+
+  &:hover {
+    background-color: rgba(0, 0, 0, 0.04);
+    color: #333;
+  }
+}
+
+.modelSelectButtonIconCustom {
+  display: flex;
+  align-items: center;
+}
+
+.modelSelectButtonTextCustom {
+  flex: 1;
+}
+
+.modelSelectChevronCustom {
+  opacity: 0.5;
+  margin-left: 2px;
+}
+
+// ─── Dropdown Overlay Custom (Model List) ───
+.dropdownOverlayCustom {
+  width: 320px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: #fff;
+  border-radius: 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  padding: 8px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+
+  &::-webkit-scrollbar {
+    width: 5px;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.1);
+    border-radius: 4px;
+  }
+  &::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.2);
+  }
+}
+
+.dropdownTitleCustom {
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #999;
+}
+
+.dropdownItemCustom {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #333;
+  transition: all 0.15s ease;
+  border: none;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+
+  &:hover {
+    background: rgba(0, 0, 0, 0.03);
+  }
+}
+
+.dropdownItemActiveCustom {
+  color: #2563eb !important;
+  background: rgba(37, 99, 235, 0.06) !important;
+
+  .modelItemIconCircleCustom {
+    background: rgba(37, 99, 235, 0.08) !important;
+    color: #2563eb !important;
+  }
+}
+
+.dropdownItemIconCustom {
+  display: flex;
+  align-items: center;
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+
+.modelItemIconCircleCustom {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 15px;
+  box-shadow: inset 0 -1px 0 rgba(0,0,0,0.1), 0 2px 4px rgba(0,0,0,0.04);
+  transition: all 0.2s ease;
+  background: #f3f4f6;
+  color: #9ca3af;
+}
+
+.dropdownItemLabelCustom {
+  flex: 1;
+  font-weight: 550;
+  color: #1f2937;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dropdownItemDescCustom {
+  font-size: 11px;
+  color: #6b7280;
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dropdownItemCheckCustom {
+  color: #2563eb;
+  opacity: 0.8;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+// ─── Popover Panel Custom (Skills List) ───
+.popoverPanelCustom {
+  width: 320px;
+  background: #fff;
+  border-radius: 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  padding: 8px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+}
+
+.popoverSearchCustom {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 8px;
+  font-size: 13px;
+  background: rgba(0, 0, 0, 0.02);
+  outline: none;
+  margin-bottom: 6px;
+  color: #333;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+
+  &:focus {
+    border-color: #2563eb;
+    background: #fff;
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.1);
+  }
+}
+
+.popoverListCustom {
+  max-height: 280px;
+  overflow-y: auto;
+  padding-right: 2px;
+
+  &::-webkit-scrollbar {
+    width: 5px;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.1);
+    border-radius: 4px;
+  }
+  &::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.2);
+  }
+}
+
+.popoverItemCustom {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+
+  &:hover {
+    background: rgba(0, 0, 0, 0.03);
+  }
+}
+
+.popoverItemIconCustom {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 15px;
+  box-shadow: inset 0 -1px 0 rgba(0,0,0,0.1), 0 2px 4px rgba(0,0,0,0.04);
+}
+
+.popoverItemInfoCustom {
+  flex: 1;
+  min-width: 0;
+}
+
+.popoverItemNameCustom {
+  font-size: 13px;
+  font-weight: 550;
+  color: #1f2937;
+}
+
+.popoverItemDescCustom {
+  font-size: 11px;
+  color: #6b7280;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 1px;
+}
+
+// ─── Global Dark Mode Support for Custom Popups ───
+:global(.dark-mode) {
+  .modelSelectButtonCustom {
+    color: #aaa;
+    &:hover {
+      background-color: rgba(255, 255, 255, 0.06);
+      color: #ddd;
+    }
+  }
+
+  .dropdownOverlayCustom {
+    background: #1f2937;
+    border-color: #374151;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  }
+
+  .dropdownTitleCustom {
+    color: #6b7280;
+  }
+
+  .dropdownItemCustom {
+    color: #d1d5db;
+    &:hover {
+      background: rgba(255, 255, 255, 0.04);
+    }
+  }
+
+  .dropdownItemActiveCustom {
+    color: #60a5fa !important;
+    background: rgba(96, 165, 250, 0.1) !important;
+
+    .modelItemIconCircleCustom {
+      background: rgba(96, 165, 250, 0.15) !important;
+      color: #60a5fa !important;
+    }
+  }
+
+  .modelItemIconCircleCustom {
+    background: rgba(255, 255, 255, 0.06);
+    color: #9ca3af;
+  }
+
+  .dropdownItemLabelCustom {
+    color: #f9fafb;
+  }
+
+  .dropdownItemDescCustom {
+    color: #9ca3af;
+  }
+
+  .dropdownItemCheckCustom {
+    color: #60a5fa;
+  }
+
+  .popoverPanelCustom {
+    background: #1f2937;
+    border-color: #374151;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  }
+
+  .popoverSearchCustom {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: #374151;
+    color: #f9fafb;
+
+    &:focus {
+      border-color: #60a5fa;
+      background: #111827;
+      box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.15);
+    }
+  }
+
+  .popoverListCustom {
+    &::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.1);
+    }
+    &::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+  }
+
+  .popoverItemCustom {
+    &:hover {
+      background: rgba(255, 255, 255, 0.04);
+    }
+  }
+
+  .popoverItemNameCustom {
+    color: #f9fafb;
+  }
+
+  .popoverItemDescCustom {
+    color: #9ca3af;
+  }
+}

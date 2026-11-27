@@ -1,0 +1,48 @@
+.page {
+  padding: 24px;
+}
+
+.content {
+  display: grid;
+  gap: 16px;
+  max-width: 1080px;
+}
+
+.providerCard {
+  border-radius: 10px;
+}
+
+.providerHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.providerTitle {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.providerDesc {
+  margin: 4px 0 0;
+  color: rgba(0, 0, 0, 0.55);
+  font-size: 13px;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 16px;
+}
+
+.full {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 760px) {
+  .formGrid {
+    grid-template-columns: 1fr;
+  }
+}

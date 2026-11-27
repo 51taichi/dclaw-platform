@@ -1,0 +1,198 @@
+.approvalCard {
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  border-radius: 16px;
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.04),
+    inset 0 1px 0 rgba(255, 255, 255, 1);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  padding: 20px 24px;
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+  overflow: hidden;
+
+  &::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 3px;
+    background: linear-gradient(90deg, #f97316, #f59e0b);
+  }
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+
+  .titleRow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .icon {
+    color: #1a1a1a;
+  }
+
+  .title {
+    font-size: 15px;
+    font-weight: 600;
+    color: #1a1a1a;
+    letter-spacing: 0;
+  }
+
+  .timer {
+    background: rgba(0, 0, 0, 0.04);
+    border-radius: 20px;
+    padding: 4px 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+
+    .timerIcon {
+      color: #64748b;
+    }
+
+    .timerText {
+      font-size: 13px;
+      font-weight: 600;
+      color: #475569;
+      font-family: "SF Mono", monospace;
+    }
+  }
+}
+
+.content {
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 12px;
+  padding: 18px;
+  border: 1px solid rgba(0, 0, 0, 0.03);
+}
+
+.reason {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.7;
+  color: #475569;
+  word-break: break-word;
+}
+
+.actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-top: 20px;
+
+  button {
+    height: 38px;
+    border-radius: 10px;
+    font-weight: 600;
+    font-size: 14px;
+    padding: 0 20px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    cursor: pointer;
+  }
+
+  .denyButton {
+    background: rgba(0, 0, 0, 0.04);
+    border: none;
+    color: #475569;
+
+    &:hover:not(:disabled) {
+      background: rgba(0, 0, 0, 0.08);
+      color: #0f172a;
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  }
+
+  .approveButton {
+    background: #000000;
+    border: none;
+    color: #ffffff;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+
+    &:hover:not(:disabled) {
+      background: #1a1a1a;
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+    }
+
+    &:disabled {
+      background: rgba(0, 0, 0, 0.3);
+      box-shadow: none;
+      cursor: not-allowed;
+      transform: none;
+    }
+  }
+}
+
+.timeoutHint {
+  margin-right: auto;
+  font-size: 13px;
+  color: #ef4444;
+  font-weight: 500;
+}
+
+:global(.dark-mode) {
+  .approvalCard {
+    background: rgba(30, 30, 30, 0.65);
+    border-color: rgba(255, 255, 255, 0.08);
+    box-shadow:
+      0 8px 32px rgba(0, 0, 0, 0.3),
+      inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  }
+
+  .title {
+    color: rgba(255, 255, 255, 0.9);
+  }
+  .icon {
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .timer {
+    background: rgba(255, 255, 255, 0.08);
+    .timerText {
+      color: rgba(255, 255, 255, 0.85);
+    }
+  }
+
+  .content {
+    background: rgba(0, 0, 0, 0.2);
+    border-color: rgba(255, 255, 255, 0.05);
+  }
+
+  .reason {
+    color: rgba(255, 255, 255, 0.72);
+  }
+
+  .actions {
+    .denyButton {
+      background: rgba(255, 255, 255, 0.08);
+      color: rgba(255, 255, 255, 0.85);
+      &:hover:not(:disabled) {
+        background: rgba(255, 255, 255, 0.12);
+      }
+    }
+    .approveButton {
+      background: #ffffff;
+      color: #000000;
+      box-shadow: 0 4px 12px rgba(255, 255, 255, 0.15);
+      &:hover:not(:disabled) {
+        background: #f5f5f5;
+        box-shadow: 0 6px 16px rgba(255, 255, 255, 0.2);
+      }
+    }
+  }
+}

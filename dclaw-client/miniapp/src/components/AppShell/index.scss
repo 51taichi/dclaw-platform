@@ -1,0 +1,13 @@
+@use "../../theme/tokens.scss" as *;
+
+.app-shell {
+  min-height: 100vh;
+  box-sizing: border-box;
+  padding: 24px 20px 32px;
+  color: $color-text;
+  background: $color-page;
+}
+
+.app-shell--with-tabbar {
+  padding-bottom: 118px;
+}

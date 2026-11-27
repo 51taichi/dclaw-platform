@@ -1,0 +1,29 @@
+@use "./theme/tokens.scss" as *;
+
+page {
+  min-height: 100%;
+  color: $color-text;
+  background: $color-page;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.page-shell {
+  min-height: 100vh;
+  box-sizing: border-box;
+  padding: 24px 20px 32px;
+}
+
+.page-title {
+  margin: 0 0 20px;
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.card {
+  box-sizing: border-box;
+  padding: 18px;
+  border: 1px solid $color-line;
+  border-radius: $radius-card;
+  background: $color-card;
+  box-shadow: $shadow-soft;
+}

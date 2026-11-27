@@ -1,0 +1,133 @@
+.page {
+  padding: 24px;
+}
+
+.content {
+  display: grid;
+  width: 100%;
+  gap: 16px;
+}
+
+.userCard {
+  overflow: hidden;
+  border-radius: 8px;
+
+  :global(.ant-card-body) {
+    padding: 0;
+  }
+}
+
+.cardTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cardCount {
+  display: inline-flex;
+  min-width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 7px;
+  border: 1px solid var(--ag-ant-color-border, #d9d9d9);
+  border-radius: 6px;
+  color: var(--ag-ant-color-text-secondary, #8c8c8c);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 22px;
+}
+
+.userTable {
+  :global(.ant-table-thead > tr > th) {
+    white-space: nowrap;
+  }
+
+  :global(.ant-pagination) {
+    margin: 16px 20px;
+  }
+}
+
+.actions {
+  white-space: nowrap;
+}
+
+.createTabContent {
+  min-height: 240px;
+  padding-top: 4px;
+}
+
+.accountFieldsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  column-gap: 20px;
+}
+
+.sceneEditor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sceneEditorHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.sceneEditorTitle {
+  color: var(--ag-ant-color-text, rgba(0, 0, 0, 0.88));
+  font-weight: 500;
+}
+
+.sceneRow {
+  display: grid;
+  grid-template-columns:
+    minmax(130px, 0.65fr) minmax(150px, 0.8fr) minmax(280px, 2fr)
+    32px;
+  align-items: start;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--ag-ant-color-border-secondary, #f0f0f0);
+  border-radius: 8px;
+
+  :global(.ant-form-item) {
+    margin-bottom: 0;
+  }
+}
+
+.sceneIconLabel {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.removeSceneButton {
+  margin-top: 30px;
+}
+
+@media (max-width: 760px) {
+  .page {
+    padding: 16px;
+  }
+
+  .accountFieldsGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .sceneRow {
+    grid-template-columns: 1fr 32px;
+
+    :global(.ant-form-item) {
+      grid-column: 1;
+    }
+
+    .removeSceneButton {
+      grid-column: 2;
+      grid-row: 1;
+    }
+  }
+}

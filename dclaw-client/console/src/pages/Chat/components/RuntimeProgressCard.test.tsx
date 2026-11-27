@@ -1,0 +1,944 @@
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import RuntimeProgressCard from "./RuntimeProgressCard";
+import { ExpertIdentityContext } from "../../../contexts/ExpertIdentityContext";
+
+const { downloadReviewAssets } = vi.hoisted(() => ({
+  downloadReviewAssets: vi.fn(),
+}));
+
+vi.mock("../../../api/modules/superExpertPlatform", () => ({
+  superExpertPlatformApi: {
+    downloadReviewAssets,
+  },
+}));
+
+it("updates a cached card when a new expert identity arrives", () => {
+  const card = (
+    <RuntimeProgressCard
+      identity={{ name: "DClaw", avatar: "/mascot.png", isSuperExpert: false }}
+      data={{ status: "completed", output: [] }}
+    />
+  );
+  const { rerender } = render(
+    <ExpertIdentityContext.Provider value={null}>
+      {card}
+    </ExpertIdentityContext.Provider>,
+  );
+  rerender(
+    <ExpertIdentityContext.Provider
+      value={{ name: "新版专家", avatar: "/new.png", isSuperExpert: true }}
+    >
+      {card}
+    </ExpertIdentityContext.Provider>,
+  );
+  expect(screen.getByText("新版专家")).toBeInTheDocument();
+  expect(screen.getByAltText("新版专家")).toHaveAttribute("src", "/new.png");
+  expect(screen.queryByText("DClaw")).not.toBeInTheDocument();
+});
+
+vi.mock("@agentscope-ai/chat", () => ({
+  Markdown: ({ content }: { content: string }) => <div>{content}</div>,
+}));
+
+describe("RuntimeProgressCard", () => {
+  it("renders a marked review bundle as one image-only card", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "review-bundle",
+              type: "message",
+              status: "completed",
+              metadata: {
+                original_id: "source-review-message",
+                metadata: {
+                  dclaw_aigc_review_bundle: {
+                    material_task_id: "task-1",
+                    assets: [{ asset_id: "asset-1" }, { asset_id: "asset-2" }],
+                  },
+                },
+              },
+              content: [
+                {
+                  type: "text",
+                  text: "提交节点：误区一；node_id=image-1；asset_id=asset-1；制作要求：内部提示词",
+                },
+                {
+                  type: "image",
+                  source: { type: "url", url: "/image-1.png" },
+                },
+                {
+                  type: "text",
+                  text: "用户上传文件，已经下载到 /app/working/secret/image-2.png",
+                },
+                {
+                  type: "image",
+                  source: { type: "url", url: "/image-2.png" },
+                },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    const card = screen.getByRole("region", { name: "审核素材" });
+    expect(card).toHaveAttribute("data-review-assets-card", "task-1");
+    expect(screen.getAllByRole("img", { name: /审核图片/ })).toHaveLength(2);
+    expect(
+      screen.getByRole("button", { name: "批量下载" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/提交节点/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/用户上传文件/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/内部提示词/)).not.toBeInTheDocument();
+  });
+
+  it("starts one archive download immediately from the review card", () => {
+    downloadReviewAssets.mockReturnValueOnce(new Promise(() => undefined));
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "review-bundle",
+              type: "message",
+              status: "completed",
+              metadata: {
+                dclaw_aigc_review_bundle: {
+                  material_task_id: "task-1",
+                  assets: [{ asset_id: "asset-1" }],
+                },
+              },
+              content: [
+                {
+                  type: "image",
+                  source: { type: "url", url: "/image-1.png" },
+                },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "批量下载" }));
+
+    expect(downloadReviewAssets).toHaveBeenCalledTimes(1);
+    expect(downloadReviewAssets).toHaveBeenCalledWith("task-1");
+    expect(screen.getByRole("button", { name: "正在打包" })).toBeDisabled();
+  });
+
+  it("creates an exact card anchor from fixed-runtime reply metadata", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "fixed-runtime-reply",
+              type: "message",
+              status: "completed",
+              metadata: {
+                super_expert_interaction_id: "interaction-s0-1",
+              },
+              content: [{ type: "text", text: "请按下方卡片填写。" }],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(
+      document.querySelector(
+        '[data-super-expert-interaction-slot="interaction-s0-1"]',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("请按下方卡片填写。")).toBeInTheDocument();
+  });
+
+  it("restores the fixed-runtime card anchor from nested history metadata", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "persisted-fixed-runtime-reply",
+              type: "message",
+              status: "completed",
+              metadata: {
+                original_id: "source-message",
+                metadata: {
+                  super_expert_interaction_id: "interaction-s0-1",
+                },
+              },
+              content: [{ type: "text", text: "请按下方卡片填写。" }],
+            },
+          ],
+        }}
+      />,
+    );
+
+    const text = screen.getByText("请按下方卡片填写。");
+    const anchor = document.querySelector(
+      '[data-super-expert-interaction-slot="interaction-s0-1"]',
+    );
+    expect(anchor).toBeInTheDocument();
+    expect(
+      text.compareDocumentPosition(anchor!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("places a successful interaction card anchor between surrounding reply text", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "message-before",
+              type: "message",
+              status: "completed",
+              content: [{ type: "text", text: "保留的前文" }],
+            },
+            {
+              id: "create-call",
+              type: "plugin_call",
+              status: "completed",
+              content: [
+                {
+                  type: "data",
+                  data: { name: "interaction_card_create" },
+                },
+              ],
+            },
+            {
+              id: "create-result",
+              type: "plugin_call_output",
+              status: "completed",
+              content: [
+                {
+                  type: "data",
+                  data: {
+                    name: "interaction_card_create",
+                    output:
+                      '[{"type":"text","text":"{\\"interaction\\":{\\"interaction_id\\":\\"interaction-1\\",\\"status\\":\\"PENDING\\"}}"}]',
+                  },
+                },
+              ],
+            },
+            {
+              id: "message-after",
+              type: "message",
+              status: "completed",
+              content: [{ type: "text", text: "保留的后文" }],
+            },
+          ],
+        }}
+      />,
+    );
+
+    const before = screen.getByText("保留的前文");
+    const anchor = document.querySelector(
+      '[data-super-expert-interaction-slot="interaction-1"]',
+    );
+    const after = screen.getByText("保留的后文");
+    const copy = screen.getByRole("button", { name: "复制回复" });
+
+    expect(anchor).not.toBeNull();
+    expect(
+      before.compareDocumentPosition(anchor!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      anchor!.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      after.compareDocumentPosition(copy) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("does not create an exact card anchor for a failed interaction request", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "failed-result",
+              type: "plugin_call_output",
+              status: "completed",
+              content: [
+                {
+                  type: "data",
+                  data: {
+                    name: "interaction_card_create",
+                    output:
+                      '[{"type":"text","text":"{\\"error\\":\\"INVALID_INTERACTION_REQUEST\\"}"}]',
+                  },
+                },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(
+      document.querySelector(
+        '[data-super-expert-interaction-slot="interaction-1"]',
+      ),
+    ).not.toBeInTheDocument();
+  });
+
+  it("removes legacy delivery status from a reply with verified card creation", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "create-result",
+              type: "plugin_call_output",
+              status: "completed",
+              content: [
+                {
+                  type: "data",
+                  data: {
+                    name: "interaction_card_create",
+                    output:
+                      '[{"type":"text","text":"{\\"interaction\\":{\\"interaction_id\\":\\"interaction-1\\",\\"status\\":\\"PENDING\\"}}"}]',
+                  },
+                },
+              ],
+            },
+            {
+              id: "message-after",
+              type: "message",
+              status: "completed",
+              content: [
+                {
+                  type: "text",
+                  text: "好了，卡片已经发给你了。按上面的问题填一下。",
+                },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("按上面的问题填一下。")).toBeInTheDocument();
+    expect(
+      screen.queryByText("好了，卡片已经发给你了。按上面的问题填一下。"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("sanitizes only the first visible reply after verified card creation", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "message-before",
+              type: "message",
+              status: "completed",
+              content: [
+                {
+                  type: "text",
+                  text: "卡片已经发给你了。这是创建前的历史说明。",
+                },
+              ],
+            },
+            {
+              id: "create-result",
+              type: "plugin_call_output",
+              status: "completed",
+              content: [
+                {
+                  type: "data",
+                  data: {
+                    name: "interaction_card_create",
+                    output:
+                      '[{"type":"text","text":"{\\"interaction\\":{\\"interaction_id\\":\\"interaction-1\\",\\"status\\":\\"PENDING\\"}}"}]',
+                  },
+                },
+              ],
+            },
+            {
+              id: "message-after",
+              type: "message",
+              status: "completed",
+              content: [
+                {
+                  type: "text",
+                  text: "卡片已经发给你了。请选择。",
+                },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByText("卡片已经发给你了。这是创建前的历史说明。"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("请选择。")).toBeInTheDocument();
+  });
+
+  it("does not anchor or sanitize a submitted interaction replay", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "submitted-replay",
+              type: "plugin_call_output",
+              status: "completed",
+              content: [
+                {
+                  type: "data",
+                  data: {
+                    name: "interaction_card_create",
+                    output:
+                      '[{"type":"text","text":"{\\"interaction\\":{\\"interaction_id\\":\\"interaction-old\\",\\"status\\":\\"SUBMITTED\\"}}"}]',
+                  },
+                },
+              ],
+            },
+            {
+              id: "message-after-replay",
+              type: "message",
+              status: "completed",
+              content: [
+                {
+                  type: "text",
+                  text: "卡片已经发给你了。这是普通回复。",
+                },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(
+      document.querySelector(
+        '[data-super-expert-interaction-slot="interaction-old"]',
+      ),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText("卡片已经发给你了。这是普通回复。"),
+    ).toBeInTheDocument();
+  });
+
+  it("only sanitizes the first non-empty text block in an associated reply", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "message-with-anchor",
+              type: "message",
+              status: "completed",
+              metadata: {
+                super_expert_interaction_id: "interaction-1",
+              },
+              content: [
+                { type: "text", text: "这里是有效业务说明。" },
+                { type: "text", text: "卡片已经发给你了。这是第二段原文。" },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("这里是有效业务说明。")).toBeInTheDocument();
+    expect(
+      screen.getByText("卡片已经发给你了。这是第二段原文。"),
+    ).toBeInTheDocument();
+  });
+
+  it("skips whitespace blocks before sanitizing the first real text block", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "message-with-anchor",
+              type: "message",
+              status: "completed",
+              metadata: {
+                super_expert_interaction_id: "interaction-1",
+              },
+              content: [
+                { type: "text", text: "   " },
+                { type: "text", text: "卡片已经发给你了。请选择。" },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("请选择。")).toBeInTheDocument();
+    expect(screen.queryByText(/卡片已经发给你了/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    "卡片发送成功率达到 95%。",
+    "卡片创建成功率偏低，需要继续排查。",
+    "卡片发过去的时间是下午三点。",
+  ])("keeps ordinary card wording after verified creation: %s", (text) => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "message-with-anchor",
+              type: "message",
+              status: "completed",
+              metadata: {
+                super_expert_interaction_id: "interaction-1",
+              },
+              content: [{ type: "text", text }],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText(text)).toBeInTheDocument();
+  });
+
+  it("renders every host-verified interaction anchor on the associated reply", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "message-with-anchors",
+              type: "message",
+              status: "completed",
+              metadata: {
+                super_expert_interaction_id: "interaction-2",
+                super_expert_interaction_ids: [
+                  "interaction-1",
+                  "interaction-2",
+                ],
+              },
+              content: [{ type: "text", text: "请选择。" }],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(
+      document.querySelector(
+        '[data-super-expert-interaction-slot="interaction-1"]',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      document.querySelector(
+        '[data-super-expert-interaction-slot="interaction-2"]',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps delivery wording when the response has no verified card creation", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "ordinary-message",
+              type: "message",
+              status: "completed",
+              content: [
+                {
+                  type: "text",
+                  text: "卡片已经发过去了。这是普通文本记录。",
+                },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByText("卡片已经发过去了。这是普通文本记录。"),
+    ).toBeInTheDocument();
+  });
+
+  it("renders processing details after interaction content", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "msg-1",
+              type: "message",
+              status: "completed",
+              content: [{ type: "text", text: "请填写以下业务信息。" }],
+            },
+            {
+              id: "reasoning-1",
+              type: "reasoning",
+              status: "completed",
+              content: [],
+            },
+          ],
+        }}
+        interactionContent={
+          <section aria-label="基础交互">
+            <button type="button">提交回答</button>
+          </section>
+        }
+      />,
+    );
+
+    const response = screen.getByText("请填写以下业务信息。");
+    const interaction = screen.getByRole("region", { name: "基础交互" });
+    const activity = screen.getByText("已完成 1 项处理");
+    const copy = screen.getByRole("button", { name: "复制回复" });
+
+    expect(
+      response.compareDocumentPosition(interaction) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      interaction.compareDocumentPosition(activity) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      activity.compareDocumentPosition(copy) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("keeps streamed messages in arrival order when the final response is merged", () => {
+    const { rerender } = render(
+      <RuntimeProgressCard
+        data={{
+          id: "response-1",
+          status: "in_progress",
+          output: [
+            {
+              id: "explanation",
+              type: "message",
+              status: "completed",
+              content: [{ type: "text", text: "先解释上一个选择" }],
+            },
+            {
+              id: "next-question",
+              type: "message",
+              status: "in_progress",
+              content: [{ type: "text", text: "再询问下一个问题" }],
+            },
+          ],
+        }}
+      />,
+    );
+
+    rerender(
+      <RuntimeProgressCard
+        data={{
+          id: "response-1",
+          status: "completed",
+          output: [
+            {
+              id: "next-question",
+              type: "message",
+              status: "completed",
+              content: [{ type: "text", text: "再询问下一个问题" }],
+            },
+            {
+              id: "explanation",
+              type: "message",
+              status: "completed",
+              content: [{ type: "text", text: "先解释上一个选择" }],
+            },
+          ],
+        }}
+      />,
+    );
+
+    const explanation = screen.getByText("先解释上一个选择");
+    const nextQuestion = screen.getByText("再询问下一个问题");
+    expect(
+      explanation.compareDocumentPosition(nextQuestion) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("collapses repeated tool and reasoning events into a progress summary", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "in_progress",
+          output: [
+            {
+              id: "msg-1",
+              type: "message",
+              status: "completed",
+              content: [{ type: "text", text: "我来帮你修改标题。" }],
+            },
+            {
+              id: "reasoning-1",
+              type: "reasoning",
+              status: "completed",
+              content: [{ type: "text", text: "" }],
+            },
+            {
+              id: "tool-1",
+              type: "plugin_call",
+              status: "completed",
+              content: [
+                {
+                  type: "data",
+                  data: {
+                    name: "edit_file",
+                    arguments: { file_path: "/tmp/project/post.md" },
+                  },
+                },
+              ],
+            },
+            {
+              id: "tool-2",
+              type: "plugin_call",
+              status: "in_progress",
+              content: [
+                {
+                  type: "data",
+                  data: {
+                    name: "edit_file",
+                    arguments: { file_path: "/tmp/project/about.md" },
+                  },
+                },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("DClaw")).toBeInTheDocument();
+    expect(screen.getByText("我来帮你修改标题。")).toBeInTheDocument();
+    expect(screen.getByText(/正在修改文件/)).toBeInTheDocument();
+    expect(screen.getByText("修改文件 2")).toBeInTheDocument();
+    expect(screen.getByText("思考 1")).toBeInTheDocument();
+    expect(screen.queryByText("Thinking")).not.toBeInTheDocument();
+    expect(screen.queryByText("edit_file")).not.toBeInTheDocument();
+  });
+
+  it("shows a calm thinking status when no text has arrived yet", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "in_progress",
+          output: [],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("DClaw")).toBeInTheDocument();
+    expect(screen.getByText("正在思考下一步...")).toBeInTheDocument();
+  });
+
+  it("renders response images inline and opens a detail preview", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "msg-1",
+              type: "message",
+              status: "completed",
+              content: [
+                { type: "text", text: "请选择视觉方案。" },
+                {
+                  type: "image",
+                  image_url: "/api/user/workspace/preview/scheme.png",
+                },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("请选择视觉方案。")).toBeInTheDocument();
+    const preview = screen.getByAltText("对话图片 1");
+    expect(preview).toBeInTheDocument();
+    expect(preview).toHaveAttribute(
+      "src",
+      "/api/user/workspace/preview/scheme.png",
+    );
+
+    fireEvent.click(preview);
+
+    const dialog = screen.getByRole("dialog", { name: "图片预览" });
+    expect(dialog).toBeInTheDocument();
+    expect(screen.getByAltText("图片预览")).toHaveAttribute(
+      "src",
+      "/api/user/workspace/preview/scheme.png",
+    );
+  });
+
+  it("hides generated image file paths from assistant text", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "msg-1",
+              type: "message",
+              status: "completed",
+              content: [
+                {
+                  type: "text",
+                  text: [
+                    "新生成的图像文件：",
+                    "- 方案一：/app/working/workspaces/default/sessions_data/<session_id>/media/imagegen/imagegen_1782365209213.png",
+                    "- 方案二：/app/working/workspaces/default/sessions_data/<session_id>/media/imagegen/imagegen_1782365278687.png",
+                    "选择后，我将继续进行设计系统提取。",
+                  ].join("\n"),
+                },
+                {
+                  type: "image",
+                  image_url:
+                    "/api/user/files/preview//app/working/workspaces/default/sessions_data/1782359420083/media/imagegen/imagegen_1782365209213.png",
+                },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText(/方案一：见下方图片 1/)).toBeInTheDocument();
+    expect(screen.getByText(/方案二：见下方图片 2/)).toBeInTheDocument();
+    expect(screen.queryByText(/\/app\/working/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/<session_id>/)).not.toBeInTheDocument();
+    expect(screen.getByAltText("对话图片 1")).toBeInTheDocument();
+  });
+
+  it("labels imagegen visual scheme previews and rewrites local workspace image URLs", () => {
+    render(
+      <RuntimeProgressCard
+        chatId="chat-123"
+        agentId="default"
+        data={{
+          status: "completed",
+          output: [
+            {
+              id: "msg-1",
+              type: "message",
+              status: "completed",
+              content: [
+                {
+                  type: "image",
+                  source: {
+                    type: "url",
+                    url: "file:///app/working/workspaces/default/media/ppt_visual_schemes/imagegen_1782712947438.png",
+                  },
+                },
+                {
+                  type: "text",
+                  text: [
+                    "Generated image with imagegen (GPT Image 2 / MXAPI)",
+                    "Style direction: 战略AI指挥中心（AI Command Center）- 深色控制室画布、模块化系统拓扑",
+                  ].join("\n"),
+                },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("战略AI指挥中心")).toBeInTheDocument();
+    const preview = screen.getByAltText("战略AI指挥中心");
+    expect(preview).toHaveAttribute(
+      "src",
+      "/api/user/workspace/preview/__qwenpaw_preview__/default/chat-123/media/ppt_visual_schemes/imagegen_1782712947438.png",
+    );
+  });
+
+  it("does not duplicate long tool names in the detail row when no target exists", () => {
+    render(
+      <RuntimeProgressCard
+        data={{
+          status: "in_progress",
+          output: [
+            {
+              id: "tool-1",
+              type: "plugin_call",
+              status: "in_progress",
+              content: [
+                {
+                  type: "data",
+                  data: {
+                    name: "presentation_builder",
+                    arguments: {},
+                  },
+                },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("查看详细操作"));
+
+    expect(screen.getAllByText("presentation_builder")).toHaveLength(1);
+  });
+});
+
+it("shows the selected super expert identity while thinking and after replying", () => {
+  const identity = {
+    name: "陆羽",
+    avatar: "data:image/png;base64,test",
+    isSuperExpert: true,
+  };
+  const { rerender } = render(
+    <RuntimeProgressCard
+      identity={identity}
+      data={{ status: "in_progress", output: [] }}
+    />,
+  );
+  expect(screen.getByText("陆羽")).toBeInTheDocument();
+  expect(screen.getByLabelText("超级专家")).toBeInTheDocument();
+  expect(screen.getByAltText("陆羽")).toHaveAttribute("src", identity.avatar);
+  rerender(
+    <RuntimeProgressCard
+      identity={identity}
+      data={{
+        status: "completed",
+        output: [
+          { type: "message", content: [{ type: "text", text: "你好" }] },
+        ],
+      }}
+    />,
+  );
+  expect(screen.getByText("陆羽")).toBeInTheDocument();
+  expect(screen.queryByText("DClaw")).not.toBeInTheDocument();
+});

@@ -1,0 +1,30 @@
+.button {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+}
+
+.checking svg {
+  animation: local-helper-spin 0.9s linear infinite;
+}
+
+.ready {
+  color: #16803c;
+  border-color: rgba(22, 128, 60, 0.35);
+}
+
+.unavailable,
+.not-installed,
+.update-required,
+.protocol-incompatible,
+.error {
+  color: #c2410c;
+  border-color: rgba(194, 65, 12, 0.35);
+}
+
+@keyframes local-helper-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
