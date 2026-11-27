@@ -120,9 +120,13 @@ describe("SuperExpertInteractionCard", () => {
     });
     expect(screen.getByRole("radio", { name: /方案甲/ })).not.toBeChecked();
     fireEvent.click(screen.getByRole("button", { name: "提交选择" }));
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({
-      version: 1, selected: [], supplement: "我的情况不同",
-    }));
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith({
+        version: 1,
+        selected: [],
+        supplement: "我的情况不同",
+      }),
+    );
   });
 
   it("counts a custom answer alongside preset multi choices", async () => {
@@ -150,11 +154,63 @@ describe("SuperExpertInteractionCard", () => {
       target: { value: "第三种情况" },
     });
     fireEvent.click(screen.getByRole("button", { name: "提交选择" }));
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({
-      version: 1,
-      selected: [{ id: "a", text: "方案甲：保留稳定业务 ID 与完整显示文本" }],
-      supplement: "第三种情况",
-    }));
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith({
+        version: 1,
+        selected: [{ id: "a", text: "方案甲：保留稳定业务 ID 与完整显示文本" }],
+        supplement: "第三种情况",
+      }),
+    );
+  });
+
+  it("keeps selected choices and shows an immediate limit warning when custom input exceeds the maximum", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    render(
+      <SuperExpertInteractionCard
+        projection={single({
+          componentType: "multi_select",
+          minSelections: 1,
+          maxSelections: 2,
+          supplement: {
+            enabled: true,
+            answerMode: "choice",
+            required: false,
+            label: "自行撰写回复",
+            placeholder: "补充另一个选项",
+            maxLength: 500,
+          },
+        })}
+        onSubmit={onSubmit}
+      />,
+    );
+    const first = screen.getByRole("checkbox", { name: /方案甲/ });
+    const second = screen.getByRole("checkbox", { name: /方案乙/ });
+    const submit = screen.getByRole("button", { name: "提交选择" });
+    fireEvent.click(first);
+    fireEvent.click(second);
+    fireEvent.change(screen.getByRole("textbox", { name: "自行撰写回复" }), {
+      target: { value: "第三种情况" },
+    });
+
+    expect(first).toBeChecked();
+    expect(second).toBeChecked();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "已选 3/2 项，请取消 1 项",
+    );
+    expect(submit).toBeDisabled();
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    fireEvent.click(second);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith({
+        version: 1,
+        selected: [{ id: "a", text: "方案甲：保留稳定业务 ID 与完整显示文本" }],
+        supplement: "第三种情况",
+      }),
+    );
   });
 
   it("only trusts DClaw bootstrap connection actions", () => {

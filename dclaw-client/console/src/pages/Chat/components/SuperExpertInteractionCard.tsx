@@ -158,6 +158,13 @@ function ChoiceInteractionCard({
   const submissionFailed = projection.submissionFailed === true;
   const busy = submitting || submissionInFlight;
   const actionable = pending || submissionInFlight || submissionFailed;
+  const customChoice =
+    projection.supplement.answerMode === "choice" &&
+    supplement.trim().length > 0;
+  const selectionCount = selected.size + (customChoice ? 1 : 0);
+  const overLimit =
+    projection.componentType === "multi_select" &&
+    selectionCount > projection.maxSelections;
 
   const submitSelection = useCallback(async () => {
     const options = projection.options.filter((option) =>
@@ -218,7 +225,8 @@ function ChoiceInteractionCard({
       }
       const next = new Set(current);
       if (next.has(key)) next.delete(key);
-      else if (next.size < projection.maxSelections) next.add(key);
+      else if (next.size + (customChoice ? 1 : 0) < projection.maxSelections)
+        next.add(key);
       return next;
     });
   };
@@ -226,10 +234,6 @@ function ChoiceInteractionCard({
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!actionable || busy || submittingRef.current) return;
-    const customChoice =
-      projection.supplement.answerMode === "choice" &&
-      supplement.trim().length > 0;
-    const selectionCount = selected.size + (customChoice ? 1 : 0);
     if (
       selectionCount < projection.minSelections ||
       selectionCount > projection.maxSelections
@@ -277,9 +281,7 @@ function ChoiceInteractionCard({
           const atLimit =
             projection.componentType === "multi_select" &&
             !checked &&
-            selected.size +
-              (projection.supplement.answerMode === "choice" && supplement.trim() ? 1 : 0) >=
-            projection.maxSelections;
+            selectionCount >= projection.maxSelections;
           return (
             <label
               key={key}
@@ -346,7 +348,8 @@ function ChoiceInteractionCard({
                 projection.componentType === "single_select" &&
                 projection.supplement.answerMode === "choice" &&
                 value.trim()
-              ) setSelected(new Set());
+              )
+                setSelected(new Set());
               setSupplement(value);
               setError("");
               event.currentTarget.style.height = "auto";
@@ -359,9 +362,13 @@ function ChoiceInteractionCard({
         </label>
       ) : null}
 
-      {error ? (
+      {overLimit || error ? (
         <p className={styles.error} role="alert" aria-live="polite">
-          {error}
+          {overLimit
+            ? `已选 ${selectionCount}/${projection.maxSelections} 项，请取消 ${
+                selectionCount - projection.maxSelections
+              } 项`
+            : error}
         </p>
       ) : null}
       {actionable ? (
@@ -372,12 +379,16 @@ function ChoiceInteractionCard({
               : submissionFailed
               ? "提交结果未送达，请重试"
               : projection.componentType === "multi_select"
-              ? `可选 ${projection.minSelections}–${projection.maxSelections} 项${projection.supplement.answerMode === "choice" ? "，自行填写计为一项" : ""}`
+              ? `已选 ${selectionCount}/${projection.maxSelections} 项${
+                  projection.supplement.answerMode === "choice"
+                    ? "，自行填写计为一项"
+                    : ""
+                }`
               : projection.supplement.answerMode === "choice"
               ? "选择一项或自行填写"
               : "请选择一项"}
           </span>
-          <button type="submit" disabled={busy} aria-busy={busy}>
+          <button type="submit" disabled={busy || overLimit} aria-busy={busy}>
             {busy ? (
               <LoaderCircle
                 className={styles.submitSpinner}
