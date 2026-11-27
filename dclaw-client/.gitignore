@@ -8,6 +8,7 @@ build/
 .vite/
 coverage/
 htmlcov/
+*.tsbuildinfo
 
 # Logs
 logs/
