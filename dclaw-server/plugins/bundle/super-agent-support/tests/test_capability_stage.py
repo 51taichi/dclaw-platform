@@ -23,6 +23,7 @@ GRANTS = {
     "interaction.card.cancel/1": "1",
     "aigc.workflow.capabilities.list/1": "1",
     "aigc.workflow.create/1": "1",
+    "card.create": "1",
     "local.task.start/1": "1",
 }
 
@@ -41,6 +42,7 @@ def test_stage_gate_requires_declaration_and_enforces_model_action_mutual_exclus
     gate.enter("interaction")
     assert "aigc.workflow.create/1" not in gate.model_grants()
     assert "local.task.start/1" not in gate.model_grants()
+    assert "card.create" not in gate.model_grants()
     assert "interaction.card.create/1" in gate.model_grants()
     gate.check("interaction.card.create/1")
     with pytest.raises(CapabilityStageError, match="action_outside_stage"):
@@ -51,6 +53,7 @@ def test_stage_gate_requires_declaration_and_enforces_model_action_mutual_exclus
     gate.enter("aigc")
     assert "interaction.card.create/1" not in gate.model_grants()
     assert "local.task.start/1" not in gate.model_grants()
+    assert "card.create" in gate.model_grants()
     with pytest.raises(CapabilityStageError, match="action_outside_stage"):
         gate.check("interaction.card.cancel/1")
     gate.check("aigc.workflow.create/1")

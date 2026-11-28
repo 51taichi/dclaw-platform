@@ -85,6 +85,7 @@ class CapabilityStageGate:
             if not (key.startswith("aigc.") and self.stage != "aigc")
             and not (key.startswith("interaction.") and self.stage != "interaction")
             and not (key.startswith("local.") and self.stage != "local")
+            and _ACTION_PREFIXES.get(key, self.stage) == self.stage
         }
 
     def record_model_call(self) -> None:
