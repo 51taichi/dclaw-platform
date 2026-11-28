@@ -70,6 +70,10 @@ PLATFORM_CAPABILITY_CATALOG_V1 = {
             for capability in _HOST
         ),
         _definition("runtime.failure.read/1", "runtime_host"),
+        _definition(
+            "capability.stage.enter/1", "runtime_host",
+            dependencies=("workspace.turn.orchestrate/1", "interaction.capabilities.list/1"),
+        ),
         _definition("card.create", "card"),
         _definition("card.update", "card", dependencies=("card.create",)),
         _definition("aigc.capabilities.list/1", "aigc"),

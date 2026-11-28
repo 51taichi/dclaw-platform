@@ -4,7 +4,7 @@
 
 标准标识：`dclaw.super-agent-development`
 
-当前版本：`2.72`
+当前版本：`2.73`
 
 发布日期：`2026-11-28`
 
@@ -736,13 +736,23 @@ DClaw 平台负责卡片持久化、渲染、提交和可信回传；开发方�
 
 `json_object` 只帮助候选返回可解析对象，不能替代实时组件 Schema、业务不变量或 Host 最终校验。已签名旧专家的固定卡直建和模型工具建卡路径继续受原合同支持；更新其发布包时迁入上述流程并验证旧任务续接，插件不静默改写旧包。
 
+### 13.1.1 按能力阶段加载实时说明书
+
+新建或更新的专家在签名清单显式声明 `capability.stage.enter/1`、必选的交互卡能力，以及实际需要的 AIGC、本地助手能力。每个模型调用前以 `host.call("capability.stage.enter/1", {"stage": "interaction"|"aigc"|"local"})` 取得当前阶段的说明书；该入口只允许进入已声明且获授权的能力组，第一次进入后若本轮模型判断需要切换，最多再切换一次。一个模型调用只注入该阶段返回的一份详细说明书，加已核验事实摘要和简短切换规则，不把其他阶段的完整目录一起塞入提示词。旧签名 Release 未声明入口时仍按原能力调用，不受阶段门控静默影响。
+
+`interaction` 说明书由 Support Plugin 提供实时组件索引、详细 Schema、场景、示例、业务答案类型到可用组件类型的映射及文字回退。专家业务注册表只声明答案形状、题目和业务约束，不写死平台组件允许列表；模型从实时目录建议组件，专家核对当前业务答案形状，Host 在创建入口校验完整组件 Schema。兼容的新组件只需更新插件说明书与渲染/提交合同；组件若改变答案语义或后续业务判断，使用它的专家须另行适配并测试。
+
+`aigc` 说明书由 DClaw AIGC 模块提供实时模型/节点目录、创建参数 Schema、任务回执与失败处理；`local` 说明书由 Support Plugin 提供准备、启动、读取、取消任务的 Schema 和设备/授权条件。专家可以只声明交互卡，或加 AIGC/本地助手。阶段内只允许执行相应的创建、变更和本地动作；恢复性只读查询可跨阶段。采集补齐并需当轮开始制作时，可在同一客户回合先用交互说明书完成一次模型判断，再自动切入 AIGC 说明书追加一次模型调用，无需客户人工切换；反馈暴露新缺口时可在下一回合返回采集。素材与需求修订分别保留，旧素材不能冒充新需求的结果。正式制作前的试制支线保留原业务阶段和待答卡。
+
+DevKit `schemas/capability-stage-v1/` 和 `capability_stage_api_demo.py` 给出关闭的请求/响应及进入示例。阶段选择属于运行时执行约束；专家仍负责决定真实业务阶段、授权和终态。发布前须覆盖采集到制作、制作反馈回采集、旧会话续接、试制支线、跨阶段动作拒绝、目录失败回退和旧 Release 未声明时的兼容路径。未部署新插件的目标实例不能使用此新入口，须先核对目标已认证版本。
+
 直接 Host 调用的关闭外层请求/响应 Schema 分别位于 DevKit `schemas/interaction-capabilities-list-v1/` 与 `schemas/interaction-card-create-v1/`，成功的 `single_select` 建卡请求、规范化结果和 `created` 回执位于 `examples/interaction-host-v1/single-select-success.json`。调用 `await host.call("interaction.capabilities.list/1", {"component_types": ["single_select"]})` 后，实时组件 Schema 在响应 `components[0].schema`；空数组或省略类型只返回精简索引，没有组件 Schema。开发方须核对详细目录的组件类型和业务不变量，再由插件在建卡入口按该公开 Schema 校验 `request.card`。公共 Component Registry 是本地助手依赖目录，不是交互卡目录，不得替代此 Host 调用。
 
 实时组件 Schema 是完整 JSON Schema，可能包含 `$defs`、`$ref`、`anyOf` 等关键词。Support Plugin 必须在建卡入口用完整校验器验证 `request.card`，不能只靠手写关键词白名单或类型强制转换；专家不需要为这项平台结构校验携带第三方校验库。DevKit `fixtures/interaction-host-v1/single-select-live-catalog.json` 是当前 `single_select` 的完整脱敏目录快照，`validate_live_card.py` 提供 Draft 2020-12 验证示例。发布前应验证快照中的合法示例和反例，再用目标实例实时目录验证；静态快照不是目标实例的权威 Schema。业务选项 ID、顺序、状态及可信回执仍须由专家另行校验。此要求仅针对新建或更新专家，不改变已签名旧包和 Host 卡片合同。
 
 所有新建及更新超级专家的交互卡实现必须以 DevKit `interaction_card_api_demo.py` 的同一 Host 边界为基线，适用于 `single_select`、`multi_select`、`question_form` 和 `file_selector`：按确定类型读取实时详细目录；由专家校验业务问题、选项或问题 ID 顺序及其他业务不变量；使用稳定 `task_key`、递增修订和幂等键调用 `interaction.card.create/1`，由插件按公开组件 Schema 校验草案；仅在真实 `PENDING` 卡片与 `interaction.card.receipt/1` 的 `created` 回执匹配后才报告卡片存在。`file_selector` 仍须单独声明和授权 `interaction.file.select/1`。发布前测试至少覆盖单次模型建议、无效建议文字回退、实时目录和创建失败回退、单选互斥、多选计数、文字续接与旧卡关闭、可信点击及重复回执；缺少相应受控证据不得通过发布门槛。现有签名专家不受静默改写，下一次更新时按本节迁入并复测。
 
-DevKit `interaction_card_api_demo.py` 的 `component_for_answer` 与 `create_question_card` 是新专家开发期的类型选择和调用参考：业务先判定答案是单项枚举、多项枚举、开放文字还是真实本地文件，分别映射为 `single_select`、`multi_select`、`question_form`、`file_selector`。模型只能建议当前业务已批准类型的卡片；内部联合标签不能作为 API 的 `component_type`。候选只包含 `task_key`、`component_type`、`card`；正整数修订、幂等键和 `card_or_text` 策略由专家运行时提供。四类可执行参数示例位于 `examples/interaction-host-v1/card-type-examples.json`，并由公开 Host 请求 Schema 与每类实时组件 Schema 双重验证。业务可枚举性、是否允许多选、问题/选项身份、文件授权和实际客户答案仍由专家负责，不由静态示例替代。
+DevKit `interaction_card_api_demo.py` 的 `component_for_answer` 与 `create_question_card` 使用 `capability.stage.enter/1` 返回的实时 `answer_kind_map` 和组件目录核对模型建议，业务先判定答案是单项枚举、多项枚举、开放文字还是真实本地文件，不在专家代码里维护平台组件类型表。内部联合标签不能作为 API 的 `component_type`。候选只包含 `task_key`、`component_type`、`card`；正整数修订、幂等键和 `card_or_text` 策略由专家运行时提供。四类当前可执行参数示例位于 `examples/interaction-host-v1/card-type-examples.json`，并由公开 Host 请求 Schema 与每类实时组件 Schema 双重验证。业务可枚举性、是否允许多选、问题/选项身份、文件授权和实际客户答案仍由专家负责，不由静态示例替代。
 
 直接建卡请求的 `idempotency_key` 与 `request` 同级；`request` 包含稳定 `task_key`、正整数 `interaction_revision`、类型、卡片对象及可选输入策略，默认 `card_only`。`card_only` 的待提交卡阻塞普通文本输入；`card_or_text`、`concurrent` 均保留文本输入，但文本本身不证明卡片已提交。Host 从可信执行上下文注入租户、installation 和任务身份，调用方不得传入这些作用域字段。相同作用域、问题、修订和载荷的重试沿用原幂等键；实质改动须递增修订并换键，已存在阻塞卡须显式提供其 `replaces_interaction_id`。首次成功时核对 `interaction.status=PENDING`、真实 `interaction_id`，以及 `receipt.contract=interaction.card.receipt/1`、`action=created`、`status=PENDING`；回执的交互 ID、可信作用域、`task_key`、修订、版本和 `event_id` 应与创建结果的 `create` 转换一致。后续 `session.context.interaction_receipts` 中的同一 `created` 回执以 `event_id` 和 `interaction_id` 关联。卡片已提交后重放原幂等请求可能返回当前非 `PENDING` 的卡片状态，但原 `created` 回执仍为 `PENDING`；不得把该重放当作新卡展示。
 
@@ -2439,6 +2449,11 @@ Skill 和专家发布前须对每条实际使用的路径同时验证：正确�
 以上是通用 Skill 的平台合同输入。Skill 维护方应在其 `references/capability-verification.md` 补 `/v2/` 的首错和终止根因区分，在 `scripts/runtime_diagnostics_with_login.py` 增加按官方 DevKit v2 Schema 查询和摘要，在相关脚本测试加入已恢复错误、最终阻断、`no_record`、越权及旧版回退案例。平台不直接覆盖 Skill 发布仓库，也不把单个专家的业务字段写成公共规则。
 
 ## 34. 版本记录
+
+### 2.73 - 2026-11-28
+
+- Support Plugin `1.18.61` 新增显式选择能力阶段的 `capability.stage.enter/1`。交互卡和本地助手说明书归插件，AIGC 说明书归 AIGC 模块；每次模型调用只接收当前阶段合同，Host 对新声明 Release 执行互斥动作门控。未声明的旧 Release 保持原行为。
+- DevKit `1.9.36`、Developer Pack `1.10.51` 发布阶段 Schema、动态卡片映射参考及回退测试要求。已签名专家不自动改变；更新版须验证旧会话状态、待答卡与素材修订续接。
 
 ### 2.72 - 2026-11-28
 

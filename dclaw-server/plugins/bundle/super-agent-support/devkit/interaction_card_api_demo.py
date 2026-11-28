@@ -14,26 +14,31 @@ class CardContractError(ValueError):
     """A catalog, candidate or Host receipt failed the public card contract."""
 
 
-ANSWER_COMPONENTS = {
-    "one_choice": "single_select",
-    "many_choices": "multi_select",
-    "open_text": "question_form",
-    "local_file": "file_selector",
-}
-
-
-def component_for_answer(answer_kind: str) -> str:
-    """Map the Agent's business answer shape to a real Host component type."""
-    try:
-        return ANSWER_COMPONENTS[answer_kind]
-    except (KeyError, TypeError) as exc:
-        raise CardContractError("unsupported answer kind") from exc
+def component_for_answer(
+    answer_kind: str, proposed_component: str, guide: dict[str, Any],
+) -> str:
+    """Check a model suggestion against the plugin's current answer mapping."""
+    mapping = guide.get("answer_kind_map") if isinstance(guide, dict) else None
+    allowed = mapping.get(answer_kind) if isinstance(mapping, dict) else None
+    catalog = guide.get("catalog") if isinstance(guide, dict) else None
+    components = catalog.get("components") if isinstance(catalog, dict) else None
+    available = {
+        item.get("component_type") for item in components if isinstance(item, dict)
+    } if isinstance(components, list) else set()
+    if (
+        not isinstance(allowed, list)
+        or proposed_component not in allowed
+        or proposed_component not in available
+    ):
+        raise CardContractError("candidate component does not match answer kind")
+    return proposed_component
 
 
 async def create_question_card(
     host: Any,
     *,
     answer_kind: str,
+    guide: dict[str, Any],
     proposal: dict[str, Any],
     task_key: str,
     interaction_revision: int,
@@ -42,15 +47,15 @@ async def create_question_card(
     input_policy: str = "card_or_text",
 ) -> str:
     """Validate one model proposal before crossing the direct Host boundary."""
-    component_type = component_for_answer(answer_kind)
     if not isinstance(proposal, dict) or set(proposal) != {
         "task_key", "component_type", "card",
     }:
         raise CardContractError("invalid card proposal shape")
     if proposal["task_key"] != task_key:
         raise CardContractError("candidate changed the approved task key")
-    if proposal["component_type"] != component_type:
-        raise CardContractError("candidate component does not match answer kind")
+    component_type = component_for_answer(
+        answer_kind, proposal["component_type"], guide,
+    )
     card = proposal["card"]
     if not isinstance(card, dict):
         raise CardContractError("invalid card body")
@@ -129,9 +134,7 @@ async def create_card(
     replaces_interaction_id: str | None = None,
 ) -> str:
     """Use the same Host boundary for every published card component."""
-    if component_type not in (
-        "single_select", "multi_select", "question_form", "file_selector",
-    ):
+    if not isinstance(component_type, str) or not component_type:
         raise CardContractError("unsupported component type")
     if (
         not isinstance(task_key, str) or not 1 <= len(task_key) <= 160

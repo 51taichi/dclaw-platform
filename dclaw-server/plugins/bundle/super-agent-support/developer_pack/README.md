@@ -1,5 +1,11 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.51 bundles standard 2.73 and DevKit 1.9.36. Newly updated
+experts can opt into stage-specific interaction, AIGC and Local Helper guides
+with `capability.stage.enter/1`; the Host gates side effects by stage. The
+business expert still owns stage decisions and customer authorization. Signed
+legacy releases are unchanged.
+
 Version 1.10.50 bundles standard 2.72 and DevKit 1.9.35. The four-card
 reference maps a business answer shape to one real component type and checks
 the model proposal before calling the existing Host APIs. Signed releases

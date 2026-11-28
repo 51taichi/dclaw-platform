@@ -1,5 +1,14 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.36 adds `capability.stage.enter/1` for opt-in, invocation-local
+interaction, AIGC and Local Helper guides. Only the current stage's detailed
+guide belongs in a model call. The Host rejects cross-stage actions for new
+releases that declare this capability; signed legacy releases are unchanged.
+`interaction_card_api_demo.py` checks the model's component against the live
+guide's `answer_kind_map`, so new compatible card types do not require a
+hard-coded expert mapping. See `schemas/capability-stage-v1/` and
+`capability_stage_api_demo.py`.
+
 Version 1.9.35 adds a business answer-kind to component-type mapping and four
 validated direct Host card examples. New experts reject a model's mismatched
 component before the Host call; the live catalog and Support Plugin still own

@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "capability.stage.enter/1 request",
+  "type": "object",
+  "required": ["stage"],
+  "properties": {"stage": {"enum": ["interaction", "aigc", "local"]}},
+  "additionalProperties": false
+}

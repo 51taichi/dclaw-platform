@@ -48,6 +48,9 @@ from . import empty_reply as _empty_reply
 from . import failure_diagnostics as _failure_diagnostics
 from . import interaction_contract as _interaction_contract
 from . import interaction_tools as _interaction_tools
+from .capability_stage import (
+    CapabilityStageError, CapabilityStageGate, interaction_guide, local_guide,
+)
 from .interaction_cards import InteractionError
 from .interaction_receipts import card_receipt
 from . import media_delivery as _media_delivery
@@ -1204,6 +1207,8 @@ async def run_workspace_orchestration_turn(
     async def execute_agent(
         arguments: dict[str, Any],
         active_safe_metadata: dict[str, Any],
+        active_grants: dict[str, str] | None = None,
+        active_business_call: Callable[[str, dict[str, Any]], Any] | None = None,
     ) -> dict[str, Any]:
         nonlocal agent_execute_call_number
         response_format = _agent_execute_response_format(arguments)
@@ -1367,19 +1372,19 @@ async def run_workspace_orchestration_turn(
         try:
             if execution_mode == "agent_loop":
                 aigc_tools = _aigc_tools.build_aigc_tools(
-                    grants=authorization.granted_capabilities,
+                    grants=active_grants or authorization.granted_capabilities,
                     installation_id=authorization.installation_id,
                     conversation_id=turn_request.session_id,
-                    business_call=effective_business_call,
+                    business_call=active_business_call or effective_business_call,
                     read_task=read_aigc_task,
                     review_input=active_safe_metadata.get("aigcReviewInput"),
                     media_delivery=media_delivery,
                 )
                 interaction_tools = _interaction_tools.build_interaction_tools(
-                    grants=authorization.granted_capabilities,
+                    grants=active_grants or authorization.granted_capabilities,
                     installation_id=authorization.installation_id,
                     conversation_id=turn_request.session_id,
-                    business_call=effective_business_call,
+                    business_call=active_business_call or effective_business_call,
                     read_card=read_interaction_card,
                     diagnostic_event=lambda event_type, payload: _append_runtime_trace(
                         state_storage_root,
@@ -1607,6 +1612,17 @@ async def run_workspace_orchestration_turn(
         active_invocation_id: str,
         active_safe_metadata: dict[str, Any],
     ) -> "WorkspaceTurnOrchestrator":
+        stage_gate = CapabilityStageGate(authorization.granted_capabilities)
+
+        async def stage_business_call(capability: str, arguments: dict[str, Any]) -> Any:
+            try:
+                stage_gate.check(capability)
+            except CapabilityStageError as exc:
+                raise WorkspaceOrchestrationError("orchestration_error", str(exc)) from exc
+            if effective_business_call is None:
+                raise WorkspaceOrchestrationError("unauthorized_capability")
+            return await _maybe_await(effective_business_call(capability, arguments))
+
         return WorkspaceTurnOrchestrator(
             workspace_root=workspace_root,
             config=config,
@@ -1614,9 +1630,12 @@ async def run_workspace_orchestration_turn(
             execute_agent=lambda arguments: execute_agent(
                 arguments,
                 active_safe_metadata,
+                stage_gate.model_grants(),
+                stage_business_call,
             ),
             session_context=lambda: trusted_context,
-            business_call=effective_business_call,
+            business_call=stage_business_call,
+            stage_gate=stage_gate,
             trace_sink=lambda trace: _append_runtime_trace(
                 state_storage_root,
                 installation_id=authorization.installation_id,
@@ -2004,12 +2023,14 @@ class WorkspaceRuntimeHost:
         session_context: Callable[[], Any],
         business_call: Callable[[str, dict[str, Any]], Any] | None = None,
         trace_sink: Callable[[dict[str, Any]], Any] | None = None,
+        stage_gate: CapabilityStageGate | None = None,
     ) -> None:
         self.request = request
         self._execute_agent = execute_agent
         self._session_context = session_context
         self._business_call = business_call
         self._trace_sink = trace_sink
+        self._stage_gate = stage_gate or CapabilityStageGate(request.granted_capabilities)
         self.completion: WorkspaceTurnCompletion | None = None
         self.failure: WorkspaceTurnFailure | None = None
 
@@ -2045,7 +2066,47 @@ class WorkspaceRuntimeHost:
         ):
             raise WorkspaceOrchestrationError("unauthorized_capability")
         if capability == "agent.execute":
+            try:
+                self._stage_gate.record_model_call()
+            except CapabilityStageError as exc:
+                raise WorkspaceOrchestrationError("orchestration_error", str(exc)) from exc
             return await _maybe_await(self._execute_agent(arguments))
+        if capability == "capability.stage.enter/1":
+            if set(arguments) != {"stage"} or not isinstance(arguments["stage"], str):
+                raise WorkspaceOrchestrationError("orchestration_error")
+            previous = (self._stage_gate.stage, self._stage_gate.transitions)
+            try:
+                self._stage_gate.enter(arguments["stage"])
+                stage = self._stage_gate.stage
+                if stage == "interaction":
+                    if self._business_call is None:
+                        raise CapabilityStageError("catalog_unavailable")
+                    index = await _maybe_await(self._business_call(
+                        "interaction.capabilities.list/1", {},
+                    ))
+                    types = [item["component_type"] for item in index["components"]]
+                    catalog = await _maybe_await(self._business_call(
+                        "interaction.capabilities.list/1", {"component_types": types},
+                    ))
+                    guide = interaction_guide(catalog)
+                elif stage == "aigc":
+                    if self._business_call is None:
+                        raise CapabilityStageError("catalog_unavailable")
+                    from qwenpaw.aigc.capability_guide import build_aigc_guide
+
+                    catalog = await _maybe_await(self._business_call(
+                        "aigc.workflow.capabilities.list/1", {},
+                    ))
+                    guide = build_aigc_guide(catalog)
+                else:
+                    guide = local_guide()
+            except Exception as exc:
+                self._stage_gate.stage, self._stage_gate.transitions = previous
+                if isinstance(exc, CapabilityStageError):
+                    raise WorkspaceOrchestrationError("orchestration_error", str(exc)) from exc
+                raise
+            await self._trace_stage("capability.stage.entered", stage=stage)
+            return {"contract": "capability.stage.enter/1", "stage": stage, "guide": guide}
         if capability == "session.context":
             started_at = time.perf_counter()
             try:
@@ -2116,6 +2177,10 @@ class WorkspaceRuntimeHost:
             return {"accepted": True}
         if self._business_call is None:
             raise WorkspaceOrchestrationError("unauthorized_capability")
+        try:
+            self._stage_gate.check(capability)
+        except CapabilityStageError as exc:
+            raise WorkspaceOrchestrationError("orchestration_error", str(exc)) from exc
         return await _maybe_await(self._business_call(capability, arguments))
 
 
@@ -2136,6 +2201,7 @@ class WorkspaceTurnOrchestrator:
         session_context: Callable[[], Any],
         business_call: Callable[[str, dict[str, Any]], Any] | None = None,
         trace_sink: Callable[[dict[str, Any]], Any] | None = None,
+        stage_gate: CapabilityStageGate | None = None,
         timeout_seconds: float | None = None,
         public_runtime: bool = False,
         signed_workspace_root: Path | None = None,
@@ -2147,6 +2213,7 @@ class WorkspaceTurnOrchestrator:
         self.session_context = session_context
         self.business_call = business_call
         self.trace_sink = trace_sink
+        self.stage_gate = stage_gate
         self.timeout_seconds = (
             workspace_orchestration_timeout_seconds()
             if timeout_seconds is None
@@ -2175,6 +2242,7 @@ class WorkspaceTurnOrchestrator:
             session_context=self.session_context,
             business_call=self.business_call,
             trace_sink=self.trace_sink,
+            stage_gate=self.stage_gate,
         )
         try:
             runtime_started_at = time.perf_counter()

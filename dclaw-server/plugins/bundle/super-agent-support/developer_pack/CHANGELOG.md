@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.51 - 2026-11-28
+
+- Bundle standard 2.73 and DevKit 1.9.36. Support Plugin 1.18.61 adds
+  opt-in per-invocation capability stage guides, mutually exclusive actions,
+  and live answer-kind mappings. Signed older releases keep their behavior.
+
 ## 1.10.50 - 2026-11-28
 
 - Bundle standard 2.72 and DevKit 1.9.35 with a deterministic answer-kind to

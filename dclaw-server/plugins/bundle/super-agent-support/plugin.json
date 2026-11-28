@@ -1,7 +1,7 @@
 {
   "id": "dclaw.super-agent-support",
   "name": "DClaw Super Agent Support",
-  "version": "1.18.60",
+  "version": "1.18.61",
   "type": "general",
   "description": "Generic local execution, Agent-owned controlled outbound transport, credential broker, capability package, offline developer pack and DevKit, client adapter, and platform helper support for Super Agents.",
   "author": "DClaw",
@@ -26,6 +26,7 @@
       "interaction-components",
       "aigc-adapter",
       "workspace-runtime",
+      "capability-stage-guides",
       "sealed-super-agent-lifecycle",
       "self-service-publishing",
       "workspace-state-migration",

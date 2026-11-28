@@ -296,8 +296,8 @@ async def test_platform_video_render_demo_prepares_then_starts_with_bound_files(
 
 def test_pack_exposes_aigc_and_local_api_references():
     payload, metadata = build_archive(PLUGIN_ROOT)
-    assert metadata["standard"]["version"] == "2.72"
-    assert metadata["devkit_version"] == "1.9.35"
+    assert metadata["standard"]["version"] == "2.73"
+    assert metadata["devkit_version"] == "1.9.36"
     prefix = f"dclaw-super-agent-developer-pack-{metadata['version']}/"
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         names = set(archive.namelist())

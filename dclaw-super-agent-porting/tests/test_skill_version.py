@@ -20,7 +20,7 @@ class SkillVersionTests(unittest.TestCase):
         major, minor, patch = map(int, skill_version.group(1).split("."))
         self.assertGreaterEqual(major, 1)
         self.assertLessEqual(minor, 15)
-        self.assertLessEqual(patch, 16)
+        self.assertLessEqual(patch, 17)
 
     def test_ec_workspace_uses_local_maintenance_source(self):
         active = [

@@ -174,6 +174,15 @@
     "owner": "dclaw.super-agent-support",
     "minimum_plugin_version": "1.18.55",
     "transport": "sealed-agent-host.call",
+    "capability_stage": {
+      "minimum_plugin_version": "1.18.61",
+      "capability_id": "capability.stage.enter/1",
+      "request_schema": "schemas/capability-stage-v1/request.schema.json",
+      "response_schema": "schemas/capability-stage-v1/response.schema.json",
+      "api_demo": "capability_stage_api_demo.py",
+      "stages": ["interaction", "aigc", "local"],
+      "opt_in": true
+    },
     "agent_execute": {
       "capability_id": "agent.execute",
       "request_schema": "schemas/agent-execute-v1/request.schema.json",

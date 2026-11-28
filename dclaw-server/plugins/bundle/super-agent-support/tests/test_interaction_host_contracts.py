@@ -18,6 +18,7 @@ from super_agent.interaction_contract import (
     build_interaction_catalog,
 )
 from super_agent.interaction_receipts import card_receipt
+from super_agent.capability_stage import interaction_guide
 from devkit.validate_live_card import validate_live_card
 from devkit.interaction_card_api_demo import (
     CardContractError,
@@ -143,7 +144,10 @@ def test_every_card_type_example_matches_public_host_and_live_component_schemas(
     examples = json.loads(CARD_TYPE_EXAMPLES.read_text(encoding="utf-8"))["examples"]
     assert len(examples) == 4
     for example in examples:
-        kind = component_for_answer(example["answer_kind"])
+        kind = component_for_answer(
+            example["answer_kind"], example["proposal"]["component_type"],
+            interaction_guide(build_interaction_catalog([example["proposal"]["component_type"]])),
+        )
         proposal = example["proposal"]
         assert proposal["component_type"] == kind
         assert proposal["task_key"] == example["task_key"]
@@ -241,7 +245,8 @@ async def test_api_demo_uses_same_host_boundary_for_each_component(kind):
 async def test_answer_kind_drives_model_proposal_and_host_request(answer_kind, kind):
     catalog = build_interaction_catalog([kind])
     example = catalog["components"][0]["create_example"]
-    assert component_for_answer(answer_kind) == kind
+    guide = interaction_guide(catalog)
+    assert component_for_answer(answer_kind, kind, guide) == kind
 
     class Host:
         calls = []
@@ -281,7 +286,7 @@ async def test_answer_kind_drives_model_proposal_and_host_request(answer_kind, k
         "card": example["card"],
     }
     interaction_id = await create_question_card(
-        host, answer_kind=answer_kind, proposal=proposal,
+        host, answer_kind=answer_kind, guide=guide, proposal=proposal,
         task_key="customer-question", interaction_revision=1,
         check_business=lambda card: None,
         idempotency_key="customer-question-rev-1",
@@ -306,6 +311,7 @@ async def test_proposal_rejects_internal_union_type_and_multi_item_form_before_h
         "host": host, "task_key": "customer-question",
         "interaction_revision": 1, "check_business": lambda card: None,
         "idempotency_key": "customer-question-rev-1",
+        "guide": interaction_guide(build_interaction_catalog([])),
     }
     with pytest.raises(CardContractError, match="component does not match"):
         await create_question_card(

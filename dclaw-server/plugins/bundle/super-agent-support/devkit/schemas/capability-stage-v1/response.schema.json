@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "capability.stage.enter/1 response",
+  "type": "object",
+  "required": ["contract", "stage", "guide"],
+  "properties": {
+    "contract": {"const": "capability.stage.enter/1"},
+    "stage": {"enum": ["interaction", "aigc", "local"]},
+    "guide": {
+      "type": "object",
+      "required": ["owner", "stage", "instructions", "host_apis"],
+      "properties": {
+        "owner": {"type": "string", "minLength": 1},
+        "stage": {"enum": ["interaction", "aigc", "local"]},
+        "instructions": {"type": "string", "minLength": 1},
+        "host_apis": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "answer_kind_map": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
+        "create_request_schema": {"type": "object"},
+        "use_when": {"type": "array", "items": {"type": "string"}},
+        "do_not_use_when": {"type": "array", "items": {"type": "string"}},
+        "fallback": {"type": "object"},
+        "catalog": {"type": "object"},
+        "schemas": {"type": "object"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

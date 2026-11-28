@@ -42,7 +42,7 @@ Schema 通过只证明请求或响应形状；`agent.execute` 返回的 `text` �
 
 ## 问答交互卡
 
-业务先判定答案形状，再选唯一真实 API 类型：一个已知选项用 `one_choice → single_select`，可并存的已知选项用 `many_choices → multi_select`，无法可靠列全的文字答案用 `open_text → question_form`，真实本地文件用 `local_file → file_selector`。`single_select_or_multi_select` 只可作为专家内部说明，不是 API 枚举值。DevKit `interaction_card_api_demo.py` 的 `component_for_answer` 和 `create_question_card` 会在 Host 调用前拒绝模型建议类型与业务决定不一致；`examples/interaction-host-v1/card-type-examples.json` 含四类完整草案。每个示例及当前专家实际卡片都需先通过 `schemas/interaction-card-create-v1/request.schema.json` 和目标实例详细目录的 `components[].schema`，并另查本专家的稳定 ID、选项顺序、选择数量、单问题 item 或文件限制。静态示例不是实时目录，也不能替代可信建卡回执。
+业务先判定答案形状，再从 `capability.stage.enter/1` 当前交互说明书的 `answer_kind_map` 与实时组件目录选择可用 API 类型。当前已发布示例涵盖 `single_select`、`multi_select`、`question_form`、`file_selector`；`single_select_or_multi_select` 只可作为专家内部说明，不是 API 枚举值。DevKit `interaction_card_api_demo.py` 的 `component_for_answer(answer_kind, proposed_component, guide)` 和 `create_question_card(..., guide=guide)` 会在 Host 调用前拒绝模型建议类型与业务答案不一致；`examples/interaction-host-v1/card-type-examples.json` 含四类当前草案。每个示例及当前专家实际卡片都需先通过 `schemas/interaction-card-create-v1/request.schema.json` 和目标实例详细目录的 `components[].schema`，并另查本专家的稳定 ID、选项顺序、选择数量、单问题 item 或文件限制。静态示例不是实时目录，也不能替代可信建卡回执。
 
 新建或更新专家的问答卡按标准 2.70 使用 `card_or_text`，让卡片和普通输入同时可用；旧签名包仍按其原 `input_policy` 运行。`card_only` 的待提交卡会阻塞普通文字，`card_or_text` 与 `concurrent` 的文字不构成可信卡片提交。单选的预设选项与卡内自行输入互斥；多选可并存，卡内自行输入计入最少和最多数量。文字回答完整时按正式取消合同关闭旧卡并继续；只回答部分时关闭旧卡，仅对剩余缺口建议新卡。Node 6 分别验证客户端卡片展示、自由文字续接、可信提交、旧卡关闭、部分回答和迟到提交，不能用本地占位退役冒充平台已取消。
 

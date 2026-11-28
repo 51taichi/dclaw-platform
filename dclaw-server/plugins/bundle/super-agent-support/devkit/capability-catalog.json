@@ -8,6 +8,7 @@
     {"capability_id":"runtime.complete","contract_version":"1","group":"runtime_host","dependencies":[]},
     {"capability_id":"runtime.fail","contract_version":"1","group":"runtime_host","dependencies":[]},
     {"capability_id":"runtime.failure.read/1","contract_version":"1","group":"runtime_host","dependencies":[]},
+    {"capability_id":"capability.stage.enter/1","contract_version":"1","group":"runtime_host","dependencies":["workspace.turn.orchestrate/1","interaction.capabilities.list/1"]},
     {"capability_id":"card.create","contract_version":"1","group":"card","dependencies":[]},
     {"capability_id":"card.update","contract_version":"1","group":"card","dependencies":["card.create"]},
     {"capability_id":"aigc.capabilities.list/1","contract_version":"1","group":"aigc","dependencies":[]},

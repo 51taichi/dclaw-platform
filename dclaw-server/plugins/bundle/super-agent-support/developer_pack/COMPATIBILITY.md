@@ -3,7 +3,7 @@
 | Component | Supported version |
 |---|---|
 | Developer pack | 1.0.x through 1.10.x |
-| Development standard | 2.1 through 2.72 |
+| Development standard | 2.1 through 2.73 |
 | Super Agent DevKit | 1.2.x through 1.9.x |
 | Super Expert manifest | 3 |
 | Runtime / runtime host | 1 |
@@ -55,6 +55,7 @@
 | Support plugin for `agent.execute` v2 default Agent Loop | >= 1.18.58 |
 | Support plugin for model-first optional card input | >= 1.18.59 |
 | Support plugin for authoritative complete card Schema validation | >= 1.18.60 |
+| Support plugin for opt-in capability stage guides | >= 1.18.61 |
 | Support plugin for public video timeline render and Helper 1.4.9 | >= 1.18.48 |
 | Support plugin for sealed Host local runtime preparation | >= 1.18.45 |
 | Support plugin for `runtime.failure.read/1` | >= 1.18.12 |
