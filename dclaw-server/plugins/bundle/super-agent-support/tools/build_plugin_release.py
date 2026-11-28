@@ -14,9 +14,9 @@ import tempfile
 import zipfile
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
-PLUGIN_PATH = "plugins/bundle/super-agent-support"
-STANDARD_PATH = "docs/super-agent-development-standard-v1.zh-CN.md"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[5]
+PLUGIN_PATH = "dclaw-server/plugins/bundle/super-agent-support"
+STANDARD_PATH = "dclaw-server/docs/super-agent-development-standard-v1.zh-CN.md"
 STANDARD_IN_PLUGIN = (
     "super-agent-support/developer_pack/standard/"
     "super-agent-development-standard-v1.zh-CN.md"
