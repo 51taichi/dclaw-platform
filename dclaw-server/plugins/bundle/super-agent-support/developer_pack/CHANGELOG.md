@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.50 - 2026-11-28
+
+- Bundle standard 2.72 and DevKit 1.9.35 with a deterministic answer-kind to
+  component mapping, four machine-checked card examples and pre-Host rejection
+  of mismatched model proposals. Keep Host `/1` APIs and signed releases intact.
+
 ## 1.10.49 - 2026-11-27
 
 - Bundle standard 2.70 and DevKit 1.9.34. Support Plugin 1.18.60 validates

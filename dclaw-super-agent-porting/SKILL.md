@@ -7,7 +7,7 @@ description: Install and use the DClaw Super Agent integration Skill, develop a 
 
 安装了解本 Skill，或从需求、现有材料开发、续建、优化 DClaw Super Agent 时使用。它负责 Codex 到 DClaw 的接入与持续发布链路；各 Agent 的业务方法和效果由各自项目定义与验证。保留当前 Skill 名称作为现有项目和会话的兼容入口。
 
-Skill 版本：`1.9.15`（EC 工作区版）。本工作区的维护源位于项目根目录 `dclaw-super-agent-porting/`，与平台及专家源码一起在同一个 `main` 提交。开始工作时先读 [references/knowledge-base.md](references/knowledge-base.md)，再按模式读取对应参考文件。知识库用于定位正式材料，不代替目标 DClaw 当前发布的唯一开发标准和 DevKit Schema。
+Skill 版本：`1.9.16`（EC 工作区版）。本工作区的维护源位于项目根目录 `dclaw-super-agent-porting/`，与平台及专家源码一起在同一个 `main` 提交。开始工作时先读 [references/knowledge-base.md](references/knowledge-base.md)，再按模式读取对应参考文件。知识库用于定位正式材料，不代替目标 DClaw 当前发布的唯一开发标准和 DevKit Schema。
 
 本工作区的开发与维护直接读取此目录，遵守根目录 `AGENTS.md` 的共享 `main` 规则；不克隆旧 Skill 仓库，也不向旧仓库回传或推送。EC 客户端入口是 `https://dclaw.rouhigh.com`；陆羽 1.1.34 的认证开发工具链与发布回执使用 `https://api.rouhigh.com`，与其当前构建器的来源合同一致。实际认证下载和发布仍以用户指定的目标实例及其正式回执为准。先检查当前目标、工作区和已有材料；只了解 Skill 时不创建 Agent 项目，开展具体 Agent 工作时按模式路由。现有未发布项目沿用，借用另一项目材料时先保护原件并建立工作副本。平台认证使用目标实例账号，Git 凭据不能代替 DClaw 认证。
 
@@ -411,6 +411,8 @@ Node 3 必须输出“业务步骤 -> 责任位置 -> 调用能力/合同 -> 输
 只使用唯一标准和目标实例正式 DevKit 已公开的 Schema、能力和合同。不得根据平台源码、旧包或其他 Agent 猜测字段。所有业务步骤都有确定合同后，Node 4 才能通过。
 
 新建或更新的超级专家若使用问答卡，Node 4 和 Node 6 必须把单次模型业务回复与条件必需的卡片建议作为统一交互合同验收：每轮先调用模型，取消固定开场和不经模型的固定卡片；每轮最多采集一个问题，单选或多选也算一个问题。模型本轮确需客户回答时必须建议对应单问题卡，`question_form` 草案恰好一个 `item`；建卡后正文只能陈述背景，不能再问第二个问题。纯解释或修辞反问不触发建卡，客户问候本身不决定是否建卡。专家校验阶段、业务字段、稳定 ID 与修订，Support Plugin 在 Host 建卡入口按公开完整组件 Schema 校验结构。建议缺失、无效或创建失败时记录原因，以同轮单问题文字继续，不声称卡片存在，也不为修卡额外调用模型。卡片与普通输入同时可用；单选预设项与卡内自行输入互斥，多选可并存且自行输入计入最少/最多数量。文字完整回答后关闭旧卡，部分回答后只为剩余缺口创建新卡。受控测试至少覆盖问候后确需提问、无采集时纯文本、建议缺失及无效时文字回退、多个 `items` 拒绝、正文第二问抑制、正常提交与恢复分支及可查询的节点诊断；缺任一项不得把 Node 6/7 标为通过。已签名旧版保持原合同兼容，不追溯改包。
+
+Node 4 先把当前业务问题归为单项枚举、多项枚举、开放文字或真实本地文件，并分别固定为 `single_select`、`multi_select`、`question_form`、`file_selector`。按 [四类卡片 API 验证](references/capability-verification.md#问答交互卡) 运行 DevKit `component_for_answer` / `create_question_card` 及四类机器示例；模型建议只提供 `task_key`、真实 `component_type`、`card`，不得把内部联合类型或运行时管理的修订、幂等键、输入策略交给模型决定。每种使用到的组件都须以目标实例实时目录和公开 Host 请求 Schema 验证参数，再核对业务不变量、真实创建与可信回执。上述门槛只约束更新包，不改变已签名专家。
 
 使用平台交互卡时，还须核对目标实例的实时组件 Schema、创建工具的真实回执，以及提交后传给 Agent 的可信事件合同；仅有静态能力 ID、模型复述的卡片 ID 或本地状态机测试，不能证明卡片已接通。合同缺失时记录平台缺口，受影响的卡片链路保持未实现。
 

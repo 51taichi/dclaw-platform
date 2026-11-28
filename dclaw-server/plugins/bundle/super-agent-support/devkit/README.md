@@ -1,5 +1,10 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.35 adds a business answer-kind to component-type mapping and four
+validated direct Host card examples. New experts reject a model's mismatched
+component before the Host call; the live catalog and Support Plugin still own
+the authoritative card Schema. Existing Host APIs and signed Agents are unchanged.
+
 Version 1.9.34 assigns complete component Schema validation to Support Plugin
 1.18.60 at the create boundary. The runtime card example checks the live
 catalog and Agent business rules without requiring `jsonschema` in the signed

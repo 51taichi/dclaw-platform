@@ -1,7 +1,7 @@
 # Super Agent Skill 统一交接：模型调用、交互卡与失败终止
 
-适用基线：标准 2.70、Support 1.18.60、Developer Pack 1.10.49、
-DevKit 1.9.34。本文适用于所有 Super Agent，不包含任何单一专家业务规则。
+适用基线：标准 2.72、Support 1.18.60、Developer Pack 1.10.50、
+DevKit 1.9.35。本文适用于所有 Super Agent，不包含任何单一专家业务规则。
 
 ## 平台统一保证
 
@@ -39,13 +39,14 @@ DevKit 1.9.34。本文适用于所有 Super Agent，不包含任何单一专家�
 
 ## 统一交互卡流程
 
-1. 每轮先调用一次模型，同时取得业务回复、文字回退和可选卡片建议。
-2. 调用 `interaction.capabilities.list/1` 获取建议组件的实时详细目录，并校验专家自己的业务字段和稳定 option ID。
-3. 调用 `interaction.card.create/1`，使用稳定幂等键；Support Plugin 按公开的完整组件 Schema 校验卡片。
-4. 同时核对持久卡记录与 `interaction.card.receipt/1` created 回执。
-5. 成功时通过 `runtime.complete` 提交卡片与回复；建议无效或建卡失败时提交同轮文字回退，不声称卡片存在。其他失败调用一次 `runtime.fail`，不得伪造成功或让回合无终态。
+1. 每轮先调用一次模型，同时取得业务回复、文字回退和卡片建议；确需客户回答一个采集问题时必须建议卡片。
+2. 专家先按业务答案类型确定真实组件：单项枚举用 `single_select`，多项枚举用 `multi_select`，开放文字用单问题 `question_form`，真实本地文件用 `file_selector`。内部联合类型不进入 Host 请求；模型建议必须匹配专家批准的类型。
+3. 调用 `interaction.capabilities.list/1` 获取建议组件的实时详细目录，并校验专家自己的业务字段和稳定 option ID。
+4. 调用 `interaction.card.create/1`，使用稳定幂等键；Support Plugin 按公开的完整组件 Schema 校验卡片。
+5. 同时核对持久卡记录与 `interaction.card.receipt/1` created 回执。
+6. 成功时通过 `runtime.complete` 提交卡片与回复；建议无效或建卡失败时提交同轮文字回退，不声称卡片存在。其他失败调用一次 `runtime.fail`，不得伪造成功或让回合无终态。
 
-卡片 API 参考：`devkit/interaction_card_api_demo.py`；模型与失败 API 参考：
+卡片 API 参考：`devkit/interaction_card_api_demo.py` 和 `devkit/examples/interaction-host-v1/card-type-examples.json`；模型与失败 API 参考：
 `devkit/agent_execute_api_demo.py`；完整规则见
 `devkit/examples/agent-execute-v1/README.md`。
 

@@ -1,0 +1,82 @@
+{
+  "examples": [
+    {
+      "answer_kind": "one_choice",
+      "task_key": "primary-channel",
+      "interaction_revision": 1,
+      "idempotency_key": "primary-channel-rev-1",
+      "input_policy": "card_or_text",
+      "proposal": {
+        "task_key": "primary-channel",
+        "component_type": "single_select",
+        "card": {
+          "title": "这次主要选择哪个渠道？",
+          "options": [
+            {"id": "short-video", "text": "短视频"},
+            {"id": "live-stream", "text": "直播"}
+          ],
+          "supplement": {"enabled": true, "answer_mode": "choice"}
+        }
+      }
+    },
+    {
+      "answer_kind": "many_choices",
+      "task_key": "available-channels",
+      "interaction_revision": 1,
+      "idempotency_key": "available-channels-rev-1",
+      "input_policy": "card_or_text",
+      "proposal": {
+        "task_key": "available-channels",
+        "component_type": "multi_select",
+        "card": {
+          "title": "目前能使用哪些渠道？",
+          "options": [
+            {"id": "short-video", "text": "短视频"},
+            {"id": "live-stream", "text": "直播"}
+          ],
+          "supplement": {"enabled": true, "answer_mode": "choice"},
+          "min_selections": 1,
+          "max_selections": 3
+        }
+      }
+    },
+    {
+      "answer_kind": "open_text",
+      "task_key": "business-description",
+      "interaction_revision": 1,
+      "idempotency_key": "business-description-rev-1",
+      "input_policy": "card_or_text",
+      "proposal": {
+        "task_key": "business-description",
+        "component_type": "question_form",
+        "card": {
+          "title": "业务情况",
+          "items": [
+            {"id": "business", "question": "目前主要经营什么业务？", "required": true}
+          ]
+        }
+      }
+    },
+    {
+      "answer_kind": "local_file",
+      "task_key": "source-document",
+      "interaction_revision": 1,
+      "idempotency_key": "source-document-rev-1",
+      "input_policy": "card_or_text",
+      "proposal": {
+        "task_key": "source-document",
+        "component_type": "file_selector",
+        "card": {
+          "title": "请选择一份业务资料",
+          "accept_mime_types": ["application/pdf"],
+          "accept_extensions": [".pdf"],
+          "multiple": false,
+          "min_files": 1,
+          "max_files": 1,
+          "max_file_size_bytes": 10485760,
+          "max_total_size_bytes": 10485760
+        }
+      }
+    }
+  ]
+}

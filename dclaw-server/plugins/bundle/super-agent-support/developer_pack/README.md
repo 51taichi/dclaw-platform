@@ -1,5 +1,10 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.50 bundles standard 2.72 and DevKit 1.9.35. The four-card
+reference maps a business answer shape to one real component type and checks
+the model proposal before calling the existing Host APIs. Signed releases
+and the published card Schemas remain unchanged.
+
 Version 1.10.49 bundles standard 2.70 and DevKit 1.9.34. New and updated
 experts use one model response for the business reply and optional card
 proposal, with a same-turn text fallback when the card cannot be created.

@@ -21,7 +21,9 @@ from super_agent.interaction_receipts import card_receipt
 from devkit.validate_live_card import validate_live_card
 from devkit.interaction_card_api_demo import (
     CardContractError,
+    component_for_answer,
     create_card,
+    create_question_card,
     create_single_select,
     verify_created,
 )
@@ -31,6 +33,7 @@ PLUGIN_ROOT = Path(__file__).parents[1]
 SCHEMAS = PLUGIN_ROOT / "devkit" / "schemas"
 EXAMPLE = PLUGIN_ROOT / "devkit" / "examples" / "interaction-host-v1" / "single-select-success.json"
 LIVE_CATALOG = PLUGIN_ROOT / "devkit" / "fixtures" / "interaction-host-v1" / "single-select-live-catalog.json"
+CARD_TYPE_EXAMPLES = PLUGIN_ROOT / "devkit" / "examples" / "interaction-host-v1" / "card-type-examples.json"
 
 
 def _schema(relative: str) -> dict:
@@ -136,6 +139,32 @@ def test_live_catalog_fixture_exercises_complete_schema():
     assert extra_field.value.validator == "additionalProperties"
 
 
+def test_every_card_type_example_matches_public_host_and_live_component_schemas():
+    examples = json.loads(CARD_TYPE_EXAMPLES.read_text(encoding="utf-8"))["examples"]
+    assert len(examples) == 4
+    for example in examples:
+        kind = component_for_answer(example["answer_kind"])
+        proposal = example["proposal"]
+        assert proposal["component_type"] == kind
+        assert proposal["task_key"] == example["task_key"]
+        catalog = build_interaction_catalog([kind])
+        validate_live_card(catalog, kind, proposal["card"])
+        if kind == "question_form":
+            assert len(proposal["card"]["items"]) == 1
+        arguments = {
+            "idempotency_key": example["idempotency_key"],
+            "request": {
+                "task_key": example["task_key"],
+                "interaction_revision": example["interaction_revision"],
+                "component_type": kind,
+                "input_policy": example["input_policy"],
+                "card": proposal["card"],
+            },
+        }
+        _validate("interaction-card-create-v1/request.schema.json", arguments)
+        InteractionCreateRequest.model_validate(arguments["request"])
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", [
     "single_select", "multi_select", "question_form", "file_selector",
@@ -200,6 +229,124 @@ async def test_api_demo_uses_same_host_boundary_for_each_component(kind):
     assert [name for name, _ in host.calls] == [
         "interaction.capabilities.list/1", "interaction.card.create/1",
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("answer_kind", "kind"), [
+    ("one_choice", "single_select"),
+    ("many_choices", "multi_select"),
+    ("open_text", "question_form"),
+    ("local_file", "file_selector"),
+])
+async def test_answer_kind_drives_model_proposal_and_host_request(answer_kind, kind):
+    catalog = build_interaction_catalog([kind])
+    example = catalog["components"][0]["create_example"]
+    assert component_for_answer(answer_kind) == kind
+
+    class Host:
+        calls = []
+
+        async def call(self, capability, arguments):
+            self.calls.append((capability, arguments))
+            if capability == "interaction.capabilities.list/1":
+                assert arguments == {"component_types": [kind]}
+                return catalog
+            assert capability == "interaction.card.create/1"
+            _validate("interaction-card-create-v1/request.schema.json", arguments)
+            request = InteractionCreateRequest.model_validate(arguments["request"])
+            assert request.component_type == kind
+            assert arguments["request"]["input_policy"] == "card_or_text"
+            return {
+                "interaction": {
+                    "interaction_id": "interaction-demo", "status": "PENDING",
+                    "version": 1, "task_key": request.task_key,
+                    "interaction_revision": request.interaction_revision,
+                    "component_type": kind, "input_policy": "card_or_text",
+                    "binding": {"installation_id": "install-demo", "conversation_id": "task-demo"},
+                    "transitions": [{"action": "create", "event_id": "created-demo"}],
+                },
+                "receipt": {
+                    "contract": "interaction.card.receipt/1", "action": "created",
+                    "status": "PENDING", "interaction_id": "interaction-demo",
+                    "event_id": "created-demo", "version": 1,
+                    "task_key": request.task_key,
+                    "interaction_revision": request.interaction_revision,
+                    "installation_id": "install-demo", "conversation_id": "task-demo",
+                },
+            }
+
+    host = Host()
+    proposal = {
+        "task_key": "customer-question", "component_type": kind,
+        "card": example["card"],
+    }
+    interaction_id = await create_question_card(
+        host, answer_kind=answer_kind, proposal=proposal,
+        task_key="customer-question", interaction_revision=1,
+        check_business=lambda card: None,
+        idempotency_key="customer-question-rev-1",
+    )
+    assert interaction_id == "interaction-demo"
+    assert [name for name, _ in host.calls] == [
+        "interaction.capabilities.list/1", "interaction.card.create/1",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_proposal_rejects_internal_union_type_and_multi_item_form_before_host():
+    class Host:
+        calls = []
+
+        async def call(self, capability, arguments):
+            self.calls.append((capability, arguments))
+            raise AssertionError("invalid proposal must not cross Host boundary")
+
+    host = Host()
+    common = {
+        "host": host, "task_key": "customer-question",
+        "interaction_revision": 1, "check_business": lambda card: None,
+        "idempotency_key": "customer-question-rev-1",
+    }
+    with pytest.raises(CardContractError, match="component does not match"):
+        await create_question_card(
+            **common, answer_kind="one_choice",
+            proposal={"task_key": "customer-question",
+                      "component_type": "single_select_or_multi_select", "card": {}},
+        )
+    with pytest.raises(CardContractError, match="one question_form item"):
+        await create_question_card(
+            **common, answer_kind="open_text",
+            proposal={"task_key": "customer-question", "component_type": "question_form",
+                      "card": {"title": "两个问题", "items": [
+                          {"question": "第一个？"}, {"question": "第二个？"},
+                      ]}},
+        )
+    assert host.calls == []
+
+
+@pytest.mark.asyncio
+async def test_api_demo_rejects_wrong_catalog_version_before_create():
+    class Host:
+        calls = []
+        catalog = None
+
+        async def call(self, capability, arguments):
+            self.calls.append((capability, arguments))
+            assert capability == "interaction.capabilities.list/1"
+            return self.catalog
+
+    host = Host()
+    for catalog in (None, {**build_interaction_catalog(["single_select"]),
+                            "catalog_version": "unknown"}):
+        host.catalog = catalog
+        host.calls.clear()
+        with pytest.raises(CardContractError, match="missing detailed component"):
+            await create_card(
+                host, component_type="single_select", task_key="primary-channel",
+                interaction_revision=1, card={"title": "渠道", "options": []},
+                check_business=lambda card: None, idempotency_key="primary-channel-1",
+            )
+        assert [name for name, _ in host.calls] == ["interaction.capabilities.list/1"]
 
 
 def test_api_demo_rejects_missing_created_event_id():
@@ -387,6 +534,7 @@ def test_public_archives_include_direct_host_contracts_and_example():
         "devkit/schemas/interaction-card-create-v1/request.schema.json",
         "devkit/schemas/interaction-card-create-v1/response.schema.json",
         "devkit/examples/interaction-host-v1/single-select-success.json",
+        "devkit/examples/interaction-host-v1/card-type-examples.json",
         "devkit/examples/interaction-host-v1/README.md",
         "devkit/fixtures/interaction-host-v1/single-select-live-catalog.json",
         "devkit/validate_live_card.py",

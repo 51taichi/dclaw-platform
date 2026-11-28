@@ -14,6 +14,62 @@ class CardContractError(ValueError):
     """A catalog, candidate or Host receipt failed the public card contract."""
 
 
+ANSWER_COMPONENTS = {
+    "one_choice": "single_select",
+    "many_choices": "multi_select",
+    "open_text": "question_form",
+    "local_file": "file_selector",
+}
+
+
+def component_for_answer(answer_kind: str) -> str:
+    """Map the Agent's business answer shape to a real Host component type."""
+    try:
+        return ANSWER_COMPONENTS[answer_kind]
+    except (KeyError, TypeError) as exc:
+        raise CardContractError("unsupported answer kind") from exc
+
+
+async def create_question_card(
+    host: Any,
+    *,
+    answer_kind: str,
+    proposal: dict[str, Any],
+    task_key: str,
+    interaction_revision: int,
+    check_business: Callable[[dict[str, Any]], None],
+    idempotency_key: str,
+    input_policy: str = "card_or_text",
+) -> str:
+    """Validate one model proposal before crossing the direct Host boundary."""
+    component_type = component_for_answer(answer_kind)
+    if not isinstance(proposal, dict) or set(proposal) != {
+        "task_key", "component_type", "card",
+    }:
+        raise CardContractError("invalid card proposal shape")
+    if proposal["task_key"] != task_key:
+        raise CardContractError("candidate changed the approved task key")
+    if proposal["component_type"] != component_type:
+        raise CardContractError("candidate component does not match answer kind")
+    card = proposal["card"]
+    if not isinstance(card, dict):
+        raise CardContractError("invalid card body")
+    if component_type == "question_form" and (
+        not isinstance(card.get("items"), list) or len(card["items"]) != 1
+    ):
+        raise CardContractError("one question_form item is required")
+    return await create_card(
+        host,
+        component_type=component_type,
+        task_key=task_key,
+        interaction_revision=interaction_revision,
+        card=card,
+        check_business=check_business,
+        idempotency_key=idempotency_key,
+        input_policy=input_policy,
+    )
+
+
 def verify_created(result: dict[str, Any], request: dict[str, Any]) -> str:
     if not isinstance(result, dict):
         raise CardContractError("invalid Host create result")
@@ -77,7 +133,11 @@ async def create_card(
         "single_select", "multi_select", "question_form", "file_selector",
     ):
         raise CardContractError("unsupported component type")
-    if not task_key or interaction_revision < 1 or not idempotency_key:
+    if (
+        not isinstance(task_key, str) or not 1 <= len(task_key) <= 160
+        or type(interaction_revision) is not int or interaction_revision < 1
+        or not isinstance(idempotency_key, str) or not idempotency_key
+    ):
         raise CardContractError("invalid stable card identity")
     if input_policy not in ("card_only", "card_or_text", "concurrent"):
         raise CardContractError("invalid input policy")
@@ -89,7 +149,9 @@ async def create_card(
         if isinstance(item, dict) and item.get("component_type") == component_type
     ] if isinstance(catalog, dict) else []
     if (
-        len(components) != 1
+        not isinstance(catalog, dict)
+        or catalog.get("catalog_version") != "1"
+        or len(components) != 1
         or components[0].get("contract_version") != "1"
         or not isinstance(components[0].get("schema"), dict)
     ):

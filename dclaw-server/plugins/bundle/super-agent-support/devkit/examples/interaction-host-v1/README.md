@@ -1,5 +1,50 @@
 # Direct Host interaction example
 
+`card-type-examples.json` is a machine-checked example for each supported
+component. Choose the answer shape from the Agent's actual business question:
+
+| Answer shape | `answer_kind` | `component_type` | Card invariant |
+| --- | --- | --- | --- |
+| Exactly one from known options | `one_choice` | `single_select` | At least two options |
+| Several from known options | `many_choices` | `multi_select` | Bounds include a custom choice when enabled |
+| Free-form answer | `open_text` | `question_form` | One `items` entry per customer turn |
+| A real local file | `local_file` | `file_selector` | Explicit file count, type and size limits |
+
+The direct Host calls are `interaction.capabilities.list/1` with
+`{"component_types": [component_type]}`, followed by
+`interaction.card.create/1` with `{"idempotency_key": string, "request": {...}}`.
+`request` requires a nonblank `task_key` (at most 160 characters), an integer
+`interaction_revision >= 1`, one of the four real `component_type` values,
+and a `card` object. New experts set `input_policy="card_or_text"`; the Host
+default is `card_only`. An existing card replacement uses
+`replaces_interaction_id` (nonempty string). Installation and conversation IDs
+come from trusted Host context, never from model output or the create request.
+
+| Card | Required `card` fields | Key type and range constraints |
+| --- | --- | --- |
+| `single_select` | `title: string`, `options: array` | `title` 1-160 characters; 2-20 options, each with nonblank `text` of at most 500 characters and a stable business `id`. Optional `supplement` is an object. |
+| `multi_select` | `title: string`, `options: array` | Same option bounds; `min_selections` is an integer 0-20, `max_selections` an integer 1-20 and no greater than the available options plus one enabled custom choice. `min_selections <= max_selections`. |
+| `question_form` | `title: string`, `items: array` | Each item has a nonblank `question` (at most 500 characters) and stable business `id`. The public Host accepts 1-20 items; the new-expert one-question rule requires exactly one item per turn. |
+| `file_selector` | `title: string` | `multiple: boolean`; `min_files` and `max_files` are integers 1-20, with `min_files <= max_files` and `max_files=1` when `multiple=false`. MIME types and extensions are string arrays, up to 32 entries each; per-file and total byte limits are positive integers, and total must cover one maximum-size file. |
+
+For selection cards, `supplement.answer_mode="choice"` means custom text is
+an answer choice: it must be enabled and optional. It is exclusive with preset
+options for `single_select`; for `multi_select` it counts as one selection.
+`answer_mode="note"` is only supplemental information. These are the key
+boundaries; use the complete current `components[].schema` from the Host for
+all fields, formats, optional values and additional-property rejection.
+
+The Agent determines whether answers can be enumerated and whether multiple
+choices are valid. A model proposal cannot change that decision. Call
+`create_question_card` with the approved `answer_kind`, stable `task_key`,
+revision and business validator; it rejects a mismatched component before any
+Host call. Internal labels such as `single_select_or_multi_select` are never
+API component types. The function defaults to `card_or_text` for new experts.
+Its `proposal` contains only `task_key`, `component_type` and `card`;
+`idempotency_key`, `interaction_revision` and `input_policy` are runtime-owned
+arguments, not model-selected fields. For `file_selector`, separately declare
+and obtain the required file-selection and local-helper grants.
+
 `single-select-success.json` contains a complete successful `single_select`
 create call and its persisted Host result. The `trusted_scope_example` values
 are illustrative Host context, never caller-supplied arguments.

@@ -42,6 +42,8 @@ Schema 通过只证明请求或响应形状；`agent.execute` 返回的 `text` �
 
 ## 问答交互卡
 
+业务先判定答案形状，再选唯一真实 API 类型：一个已知选项用 `one_choice → single_select`，可并存的已知选项用 `many_choices → multi_select`，无法可靠列全的文字答案用 `open_text → question_form`，真实本地文件用 `local_file → file_selector`。`single_select_or_multi_select` 只可作为专家内部说明，不是 API 枚举值。DevKit `interaction_card_api_demo.py` 的 `component_for_answer` 和 `create_question_card` 会在 Host 调用前拒绝模型建议类型与业务决定不一致；`examples/interaction-host-v1/card-type-examples.json` 含四类完整草案。每个示例及当前专家实际卡片都需先通过 `schemas/interaction-card-create-v1/request.schema.json` 和目标实例详细目录的 `components[].schema`，并另查本专家的稳定 ID、选项顺序、选择数量、单问题 item 或文件限制。静态示例不是实时目录，也不能替代可信建卡回执。
+
 新建或更新专家的问答卡按标准 2.70 使用 `card_or_text`，让卡片和普通输入同时可用；旧签名包仍按其原 `input_policy` 运行。`card_only` 的待提交卡会阻塞普通文字，`card_or_text` 与 `concurrent` 的文字不构成可信卡片提交。单选的预设选项与卡内自行输入互斥；多选可并存，卡内自行输入计入最少和最多数量。文字回答完整时按正式取消合同关闭旧卡并继续；只回答部分时关闭旧卡，仅对剩余缺口建议新卡。Node 6 分别验证客户端卡片展示、自由文字续接、可信提交、旧卡关闭、部分回答和迟到提交，不能用本地占位退役冒充平台已取消。
 
 目标实例须提供 `interaction.capabilities.list/1` 与 `interaction.card.create/1` 的公开请求/响应 Schema、操作目录和实时详细组件目录。组件目录不是本地公共 Component Registry；能力 ID、旧模型工具说明及 `interaction.card.receipt/1` 回执也不能代替直接 Host 调用合同。目标实例若另发布错误 Schema，一并核对；仅缺独立错误 Schema 不阻断已公开的请求/响应合同。未公开的错误字段保持未知，调用异常或回执不合格时按实际阶段记录并处理。请求/响应合同或必要的失败语义不足时，受影响的 Node 4 接线、密封及发布保持阻断；旧已签名专家按原合同运行。
