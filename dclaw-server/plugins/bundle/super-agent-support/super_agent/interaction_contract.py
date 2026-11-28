@@ -794,7 +794,11 @@ def _component_entry(
                 {"id": "option-a", "text": "选项甲", "recommended": True},
                 {"text": "选项乙"},
             ],
-            "supplement": {"enabled": True, "required": False},
+            "supplement": {
+                "enabled": True,
+                "answer_mode": "choice",
+                "required": False,
+            },
             "layout": "auto",
         },
     }

@@ -85,6 +85,9 @@ def test_filtered_catalog_exposes_only_requested_detailed_contract():
     }
     assert component["schema"]["additionalProperties"] is False
     assert component["create_example"]["component_type"] == "single_select"
+    assert component["create_example"]["card"]["supplement"] == {
+        "enabled": True, "answer_mode": "choice", "required": False,
+    }
     assert catalog["answer_schema"]["additionalProperties"] is False
 
 

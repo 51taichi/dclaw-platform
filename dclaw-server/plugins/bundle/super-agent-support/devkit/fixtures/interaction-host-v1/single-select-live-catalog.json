@@ -222,6 +222,7 @@
             }
           ],
           "supplement": {
+            "answer_mode": "choice",
             "enabled": true,
             "required": false
           },

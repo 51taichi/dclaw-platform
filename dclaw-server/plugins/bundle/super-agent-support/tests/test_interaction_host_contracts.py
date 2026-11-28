@@ -131,6 +131,9 @@ def test_live_catalog_fixture_exercises_complete_schema():
     assert "$defs" in component["schema"]
     assert component["schema"]["properties"]["supplement"]["$ref"].startswith("#/$defs/")
     example = component["create_example"]["card"]
+    assert example["supplement"] == {
+        "enabled": True, "answer_mode": "choice", "required": False,
+    }
     validate_live_card(catalog, "single_select", example)
     with pytest.raises(ValidationError) as missing_title:
         validate_live_card(catalog, "single_select", {"options": example["options"]})

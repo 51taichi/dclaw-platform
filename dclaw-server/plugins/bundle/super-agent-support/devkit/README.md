@@ -1,5 +1,9 @@
 # DClaw Super Agent DevKit
 
+Version 1.9.37 corrects the live choice-card catalog fixture: an enabled
+free-text alternative uses `supplement.answer_mode="choice"`. The schema and
+existing signed releases are unchanged.
+
 Version 1.9.36 adds `capability.stage.enter/1` for opt-in, invocation-local
 interaction, AIGC and Local Helper guides. Only the current stage's detailed
 guide belongs in a model call. The Host rejects cross-stage actions for new

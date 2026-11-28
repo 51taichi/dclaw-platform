@@ -1,5 +1,9 @@
 # DClaw Super Agent Developer Pack
 
+Version 1.10.52 bundles standard 2.73 and DevKit 1.9.37. The live
+choice-card example now marks optional free text as a mutually exclusive
+choice. Existing card schemas and signed releases remain compatible.
+
 Version 1.10.51 bundles standard 2.73 and DevKit 1.9.36. Newly updated
 experts can opt into stage-specific interaction, AIGC and Local Helper guides
 with `capability.stage.enter/1`; the Host gates side effects by stage. The

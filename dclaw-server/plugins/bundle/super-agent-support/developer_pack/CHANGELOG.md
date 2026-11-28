@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.52 - 2026-11-28
+
+- Bundle standard 2.73 and DevKit 1.9.37. Support Plugin 1.18.62 corrects
+  the live choice-card example to include `supplement.answer_mode="choice"`.
+  Card schemas and signed legacy releases remain compatible.
+
 ## 1.10.51 - 2026-11-28
 
 - Bundle standard 2.73 and DevKit 1.9.36. Support Plugin 1.18.61 adds
