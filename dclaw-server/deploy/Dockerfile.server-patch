@@ -13,6 +13,7 @@ COPY scripts/db ./scripts/db
 COPY deploy/pricing ./deploy/pricing
 COPY scripts/perf ./scripts/perf
 COPY src ./src
+RUN rm -rf ./plugins/auto-load/super-agent-support
 COPY plugins/bundle/super-agent-support ./plugins/auto-load/super-agent-support
 COPY docs/super-agent-development-standard-v1.zh-CN.md ./plugins/auto-load/super-agent-support/developer_pack/standard/super-agent-development-standard-v1.zh-CN.md
 RUN rm -rf ./src/qwenpaw/console
