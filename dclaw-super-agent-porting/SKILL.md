@@ -7,7 +7,7 @@ description: Install and use the DClaw Super Agent integration Skill, develop a 
 
 安装了解本 Skill，或从需求、现有材料开发、续建、优化 DClaw Super Agent 时使用。它负责 Codex 到 DClaw 的接入与持续发布链路；各 Agent 的业务方法和效果由各自项目定义与验证。保留当前 Skill 名称作为现有项目和会话的兼容入口。
 
-Skill 版本：`1.9.18`（EC 工作区版）。本工作区的维护源位于项目根目录 `dclaw-super-agent-porting/`，与平台及专家源码一起在同一个 `main` 提交。开始工作时先读 [references/knowledge-base.md](references/knowledge-base.md)，再按模式读取对应参考文件。知识库用于定位正式材料，不代替目标 DClaw 当前发布的唯一开发标准和 DevKit Schema。
+Skill 版本：`1.9.19`（EC 工作区版）。本工作区的维护源位于项目根目录 `dclaw-super-agent-porting/`，与平台及专家源码一起在同一个 `main` 提交。开始工作时先读 [references/knowledge-base.md](references/knowledge-base.md)，再按模式读取对应参考文件。知识库用于定位正式材料，不代替目标 DClaw 当前发布的唯一开发标准和 DevKit Schema。
 
 本工作区的开发与维护直接读取此目录，遵守根目录 `AGENTS.md` 的共享 `main` 规则；不克隆旧 Skill 仓库，也不向旧仓库回传或推送。EC 客户端入口是 `https://dclaw.rouhigh.com`；陆羽 1.1.34 的认证开发工具链与发布回执使用 `https://api.rouhigh.com`，与其当前构建器的来源合同一致。实际认证下载和发布仍以用户指定的目标实例及其正式回执为准。先检查当前目标、工作区和已有材料；只了解 Skill 时不创建 Agent 项目，开展具体 Agent 工作时按模式路由。现有未发布项目沿用，借用另一项目材料时先保护原件并建立工作副本。平台认证使用目标实例账号，Git 凭据不能代替 DClaw 认证。
 

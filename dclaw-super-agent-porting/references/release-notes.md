@@ -1,5 +1,9 @@
 # Skill 版本记录
 
+## 1.9.19（2026-11-28，AgentScope 2 原生消息投影诊断）
+
+- 对齐平台运行时修复：`agent_loop` 工具调用成功后可返回 AgentScope 2 原生 `Msg`，公共事件投影必须接受该基类；此前只接受 DClaw 兼容子类，可能使已创建的 AIGC 画布在最终回复阶段显示 `HOST.AGENT_EXECUTE_FAILED`。试跑排查须分别核对创建回执、节点 job 和资产，不把回复失败当作创建失败或图片生成成功。Node 6 增加原生消息回归，旧已签名专家无需改业务代码；目标 EC 实际生效仍以镜像部署和真实会话复测为准。
+
 ## 1.9.18（2026-11-28，选择卡示例勘误）
 
 - 对齐标准 2.73、Support Plugin 1.18.62、Developer Pack 1.10.52、DevKit 1.9.37：选择卡把客户自行输入视为可选答案时，实时示例必须显式 `supplement.answer_mode="choice"`，同时 `enabled=true`、`required=false`。此前实时示例省略该字段，落入 `note` 默认模式，可能使模型建议与专家的业务校验冲突。Node 4/6 核对实际目标实例目录及正常建卡路径；旧已签名专家和组件 Schema 不变。本次勘误不授权发布。

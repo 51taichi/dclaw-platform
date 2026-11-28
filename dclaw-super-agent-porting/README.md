@@ -1,6 +1,6 @@
 # DClaw 超级专家开发 Skill（EC 工作区）
 
-本目录是当前 `dclaw-agentscope2-lab` monorepo 中的独立维护版。它以原 Skill 候选提交 `f4c62fac` 为基线；源码指导已更新到标准 2.73、Developer Pack 1.10.52 和 DevKit 1.9.37，目标 EC 的认证版本仍须单独核对。当前版本为 `v1.9.18`。本目录不使用旧 Skill 仓库或用户级安装副本作为更新源，也不包含其他专家的源码交接包。
+本目录是当前 `dclaw-agentscope2-lab` monorepo 中的独立维护版。它以原 Skill 候选提交 `f4c62fac` 为基线；源码指导已更新到标准 2.73、Developer Pack 1.10.52 和 DevKit 1.9.37，目标 EC 的认证版本仍须单独核对。当前版本为 `v1.9.19`。本目录不使用旧 Skill 仓库或用户级安装副本作为更新源，也不包含其他专家的源码交接包。
 
 ## 工作入口
 

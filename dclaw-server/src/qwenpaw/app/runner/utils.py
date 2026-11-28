@@ -7,7 +7,7 @@ from typing import List, Optional, Union
 from urllib.parse import unquote, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from ...agents.message_compat import Msg
+from agentscope.message import Msg
 from qwenpaw.runtime.contracts import (
     Message,
     TextContent,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from agentscope.message import (
     HintBlock,
+    Msg as AgentScopeMsg,
     TextBlock,
     ThinkingBlock,
     ToolResultBlock,
@@ -49,6 +50,21 @@ def test_history_projection_hides_hint_blocks_from_public_messages():
     assert public_text == "checkingpublic answer"
     assert "system-reminder" not in public_text
     assert all(item.status == RunStatus.Completed for item in projected)
+
+
+def test_native_agentscope_message_projects_after_agent_loop_tool_call():
+    source = AgentScopeMsg(
+        name="agent",
+        role="assistant",
+        content=[TextBlock(text="任务已创建")],
+        id="native-reply",
+    )
+
+    projected = agentscope_msg_to_message(source)
+
+    assert len(projected) == 1
+    assert projected[0].get_text_content() == "任务已创建"
+    assert projected[0].status == RunStatus.Completed
 
 
 class _TextStreamRunner(Runner):
